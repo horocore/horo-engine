@@ -1,6 +1,7 @@
 #include "AllocationProbe.h"
 #include "EnvironmentQueryTestSupport.h"
 #include "Horo/AI/AIErrors.h"
+#include "Horo/AI/DecisionQueryTask.h"
 #include "Horo/AI/EnvironmentQueryCache.h"
 #include "Horo/AI/EnvironmentQueryContexts.h"
 #include "Horo/AI/EnvironmentQueryExecution.h"
@@ -44,6 +45,7 @@ namespace Horo::AI {
             int polls{};
             int cancelled{};
             QueryStageId lastStage;
+            std::optional<Runtime::EntityRef> actor;
         };
 
         class ExecutionSource final : public IQueryExecutionSource {
@@ -58,6 +60,10 @@ namespace Horo::AI {
                 ++probe_.generated;
                 if (probe_.failure == SourceFailure::Generation)
                     throw std::runtime_error("generator failed");
+                if (probe_.actor) {
+                    output.items[0] = *probe_.actor;
+                    return Result<QueryGenerationResult>::Success({.provenance = output.provenance, .itemCount = 1});
+                }
                 const std::array points{Math::WorldCoordinate64::FromMillimeters(1, 0, 0),
                                         Math::WorldCoordinate64::FromMillimeters(2, 0, 0)};
                 return GenerateQueryPoints(points, output);
@@ -72,7 +78,8 @@ namespace Horo::AI {
                 probe_.lastStage = stage;
                 if (probe_.backpressure)
                     return Result<bool>::Success(false);
-                sample_ = {.stage = stage, .metric = static_cast<double>(std::get<Math::WorldCoordinate64>(item).Millimeters()[0]) / 2.0};
+                const auto *point = std::get_if<Math::WorldCoordinate64>(&item);
+                sample_ = {.stage = stage, .metric = point ? static_cast<double>(point->Millimeters()[0]) / 2.0 : 1.0};
                 return Result<bool>::Success(true);
             }
 
@@ -161,6 +168,8 @@ namespace Horo::AI {
                                                                     bool reverseStages = false, bool deterministic = false,
                                                                     QueryExecutionInputs *capturedInputs = nullptr) {
             QueryFixture fixture;
+            if (probe.actor)
+                fixture.items.front().kind = QueryItemKind::Actor;
             const QueryTestDescriptor test{MakeIdentity<QueryTestId>(17), fixture.generator.origin, fixture.items[0].id, {1, 1}, {}, {}};
             const auto registry = fixture.Registry(std::span{&test, 1});
             const auto plan = fixture.Plan(registry, test.id, reverseStages);
@@ -189,6 +198,181 @@ namespace Horo::AI {
             auto execution = admit();
             REQUIRE(execution.HasValue());
             return std::move(execution).Value();
+        }
+
+        class QueryTaskHost final : public IDecisionQueryTaskHost {
+        public:
+            Runtime::RuntimeScene &scene;
+            ExecutionProbe probe;
+            std::size_t admissions{};
+
+            explicit QueryTaskHost(Runtime::RuntimeScene &value) : scene(value) {}
+
+            Result<std::unique_ptr<QueryExecution>> Admit(const DecisionQueryTaskDescriptor &, const AiTaskOperationContext &,
+                                                          std::uint64_t, std::uint64_t) override {
+                ++admissions;
+                return Result<std::unique_ptr<QueryExecution>>::Success(MakeExecution(probe, scene));
+            }
+        };
+
+        struct QueryTaskFixture final {
+            std::unique_ptr<Runtime::RuntimeScene> scene{MakeScene()};
+            QueryTaskHost host{*scene};
+            AgentHandle agent{MakeIdentity<AiRuntimeIncarnation>(7), {1, 1}};
+            DecisionNodeId node{MakeIdentity<DecisionNodeId>(5)};
+            TaskId task{MakeIdentity<TaskId>(6)};
+            BlackboardKeyId output{MakeIdentity<BlackboardKeyId>(7)};
+            std::unique_ptr<BlackboardInstance> blackboard;
+            DecisionQueryTask *executor{};
+
+            std::shared_ptr<const BehaviorTreeExecutionPlan> BuildTree(const BlackboardValueKind kind) {
+                const std::array keys{BlackboardKeyDescriptor{.key = output, .kind = kind, .presence = BlackboardKeyPresence::Optional}};
+                auto schema = BlackboardSchema::Capture({.identity = MakeIdentity<BlackboardSchemaId>(8), .keys = keys});
+                REQUIRE(schema.HasValue());
+                auto owned = std::make_shared<const BlackboardSchema>(std::move(schema).Value());
+                auto created = BlackboardInstance::Create({agent, owned->Identity(), owned->Version(), 1, 1}, owned);
+                REQUIRE(created.HasValue());
+                blackboard = std::move(created).Value();
+                const SourceLocation authored{"tests/query_task", 1, 1};
+                const auto type = MakeIdentity<DecisionNodeTypeId>(10);
+                const DecisionAssetDescriptor asset{.asset = MakeIdentity<DecisionGraphAssetId>(11),
+                                                    .kind = DecisionPlanKind::BehaviorTree,
+                                                    .blackboardSchema = owned->Identity(),
+                                                    .nodes = {{.id = node, .type = type, .source = authored}},
+                                                    .source = authored};
+                const std::array descriptors{
+                    DecisionNodeDescriptor{.type = type,
+                                           .origin = {DecisionDescriptorSourceKind::Native, MakeIdentity<DecisionProviderId>(12), 1},
+                                           .requirements = {{.key = output,
+                                                             .kind = kind,
+                                                             .access = BlackboardKeyAccess::ReadWrite,
+                                                             .source = authored}},
+                                           .source = authored}};
+                const auto bindings = DecisionAssetCompiler::Compile(asset, {}, descriptors, std::array{owned});
+                REQUIRE(bindings.HasValue());
+                REQUIRE(bindings.Value().IsValid());
+                const std::array nodes{BehaviorTreeExecutionNode{.id = node, .operation = BehaviorTreeOperation::Task, .task = task}};
+                const auto tree = BehaviorTreeExecutionPlan::Compile(bindings.Value().plan, node, nodes, {});
+                REQUIRE(tree.HasValue());
+                return tree.Value();
+            }
+
+            Result<std::unique_ptr<DecisionQueryTask>> Bind(const BehaviorTreeExecutionPlan &tree) {
+                QueryFixture fixture;
+                if (host.probe.actor)
+                    fixture.items.front().kind = QueryItemKind::Actor;
+                const auto registry = fixture.Registry();
+                const auto plan = fixture.Plan(registry);
+                return DecisionQueryTask::Bind({node, task, plan.Id(), plan.ResultSchema().id, plan.ResultSchema().version,
+                                                plan.ResultSchema().itemType, output, 4},
+                                               plan, registry, tree, host);
+            }
+
+            std::unique_ptr<BehaviorTreeInstance> Start(const BlackboardValueKind kind = BlackboardValueKind::WorldCoordinate) {
+                const auto tree = BuildTree(kind);
+                auto bound = Bind(*tree);
+                REQUIRE(bound.HasValue());
+                auto implementation = std::move(bound).Value();
+                executor = implementation.get();
+                auto instance = BehaviorTreeInstance::Create(tree, {agent, {}, 100, 1, blackboard->Binding()}, std::move(implementation));
+                REQUIRE(instance.HasValue());
+                return std::move(instance).Value();
+            }
+
+            AiTaskState Evaluate(BehaviorTreeInstance &instance, const std::uint64_t tick) {
+                const auto snapshot = blackboard->Snapshot();
+                REQUIRE(snapshot.HasValue());
+                const auto evaluated = instance.Evaluate(tick, snapshot.Value(), agent);
+                REQUIRE(evaluated.HasValue());
+                return evaluated.Value();
+            }
+        };
+
+        TEST_CASE("EQS task rejects incompatible compiled output before activating the behavior tree", "[unit][ai][eqs][task]") {
+            QueryTaskFixture fixture;
+            const auto tree = fixture.BuildTree(BlackboardValueKind::Boolean);
+            ExpectError(fixture.Bind(*tree), AIErrors::BlackboardValueTypeMismatch);
+            CHECK(fixture.host.admissions == 0);
+        }
+
+        TEST_CASE("Behavior tree EQS task awaits owner phases and commits the winner once", "[unit][ai][eqs][task]") {
+            QueryTaskFixture fixture;
+            auto tree = fixture.Start();
+            REQUIRE(fixture.Evaluate(*tree, 4) == AiTaskState::Running);
+            CHECK(fixture.host.probe.generated == 0);
+            for (std::uint64_t tick = 5; tick <= 6; ++tick) {
+                fixture.executor->SyncQuery(tick);
+                REQUIRE(fixture.Evaluate(*tree, tick) == AiTaskState::Running);
+                AiWorkBudget budget{64};
+                fixture.executor->AdvanceQuery(tick, {budget, budget, budget});
+            }
+            fixture.executor->SyncQuery(7);
+            REQUIRE(fixture.Evaluate(*tree, 7) == AiTaskState::Succeeded);
+            const auto view = fixture.scene->View();
+            CHECK_FALSE(fixture.executor->CommitOutput(7, view, *fixture.blackboard).Value());
+            REQUIRE(fixture.executor->CommitOutput(8, view, *fixture.blackboard).Value());
+            CHECK_FALSE(fixture.executor->CommitOutput(9, view, *fixture.blackboard).Value());
+            const auto value = fixture.blackboard->Snapshot().Value().Read(fixture.output);
+            REQUIRE(value.HasValue());
+            REQUIRE(value.Value().has_value());
+            CHECK(std::get<Math::WorldCoordinate64>(std::get<BlackboardScalarValue>(*value.Value())).Millimeters()[0] == 2);
+        }
+
+        TEST_CASE("Behavior tree EQS revalidates the exact winning actor at BlackboardSync", "[unit][ai][eqs][task]") {
+            QueryTaskFixture fixture;
+            const auto actor = *fixture.scene->View().Find({2});
+            fixture.host.probe.actor = actor;
+            auto tree = fixture.Start(BlackboardValueKind::EntityReference);
+            REQUIRE(fixture.Evaluate(*tree, 4) == AiTaskState::Running);
+            fixture.executor->SyncQuery(5);
+            AiWorkBudget budget{64};
+            fixture.executor->AdvanceQuery(5, {budget, budget, budget});
+            fixture.executor->SyncQuery(6);
+            REQUIRE(fixture.Evaluate(*tree, 6) == AiTaskState::Succeeded);
+            SECTION("current actor is written") {
+                REQUIRE(fixture.executor->CommitOutput(7, fixture.scene->View(), *fixture.blackboard).Value());
+                const auto value = fixture.blackboard->Snapshot().Value().Read(fixture.output);
+                REQUIRE(value.HasValue());
+                REQUIRE(value.Value().has_value());
+                CHECK(std::get<BlackboardStoredEntityReference>(std::get<BlackboardScalarValue>(*value.Value())) ==
+                      BlackboardStoredEntityReference{actor.runtime.value, actor.entity.index, actor.entity.generation});
+            }
+            SECTION("retired actor is rejected") {
+                Runtime::SceneCommandBuffer destroy;
+                destroy.Destroy(actor);
+                REQUIRE(fixture.scene->Commit(destroy).HasValue());
+                ExpectError(fixture.executor->CommitOutput(7, fixture.scene->View(), *fixture.blackboard),
+                            AIErrors::EnvironmentQueryContextStale);
+                CHECK_FALSE(fixture.blackboard->Snapshot().Value().Read(fixture.output).Value());
+            }
+        }
+
+        TEST_CASE("Behavior tree EQS abort and deadline retire work before any late output", "[unit][ai][eqs][task]") {
+            QueryTaskFixture fixture;
+            fixture.host.probe.ready = false;
+            auto tree = fixture.Start();
+            REQUIRE(fixture.Evaluate(*tree, 4) == AiTaskState::Running);
+            fixture.executor->SyncQuery(5);
+            AiWorkBudget budget{64};
+            fixture.executor->AdvanceQuery(5, {budget, budget, budget});
+            REQUIRE(fixture.host.probe.attempts == 1);
+            SECTION("explicit subtree abort") {
+                REQUIRE(tree->AbortSubtree(fixture.node).HasValue());
+                REQUIRE(fixture.Evaluate(*tree, 6) == AiTaskState::Cancelled);
+            }
+            SECTION("query reaches its admitted deadline") {
+                for (std::uint64_t tick = 6; tick < 8; ++tick) {
+                    fixture.executor->SyncQuery(tick);
+                    REQUIRE(fixture.Evaluate(*tree, tick) == AiTaskState::Running);
+                }
+                fixture.executor->SyncQuery(8);
+                REQUIRE(fixture.Evaluate(*tree, 8) == AiTaskState::Cancelled);
+            }
+            fixture.host.probe.ready = true;
+            fixture.executor->SyncQuery(9);
+            CHECK(fixture.host.probe.cancelled == 1);
+            CHECK_FALSE(fixture.executor->CommitOutput(9, fixture.scene->View(), *fixture.blackboard).Value());
+            CHECK_FALSE(fixture.blackboard->Snapshot().Value().Read(fixture.output).Value());
         }
 
         TEST_CASE("EQS cache retains complete results under exact scene, dependency and owner bounds", "[unit][ai][eqs][cache]") {

@@ -338,4 +338,16 @@ namespace Horo::AI {
     const QueryExecutionResult *QueryExecution::Published() const noexcept {
         return published_ ? &result_ : nullptr;
     }
+
+    /** @copydoc QueryExecution::MatchesAdmission */
+    bool QueryExecution::MatchesAdmission(const QueryId query, const AgentHandle agent, const std::uint64_t submittedTick,
+                                          const std::uint64_t deadlineTick) const noexcept {
+        return inputs_.contexts->Query() == query && inputs_.agent == agent && settings_.submittedTick == submittedTick &&
+               settings_.deadlineTick == deadlineTick;
+    }
+
+    /** @copydoc QueryExecution::InputsAreCurrent */
+    bool QueryExecution::InputsAreCurrent() const noexcept {
+        return source_->IsCurrent(inputs_);
+    }
 }  // namespace Horo::AI

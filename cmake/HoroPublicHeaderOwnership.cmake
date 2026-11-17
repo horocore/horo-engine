@@ -873,6 +873,7 @@ horo_configure_target_header_boundary(HoroAISceneIntegration PUBLIC_HEADERS
     Horo/AI/EnvironmentQueryContexts.h
     Horo/AI/EnvironmentQueryGenerators.h
     Horo/AI/EnvironmentQueryExecution.h
+    Horo/AI/DecisionQueryTask.h
     Horo/AI/EnvironmentQueryCache.h
     Horo/AI/EnvironmentQueryPerception.h
 )

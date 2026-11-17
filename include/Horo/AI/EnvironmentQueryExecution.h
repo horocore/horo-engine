@@ -207,6 +207,11 @@ namespace Horo::AI {
         void Cancel() noexcept;
         /** @brief Reads the immutable terminal result. @return Null until publication. */
         [[nodiscard]] const QueryExecutionResult *Published() const noexcept;
+        /** @brief Checks the exact query/task owner and timing supplied at admission. */
+        [[nodiscard]] bool MatchesAdmission(QueryId query, AgentHandle agent, std::uint64_t submittedTick,
+                                            std::uint64_t deadlineTick) const noexcept;
+        /** @brief Checks whether retained input authority can still be honored. */
+        [[nodiscard]] bool InputsAreCurrent() const noexcept;
 
     private:
         QueryExecution(QueryExecutionInputs inputs, QueryGeneratorProvenance provenance, QueryScoringPlan scoring,
