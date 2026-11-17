@@ -51,7 +51,7 @@ namespace Horo::Tests::CliContract {
      */
     inline void ValidateSchema(const std::string_view command, const std::string_view schema, const unsigned version) {
         const auto &contract = Fixture().at("commandSchemas").at(schema);
-        if (contract.at("command") != command || contract.at("version") != version)
+        if (contract.at("command").get_ref<const std::string &>() != command || contract.at("version") != version)
             throw std::runtime_error("CLI command schema identity or version changed");
     }
 
