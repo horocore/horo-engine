@@ -6,6 +6,7 @@
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Runtime/InputCollection.h"
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -17,7 +18,14 @@ namespace Horo::Runtime {
 
 namespace Horo::XR {
     enum class XRFeatureProfile : std::uint8_t;
-}
+    enum class XRSessionState : std::uint8_t;
+    enum class XRTrackingState : std::uint8_t;
+    enum class XRCapability : std::uint8_t;
+    enum class XRCapabilityState : std::uint8_t;
+    enum class XRFeatureDecisionState : std::uint8_t;
+    enum class XRTrackedActionKind : std::uint8_t;
+    enum class XRTrackedDeviceState : std::uint8_t;
+}  // namespace Horo::XR
 
 namespace Horo::Editor {
     class EditorXrSceneSourcePort;
@@ -63,12 +71,87 @@ namespace Horo::Editor {
         EditorXrSetupIssue issue{EditorXrSetupIssue::Unavailable};
     };
 
+    /** @brief Completeness of the exact selected session's inspection evidence. */
+    enum class EditorXrInspectionStatus : std::uint8_t {
+        Unavailable,
+        Idle,
+        WaitingForSample,
+        Unfocused,
+        EventsPending,
+        Current,
+        Stale
+    };
+
+    /** @brief Only diagnostic summaries cross the editor port. Sensitive raw channels require a separately admitted capture. */
+    enum class EditorXrInspectionPrivacy : std::uint8_t {
+        Redacted
+    };
+
+    /** @brief Aggregate pose metadata with no coordinates, quaternion or native-space handles. */
+    struct EditorXrInspectionValidity final {
+        std::array<std::uint16_t, 3> position{};    /**< Invalid, inferred, tracked. */
+        std::array<std::uint16_t, 3> orientation{}; /**< Invalid, inferred, tracked. */
+        std::array<std::uint16_t, 3> confidence{};  /**< Absent, low, high. */
+    };
+
+    /** @brief One anatomical source's current lifecycle and redacted joint metadata. */
+    struct EditorXrInspectionHand final {
+        std::optional<XR::XRTrackedDeviceState> state;
+        std::uint32_t generation{};
+        EditorXrInspectionValidity validity;
+    };
+
+    /** @brief Current observed capability and the separately accepted decision from the same revision. */
+    struct EditorXrInspectionCapability final {
+        XR::XRCapability kind;
+        XR::XRCapabilityState observed;
+        XR::XRFeatureDecisionState decision;
+    };
+
+    /** @brief One binding-plan sample's typed presence; native paths and payload values are excluded. */
+    struct EditorXrInspectionAction final {
+        std::uint32_t bindingIndex{};
+        std::uint32_t deviceGeneration{};
+        XR::XRTrackedActionKind kind;
+        bool active{};
+    };
+
+    /** @brief Owned redacted snapshot copied on the application owner lane without any native API access. */
+    struct EditorXrInspectionSnapshot final {
+        static constexpr std::size_t MaximumDisplayedActions = 12;
+        static constexpr std::size_t CapabilityCount = 6;
+        EditorXrInspectionStatus status{EditorXrInspectionStatus::Unavailable};
+        EditorXrInspectionPrivacy privacy{EditorXrInspectionPrivacy::Redacted};
+        std::optional<XR::XRSessionState> session;
+        std::optional<XR::XRTrackingState> tracking;
+        std::uint64_t runtimeGeneration{};
+        std::uint32_t systemGeneration{};
+        std::uint32_t sessionGeneration{};
+        std::uint64_t capabilityRevision{};
+        std::uint64_t trackingRevision{};
+        std::uint64_t originRevision{};
+        std::uint64_t bindingRevision{};
+        std::int64_t sampleNanoseconds{}; /**< Exact admitted runtime cutoff, zero when there is no current sample. */
+        bool focused{};
+        std::uint16_t deviceCount{};
+        std::uint16_t actionCount{};
+        std::uint16_t activeActionCount{};
+        std::uint16_t omittedActionCount{};
+        EditorXrInspectionValidity poses;
+        std::array<std::uint16_t, 5> spaces{};         /**< Pose references by canonical view, local, stage, world and action kind. */
+        std::array<EditorXrInspectionHand, 2> hands{}; /**< Redacted joint summaries, left then right. */
+        std::array<EditorXrInspectionCapability, CapabilityCount> capabilities{};
+        std::array<EditorXrInspectionAction, MaximumDisplayedActions> actions{};
+    };
+
     /** @brief Owner-lane setup commands, independent of the Play adapter and of GUI or native API types. */
     class IEditorXrSetup {
     public:
         virtual ~IEditorXrSetup() = default;
         /** @return Existing fixed-size evidence without provider calls, file access or allocation. */
         [[nodiscard]] virtual EditorXrSetupReport ReadSetup() const noexcept = 0;
+        /** @return Owned, bounded, redacted evidence for the current owner, or an explicit unavailable/stale status. */
+        [[nodiscard]] virtual EditorXrInspectionSnapshot ReadInspection() const noexcept = 0;
         /** @return Exact queued request or typed rejection. No native work happens on submission. */
         [[nodiscard]] virtual Result<EditorXrSetupTestId> RequestSetupTest() = 0;
         /** @brief Cancel only the specified queued request. Committed observations cannot be revoked by a stale ID. */

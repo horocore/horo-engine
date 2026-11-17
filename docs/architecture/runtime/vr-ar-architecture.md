@@ -782,6 +782,15 @@ reporting success. Native permission denial is reported separately. Test teardow
 failures keep ownership in the application for a bounded explicit retry, and block
 Play preparation until the owner has retired the abandoned session.
 
+XR Setup also presents the current session inspector. It joins session/capability
+generation and revision with the latest same-owner Input tracking cutoff. The
+report distinguishes waiting, unfocused, event backlog, current and retired
+evidence. Pose and hand rows summarize validity and confidence. Action rows
+show presence and binding/device generation, with an explicit omitted count
+beyond the display budget. The editor receives no action payloads, native
+handles, pose or joint coordinates, gaze, camera or room data. The inspector
+cannot authorize sensitive capture.
+
 Detailed capture is an explicit bounded operation with channels, duration/frame/byte
 limits, privacy purpose, retention/export and a manifest recording completeness,
 truncation and drops. Sensitive channels are unavailable unless separately admitted;

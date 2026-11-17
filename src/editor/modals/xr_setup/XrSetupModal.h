@@ -20,6 +20,8 @@ namespace Horo::Editor {
         void OnClose(ModalCloseReason) override;
 
     private:
+        /** @brief Draws the owned redacted inspection report. */
+        void DrawInspection(const EditorXrInspectionSnapshot &report) const;
         [[nodiscard]] const std::string &Text(const char *key) const;
         const EditorGuiContext &context_;
         IEditorXrSetup *setup_;

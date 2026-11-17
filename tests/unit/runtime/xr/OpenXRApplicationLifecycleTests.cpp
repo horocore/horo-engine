@@ -554,6 +554,46 @@ namespace Horo::Tests::OpenXRApplication {
         }
     }  // namespace
 
+    TEST_CASE("XR inspection bounds action metadata and ignores action payload values", "[xr][application][inspection]") {
+        const XR::XRSessionId session{{RequireValue(XR::XRRuntimeGeneration::Create(1)), {1, 1}}, {1, 1}};
+        XR::XRTrackedDeviceCapabilities features;
+        features.values[static_cast<std::size_t>(XR::XRTrackedDeviceCapability::GripPose)] = true;
+        const std::array devices{XR::XRTrackedDeviceRecord{{session, {1, 3}},
+                                                           XR::XRTrackedDeviceRole::LeftController,
+                                                           XR::XRTrackedDeviceState::TrackingLost,
+                                                           features}};
+        std::array<XR::XRTrackedActionRecord, Editor::EditorXrInspectionSnapshot::MaximumDisplayedActions + 1> actions{};
+        for (std::size_t index = 0; index < actions.size(); ++index)
+            actions[index] = {devices.front().id, static_cast<std::uint32_t>(index), XR::XRTrackedActionKind::Scalar, true, 1.0F, 0};
+        const auto revision = RequireValue(XR::XRTrackingSnapshotRevision::Create(1));
+        const auto origin = RequireValue(XR::XRWorldOriginRevision::Create(1));
+        const XR::XRTrackingSnapshotDescriptor descriptor{.session = session,
+                                                          .revision = revision,
+                                                          .sequence = 1,
+                                                          .sampledAt = RequireValue(XR::XRRuntimeTime::Create(100)),
+                                                          .worldOriginRevision = origin,
+                                                          .focus = XR::XRTrackingFocusState::Focused,
+                                                          .visibility = XR::XRTrackingVisibilityState::Visible,
+                                                          .state = XR::XRTrackingState::TrackingLost,
+                                                          .limits = {1, 1, static_cast<std::uint32_t>(actions.size())},
+                                                          .devices = devices,
+                                                          .bindingRevision = 8,
+                                                          .actions = actions};
+        for (const auto scalar : {0.5F, -0.5F}) {
+            actions.front().x = scalar;
+            const auto snapshot = RequireValue(XR::XRTrackingSnapshot::Create(descriptor, session, origin));
+            Editor::EditorXrInspectionSnapshot report;
+            Host::CopyOpenXRInspectionTracking(report, snapshot);
+            CHECK(report.privacy == Editor::EditorXrInspectionPrivacy::Redacted);
+            CHECK(report.actionCount == actions.size());
+            CHECK(report.activeActionCount == actions.size());
+            CHECK(report.omittedActionCount == 1);
+            CHECK(report.actions.back().bindingIndex == report.actions.size() - 1);
+            CHECK(report.actions.front().deviceGeneration == 3);
+            CHECK(report.actions.front().active);
+        }
+    }
+
     TEST_CASE("Real installed Play samples bounded hands before Input and revokes candidates on focus or invalid evidence",
               "[xr][application][play][hands]") {
         using enum XR::XRProjectFeaturePolicy;
@@ -581,7 +621,14 @@ namespace Horo::Tests::OpenXRApplication {
         SECTION("session loss cancels hand evidence and permits a fresh tracker pair") {
             outcome = Outcome::Replacement;
         }
+        using Editor::EditorXrInspectionStatus;
         auto scene = PublishPlay(fixture);
+        const auto waiting = fixture.play->ReadInspection();
+        CHECK(waiting.status == EditorXrInspectionStatus::WaitingForSample);
+        CHECK(waiting.focused);
+        CHECK(waiting.sessionGeneration > 0);
+        CHECK(waiting.capabilityRevision > 0);
+        CHECK(waiting.trackingRevision == 0);
         auto cutoff = std::make_unique<AppInputSample>(*fixture.play);
         auto *observed = cutoff.get();
         REQUIRE(fixture.scheduler->AddParticipant(std::move(cutoff)).HasValue());
@@ -591,16 +638,40 @@ namespace Horo::Tests::OpenXRApplication {
         INFO((observed->result->HasError() ? OpenXRProduct::ErrorText(observed->result->ErrorValue()) : "Input cutoff committed"));
         REQUIRE(observed->result->HasValue());
         const auto handGestures = fixture.play->ReadHandGestures();
+        const auto nativeCalls = fixture.script.native.calls.size();
+        const auto handLocates = fixture.script.hands.locates;
+        const auto inspection = fixture.play->ReadInspection();
+        CHECK(fixture.script.native.calls.size() == nativeCalls);
+        CHECK(fixture.script.hands.locates == handLocates);
+        CHECK(inspection.status == EditorXrInspectionStatus::Current);
+        CHECK(inspection.privacy == Editor::EditorXrInspectionPrivacy::Redacted);
+        CHECK(inspection.trackingRevision > 0);
+        CHECK(inspection.originRevision > 0);
+        CHECK(inspection.bindingRevision > 0);
+        CHECK(inspection.sampleNanoseconds > 0);
+        CHECK(inspection.sessionGeneration == waiting.sessionGeneration);
+        CHECK(inspection.spaces[static_cast<std::size_t>(XR::XRSpaceKind::View)] > 0);
+        CHECK(inspection.deviceCount > 0);
         if (outcome != Outcome::Unsupported && outcome != Outcome::PartialCreate) {
             REQUIRE(handGestures.Candidates().size() == 1);
             CHECK(handGestures.Candidates().front().hand == XR::XRHandedness::Left);
             CHECK(handGestures.Candidates().front().kind == XR::XRHandGestureKind::Pinch);
             CHECK(handGestures.Candidates().front().confidence == XR::XRTrackingConfidence::High);
             CHECK(fixture.script.hands.locates == 2);
+            CHECK(inspection.hands[0].validity.position[2] == XR::XRHandTrackingHardLimits::JointsPerHand);
+            CHECK(inspection.hands[0].validity.confidence[2] == XR::XRHandTrackingHardLimits::JointsPerHand);
+            CHECK(inspection.hands[1].validity.position[2] == 0);
+            CHECK(inspection.hands[0].generation > 0);
+            CHECK(inspection.hands[0].state == XR::XRTrackedDeviceState::Tracked);
+            CHECK_FALSE(inspection.hands[1].state.has_value());
             if (outcome == Outcome::FocusLoss) {
                 fixture.script.events.Push(XR_SESSION_STATE_VISIBLE);
                 REQUIRE(fixture.play->PollEvents().HasValue());
                 CHECK(fixture.play->ReadHandGestures().Candidates().empty());
+                const auto unfocused = fixture.play->ReadInspection();
+                CHECK(unfocused.status == EditorXrInspectionStatus::Unfocused);
+                CHECK(unfocused.trackingRevision == 0);
+                CHECK(unfocused.hands[0].validity.position[2] == 0);
                 REQUIRE(fixture.scheduler->RunFrame().HasValue());
                 CHECK(fixture.script.hands.locates == 2);
             } else if (outcome == Outcome::Malformed) {
@@ -613,6 +684,9 @@ namespace Horo::Tests::OpenXRApplication {
                 fixture.script.events.pollResult = XR_ERROR_SESSION_LOST;
                 REQUIRE(fixture.play->PollEvents().HasValue());
                 CHECK(fixture.play->ReadHandGestures().Candidates().empty());
+                const auto lost = fixture.play->ReadInspection();
+                CHECK(lost.status == EditorXrInspectionStatus::Stale);
+                CHECK(lost.trackingRevision == 0);
                 REQUIRE(fixture.play->PollEvents().HasValue());
                 CHECK_FALSE(fixture.script.hands.live[0]);
                 CHECK_FALSE(fixture.script.hands.live[1]);
@@ -625,6 +699,9 @@ namespace Horo::Tests::OpenXRApplication {
                 replacement->Publish();
                 scene->Shutdown();
                 CHECK(fixture.play->UsesXrScene());
+                const auto nextInspection = fixture.play->ReadInspection();
+                CHECK(nextInspection.sessionGeneration > inspection.sessionGeneration);
+                CHECK(nextInspection.trackingRevision == 0);
                 CHECK(fixture.script.hands.live[0]);
                 CHECK(fixture.script.hands.live[1]);
                 CHECK(fixture.play->ReadHandGestures().Candidates().empty());
@@ -686,6 +763,10 @@ namespace Horo::Tests::OpenXRApplication {
 
         REQUIRE(fixture.play->PollEvents().HasValue());
         CHECK(fixture.play->PresentationState() == Pending);
+        const auto inspecting = fixture.play->ReadInspection();
+        CHECK(inspecting.status == Editor::EditorXrInspectionStatus::EventsPending);
+        CHECK(inspecting.trackingRevision == 0);
+        CHECK_FALSE(inspecting.focused);
         CHECK(fixture.script.events.polls - polls == Native::OpenXRSessionEvents::MaximumEventsPerPoll);
         REQUIRE(fixture.play->ProgressRenderTail().HasValue());
         CHECK(fixture.script.frames.ends == 0);

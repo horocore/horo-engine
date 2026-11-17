@@ -24,6 +24,12 @@ namespace Horo::Render {
 }  // namespace Horo::Render
 
 namespace Horo::Application::Internal {
+
+    /** @brief Copies metadata from one validated tracking snapshot into a redacted inspection report.
+     * @param out Report for the same canonical session. @param tracking Exact admitted cutoff.
+     * @post The report stores no native handles, action values, or pose and joint coordinates. Requires no provider calls.
+     */
+    void CopyOpenXRInspectionTracking(Editor::EditorXrInspectionSnapshot &out, const XR::XRTrackingSnapshot &tracking) noexcept;
     /** @brief Read-only projection of existing Scene/debt and canonical session admission, never another lifecycle. */
     enum class OpenXRPlayPresentation {
         Inactive,
@@ -83,6 +89,7 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<bool> Close();
         [[nodiscard]] Editor::EditorXrSetupReport ReadSetup() const noexcept override;
+        [[nodiscard]] Editor::EditorXrInspectionSnapshot ReadInspection() const noexcept override;
         [[nodiscard]] Result<Editor::EditorXrSetupTestId> RequestSetupTest() override;
         void CancelSetupTest(Editor::EditorXrSetupTestId request) noexcept override;
         /** @brief Performs one queued cold setup test outside RuntimeHost frames. */
