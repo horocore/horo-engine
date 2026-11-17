@@ -214,8 +214,21 @@ add_library(HoroPlatform STATIC
         platform/file_storage/NativePublicationFileSystem.cpp
         platform/android/AndroidLifecycle.cpp
         platform/android/AndroidLifecycleAdapter.cpp
+        platform/android/AndroidWindowBridge.cpp
+        platform/android/AndroidWindowErrors.cpp
+        platform/android/AndroidNativeWindow.cpp
         platform/android/AndroidStorage.cpp
 )
+
+# Only Android host retention contracts cross this non-installed boundary.
+add_library(HoroAndroidWindowInternal INTERFACE)
+set(_horo_android_window_headers "${CMAKE_CURRENT_BINARY_DIR}/internal/android-window")
+file(MAKE_DIRECTORY "${_horo_android_window_headers}")
+foreach(_horo_android_window_header AndroidLifecycleAdapter.h AndroidWindowBridge.h AndroidWindowErrors.h)
+    configure_file("platform/android/${_horo_android_window_header}"
+        "${_horo_android_window_headers}/${_horo_android_window_header}" COPYONLY)
+endforeach()
+target_include_directories(HoroAndroidWindowInternal INTERFACE "${_horo_android_window_headers}")
 
 if (WIN32)
     target_sources(HoroPlatform PRIVATE

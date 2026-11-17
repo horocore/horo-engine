@@ -199,6 +199,7 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroAssetsPublicHeaderConsumer
     HoroInputTests
     HoroAndroidInputTests
+    HoroAndroidWindowBridgeTests
     HoroAndroidInputIntegrationPublicHeaderConsumer
     HoroCharacterInputTests
     HoroCharacterInputPublicHeaderConsumer
