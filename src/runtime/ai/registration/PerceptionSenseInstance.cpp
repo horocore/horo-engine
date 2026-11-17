@@ -36,7 +36,7 @@ namespace Horo::AI {
         /** @brief Falls back to identity-only diagnostics when text allocation fails; identity storage remains fallible. */
         Error SenseFailure(const ErrorCodeDescriptor &descriptor, const std::exception *error = nullptr) noexcept {
             try {
-                return MakeError(descriptor, error ? std::string{ExceptionText(*error)} : std::string{});
+                return MakeError(descriptor, error ? std::string{ExceptionText(*error)} : std::string{""});
             } catch (const std::bad_alloc &) {
                 // MakeError fills an empty message from the summary, which would allocate again here.
                 try {

@@ -117,7 +117,11 @@ namespace Horo::AI {
             try {
                 auto registry = PerceptionDescriptorRegistry::Capture({std::span{&contract.sense, 1}, std::span{&contract.stimulus, 1}, {}},
                                                                       AllCapabilities);
-                return registry.HasError() ? Result<void>::Failure(registry.ErrorValue()) : Result<void>::Success();
+                if (registry.HasValue())
+                    return Result<void>::Success();
+                if (registry.ErrorValue().code == AIErrors::PerceptionRegistryStorageUnavailable.code)
+                    return Result<void>::Failure(StorageFailure());
+                return Result<void>::Failure(registry.ErrorValue());
             } catch (const std::bad_alloc &) {
                 return Result<void>::Failure(StorageFailure());
             }
