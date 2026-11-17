@@ -12,6 +12,10 @@
 namespace Horo::XR::XRSessionErrors {
     /** @brief A selected-backend preparation stage failed before session publication. */
     extern const ErrorCodeDescriptor ActivationFailed;
+    /** @brief Cooperative cancellation prevented publication of a newly prepared session. */
+    extern const ErrorCodeDescriptor ActivationCancelled;
+    /** @brief A session operation was invoked outside its control thread. */
+    extern const ErrorCodeDescriptor WrongThread;
     /** @brief A runtime event cannot legally follow the current session state. */
     extern const ErrorCodeDescriptor TransitionInvalid;
 

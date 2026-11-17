@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace Horo::XR {
@@ -62,6 +63,8 @@ namespace Horo::XR {
                 calls.push_back({stage, candidate, false});
                 if (stage == failAt)
                     return Result<void>::Failure(MakeError(XRErrors::RuntimeUnavailable));
+                if (cancellation && stage == cancelAt)
+                    cancellation->RequestCancellation();
                 return Result<void>::Success();
             }
 
@@ -78,6 +81,8 @@ namespace Horo::XR {
             }
 
             XRSessionPreparation failAt{XRSessionPreparation::Count};
+            XRSessionPreparation cancelAt{XRSessionPreparation::Count};
+            CancellationSource *cancellation{};
             std::vector<Entry> calls;
             XRSessionId retiring;
             bool drained{};
@@ -178,7 +183,7 @@ namespace Horo::XR {
 
         TEST_CASE("XRRuntime contributes unique actionable session errors", "[unit][xr][lifecycle]") {
             const auto descriptors = XRSessionErrors::Descriptors();
-            REQUIRE(descriptors.size() == 2);
+            REQUIRE(descriptors.size() == 4);
             std::set<std::string> codes;
             for (const auto *descriptor : descriptors) {
                 REQUIRE(descriptor != nullptr);
@@ -186,6 +191,95 @@ namespace Horo::XR {
                 REQUIRE_FALSE(descriptor->remediationHint.empty());
                 REQUIRE(codes.insert(descriptor->code.Value()).second);
             }
+        }
+
+        TEST_CASE("XR session rejects off-thread activation, event, admission and retirement", "[unit][xr][lifecycle]") {
+            RecordingResources resources;
+            XRSessionLifecycle lifecycle{resources};
+            XRFrameLifecycle frames{lifecycle};
+            const auto capabilities = Capabilities();
+            const auto plan = PlanFor(capabilities);
+            const auto session = Activate(lifecycle, capabilities);
+            const auto prepared = resources.calls.size();
+            resources.retiring = session;
+            resources.drained = true;
+            std::array<std::string, 4> codes;
+            XRSessionSnapshot foreignSnapshot;
+            bool foreignPlan{};
+            const auto failureCode = [](const auto &result) {
+                return result.HasError() ? result.ErrorValue().code.Value() : std::string{};
+            };
+            std::thread other{[&] {
+                codes[0] = failureCode(lifecycle.Activate(capabilities, capabilities.System(), capabilities.Revision(), plan));
+                codes[1] = failureCode(lifecycle.ApplyEvent(session, XRSessionEvent::Started));
+                codes[2] = failureCode(lifecycle.Admit(session, false));
+                codes[3] = failureCode(RuntimeInternal::XRSessionHostControl::Retire(lifecycle, frames, resources, session));
+                foreignSnapshot = lifecycle.Snapshot();
+                foreignPlan = lifecycle.AcceptedPlan().has_value();
+                lifecycle.Shutdown();
+            }};
+            other.join();
+            for (const auto &code : codes)
+                CHECK(code == XRSessionErrors::WrongThread.code.Value());
+            CHECK_FALSE(foreignSnapshot.session.IsValid());
+            CHECK_FALSE(foreignPlan);
+            CHECK(resources.calls.size() == prepared);
+            CHECK(resources.observations == 0);
+            CHECK(lifecycle.Snapshot().state == XRSessionState::Ready);
+            REQUIRE(lifecycle.ApplyEvent(session, XRSessionEvent::Started).HasValue());
+            CHECK(lifecycle.Admit(session, false).HasValue());
+        }
+
+        TEST_CASE("XR cancellation rolls back only the interrupted preparation and never publishes it", "[unit][xr][lifecycle]") {
+            RecordingResources resources;
+            XRSessionLifecycle lifecycle{resources};
+            const auto original = Activate(lifecycle, Capabilities());
+            REQUIRE(lifecycle.ApplyEvent(original, XRSessionEvent::Started).HasValue());
+            const auto next = Capabilities(2);
+            const auto plan = PlanFor(next);
+            std::uint32_t generation = original.slot.generation;
+            SECTION("a cancelled request never reaches the resource adapter") {
+                resources.calls.clear();
+                CancellationSource cancellation;
+                std::thread other{[&] {
+                    cancellation.RequestCancellation();
+                }};
+                other.join();
+                RequireFailureIdentity(lifecycle.Activate(next, next.System(), next.Revision(), plan, cancellation.Token()),
+                                       XRSessionErrors::ActivationCancelled);
+                CHECK(resources.calls.empty());
+            }
+            SECTION("cancellation after any completed stage releases that prefix in reverse order") {
+                for (std::uint8_t stage = 0; stage < static_cast<std::uint8_t>(XRSessionPreparation::Count); ++stage) {
+                    CancellationSource cancellation;
+                    resources.calls.clear();
+                    resources.cancellation = &cancellation;
+                    resources.cancelAt = static_cast<XRSessionPreparation>(stage);
+                    RequireFailureIdentity(lifecycle.Activate(next, next.System(), next.Revision(), plan, cancellation.Token()),
+                                           XRSessionErrors::ActivationCancelled);
+                    const std::size_t prefix = stage + 1;
+                    REQUIRE(resources.calls.size() == prefix * 2);
+                    const auto cancelled = resources.calls.front().session;
+                    CHECK(cancelled.slot.generation > generation);
+                    generation = cancelled.slot.generation;
+                    for (std::size_t index = 0; index < prefix; ++index) {
+                        const auto &prepared = resources.calls[index];
+                        const auto &released = resources.calls[resources.calls.size() - 1 - index];
+                        CHECK_FALSE(prepared.release);
+                        CHECK(released.release);
+                        CHECK(prepared.stage == released.stage);
+                        CHECK(prepared.session == cancelled);
+                        CHECK(released.session == cancelled);
+                    }
+                    RequireFailureIdentity(lifecycle.ApplyEvent(cancelled, XRSessionEvent::Started), XRErrors::IdentityStale);
+                    CHECK(lifecycle.Snapshot().session == original);
+                    resources.cancellation = nullptr;
+                }
+            }
+            CHECK(lifecycle.Admit(original, false).HasValue());
+            const auto recovered = Activate(lifecycle, next);
+            CHECK(recovered.slot.generation > generation);
+            RequireFailureIdentity(lifecycle.ApplyEvent(original, XRSessionEvent::Stopping), XRErrors::IdentityStale);
         }
 
         TEST_CASE("XR session events gate frames and focused actions", "[unit][xr][lifecycle]") {

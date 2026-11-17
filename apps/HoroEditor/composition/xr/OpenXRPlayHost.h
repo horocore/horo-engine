@@ -4,6 +4,7 @@
  */
 #include "EditorPlayXrHost.h"
 #include "EditorXrSceneGeometry.h"
+#include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 #include "OpenXRApplicationSession.h"
 #include "OpenXRInputClock.h"
@@ -160,6 +161,7 @@ namespace Horo::Application::Internal {
             std::unique_ptr<Editor::PreparedEditorXrGeometry> geometry;
             std::optional<OpenXRApplicationProjection> projection;
             XR::XRSessionId session;
+            CancellationSource preparationCancellation; /**< Exact unpublished attempt; revocation cannot affect a replacement. */
             bool activated{};
             bool published{};
             bool retiring{};

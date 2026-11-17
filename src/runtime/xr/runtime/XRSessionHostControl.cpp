@@ -7,6 +7,8 @@ namespace Horo::XR::RuntimeInternal {
     /** @copydoc XRSessionHostControl::Retire */
     Result<void> XRSessionHostControl::Retire(XRSessionLifecycle &sessions, XRFrameLifecycle &frames,
                                               const IXRSessionRetirementResources &resources, const XRSessionId &session) {
+        if (!sessions.IsOwnerThread())
+            return Result<void>::Failure(MakeError(XRSessionErrors::WrongThread));
         if (!session.IsValid())
             return Result<void>::Failure(MakeError(XRErrors::IdentityInvalid));
         if (sessions.resources_ != &resources || frames.sessions_ != &sessions)

@@ -4,6 +4,7 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
+#include <thread>
 
 namespace Horo::XR {
     namespace {
@@ -79,6 +80,42 @@ namespace Horo::XR {
             REQUIRE(waited.frame.IsValid());
             REQUIRE(waited.frame == reserved.frame);
             return waited.frame;
+        }
+
+        TEST_CASE("XR frame gate rejects off-thread admission, completion and reset without mutating the owner",
+                  "[unit][xr][frame][lifecycle]") {
+            NoopResources resources;
+            XRSessionLifecycle sessions{resources};
+            const auto capabilities = Capabilities();
+            const auto session = Activate(sessions, capabilities);
+            XRFrameLifecycle frames{sessions};
+            const auto configuration = Configuration(session);
+            REQUIRE(frames.BindConfiguration(configuration, capabilities, StereoLimits) == XRFrameStatus::Ok);
+            const auto reservation = frames.ReserveWait(session);
+            REQUIRE(reservation.status == XRFrameStatus::Ok);
+            const auto predicted = Prediction(10'000);
+            std::array<XRFrameStatus, 5> statuses{};
+            XRFrameSnapshot foreignSnapshot;
+            std::thread other{[&] {
+                statuses[0] = frames.BindConfiguration(configuration, capabilities, StereoLimits);
+                statuses[1] = frames.ReserveWait(session).status;
+                statuses[2] = frames.CancelWait();
+                statuses[3] = frames.RecordWait(predicted, false).status;
+                statuses[4] = frames.Begin(reservation.frame);
+                foreignSnapshot = frames.Snapshot();
+                frames.ResetAfterQuiescence();
+                frames.Shutdown();
+            }};
+            other.join();
+            for (const auto status : statuses)
+                CHECK(status == XRFrameStatus::WrongThread);
+            CHECK_FALSE(foreignSnapshot.frame.IsValid());
+            CHECK(frames.Snapshot().phase == XRFramePhase::WaitReserved);
+            const auto waited = frames.RecordWait(predicted, false);
+            REQUIRE(waited.status == XRFrameStatus::Ok);
+            CHECK(waited.frame == reservation.frame);
+            REQUIRE(frames.Begin(waited.frame) == XRFrameStatus::Ok);
+            REQUIRE(frames.End(waited.frame, 0) == XRFrameStatus::Ok);
         }
 
         TEST_CASE("XR frame contract completes a bounded predicted rendering transaction", "[unit][xr][frame]") {

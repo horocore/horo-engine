@@ -66,7 +66,8 @@ namespace Horo::XR {
         ImageNotReleased,
         IncompleteSubmission,
         SequenceExhausted,
-        Shutdown
+        Shutdown,
+        WrongThread /**< Operation did not run on the owning session's control thread. */
     };
 
     /** @brief Immutable finite bounds admitted for one session/configuration publication. */
@@ -100,7 +101,9 @@ namespace Horo::XR {
     /**
      * @brief Single-control-thread XR frame gate; records completed adapter operations without performing native work.
      *
-     * XRSessionLifecycle and the selected backend/Renderer owner outlive this gate. Methods cannot race or be re-entered.
+     * XRSessionLifecycle and the selected backend/Renderer owner outlive this gate. The gate uses the exact session
+     * control thread for binding, admission, completion and teardown. Methods cannot be re-entered.
+     * Calls outside the control thread fail with WrongThread, or return empty/do nothing for queries without status.
      * The host reserves a frame before native wait, cancels that reservation only when native wait fails, and records
      * every successful native wait even if its prediction or render intent is unusable. Such a completed wait still
      * returns a valid frame to begin/end with zero layers while the native session remains live; the host must never
@@ -229,10 +232,10 @@ namespace Horo::XR {
         /** @brief Return a fixed-size current publication. @return Copy of frame identity, phase, prediction, and counts. */
         [[nodiscard]] XRFrameSnapshot Snapshot() const noexcept;
 
-        /** @brief Drop old session/configuration evidence only after host-proved native quiescence. */
+        /** @brief Drop old session/configuration evidence only on the control thread after host-proved native quiescence. */
         void ResetAfterQuiescence() noexcept;
 
-        /** @brief Permanently close frame admission after host-proved native quiescence; idempotent. */
+        /** @brief Permanently close frame admission on the control thread after host-proved native quiescence; idempotent. */
         void Shutdown() noexcept;
 
     private:

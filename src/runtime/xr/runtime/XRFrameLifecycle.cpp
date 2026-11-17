@@ -7,6 +7,8 @@ namespace Horo::XR {
     /** @copydoc XRFrameLifecycle::BindConfiguration */
     XRFrameStatus XRFrameLifecycle::BindConfiguration(const XRViewConfigurationId &configuration, const XRCapabilitySnapshot &capabilities,
                                                       const XRFrameLimits limits) noexcept {
+        if (!sessions_->IsOwnerThread())
+            return XRFrameStatus::WrongThread;
         if (shutdown_)
             return XRFrameStatus::Shutdown;
         if (current_.phase != XRFramePhase::Idle)
@@ -30,6 +32,8 @@ namespace Horo::XR {
 
     /** @copydoc XRFrameLifecycle::ReserveWait */
     XRFrameWaitOutcome XRFrameLifecycle::ReserveWait(const XRSessionId &session) noexcept {
+        if (!sessions_->IsOwnerThread())
+            return {XRFrameStatus::WrongThread, {}};
         if (shutdown_)
             return {XRFrameStatus::Shutdown, {}};
         if (!session.IsValid())
@@ -57,6 +61,8 @@ namespace Horo::XR {
 
     /** @copydoc XRFrameLifecycle::CancelWait */
     XRFrameStatus XRFrameLifecycle::CancelWait() noexcept {
+        if (!sessions_->IsOwnerThread())
+            return XRFrameStatus::WrongThread;
         if (shutdown_)
             return XRFrameStatus::Shutdown;
         if (current_.phase != XRFramePhase::WaitReserved)
@@ -67,6 +73,8 @@ namespace Horo::XR {
 
     /** @copydoc XRFrameLifecycle::RecordWait */
     XRFrameWaitOutcome XRFrameLifecycle::RecordWait(const XRRenderPredictionTime predictedDisplayTime, const bool shouldRender) noexcept {
+        if (!sessions_->IsOwnerThread())
+            return {XRFrameStatus::WrongThread, {}};
         if (shutdown_)
             return {XRFrameStatus::Shutdown, {}};
         if (current_.phase != XRFramePhase::WaitReserved)
@@ -243,11 +251,13 @@ namespace Horo::XR {
 
     /** @copydoc XRFrameLifecycle::Snapshot */
     XRFrameSnapshot XRFrameLifecycle::Snapshot() const noexcept {
-        return current_;
+        return sessions_->IsOwnerThread() ? current_ : XRFrameSnapshot{};
     }
 
     /** @copydoc XRFrameLifecycle::ResetAfterQuiescence */
     void XRFrameLifecycle::ResetAfterQuiescence() noexcept {
+        if (!sessions_->IsOwnerThread())
+            return;
         ClearFrame();
         configuration_ = {};
         revision_ = {};
@@ -256,7 +266,7 @@ namespace Horo::XR {
 
     /** @copydoc XRFrameLifecycle::Shutdown */
     void XRFrameLifecycle::Shutdown() noexcept {
-        if (shutdown_)
+        if (!sessions_->IsOwnerThread() || shutdown_)
             return;
         ResetAfterQuiescence();
         shutdown_ = true;
@@ -264,6 +274,8 @@ namespace Horo::XR {
 
     /** @copydoc XRFrameLifecycle::ValidateCurrent */
     XRFrameStatus XRFrameLifecycle::ValidateCurrent(const XRFrameId &frame) const noexcept {
+        if (!sessions_->IsOwnerThread())
+            return XRFrameStatus::WrongThread;
         if (shutdown_)
             return XRFrameStatus::Shutdown;
         if (!frame.IsValid())

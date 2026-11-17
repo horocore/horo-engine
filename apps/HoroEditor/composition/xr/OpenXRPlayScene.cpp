@@ -1,6 +1,7 @@
 #include "EditorVulkanXrViewportAccess.h"
 #include "EditorXrTrackingRoot.h"
 #include "Horo/Foundation/Assertions.h"
+#include "Horo/XR/XRSessionErrors.h"
 #include "OpenXRPlayFrameState.h"
 
 namespace Horo::Application::Internal {
@@ -230,18 +231,23 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRPlayHost::SceneState::PrepareResources */
     Result<void> OpenXRPlayHost::SceneState::PrepareResources(OpenXRPlayHost &host, const NativeTrackingSpaceRequest &tracking) {
+        const auto cancellation = preparationCancellation.Token();
+        if (cancellation.IsCancellationRequested())
+            return Result<void>::Failure(MakeError(XRSessionErrors::ActivationCancelled));
         if (auto prepared =
                 host.composition_.session.PrepareInput(*host.input_.port, *host.input_.router, *host.composition_.bindings, tracking);
             prepared.HasError())
             return Result<void>::Failure(prepared.ErrorValue());
+        if (cancellation.IsCancellationRequested())
+            return Result<void>::Failure(MakeError(XRSessionErrors::ActivationCancelled));
         auto preparedProjection = host.composition_.session.PrepareProjection(host.composition_.frontend, host.composition_.viewport,
                                                                               *host.composition_.bindings);
         if (preparedProjection.HasError())
             return Result<void>::Failure(preparedProjection.ErrorValue());
         projection.emplace(std::move(preparedProjection).Value());
         const auto &facts = *projection;
-        auto activatedSession =
-            host.sessions_.Activate(facts.capabilities, facts.capabilities.System(), facts.capabilities.Revision(), facts.plan);
+        auto activatedSession = host.sessions_.Activate(facts.capabilities, facts.capabilities.System(), facts.capabilities.Revision(),
+                                                        facts.plan, cancellation);
         if (activatedSession.HasError())
             return Result<void>::Failure(activatedSession.ErrorValue());
         activated = true;

@@ -1,6 +1,7 @@
 #include "EditorVulkanXrViewportAccess.h"
 #include "Horo/Runtime/Render/NullBackendModule.h"
 #include "Horo/Runtime/RuntimeHost.h"
+#include "Horo/XR/XRSessionErrors.h"
 #include "OpenXRApplicationSession.h"
 #include "OpenXRApplicationVulkanTestSupport.h"
 #include "OpenXRPlayHost.h"
@@ -9,7 +10,9 @@
 #include "support/OpenXRInstalledProductTestFixture.h"
 #include "unit/editor/SceneDocumentHierarchyFixture.h"
 
+#include <functional>
 #include <type_traits>
+#include <utility>
 
 extern "C" [[gnu::visibility("default")]] XRAPI_ATTR XrResult XRAPI_CALL HoroTestOpenXRResolve(XrInstance instance, const char *name,
                                                                                                PFN_xrVoidFunction *function) {
@@ -79,6 +82,7 @@ namespace Horo::Tests::OpenXRApplication {
             std::unique_ptr<Editor::EditorViewportRendererVulkan> viewport;
             std::unique_ptr<Host::OpenXRPlayHost> play;
             bool admission{true};
+            std::function<void()> onCheckAdmission;
 
             explicit ApplicationFixture(const bool render = false, const std::int64_t maximumSpaces = 5) {
                 ConfigurationResolutionRequest request;
@@ -92,6 +96,8 @@ namespace Horo::Tests::OpenXRApplication {
                                                                                                               product.Root(),
                                                                                                               product.host->Generation(),
                                                                                                               [this] {
+                    if (onCheckAdmission)
+                        onCheckAdmission();
                     return admission ? Result<void>::Success() : Result<void>::Failure(MakeError(XR::XRErrors::RuntimeRejected));
                 }},
                                                                            settings, product.Candidate(), *product.policy);
@@ -297,6 +303,31 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(prepared.ErrorValue().code.Value() == XR::XRErrors::CapacityExceeded.code.Value());
         CHECK_FALSE(fixture.play->UsesXrScene());
         CHECK(fixture.play->PresentationState() == Host::OpenXRPlayPresentation::Pending);
+    }
+
+    TEST_CASE("Input revocation cancels the exact unpublished application Play attempt", "[xr][application][play]") {
+        bool revoked{};
+        ApplicationFixture fixture;
+        fixture.CreatePlay();
+        const auto input = fixture.InputPort();
+        REQUIRE(fixture.play->AttachInput(input, fixture.source.Port()).HasValue());
+        auto participant = fixture.play->MakeSceneParticipant();
+        fixture.onCheckAdmission = [&] {
+            if (!std::exchange(revoked, true))
+                static_cast<void>(fixture.play->DetachInput());
+        };
+
+        const auto prepared = participant->Prepare(fixture.definition, fixture.scene->View());
+        REQUIRE(prepared.HasError());
+        CHECK(revoked);
+        CHECK(prepared.ErrorValue().code.Value() == XR::XRSessionErrors::ActivationCancelled.code.Value());
+        CHECK_FALSE(fixture.play->UsesXrScene());
+        CHECK(fixture.script.native.liveSessions == 0);
+        fixture.onCheckAdmission = {};
+        const auto closed = fixture.play->Close();
+        REQUIRE(closed.HasValue());
+        CHECK(closed.Value());
+        CHECK(fixture.script.actions.liveSets == 0);
     }
 
     TEST_CASE("Actual application Play remains inactive until canonical scene and renderer preparation succeed",

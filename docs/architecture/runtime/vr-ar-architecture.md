@@ -784,6 +784,12 @@ extents are recorded from runtime enumeration, not a static headset table.
   blocking I/O, logging-string formatting, and contended locks.
 - Runtime event polling and frame submission occur on their declared owner
   threads. Native callbacks publish bounded state and do not mutate scene data.
+- The backend-neutral session and frame gates share the session coordinator's
+  construction thread. Adapters deliver generation-tagged events and complete
+  frame work on that thread. Off-thread calls cannot publish or retire state.
+- Activation checks its caller's cancellation token between resource stages.
+  A cancelled attempt retires the completed stages in reverse order and keeps
+  the previous session publication until another activation commits.
 - Diagnostics observe revisions and snapshots at their own cadence; they never
   stall frame production.
 - Extension providers, action/profile state, spaces, images, and captures are

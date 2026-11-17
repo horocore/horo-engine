@@ -119,6 +119,8 @@ namespace Horo::Application::Internal {
         input_.admitted = false;
         tracking_.Revoke();
         if (busy_) {
+            if (scene_ && !scene_->activated)
+                scene_->preparationCancellation.RequestCancellation();
             pendingRevoke_ = true;
             return;
         }
