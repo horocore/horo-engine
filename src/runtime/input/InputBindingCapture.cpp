@@ -1,4 +1,5 @@
 #include "Horo/Runtime/Input.h"
+#include "InputAxisProcessing.h"
 #include "InputErrors.h"
 #include "InputRouterInternal.h"
 
@@ -32,53 +33,83 @@ namespace Horo::Input {
             return valueType != ActionValueType::Digital && value < 0.0F ? -1.0F : 1.0F;
         }
 
+        /** @brief Converts the host's explicit raw-axis range into the persisted binding policy. */
+        DeadzoneKind RawAxisPolicy(const RawAxisCaptureRange range) noexcept {
+            if (range == RawAxisCaptureRange::RestingNegativeOne)
+                return DeadzoneKind::UnipolarFromNegativeOne;
+            if (range == RawAxisCaptureRange::RestingPositiveOne)
+                return DeadzoneKind::UnipolarFromPositiveOne;
+            return DeadzoneKind::Axial;
+        }
+
+        /** @brief Rejects ambiguous starting samples instead of inferring a trigger from a held stick. */
+        BindingCaptureResult RawAxisBinding(const GamepadState &gamepad, GamepadState &baseline, const ActionValueType valueType,
+                                            const RawAxisCaptureRange range) {
+            const DeadzoneKind policy = RawAxisPolicy(range);
+            for (std::size_t index = 0; index < gamepad.rawAxes.size(); ++index) {
+                const float current = Detail::NormalizeAxisRange(gamepad.rawAxes[index], policy);
+                const float initial = Detail::NormalizeAxisRange(baseline.rawAxes[index], policy);
+                if (std::abs(initial) > 0.25F) {
+                    if (std::abs(current - initial) >= 0.5F)
+                        return {BindingCaptureStatus::NeedsAxisCalibration, {}};
+                    continue;
+                }
+                if (std::abs(current) < 0.25F)
+                    baseline.rawAxes[index] = gamepad.rawAxes[index];
+                if (std::abs(current) >= 0.75F && std::abs(current - initial) >= 0.5F)
+                    return {BindingCaptureStatus::Captured, InputBinding{.kind = BindingControlKind::RawGamepadAxis,
+                                                                         .rawControl = static_cast<std::uint16_t>(index),
+                                                                         .scale = CaptureScale(current, valueType),
+                                                                         .deadzoneKind = policy,
+                                                                         .deadzone = std::max(0.15F, std::abs(initial))}};
+            }
+            return {};
+        }
+
         /** @brief Selects canonical controls before raw fallback without using adapter display labels as identity. */
-        std::optional<InputBinding> GamepadBinding(const GamepadState &gamepad, GamepadState &baseline, const ActionValueType valueType) {
+        BindingCaptureResult GamepadBinding(const GamepadState &gamepad, GamepadState &baseline, const ActionValueType valueType,
+                                            const RawAxisCaptureRange range) {
             if (const auto button = PressedButton(gamepad.buttons))
-                return InputBinding{.kind = BindingControlKind::GamepadButton, .gamepadButton = static_cast<GamepadButton>(*button)};
+                return {BindingCaptureStatus::Captured,
+                        InputBinding{.kind = BindingControlKind::GamepadButton, .gamepadButton = static_cast<GamepadButton>(*button)}};
             if (const auto button = PressedButton(gamepad.rawButtons))
-                return InputBinding{.kind = BindingControlKind::RawGamepadButton, .rawControl = static_cast<std::uint16_t>(*button)};
+                return {BindingCaptureStatus::Captured,
+                        InputBinding{.kind = BindingControlKind::RawGamepadButton, .rawControl = static_cast<std::uint16_t>(*button)}};
             if (const auto axis = MovedAxis(gamepad.axes, baseline.axes))
-                return InputBinding{.kind = BindingControlKind::GamepadAxis,
-                                    .gamepadAxis = static_cast<GamepadAxis>(*axis),
-                                    .scale = CaptureScale(gamepad.axes[*axis], valueType),
-                                    .deadzoneKind = DeadzoneKind::Axial,
-                                    .deadzone = 0.15F};
-            if (const auto axis = MovedAxis(gamepad.rawAxes, baseline.rawAxes))
-                return InputBinding{.kind = BindingControlKind::RawGamepadAxis,
-                                    .rawControl = static_cast<std::uint16_t>(*axis),
-                                    .scale = CaptureScale(gamepad.rawAxes[*axis], valueType),
-                                    .deadzoneKind = DeadzoneKind::Axial,
-                                    .deadzone = 0.15F};
-            return std::nullopt;
+                return {BindingCaptureStatus::Captured, InputBinding{.kind = BindingControlKind::GamepadAxis,
+                                                                     .gamepadAxis = static_cast<GamepadAxis>(*axis),
+                                                                     .scale = CaptureScale(gamepad.axes[*axis], valueType),
+                                                                     .deadzoneKind = DeadzoneKind::Axial,
+                                                                     .deadzone = 0.15F}};
+            return RawAxisBinding(gamepad, baseline, valueType, range);
         }
 
         /** @brief Selects one typed control after lifecycle admission, with deterministic keyboard/pointer/gamepad priority. */
-        std::optional<InputBinding> SnapshotBinding(const RawInputSnapshot &snapshot, std::vector<GamepadState> &baselines,
-                                                    const ActionValueType valueType) {
+        BindingCaptureResult SnapshotBinding(const RawInputSnapshot &snapshot, std::vector<GamepadState> &baselines,
+                                             const ActionValueType valueType, const RawAxisCaptureRange range) {
             for (std::size_t index = 1; index < snapshot.keyboard.size(); ++index)
                 if (snapshot.keyboard[index].pressed)
-                    return InputBinding{.kind = BindingControlKind::Key,
-                                        .key = static_cast<Key>(index),
-                                        .requiredModifiers = snapshot.modifiers};
+                    return {BindingCaptureStatus::Captured, InputBinding{.kind = BindingControlKind::Key,
+                                                                         .key = static_cast<Key>(index),
+                                                                         .requiredModifiers = snapshot.modifiers}};
             if (const auto button = PressedButton(snapshot.pointer.buttons))
-                return InputBinding{.kind = BindingControlKind::PointerButton,
-                                    .pointerButton = static_cast<PointerButton>(*button),
-                                    .requiredModifiers = snapshot.modifiers};
+                return {BindingCaptureStatus::Captured, InputBinding{.kind = BindingControlKind::PointerButton,
+                                                                     .pointerButton = static_cast<PointerButton>(*button),
+                                                                     .requiredModifiers = snapshot.modifiers}};
             if (snapshot.pointer.wheelX != 0.0F)
-                return InputBinding{.kind = BindingControlKind::PointerWheelX,
-                                    .requiredModifiers = snapshot.modifiers,
-                                    .scale = CaptureScale(snapshot.pointer.wheelX, valueType)};
+                return {BindingCaptureStatus::Captured, InputBinding{.kind = BindingControlKind::PointerWheelX,
+                                                                     .requiredModifiers = snapshot.modifiers,
+                                                                     .scale = CaptureScale(snapshot.pointer.wheelX, valueType)}};
             if (snapshot.pointer.wheelY != 0.0F)
-                return InputBinding{.kind = BindingControlKind::PointerWheelY,
-                                    .requiredModifiers = snapshot.modifiers,
-                                    .scale = CaptureScale(snapshot.pointer.wheelY, valueType)};
+                return {BindingCaptureStatus::Captured, InputBinding{.kind = BindingControlKind::PointerWheelY,
+                                                                     .requiredModifiers = snapshot.modifiers,
+                                                                     .scale = CaptureScale(snapshot.pointer.wheelY, valueType)}};
             for (const auto &pad : snapshot.gamepads) {
                 auto &baseline = *std::ranges::find(baselines, pad.id, &GamepadState::id);
-                if (const auto binding = GamepadBinding(pad, baseline, valueType))
+                if (const auto binding = GamepadBinding(pad, baseline, valueType, range); binding.status != BindingCaptureStatus::Pending)
                     return binding;
             }
-            return std::nullopt;
+            return {};
         }
 
         /** @brief Checks exact device generations and raw shapes before indexing stored baselines. */
@@ -94,8 +125,8 @@ namespace Horo::Input {
     /** @copydoc InputBindingCapture::InputBindingCapture */
     InputBindingCapture::InputBindingCapture(InputBindingCapture &&other) noexcept
         : routerIdentity_(std::exchange(other.routerIdentity_, nullptr)), routerLifetime_(std::move(other.routerLifetime_)),
-          routing_(other.routing_), valueType_(other.valueType_), frame_(other.frame_), terminal_(std::exchange(other.terminal_, true)),
-          baselines_(std::move(other.baselines_)) {}
+          routing_(other.routing_), valueType_(other.valueType_), rawAxisRange_(other.rawAxisRange_), frame_(other.frame_),
+          terminal_(std::exchange(other.terminal_, true)), baselines_(std::move(other.baselines_)) {}
 
     /** @copydoc InputBindingCapture::operator= */
     InputBindingCapture &InputBindingCapture::operator=(InputBindingCapture &&other) noexcept {
@@ -104,6 +135,7 @@ namespace Horo::Input {
             routerLifetime_ = std::move(other.routerLifetime_);
             routing_ = other.routing_;
             valueType_ = other.valueType_;
+            rawAxisRange_ = other.rawAxisRange_;
             frame_ = other.frame_;
             terminal_ = std::exchange(other.terminal_, true);
             baselines_ = std::move(other.baselines_);
@@ -113,11 +145,14 @@ namespace Horo::Input {
 
     /** @copydoc InputBindingCapture::Create */
     Result<InputBindingCapture> InputBindingCapture::Create(const InputRouter &router, const InputContextToken &context,
-                                                            const ActionId &action) {
+                                                            const ActionId &action, const RawAxisCaptureRange rawAxisRange) {
         if (const auto owner = router.impl_->collection->Borrow(); owner.HasError())
             return Result<InputBindingCapture>::Failure(owner.ErrorValue());
         if (!router.IsContextActive(context))
             return Result<InputBindingCapture>::Failure(MakeError(Errors::CaptureInactiveContext));
+        if (rawAxisRange > RawAxisCaptureRange::RestingPositiveOne)
+            return Result<InputBindingCapture>::Failure(
+                MakeError(Errors::ProfileValidationFailed, "Raw axis capture range is unsupported."));
         const auto descriptor = std::ranges::find(router.Actions(), action, &ActionDescriptor::id);
         if (descriptor == router.Actions().end())
             return Result<InputBindingCapture>::Failure(
@@ -127,6 +162,7 @@ namespace Horo::Input {
         capture.routerLifetime_ = router.impl_->collection;
         capture.routing_ = router.RoutingState(context);
         capture.valueType_ = descriptor->valueType;
+        capture.rawAxisRange_ = rawAxisRange;
         capture.frame_ = router.Snapshot().frame;
         capture.baselines_ = router.Snapshot().gamepads;
         return Result<InputBindingCapture>::Success(std::move(capture));
@@ -158,10 +194,10 @@ namespace Horo::Input {
             router.FinishBindingCapture();
             return {BindingCaptureStatus::Cancelled, {}};
         }
-        const auto binding = SnapshotBinding(snapshot, baselines_, valueType_);
-        terminal_ = binding.has_value();
+        const auto binding = SnapshotBinding(snapshot, baselines_, valueType_, rawAxisRange_);
+        terminal_ = binding.status != BindingCaptureStatus::Pending;
         if (terminal_)
             router.FinishBindingCapture();
-        return {binding ? BindingCaptureStatus::Captured : BindingCaptureStatus::Pending, binding};
+        return binding;
     }
 }  // namespace Horo::Input

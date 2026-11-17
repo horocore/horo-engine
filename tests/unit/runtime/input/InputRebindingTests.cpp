@@ -1,4 +1,5 @@
 #include "Horo/Runtime/Input.h"
+#include "helpers/input/BindingCaptureFixture.h"
 #include "support/AllocationProbe.h"
 #include "support/OwnedTestDirectory.h"
 
@@ -9,51 +10,7 @@
 namespace {
     using namespace Horo::Input;
 
-    struct CaptureFixture {
-        InputService input;
-        InputContextId gameplayId{"gameplay"};
-        InputContextId pauseId{"pause.rebind"};
-        InputContextToken gameplay{input.Router().PushContext(gameplayId, InputContextKind::Gameplay)};
-        InputContextToken owner;
-        std::optional<InputBindingCapture> capture;
-        GamepadDeviceId pad;
-        GamepadDeviceId raw;
-        FrameNumber frame{1};
-
-        explicit CaptureFixture(const InputContextKind ownerKind = InputContextKind::ModalRoot)
-            : owner(input.Router().PushContext(pauseId, ownerKind)) {
-            REQUIRE(input.Router()
-                        .SetActionMap({{ActionId{"jump"},
-                                        ActionValueType::Digital,
-                                        gameplayId,
-                                        true,
-                                        {{.kind = BindingControlKind::Key, .key = Key::Space}}},
-                                       {ActionId{"pause.submit"},
-                                        ActionValueType::Digital,
-                                        pauseId,
-                                        false,
-                                        {{.kind = BindingControlKind::Key, .key = Key::J}}}})
-                        .HasValue());
-            input.BeginFrame(frame);
-            pad = input.Collector().ConnectGamepad("canonical");
-            raw = input.Collector().ConnectGamepad("unknown", false, 1, 1);
-            REQUIRE(input.Collector().SetRawGamepadAxis(raw, 0, -1.0F));
-            (void)input.CommitFrame();
-            auto created = InputBindingCapture::Create(input.Router(), owner, ActionId{"jump"});
-            REQUIRE(created.HasValue());
-            capture.emplace(std::move(created).Value());
-        }
-
-        RawInputCollector &Begin() {
-            input.BeginFrame(++frame);
-            return input.Collector();
-        }
-
-        BindingCaptureResult Poll() {
-            (void)input.CommitFrame();
-            return capture->Poll(input.Router(), owner);
-        }
-    };
+    using CaptureFixture = Horo::Input::Tests::CaptureFixture;
 
     TEST_CASE("Pause-menu and editor capture commit the same typed keyboard pointer and gamepad bindings", "[input][rebinding]") {
         CaptureFixture fixture;
@@ -100,7 +57,7 @@ namespace {
     }
 
     TEST_CASE("Resting unknown-controller axes require deliberate movement before capture", "[input][rebinding]") {
-        CaptureFixture fixture;
+        CaptureFixture fixture{InputContextKind::ModalRoot, -1.0F, ActionValueType::Digital, RawAxisCaptureRange::RestingNegativeOne};
         fixture.Begin();
         REQUIRE(fixture.Poll().status == BindingCaptureStatus::Pending);
         REQUIRE(fixture.capture->Poll(fixture.input.Router(), fixture.owner).status == BindingCaptureStatus::Pending);
@@ -109,6 +66,7 @@ namespace {
         REQUIRE(result.status == BindingCaptureStatus::Captured);
         REQUIRE(result.binding->kind == BindingControlKind::RawGamepadAxis);
         REQUIRE(result.binding->rawControl == 0);
+        REQUIRE(result.binding->deadzoneKind == DeadzoneKind::UnipolarFromNegativeOne);
     }
 
     TEST_CASE("Keyboard and pointer captures preserve modifiers without imposing them on gamepads", "[input][rebinding]") {
@@ -146,6 +104,8 @@ namespace {
             fixture.input.Router()
                 .SetActionMap({{ActionId{"jump"}, shape, fixture.gameplayId, true, {{.kind = BindingControlKind::Key, .key = Key::Space}}}})
                 .HasValue());
+        REQUIRE(fixture.Begin().SetRawGamepadAxis(fixture.raw, 0, 0.0F));
+        (void)fixture.input.CommitFrame();
         auto capture = InputBindingCapture::Create(fixture.input.Router(), fixture.owner, ActionId{"jump"});
         REQUIRE(capture.HasValue());
         fixture.capture.emplace(std::move(capture).Value());

@@ -418,12 +418,14 @@ namespace Horo::Input {
         RawGamepadButton,
         RawGamepadAxis,
     };
-    /** @brief Deadzone transformation applied before action aggregation. */
+    /** @brief Axis range and deadzone transformation applied before action aggregation. */
     enum class DeadzoneKind : std::uint8_t {
-        None,
-        Axial,
-        Radial,
-        Threshold
+        None = 0,
+        Axial = 1,
+        Radial = 2,
+        Threshold = 3,
+        UnipolarFromNegativeOne = 4, /**< Raw [-1, 1] with -1 rest becomes [0, 1] before axial deadzone. */
+        UnipolarFromPositiveOne = 5  /**< Raw [-1, 1] with +1 rest becomes [0, 1] before axial deadzone. */
     };
 
     /** @brief Typed binding from one control, modifiers, or chord into an action component. */
@@ -898,11 +900,19 @@ namespace Horo::Input {
         std::unique_ptr<Impl> impl_;
     };
 
+    /** @brief Declared neutral range for unknown-controller axes during capture. */
+    enum class RawAxisCaptureRange : std::uint8_t {
+        Centered,
+        RestingNegativeOne,
+        RestingPositiveOne
+    };
+
     /** @brief Explicit terminal or pending result of a rebinding capture. */
     enum class BindingCaptureStatus : std::uint8_t {
         Pending,
         Captured,
-        Cancelled
+        Cancelled,
+        NeedsAxisCalibration /**< A moved raw axis was not neutral in the declared range; retry after centering or selecting its range. */
     };
 
     /** @brief One typed capture result. The binding is populated only for Captured. */
@@ -923,16 +933,21 @@ namespace Horo::Input {
         /** @brief Starts a capture after the host establishes an exclusive input context.
          * @param router Host-owned semantic authority. @param context Exact eligible capture context.
          * @param action Registered action whose value shape controls axis capture policy.
-         * @return A move-only transient capture, or an inactive-context error.
+         * @param rawAxisRange Neutral range explicitly selected by the host for unknown-controller axes.
+         * @return A move-only transient capture, or an inactive-context, action or range error.
+         * @throws std::bad_alloc If transient baseline or diagnostic storage cannot be allocated.
          * @details Only creation copies baseline gamepad storage. The host retains context ownership through terminal delivery.
+         * Raw axes must start near neutral in the declared range. A non-neutral axis cannot identify a trigger versus a held stick.
          */
         [[nodiscard]] static Result<InputBindingCapture> Create(const InputRouter &router, const InputContextToken &context,
-                                                                const ActionId &action);
+                                                                const ActionId &action,
+                                                                RawAxisCaptureRange rawAxisRange = RawAxisCaptureRange::Centered);
         /** @brief Polls one later committed frame without allocating or retaining snapshot borrows.
          * @param router Same live router. @param context Same live capture context.
          * @return First keyboard, pointer or gamepad binding, pending, or cancellation after Escape/focus/context/device/configuration
-         * loss.
-         * @details Held axes must move from their captured baseline; resting unknown-controller triggers cannot bind themselves.
+         * loss, or NeedsAxisCalibration for a moved raw axis with a non-neutral starting sample.
+         * @details Canonical held axes must move from their captured baseline. Raw axes use the host's declared neutral range;
+         * a non-neutral raw starting sample requires a fresh capture after release or range selection.
          * Terminal captures remain cancelled on later polls. Polling a different router only compares the stored identity.
          * Terminal delivery neutralizes routing for that frame and blocks lower contexts through the following close frame.
          */
@@ -944,6 +959,7 @@ namespace Horo::Input {
         std::weak_ptr<InputCollectionLifetime> routerLifetime_;
         InputRoutingState routing_;
         ActionValueType valueType_{ActionValueType::Digital};
+        RawAxisCaptureRange rawAxisRange_{RawAxisCaptureRange::Centered};
         FrameNumber frame_{};
         bool terminal_{};
         std::vector<GamepadState> baselines_;

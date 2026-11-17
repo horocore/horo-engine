@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Input.h"
 
 #include "Horo/Foundation/Utf8.h"
+#include "InputAxisProcessing.h"
 #include "InputErrors.h"
 #include "InputRouterInternal.h"
 
@@ -45,10 +46,11 @@ namespace Horo::Input {
             using enum DeadzoneKind;
             if (!std::isfinite(value))
                 return 0.0F;
+            value = Detail::NormalizeAxisRange(value, binding.deadzoneKind);
             const float deadzone = std::clamp(binding.deadzone, 0.0F, 0.99F);
             if (binding.deadzoneKind == Threshold)
                 return std::abs(value) >= deadzone ? value : 0.0F;
-            if (binding.deadzoneKind == Axial || binding.deadzoneKind == Radial) {
+            if (binding.deadzoneKind == Axial || binding.deadzoneKind == Radial || Detail::IsUnipolarAxisPolicy(binding.deadzoneKind)) {
                 if (std::abs(value) <= deadzone)
                     return 0.0F;
                 return std::copysign((std::abs(value) - deadzone) / (1.0F - deadzone), value);
@@ -260,8 +262,10 @@ namespace Horo::Input {
                 return key <= Key::Unknown || key >= Key::Count;
             }))
                 report.diagnostics.emplace_back(UnsupportedControl, action, "Binding chord references an unsupported key.");
-            if (binding.deadzoneKind > DeadzoneKind::Threshold)
+            if (binding.deadzoneKind > DeadzoneKind::UnipolarFromPositiveOne)
                 report.diagnostics.emplace_back(InvalidDeadzone, action, "Binding deadzone policy is unsupported.");
+            if (Detail::IsUnipolarAxisPolicy(binding.deadzoneKind) && binding.kind != BindingControlKind::RawGamepadAxis)
+                report.diagnostics.emplace_back(InvalidDeadzone, action, "Unipolar range policies require a raw gamepad axis.");
             if (!IsControlSupported(binding))
                 report.diagnostics.emplace_back(UnsupportedControl, action, std::string(unsupportedControlMessage));
             if (IsReservedShortcut(binding))
@@ -548,7 +552,8 @@ namespace Horo::Input {
             binding.rawControl = static_cast<std::uint16_t>(ProfileInteger(json, "rawControl", 255));
             binding.scale = json.value("scale", 1.0F);
             binding.component = static_cast<std::uint8_t>(ProfileInteger(json, "component", 1));
-            binding.deadzoneKind = static_cast<DeadzoneKind>(ProfileInteger(json, "deadzoneKind", Index(DeadzoneKind::Threshold)));
+            binding.deadzoneKind =
+                static_cast<DeadzoneKind>(ProfileInteger(json, "deadzoneKind", Index(DeadzoneKind::UnipolarFromPositiveOne)));
             binding.deadzone = json.value("deadzone", 0.0F);
             binding.digitalThreshold = json.value("digitalThreshold", 0.5F);
             if (const auto chord = json.find("chord"); chord != json.end()) {

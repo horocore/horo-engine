@@ -134,6 +134,15 @@ still requires compilation and test execution. Two other CI jobs failed
 while downloading Lua 5.4.8 with an SSL connection reset, before source compilation;
 no TLS verification or dependency policy was changed to bypass those failures.
 
+The subsequent native Windows/MSVC Debug batch at `eb55aa728` built core Input,
+Android/SDL adapters and the Input public-header consumer. It selected 110 tests:
+109 passed, none failed, and one symlink-containment test explicitly skipped
+because this host cannot create directory symlinks. This result predates the
+new raw-axis calibration candidate. That candidate adds explicit range selection,
+safe ambiguous-baseline outcomes, trigger persistence and editor interaction
+regressions. Its before/after native execution and remaining integration/quality
+checks are pending; the earlier core result does not qualify these later edits.
+
 ## Reproducible Targeted Qualification
 
 These commands describe the required runs, not successful execution. On the

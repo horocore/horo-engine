@@ -48,6 +48,8 @@ namespace Horo::Editor {
         void DrawActions(const EditorGuiContext &context);
         void DrawActionTable(std::span<const Input::ActionDescriptor> actions, const EditorGuiContext &context);
         void DrawSelectedAction(const Input::ActionDescriptor &action, const EditorGuiContext &context);
+        /** @brief Selects the declared neutral range used only when capturing unknown-controller axes. */
+        void DrawRawAxisRange(const EditorGuiContext &context);
         [[nodiscard]] bool DrawBindingDirection(const Input::ActionDescriptor &action, std::span<const Input::InputBinding> bindings,
                                                 std::size_t index, const EditorGuiContext &context);
         [[nodiscard]] bool DrawBindingActions(const Input::ActionDescriptor &action, std::span<const Input::InputBinding> bindings,
@@ -63,6 +65,7 @@ namespace Horo::Editor {
 
         Input::InputRouter *router_{nullptr};
         Page page_{Page::Actions};
+        Input::RawAxisCaptureRange rawAxisRange_{Input::RawAxisCaptureRange::Centered};
         std::size_t selectedAction_{0};
         std::optional<std::pair<std::size_t, float>> deadzoneDraft_;
         std::optional<Input::ActionId> listeningAction_;

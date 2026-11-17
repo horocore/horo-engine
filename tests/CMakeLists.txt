@@ -149,6 +149,7 @@ target_sources(HoroRenderFrontendPublicHeaderConsumer PRIVATE support/RenderPara
 target_sources(HoroRuntimeUiPublicHeaderConsumer PRIVATE support/RuntimeUiUnicodePublicContract.cpp)
 target_sources(HoroRuntimeUiPublicHeaderConsumer PRIVATE support/RuntimeUiInspectionPublicContract.cpp)
 target_sources(HoroInputPublicHeaderConsumer PRIVATE support/InputCollectionPublicContract.cpp)
+target_sources(HoroInputPublicHeaderConsumer PRIVATE support/InputRebindingPublicContract.cpp)
 target_sources(HoroPackagesPublicHeaderConsumer PRIVATE support/PackageCachePublicContract.cpp)
 target_sources(HoroSecurityEnvelopePublicHeaderConsumer PRIVATE support/SecurityEnvelopePublicContract.cpp)
 add_test(NAME HoroSecurityEnvelopeSdkContract COMMAND "${CMAKE_COMMAND}"
@@ -332,6 +333,7 @@ add_executable(HoroInputTests
         unit/runtime/input/GameplayInputFrameTests.cpp
         unit/runtime/input/InputTests.cpp
         unit/runtime/input/InputRebindingTests.cpp
+        unit/runtime/input/RawAxisCaptureTests.cpp
         unit/runtime/input/InputPresentationTests.cpp
         unit/runtime/input/InputCollectionTests.cpp
         support/AllocationProbe.cpp

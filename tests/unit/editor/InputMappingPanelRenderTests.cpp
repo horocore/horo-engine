@@ -3,6 +3,7 @@
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 #include "support/OwnedTestDirectory.h"
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <cstdlib>
@@ -53,6 +54,7 @@ namespace {
         Input::InputContextToken workspace;
         Input::RawInputCollector collector;
         Input::GamepadDeviceId pad;
+        Input::GamepadDeviceId rawPad;
         ImVec2 pageOrigin;
 
         MappingFixture() {
@@ -75,6 +77,7 @@ namespace {
             workspace = gui.input.PushContext(id, Input::InputContextKind::EditorWorkspace);
             collector.BeginFrame(1);
             pad = collector.ConnectGamepad(std::string(160, 'b'));
+            rawPad = collector.ConnectGamepad("Unknown controller", false, 0, 1);
             gui.input.BeginFrame(collector.Commit());
             PanelContext context{.dataBus = gui.editorEvents, .inputRouter = &gui.input, .workspaceInputContext = &workspace};
             panel.OnAttach(context);
@@ -127,20 +130,63 @@ namespace {
             Draw(width);
         }
 
+        ImGuiWindow *ContentWindow() {
+            for (auto *window : ImGui::GetCurrentContext()->Windows) {
+                if (window->Active && window->ParentWindow && std::string_view{window->ParentWindow->Name} == "Input Mapping render" &&
+                    std::string_view{window->Name}.find("##InputMappingContent") != std::string_view::npos)
+                    return window;
+            }
+            FAIL("Input Mapping content was not drawn");
+            return nullptr;
+        }
+
         void ActivateRebind(const std::optional<int> binding = {}) {
             const auto &label =
                 gui.localization.Get("editor", binding ? "workspace.input_mapping.rebind" : "workspace.input_mapping.add_binding");
-            for (auto *window : ImGui::GetCurrentContext()->Windows) {
-                if (window->Active && std::string_view{window->Name}.find("##InputMappingContent") != std::string_view::npos) {
-                    ImGui::FocusWindow(window);
-                    auto seed = window->IDStack.back();
-                    if (binding)
-                        seed = ImHashData(&*binding, sizeof(int), seed);
-                    ImGui::ActivateItemByID(ImHashStr(label.c_str(), 0, seed));
-                    return;
+            auto *window = ContentWindow();
+            ImGui::FocusWindow(window);
+            auto seed = window->IDStack.back();
+            if (binding)
+                seed = ImHashData(&*binding, sizeof(int), seed);
+            ImGui::ActivateItemByID(ImHashStr(label.c_str(), 0, seed));
+        }
+
+        void SelectRawAxisRange(const int range, const float width) {
+            Draw(width);
+            auto *window = ContentWindow();
+            const auto seed = ImHashStr("##RawAxisRange", 0, window->IDStack.back());
+            const auto field = ImHashStr("Combo#####RawAxisRange", 0, seed);
+            auto &io = ImGui::GetIO();
+            const ImRect bounds = window->InnerClipRect;
+            const float step = std::max(1.0F, ImGui::GetFontSize() * 0.5F);
+            bool found{};
+            for (float y = bounds.Min.y + step * 0.5F; y < bounds.Max.y; y += step) {
+                io.AddMousePosEvent(bounds.GetCenter().x, y);
+                Draw(width);
+                if (ImGui::GetCurrentContext()->HoveredId == field) {
+                    found = true;
+                    break;
                 }
             }
-            FAIL("Input Mapping content was not drawn");
+            REQUIRE(found);
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+            Draw(width);
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            Draw(width);
+            ImGuiWindow *popup{};
+            for (auto *candidate : ImGui::GetCurrentContext()->Windows)
+                if (candidate->Active && (candidate->Flags & ImGuiWindowFlags_Popup))
+                    popup = candidate;
+            REQUIRE(popup != nullptr);
+            CHECK(popup->Size.x <= width);
+            const float rowHeight = popup->ContentSize.y / 3.0F;
+            io.AddMousePosEvent(popup->InnerRect.GetCenter().x,
+                                popup->DC.CursorStartPos.y + (static_cast<float>(range) + 0.5F) * rowHeight);
+            Draw(width);
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+            Draw(width);
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            Draw(width);
         }
     };
 
@@ -217,6 +263,48 @@ namespace {
         fixture.collector.BeginFrame(4);
         fixture.gui.input.BeginFrame(fixture.collector.Commit());
         CHECK(fixture.gui.input.ReadAction(fixture.workspace, action).x == -1.0F);
+    }
+
+    TEST_CASE("Input Mapping persists an explicitly selected unknown-controller trigger range", "[editor][input][gui]") {
+        MappingFixture fixture;
+        fixture.Locale(GENERATE("en-US", "tr-TR"));
+        const float width = GENERATE(260.0F, 900.0F);
+        const float rest = GENERATE(-1.0F, 1.0F);
+        const Input::ActionId action{"trigger"};
+        REQUIRE(fixture.gui.input
+                    .SetActionMap({{action,
+                                    Input::ActionValueType::Digital,
+                                    Input::InputContextId{"workspace"},
+                                    true,
+                                    {{.kind = Input::BindingControlKind::Key, .key = Input::Key::Space}}}})
+                    .HasValue());
+        fixture.collector.BeginFrame(2);
+        REQUIRE(fixture.collector.SetRawGamepadAxis(fixture.rawPad, 0, rest));
+        fixture.gui.input.BeginFrame(fixture.collector.Commit());
+        fixture.SelectRawAxisRange(rest < 0 ? 1 : 2, width);
+        fixture.ActivateRebind(0);
+        fixture.Draw(width);
+        REQUIRE_FALSE(fixture.gui.input.IsContextActive(fixture.workspace));
+        fixture.collector.BeginFrame(3);
+        REQUIRE(fixture.collector.SetRawGamepadAxis(fixture.rawPad, 0, -rest));
+        fixture.gui.input.BeginFrame(fixture.collector.Commit());
+        fixture.Draw(width);
+        const auto paths = Input::ResolveBindingProfilePaths({}, fixture.home.directory.Path());
+        REQUIRE(paths.HasValue());
+        const auto saved = Input::LoadBindingProfile(paths.Value().editorUser);
+        REQUIRE(saved.HasValue());
+        const auto policy = rest < 0 ? Input::DeadzoneKind::UnipolarFromNegativeOne : Input::DeadzoneKind::UnipolarFromPositiveOne;
+        REQUIRE(saved.Value().overrides.front().bindings.front().deadzoneKind == policy);
+        fixture.collector.BeginFrame(4);
+        REQUIRE(fixture.collector.SetRawGamepadAxis(fixture.rawPad, 0, rest));
+        fixture.gui.input.BeginFrame(fixture.collector.Commit());
+        fixture.collector.BeginFrame(5);
+        fixture.gui.input.BeginFrame(fixture.collector.Commit());
+        CHECK_FALSE(fixture.gui.input.ReadAction(fixture.workspace, action).down);
+        fixture.collector.BeginFrame(6);
+        REQUIRE(fixture.collector.SetRawGamepadAxis(fixture.rawPad, 0, -rest));
+        fixture.gui.input.BeginFrame(fixture.collector.Commit());
+        CHECK(fixture.gui.input.ReadAction(fixture.workspace, action).pressed);
     }
 
     TEST_CASE("Pointer gestures outside Input Mapping abandon capture without authoring another surface's input", "[editor][input][gui]") {

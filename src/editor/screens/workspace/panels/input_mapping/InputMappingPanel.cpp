@@ -70,6 +70,7 @@ namespace Horo::Editor {
         listeningAction_.reset();
         bindingCapture_.reset();
         deadzoneDraft_.reset();
+        rawAxisRange_ = Input::RawAxisCaptureRange::Centered;
         router_ = nullptr;
     }
 
@@ -182,6 +183,7 @@ namespace Horo::Editor {
         }
         ImGui::Separator();
         ImGui::TextWrapped("%s", action.id.Value().c_str());
+        DrawRawAxisRange(context);
         const auto &bindings = BindingsFor(action, router_->Profile());
         for (std::size_t index = 0; index < bindings.size(); ++index) {
             const auto label = Ui::ShortcutLabel(bindings[index]);
@@ -244,6 +246,23 @@ namespace Horo::Editor {
         return true;
     }
 
+    /** @copydoc InputMappingPanel::DrawRawAxisRange */
+    void InputMappingPanel::DrawRawAxisRange(const EditorGuiContext &context) {
+        if (!std::ranges::any_of(router_->Snapshot().gamepads, [](const Input::GamepadState &pad) {
+            return !pad.rawAxes.empty();
+        }))
+            return;
+        ImGui::TextWrapped("%s", kTextScope.Text(context.localization, "raw_axis_range").c_str());
+        const std::array labels{kTextScope.Text(context.localization, "raw_axis_centered").c_str(),
+                                kTextScope.Text(context.localization, "raw_axis_trigger").c_str(),
+                                kTextScope.Text(context.localization, "raw_axis_inverted_trigger").c_str()};
+        auto selected = static_cast<int>(rawAxisRange_);
+        ImGui::SetNextItemWidth(std::max(1.0F, ImGui::GetContentRegionAvail().x));
+        if (Ui::ComboControl("##RawAxisRange", &selected, labels.data(), static_cast<int>(labels.size()), context.theme.fonts,
+                             {.componentSize = Ui::ComponentSize::Medium}))
+            rawAxisRange_ = static_cast<Input::RawAxisCaptureRange>(selected);
+    }
+
     bool InputMappingPanel::DrawBindingDeadzone(const Input::ActionDescriptor &action, const std::span<const Input::InputBinding> bindings,
                                                 const std::size_t index, const EditorGuiContext &context) {
         const auto &binding = bindings[index];
@@ -266,20 +285,25 @@ namespace Horo::Editor {
 
     void InputMappingPanel::StartBindingCapture(const Input::ActionId &action, const std::optional<std::size_t> bindingIndex,
                                                 const EditorGuiContext &context) {
-        listeningAction_ = action;
-        listeningBinding_ = bindingIndex;
+        bindingCapture_.reset();
         bindingCaptureContext_.Reset();
-        bindingCaptureContext_ =
+        listeningAction_.reset();
+        listeningBinding_.reset();
+        Input::ActionId requestedAction = action;
+        std::string prompt = kTextScope.Text(context.localization, "press_key");
+        // Pending ownership stays local until every fallible copy has completed.
+        auto pendingContext =
             router_->PushContext(Input::InputContextId{"editor.input_binding_capture"}, Input::InputContextKind::FocusedGuiWidget);
-        auto capture = Input::InputBindingCapture::Create(*router_, bindingCaptureContext_, *listeningAction_);
+        auto capture = Input::InputBindingCapture::Create(*router_, pendingContext, requestedAction, rawAxisRange_);
         if (capture.HasError()) {
             statusMessage_ = capture.ErrorValue().message;
-            listeningAction_.reset();
-            bindingCaptureContext_.Reset();
-        } else {
-            bindingCapture_.emplace(std::move(capture).Value());
-            statusMessage_ = InputMappingPanel::kTextScope.Text(context.localization, "press_key");
+            return;
         }
+        listeningAction_.emplace(std::move(requestedAction));
+        listeningBinding_ = bindingIndex;
+        bindingCaptureContext_ = std::move(pendingContext);
+        bindingCapture_.emplace(std::move(capture).Value());
+        statusMessage_ = std::move(prompt);
     }
 
     void InputMappingPanel::DrawDevices(const EditorGuiContext &context) {
@@ -397,7 +421,9 @@ namespace Horo::Editor {
             }
             const auto applied = CommitBindingChange(std::move(change));
             statusMessage_ = applied.HasError() ? applied.ErrorValue().message : kTextScope.Text(context.localization, "binding_updated");
-        } else
+        } else if (result.status == Input::BindingCaptureStatus::NeedsAxisCalibration)
+            statusMessage_ = kTextScope.Text(context.localization, "axis_calibration_required");
+        else
             statusMessage_.clear();
         listeningAction_.reset();
         bindingCapture_.reset();

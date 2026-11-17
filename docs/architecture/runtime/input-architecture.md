@@ -648,6 +648,21 @@ context/configuration/assignment/device generations and the router's existing
 weak lifecycle anchor. It retains no snapshot references and allocates no normal
 poll storage. Focus loss, preemption, Escape, retired owners and changed device
 generations cancel capture. Resting raw trigger axes require deliberate motion.
+The host declares `RawAxisCaptureRange`: centered stick, trigger resting at -1,
+or trigger resting at +1. The initial sample alone cannot distinguish a held
+stick from a resting trigger. Moving a raw axis that did not start near neutral
+in the declared range terminates capture with `NeedsAxisCalibration` and no
+binding. The host releases/recenters the control or selects its range, then
+starts a fresh capture. Input Mapping exposes this choice through the shared
+localized controls; runtime pause-menu hosts pass the same typed option.
+
+Raw trigger bindings persist `DeadzoneKind::UnipolarFromNegativeOne` or
+`UnipolarFromPositiveOne`. These policies normalize signed raw samples to [0, 1]
+before axial deadzone, digital threshold and action aggregation. They are valid
+only for raw gamepad axes; canonical axes already have their declared range.
+Capture deadzones cover the admitted near-neutral raw starting sample. Raw
+snapshots and physical control/glyph identities remain unchanged.
+
 Terminal delivery neutralizes routing in the capture frame and blocks lower
 contexts through the following close frame. The host retains its context through
 terminal delivery; hidden editor presentation withdraws its own capture.
@@ -655,6 +670,21 @@ The Input Mapping panel replaces a selected binding while preserving the other
 controls and the selected binding's output component/scale. Adding, removing and
 selecting axis component/direction publish complete per-action overrides through
 the same validated scope. Capture completion cannot activate another panel control.
+
+The raw-range revision fixes captures that otherwise remain active when a signed
+raw trigger returns to an endpoint. Existing deadzone values 0 through 3 and
+schema-1 profiles retain their meaning; the new policies append values 4 and 5.
+Older strict readers reject those unsupported values and preserve their last
+valid profile rather than silently interpreting a trigger as a signed stick.
+Existing raw-axis overrides keep their signed meaning. To migrate a raw trigger,
+select its trigger type in Input Mapping and rebind from its released position,
+or pass the corresponding range to the runtime capture API before committing.
+`InputBindingCapture::Create` now has a fourth, defaulted range argument. Existing
+source calls retain centered behavior, but binary consumers must rebuild and
+hosts must handle `NeedsAxisCalibration`. Affected callers include Input Mapping,
+runtime pause-menu consumers and capture fixtures. The public header remains
+owned by `HoroInput`; its compile-only rebinding consumer covers explicit range
+selection without exposing the target-private normalization helper.
 
 The former embedded `editor_settings.json` `input.bindingProfile` is imported
 when the canonical editor-user file is absent. Settings save or project-entry
