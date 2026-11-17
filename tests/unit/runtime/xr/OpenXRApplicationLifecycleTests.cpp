@@ -10,6 +10,7 @@
 #include "support/OpenXRInstalledProductTestFixture.h"
 #include "unit/editor/SceneDocumentHierarchyFixture.h"
 
+#include <algorithm>
 #include <functional>
 #include <type_traits>
 #include <utility>
@@ -339,6 +340,7 @@ namespace Horo::Tests::OpenXRApplication {
         REQUIRE(initial.rendererReady);
         REQUIRE(initial.mayRequestTest);
         REQUIRE(fixture.script.native.liveSessions == 1);
+        const auto created = std::ranges::count(fixture.script.native.calls, "session");
 
         const auto cancelled = RequireValue(fixture.play->RequestSetupTest());
         REQUIRE(fixture.play->RequestSetupTest().HasError());
@@ -346,6 +348,7 @@ namespace Horo::Tests::OpenXRApplication {
         fixture.play->PumpSetupTest();
         CHECK(fixture.play->ReadSetup().test == Cancelled);
         CHECK(fixture.script.native.liveSessions == 1);
+        CHECK(std::ranges::count(fixture.script.native.calls, "session") == created);
 
         const auto next = RequireValue(fixture.play->RequestSetupTest());
         REQUIRE(next != cancelled);
@@ -353,10 +356,12 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(fixture.play->ReadSetup().test == Queued);
         fixture.play->PumpSetupTest();
         CHECK(fixture.play->ReadSetup().test == Passed);
+        CHECK(std::ranges::count(fixture.script.native.calls, "session") == created + 1);
         CHECK(fixture.script.native.liveSessions == 0);
         CHECK_FALSE(fixture.play->UsesXrScene());
         CHECK_FALSE(fixture.session->RetainedSession());
         REQUIRE(fixture.session->PrepareSession().HasValue());
+        CHECK(std::ranges::count(fixture.script.native.calls, "session") == created + 2);
         CHECK(fixture.script.native.liveSessions == 1);
         REQUIRE(fixture.play->Close().HasValue());
         CHECK(fixture.script.native.liveSessions == 0);
