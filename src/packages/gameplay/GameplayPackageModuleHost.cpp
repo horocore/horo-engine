@@ -339,6 +339,6 @@ namespace Horo::Packages {
         if (!LiveRole(*state))
             return Output::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
         contract.source = {source.Value(), 1, 1};
-        return Gameplay::LuaPerceptionSenseProgram::Compile(std::move(code), std::move(contract), std::move(parent).Value(), limits);
+        return Gameplay::LuaPerceptionSenseProgram::Compile(code, contract, std::move(parent).Value(), limits);
     }
 }  // namespace Horo::Packages

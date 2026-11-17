@@ -26,7 +26,7 @@ namespace Horo::AI {
             }
 
             std::unique_ptr<Gameplay::LuaPerceptionSenseProgram> Program(std::string source) const {
-                auto compiled = Gameplay::LuaPerceptionSenseProgram::Compile(std::move(source), contract, parent);
+                auto compiled = Gameplay::LuaPerceptionSenseProgram::Compile(source, contract, parent);
                 REQUIRE(compiled.HasValue());
                 return std::move(compiled).Value();
             }
@@ -146,11 +146,10 @@ namespace Horo::AI {
 
         TEST_CASE("Lua custom sense compilation reports typed storage failure", "[unit][ai][sense-lua]") {
             Fixture fixture;
-            std::string source{"return function() return true end"};
-            auto contract = fixture.contract;
+            const std::string source{"return function() return true end"};
             auto failed = [&] {
                 Tests::AllocationProbe::ScopedFailure allocation;
-                auto result = Gameplay::LuaPerceptionSenseProgram::Compile(std::move(source), std::move(contract), fixture.parent);
+                auto result = Gameplay::LuaPerceptionSenseProgram::Compile(source, fixture.contract, fixture.parent);
                 return result;
             }();
             ExpectError(failed, AIErrors::PerceptionRegistryStorageUnavailable);

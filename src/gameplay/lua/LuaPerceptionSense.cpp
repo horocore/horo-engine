@@ -55,7 +55,7 @@ namespace Horo::Gameplay {
         }
 
         /** @brief Validates source and instruction ceilings before compiling untrusted script bytes. */
-        bool ValidSource(const std::string &source, const LuaBehaviorLimits limits) noexcept {
+        bool ValidSource(const std::string_view source, const LuaBehaviorLimits limits) noexcept {
             return !source.empty() && source.size() <= 256U * 1024U && source.find('\0') == std::string::npos &&
                    limits.maximumInstructionsPerCallback > 0 && limits.maximumInstructionsPerCallback <= 100'000;
         }
@@ -162,6 +162,10 @@ namespace Horo::Gameplay {
     }  // namespace
 
     struct LuaPerceptionSenseProgram::Image final {
+        Image(const std::string_view sourceBytes, const AI::PerceptionSenseContract &declaration, const LuaBehaviorLimits policy,
+              std::shared_ptr<const AI::PerceptionSenseGeneration> nativeParent)
+            : source(sourceBytes), contract(declaration), limits(policy), parent(std::move(nativeParent)) {}
+
         std::string source;
         AI::PerceptionSenseContract contract;
         LuaBehaviorLimits limits;
@@ -206,20 +210,16 @@ namespace Horo::Gameplay {
 
     /** @copydoc LuaPerceptionSenseProgram::Compile */
     Result<std::unique_ptr<LuaPerceptionSenseProgram>> LuaPerceptionSenseProgram::Compile(
-        std::string source, AI::PerceptionSenseContract contract, std::shared_ptr<const AI::PerceptionSenseGeneration> parent,
-        const LuaBehaviorLimits limits) {
+        const std::string_view source, const AI::PerceptionSenseContract &contract,
+        std::shared_ptr<const AI::PerceptionSenseGeneration> parent, const LuaBehaviorLimits limits) {
         using Output = Result<std::unique_ptr<LuaPerceptionSenseProgram>>;
         if (!parent || !parent->CanAdmit())
             return Output::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
         if (!ValidSource(source, limits) || !ValidPolicy(contract, limits, sizeof(Instance)))
             return Output::Failure(MakeError(AI::AIErrors::PerceptionDescriptorInvalid));
         try {
-            auto image = std::make_shared<Image>();
-            image->source = std::move(source);
-            image->contract = std::move(contract);
+            auto image = std::make_shared<Image>(source, contract, limits, std::move(parent));
             image->contract.instanceBytes = sizeof(Instance) + limits.maximumMemoryBytes;
-            image->limits = limits;
-            image->parent = std::move(parent);
             auto program = std::unique_ptr<LuaPerceptionSenseProgram>{new LuaPerceptionSenseProgram{image}};
             if (auto captured = program->Acquire(); captured.HasError())
                 return Output::Failure(captured.ErrorValue());

@@ -53,7 +53,10 @@ package-script composition require their own native test pass; product dispatch
 remains outstanding and is not hidden by native registration coverage.
 
 Scripts use `LuaPerceptionSenseProgram::Compile` with a mandatory acquired native
-perception parent. The source returns a predicate accepting six exact signed
+perception parent. Compilation borrows a string view and a const contract for the
+call, then copies both inside the typed storage-failure boundary. Existing C++
+callers can pass the same values and must rebuild against the updated signature.
+The source returns a predicate accepting six exact signed
 64-bit millimeter coordinates (candidate then listener), returning boolean or nil.
 The scalar tier removes string/table/utf8 libraries, protected calls, metatable/raw
 access and logging/load/random entry points. It also clears the string metatable,
