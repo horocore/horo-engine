@@ -1608,6 +1608,7 @@ horo_configure_target_header_boundary(HoroPCGSceneAdapter PUBLIC_HEADERS
 
 horo_configure_target_header_boundary(HoroGameplayAiIntegration PUBLIC_HEADERS
     Horo/Gameplay/GameplayAiContext.h
+    Horo/Gameplay/TacticalCover.h
 )
 
 horo_configure_target_header_boundary(HoroGameplayAiScriptBridge PUBLIC_HEADERS

@@ -111,6 +111,16 @@ PerceivedVisibilityTest asks what an agent senses/remembers through Perception.
 Distance, dot-product, path-cost and cover-exposure tests declare all actual provider
 and context dependencies. Geometric visibility and perception are not synonyms.
 
+Gameplay composes a `TacticalCoverRegistry` per Scene. It publishes stable
+cover identities, live anchors, stance, direction and positions at the
+structural safe point. EQS uses the captured order for candidate indices.
+The host submits each candidate's reachability and stance-specific exposure
+tests through the existing Navigation and Physics adapters, then combines the
+completed facts with current Gameplay contention. Score and capture are
+read-only. A decision issues a separate reservation at the owner safe point.
+Unloading an anchor or replacing its descriptor invalidates old selections,
+and an exact reservation receipt is required to release occupancy.
+
 Each test filters, scores, or both. Scores normalize to [0,1] using declared fixed
 ranges. Scored plans use `sum(weight * score) / sum(weight)`; cook/admission require
 finite nonnegative weights and a finite positive total, and reject invalid ranges

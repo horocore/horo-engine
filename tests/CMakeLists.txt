@@ -1285,8 +1285,10 @@ horo_register_catch_test(HoroAISightTests LABELS "unit;ai;sight;headless")
 add_executable(HoroAINavigationTests unit/runtime/ai/EnvironmentQueryNavigationTests.cpp)
 target_compile_features(HoroAINavigationTests PRIVATE cxx_std_20)
 target_include_directories(HoroAINavigationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
-target_link_libraries(HoroAINavigationTests PRIVATE HoroEngine::AINavigationIntegration)
-target_compile_definitions(HoroAINavigationTests PRIVATE HORO_TEST_NAVIGATION_NATIVE=$<BOOL:${HORO_BUILD_NAVIGATION_RECAST_DETOUR}>)
+target_link_libraries(HoroAINavigationTests PRIVATE HoroEngine::AINavigationIntegration HoroEngine::AISightIntegration HoroEngine::GameplayAiIntegration)
+target_compile_definitions(HoroAINavigationTests PRIVATE
+    HORO_TEST_NAVIGATION_NATIVE=$<BOOL:${HORO_BUILD_NAVIGATION_RECAST_DETOUR}>
+    HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>)
 if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     target_link_libraries(HoroAINavigationTests PRIVATE HoroEngine::NavigationRecastDetour)
 endif()

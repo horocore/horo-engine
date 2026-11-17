@@ -1816,7 +1816,7 @@ target_compile_features(HoroAISceneIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroAISceneIntegration PUBLIC HoroEngine::AI HoroEngine::RuntimeScene)
 
 # Explicit gameplay composition above the AI scene owner; core AI never depends on Gameplay or Extensions.
-add_library(HoroGameplayAiIntegration STATIC gameplay/GameplayAiContext.cpp)
+add_library(HoroGameplayAiIntegration STATIC gameplay/GameplayAiContext.cpp gameplay/TacticalCover.cpp)
 add_library(HoroEngine::GameplayAiIntegration ALIAS HoroGameplayAiIntegration)
 target_compile_features(HoroGameplayAiIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroGameplayAiIntegration PUBLIC HoroEngine::GameplayApi HoroEngine::AISceneIntegration)

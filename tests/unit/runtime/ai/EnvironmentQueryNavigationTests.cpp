@@ -1,8 +1,14 @@
+#include "EnvironmentQueryTestSupport.h"
 #include "Horo/AI/EnvironmentQueryNavigation.h"
+#include "Horo/Gameplay/TacticalCover.h"
 #include "navigation/NavigationCoordinatorTestFixtures.h"
 
 #if HORO_TEST_NAVIGATION_NATIVE
 #include "navigation/NavigationGroundedProviderFixture.h"
+#endif
+#if HORO_TEST_NAVIGATION_NATIVE && HORO_TEST_PHYSICS_NATIVE
+#include "Horo/AI/EnvironmentQueryPhysics.h"
+#include "PerceptionSightTestSupport.h"
 #endif
 
 #include <limits>
@@ -11,6 +17,84 @@ namespace Horo::AI {
     namespace {
         using namespace Navigation;
         using namespace Navigation::CoordinatorTestSupport;
+        using namespace Gameplay;
+
+        [[nodiscard]] TacticalCoverPoint CoverPoint(const Runtime::EntityRef anchor, const std::uint64_t id = 1) {
+            return {TacticalCoverId::Create(id).Value(),
+                    anchor,
+                    Math::WorldCoordinate64::FromMillimeters(9000, 0, 9000),
+                    {0, 0, -1},
+                    TacticalCoverStance::Crouched};
+        }
+
+        TEST_CASE("Gameplay cover reservations reject contention, validate receipts and survive unchanged publication",
+                  "[unit][ai][navigation][eqs][cover]") {
+            auto scene = QueryTestSupport::MakeScene();
+            const auto view = scene->View();
+            const auto first = *view.Find({1});
+            const auto second = *view.Find({2});
+            const std::array points{CoverPoint(second, 2), CoverPoint(first)};
+            TacticalCoverRegistry cover;
+            REQUIRE(cover.Publish(view, 1, points).HasValue());
+            CHECK(cover.Capture(view, 1).HasError());
+            const auto candidates = cover.Capture(view, 2);
+            REQUIRE(candidates.HasValue());
+            REQUIRE(candidates.Value().size() == 2);
+            CHECK(candidates.Value()[0].point == points[1]);
+            const auto selected = candidates.Value()[0].handle;
+            const auto acquired = cover.TryReserve(view, selected, first);
+            REQUIRE(acquired.HasValue());
+            REQUIRE(acquired.Value().has_value());
+            REQUIRE(cover.Publish(view, 2, points).HasValue());
+            CHECK(cover.TryReserve(view, selected, first).Value() == acquired.Value());
+            const auto contested = cover.TryReserve(view, selected, second);
+            REQUIRE(contested.HasValue());
+            CHECK_FALSE(contested.Value());
+
+            auto invalid = points;
+            invalid[0].direction = {};
+            REQUIRE(cover.Publish(view, 3, invalid).HasError());
+            REQUIRE(cover.Release(*acquired.Value()));
+            const auto next = cover.TryReserve(view, selected, second);
+            REQUIRE(next.HasValue());
+            REQUIRE(next.Value().has_value());
+            CHECK_FALSE(cover.Release(*acquired.Value()));
+            CHECK(cover.TryReserve(view, selected, second).Value() == next.Value());
+        }
+
+        TEST_CASE("Cover selection rejects a retired anchor even before its inventory is republished",
+                  "[unit][ai][navigation][eqs][cover]") {
+            auto scene = QueryTestSupport::MakeScene();
+            const auto view = scene->View();
+            const auto oldAnchor = *view.Find({1});
+            const auto occupant = *view.Find({2});
+            const auto point = CoverPoint(oldAnchor);
+            TacticalCoverRegistry cover;
+            REQUIRE(cover.Publish(view, 1, std::span{&point, 1}).HasValue());
+            const auto old = cover.Capture(view, 1);
+            REQUIRE(old.HasValue());
+            REQUIRE(old.Value().size() == 1);
+
+            Runtime::SceneCommandBuffer unload;
+            unload.Destroy(oldAnchor);
+            REQUIRE(scene->Commit(unload).HasValue());
+            REQUIRE(cover.Capture(scene->View(), 1).Value().empty());
+            CHECK(cover.TryReserve(scene->View(), old.Value().front().handle, occupant).HasError());
+            CHECK(cover.Score(scene->View(), old.Value().front().handle, {}, {}, {}).HasError());
+            Runtime::SceneCommandBuffer reload;
+            REQUIRE(reload.Create({}).IsValid());
+            const auto committed = scene->Commit(reload);
+            REQUIRE(committed.HasValue());
+            REQUIRE(committed.Value().created.size() == 1);
+            const auto replacement = CoverPoint(committed.Value().created[0].entity);
+            CHECK(replacement.anchor != oldAnchor);
+            REQUIRE(cover.Publish(scene->View(), 2, std::span{&replacement, 1}).HasValue());
+            CHECK(cover.TryReserve(scene->View(), old.Value().front().handle, occupant).HasError());
+            const auto newCover = cover.Capture(scene->View(), 1);
+            REQUIRE(newCover.HasValue());
+            REQUIRE(newCover.Value().size() == 1);
+            CHECK(cover.TryReserve(scene->View(), newCover.Value().front().handle, occupant).Value().has_value());
+        }
 
         [[nodiscard]] QueryGeneratorOutput SurfaceOutput(std::span<QueryGeneratedItem> items) {
             return {{QueryStageId::Create(1).Value(), QueryGeneratorId::Create(2).Value(), QueryProviderId::Create(3).Value(),
@@ -192,6 +276,69 @@ namespace Horo::AI {
         }
 
 #if HORO_TEST_NAVIGATION_NATIVE
+#if HORO_TEST_PHYSICS_NATIVE
+        TEST_CASE("Cover combines actual reachability and occlusion without claiming occupancy", "[unit][ai][navigation][eqs][cover]") {
+            auto scene = QueryTestSupport::MakeScene();
+            const auto view = scene->View();
+            const auto point = CoverPoint(*view.Find({1}));
+            const auto occupant = *view.Find({2});
+            TacticalCoverRegistry cover;
+            REQUIRE(cover.Publish(view, 1, std::span{&point, 1}).HasValue());
+            const auto candidates = cover.Capture(view, 1);
+            REQUIRE(candidates.HasValue());
+            REQUIRE(candidates.Value().size() == 1);
+            const auto selection = candidates.Value().front().handle;
+
+            const auto exposureStage = QueryStageId::Create(1).Value();
+            const auto contentionStage = QueryStageId::Create(2).Value();
+            const auto reachableStage = QueryStageId::Create(3).Value();
+            ProbeOwner navigation{Navigation::TestSupport::MakeGroundedProvider()};
+            QueryNavigationProbe route{navigation.coordinator};
+            const std::array callers{Caller()};
+            auto input = Input(callers.front());
+            input.request.start = {1, 0, 1};
+            const auto globalCover = point.position.Millimeters();
+            input.request.destination = {static_cast<float>(globalCover[0]) / 1000.0F, static_cast<float>(globalCover[1]) / 1000.0F,
+                                         static_cast<float>(globalCover[2]) / 1000.0F};
+            REQUIRE(route.Start(navigation.world, reachableStage, input, 0).Value());
+            navigation.Complete(callers, 1);
+            const auto reachable = route.Poll(Current(callers));
+            REQUIRE(reachable.HasValue());
+            REQUIRE(reachable.Value().has_value());
+            REQUIRE(reachable.Value()->filter == true);
+
+            SightTest::SightWorld physics;
+            (void)physics.Box(-5);
+            physics.Advance();
+            const auto tick = physics.world->PublishedTick();
+            const QueryPhysicsPublication publication{physics.capability.Identity(), 7, tick.publicationRevision, tick.completedTick};
+            QueryPhysicsProbe sight;
+            // The Physics fixture is rebased to a threat ten meters in front of the cover.
+            REQUIRE(sight
+                        .Start(physics.capability, publication, exposureStage, Physics::PhysicsRayQuery{.maximumDistanceMeters = 10},
+                               {.channel = SightTest::VisibilityChannel()})
+                        .Value());
+            REQUIRE(physics.world->ProcessQueryBatch().HasValue());
+            const auto visibility = sight.Poll(publication);
+            REQUIRE(visibility.HasValue());
+            REQUIRE(visibility.Value().has_value());
+            REQUIRE(visibility.Value()->filter == false);
+
+            const auto scored = cover.Score(view, selection, *reachable.Value(), *visibility.Value(), contentionStage);
+            REQUIRE(scored.HasValue());
+            CHECK(scored.Value()[0].stage == exposureStage);
+            CHECK(scored.Value()[0].filter == true);
+            CHECK(scored.Value()[1].stage == contentionStage);
+            CHECK(scored.Value()[1].filter == true);
+            CHECK(scored.Value()[2].stage == reachableStage);
+            CHECK(scored.Value()[2].filter == true);
+            REQUIRE(cover.TryReserve(view, selection, occupant).Value().has_value());
+            const auto occupied = cover.Score(view, selection, *reachable.Value(), *visibility.Value(), contentionStage);
+            REQUIRE(occupied.HasValue());
+            CHECK(occupied.Value()[1].filter == false);
+        }
+#endif
+
         TEST_CASE("EQS builds canonical points from actual bounded Detour surface samples", "[unit][ai][navigation][eqs][generator]") {
             ProbeOwner owner{Navigation::TestSupport::MakeGroundedProvider()};
             const auto lease = owner.world.Acquire(World());
