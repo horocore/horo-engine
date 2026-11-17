@@ -88,6 +88,15 @@ namespace Horo::XR::XRErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor PermissionDenied{
+        .domain = XRDomain,
+        .code = ErrorCode{"xr.permission.denied"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The XR runtime or platform denied a required permission.",
+        .remediationHint = "Review your XR runtime and operating system privacy permissions before retrying.",
+        .retryable = true,
+        .userActionable = true,
+    };
     const ErrorCodeDescriptor CapacityExceeded{
         .domain = XRDomain,
         .code = ErrorCode{"xr.operation.capacity_exceeded"},
@@ -300,6 +309,7 @@ namespace Horo::XR::XRErrors {
             &OperationUnsupported,
             &OperationUnavailable,
             &OperationIncompatible,
+            &PermissionDenied,
             &CapacityExceeded,
             &OperationInvalid,
             &CoordinateSpaceIncompatible,

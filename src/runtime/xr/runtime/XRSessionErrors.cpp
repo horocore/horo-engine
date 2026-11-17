@@ -25,6 +25,15 @@ namespace Horo::XR::XRSessionErrors {
         .retryable = true,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor SetupCleanupPending{
+        .domain = XRDomain,
+        .code = ErrorCode{"xr.setup.cleanup_pending"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The XR setup test is waiting for native session retirement.",
+        .remediationHint = "Retry retirement before starting Play or running a new session test.",
+        .retryable = true,
+        .userActionable = true,
+    };
     const ErrorCodeDescriptor WrongThread{
         .domain = XRDomain,
         .code = ErrorCode{"xr.session.wrong_thread"},
@@ -46,7 +55,8 @@ namespace Horo::XR::XRSessionErrors {
 
     /** @copydoc Descriptors */
     std::span<const ErrorCodeDescriptor *const> Descriptors() noexcept {
-        static constexpr std::array descriptors{&ActivationFailed, &ActivationCancelled, &WrongThread, &TransitionInvalid};
+        static constexpr std::array descriptors{&ActivationFailed, &ActivationCancelled, &SetupCleanupPending, &WrongThread,
+                                                &TransitionInvalid};
         return descriptors;
     }
 }  // namespace Horo::XR::XRSessionErrors

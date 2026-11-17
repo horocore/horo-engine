@@ -55,6 +55,7 @@ namespace Horo::Application::Internal {
      * of outgoing Scene/Input borrows until the canonical completion receipts retire it.
      */
     class OpenXRPlayHost final : public Editor::IEditorPlayXrHost,
+                                 public Editor::IEditorXrSetup,
                                  private XR::RuntimeInternal::IXRSessionRetirementResources,
                                  private XR::IXRBindingNeutralizer {
     public:
@@ -81,6 +82,11 @@ namespace Horo::Application::Internal {
          * closing still rejects new work. Only actual native destruction permits the quiescent frame reset.
          */
         [[nodiscard]] Result<bool> Close();
+        [[nodiscard]] Editor::EditorXrSetupReport ReadSetup() const noexcept override;
+        [[nodiscard]] Result<Editor::EditorXrSetupTestId> RequestSetupTest() override;
+        void CancelSetupTest(Editor::EditorXrSetupTestId request) noexcept override;
+        /** @brief Performs one queued cold setup test outside RuntimeHost frames. */
+        void PumpSetupTest();
         [[nodiscard]] Result<void> AttachInput(const Input::InputActionCollection &input,
                                                const Editor::EditorXrSceneSourcePort &geometry) override;
         [[nodiscard]] Result<void> UpdateScene(const Runtime::RuntimeSceneView &scene) override;
@@ -151,6 +157,8 @@ namespace Horo::Application::Internal {
         void Neutralize(const XR::XRSessionId &session, std::uint64_t revision) noexcept override;
         [[nodiscard]] Result<void> AppendInput(const Runtime::FrameContext &context, const Input::InputCollectionFrame &frame);
         [[nodiscard]] Result<void> Lane() const;
+        /** @brief Checks current owner lane and absence of Play work before a private session test. */
+        [[nodiscard]] bool SetupIdle() const noexcept;
         struct FrameState;
         [[nodiscard]] Result<void> ProgressTail();
         [[nodiscard]] Result<void> AbortRenderFrame();
@@ -270,6 +278,9 @@ namespace Horo::Application::Internal {
         Runtime::SceneRuntimeId retiredScene_; /**< Exact already-drained Scene; late canonical retirement is an idempotent no-op. */
         InputState input_;
         std::shared_ptr<SceneState> scene_;
+        Editor::EditorXrSetupReport setup_;
+        Editor::EditorXrSetupTestId queuedSetupTest_;
+        std::uint64_t lastSetupTest_{};
         const std::thread::id lane_{std::this_thread::get_id()};
         bool eventsBound_{};
         bool eventsPending_{};
@@ -277,5 +288,6 @@ namespace Horo::Application::Internal {
         bool pendingRevoke_{};
         bool pendingDetach_{};
         bool closing_{};
+        bool setupCleanupPending_{};
     };
 }  // namespace Horo::Application::Internal

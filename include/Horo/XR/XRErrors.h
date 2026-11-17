@@ -32,6 +32,8 @@ namespace Horo::XR::XRErrors {
     extern const ErrorCodeDescriptor CapacityExceeded;
     /** @brief An XR operation request is malformed. */
     extern const ErrorCodeDescriptor OperationInvalid;
+    /** @brief The platform or XR runtime denied a required permission. */
+    extern const ErrorCodeDescriptor PermissionDenied;
     /** @brief An XR coordinate-space relation or convention is incompatible. */
     extern const ErrorCodeDescriptor CoordinateSpaceIncompatible;
     /** @brief XR clock evidence mixes or omits required time domains. */

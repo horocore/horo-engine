@@ -330,6 +330,81 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(fixture.script.actions.liveSets == 0);
     }
 
+    TEST_CASE("XR setup checks a private session and leaves the selected owner available for Play", "[xr][application][setup]") {
+        using enum Editor::EditorXrSetupTestState;
+        ApplicationFixture fixture;
+        fixture.CreatePlay();
+        const auto initial = fixture.play->ReadSetup();
+        REQUIRE(initial.loaderMajor > 0);
+        REQUIRE(initial.rendererReady);
+        REQUIRE(initial.mayRequestTest);
+        REQUIRE(fixture.script.native.liveSessions == 1);
+
+        const auto cancelled = RequireValue(fixture.play->RequestSetupTest());
+        REQUIRE(fixture.play->RequestSetupTest().HasError());
+        fixture.play->CancelSetupTest(cancelled);
+        fixture.play->PumpSetupTest();
+        CHECK(fixture.play->ReadSetup().test == Cancelled);
+        CHECK(fixture.script.native.liveSessions == 1);
+
+        const auto next = RequireValue(fixture.play->RequestSetupTest());
+        REQUIRE(next != cancelled);
+        fixture.play->CancelSetupTest(cancelled);
+        CHECK(fixture.play->ReadSetup().test == Queued);
+        fixture.play->PumpSetupTest();
+        CHECK(fixture.play->ReadSetup().test == Passed);
+        CHECK(fixture.script.native.liveSessions == 0);
+        CHECK_FALSE(fixture.play->UsesXrScene());
+        CHECK_FALSE(fixture.session->RetainedSession());
+        REQUIRE(fixture.session->PrepareSession().HasValue());
+        CHECK(fixture.script.native.liveSessions == 1);
+        REQUIRE(fixture.play->Close().HasValue());
+        CHECK(fixture.script.native.liveSessions == 0);
+        CHECK_FALSE(fixture.play->ReadSetup().mayRequestTest);
+        CHECK(fixture.play->RequestSetupTest().HasError());
+    }
+
+    TEST_CASE("XR setup distinguishes busy Play, permission denial, and retained cleanup", "[xr][application][setup]") {
+        ApplicationFixture fixture;
+        fixture.CreatePlay();
+        const auto queued = RequireValue(fixture.play->RequestSetupTest());
+        SECTION("the owner can enter Play between enqueue and pump") {
+            REQUIRE(fixture.play->SetPlayState(Editor::EditorPlayState::Playing).HasValue());
+            fixture.play->PumpSetupTest();
+            CHECK(fixture.play->ReadSetup().issue == Editor::EditorXrSetupIssue::Busy);
+            CHECK(fixture.script.native.liveSessions == 1);
+        }
+        SECTION("native permission cannot become successful preflight") {
+            fixture.script.native.fail = "session";
+            fixture.script.native.failureResult = XR_ERROR_PERMISSION_INSUFFICIENT;
+            fixture.play->PumpSetupTest();
+            CHECK(fixture.play->ReadSetup().issue == Editor::EditorXrSetupIssue::Permission);
+            CHECK(fixture.script.native.liveSessions == 0);
+        }
+        SECTION("a retained exact session must retire on retry") {
+            fixture.script.native.failRetirement = true;
+            fixture.play->PumpSetupTest();
+            CHECK(fixture.play->ReadSetup().issue == Editor::EditorXrSetupIssue::Cleanup);
+            CHECK(fixture.script.native.liveSessions == 1);
+            fixture.script.native.failRetirement = false;
+            REQUIRE(RequireValue(fixture.play->RequestSetupTest()) != queued);
+            fixture.play->PumpSetupTest();
+            CHECK(fixture.play->ReadSetup().test == Editor::EditorXrSetupTestState::Passed);
+            CHECK(fixture.script.native.liveSessions == 0);
+        }
+        REQUIRE(fixture.play->Close().HasValue());
+    }
+
+    TEST_CASE("XR setup rejects an under-budget profile before entering a native session test", "[xr][application][setup]") {
+        ApplicationFixture fixture{false, 4};
+        fixture.CreatePlay();
+        REQUIRE(fixture.play->RequestSetupTest().HasValue());
+        fixture.play->PumpSetupTest();
+        CHECK(fixture.play->ReadSetup().issue == Editor::EditorXrSetupIssue::Capacity);
+        CHECK(fixture.script.native.liveSessions == 1);
+        REQUIRE(fixture.play->Close().HasValue());
+    }
+
     TEST_CASE("Actual application Play remains inactive until canonical scene and renderer preparation succeed",
               "[xr][application][play]") {
         ApplicationFixture fixture;

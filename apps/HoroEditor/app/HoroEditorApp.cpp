@@ -1828,6 +1828,14 @@ namespace Horo::Editor {
                 }
             }
 
+            /** @brief Runs one explicit setup test between full RuntimeHost frames. */
+            void PumpXrSetupTest() {
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+                if (auto *xr = p_->presentation.composition.xrPlay.get())
+                    xr->PumpSetupTest();
+#endif
+            }
+
             /** @brief Reports actual successful native presentation, excluding acquisition-pending runtime ticks. */
             [[nodiscard]] bool HasPresentedFrame() const noexcept {
                 return presentedFrames_ != 0;
@@ -2737,6 +2745,7 @@ namespace Horo::Editor {
             bool completedFrame = false;
             while (!screenHost.IsApplicationCloseRequested() && (runtime.State() == Runtime::RuntimeLifecycleState::Running ||
                                                                  runtime.State() == Runtime::RuntimeLifecycleState::Suspended)) {
+                participant.PumpXrSetupTest();
                 if (const Result<void> frame = RunPacedEditorFrame(participant, runtime); frame.HasError()) {
                     if (frame.ErrorValue().code.Value() != "runtime.host.cancelled" &&
                         frame.ErrorValue().code.Value() != Render::FramePacingErrors::Cancelled.code.Value()) {
@@ -2970,8 +2979,10 @@ namespace Horo::Editor {
 
         /** @brief Publishes only the explicitly composed XR Play capability to the entered screen's services. */
         void RegisterEditorXrPlayServices(GuiScreenHost &screens, Application::Internal::OpenXRPlayHost *host) {
-            if (host)
+            if (host) {
                 screens.Services().Register<IEditorPlayXrHost>(*host);
+                screens.Services().Register<IEditorXrSetup>(*host);
+            }
         }
 #endif
 
@@ -4232,7 +4243,8 @@ namespace Horo::Editor {
             LOG_CRITICAL("editor.startup", "Console arguments rejected: %s", captured.ErrorValue().message.c_str());
             return 1;
         }
-        auto opts = ParseOptions(captured.Value().hostArguments);
+        auto launch = std::move(captured).Value();
+        auto opts = ParseOptions(launch.hostArguments);
         std::vector<RecentProjectEntry> recentProjects = LoadRecentProjectsFromDisk();
         WelcomeScreenController ctrl{recentProjects};
         auto vm = ctrl.BuildViewModel();
@@ -4242,7 +4254,7 @@ namespace Horo::Editor {
             return 0;
         }
 
-        auto prepared = PrepareEditorStartup(std::move(opts), xrHost, captured.Value().hostArguments, captured.Value().console);
+        auto prepared = PrepareEditorStartup(std::move(opts), xrHost, launch.hostArguments, launch.console);
         if (!prepared) {
             saveTelemetry.reset();
             Log::Logger::Shutdown();

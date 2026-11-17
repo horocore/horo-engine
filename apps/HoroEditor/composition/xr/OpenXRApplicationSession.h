@@ -98,6 +98,14 @@ namespace Horo::Application::Internal {
          * @return Real spaces/formats or original typed failure; no Horo session identity is issued.
          */
         [[nodiscard]] Result<XR::OpenXRInternal::NativeSessionCensus> PrepareSession();
+        /** @brief Performs one cold test using the selected native owner, graphics binding and configuration.
+         * @param bindings Same installed declaration used by Play to check requested action and space limits.
+         * @return Actual creation/census and retirement result, or typed failure with any cleanup cause.
+         * @pre Owner lane with no Scene, input, image, frame or issued session. The caller serializes Play admission.
+         * @post No native session is retained after success. Failure retains cleanup with this owner for an explicit
+         * retry. Discovery and the selected device remain usable for subsequent Play preparation.
+         */
+        [[nodiscard]] Result<void> RunSetupSessionTest(const OpenXRApplicationBindings &bindings);
         /** @brief Borrows actual complete native census and immutable policy from the SAME retained preparation.
          * @return Synchronous owner/attempt-fenced facts or original typed failure; no IDs, limits or flags are synthesized.
          * @pre PrepareSession succeeded; no borrow survives another owner operation.
@@ -220,6 +228,8 @@ namespace Horo::Application::Internal {
     private:
         [[nodiscard]] Result<void> Current() const;
         [[nodiscard]] Result<void> DiscoverRuntime();
+        /** @brief Validates the same selected profile and static capacity required by Play. */
+        [[nodiscard]] Result<void> ValidateProjectionPolicy(const OpenXRApplicationBindings &bindings) const;
 
         /** @brief Borrowed normalized packet from one already-fenced native Input cutoff. No borrow survives this call. */
         struct PreparedInputSample final {

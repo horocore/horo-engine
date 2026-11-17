@@ -18,6 +18,13 @@ namespace Horo::Application::Internal {
                        composition.trackingRoot},
           native_(preparation.native), getProc_(preparation.getProc), clock_(native_) {
         input_.router = &composition.router;
+        const auto version = preparation.preflight.LoaderApiVersion();
+        setup_ = {.loaderMajor = version.major,
+                  .loaderMinor = version.minor,
+                  .loaderPatch = version.patch,
+                  .requestedProfile = preparation.settings.Profile(),
+                  .rendererReady = true,
+                  .issue = Editor::EditorXrSetupIssue::None};
     }
 
     /** @copydoc OpenXRPlayHost::Create */
@@ -45,6 +52,7 @@ namespace Horo::Application::Internal {
     Result<bool> OpenXRPlayHost::Close() {
         if (std::this_thread::get_id() != lane_ || busy_)
             return Result<bool>::Failure(MakeError(XRErrors::OperationIncompatible));
+        CancelSetupTest(queuedSetupTest_);
         closing_ = true;
         // A failed native Begin/End cannot be retried as a successful zero-layer frame. The same host
         // revokes admission and retains all image/queue prefixes until its existing Lost cleanup proves quiescence.

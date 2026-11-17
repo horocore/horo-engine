@@ -85,6 +85,13 @@ namespace {
         CHECK(manager->enabledByDefault);
     }
 
+    TEST_CASE("XR Setup has a native menu action", "[unit][editor][xr]") {
+        const auto *setup = FindAction(GetEditorMenuModel().menus[5], EditorMenuAction::OpenXrSetup);
+        REQUIRE(setup);
+        CHECK(setup->labelKey == "web_workspace.menu.xr_setup");
+        CHECK(setup->enabledByDefault);
+    }
+
     TEST_CASE("Build menu opens native workflows and keeps unsupported execution commands disabled", "[unit][editor][build_release]") {
         const EditorMenuItem &build = GetEditorMenuModel().menus[6];
         REQUIRE((build.children.size() == 4));

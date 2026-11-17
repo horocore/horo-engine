@@ -1,6 +1,7 @@
 #include "OpenXRApplicationSession.h"
 
 #include "Horo/Foundation/Assertions.h"
+#include "Horo/XR/XRSessionErrors.h"
 
 #include <algorithm>
 #include <limits>
@@ -153,6 +154,24 @@ namespace Horo::Application::Internal {
             return observed;
         sessionCensus_ = observed.Value();
         return observed;
+    }
+
+    /** @copydoc OpenXRApplicationSession::RunSetupSessionTest */
+    Result<void> OpenXRApplicationSession::RunSetupSessionTest(const OpenXRApplicationBindings &bindings) {
+        if (auto current = Current(); current.HasError())
+            return current;
+        if (!native_ || !preflight_ || !system_ || sessionOwner_ || input_.native)
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
+        if (auto admitted = ValidateProjectionPolicy(bindings); admitted.HasError())
+            return admitted;
+        if (auto retired = RetirePreparation(); retired.HasError())
+            return Result<void>::Failure(WrapError(XRSessionErrors::SetupCleanupPending, std::move(retired).ErrorValue()));
+        const auto prepared = PrepareSession();
+        if (auto retired = RetirePreparation(); retired.HasError())
+            return Result<void>::Failure(WrapError(XRSessionErrors::SetupCleanupPending, std::move(retired).ErrorValue()));
+        if (prepared.HasError())
+            return Result<void>::Failure(prepared.ErrorValue());
+        return Current();
     }
 
     /** @copydoc OpenXRApplicationSession::BorrowPreparation */

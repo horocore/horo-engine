@@ -20,6 +20,8 @@ namespace Horo::XR::OpenXRInternal {
                     return XRErrors::SystemTemporarilyUnavailable;
                 case XR_ERROR_FORM_FACTOR_UNSUPPORTED:
                     return XRErrors::SystemUnsupported;
+                case XR_ERROR_PERMISSION_INSUFFICIENT:
+                    return XRErrors::PermissionDenied;
                 case XR_ERROR_EXTENSION_NOT_PRESENT:
                 case XR_ERROR_API_LAYER_NOT_PRESENT:
                     return XRErrors::OperationUnsupported;

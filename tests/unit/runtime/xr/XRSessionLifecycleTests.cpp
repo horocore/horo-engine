@@ -183,7 +183,7 @@ namespace Horo::XR {
 
         TEST_CASE("XRRuntime contributes unique actionable session errors", "[unit][xr][lifecycle]") {
             const auto descriptors = XRSessionErrors::Descriptors();
-            REQUIRE(descriptors.size() == 4);
+            REQUIRE(descriptors.size() == 5);
             std::set<std::string> codes;
             for (const auto *descriptor : descriptors) {
                 REQUIRE(descriptor != nullptr);

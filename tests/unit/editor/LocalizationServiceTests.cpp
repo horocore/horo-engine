@@ -237,6 +237,34 @@ namespace {
         RequireCatalogKeys(service, recoveryKeys);
         RequireCatalogKeys(service, projectLoadingKeys);
         RequireCatalogKeys(service, sceneConflictKeys);
+        constexpr std::array xrSetupKeys{
+            "workspace.xr_setup.title",
+            "workspace.xr_setup.runtime_discovered",
+            "workspace.xr_setup.runtime_missing",
+            "workspace.xr_setup.renderer_ready",
+            "workspace.xr_setup.renderer_missing",
+            "workspace.xr_setup.profile_projection",
+            "workspace.xr_setup.profile_tracked",
+            "workspace.xr_setup.profile_unavailable",
+            "workspace.xr_setup.test_not_run",
+            "workspace.xr_setup.test_queued",
+            "workspace.xr_setup.test_passed",
+            "workspace.xr_setup.test_failed",
+            "workspace.xr_setup.test_cancelled",
+            "workspace.xr_setup.permissions",
+            "workspace.xr_setup.busy",
+            "workspace.xr_setup.unavailable",
+            "workspace.xr_setup.renderer_incompatible",
+            "workspace.xr_setup.unsupported",
+            "workspace.xr_setup.permission_denied",
+            "workspace.xr_setup.stale",
+            "workspace.xr_setup.capacity",
+            "workspace.xr_setup.invalid",
+            "workspace.xr_setup.cleanup",
+            "workspace.xr_setup.run_test",
+            "workspace.xr_setup.close",
+        };
+        RequireCatalogKeys(service, xrSetupKeys);
     }
 
     TEST_CASE("Locale Tags Normalize And Reject Invalid Input", "[unit][editor]") {

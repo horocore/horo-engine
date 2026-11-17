@@ -745,6 +745,14 @@ native XR or persist local discovery/evidence into project settings. Metrics adm
 finite dimensions such as registered backend/profile/phase/outcome classes—never device
 names, serials, native strings/paths, live IDs, poses, gaze or environment geometry.
 
+The editor's XR Setup command reads the selected application's discovery and graphics
+evidence through the same typed port available to non-graphical consumers. A session
+test runs between complete frames while Play is idle. It creates and inspects an
+unpublished native session on the selected graphics binding, then retires it before
+reporting success. Native permission denial is reported separately. Test teardown
+failures keep ownership in the application for a bounded explicit retry, and block
+Play preparation until the owner has retired the abandoned session.
+
 Detailed capture is an explicit bounded operation with channels, duration/frame/byte
 limits, privacy purpose, retention/export and a manifest recording completeness,
 truncation and drops. Sensitive channels are unavailable unless separately admitted;

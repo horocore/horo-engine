@@ -122,13 +122,25 @@ namespace Horo::Application::Internal {
         }
     }  // namespace
 
+    /** @copydoc OpenXRApplicationSession::ValidateProjectionPolicy */
+    Result<void> OpenXRApplicationSession::ValidateProjectionPolicy(const OpenXRApplicationBindings &bindings) const {
+        if (settings_.Profile() != XRFeatureProfile::Projection1_0)
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
+        const auto &budget = settings_.Limits();
+        if (const auto preparedActions = bindings.schema.actions.size() + bindings.poses.size();
+            preparedActions > budget.maximumActions || budget.maximumSpaces < 5 + bindings.poses.size() ||
+            budget.maximumActions > XRActionBindingLimits::MaximumActions || budget.maximumDevices > 3 ||
+            budget.maximumSpaces > XRHardLimits::MaximumSpaces)
+            return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
+        return Result<void>::Success();
+    }
+
     /** @copydoc OpenXRApplicationSession::ValidateProjectionPreparation */
     Result<XRSystemId> OpenXRApplicationSession::ValidateProjectionPreparation(const Editor::EditorViewportRendererVulkan &viewport) const {
         using Outcome = Result<XRSystemId>;
         if (auto current = Current(); current.HasError())
             return Outcome::Failure(current.ErrorValue());
-        if (!native_ || !preflight_ || !system_ || !sessionCensus_ || !input_.native || !input_.projection || !input_.bindings ||
-            settings_.Profile() != XRFeatureProfile::Projection1_0)
+        if (!native_ || !preflight_ || !system_ || !sessionCensus_ || !input_.native || !input_.projection || !input_.bindings)
             return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
         if (lastCapabilityRevision_ == std::numeric_limits<std::uint64_t>::max())
             return Outcome::Failure(MakeError(XRErrors::CapacityExceeded));
@@ -166,12 +178,9 @@ namespace Horo::Application::Internal {
         const auto targets = PrepareProjectionTargets(frontend, observed, session);
         if (targets.HasError())
             return Outcome::Failure(targets.ErrorValue());
+        if (auto admitted = ValidateProjectionPolicy(bindings); admitted.HasError())
+            return Outcome::Failure(admitted.ErrorValue());
         const auto &budget = settings_.Limits();
-        if (const auto preparedActions = bindings.schema.actions.size() + bindings.poses.size();
-            preparedActions > budget.maximumActions || budget.maximumSpaces < 5 + bindings.poses.size() ||
-            budget.maximumActions > XRActionBindingLimits::MaximumActions || budget.maximumDevices > 3 ||
-            budget.maximumSpaces > XRHardLimits::MaximumSpaces)
-            return Outcome::Failure(MakeError(XRErrors::CapacityExceeded));
         auto revision = XRCapabilityRevision::Create(lastCapabilityRevision_ + 1);
         if (revision.HasError())
             return Outcome::Failure(revision.ErrorValue());

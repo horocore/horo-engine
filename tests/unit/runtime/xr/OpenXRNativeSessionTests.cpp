@@ -261,6 +261,7 @@ namespace Horo::Tests::OpenXR {
         const std::array mappings{Mapping{XR_ERROR_RUNTIME_UNAVAILABLE, &XRErrors::RuntimeUnavailable},
                                   Mapping{XR_ERROR_FORM_FACTOR_UNAVAILABLE, &XRErrors::SystemTemporarilyUnavailable},
                                   Mapping{XR_ERROR_FORM_FACTOR_UNSUPPORTED, &XRErrors::SystemUnsupported},
+                                  Mapping{XR_ERROR_PERMISSION_INSUFFICIENT, &XRErrors::PermissionDenied},
                                   Mapping{XR_ERROR_EXTENSION_NOT_PRESENT, &XRErrors::OperationUnsupported},
                                   Mapping{XR_ERROR_API_LAYER_NOT_PRESENT, &XRErrors::OperationUnsupported},
                                   Mapping{XR_ERROR_RUNTIME_FAILURE, &XRErrors::OperationUnavailable}};

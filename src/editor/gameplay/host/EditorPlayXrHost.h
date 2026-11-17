@@ -6,6 +6,7 @@
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Runtime/InputCollection.h"
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 
@@ -14,8 +15,65 @@ namespace Horo::Runtime {
     class RuntimeSceneView;
 }  // namespace Horo::Runtime
 
+namespace Horo::XR {
+    enum class XRFeatureProfile : std::uint8_t;
+}
+
 namespace Horo::Editor {
     class EditorXrSceneSourcePort;
+
+    /** @brief One owner-issued test request, valid only while that request is queued. */
+    struct EditorXrSetupTestId final {
+        std::uint64_t value{};
+        constexpr bool operator==(const EditorXrSetupTestId &) const noexcept = default;
+    };
+
+    /** @brief Cold probe state exposed identically to graphical and non-graphical callers. */
+    enum class EditorXrSetupTestState : std::uint8_t {
+        NotRun,
+        Queued,
+        Passed,
+        Failed,
+        Cancelled
+    };
+
+    /** @brief Actionable redacted reason; raw provider strings never enter the setup surface. */
+    enum class EditorXrSetupIssue : std::uint8_t {
+        None,
+        Busy,
+        Unavailable,
+        Renderer,
+        Unsupported,
+        Permission,
+        Stale,
+        Capacity,
+        Invalid,
+        Cleanup
+    };
+
+    /** @brief Fixed-size setup evidence from the selected application owner. */
+    struct EditorXrSetupReport final {
+        std::uint16_t loaderMajor{}; /**< Nonzero only after real loader/runtime/system discovery. */
+        std::uint16_t loaderMinor{};
+        std::uint16_t loaderPatch{};
+        std::optional<XR::XRFeatureProfile> requestedProfile;
+        bool rendererReady{};  /**< The startup-selected renderer supplied the exact native session binding. */
+        bool mayRequestTest{}; /**< Ownership and idle state permit a test or cleanup retry. */
+        EditorXrSetupTestState test{EditorXrSetupTestState::NotRun};
+        EditorXrSetupIssue issue{EditorXrSetupIssue::Unavailable};
+    };
+
+    /** @brief Owner-lane setup commands, independent of the Play adapter and of GUI or native API types. */
+    class IEditorXrSetup {
+    public:
+        virtual ~IEditorXrSetup() = default;
+        /** @return Existing fixed-size evidence without provider calls, file access or allocation. */
+        [[nodiscard]] virtual EditorXrSetupReport ReadSetup() const noexcept = 0;
+        /** @return Exact queued request or typed rejection. No native work happens on submission. */
+        [[nodiscard]] virtual Result<EditorXrSetupTestId> RequestSetupTest() = 0;
+        /** @brief Cancel only the specified queued request. Committed observations cannot be revoked by a stale ID. */
+        virtual void CancelSetupTest(EditorXrSetupTestId request) noexcept = 0;
+    };
 
     /** @brief Copied actual consumed simulator view in canonical World coordinates; never authored-camera fallback. */
     struct EditorPlayXrPreview final {

@@ -4,6 +4,7 @@
 #include "../modals/extension_pages/EditorPageThemeCapture.h"
 #include "EditorControlMetadata.h"
 #include "EditorPageFileStore.h"
+#include "EditorPlayXrHost.h"
 #include "Horo/Application/ProjectAssetImportCommitter.h"
 #include "Horo/Editor/AssetImportModal.h"
 #include "Horo/Editor/AudioComponentPreview.h"
@@ -41,6 +42,7 @@
 #include "editor/modals/build_release/BuildActivity.h"
 #include "editor/modals/build_release/BuildModal.h"
 #include "editor/modals/build_release/BuildReleaseModal.h"
+#include "editor/modals/xr_setup/XrSetupModal.h"
 #include "editor/project_model/RendererAvailability.h"
 #include "editor/status_bar/EditorStatusBar.h"
 #include "editor/update/UpdateExperienceSession.h"
@@ -1030,6 +1032,9 @@ namespace Horo::Editor {
                 return;
             case OpenEditorSettings:
                 OpenEditorSettingsModal();
+                return;
+            case OpenXrSetup:
+                static_cast<void>(modalHost_->OpenRoot(std::make_unique<XrSetupModal>(context_, services_.TryGet<IEditorXrSetup>())));
                 return;
             case ExitApplication:
                 static_cast<void>(RequestCloseApplication());

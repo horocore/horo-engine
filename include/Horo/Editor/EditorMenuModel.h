@@ -31,6 +31,7 @@ namespace Horo::Editor {
         OpenBuild,
         OpenRelease,
         OpenSaveLoadManager,
+        OpenXrSetup,
     };
 
     /** @brief Typed command emitted by every platform menu adapter. */

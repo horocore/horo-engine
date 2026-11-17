@@ -4304,6 +4304,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceViewSequence.cpp
             editor/screens/workspace/WorldLayerOutliner.cpp
             editor/modals/world_layer/CreateWorldLayerModal.cpp
+            editor/modals/xr_setup/XrSetupModal.cpp
             editor/screens/workspace/EditorWorkspaceView.cpp
             editor/screens/workspace/ExtensionRecoveryView.cpp
             editor/screens/workspace/ExtensionActivityView.cpp
