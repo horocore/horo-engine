@@ -860,7 +860,7 @@ namespace Horo {
                                    kInputLimitDiagnostic);
 
         Foundation::JsonParseGuard guard{std::min(limits.maximumNestingDepth, ConfigurationLimits{}.maximumNestingDepth)};
-        if (!guard.Validate(document.begin(), document.end()))
+        if (document.find('\0') != std::string_view::npos || !guard.Validate(document.begin(), document.end()))
             return DocumentFailure("Configuration document has invalid syntax, duplicate keys, encoding, or nesting.",
                                    std::move(sourceName), guard.IsTooDeep() ? kInputLimitDiagnostic : kDocumentDiagnostic);
         const Json parsed = Json::parse(document, nullptr, false);
