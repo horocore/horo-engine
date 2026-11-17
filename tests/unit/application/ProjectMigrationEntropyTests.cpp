@@ -53,6 +53,7 @@ namespace project_migration_tests {
         ProjectMigrationPlan EntropyPlan(const std::shared_ptr<EntropyObservation> &observation) {
             auto builder = ProjectMigrationPipelineBuilder::Begin({"test.entropy"});
             static_cast<void>(builder.AddThen(std::make_shared<EntropyStage>(observation)));
+            static_cast<void>(builder.AddValidator(std::make_shared<SuffixValidator>("test.entropy.validate", "")));
             auto pipeline = std::move(builder).Build();
             REQUIRE(pipeline.HasValue());
             auto definition =
