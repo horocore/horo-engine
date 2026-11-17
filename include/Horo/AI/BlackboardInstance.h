@@ -223,6 +223,13 @@ namespace Horo::AI {
 
     private:
         friend class BlackboardInstance;
+        friend class UtilitySelector;
+
+        /** @brief Reads an exact slot already bound to this immutable schema publication.
+         * @param index Slot in the snapshot's retained schema; caller verifies schema identity.
+         * @return Borrowed value, null for a missing value, or the same revocation error as Read.
+         */
+        [[nodiscard]] Result<const BlackboardValue *> ReadBound(std::size_t index) const;
 
         BlackboardSnapshot(BlackboardInstanceBinding binding, std::shared_ptr<const BlackboardSchema> schema,
                            std::vector<std::optional<BlackboardValue>> values, std::uint64_t revision,

@@ -27,21 +27,23 @@ namespace Horo::AI {
             }
         }
 
-        [[nodiscard]] bool ValidConsideration(const BlackboardSchema &schema, const UtilityConsideration &consideration) noexcept {
+        /** @brief Binds a finite authored response to the immutable sorted schema. */
+        [[nodiscard]] std::optional<std::size_t> BindConsideration(const BlackboardSchema &schema,
+                                                                   const UtilityConsideration &consideration) noexcept {
             const auto keys = schema.Keys();
-            const auto key = std::ranges::find(keys, consideration.key, &BlackboardKeyDescriptor::key);
+            const auto key = std::ranges::lower_bound(keys, consideration.key, {}, &BlackboardKeyDescriptor::key);
             const auto width = consideration.maximum - consideration.minimum;
-            return key != keys.end() && key->kind == BlackboardValueKind::Scalar &&
-                   key->cardinality == BlackboardValueCardinality::Scalar && std::isfinite(width) && width > 0 &&
-                   UnitValue(consideration.weight) && ValidParameter(consideration);
+            if (key == keys.end() || key->key != consideration.key || key->kind != BlackboardValueKind::Scalar ||
+                key->cardinality != BlackboardValueCardinality::Scalar || !std::isfinite(width) || width <= 0 ||
+                !UnitValue(consideration.weight) || !ValidParameter(consideration))
+                return std::nullopt;
+            return static_cast<std::size_t>(key - keys.begin());
         }
 
-        [[nodiscard]] bool ValidOption(const BlackboardSchema &schema, const UtilityOption &option) noexcept {
-            if (!option.id.IsValid() || !option.action.IsValid() || !UnitValue(option.priority) || !UnitValue(option.compensation))
-                return false;
-            return std::ranges::all_of(option.considerations, [&schema](const UtilityConsideration &consideration) {
-                return ValidConsideration(schema, consideration);
-            });
+        /** @brief Rejects malformed option identity, bounds and coefficients before copying the option. */
+        [[nodiscard]] bool ValidOption(const UtilityOption &option) noexcept {
+            return option.id.IsValid() && option.action.IsValid() && UnitValue(option.priority) && UnitValue(option.compensation) &&
+                   !option.considerations.empty() && option.considerations.size() <= UtilitySelector::MaximumConsiderations;
         }
 
         [[nodiscard]] double Respond(const UtilityConsideration &consideration, const double input) noexcept {
@@ -66,52 +68,14 @@ namespace Horo::AI {
             }
         }
 
-        struct EvidenceWriter final {
-            std::span<UtilityScoreRecord> output;
-            UtilityEvaluation &result;
-
-            void Append(const UtilityScoreRecord &record) const noexcept {
-                if (result.evidenceWritten < output.size())
-                    output[result.evidenceWritten++] = record;
-                else if (!output.empty())
-                    ++result.evidenceDropped;
-            }
-        };
-
-        [[nodiscard]] Result<std::optional<double>> ReadScore(const BlackboardSnapshot &snapshot,
-                                                              const UtilityConsideration &consideration) {
-            auto read = snapshot.Read(consideration.key);
-            if (read.HasError())
-                return Result<std::optional<double>>::Failure(std::move(read).ErrorValue());
-            if (!read.Value())
-                return Result<std::optional<double>>::Success(std::nullopt);
-            const auto *scalar = std::get_if<BlackboardScalarValue>(&*read.Value());
+        /** @brief Projects the borrowed value to the authored normalized score without copying the value payload. */
+        [[nodiscard]] std::optional<double> ReadScore(const BlackboardValue *value, const UtilityConsideration &consideration) noexcept {
+            const auto *scalar = std::get_if<BlackboardScalarValue>(value);
             const auto *input = scalar ? std::get_if<double>(scalar) : nullptr;
             if (!input || !std::isfinite(*input))
-                return Result<std::optional<double>>::Success(std::nullopt);
+                return std::nullopt;
             const auto score = Respond(consideration, *input);
-            return Result<std::optional<double>>::Success(UnitValue(score) ? std::optional{score} : std::nullopt);
-        }
-
-        [[nodiscard]] Result<std::optional<double>> ScoreOption(const BlackboardSnapshot &snapshot, const UtilityOption &option,
-                                                                EvidenceWriter writer) {
-            auto score = option.priority;
-            bool eligible = true;
-            const auto compensation = option.compensation * (1 - 1.0 / static_cast<double>(option.considerations.size()));
-            for (const auto &consideration : option.considerations) {
-                auto response = ReadScore(snapshot, consideration);
-                if (response.HasError())
-                    return response;
-                writer.Append({option.id, consideration.key, response.Value()});
-                if (!response.Value()) {
-                    eligible = false;
-                    continue;
-                }
-                const auto value = *response.Value();
-                const auto adjusted = value + (1 - value) * compensation * value;
-                score *= std::lerp(1.0, adjusted, consideration.weight);
-            }
-            return Result<std::optional<double>>::Success(eligible && UnitValue(score) ? std::optional{score} : std::nullopt);
+            return UnitValue(score) ? std::optional{score} : std::nullopt;
         }
 
         /** @brief Keeps the first stable option on an equal score. */
@@ -130,6 +94,42 @@ namespace Horo::AI {
         }
     }  // namespace
 
+    /** @brief Writes only to caller-provided evidence storage and accounts for truncation. */
+    struct UtilitySelector::EvidenceWriter final {
+        std::span<UtilityScoreRecord> output;
+        UtilityEvaluation &result;
+
+        void Append(const UtilityScoreRecord &record) const noexcept {
+            if (result.evidenceWritten < output.size())
+                output[result.evidenceWritten++] = record;
+            else if (!output.empty())
+                ++result.evidenceDropped;
+        }
+    };
+
+    /** @copydoc UtilitySelector::ScoreOption */
+    Result<std::optional<double>> UtilitySelector::ScoreOption(const BlackboardSnapshot &snapshot, const UtilityOption &option,
+                                                               const std::span<const std::size_t> slots, const EvidenceWriter &writer) {
+        auto score = option.priority;
+        bool eligible = true;
+        const auto compensation = option.compensation * (1 - 1.0 / static_cast<double>(option.considerations.size()));
+        for (std::size_t index = 0; index < option.considerations.size(); ++index) {
+            const auto &consideration = option.considerations[index];
+            auto value = snapshot.ReadBound(slots[index]);
+            if (value.HasError())
+                return Result<std::optional<double>>::Failure(std::move(value).ErrorValue());
+            const auto response = ReadScore(value.Value(), consideration);
+            writer.Append({option.id, consideration.key, response});
+            if (!response) {
+                eligible = false;
+                continue;
+            }
+            const auto adjusted = *response + (1 - *response) * compensation * *response;
+            score *= std::lerp(1.0, adjusted, consideration.weight);
+        }
+        return Result<std::optional<double>>::Success(eligible && UnitValue(score) ? std::optional{score} : std::nullopt);
+    }
+
     /** @copydoc UtilitySelector::Capture */
     Result<UtilitySelector> UtilitySelector::Capture(std::shared_ptr<const BlackboardSchema> schema,
                                                      const std::span<const UtilityOption> options) {
@@ -140,8 +140,7 @@ namespace Horo::AI {
         result.schema_ = std::move(schema);
         result.options_.reserve(options.size());
         for (const auto &option : options) {
-            if (option.considerations.empty() || option.considerations.size() > MaximumConsiderations ||
-                !ValidOption(*result.schema_, option))
+            if (!ValidOption(option))
                 return CaptureResult::Failure(MakeError(AIErrors::DecisionAssetSchemaInvalid));
             result.options_.push_back(option);
             result.workUnits_ += 1 + option.considerations.size();
@@ -149,6 +148,15 @@ namespace Horo::AI {
         std::ranges::sort(result.options_, {}, &UtilityOption::id);
         if (std::ranges::adjacent_find(result.options_, {}, &UtilityOption::id) != result.options_.end())
             return CaptureResult::Failure(MakeError(AIErrors::DecisionAssetSchemaInvalid));
+        result.slots_.reserve(result.workUnits_ - options.size());
+        for (const auto &option : result.options_) {
+            for (const auto &consideration : option.considerations) {
+                const auto slot = BindConsideration(*result.schema_, consideration);
+                if (!slot)
+                    return CaptureResult::Failure(MakeError(AIErrors::DecisionAssetSchemaInvalid));
+                result.slots_.push_back(*slot);
+            }
+        }
         return CaptureResult::Success(std::move(result));
     }
 
@@ -168,10 +176,13 @@ namespace Horo::AI {
             return Evaluation::Success(result);
         }
         const EvidenceWriter writer{evidence, result};
+        auto slots = std::span<const std::size_t>{slots_};
         for (const auto &option : options_) {
-            auto score = ScoreOption(snapshot, option, writer);
+            const auto count = option.considerations.size();
+            auto score = ScoreOption(snapshot, option, slots.first(count), writer);
             if (score.HasError())
                 return Evaluation::Failure(std::move(score).ErrorValue());
+            slots = slots.subspan(count);
             writer.Append({option.id, {}, score.Value()});
             if (IsBetterScore(score.Value(), result.selection))
                 result.selection = UtilitySelection{option.id, option.action, *score.Value()};
@@ -186,7 +197,8 @@ namespace Horo::AI {
 
     /** @copydoc UtilitySelector::Storage */
     DecisionKernelStorage UtilitySelector::Storage() const noexcept {
-        DecisionKernelStorage storage{.compiledBytes = sizeof(UtilitySelector) + options_.capacity() * sizeof(UtilityOption)};
+        DecisionKernelStorage storage{.compiledBytes = sizeof(UtilitySelector) + options_.capacity() * sizeof(UtilityOption) +
+                                                       slots_.capacity() * sizeof(std::size_t)};
         for (const auto &option : options_)
             storage.compiledBytes += option.considerations.capacity() * sizeof(UtilityConsideration);
         return storage;

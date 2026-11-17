@@ -38,8 +38,9 @@ namespace Horo::AI {
         const auto &utility =
             *std::get<std::shared_ptr<const CookedUtilityPlan>>(plan_->Graphs()[plan_->Occurrences()[index].plan].execution);
         if (!runtime.selected) {
+            const auto evidence = trace_ ? std::span<UtilityScoreRecord>{runtime.evidence} : std::span<UtilityScoreRecord>{};
             auto evaluated = utility.Selector().Evaluate(input_->blackboard, input_->current.agent, *input_->utilityAgentBudget,
-                                                         *input_->utilityGlobalBudget, runtime.evidence);
+                                                         *input_->utilityGlobalBudget, evidence);
             if (evaluated.HasError())
                 return Result<AiTaskState>::Failure(evaluated.ErrorValue());
             const auto &result = evaluated.Value();

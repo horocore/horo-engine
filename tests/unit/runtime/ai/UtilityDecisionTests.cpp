@@ -7,9 +7,14 @@ namespace Horo::AI {
     namespace {
         using namespace DecisionGraphTestSupport;
 
+        constexpr auto DerivedUtilityKey = 900ULL;
+
         struct UtilityFixture final : Fixture {
             UtilityFixture() {
-                const std::array keys{BlackboardKeyDescriptor{.key = MakeIdentity<BlackboardKeyId>(2),
+                const std::array keys{BlackboardKeyDescriptor{.key = MakeIdentity<BlackboardKeyId>(DerivedUtilityKey),
+                                                              .kind = BlackboardValueKind::Scalar,
+                                                              .defaultValue = BlackboardValue{BlackboardScalarValue{0.1}}},
+                                      BlackboardKeyDescriptor{.key = MakeIdentity<BlackboardKeyId>(2),
                                                               .kind = BlackboardValueKind::Scalar,
                                                               .defaultValue = BlackboardValue{BlackboardScalarValue{0.25}}}};
                 auto captured = BlackboardSchema::Capture({SchemaId(), 1, BlackboardUnknownValuePolicy::Reject, keys});
@@ -124,6 +129,55 @@ namespace Horo::AI {
             REQUIRE(instance->Cancel(AiTaskCancellationReason::Requested).HasValue());
             CHECK(fixture.probe.aborts == 2);
             CHECK(fixture.probe.cleanups == 2);
+        }
+
+        TEST_CASE("Compiled utility honors sparse scalar bindings and derived-value revocation", "[ai][decision-compiler][utility]") {
+            UtilityFixture fixture;
+            const auto key = MakeIdentity<BlackboardKeyId>(DerivedUtilityKey);
+            auto source = UtilitySource();
+            auto &body = std::get<UtilityDecisionSource>(source.body);
+            body.requirements.push_back({.key = key, .kind = BlackboardValueKind::Scalar, .source = Location()});
+            body.options.back().option.considerations.front() = {.key = key};
+            std::ranges::reverse(body.options);
+            auto instance = fixture.Instance(fixture.Compile(std::span{&source, 1}, 1));
+
+            const auto permission = std::make_shared<BlackboardValueAuthorization>();
+            auto batch = fixture.blackboard->BeginWriteBatch();
+            REQUIRE(batch.HasValue());
+            auto staged = std::move(batch).Value();
+            REQUIRE(staged.Stage({key, BlackboardScalarValue{0.875}, permission}).HasValue());
+            REQUIRE(fixture.blackboard->CommitAtBlackboardSync(std::move(staged)).HasValue());
+            const auto snapshot = fixture.blackboard->Snapshot();
+            REQUIRE(snapshot.HasValue());
+
+            AiWorkBudget agent{4}, shortGlobal{3};
+            DecisionStepTrace trace;
+            CHECK(fixture.Tick(*instance, 1, agent, shortGlobal, &trace) == AiTaskState::Running);
+            CHECK(agent.Remaining() == 4);
+            CHECK(shortGlobal.Remaining() == 3);
+            CHECK(trace.Records().empty());
+            CHECK(fixture.probe.starts == 0);
+
+            AiWorkBudget global{4};
+            const DecisionGraphStepInput input{2, fixture.binding, snapshot.Value(), {}, &agent, &global};
+            SECTION("Current value participates at its own stable key") {
+                REQUIRE(instance->StepWithTrace(input, trace).HasValue());
+                REQUIRE(fixture.probe.calls.size() >= 1);
+                CHECK(fixture.probe.calls.front() == "start:5003");
+                REQUIRE(trace.Records().size() >= 4);
+                CHECK(trace.Records()[2].key == key);
+                CHECK(trace.Records()[2].utilityScore == 0.875);
+                CHECK(agent.Remaining() == 0);
+                CHECK(global.Remaining() == 0);
+            }
+            SECTION("Revoked frozen value cannot publish or start a task") {
+                permission->Revoke();
+                const auto result = instance->StepWithTrace(input, trace);
+                REQUIRE(result.HasError());
+                CHECK(result.ErrorValue().code.Value() == AIErrors::BlackboardInstanceStale.code.Value());
+                CHECK(trace.Records().empty());
+                CHECK(fixture.probe.starts == 0);
+            }
         }
 
         TEST_CASE("HSM Utility reentry advances the selected task generation and releases prior callbacks exactly once",

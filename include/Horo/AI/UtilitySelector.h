@@ -96,9 +96,16 @@ namespace Horo::AI {
         [[nodiscard]] DecisionKernelStorage Storage() const noexcept;
 
     private:
+        struct EvidenceWriter;
+
+        /** @brief Scores one option against the exact schema slots bound at capture. */
+        [[nodiscard]] static Result<std::optional<double>> ScoreOption(const BlackboardSnapshot &snapshot, const UtilityOption &option,
+                                                                       std::span<const std::size_t> slots, const EvidenceWriter &writer);
+
         UtilitySelector() = default;
         std::shared_ptr<const BlackboardSchema> schema_;
         std::vector<UtilityOption> options_;
+        std::vector<std::size_t> slots_; /**< Bound consideration slots in stable option order. */
         std::size_t workUnits_{};
     };
 }  // namespace Horo::AI
