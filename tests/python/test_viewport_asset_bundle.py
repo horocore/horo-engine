@@ -39,7 +39,7 @@ def test_sonar_cooks_and_verifies_locally_after_build_before_coverage():
     venv = consumer.index('python3 -m venv /tmp/horo-coverage')
     assert python < venv
     assert "python-version: '3.12'" in consumer[python:venv]
-    assert 'coverage==7.6.10 fastcov==1.17 pytest==8.3.4 defusedxml==0.7.1' in consumer
+    assert 'coverage==7.6.10 fastcov==1.17 pytest==9.0.3 defusedxml==0.7.1' in consumer
     assert '-DPython3_EXECUTABLE=/tmp/horo-coverage/bin/python' in consumer
     require_provisioning_failure_policy(consumer)
 

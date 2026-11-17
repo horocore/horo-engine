@@ -819,7 +819,7 @@ def test_windows_parallel_tests_require_native_fixture_isolation_qualification()
     marker = "- name: Verify Windows CTest fixture isolation"
     qualification = native.split(marker, 1)[1].split("\n      - name:", 1)[0]
     assert "if: runner.os == 'Windows'" in qualification
-    assert "pytest==8.3.4" in qualification
+    assert "pytest==9.0.3" in qualification
     assert "tests/python/test_ci_case_isolation.py" in qualification
     assert "-k 'test_generated_suite_properties_preserve_contracts_and_control_concurrency or test_case_' -q" in qualification
     assert "timeout-minutes: 2" in qualification

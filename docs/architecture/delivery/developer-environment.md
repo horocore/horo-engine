@@ -44,8 +44,8 @@ All project-owned Python entry points, including `scripts/dev.py`,
 `scripts/ci.py`, and `scripts/dependency-state.py`, use
 `scripts/requirements.txt` as their single third-party dependency declaration:
 
-```text
-pytest==8.4.2
+```sh
+python -m pip install -r scripts/requirements.txt
 ```
 
 Hashing, JSON parsing, argument parsing, and filesystem access in
