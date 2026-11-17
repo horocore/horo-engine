@@ -1623,6 +1623,7 @@ add_executable(HoroWorldStreamingTests
         unit/runtime/world_streaming/FallbackStreamingProviderTests.cpp
         unit/runtime/world_streaming/StreamingBudgetModelTests.cpp
         unit/runtime/world_streaming/StreamingFeatureBudgetReservationsTests.cpp
+        unit/runtime/world_streaming/StreamingDirectionFinalizationTests.cpp
         unit/runtime/world_streaming/SharedAssetResidencyTests.cpp
         unit/runtime/world_streaming/StreamingCellOperationTests.cpp
         unit/runtime/world_streaming/StreamingCellCandidateTests.cpp
