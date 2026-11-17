@@ -256,7 +256,8 @@ private:
     bool closed_{};
 };
 
-Result<void> PrepareConfiguredAnimation(WorldOwners &owners, WorldRecord &record) {
+/** @brief Binds the owner-issued animation identity to this configured Scene before startup. */
+inline Result<void> PrepareConfiguredAnimation(WorldOwners &owners, WorldRecord &record) {
     const auto &input = *owners.configured;
     if (!input.animationIdentities)
         return Result<void>::Success();

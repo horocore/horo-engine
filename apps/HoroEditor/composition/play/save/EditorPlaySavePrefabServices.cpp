@@ -186,7 +186,8 @@ namespace Horo::Application::Internal {
             !state_->scenes.IsRestoreCandidate(scene))
             return Unavailable<std::shared_ptr<const Gameplay::GameplayPrefabContext>>();
         auto inventory =
-            PlaySavePrefabInventory::PrepareForScene(state_->scenes, scene, saved, restored.PreparedInstances(), state_->authored,
+            PlaySavePrefabInventory::PrepareForScene(state_->scenes, scene,
+                                                     PlaySavePrefabRestoreInput{saved, restored.PreparedInstances(), state_->authored},
                                                      state_->entropy, state_->limits, state_->provider.LimitProfile());
         if (inventory.HasError())
             return Outcome::Failure(inventory.ErrorValue());

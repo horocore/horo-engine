@@ -15,6 +15,15 @@ namespace Horo::Application::Internal {
         Prefab::PrefabPersistentState prefabs;
     };
 
+    /** @brief Synchronous reconstruction inputs; authored records are owned while saved recipes/member receipts are borrowed.
+     * The caller retains the borrowed inputs for PrepareForScene; the inventory adopts owned records and copies admitted recipes.
+     */
+    struct PlaySavePrefabRestoreInput final {
+        const Prefab::PrefabPersistentState &saved;
+        std::span<const Prefab::PrefabRestoredInstance> restored;
+        std::vector<Runtime::PersistentEntityRecord> authored;
+    };
+
     /** @brief The existing Play host's single complete durable entity inventory, including dynamic recipe tombstones.
      * @details The same explicit entropy source already issues authored/session/slot identities. This object issues no
      * runtime Scene IDs, publishes no entities and owns no replacement transaction. Scenes outlives the entire accepted
@@ -45,14 +54,13 @@ namespace Horo::Application::Internal {
                                                                     std::string_view creator) const override;
         /** @brief Prepares the same inventory for an actual unpublished Scene using exact reconstructed members.
          * @param scenes Canonical Scene owner. @param candidate Actual unpublished candidate.
-         * @param saved Complete admitted dynamic recipes. @param restored Exact adapter-created member receipts.
-         * @param authored Original issued authored inventory. @param entropy Existing host issuer.
+         * @param input Complete admitted recipes, exact reconstructed member receipts and owned original authored records.
+         * @param entropy Existing host issuer.
          * @param limits Aggregate budget. @param profile Canonical policy. @param schemas Canonical property schemas.
          * @return Unpublished inventory, inaccessible through Current until the Scene itself publishes.
          */
         [[nodiscard]] static Result<std::shared_ptr<PlaySavePrefabInventory>> PrepareForScene(
-            Runtime::RuntimeSceneService &scenes, Runtime::RuntimeScene &candidate, const Prefab::PrefabPersistentState &saved,
-            std::span<const Prefab::PrefabRestoredInstance> restored, std::vector<Runtime::PersistentEntityRecord> authored,
+            Runtime::RuntimeSceneService &scenes, Runtime::RuntimeScene &candidate, PlaySavePrefabRestoreInput input,
             std::shared_ptr<Security::SecureRandomSource> entropy, Prefab::PrefabPersistenceLimits limits,
             Prefab::PrefabLimitProfile profile, std::shared_ptr<const Prefab::PrefabValueSchemaSnapshot> schemas = {});
         /** @brief Captures the real current Scene's complete identities and canonical recipe deltas at the safe point.

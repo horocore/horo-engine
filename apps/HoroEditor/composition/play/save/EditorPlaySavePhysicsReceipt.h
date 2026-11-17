@@ -4,6 +4,15 @@
 #include <thread>
 
 namespace Horo::Application::Internal {
+    /** @brief Constructor-only coherent Scene restore inputs; the receipt copies context/view and keeps the existing identity borrow.
+     * All references remain valid through synchronous receipt construction. SceneRestoreBundle owns the identity map thereafter.
+     */
+    struct PlaySavePhysicsRestoreScene final {
+        const Runtime::StagedRestoreContext &context;
+        const Runtime::RuntimeSceneView &scene;
+        const Runtime::PersistentEntityIdentityMap &identities;
+    };
+
     /** @brief Canonical participant over an ACTUAL pending Scene target and actual archive bytes.
      * SceneRestoreBundle owns this receipt and its immutable identity map through all synchronous preparation calls.
      * The map borrow is used only on the owner during Instantiate, cleared on retirement, and never read by a worker/destructor.
@@ -13,8 +22,7 @@ namespace Horo::Application::Internal {
     public:
         PlaySavePhysicsReceipt(Physics::Detail::PhysicsSceneStateTarget, PlaySavePhysicsPolicy,
                                std::shared_ptr<const PlaySavePhysicsContent>, std::shared_ptr<const std::vector<std::byte>>,
-                               Runtime::StagedRestoreContext, Runtime::RuntimeSceneView, const Runtime::PersistentEntityIdentityMap &,
-                               CancellationToken, std::shared_ptr<PlaySavePhysicsRestoreFence>);
+                               const PlaySavePhysicsRestoreScene &, CancellationToken, std::shared_ptr<PlaySavePhysicsRestoreFence>);
         [[nodiscard]] const Runtime::StagedRestoreParticipantRequirement &Requirement() const noexcept override;
         [[nodiscard]] Result<void> Decode(const Runtime::StagedRestoreContext &) override;
         [[nodiscard]] Result<void> Validate(const Runtime::StagedRestoreContext &) override;

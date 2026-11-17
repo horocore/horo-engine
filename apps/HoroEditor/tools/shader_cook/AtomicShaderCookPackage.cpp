@@ -189,17 +189,20 @@ namespace Horo::Editor::Offline {
         }
 
         /** @brief Uses only native exclusive promotion, failing closed when no such primitive is available. */
-        bool RenameExclusive(const std::filesystem::path &source, const std::filesystem::path &destination) {
+        Result<void> RenameExclusive(const std::filesystem::path &source, const std::filesystem::path &destination) {
 #if defined(_WIN32)
-            return MoveFileExW(source.c_str(), destination.c_str(), MOVEFILE_WRITE_THROUGH) != 0;
+            return MoveFileExW(source.c_str(), destination.c_str(), MOVEFILE_WRITE_THROUGH) != 0 ? Result<void>::Success() : IoFailure();
 #elif defined(__APPLE__)
-            return renameatx_np(AT_FDCWD, source.c_str(), AT_FDCWD, destination.c_str(), RENAME_EXCL) == 0;
+            return renameatx_np(AT_FDCWD, source.c_str(), AT_FDCWD, destination.c_str(), RENAME_EXCL) == 0 ? Result<void>::Success()
+                                                                                                           : IoFailure();
 #elif defined(__linux__) && defined(SYS_renameat2)
-            return syscall(SYS_renameat2, AT_FDCWD, source.c_str(), AT_FDCWD, destination.c_str(), RENAME_NOREPLACE) == 0;
+            return syscall(SYS_renameat2, AT_FDCWD, source.c_str(), AT_FDCWD, destination.c_str(), RENAME_NOREPLACE) == 0
+                       ? Result<void>::Success()
+                       : IoFailure();
 #else
             (void)source;
             (void)destination;
-            return false;
+            return IoFailure();
 #endif
         }
 
@@ -374,7 +377,7 @@ namespace Horo::Editor::Offline {
             return IoFailure();
         if (auto absent = DestinationAbsent(destination); absent.HasError())
             return absent;
-        return RenameExclusive(source, destination) ? Result<void>::Success() : IoFailure();
+        return RenameExclusive(source, destination);
     }
 
     Result<void> ValidateAtomicShaderCookDestination(const std::filesystem::path &destination, std::string_view PrivateCandidatePrefix) {

@@ -39,6 +39,7 @@ namespace Horo::Application::Internal {
 #endif
     }
 
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__x86_64__))
     namespace {
         /** @brief Constructs only independent explicitly supplied active roots; decoding alone does not approve a publisher. */
         Result<std::shared_ptr<Security::TrustedRootStore>> Roots(const std::span<const std::uint8_t> bytes) {
@@ -111,12 +112,12 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
     }  // namespace
+#endif
 
     Result<AuthenticatedShaderCookConfiguration> MakeAuthenticatedShaderCookConfiguration(
         const ShaderCookAuthenticationFiles &inputs, std::span<const std::filesystem::path> executables, ShaderCookToolProfile profile) {
         using Configuration = Result<AuthenticatedShaderCookConfiguration>;
-        if (ActualShaderCookHost().empty())
-            return Configuration::Failure(MakeError(ShaderCompilerPipelineErrors::UnsupportedTarget));
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__x86_64__))
         auto catalog = Authenticate(inputs);
         if (catalog.HasError())
             return Configuration::Failure(catalog.ErrorValue());
@@ -129,6 +130,12 @@ namespace Horo::Application::Internal {
             return Configuration::Failure(installed.ErrorValue());
         return Configuration::Success({std::move(configuration), std::make_shared<const std::vector<std::uint8_t>>(catalog.Value().catalog),
                                        std::make_shared<const std::vector<std::uint8_t>>(catalog.Value().signature)});
+#else
+        (void)inputs;
+        (void)executables;
+        (void)profile;
+        return Configuration::Failure(MakeError(ShaderCompilerPipelineErrors::UnsupportedTarget));
+#endif
     }
 
     Result<AuthenticatedShaderCookConfiguration> MakeAuthenticatedSpirvCookConfiguration(const AuthenticatedSpirvCookInputs &inputs) {

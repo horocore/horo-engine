@@ -8,11 +8,10 @@ namespace Horo::Application::Internal {
     PlaySavePhysicsReceipt::PlaySavePhysicsReceipt(Physics::Detail::PhysicsSceneStateTarget target, PlaySavePhysicsPolicy policy,
                                                    std::shared_ptr<const PlaySavePhysicsContent> content,
                                                    std::shared_ptr<const std::vector<std::byte>> source,
-                                                   Runtime::StagedRestoreContext context, Runtime::RuntimeSceneView scene,
-                                                   const Runtime::PersistentEntityIdentityMap &identities, CancellationToken cancellation,
+                                                   const PlaySavePhysicsRestoreScene &restore, CancellationToken cancellation,
                                                    std::shared_ptr<PlaySavePhysicsRestoreFence> fence)
-        : target_(std::move(target)), policy_(policy), content_(std::move(content)), source_(std::move(source)), context_(context),
-          scene_(scene), identities_(&identities), cancellation_(std::move(cancellation)), fence_(std::move(fence)) {
+        : target_(std::move(target)), policy_(policy), content_(std::move(content)), source_(std::move(source)), context_(restore.context),
+          scene_(restore.scene), identities_(&restore.identities), cancellation_(std::move(cancellation)), fence_(std::move(fence)) {
         const auto descriptor = Physics::Detail::PhysicsStateSaveDescriptor();
         requirement_ = {descriptor.participant, descriptor.schemaVersion, descriptor.scope};
     }

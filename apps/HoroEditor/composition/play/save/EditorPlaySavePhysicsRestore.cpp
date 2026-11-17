@@ -22,8 +22,9 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(content.ErrorValue());
         try {
             return Outcome::Success(std::make_unique<PlaySavePhysicsReceipt>(std::move(target).Value(), policy_, std::move(content).Value(),
-                                                                             std::move(source), context, scene, identities, cancellation,
-                                                                             std::move(fence)));
+                                                                             std::move(source),
+                                                                             PlaySavePhysicsRestoreScene{context, scene, identities},
+                                                                             cancellation, std::move(fence)));
         } catch (const std::bad_alloc &) {
             return Outcome::Failure(MakeError(Physics::PhysicsErrors::CapacityExceeded));
         }
