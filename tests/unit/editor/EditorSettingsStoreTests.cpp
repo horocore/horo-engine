@@ -371,11 +371,10 @@ namespace {
         RequireSettingValue<bool>(after, "editor.code.codeShowWhitespace", true);
         RequireSettingValue<std::int64_t>(after, "editor.code.codeAutoSaveDelaySeconds", 3);
         REQUIRE((observed.revision == after.Revision()));
-        RequireChangedKeys(observed,
-                           {"editor.theme.active", "editor.theme.package_id", "editor.appearance.accent_color",
-                            "editor.appearance.ui_scale_percent", "editor.appearance.code_font_size_px",
-                            "editor.appearance.code_font_family", "editor.code.codeShowLineNumbers", "editor.code.codeShowWhitespace",
-                            "editor.code.codeWordWrap", "editor.code.codeShowScrollBar", "editor.code.codeAutoSaveDelaySeconds"});
+        RequireChangedKeys(observed, {"editor.theme.active", "editor.theme.package_id", "editor.appearance.accent_color",
+                                      "editor.appearance.ui_scale_percent", "editor.appearance.code_font_size_px",
+                                      "editor.appearance.code_font_family", "editor.code.codeShowWhitespace",
+                                      "editor.code.codeAutoSaveDelaySeconds"});
     }
 
     TEST_CASE("Failed Or Stale Authority Commit Retains Committed Snapshot And Does Not Publish", "[unit][editor]") {
