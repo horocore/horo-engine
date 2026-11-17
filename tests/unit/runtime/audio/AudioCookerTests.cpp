@@ -135,14 +135,15 @@ namespace Horo::Audio {
             const Assets::AssetId asset = Assets::AssetId::Parse("00000000-0000-0000-0000-000000000544").Value();
             static constexpr std::size_t artifactLimit = 4'096;
             AudioProcessingFormat format;
+            std::vector<AudioLoopRegion> loops;
             std::vector<std::uint8_t> encoded;
             TemporaryCookRoot root;
 
-            CookedStreamFixture() {
+            explicit CookedStreamFixture(const bool loop = false) {
                 AudioCookProfile profile;
                 profile.defaults.streamThresholdFrames = 2;
                 profile.defaults.streamChunkFrames = 2;
-                auto cooked = CookAudioSource(WaveFixture(), profile, target, Toolchain());
+                auto cooked = CookAudioSource(WaveFixture(loop), profile, target, Toolchain());
                 REQUIRE(cooked.HasValue());
                 Assets::AssetCookArtifact artifact;
                 artifact.id = asset;
@@ -156,6 +157,7 @@ namespace Horo::Audio {
                 REQUIRE(encoding.HasValue());
                 encoded = std::move(encoding).Value();
                 format = cooked.Value().manifest.format;
+                loops = std::move(cooked).Value().manifest.loops;
                 REQUIRE(encoded.size() <= artifactLimit);
             }
 
@@ -401,11 +403,67 @@ namespace Horo::Audio {
                 corrupt[loopOffset + relativeOffset + byte] = relativeOffset == 4 ? 0 : 0xFF;
             CHECK(HasCode(InspectCookedAudio(corrupt), AudioErrors::CookPayloadInvalid));
         }
+        for (const auto field : {&AudioCookSettings::encoderDelayFrames, &AudioCookSettings::encoderPaddingFrames}) {
+            profile.defaults.*field = 1;
+            CHECK(HasCode(CookAudioSource(source, profile, Target("linux-desktop"), Toolchain()), AudioErrors::CookCombinationUnsupported));
+            profile.defaults.*field = 0;
+        }
         profile.defaults.preRollFrames = 1;
         CHECK(HasCode(CookAudioSource(source, profile, Target("linux-desktop"), Toolchain()), AudioErrors::CookCombinationUnsupported));
         profile.defaults.preRollFrames = 0;
         profile.defaults.loopCrossfadeFrames = 1;
         CHECK(HasCode(CookAudioSource(source, profile, Target("linux-desktop"), Toolchain()), AudioErrors::CookCombinationUnsupported));
+    }
+
+    TEST_CASE("Packaged PCM seeks across chunk anchors and wraps its authored loop sample exactly", "[integration][audio][cook][gapless]") {
+        const CookedStreamFixture fixture{true};
+        REQUIRE(fixture.loops.size() == 1);
+        const auto &loop = fixture.loops.front();
+        auto source = MakeCookedAudioStreamSource(fixture.Archive(), fixture.target, fixture.type, CookedStreamFixture::artifactLimit);
+        REQUIRE(source.HasValue());
+        JobSystem jobs({.workerCount = 1});
+        auto created = AudioStreamingService::Create(jobs, std::move(source).Value());
+        REQUIRE(created.HasValue());
+        auto service = std::move(created).Value();
+        const auto admitted = service->Admit(fixture.Request());
+        REQUIRE(admitted.HasValue());
+        const auto handle = admitted.Value();
+        auto opened = service->RenderPort(handle);
+        REQUIRE(opened.HasValue());
+        auto port = std::move(opened).Value();
+        REQUIRE((loop == AudioLoopRegion{{1}, 1, 3}));
+        REQUIRE(port.RequestPosition(2, {true, static_cast<std::uint32_t>(loop.startFrame), static_cast<std::uint32_t>(loop.endFrame)}));
+        const auto pump = [&] {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{3};
+            while (port.AvailableFrames() == 0 && !port.IsStopped() && std::chrono::steady_clock::now() < deadline) {
+                service->Pump();
+                std::this_thread::yield();
+            }
+            REQUIRE(port.PositionReady());
+            REQUIRE(port.AvailableFrames() > 0);
+        };
+        alignas(64) std::array<AudioSample, 2> left{};
+        alignas(64) std::array<AudioSample, 2> right{};
+        const std::array<AudioSample *, 2> planes{left.data(), right.data()};
+        for (unsigned frame = 0; frame < 8; ++frame) {
+            pump();
+            const auto output = port.Render(planes, 1);
+            CHECK(output.availableFrames == 1);
+            CHECK(output.silentFrames == 0);
+            const bool afterWrap = frame % 2 != 0;
+            CHECK(left.front() == (afterWrap ? 32'767.0F / 32'768.0F : -0.5F));
+            CHECK(right.front() == (afterWrap ? -1.0F : 0.25F));
+        }
+        REQUIRE(port.RequestPosition(3));
+        pump();
+        const auto terminal = port.Render(planes, 2);
+        CHECK(terminal.availableFrames == 1);
+        CHECK(terminal.silentFrames == 1);
+        CHECK(terminal.ended);
+        CHECK((left == std::array<AudioSample, 2>{0.0F, 0.0F}));
+        CHECK((right == std::array<AudioSample, 2>{-0.25F, 0.0F}));
+        CHECK(service->Snapshot(handle).Value().underrunCallbacks == 0);
+        REQUIRE(service->Retire(handle).HasValue());
     }
 
     TEST_CASE("Audio cook target override resolves streamed chunks without changing source identity", "[unit][audio][cook]") {
