@@ -109,8 +109,8 @@ TEST_CASE("Console settings reject missing malformed and secret schemas without 
     descriptors = Descriptors();
     for (auto &descriptor : descriptors)
         if (descriptor.key.Value() == ConsoleEnabledSettingName) {
-            descriptor.type = SettingValueType::String;
-            descriptor.defaultValue = std::string("opaque-private-binding");
+            descriptor.type = SettingValueType::CredentialReference;
+            descriptor.defaultValue = CredentialReference{};
             descriptor.sensitivity = SettingSensitivity::SecretReference;
         }
     ConfigurationService secret(Schema(descriptors));
@@ -133,8 +133,8 @@ TEST_CASE("History preference projection reads only its canonical public setting
     REQUIRE(configuration.ResolveAndCommit(sources).HasValue());
     CHECK(ReadConsoleHistoryLimit(configuration.Snapshot()).Value() == 1);
     CHECK(ReadConsoleHistoryLimit(original).Value() == 500);
-    descriptors[0].type = SettingValueType::String;
-    descriptors[0].defaultValue = std::string("private-binding");
+    descriptors[0].type = SettingValueType::CredentialReference;
+    descriptors[0].defaultValue = CredentialReference{};
     descriptors[0].sensitivity = SettingSensitivity::SecretReference;
     ConfigurationService secret(Schema(descriptors));
     CHECK(ReadConsoleHistoryLimit(secret.Snapshot()).HasError());
