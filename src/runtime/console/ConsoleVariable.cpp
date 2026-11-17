@@ -18,10 +18,15 @@ namespace Horo::Debug {
             }, value);
         }
 
-        /** @brief Copies the canonical configuration value into a typed presentation projection. */
-        ConsoleValue Project(const SettingValue &value) {
-            return std::visit([](const auto &item) -> ConsoleValue {
-                return item;
+        /** @brief Projects only configuration values supported by the console. */
+        std::optional<ConsoleValue> Project(const SettingValue &value) {
+            if (value.valueless_by_exception())
+                return std::nullopt;
+            return std::visit([](const auto &item) -> std::optional<ConsoleValue> {
+                if constexpr (std::is_same_v<std::decay_t<decltype(item)>, CredentialReference>)
+                    return std::nullopt;
+                else
+                    return ConsoleValue{item};
             }, value);
         }
     }  // namespace
@@ -66,7 +71,8 @@ namespace Horo::Debug {
         if (variable.descriptor_.configurationKey) {
             const auto snapshot = variable.configuration_->Snapshot();
             const auto *current = snapshot.FindResolved(*variable.descriptor_.configurationKey);
-            if (!current || current->sensitivity != SettingSensitivity::Public || variable.Validate(Project(current->value)).HasError())
+            const auto projected = current && current->sensitivity == SettingSensitivity::Public ? Project(current->value) : std::nullopt;
+            if (!projected || variable.Validate(*projected).HasError())
                 return Result<ConsoleVariable>::Failure(MakeCommandError(CommandError::InvalidDescriptor));
         }
         return Result<ConsoleVariable>::Success(std::move(variable));
@@ -111,18 +117,21 @@ namespace Horo::Debug {
         if (descriptor_.configurationKey) {
             const auto snapshot = configuration_->Snapshot();
             const auto *current = snapshot.FindResolved(*descriptor_.configurationKey);
-            if (!current || current->sensitivity != SettingSensitivity::Public || Validate(Project(current->value)).HasError())
+            auto projected = current && current->sensitivity == SettingSensitivity::Public ? Project(current->value) : std::nullopt;
+            if (!projected || Validate(*projected).HasError())
                 return Result<ConsoleVariableSnapshot>::Failure(MakeCommandError(CommandError::InvalidDescriptor));
-            active = Project(current->value);
+            active = std::move(*projected);
         } else
             active = *sessionValue_;
         auto pending = pending_;
         if (descriptor_.persistence != ConsoleVariablePersistence::Session) {
             const auto stored = persistence_->Pending(*descriptor_.configurationKey);
-            if (stored && Validate(Project(*stored)).HasError())
-                return Result<ConsoleVariableSnapshot>::Failure(MakeCommandError(CommandError::InvalidDescriptor));
-            if (stored)
-                pending = Project(*stored);
+            if (stored) {
+                auto projected = Project(*stored);
+                if (!projected || Validate(*projected).HasError())
+                    return Result<ConsoleVariableSnapshot>::Failure(MakeCommandError(CommandError::InvalidDescriptor));
+                pending = std::move(projected);
+            }
         }
         return Result<ConsoleVariableSnapshot>::Success({std::move(active), std::move(pending), descriptor_.applyPolicy});
     }

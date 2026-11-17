@@ -3,8 +3,8 @@
 #include "LuaBehaviorSandbox.h"
 #include "LuaDecisionNodeBoundary.h"
 
-#include <initializer_list>
 #include <exception>
+#include <initializer_list>
 #include <limits>
 #include <new>
 #include <stdexcept>

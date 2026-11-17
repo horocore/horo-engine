@@ -109,3 +109,43 @@ TEST_CASE("Console configuration variables always read and commit the canonical 
     REQUIRE(variable.Apply(ConsoleVariableApplyPolicy::NextFrame).HasValue());
     CHECK(std::get<std::int64_t>(configuration->Snapshot().Get(key)) == 4);
 }
+
+TEST_CASE("Console rejects credential references returned by durable pending storage", "[console][configuration]") {
+    class PendingReference final : public IConsoleVariablePersistence {
+    public:
+        Result<void> Store(const SettingKey &, const SettingValue &, ConsoleVariablePersistence, ConsoleVariableApplyPolicy,
+                           ConfigurationRevision) override {
+            return Result<void>::Success();
+        }
+
+        std::optional<SettingValue> Pending(const SettingKey &) const override {
+            return SettingValue{CredentialReference{}};
+        }
+
+        Result<bool> Apply(const SettingKey &, ConsoleVariableApplyPolicy) override {
+            return Result<bool>::Success(false);
+        }
+    };
+
+    const SettingKey key("runtime.debug_text");
+    ConfigurationSchema schema;
+    REQUIRE(schema
+                .Register({key,
+                           SettingValueType::String,
+                           std::string{"default"},
+                           SettingScope::Project,
+                           ReloadPolicy::NextFrame,
+                           SettingSensitivity::Public,
+                           {}})
+                .HasValue());
+    REQUIRE(schema.Seal().HasValue());
+    auto configuration = std::make_shared<ConfigurationService>(std::move(schema));
+    ConsoleVariableDescriptor descriptor{1, "console.text", std::string{"default"}};
+    descriptor.configurationKey = key;
+    descriptor.persistence = ConsoleVariablePersistence::Project;
+    auto created = ConsoleVariable::Create(descriptor, {}, configuration, std::make_shared<PendingReference>());
+    REQUIRE(created.HasValue());
+    const auto read = created.Value().Read({3});
+    REQUIRE(read.HasError());
+    CHECK(read.ErrorValue().code.Value() == MakeCommandError(CommandError::InvalidDescriptor).code.Value());
+}

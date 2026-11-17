@@ -152,7 +152,7 @@ namespace Horo::Editor {
             listeningAction_.reset();
             bindingCapture_.reset();
             deadzoneDraft_.reset();
-        accessibilityAction_.reset();
+            accessibilityAction_.reset();
             statusMessage_.clear();
             projectRoot_ = WorkspaceNativePath(viewModel.projectRoot);
             projectRootText_ = viewModel.projectRoot;
@@ -218,7 +218,7 @@ namespace Horo::Editor {
                                       {std::max(1.0F, ImGui::GetContentRegionAvail().x), 0.0F})) {
                     if (selectedAction_ != index)
                         deadzoneDraft_.reset();
-        accessibilityAction_.reset();
+                    accessibilityAction_.reset();
                     selectedAction_ = index;
                 }
                 ImGui::TableSetColumnIndex(1);
@@ -233,10 +233,11 @@ namespace Horo::Editor {
         }
     }
 
-    void InputMappingPanel::DrawSelectedAction(const Input::ActionDescriptor &action, const EditorGuiContext &context, EditorWorkspaceViewCommandData &command) {
+    void InputMappingPanel::DrawSelectedAction(const Input::ActionDescriptor &action, const EditorGuiContext &context,
+                                               EditorWorkspaceViewCommandData &command) {
         if (displayedAction_ != action.id) {
             deadzoneDraft_.reset();
-        accessibilityAction_.reset();
+            accessibilityAction_.reset();
             displayedAction_ = action.id;
         }
         ImGui::Separator();
@@ -262,7 +263,8 @@ namespace Horo::Editor {
         DrawAccessibilityControls(action, context);
         if (action.valueType != Input::ActionValueType::Digital &&
             Ui::Button({.label = LocalizedText(context.localization, "gyro.add").c_str(),
-                        .variant = Ui::ButtonVariant::Secondary, .font = context.theme.fonts.sans})) {
+                        .variant = Ui::ButtonVariant::Secondary,
+                        .font = context.theme.fonts.sans})) {
             listeningAction_.reset();
             bindingCaptureContext_.Reset();
             command.command = EditorWorkspaceViewCommand::OpenGyroscopeBinding;
@@ -271,23 +273,24 @@ namespace Horo::Editor {
     }
 
     bool InputMappingPanel::DrawExtendedBindingAction(const Input::ActionDescriptor &action,
-                                                       const std::span<const Input::InputBinding> bindings,
-                                                       const std::size_t index, const EditorGuiContext &context,
-                                                       EditorWorkspaceViewCommandData &command) {
+                                                      const std::span<const Input::InputBinding> bindings, const std::size_t index,
+                                                      const EditorGuiContext &context, EditorWorkspaceViewCommandData &command) {
         const auto &binding = bindings[index];
         if (binding.kind == Input::BindingControlKind::GyroscopeAxis &&
             Ui::Button({.label = LocalizedText(context.localization, "gyro.edit").c_str(),
-                        .variant = Ui::ButtonVariant::Secondary, .font = context.theme.fonts.sans})) {
+                        .variant = Ui::ButtonVariant::Secondary,
+                        .font = context.theme.fonts.sans})) {
             listeningAction_.reset();
             bindingCaptureContext_.Reset();
             command.command = EditorWorkspaceViewCommand::OpenGyroscopeBinding;
-            command.gyroscopeBinding = GyroscopeBindingEditRequest{
-                action.id, router_->RoutingState({}).configurationRevision, GyroscopeBindingReplacement{index, binding}};
+            command.gyroscopeBinding = GyroscopeBindingEditRequest{action.id, router_->RoutingState({}).configurationRevision,
+                                                                   GyroscopeBindingReplacement{index, binding}};
             return true;
         }
         if (action.valueType != Input::ActionValueType::Digital ||
             !Ui::Button({.label = LocalizedText(context.localization, "accessibility.edit").c_str(),
-                         .variant = Ui::ButtonVariant::Secondary, .font = context.theme.fonts.sans}))
+                         .variant = Ui::ButtonVariant::Secondary,
+                         .font = context.theme.fonts.sans}))
             return false;
         accessibilityAction_ = action.id;
         accessibilityBinding_ = index;

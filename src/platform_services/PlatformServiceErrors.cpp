@@ -1,8 +1,8 @@
 #include "Horo/PlatformServices/PlatformServiceErrors.h"
 
+#include "Horo/PlatformServices/PlatformCloudObjects.h"
 #include "Horo/PlatformServices/PlatformOfflineQueueErrors.h"
 #include "Horo/PlatformServices/PlatformOfflineQueueStorage.h"
-#include "Horo/PlatformServices/PlatformCloudObjects.h"
 #include "Horo/PlatformServices/PlatformRequestErrors.h"
 #include "Horo/PlatformServices/PlatformServicesBackend.h"
 #include "Horo/PlatformServices/PlatformServicesFrontend.h"

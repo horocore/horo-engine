@@ -952,7 +952,8 @@ namespace Horo::Editor {
 
         void ApplySavedThemePreference(const ConfigurationSnapshot &configuration, const EditorSettings &settings) {
             const auto &overridePath = std::get<std::string>(configuration.Get(SettingKey{"editor.theme.override_path"}));
-            if (const int active = Theme::GetActiveThemeIndex(); !overridePath.empty() && active >= 0 && static_cast<std::size_t>(active) < Theme::GetThemeList().size() &&
+            if (const int active = Theme::GetActiveThemeIndex();
+                !overridePath.empty() && active >= 0 && static_cast<std::size_t>(active) < Theme::GetThemeList().size() &&
                 Theme::GetThemeList()[static_cast<std::size_t>(active)].sourcePath == overridePath)
                 return;
             int selected = static_cast<int>(settings.themePreset);
@@ -3500,9 +3501,9 @@ namespace Horo::Editor {
     };
 
     /** @brief Registers inert descriptors and resolves explicit captured inputs before any native presentation. */
-    [[nodiscard]] static std::optional<EditorStartupConfiguration> PrepareEditorConfiguration(const EditorSettingsDocument &document,
-                                                                                              const ModuleHost &modules,
-                                                                                              const EditorOpenXRHostServices *xrHost, const Debug::ConsoleLaunchArguments &console) {
+    [[nodiscard]] static std::optional<EditorStartupConfiguration> PrepareEditorConfiguration(
+        const EditorSettingsDocument &document, const ModuleHost &modules, const EditorOpenXRHostServices *xrHost,
+        const Debug::ConsoleLaunchArguments &console) {
         auto moduleSchema = modules.BuildConfigurationSchema();
         if (moduleSchema.HasError()) {
             LOG_CRITICAL("editor.startup", "Module configuration failed: %s", moduleSchema.ErrorValue().message.c_str());

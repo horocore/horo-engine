@@ -1386,8 +1386,9 @@ namespace Horo::Input {
                     return EvaluateWheel(snapshot.pointer.wheelY, impl.consumed.wheelY);
                 case GyroscopeAxis: {
                     if (binding.gyroscope.source == GyroscopeSource::Gamepad)
-                        return EvaluateGamepadBinding(binding, snapshot, impl.previousSnapshot, impl.assignments, impl.previousPlayerDevices, player,
-                                                      impl.consumed.gamepadTransitions, consume, preferred);
+                        return EvaluateGamepadBinding(binding, snapshot, impl.previousSnapshot, impl.assignments,
+                                                      impl.previousPlayerDevices, player, impl.consumed.gamepadTransitions, consume,
+                                                      preferred);
                     const float axis =
                         ResolveAnalogAxis(Detail::ReadGyroscopeAxis(snapshot.sensors[Index(SensorKind::Gyroscope)], binding.gyroscope),
                                           binding);
@@ -1403,8 +1404,8 @@ namespace Horo::Input {
                     return {axis, state};
                 }
                 default: {
-                    return EvaluateGamepadBinding(binding, snapshot, impl.previousSnapshot, impl.assignments, impl.previousPlayerDevices, player,
-                                                  impl.consumed.gamepadTransitions, consume, preferred);
+                    return EvaluateGamepadBinding(binding, snapshot, impl.previousSnapshot, impl.assignments, impl.previousPlayerDevices,
+                                                  player, impl.consumed.gamepadTransitions, consume, preferred);
                 }
             }
         }
@@ -1496,9 +1497,8 @@ namespace Horo::Input {
                 target.value.repeated = target.value.repeated || interpreted.repeated;
             }
             const auto state = evaluated.state;
-            const float resolvedAxis = descriptor.valueType == ActionValueType::Digital
-                                           ? (state.down || state.pressed ? 1.0F : 0.0F)
-                                           : evaluated.axis;
+            const float resolvedAxis =
+                descriptor.valueType == ActionValueType::Digital ? (state.down || state.pressed ? 1.0F : 0.0F) : evaluated.axis;
             const double axis = static_cast<double>(resolvedAxis) * binding.scale;
             AccumulateSource(binding, evaluated, target.evidence);
             target.radial2D =

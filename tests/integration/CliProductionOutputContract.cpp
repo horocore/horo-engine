@@ -1,7 +1,7 @@
+#include "CliOutputContractFixture.h"
 #include "Horo/Application/PlatformServicesProjectCook.h"
 #include "Horo/Application/PlatformServicesProjectSources.h"
 #include "Horo/Editor/ProjectMutation.h"
-#include "CliOutputContractFixture.h"
 #include "Horo/Platform/ExternalProcess.h"
 
 #include <algorithm>

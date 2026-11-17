@@ -99,7 +99,8 @@ namespace Horo::Editor {
 
         void DrawActions(const EditorGuiContext &context, EditorWorkspaceViewCommandData &command);
         void DrawActionTable(std::span<const Input::ActionDescriptor> actions, const EditorGuiContext &context);
-        void DrawSelectedAction(const Input::ActionDescriptor &action, const EditorGuiContext &context, EditorWorkspaceViewCommandData &command);
+        void DrawSelectedAction(const Input::ActionDescriptor &action, const EditorGuiContext &context,
+                                EditorWorkspaceViewCommandData &command);
         /** @brief Selects the declared neutral range used only when capturing unknown-controller axes. */
         void DrawRawAxisRange(const EditorGuiContext &context);
         [[nodiscard]] bool DrawBindingDirection(const Input::ActionDescriptor &action, std::span<const Input::InputBinding> bindings,
@@ -109,9 +110,9 @@ namespace Horo::Editor {
         [[nodiscard]] bool DrawBindingDeadzone(const Input::ActionDescriptor &action, std::span<const Input::InputBinding> bindings,
                                                std::size_t index, const EditorGuiContext &context);
         void DrawAccessibilityControls(const Input::ActionDescriptor &action, const EditorGuiContext &context);
-        [[nodiscard]] bool DrawExtendedBindingAction(const Input::ActionDescriptor &action,
-                                                     std::span<const Input::InputBinding> bindings, std::size_t index,
-                                                     const EditorGuiContext &context, EditorWorkspaceViewCommandData &command);
+        [[nodiscard]] bool DrawExtendedBindingAction(const Input::ActionDescriptor &action, std::span<const Input::InputBinding> bindings,
+                                                     std::size_t index, const EditorGuiContext &context,
+                                                     EditorWorkspaceViewCommandData &command);
         void DrawDevices(const EditorGuiContext &context);
         void DrawProfiles(const EditorGuiContext &context);
         void PollBindingCapture(const EditorGuiContext &context);

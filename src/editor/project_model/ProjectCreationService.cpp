@@ -13,9 +13,9 @@
 #include "Horo/Foundation/Progress.h"
 #include "Horo/Foundation/String.h"
 #include "Horo/Foundation/Utf8.h"
+#include "Horo/Runtime/Input.h"
 #include "Horo/Security/SecureMemory.h"
 #include "Horo/Security/SecurityErrors.h"
-#include "Horo/Runtime/Input.h"
 #include "editor/EditorServiceErrors.h"
 
 #include <algorithm>

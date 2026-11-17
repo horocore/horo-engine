@@ -1,8 +1,8 @@
+#include "EditorControlMetadata.h"
 #include "Horo/Application/NetworkDebugger.h"
 #include "Horo/Debug/ConsoleBuiltins.h"
 #include "Horo/Debug/ConsoleConfiguration.h"
 #include "Horo/Debug/ConsoleVariableSet.h"
-#include "EditorControlMetadata.h"
 #include "Horo/Editor/EditorIcons.h"
 #include "Horo/Editor/EditorSnackbarHost.h"
 #include "Horo/Editor/EditorTheme.h"
@@ -1976,6 +1976,7 @@ TEST_CASE("Graphical runtime console Tab and Enter use the same core dispatcher 
     CHECK_FALSE(console.view->Visible());
     CHECK_FALSE(console.view->Interactive());
 }
+
 TEST_CASE("Shared combo selected text stays inside the label area for long localized values", "[unit][editor][gui][input][accessibility]") {
     using namespace Horo::Editor;
     for (const float width : {80.0F, 180.0F, 320.0F}) {
