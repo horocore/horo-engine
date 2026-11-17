@@ -167,17 +167,18 @@ TEST_CASE("Editor core console startup uses the same process operations and real
     REQUIRE(configuration.ResolveAndCommit(sources).HasValue());
     auto launch = ResolveConsoleLaunch(captured.Value().console, configuration.Snapshot(), ProductProfile::Editor);
     REQUIRE(launch.HasValue());
-    auto prepared = PrepareEditorConsole(launch.Value(), configuration.Snapshot());
-    REQUIRE(prepared.HasValue());
+    auto preparedResult = PrepareEditorConsole(launch.Value(), configuration.Snapshot());
+    REQUIRE(preparedResult.HasValue());
+    auto prepared = std::move(preparedResult).Value();
     JobSystem jobs(JobSystemConfig{.workerCount = 0});
     auto operations = std::make_shared<OperationStore>(8, 8);
-    CHECK(EditorConsoleExecution::Start(prepared.Value(), jobs, {}, configurationOwner, "Product Editor").HasError());
-    auto started = EditorConsoleExecution::Start(prepared.Value(), jobs, operations, configurationOwner, "Product Editor");
+    CHECK(EditorConsoleExecution::Start(prepared, jobs, {}, configurationOwner, "Product Editor").HasError());
+    auto started = EditorConsoleExecution::Start(prepared, jobs, operations, configurationOwner, "Product Editor");
     REQUIRE(started.HasValue());
     auto execution = std::move(started).Value();
     REQUIRE(execution->Accepted().size() == 2);
-    REQUIRE(prepared.Value().history->Entries().size() == 2);
-    CHECK(prepared.Value().history->Entries()[0].output == "Product Editor");
+    REQUIRE(prepared.history->Entries().size() == 2);
+    CHECK(prepared.history->Entries()[0].output == "Product Editor");
     REQUIRE(execution->Accepted()[1].operation);
     const auto clear = *execution->Accepted()[1].operation;
     const auto pending = operations->SnapshotIfChanged(0);
@@ -192,9 +193,9 @@ TEST_CASE("Editor core console startup uses the same process operations and real
     other.join();
     CHECK(wrongThread);
     REQUIRE(execution->RenderSafePoint().HasValue());
-    CHECK(prepared.Value().history->Entries().size() == 2);
+    CHECK(prepared.history->Entries().size() == 2);
     REQUIRE(execution->OwnerSafePoint(std::chrono::steady_clock::now()).HasValue());
-    CHECK(prepared.Value().history->Entries().empty());
+    CHECK(prepared.history->Entries().empty());
     const auto terminal = operations->SnapshotIfChanged(0);
     REQUIRE(terminal);
     REQUIRE(terminal->operations.size() == 1);
@@ -204,7 +205,7 @@ TEST_CASE("Editor core console startup uses the same process operations and real
     execution->Stop();
     execution->Stop();
     CHECK(execution->OwnerSafePoint(std::chrono::steady_clock::now()).HasError());
-    CHECK(EditorConsoleExecution::Start(prepared.Value(), jobs, operations, configurationOwner, "Product Editor").HasError());
+    CHECK(EditorConsoleExecution::Start(prepared, jobs, operations, configurationOwner, "Product Editor").HasError());
 }
 
 TEST_CASE("Editor history consumes canonical changes only at the live owner boundary", "[console][configuration][host]") {
@@ -216,14 +217,15 @@ TEST_CASE("Editor history consumes canonical changes only at the live owner boun
     const auto frozen = configuration.Snapshot();
     auto launch = ResolveConsoleLaunch(captured.Value(), frozen, ProductProfile::Editor);
     REQUIRE(launch.HasValue());
-    auto prepared = PrepareEditorConsole(launch.Value(), frozen);
-    REQUIRE(prepared.HasValue());
+    auto preparedResult = PrepareEditorConsole(launch.Value(), frozen);
+    REQUIRE(preparedResult.HasValue());
+    auto prepared = std::move(preparedResult).Value();
     JobSystem jobs(JobSystemConfig{.workerCount = 0});
     auto operations = std::make_shared<OperationStore>(8, 8);
-    auto started = EditorConsoleExecution::Start(prepared.Value(), jobs, operations, configurationOwner, "Product Editor");
+    auto started = EditorConsoleExecution::Start(prepared, jobs, operations, configurationOwner, "Product Editor");
     REQUIRE(started.HasValue());
     auto execution = std::move(started).Value();
-    auto &history = *prepared.Value().history;
+    auto &history = *prepared.history;
     for (const auto command : {"a", "b", "c"})
         history.Append({1, {}, command}, "result");
     const auto publish = [&](const std::int64_t limit) {
@@ -274,19 +276,20 @@ TEST_CASE("Editor lazy console activation uses the current canonical history pre
     auto &configuration = *configurationOwner;
     auto launch = ResolveConsoleLaunch(captured.Value(), configuration.Snapshot(), ProductProfile::Editor);
     REQUIRE(launch.HasValue());
-    auto prepared = PrepareEditorConsole(launch.Value(), configuration.Snapshot());
-    REQUIRE(prepared.HasValue());
+    auto preparedResult = PrepareEditorConsole(launch.Value(), configuration.Snapshot());
+    REQUIRE(preparedResult.HasValue());
+    auto prepared = std::move(preparedResult).Value();
     ConfigurationResolutionRequest sources;
     sources.session.emplace(SettingKey(std::string(ConsoleHistorySettingName)), ConfigurationInputValue{std::int64_t{2}, {}});
     REQUIRE(configuration.ResolveAndCommit(sources).HasValue());
     JobSystem jobs(JobSystemConfig{.workerCount = 0});
     auto operations = std::make_shared<OperationStore>(8, 8);
-    auto started = EditorConsoleExecution::Start(prepared.Value(), jobs, operations, configurationOwner, "Product Editor");
+    auto started = EditorConsoleExecution::Start(prepared, jobs, operations, configurationOwner, "Product Editor");
     REQUIRE(started.HasValue());
     for (const auto command : {"a", "b", "c"})
-        prepared.Value().history->Append({1, {}, command}, "result");
-    REQUIRE(prepared.Value().history->Entries().size() == 2);
-    CHECK(prepared.Value().history->Entries().front().command == "b");
+        prepared.history->Append({1, {}, command}, "result");
+    REQUIRE(prepared.history->Entries().size() == 2);
+    CHECK(prepared.history->Entries().front().command == "b");
 }
 
 TEST_CASE("Editor history variable uses common admission and remains recoverable after a stale pending write",
@@ -297,12 +300,13 @@ TEST_CASE("Editor history variable uses common admission and remains recoverable
     auto configuration = std::make_shared<ConfigurationService>(HostSchema());
     auto launch = ResolveConsoleLaunch(captured.Value(), configuration->Snapshot(), ProductProfile::Editor);
     REQUIRE(launch.HasValue());
-    auto prepared = PrepareEditorConsole(launch.Value(), configuration->Snapshot());
-    REQUIRE(prepared.HasValue());
+    auto preparedResult = PrepareEditorConsole(launch.Value(), configuration->Snapshot());
+    REQUIRE(preparedResult.HasValue());
+    auto prepared = std::move(preparedResult).Value();
     JobSystem jobs(JobSystemConfig{.workerCount = 0});
     auto operations = std::make_shared<OperationStore>(8, 8);
-    CHECK(EditorConsoleExecution::Start(prepared.Value(), jobs, operations, {}, "Product Editor").HasError());
-    auto started = EditorConsoleExecution::Start(prepared.Value(), jobs, operations, configuration, "Product Editor");
+    CHECK(EditorConsoleExecution::Start(prepared, jobs, operations, {}, "Product Editor").HasError());
+    auto started = EditorConsoleExecution::Start(prepared, jobs, operations, configuration, "Product Editor");
     REQUIRE(started.HasValue());
     auto execution = std::move(started).Value();
     const DebugCommandContext developer{3, false, false};
@@ -319,7 +323,7 @@ TEST_CASE("Editor history variable uses common admission and remains recoverable
     auto accepted = dispatcher.Submit("console.history.limit 2", developer);
     REQUIRE(accepted.HasValue());
     REQUIRE(accepted.Value().operation);
-    auto &history = *prepared.Value().history;
+    auto &history = *prepared.history;
     for (const auto command : {"a", "b", "c"})
         history.Append({1, {}, command}, "result");
     CHECK(ReadConsoleHistoryLimit(configuration->Snapshot()).Value() == 500);
@@ -391,11 +395,12 @@ TEST_CASE("Editor visibility uses the Public session variable and bounded common
         const auto frozen = configuration->Snapshot();
         auto launch = ResolveConsoleLaunch(captured.Value(), frozen, ProductProfile::Editor);
         REQUIRE(launch.HasValue());
-        auto prepared = PrepareEditorConsole(launch.Value(), frozen);
-        REQUIRE(prepared.HasValue());
+        auto preparedResult = PrepareEditorConsole(launch.Value(), frozen);
+        REQUIRE(preparedResult.HasValue());
+        auto prepared = std::move(preparedResult).Value();
         JobSystem jobs(JobSystemConfig{.workerCount = 0});
         auto operations = std::make_shared<OperationStore>(1, 4);
-        auto started = EditorConsoleExecution::Start(prepared.Value(), jobs, operations, configuration, "Product Editor");
+        auto started = EditorConsoleExecution::Start(prepared, jobs, operations, configuration, "Product Editor");
         REQUIRE(started.HasValue());
         auto execution = std::move(started).Value();
         REQUIRE(execution->ConsoleVisible().HasValue());
@@ -443,12 +448,13 @@ TEST_CASE("Editor process-store panel controls use registered Developer variable
     const auto frozen = configuration->Snapshot();
     auto launch = ResolveConsoleLaunch(captured.Value(), frozen, ProductProfile::Editor);
     REQUIRE(launch.HasValue());
-    auto prepared = PrepareEditorConsole(launch.Value(), frozen);
-    REQUIRE(prepared.HasValue());
+    auto preparedResult = PrepareEditorConsole(launch.Value(), frozen);
+    REQUIRE(preparedResult.HasValue());
+    auto prepared = std::move(preparedResult).Value();
     JobSystem jobs(JobSystemConfig{.workerCount = 0});
     auto operations = std::make_shared<OperationStore>(8, 8);
     const std::array requested{OverlaySource::Logs, OverlaySource::Frame};
-    auto started = EditorConsoleExecution::Start(prepared.Value(), jobs, operations, configuration, "Product Editor", requested);
+    auto started = EditorConsoleExecution::Start(prepared, jobs, operations, configuration, "Product Editor", requested);
     REQUIRE(started.HasValue());
     auto execution = std::move(started).Value();
     const DebugCommandContext developer{3, false, false};
@@ -495,12 +501,13 @@ TEST_CASE("Editor Scene panel visibility uses the same Developer queue and NextF
     auto configuration = std::make_shared<ConfigurationService>(HostSchema());
     auto launch = ResolveConsoleLaunch(captured.Value(), configuration->Snapshot(), ProductProfile::Editor);
     REQUIRE(launch.HasValue());
-    auto preparation = PrepareEditorConsole(launch.Value(), configuration->Snapshot());
-    REQUIRE(preparation.HasValue());
+    auto preparedResult = PrepareEditorConsole(launch.Value(), configuration->Snapshot());
+    REQUIRE(preparedResult.HasValue());
+    auto preparation = std::move(preparedResult).Value();
     JobSystem jobs(JobSystemConfig{.workerCount = 0});
     auto operations = std::make_shared<OperationStore>(8, 8);
     const std::array panels{OverlaySource::Scene};
-    auto started = EditorConsoleExecution::Start(preparation.Value(), jobs, operations, configuration, "Product Editor", panels);
+    auto started = EditorConsoleExecution::Start(preparation, jobs, operations, configuration, "Product Editor", panels);
     REQUIRE(started.HasValue());
     auto execution = std::move(started).Value();
     const DebugCommandContext developer{3, false, false};
@@ -531,16 +538,17 @@ TEST_CASE("Stopping either shared console facade prevents pending host configura
         auto configuration = std::make_shared<ConfigurationService>(HostSchema());
         auto launch = ResolveConsoleLaunch(captured.Value(), configuration->Snapshot(), ProductProfile::Editor);
         REQUIRE(launch.HasValue());
-        auto prepared = PrepareEditorConsole(launch.Value(), configuration->Snapshot());
-        REQUIRE(prepared.HasValue());
+        auto preparedResult = PrepareEditorConsole(launch.Value(), configuration->Snapshot());
+        REQUIRE(preparedResult.HasValue());
+        auto prepared = std::move(preparedResult).Value();
         JobSystem jobs(JobSystemConfig{.workerCount = 0});
         auto operations = std::make_shared<OperationStore>(8, 8);
-        auto started = EditorConsoleExecution::Start(prepared.Value(), jobs, operations, configuration, "Product Editor");
+        auto started = EditorConsoleExecution::Start(prepared, jobs, operations, configuration, "Product Editor");
         REQUIRE(started.HasValue());
         auto execution = std::move(started).Value();
         REQUIRE(execution->Dispatcher().Submit("console.history.limit 1", {3, false, false}).HasValue());
         REQUIRE(execution->OwnerSafePoint({}).HasValue());
-        auto &history = *prepared.Value().history;
+        auto &history = *prepared.history;
         history.Append({1, {}, "first"}, "result");
         history.Append({1, {}, "second"}, "result");
         const auto before = configuration->Snapshot();
@@ -571,12 +579,13 @@ TEST_CASE("Editor metric command binds the actual process availability owner wit
     auto configuration = std::make_shared<ConfigurationService>(HostSchema());
     auto launch = ResolveConsoleLaunch(captured.Value(), configuration->Snapshot(), ProductProfile::Editor);
     REQUIRE(launch.HasValue());
-    auto prepared = PrepareEditorConsole(launch.Value(), configuration->Snapshot());
-    REQUIRE(prepared.HasValue());
+    auto preparedResult = PrepareEditorConsole(launch.Value(), configuration->Snapshot());
+    REQUIRE(preparedResult.HasValue());
+    auto prepared = std::move(preparedResult).Value();
     JobSystem jobs(JobSystemConfig{.workerCount = 0});
     auto operations = std::make_shared<OperationStore>(8, 8);
     const auto before = Telemetry::Runtime::GetDiagnosticSnapshot();
-    auto started = EditorConsoleExecution::Start(prepared.Value(), jobs, operations, configuration, "Product Editor");
+    auto started = EditorConsoleExecution::Start(prepared, jobs, operations, configuration, "Product Editor");
     REQUIRE(started.HasValue());
     auto execution = std::move(started).Value();
     CHECK(Telemetry::Runtime::GetDiagnosticSnapshot().runtimeGeneration == before.runtimeGeneration);
@@ -604,7 +613,7 @@ TEST_CASE("Editor metric command binds the actual process availability owner wit
     CHECK(record.id == *submitted.Value().operation);
     CHECK(record.state == OperationState::Succeeded);
     CHECK(record.message.starts_with("telemetry generation="));
-    CHECK(record.message.size() <= prepared.Value().registry->Limits().outputBytes);
+    CHECK(record.message.size() <= prepared.registry->Limits().outputBytes);
     CHECK(record.message.find("private_host_metric") == std::string::npos);
     CHECK(record.message.find("private_host_subsystem") == std::string::npos);
 #if HORO_ENABLE_TELEMETRY
@@ -629,11 +638,12 @@ TEST_CASE("Editor Scene commands consume explicit weak views without retaining t
     REQUIRE(captured.HasValue());
     auto launch = ResolveConsoleLaunch(captured.Value(), configuration->Snapshot(), ProductProfile::Editor);
     REQUIRE(launch.HasValue());
-    auto prepared = PrepareEditorConsole(launch.Value(), configuration->Snapshot());
-    REQUIRE(prepared.HasValue());
+    auto preparedResult = PrepareEditorConsole(launch.Value(), configuration->Snapshot());
+    REQUIRE(preparedResult.HasValue());
+    auto prepared = std::move(preparedResult).Value();
     JobSystem jobs(JobSystemConfig{.workerCount = 0});
     auto operations = std::make_shared<OperationStore>(16, 16);
-    auto started = EditorConsoleExecution::Start(prepared.Value(), jobs, operations, configuration, "Product Editor");
+    auto started = EditorConsoleExecution::Start(prepared, jobs, operations, configuration, "Product Editor");
     REQUIRE(started.HasValue());
     auto execution = std::move(started).Value();
     auto scene = std::make_unique<Runtime::RuntimeSceneService>(Runtime::SceneRuntimeId{73});
@@ -760,14 +770,15 @@ TEST_CASE("Editor network inspection is explicitly composed before activation an
     REQUIRE(captured.HasValue());
     auto launch = ResolveConsoleLaunch(captured.Value(), configuration->Snapshot(), ProductProfile::Editor);
     REQUIRE(launch.HasValue());
-    auto preparation = PrepareEditorConsole(launch.Value(), configuration->Snapshot(), {.networkInspection = true});
-    REQUIRE(preparation.HasValue());
+    auto preparedResult = PrepareEditorConsole(launch.Value(), configuration->Snapshot(), {.networkInspection = true});
+    REQUIRE(preparedResult.HasValue());
+    auto preparation = std::move(preparedResult).Value();
     JobSystem jobs(JobSystemConfig{.workerCount = 0});
     auto operations = std::make_shared<OperationStore>(8, 8);
-    CHECK(EditorConsoleExecution::Start(preparation.Value(), jobs, operations, configuration, "Editor").HasError());
+    CHECK(EditorConsoleExecution::Start(preparation, jobs, operations, configuration, "Editor").HasError());
     CHECK_FALSE(operations->SnapshotIfChanged(0));
     auto query = std::make_shared<Application::NetworkDebuggerService>(std::chrono::hours{1});
-    auto started = EditorConsoleExecution::Start(preparation.Value(), jobs, operations, configuration, "Editor", {}, query);
+    auto started = EditorConsoleExecution::Start(preparation, jobs, operations, configuration, "Editor", {}, query);
     REQUIRE(started.HasValue());
     auto execution = std::move(started).Value();
     CHECK_FALSE(query->Query().snapshot.attached);
@@ -827,21 +838,22 @@ TEST_CASE("Editor startup partial admission cancels the accepted prefix through 
     auto &configuration = *configurationOwner;
     auto launch = ResolveConsoleLaunch(captured.Value().console, configuration.Snapshot(), ProductProfile::Editor);
     REQUIRE(launch.HasValue());
-    auto prepared = PrepareEditorConsole(launch.Value(), configuration.Snapshot());
-    REQUIRE(prepared.HasValue());
+    auto preparedResult = PrepareEditorConsole(launch.Value(), configuration.Snapshot());
+    REQUIRE(preparedResult.HasValue());
+    auto prepared = std::move(preparedResult).Value();
     JobSystem jobs(JobSystemConfig{.workerCount = 0});
     auto operations = std::make_shared<OperationStore>(1, 4);
-    auto started = EditorConsoleExecution::Start(prepared.Value(), jobs, operations, configurationOwner, "Product Editor");
+    auto started = EditorConsoleExecution::Start(prepared, jobs, operations, configurationOwner, "Product Editor");
     REQUIRE(started.HasError());
     CHECK(started.ErrorValue().code.Value() == "console.limit_exceeded");
-    REQUIRE(prepared.Value().history->Entries().size() == 1);
-    CHECK(prepared.Value().history->Entries()[0].command == "clear");
+    REQUIRE(prepared.history->Entries().size() == 1);
+    CHECK(prepared.history->Entries()[0].command == "clear");
     const auto snapshot = operations->SnapshotIfChanged(0);
     REQUIRE(snapshot);
     REQUIRE(snapshot->operations.size() == 1);
     CHECK(snapshot->operations[0].state == OperationState::Cancelled);
-    CHECK(prepared.Value().history->Entries()[0].operation == snapshot->operations[0].id);
+    CHECK(prepared.history->Entries()[0].operation == snapshot->operations[0].id);
     auto replacement = std::make_shared<OperationStore>(8, 8);
-    CHECK(EditorConsoleExecution::Start(prepared.Value(), jobs, replacement, configurationOwner, "Product Editor").HasError());
+    CHECK(EditorConsoleExecution::Start(prepared, jobs, replacement, configurationOwner, "Product Editor").HasError());
     CHECK_FALSE(replacement->SnapshotIfChanged(0));
 }
