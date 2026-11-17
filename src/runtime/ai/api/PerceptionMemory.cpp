@@ -170,7 +170,7 @@ namespace Horo::AI {
         if (!source.IsValid() || source.sceneIncarnation != sceneIncarnation_)
             return Result<void>::Failure(MakeError(AIErrors::PerceptionMemoryInvalid));
         for (std::size_t index = 0; index < count_;) {
-            if (entries_[index].key.source == source)
+            if (entries_[index].key.source == source || entries_[index].provenance == source)
                 Erase(index);
             else
                 ++index;
@@ -181,7 +181,9 @@ namespace Horo::AI {
     /** @brief Removes stale weak references before exposing decision-visible memory. */
     void AIPerceptionMemory::PruneDead(const PerceptionSourceLiveness liveness) {
         for (std::size_t index = 0; index < count_;) {
-            if (!liveness.isAlive(liveness.context, entries_[index].key.source))
+            const auto &entry = entries_[index];
+            if (!liveness.isAlive(liveness.context, entry.key.source) ||
+                (entry.provenance != entry.key.source && !liveness.isAlive(liveness.context, entry.provenance)))
                 Erase(index);
             else
                 ++index;

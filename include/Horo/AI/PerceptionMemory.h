@@ -145,14 +145,14 @@ namespace Horo::AI {
         [[nodiscard]] Result<void> AdvanceTo(std::uint64_t simulationTick);
 
         /**
-         * @brief Eagerly removes every record for an entity destroyed or recycled by its scene owner.
-         * @param source Exact weak source identity.
+         * @brief Eagerly removes records whose subject or provenance was destroyed or recycled by the Scene owner.
+         * @param source Exact weak subject or emitter identity.
          * @return Success or a typed foreign/invalid source failure.
          */
         [[nodiscard]] Result<void> ForgetSource(PerceptionSourceRef source);
 
         /**
-         * @brief Returns an exact stimulus only after aging and checking source residency.
+         * @brief Returns an exact stimulus only after aging and checking subject and provenance residency.
          * @param key Stimulus to find.
          * @param simulationTick Current monotonic committed simulation tick.
          * @param liveness Synchronous exact-generation scene residency adapter.
@@ -162,7 +162,7 @@ namespace Horo::AI {
                                                                     PerceptionSourceLiveness liveness);
 
         /**
-         * @brief Returns bounded value copies after aging and removing destroyed sources.
+         * @brief Returns bounded value copies after aging and removing records with retired subjects or emitters.
          * @param simulationTick Current monotonic committed simulation tick.
          * @param liveness Synchronous exact-generation scene residency adapter.
          * @return Valid records in deterministic storage order or a typed failure.

@@ -1,6 +1,9 @@
 #include "Horo/AI/AIScenePerceptionSource.h"
 #include "PerceptionSightTestSupport.h"
 
+#include <algorithm>
+#include <array>
+
 namespace Horo::AI {
     namespace {
         using namespace SightTest;
@@ -117,6 +120,56 @@ namespace Horo::AI {
             CHECK_FALSE(capacity.Value().pending);
             CHECK(another.remainingRaycasts == 2);
             CHECK(capacity.Value().observations[0].evidence == PerceptionSightEvidence::BudgetExhausted);
+        }
+
+        TEST_CASE("Sight candidate and ray ceilings produce bounded deterministic diagnostics",
+                  "[unit][ai][sight][canonical][qualification]") {
+            SightScene scene;
+            constexpr auto CandidateLimit = PerceptionSpatialLimits::CandidatesPerQuery;
+            constexpr std::size_t RayBudget = 8;
+            Runtime::SceneCommandBuffer add;
+            std::array<PerceptionSpatialSource, CandidateLimit + 1> sources{};
+            for (std::size_t index = 0; index < sources.size(); ++index)
+                REQUIRE(add.Create({}).IsValid());
+            const auto created = scene.scene->Commit(add);
+            REQUIRE(created.HasValue());
+            REQUIRE(created.Value().created.size() == sources.size());
+            const auto point = Math::WorldCoordinate64::FromMillimeters(0, 0, -10'000);
+            for (std::size_t index = 0; index < sources.size(); ++index) {
+                sources[index] = {.entity = created.Value().created[index].entity,
+                                  .position = point,
+                                  .layers = 1,
+                                  .senses = {SenseTypeIds::Sight},
+                                  .senseCount = 1};
+            }
+            const PerceptionSpatialListener listener{.entity = scene.listener, .senses = {SenseTypeIds::Sight}, .senseCount = 1};
+            const auto spatial = scene.broadphase.Publish(scene.scene->View(), ++scene.revision, std::span{&listener, 1}, sources);
+            REQUIRE(spatial.HasValue());
+
+            SightWorld physics;
+            (void)physics.Box(-5);
+            physics.Advance();
+            PerceptionSight sight;
+            const auto frame = physics.CurrentFrame(scene.listener);
+            PerceptionSightBudget budget{.simulationTick = physics.tick, .remainingRaycasts = RayBudget};
+            const auto queued = sight.Begin(scene.scene->View(), *spatial.Value(), physics.capability, frame, {}, budget);
+            REQUIRE(queued.HasValue());
+            REQUIRE(queued.Value().count == CandidateLimit);
+            CHECK(queued.Value().candidatesTruncated);
+            CHECK(budget.remainingRaycasts == 0);
+            REQUIRE(physics.world->ProcessQueryBatch().HasValue());
+            CHECK(PerceptionSightTestAccess::Completion(sight).entries.size() == RayBudget);
+
+            const auto completed = sight.Poll(scene.scene->View(), scene.revision, Publication(physics.capability, frame));
+            REQUIRE(completed.HasValue());
+            REQUIRE(completed.Value().count == CandidateLimit);
+            CHECK_FALSE(completed.Value().pending);
+            CHECK(completed.Value().candidatesTruncated);
+            const auto observations = std::span{completed.Value().observations}.first(completed.Value().count);
+            CHECK(std::ranges::count(observations, PerceptionSightEvidence::Occluded, &PerceptionSightObservation::evidence) == RayBudget);
+            CHECK(std::ranges::count(observations, PerceptionSightEvidence::BudgetExhausted, &PerceptionSightObservation::evidence) ==
+                  CandidateLimit - RayBudget);
+            CHECK(std::ranges::none_of(observations, &PerceptionSightObservation::visible));
         }
 
         TEST_CASE("Sight stale target completions cannot reveal a replacement entity", "[unit][ai][sight][canonical]") {

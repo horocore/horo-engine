@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <limits>
 #include <memory>
 #include <type_traits>
@@ -302,6 +303,77 @@ namespace Horo::AI {
             CHECK(snapshot.entries[0].lastKnownPosition == latest.location);
             ExpectError(other.Observe({.key = snapshot.entries[0].key}, 4), AIErrors::PerceptionEventUnauthorized);
             CHECK(other.StoredCount() == 0);
+        }
+
+        TEST_CASE("A full Gameplay sensing window bounds noise and ages mixed stimuli deterministically",
+                  "[unit][ai][perception][events][qualification]") {
+            Fixture fixture;
+            auto admitted = AIPerceptionMemory::Create(99, fixture.recipient,
+                                                       {.listenerMaximumEntries = 1,
+                                                        .profileMaximumEntries = 4,
+                                                        .fixedStep = std::chrono::seconds{1},
+                                                        .memoryDurationSeconds = 2});
+            REQUIRE(admitted.HasValue());
+            auto memory = std::move(admitted).Value();
+            std::array<CommittedPerceptionDelivery, PerceptionEventSource::MaximumDeliveries + 1> records;
+            records.fill(fixture.Sound());
+            records[0] = {{fixture.recipient, MakeIdentity<PerceptionListenerTypeId>(10),
+                           DamagePerceptionEvent{fixture.Source(2), Math::WorldCoordinate64::FromMillimeters(7, 0, 0), 2}, 4},
+                          PerceptionFilterDecision::Accept};
+            records[1] = {{fixture.recipient, MakeIdentity<PerceptionListenerTypeId>(11),
+                           ProximityPerceptionEvent{fixture.Source(3), Math::WorldCoordinate64::FromMillimeters(9, 0, 0)}, 4},
+                          PerceptionFilterDecision::Accept};
+            records[2] = fixture.Team();
+            records[2].delivery.simulationTick = 4;
+
+            const auto capture = [&](std::span<const CommittedPerceptionDelivery> batch) {
+                return PerceptionEventSource::Capture(*fixture.scene, fixture.ai, fixture.host, Network::NetworkModeWorldKind::Standalone,
+                                                      fixture.registry, fixture.filtering, batch);
+            };
+            ExpectError(capture(records), AIErrors::PerceptionEventInvalid);
+            const auto bounded = std::span{records}.first(PerceptionEventSource::MaximumDeliveries);
+            const auto finalSound = Math::WorldCoordinate64::FromMillimeters(700, 0, 0);
+            std::get<HearingPerceptionEvent>(bounded.back().delivery.event).location = finalSound;
+            auto captured = capture(bounded);
+            REQUIRE(captured.HasValue());
+            auto window = std::move(captured).Value();
+            for (std::size_t index = 0; index < bounded.size(); ++index) {
+                REQUIRE(window.Deliver(index, memory).HasValue());
+                CHECK(memory.StoredCount() <= memory.Capacity());
+            }
+            ExpectError(window.Deliver(bounded.size(), memory), AIErrors::PerceptionEventInvalid);
+            const auto liveness = PerceptionSceneLiveness(*fixture.scene);
+            const auto observed = memory.Snapshot(4, liveness);
+            REQUIRE(observed.HasValue());
+            REQUIRE(observed.Value().count == 4);
+            const auto &entries = observed.Value().entries;
+            CHECK(entries[0].key.sense == SenseTypeIds::Damage);
+            CHECK(entries[1].key.sense == SenseTypeIds::Touch);
+            CHECK(entries[2].key.sense == SenseTypeIds::Team);
+            CHECK(entries[3].key.sense == SenseTypeIds::Hearing);
+            CHECK(entries[3].lastKnownPosition == finalSound);
+
+            auto explicitlyRetired = memory;
+            REQUIRE(explicitlyRetired.ForgetSource(fixture.Source(3)).HasValue());
+            const auto afterRetirement = explicitlyRetired.Snapshot(4, liveness);
+            REQUIRE(afterRetirement.HasValue());
+            CHECK(afterRetirement.Value().count == 2);
+
+            Runtime::SceneCommandBuffer unload;
+            unload.Destroy(fixture.Entity(3));
+            REQUIRE(fixture.scene->Commit(unload).HasValue());
+            ExpectError(window.Deliver(2, memory), AIErrors::PerceptionEventStale);
+            const auto surviving = memory.Snapshot(5, liveness);
+            REQUIRE(surviving.HasValue());
+            REQUIRE(surviving.Value().count == 2);
+            CHECK(surviving.Value().entries[0].key.sense == SenseTypeIds::Damage);
+            CHECK(surviving.Value().entries[1].key.sense == SenseTypeIds::Hearing);
+            const auto expired = memory.Snapshot(6, liveness);
+            REQUIRE(expired.HasValue());
+            CHECK(expired.Value().count == 0);
+            window.Close();
+            fixture.ai.BeginShutdown();
+            ExpectError(window.Deliver(0, memory), AIErrors::PerceptionEventUnauthorized);
         }
 
         TEST_CASE("sound delivery rejects expired, inaudible and unauthorized events", "[unit][ai][perception][events][hearing]") {
