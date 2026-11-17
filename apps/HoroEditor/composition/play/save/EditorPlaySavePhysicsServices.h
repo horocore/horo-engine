@@ -4,6 +4,8 @@
 #include "PhysicsStateSaveContract.h"
 #include "ScenePhysicsHost.h"
 
+#include <type_traits>
+
 namespace Horo::Application::Internal {
     class PlaySavePhysicsServices;
     class PlaySavePhysicsRestoreFence;
@@ -33,7 +35,24 @@ namespace Horo::Application::Internal {
     class PlaySavePhysicsServices final : public std::enable_shared_from_this<PlaySavePhysicsServices> {
         friend class PlaySavePhysicsCaptureCoverage;
 
+        /** @brief Factory-only owned input; policy validation precedes shared allocation and no caller borrow survives it. */
+        class ConstructionInput final {
+            friend class PlaySavePhysicsServices;
+
+            explicit ConstructionInput(const PlaySavePhysicsPolicy &requested) noexcept : policy_(requested) {}
+
+            PlaySavePhysicsPolicy policy_;
+        };
+
+        static_assert(!std::is_aggregate_v<ConstructionInput>);
+        static_assert(std::is_nothrow_copy_constructible_v<PlaySavePhysicsPolicy>);
+
     public:
+        /** @brief Retains the factory's validated policy independently of its synchronous construction input.
+         * @param native Existing native Scene authority. @param scenes Existing canonical Scene owner.
+         * @param input Private factory input owning the already validated policy snapshot.
+         */
+        PlaySavePhysicsServices(ScenePhysicsHost &native, Runtime::RuntimeSceneService &scenes, const ConstructionInput &input) noexcept;
         /** @brief Admits one owned policy snapshot before constructing the Scene/native adapter.
          * @param native Existing native Scene authority. @param scenes Existing canonical Scene owner.
          * @param requested Policy copied before validation and retained independently by the service.
@@ -61,7 +80,6 @@ namespace Horo::Application::Internal {
         [[nodiscard]] std::size_t RetainedPayloadBytes() const noexcept;
 
     private:
-        PlaySavePhysicsServices(ScenePhysicsHost &, Runtime::RuntimeSceneService &, const PlaySavePhysicsPolicy &) noexcept;
         [[nodiscard]] Result<void> ValidateCaptureScene(const Runtime::CanonicalCaptureContext &) const;
         [[nodiscard]] Result<void> EnsureCapture(const Runtime::CanonicalCaptureContext &);
         [[nodiscard]] bool MatchesCapture(Runtime::RuntimeSceneView, const Runtime::RuntimeSaveCaptureProvenance &) const noexcept;

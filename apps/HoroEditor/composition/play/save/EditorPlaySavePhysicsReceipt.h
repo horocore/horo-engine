@@ -4,12 +4,12 @@
 #include <thread>
 
 namespace Horo::Application::Internal {
-    /** @brief Constructor-only coherent Scene restore inputs; the receipt copies context/view and keeps the existing identity borrow.
-     * All references remain valid through synchronous receipt construction. SceneRestoreBundle owns the identity map thereafter.
+    /** @brief Owns coherent context/view snapshots before native callbacks; keeps the existing restore-bundle identity borrow.
+     * The receipt retains independent context/view copies. SceneRestoreBundle owns the identity map through receipt preparation.
      */
     struct PlaySavePhysicsRestoreScene final {
-        const Runtime::StagedRestoreContext &context;
-        const Runtime::RuntimeSceneView &scene;
+        Runtime::StagedRestoreContext context;
+        Runtime::RuntimeSceneView scene;
         const Runtime::PersistentEntityIdentityMap &identities;
     };
 

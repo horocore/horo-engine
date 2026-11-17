@@ -8,20 +8,21 @@
 namespace Horo::Application::Internal {
     /** @copydoc PlaySavePhysicsServices::PlaySavePhysicsServices */
     PlaySavePhysicsServices::PlaySavePhysicsServices(ScenePhysicsHost &native, Runtime::RuntimeSceneService &scenes,
-                                                     const PlaySavePhysicsPolicy &policy) noexcept
-        : native_(native), scenes_(scenes), policy_(policy) {}
+                                                     const ConstructionInput &input) noexcept
+        : native_(native), scenes_(scenes), policy_(input.policy_) {}
 
     /** @copydoc PlaySavePhysicsServices::Create */
     Result<std::shared_ptr<PlaySavePhysicsServices>> PlaySavePhysicsServices::Create(ScenePhysicsHost &native,
                                                                                      Runtime::RuntimeSceneService &scenes,
                                                                                      const PlaySavePhysicsPolicy &requested) {
-        const auto policy = requested;
+        const ConstructionInput input{requested};
+        const auto &policy = input.policy_;
         using Outcome = Result<std::shared_ptr<PlaySavePhysicsServices>>;
         if (!policy.maximumWireBytes || policy.maximumWireBytes > Physics::Detail::MaximumPhysicsStateSaveRecordBytes ||
             !policy.state.maximumRetainedBytes || !policy.state.snapshotSlots)
             return Outcome::Failure(MakeError(Physics::PhysicsErrors::DescriptorInvalid));
         try {
-            return Outcome::Success(std::shared_ptr<PlaySavePhysicsServices>{new PlaySavePhysicsServices{native, scenes, policy}});
+            return Outcome::Success(std::make_shared<PlaySavePhysicsServices>(native, scenes, input));
         } catch (const std::bad_alloc &) {
             return Outcome::Failure(MakeError(Physics::PhysicsErrors::CapacityExceeded));
         }
