@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Render/ShaderReflectionErrors.h"
 #include "Horo/Runtime/Render/VfxShaderParameters.h"
 #include "LockedVfxShaderFixture.h"
 #include "ShaderReflectionCook.h"
@@ -163,6 +164,21 @@ TEST_CASE("VFX cook rejects competing native semantics and foreign logical evide
         evidence.translations[0].resize(1024U * 1024U + 1, ' ');
     }
     CHECK(NormalizeVfxMetalReflection(evidence.manifest, evidence.target, evidence.stages, evidence.translations).HasError());
+}
+
+TEST_CASE("VFX native layout rejects non-string parameter types with a typed reflection failure", "[renderer][shader-cook][vfx]") {
+    const auto backend = GENERATE(ShaderTargetBackend::OpenGL, ShaderTargetBackend::Metal);
+    const auto malformed =
+        GENERATE(std::string_view{"null"}, std::string_view{"true"}, std::string_view{"7"}, std::string_view{"[]"}, std::string_view{"{}"});
+    auto evidence = backend == ShaderTargetBackend::OpenGL ? OpenGLEvidence() : Evidence{};
+    Replace(evidence.stages[0].json, "\"type\":\"mat4\"", std::string{"\"type\":"} + std::string{malformed});
+    const auto result = backend == ShaderTargetBackend::OpenGL
+                            ? NormalizeVfxOpenGLReflection(evidence.manifest, evidence.target, evidence.stages, evidence.translations)
+                            : NormalizeVfxMetalReflection(evidence.manifest, evidence.target, evidence.stages, evidence.translations);
+    INFO("Backend=" << static_cast<unsigned>(backend) << " malformed type=" << malformed);
+    REQUIRE(result.HasError());
+    CHECK(result.ErrorValue().domain.Value() == ShaderReflectionErrors::InvalidReflection.domain.Value());
+    CHECK(result.ErrorValue().code.Value() == ShaderReflectionErrors::InvalidReflection.code.Value());
 }
 
 TEST_CASE("VFX cook handles optimized fragment uniform removal without renumbering logical identities", "[renderer][shader-cook][vfx]") {

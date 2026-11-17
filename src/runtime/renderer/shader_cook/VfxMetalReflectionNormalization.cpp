@@ -290,8 +290,9 @@ namespace Horo::Render {
             const auto role = instances ? index : index + 2;
             const auto &layout = layouts[role];
             const bool matrix = layout.matrixStride != 0;
-            if (member.at("name").get_ref<const std::string &>() != layout.name || member.at("type") != layout.type ||
-                Unsigned(member.at("offset")) != layout.offset || member.contains("physical_pointer"))
+            if (member.at("name").get_ref<const std::string &>() != layout.name || !member.at("type").is_string() ||
+                member.at("type").get_ref<const std::string &>() != layout.type || Unsigned(member.at("offset")) != layout.offset ||
+                member.contains("physical_pointer"))
                 throw InvalidVfxEvidence{};
             if (instances) {
                 const auto &array = member.at("array");
