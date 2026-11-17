@@ -310,6 +310,7 @@ namespace Horo::Application::Internal {
             if (canonical.HasError())
                 return Result<bool>::Failure(canonical.ErrorValue());
         }
+        host.tracking_.Close(candidate);
         host.input_.coordinator.reset();
         host.input_.origin = {};
         host.retiredScene_ = host.scene_->scene;
