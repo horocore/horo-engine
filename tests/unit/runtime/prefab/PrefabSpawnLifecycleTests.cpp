@@ -280,10 +280,36 @@ namespace Horo::Prefab {
         const auto original = fixture.scenes.ActiveScene()->Find({1}).value();
         auto request = fixture.Request();
         request.bindings.emplace_back(Property(21), original);
+        fixture.Warm();
+        std::size_t completeCallbacks{};
+        fixture.trace.onCreate = [&fixture, &completeCallbacks](Gameplay::BehaviorContext &context) {
+            const auto scene = fixture.scenes.ActiveScene();
+            REQUIRE(scene);
+            CHECK(fixture.Count() == 3);
+            const auto self = scene->EntityAt(context.Entity().index);
+            REQUIRE(self);
+            if (self->groupReferences.empty())
+                return;
+            const auto owner = Runtime::RuntimeGroupMemberIdentity{Type(), self->components->behaviors.front().instanceId.value};
+            const auto member = fixture.context->Reference(self->entity, owner, Property(2));
+            REQUIRE(member.HasValue());
+            const auto target = std::get<Runtime::RuntimeGroupMemberReference>(member.Value().target);
+            const auto child = scene->Get(target.entity);
+            REQUIRE(child.HasValue());
+            CHECK(child.Value().parent == self->entity);
+            CHECK(target.member ==
+                  Runtime::RuntimeGroupMemberIdentity{Type(), child.Value().components->behaviors.front().instanceId.value});
+            ++completeCallbacks;
+        };
         auto operation = fixture.context->Spawn(request);
         REQUIRE(operation.HasValue());
+        fixture.Advance();
+        CHECK(operation.Value().State() == PrefabSpawnState::Pending);
+        CHECK(fixture.Count() == 1);
+        CHECK(completeCallbacks == 0);
         fixture.Drain(operation.Value());
         REQUIRE(operation.Value().State() == PrefabSpawnState::Committed);
+        CHECK(completeCallbacks == 1);
         const auto instance = operation.Value().Spawned().Value();
         const auto root = fixture.scenes.ActiveScene()->Get(instance.Root()).Value();
         const Runtime::RuntimeGroupMemberIdentity owner{Type(), root.components->behaviors.front().instanceId.value};
@@ -306,6 +332,34 @@ namespace Horo::Prefab {
         fixture.Commit();
         CHECK(fixture.context->Reference(instance.Root(), owner, Property(3)).HasError());
         CHECK(fixture.context->Reference(instance.Root(), owner, Property(1)).HasValue());
+    }
+
+    TEST_CASE("Prefab groups meet the captured capacity before any member is activated", "[prefab][spawn][bounds][lifecycle]") {
+        constexpr std::size_t objectCapacity = 2;
+        PrefabProjectPolicy policy;
+        policy.maximumObjectCount = objectCapacity;
+        Fixture fixture{2, policy};
+        auto data = fixture.Data();
+        const auto sourceObjects = data.entities.size();
+        REQUIRE(sourceObjects == objectCapacity);
+        bool rejected = false;
+        SECTION("exact capacity publishes the whole group") {}
+        SECTION("one over capacity preserves the original scene") {
+            auto extra = data.entities.back();
+            extra.provenance.sourceObject = PrefabObjectAddress::Create({}, {8}).Value();
+            std::get<Gameplay::BehaviorComponent>(extra.members.front()).instanceId.value = 11;
+            data.entities.push_back(std::move(extra));
+            fixture.Put(std::move(data));
+            rejected = true;
+        }
+        const auto operation = fixture.context->Spawn(fixture.Request());
+        REQUIRE(operation.HasValue());
+        fixture.Drain(operation.Value());
+        const auto expectedCount = rejected ? 1 : 1 + sourceObjects;
+        CHECK(operation.Value().State() == (rejected ? PrefabSpawnState::Failed : PrefabSpawnState::Committed));
+        CHECK(fixture.Count() == expectedCount);
+        CHECK(fixture.trace.creates == expectedCount);
+        CHECK(fixture.runner->InstanceCount() == expectedCount);
     }
 
     TEST_CASE("Missing required and invalid supplied optional prefab bindings reject complete creation", "[prefab][spawn][references]") {
