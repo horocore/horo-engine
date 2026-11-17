@@ -313,6 +313,72 @@ namespace Horo::Runtime::Ui {
             REQUIRE(DeserializeUiDocument(encoded, tiny).HasError());
         }
 
+        TEST_CASE("Runtime UI source mutations either fail explicitly or reach a canonical fixed point",
+                  "[runtime_ui][document][serialization][fuzz]") {
+            const auto original = MakeDocument();
+            const auto baseline = SerializeUiDocument(original).Value();
+            UiDocumentSerializationLimits limits;
+            limits.maximumSourceBytes = baseline.size() * 2;
+            constexpr std::array replacements{'\0', static_cast<char>(0xff), '"', ']', '0', ' '};
+            std::uint32_t state = 0xbeef3513;
+            std::size_t accepted{};
+            std::size_t rejected{};
+            for (std::size_t iteration = 0; iteration < 192; ++iteration) {
+                state = state * 1664525U + 1013904223U;
+                const std::size_t position = state % baseline.size();
+                CAPTURE(iteration, position);
+                auto candidate = baseline;
+                switch (iteration % 4) {
+                    case 0:
+                        candidate.push_back(' ');
+                        break;
+                    case 1:
+                        candidate[position] = replacements[(state >> 16U) % replacements.size()];
+                        break;
+                    case 2:
+                        candidate.erase(position);
+                        break;
+                    case 3:
+                        candidate.insert(position, 1, replacements[(state >> 16U) % replacements.size()]);
+                        break;
+                }
+                const auto decoded = DeserializeUiDocument(candidate, limits);
+                if (decoded.HasError()) {
+                    ++rejected;
+                    CHECK_FALSE(decoded.ErrorValue().code.Value().empty());
+                    continue;
+                }
+                ++accepted;
+                const auto canonical = SerializeUiDocument(decoded.Value(), limits);
+                REQUIRE(canonical.HasValue());
+                const auto roundTrip = DeserializeUiDocument(canonical.Value(), limits);
+                REQUIRE(roundTrip.HasValue());
+                CHECK(SerializeUiDocument(roundTrip.Value(), limits).Value() == canonical.Value());
+            }
+            CHECK(accepted > 0);
+            CHECK(rejected > 0);
+            CHECK(SerializeUiDocument(original).Value() == baseline);
+        }
+
+        TEST_CASE("Generated invalid migration graphs leave their source bytes unchanged", "[runtime_ui][document][migration][fuzz]") {
+            const UiDocumentSchemaVersion legacy{1, 0};
+            const auto source = MakeDocument(legacy);
+            const auto bytes = SerializeUiDocument(source).Value();
+            const UiDocumentMigrationStep valid{legacy, CurrentUiDocumentSchemaVersion, &UpgradeToCurrent};
+            for (std::uint16_t minor = 0; minor < 48; ++minor) {
+                CAPTURE(minor);
+                const UiDocumentSchemaVersion candidateVersion{1, minor};
+                const UiDocumentMigrationStep malformed{minor % 2 == 0 ? legacy : CurrentUiDocumentSchemaVersion, candidateVersion,
+                                                        minor % 3 == 0 ? nullptr : &UpgradeToCurrent};
+                const std::array steps{valid, malformed};
+                const auto migrated = MigrateUiDocument(source, CurrentUiDocumentSchemaVersion, steps);
+                REQUIRE(migrated.HasError());
+                CHECK_FALSE(migrated.ErrorValue().code.Value().empty());
+            }
+            CHECK(SerializeUiDocument(source).Value() == bytes);
+            CHECK(MigrateUiDocument(source, CurrentUiDocumentSchemaVersion, std::array{valid}).HasValue());
+        }
+
         TEST_CASE("Runtime UI document migration is explicit, bounded, and detached", "[runtime_ui][document][serialization][migration]") {
             const auto source = MakeDocument({1, 0});
             const auto encoded = SerializeUiDocument(source);

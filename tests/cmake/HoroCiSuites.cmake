@@ -243,6 +243,10 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroRuntimeUiEventDispatchTests
     HoroRuntimeUiPointerPublicHeaderConsumer
     HoroRuntimeUiTextUnicodeTests
+    HoroRuntimeUiDocumentTests
+    HoroRuntimeUiBindingTests
+    HoroRuntimeUiLayoutTests
+    HoroUiTemplateGraphTests
     HoroRuntimeUiUnicodeStartupTests
     HoroRuntimeUiUnicodeLifecycleTests
     HoroRuntimeUiTextShapingTests

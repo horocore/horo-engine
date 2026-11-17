@@ -509,6 +509,34 @@ namespace Horo::Runtime::Ui {
             REQUIRE(updated.Value().Get(tree.Find(Stable<UiElementId>(5)).Value()).HasValue());
         }
 
+        TEST_CASE("Generated malformed root constraints never publish over the live layout", "[runtime_ui][layout][fuzz]") {
+            auto tree = Tree();
+            auto engine = Engine();
+            CountingEvaluator evaluator;
+            const auto original = engine.Update(tree, Request(evaluator));
+            REQUIRE(original.HasValue());
+            const auto interaction = original.Value().Descriptor().interaction;
+            std::uint32_t state = 0x4103c218U;
+            for (std::size_t iteration = 0; iteration < 128; ++iteration) {
+                state = state * 1664525U + 1013904223U;
+                CAPTURE(iteration);
+                auto candidate = Request(evaluator, 2);
+                const auto boundary = static_cast<std::int32_t>((state >> 16U) + 1);
+                if (iteration % 2 == 0)
+                    candidate.rootConstraints.minimum.width = candidate.rootConstraints.maximum.width + boundary;
+                else
+                    candidate.rootContent.extent.height = -boundary;
+                const auto result = engine.Update(tree, candidate);
+                REQUIRE(result.HasError());
+                CHECK_FALSE(result.ErrorValue().code.Value().empty());
+                CHECK(engine.PublishedInteraction() == interaction);
+            }
+            const auto recovered = engine.Update(tree, Request(evaluator, 2));
+            REQUIRE(recovered.HasValue());
+            CHECK(recovered.Value().Descriptor().interaction == Rev<UiInteractionRevision>(2));
+            CHECK(original.Value().Descriptor().interaction == interaction);
+        }
+
         TEST_CASE("Layout failure retains the last good generation and pending dirtiness", "[runtime_ui][layout][failure]") {
             auto tree = Tree();
             auto engine = Engine();

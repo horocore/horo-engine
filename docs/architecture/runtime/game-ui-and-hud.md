@@ -1057,6 +1057,14 @@ change actual pixel coverage. Atlas inspection reports occupied and reserved
 tiles, including pending uploads, and capacity pressure. These APIs do not
 sample native GPU timing or claim allocator-level totals.
 
+Runtime UI malformed-input qualification uses fixed seeds and bounded cases for
+source and cooked documents, migration graphs, template graphs, layout
+constraints, UTF-8, and binding provider contributions. The corresponding
+Catch2 suites run through the Windows CI test group and the full native test
+configuration. Run the individual executables with `[fuzz]` to select just
+the generated cases. Each case limits its inputs without relying on a
+wall-clock assertion, and validates accepted evidence or transactional refusal.
+
 ### Render-graph composition admission
 
 `Horo/Runtime/Render/UiRenderComposition.h` is the single typed bridge from an

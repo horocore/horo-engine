@@ -118,6 +118,38 @@ namespace Horo::Runtime::Ui {
             REQUIRE(malformedResult.ErrorValue().code.Value() == UiErrors::CookedPayloadMalformed.code.Value());
         }
 
+        TEST_CASE("Cooked UI mutation sweep stays within the declared decoder limits", "[runtime_ui][cook][fuzz]") {
+            const auto cooked = CookedUiDocument::Cook(MakeDocument(Asset(7))).Value();
+            const auto payload = cooked.Payload();
+            UiDocumentCookLimits limits;
+            limits.maximumPayloadBytes = payload.size();
+            limits.maximumCanvases = cooked.Canvases().size();
+            limits.maximumElements = cooked.Elements().size();
+            std::uint32_t state = 0x4304089fU;
+            std::size_t rejected{};
+            for (std::size_t iteration = 0; iteration < 160; ++iteration) {
+                state = state * 1664525U + 1013904223U;
+                auto candidate = std::vector<std::uint8_t>(payload.begin(), payload.end());
+                const auto position = state % candidate.size();
+                CAPTURE(iteration, position);
+                if (iteration % 3 == 0)
+                    candidate.resize(position);
+                else
+                    candidate[position] ^= static_cast<std::uint8_t>(1U << ((state >> 24U) % 8U));
+                const auto decoded = CookedUiDocument::Decode(candidate, limits);
+                if (decoded.HasError()) {
+                    ++rejected;
+                    CHECK_FALSE(decoded.ErrorValue().code.Value().empty());
+                    continue;
+                }
+                CHECK(decoded.Value().Canvases().size() <= limits.maximumCanvases);
+                CHECK(decoded.Value().Elements().size() <= limits.maximumElements);
+                CHECK(std::ranges::equal(decoded.Value().Payload(), candidate));
+            }
+            CHECK(rejected > 0);
+            CHECK(CookedUiDocument::Decode(payload, limits).HasValue());
+        }
+
         TEST_CASE("Runtime UI asset loading resolves a bounded packaged closure", "[runtime_ui][asset_loading]") {
             const Assets::AssetId root = Asset(1);
             const Assets::AssetId dependency = Asset(7);
