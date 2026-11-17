@@ -194,8 +194,8 @@ namespace Horo::Application {
                 auto document = DecodeProjectSourceDocument(*raw.Value());
                 if (document.HasError())
                     return Outcome::Failure(document.ErrorValue());
-                const auto &metadata = document.Value().metadata;
-                if (metadata.horoVersion != classified.metadata->horoVersion ||
+                if (const auto &metadata = document.Value().metadata;
+                    metadata.horoVersion != classified.metadata->horoVersion ||
                     metadata.persistentContract != classified.metadata->persistentContract)
                     return Outcome::Failure(MakeError(PrefabSceneCookErrors::Stale));
                 return Outcome::Success({std::move(document).Value().metadata, std::move(raw).Value().value()});
@@ -211,9 +211,9 @@ namespace Horo::Application {
                                        const Release::ReleaseExecutionPlan *plan) {
                 if (!plan)
                     return Result<void>::Success();
-                const auto digest =
-                    packages ? ComputeSha256(std::as_bytes(std::span{*packages})) : ComputeSha256(std::span<const std::byte>{});
-                if (digest != plan->Identities().dependencyLock)
+                if (const auto digest =
+                        packages ? ComputeSha256(std::as_bytes(std::span{*packages})) : ComputeSha256(std::span<const std::byte>{});
+                    digest != plan->Identities().dependencyLock)
                     return Result<void>::Failure(MakeError(PrefabSceneCookErrors::Stale));
                 Append(semantic, FormatSha256(plan->Identities().profile));
                 Append(semantic, FormatSha256(plan->Identities().policy));

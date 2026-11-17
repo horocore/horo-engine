@@ -453,7 +453,7 @@ namespace Horo::Runtime {
                     if (record.disposition != PersistentEntityDisposition::Live ||
                         !std::holds_alternative<SpawnedPersistentEntityProvenance>(record.provenance))
                         continue;
-                    if (!ValidSpawnedRecord(record) || !live.emplace(record.identity, &record).second)
+                    if (!ValidSpawnedRecord(record) || !live.try_emplace(record.identity, &record).second)
                         return Failure<void>(SaveErrors::RestoreParticipantInvalid);
                 }
                 return Result<void>::Success();
@@ -595,8 +595,7 @@ namespace Horo::Runtime {
         if (!state.transaction || state.closed || !state.graph ||
             state.transaction->State() != StagedRestoreTransactionState::ReadyToActivate)
             return Failure<void>(SaveErrors::RestoreActivationStale);
-        const auto evidence = state.authority->Current();
-        if (!state.SameGenerations(evidence))
+        if (const auto evidence = state.authority->Current(); !state.SameGenerations(evidence))
             return Failure<void>(SaveErrors::RestoreActivationStale);
         if (active && active->RuntimeId().value != state.request.context.sceneIncarnation)
             return Failure<void>(SaveErrors::RestoreActivationStale);

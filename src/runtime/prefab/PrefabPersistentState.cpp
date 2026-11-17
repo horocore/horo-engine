@@ -44,8 +44,9 @@ namespace Horo::Prefab {
             if (!HasCreationIdentity(instance) || instance.placement.TryToMatrix().HasError() || instance.members.empty())
                 return Invalid("Durable prefab creation requires exact instance, cooked "
                                "artifact, root revision and placement evidence.");
-            const auto version = Application::ParseHoroVersion(Application::FormatHoroVersion(instance.rootSourceRevision.projectVersion));
-            if (version.HasError() || version.Value() != instance.rootSourceRevision.projectVersion)
+            if (const auto version =
+                    Application::ParseHoroVersion(Application::FormatHoroVersion(instance.rootSourceRevision.projectVersion));
+                version.HasError() || version.Value() != instance.rootSourceRevision.projectVersion)
                 return Invalid("Durable prefab root revision has an invalid canonical "
                                "project version.");
             if (instance.disposition > Runtime::PersistentEntityDisposition::Tombstone)
