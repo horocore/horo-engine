@@ -388,25 +388,39 @@ namespace Horo::Gameplay {
 
             /** @brief Constructs and activates the prepared new suffix, retaining the existing exact rollback boundary. */
             [[nodiscard]] Result<void> AttachCommittedInstances(const std::size_t first) {
+                struct AttachmentRollback final {
+                    StructuralCandidate &candidate;
+                    std::size_t firstInstance;
+                    std::size_t firstEvent;
+                    bool committed{};
+
+                    ~AttachmentRollback() noexcept {
+                        if (committed)
+                            return;
+                        candidate.RollbackAdditions(firstInstance);
+                        // FixedUpdate cannot drain pending events during structural notifications.
+                        candidate.owner.events.next.resize(firstEvent);
+                    }
+                } rollback{*this, first, owner.events.next.size()};
+
                 for (Instance &instance : additions) {
                     if (owner.shutdownRequested)
-                        return FailAdditions(first, "Gameplay shutdown requested during structural notifications.");
-                    if (auto admitted = owner.InitializePrefabContext(instance); admitted.HasError()) {
-                        RollbackAdditions(first);
+                        return Result<void>::Failure(MakeError(GameplayErrors::GameplayFactoryFailed,
+                                                               "Gameplay shutdown requested during structural notifications."));
+                    if (auto admitted = owner.InitializePrefabContext(instance); admitted.HasError())
                         return admitted;
-                    }
                     if (!TryCreateInstance(instance))
-                        return FailAdditions(first, "Spawned behavior factory threw an exception.");
+                        return Result<void>::Failure(
+                            MakeError(GameplayErrors::GameplayFactoryFailed, "Spawned behavior factory threw an exception."));
                     if (instance.implementation == nullptr)
-                        return FailAdditions(first, "Spawned behavior factory returned no instance.");
+                        return Result<void>::Failure(
+                            MakeError(GameplayErrors::GameplayFactoryFailed, "Spawned behavior factory returned no instance."));
                     // Capacity and all component copies were prepared before the aggregate commit fence.
                     owner.instances.push_back(std::move(instance));
                 }
-                if (auto activated = owner.ActivateInstances(first); activated.HasError()) {
-                    const Error error = activated.ErrorValue();
-                    RollbackAdditions(first);
-                    return Result<void>::Failure(error);
-                }
+                if (auto activated = owner.ActivateInstances(first); activated.HasError())
+                    return activated;
+                rollback.committed = true;
                 return Result<void>::Success();
             }
 
@@ -425,12 +439,6 @@ namespace Horo::Gameplay {
                 for (std::size_t index = owner.instances.size(); index > first; --index)
                     (void)owner.RollbackInstance(owner.instances[index - 1]);
                 owner.instances.resize(first);
-            }
-
-            /** @brief Reports a postcommit factory fault after deterministic partial-instance teardown. */
-            [[nodiscard]] Result<void> FailAdditions(const std::size_t first, const char *message) {
-                RollbackAdditions(first);
-                return Result<void>::Failure(MakeError(GameplayErrors::GameplayFactoryFailed, message));
             }
 
             std::shared_ptr<Impl> lifetime;

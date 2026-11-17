@@ -950,7 +950,7 @@ enum class PrefabError : std::uint32_t {
 | **Lifecycle** | Cancel/unload/replace scene while asset loads | No late publication into destroyed or replacement scene |
 | **Lifecycle** | Parent destroyed/reused while asset loads | `InvalidParent`; no attachment to replacement entity |
 | **Lifecycle** | Created-disabled behavior | `OnCreate` runs; `OnEnable`/`OnStart` wait for first enable |
-| **Lifecycle** | Post-commit behavior construction or hook fault | Structural spawn remains committed; fault reported; normal teardown |
+| **Lifecycle** | Post-commit behavior construction or hook fault | Structural spawn remains committed and reports the fault. New behavior instances roll back and their queued events are discarded, preserving earlier events. |
 | **Cook** | Nested dependency, target, settings, or version changes | Full canonical cache key changes; no stale artifact reuse |
 | **Identity** | Built-in/project component and property renamed or reordered | Stable IDs retain target; labels/offsets/order are irrelevant |
 | **Identity** | Same component type appears twice on one object | Persisted `ComponentInstanceId` selects the exact occurrence |

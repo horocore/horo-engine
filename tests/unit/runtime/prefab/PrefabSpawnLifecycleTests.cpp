@@ -1,6 +1,8 @@
+#include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "PrefabSpawnTestSupport.h"
 
+#include <stdexcept>
 #include <thread>
 
 namespace Horo::Prefab {
@@ -164,6 +166,50 @@ namespace Horo::Prefab {
         CHECK(fixture.Count() == 1);
         CHECK(fixture.runner->InstanceCount() == 1);
         CHECK(fixture.trace.creates == 1);
+    }
+
+    TEST_CASE("A failed prefab activation discards only that group's deferred gameplay events", "[prefab][spawn][lifecycle]") {
+        const Gameplay::GameplayEventTypeId prior{"game.test.prior"};
+        const Gameplay::GameplayEventTypeId activation{"game.test.activation"};
+        const Gameplay::GameplayEventTypeId rollback{"game.test.rollback"};
+        Fixture fixture;
+        fixture.trace.onTick = [&prior](Gameplay::BehaviorContext &context) {
+            REQUIRE(context.Publish({.type = prior}).HasValue());
+        };
+        REQUIRE(fixture.runner->FixedUpdate({}, {0.01}).HasValue());
+        fixture.trace.onTick = {};
+        fixture.trace.onCreate = [&activation](Gameplay::BehaviorContext &context) {
+            REQUIRE(context.Publish({.type = activation}).HasValue());
+        };
+        fixture.trace.onEnable = [&fixture](Gameplay::BehaviorContext &) {
+            if (fixture.trace.creates == 3)
+                throw std::runtime_error("second prefab OnEnable failed");
+        };
+        fixture.trace.onDestroy = [&rollback](Gameplay::BehaviorContext &context) {
+            REQUIRE(context.Publish({.type = rollback}).HasValue());
+        };
+        const auto operation = fixture.context->Spawn(fixture.Request());
+        REQUIRE(operation.HasValue());
+        fixture.Drain(operation.Value());
+
+        CHECK(operation.Value().State() == PrefabSpawnState::Committed);
+        const auto failure = fixture.scenes.TakeOperationError();
+        REQUIRE(failure);
+        CHECK(failure->code.Value() == Gameplay::GameplayErrors::GameplayFactoryFailed.code.Value());
+        CHECK(fixture.Count() == 3);
+        CHECK(fixture.trace.creates == 3);
+        CHECK(fixture.trace.destroys == 2);
+        CHECK(fixture.runner->InstanceCount() == 1);
+        REQUIRE(fixture.runner->FixedUpdate({}, {0.01}).HasValue());
+        CHECK(fixture.trace.starts == 1);
+        CHECK(fixture.trace.deliveredEvents == std::vector{prior});
+
+        const auto retired = fixture.context->Despawn(operation.Value().Spawned().Value(), fixture.tick);
+        REQUIRE(retired.HasValue());
+        fixture.Drain(retired.Value());
+        CHECK(retired.Value().State() == PrefabSpawnState::Committed);
+        CHECK(fixture.trace.destroys == 2);
+        CHECK(fixture.Count() == 1);
     }
 
     TEST_CASE("Spawned provider schema mismatch rejects the full group before creation hooks", "[prefab][spawn][malformed]") {
