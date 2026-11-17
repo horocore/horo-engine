@@ -310,6 +310,8 @@ namespace Horo::Tests::OpenXRApplication {
         bool revoked{};
         ApplicationFixture fixture;
         fixture.CreatePlay();
+        REQUIRE(fixture.script.native.liveSessions == 1);
+        const auto preparedSessions = std::ranges::count(fixture.script.native.calls, "session");
         const auto input = fixture.InputPort();
         REQUIRE(fixture.play->AttachInput(input, fixture.source.Port()).HasValue());
         auto participant = fixture.play->MakeSceneParticipant();
@@ -323,11 +325,13 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(revoked);
         CHECK(prepared.ErrorValue().code.Value() == XR::XRSessionErrors::ActivationCancelled.code.Value());
         CHECK_FALSE(fixture.play->UsesXrScene());
-        CHECK(fixture.script.native.liveSessions == 0);
+        CHECK(std::ranges::count(fixture.script.native.calls, "session") == preparedSessions);
+        CHECK(fixture.script.native.liveSessions == 1);  // The App owner retains its existing standby until physical retirement.
         fixture.onCheckAdmission = {};
         const auto closed = fixture.play->Close();
         REQUIRE(closed.HasValue());
         CHECK(closed.Value());
+        CHECK(fixture.script.native.liveSessions == 0);
         CHECK(fixture.script.actions.liveSets == 0);
     }
 
