@@ -835,7 +835,14 @@ Baseline passthrough is a runtime compositor-layer intent and exposes no raw cam
 frames. Live anchors use Horo generation-safe localization identity; durable restore is
 a separate capability with opaque protected provider references. Plane/mesh snapshots
 are bounded observed evidence and never mutate authored Scene, Physics or Navigation
-without an explicit destination-owned adapter and transaction. Hit tests cannot invoke
+without an explicit destination-owned adapter and transaction. The portable plane publication
+authorizes one session and calibrated World origin at a time. It accepts a complete ordered
+batch at a bounded cadence and expires it by runtime-clock age. The owning host withdraws
+the publication on tracking, permission, origin or session loss. An empty valid batch removes
+earlier observations. Provider identifiers and geometry from previous grants must not be
+persisted or reused by the host.
+
+Hit tests cannot invoke
 UI/gameplay/editor actions, and light estimates cannot rewrite authored lights/exposure.
 
 ## Android And Standalone XR
