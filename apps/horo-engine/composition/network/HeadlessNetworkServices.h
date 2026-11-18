@@ -51,8 +51,8 @@ namespace Horo::Application::Internal {
         std::shared_ptr<AnimationRuntimeIdentitySource> animationIdentities; /**< One cold host issuer shared by all records/travel. */
         std::shared_ptr<const Runtime::SceneAnimationInputSource>
             animationInputs; /**< Exact optional adjacent-owner snapshot, no new store. */
-        std::function<Result<std::vector<AI::AiScenePerceptionPosition>>(const Runtime::RuntimeSceneView &)>
-            perceptionPositions; /**< Authority-projected global positions in ascending entity order. */
+        AI::AiScenePerceptionPositionSource
+            perceptionPositions; /**< Global positions from the supplied candidate/current Scene in ascending entity order. */
         AI::PerceptionFilteringPolicy perceptionFiltering;
         AI::AiScenePerceptionGroupPositionSource perceptionGroupPositions; /**< Exact detached endpoint coordinates at admission. */
         std::shared_ptr<const ProjectSceneNavigationSelection> navigation;

@@ -20,6 +20,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace Horo::AI {
@@ -31,6 +32,17 @@ namespace Horo::AI {
     struct AiScenePerceptionPosition final {
         Runtime::EntityRef entity;
         Math::WorldCoordinate64 position;
+    };
+
+    /** @brief Captures absolute positions for a Scene's declared endpoints in ascending entity order. */
+    using AiScenePerceptionPositionSource =
+        std::function<Result<std::vector<AiScenePerceptionPosition>>(const Runtime::RuntimeSceneView &)>;
+
+    /** @brief Explicit perception publication owned by an AI Scene activation candidate. */
+    struct AiScenePerceptionActivationInput final {
+        PerceptionSpatialBroadphase &spatial; /**< Outlives the Scene participant and all its candidates. */
+        PerceptionFilteringPolicy filtering;
+        AiScenePerceptionPositionSource positions; /**< Captures the actual candidate Scene's global positions. */
     };
 
     /** @brief Captures absolute positions for each exact prospective Perception endpoint in ascending entity order. */
@@ -122,6 +134,7 @@ namespace Horo::AI {
 
     namespace Detail {
         struct AiSceneRuntimeState;
+        struct PerceptionGroupPublication;
         struct AgentRuntimeState;
         class AiSceneStructuralParticipant;
         struct AiSceneRestoreState;
@@ -191,8 +204,13 @@ namespace Horo::AI {
         }
 
     private:
+        friend class AiSceneActivationParticipant;
+        /** @brief Stages exact spatial authority while the whole Scene aggregate is still private. */
+        [[nodiscard]] Result<void> PreparePerception(const Runtime::RuntimeSceneView &scene, const AiScenePerceptionActivationInput &input);
+
         AiSceneRuntime *runtime_{};
         AiSceneActivationBinding binding_;
+        std::unique_ptr<Detail::PerceptionGroupPublication> perception_;
         std::shared_ptr<Detail::AiSceneRuntimeState> state_;
         std::uint64_t publicationToken_{};
         bool published_{};
@@ -430,9 +448,11 @@ namespace Horo::AI {
          * @brief Binds a scene runtime and inert descriptor catalog whose lifetimes exceed this participant.
          * @param runtime Owner-thread AI scene runtime.
          * @param descriptors Immutable controller dependency descriptors.
+         * @param perception Explicit optional spatial policy; its publisher outlives the Scene activation and structural adapters.
          */
-        AiSceneActivationParticipant(AiSceneRuntime &runtime, std::span<const AiControllerDescriptor> descriptors) noexcept
-            : runtime_(&runtime), descriptors_(descriptors) {}
+        AiSceneActivationParticipant(AiSceneRuntime &runtime, std::span<const AiControllerDescriptor> descriptors,
+                                     std::optional<AiScenePerceptionActivationInput> perception = {}) noexcept
+            : runtime_(&runtime), descriptors_(descriptors), perception_(std::move(perception)) {}
 
         /** @copydoc Runtime::SceneActivationParticipant::Prepare */
         [[nodiscard]] Result<std::unique_ptr<Runtime::SceneActivationCandidate>> Prepare(const Runtime::RuntimeSceneDefinition &definition,
@@ -441,5 +461,6 @@ namespace Horo::AI {
     private:
         AiSceneRuntime *runtime_{};
         std::span<const AiControllerDescriptor> descriptors_;
+        std::optional<AiScenePerceptionActivationInput> perception_;
     };
 }  // namespace Horo::AI

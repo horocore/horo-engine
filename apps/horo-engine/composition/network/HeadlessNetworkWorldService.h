@@ -257,8 +257,6 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return vfx;
             if (auto prepared = PrepareHeadlessSceneAtLoadBoundary(*record_->scenes, *owners_->definition, boundary); prepared.HasError())
                 return Result<void>::Failure(prepared.ErrorValue());
-            if (auto perception = PublishConfiguredPerception(); perception.HasError())
-                return perception;
             return PrepareConfiguredTemplates();
         }
 
@@ -302,16 +300,20 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             if (ai.HasError())
                 return Result<void>::Failure(ai.ErrorValue());
             record_->ai = std::make_unique<AI::AiSceneRuntime>(std::move(ai).Value());
-            if (auto added =
-                    record_->scenes->AddActivationParticipant(std::make_unique<AI::AiSceneActivationParticipant>(*record_->ai, catalog));
+            std::optional<AI::AiScenePerceptionActivationInput> activation;
+            std::optional<AI::AiScenePerceptionGroupInput> structural;
+            if (OwnsPerception()) {
+                activation.emplace(
+                    AI::AiScenePerceptionActivationInput{record_->perception, input.perceptionFiltering, input.perceptionPositions});
+                structural.emplace(
+                    AI::AiScenePerceptionGroupInput{record_->perception, input.perceptionFiltering, input.perceptionGroupPositions});
+            }
+            if (auto added = record_->scenes->AddActivationParticipant(
+                    std::make_unique<AI::AiSceneActivationParticipant>(*record_->ai, catalog, std::move(activation)));
                 added.HasError())
                 return added;
-            std::optional<AI::AiScenePerceptionGroupInput> perception;
-            if (OwnsPerception())
-                perception.emplace(
-                    AI::AiScenePerceptionGroupInput{record_->perception, input.perceptionFiltering, input.perceptionGroupPositions});
             if (auto added =
-                    record_->scenes->AddStructuralParticipant(record_->ai->MakeStructuralParticipant(catalog, std::move(perception)));
+                    record_->scenes->AddStructuralParticipant(record_->ai->MakeStructuralParticipant(catalog, std::move(structural)));
                 added.HasError())
                 return added;
             return Result<void>::Success();

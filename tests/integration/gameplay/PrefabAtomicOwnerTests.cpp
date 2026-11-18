@@ -388,6 +388,7 @@ namespace Horo::Application::PrefabAtomicTest {
                     CHECK(spatial->SourceCount() == 1);
                     CHECK(spatial->ListenerCount() == 1);
                     CHECK(spatial->Scene() == Runtime::SceneRuntimeId{7});
+                    CHECK(spatial->ReadAuthorization()->IsCurrent());
                     const auto physics = composed.Value().factories.services[static_cast<std::size_t>(NetworkModeServiceKind::Physics)](
                         {NetworkModeServiceKind::Physics, role, {}, world, {7}});
                     REQUIRE(physics.HasValue());
@@ -397,12 +398,18 @@ namespace Horo::Application::PrefabAtomicTest {
                     const auto refreshed = Internal::InspectHeadlessPerception(sceneService);
                     REQUIRE(refreshed);
                     CHECK(refreshed->Revision() == spatial->Revision() + 1);
+                    CHECK_FALSE(spatial->ReadAuthorization()->IsCurrent());
+                    REQUIRE(refreshed->ReadAuthorization()->IsCurrent());
+                    sceneService.Shutdown();
+                    CHECK_FALSE(refreshed->ReadAuthorization()->IsCurrent());
+                    CHECK_FALSE(Internal::InspectHeadlessPerception(*physics.Value()));
                     physics.Value()->Shutdown();
                 } else {
                     CHECK_FALSE(spatial);
                 }
             } else {
                 REQUIRE(prepared.HasError());
+                CHECK_FALSE(Internal::InspectHeadlessScene(sceneService));
                 CHECK_FALSE(Internal::InspectHeadlessPerception(sceneService));
             }
             sceneService.Shutdown();

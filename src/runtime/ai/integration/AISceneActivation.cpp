@@ -335,6 +335,26 @@ namespace Horo::AI {
         Shutdown();
     }
 
+    /** @copydoc AiSceneActivationCandidate::PreparePerception */
+    Result<void> AiSceneActivationCandidate::PreparePerception(const Runtime::RuntimeSceneView &scene,
+                                                               const AiScenePerceptionActivationInput &input) {
+        if (!input.positions)
+            return Result<void>::Failure(MakeError(AIErrors::PerceptionDependencyMissing));
+        try {
+            const auto positions = input.positions(scene);
+            if (positions.HasError())
+                return Result<void>::Failure(positions.ErrorValue());
+            auto prepared = Detail::PerceptionGroupPublication::PrepareScene(input.spatial, scene, 1, positions.Value(), input.filtering,
+                                                                             state_->agents);
+            if (prepared.HasError())
+                return Result<void>::Failure(prepared.ErrorValue());
+            perception_ = std::make_unique<Detail::PerceptionGroupPublication>(std::move(prepared).Value());
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(AIErrors::AgentCapacityExceeded));
+        }
+    }
+
     /** @copydoc AiSceneActivationCandidate::ValidatePublication */
     Result<void> AiSceneActivationCandidate::ValidatePublication() const {
         if (published_)
@@ -343,6 +363,8 @@ namespace Horo::AI {
             return Failure(AIErrors::SceneActivationInvalid, "The AI scene activation candidate has no owned staged state.");
         if (auto valid = runtime_->ValidateCandidate(binding_); valid.HasError())
             return valid;
+        if (perception_ && !perception_->IsCurrent())
+            return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
         return Detail::ValidateCurrentCookedDecisions(state_->agents);
     }
 
@@ -351,6 +373,8 @@ namespace Horo::AI {
         if (published_ || runtime_ == nullptr || state_ == nullptr)
             return;
         published_ = runtime_->PublishCandidate(state_, binding_, publicationToken_);
+        if (published_ && perception_)
+            perception_->Publish();
     }
 
     /** @copydoc AiSceneActivationCandidate::Shutdown */
@@ -362,9 +386,12 @@ namespace Horo::AI {
             state_.reset();
         }
         if (published_) {
+            if (perception_)
+                perception_->RetireScene(binding_.scene);
             runtime_->RetirePublication(publicationToken_);
             published_ = false;
         }
+        perception_.reset();
     }
 
     /** @copydoc AiSceneRuntime::Create */
@@ -654,6 +681,10 @@ namespace Horo::AI {
         auto candidate = runtime_->PrepareScene(binding.Value(), agents, descriptors_);
         if (candidate.HasError())
             return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(candidate.ErrorValue());
+        if (perception_) {
+            if (auto staged = candidate.Value()->PreparePerception(scene, *perception_); staged.HasError())
+                return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(staged.ErrorValue());
+        }
         return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Success(std::move(candidate).Value());
     }
 }  // namespace Horo::AI

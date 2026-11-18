@@ -115,6 +115,37 @@ namespace Horo::AI {
         }
     }  // namespace
 
+    /** @copydoc Detail::PerceptionGroupPublication::PrepareScene */
+    Result<Detail::PerceptionGroupPublication> Detail::PerceptionGroupPublication::PrepareScene(
+        PerceptionSpatialBroadphase &spatial, const Runtime::RuntimeSceneView &scene, const std::uint64_t revision,
+        const std::span<const AiScenePerceptionPosition> positions, const PerceptionFilteringPolicy &filtering,
+        const std::span<const AgentRuntimeState> agents) {
+        using Publication = Result<PerceptionGroupPublication>;
+        const auto byEntity = &AiScenePerceptionPosition::entity;
+        if (positions.size() > MaximumAiSceneAgents || !std::ranges::is_sorted(positions, {}, byEntity) ||
+            std::ranges::adjacent_find(positions, {}, byEntity) != positions.end())
+            return Publication::Failure(MakeError(AIErrors::PerceptionSpatialInvalid));
+        try {
+            std::vector<PerceptionSpatialListener> listeners;
+            std::vector<PerceptionSpatialSource> sources;
+            for (const auto &agent : agents) {
+                if (!HasActiveEndpoints(agent))
+                    continue;
+                const auto entity = agent.record.owner;
+                const auto position = std::ranges::lower_bound(positions, entity, {}, byEntity);
+                if (position == positions.end() || position->entity != entity)
+                    return Publication::Failure(MakeError(AIErrors::PerceptionDependencyMissing));
+                AppendEndpoints(agent, position->position, listeners, sources);
+            }
+            auto next = spatial.Prepare(scene, revision, listeners, sources, filtering, {});
+            if (next.HasError())
+                return Publication::Failure(next.ErrorValue());
+            return Publication::Success({&spatial, spatial.Current(), std::move(next).Value(), scene});
+        } catch (const std::bad_alloc &) {
+            return Publication::Failure(MakeError(AIErrors::AgentCapacityExceeded));
+        }
+    }
+
     /** @copydoc Detail::PerceptionGroupPublication::Prepare */
     Result<std::optional<Detail::PerceptionGroupPublication>> Detail::PerceptionGroupPublication::Prepare(
         const AiScenePerceptionGroupInput &input, const Runtime::RuntimeSceneView &scene,
@@ -172,17 +203,26 @@ namespace Horo::AI {
         auto next = input.spatial.Prepare(scene, previous->Revision() + 1, listeners, sources, input.filtering, prospective);
         if (next.HasError())
             return Publication::Failure(next.ErrorValue());
-        return Publication::Success(PerceptionGroupPublication{&input.spatial, previous, std::move(next).Value()});
+        return Publication::Success(PerceptionGroupPublication{&input.spatial, previous, std::move(next).Value(), scene});
     }
 
     /** @copydoc Detail::PerceptionGroupPublication::IsCurrent */
     bool Detail::PerceptionGroupPublication::IsCurrent() const noexcept {
-        return owner->Current() == previous;
+        return preparedScene.IsCurrent() && owner->Current() == previous;
     }
 
     /** @copydoc Detail::PerceptionGroupPublication::Publish */
     void Detail::PerceptionGroupPublication::Publish() noexcept {
         owner->PublishPrepared(std::move(next));
+        previous.reset();
+        preparedScene = {};
+    }
+
+    /** @copydoc Detail::PerceptionGroupPublication::RetireScene */
+    void Detail::PerceptionGroupPublication::RetireScene(const Runtime::SceneRuntimeId scene) noexcept {
+        const auto current = owner->Current();
+        if (current && current->Scene() == scene)
+            owner->PublishPrepared({});
     }
 
     /** @copydoc Detail::ValidatePerceptionCapacity */
@@ -216,26 +256,12 @@ namespace Horo::AI {
             return Publication::Failure(owner.ErrorValue());
         if (!scene.IsCurrent() || scene.RuntimeId() != active_->binding.scene)
             return Publication::Failure(MakeError(AIErrors::PerceptionSpatialStale));
-        const auto byEntity = &AiScenePerceptionPosition::entity;
-        if (positions.size() > MaximumAiSceneAgents || !std::ranges::is_sorted(positions, {}, byEntity) ||
-            std::ranges::adjacent_find(positions, {}, byEntity) != positions.end())
-            return Publication::Failure(MakeError(AIErrors::PerceptionSpatialInvalid));
-        try {
-            std::vector<PerceptionSpatialListener> listeners;
-            std::vector<PerceptionSpatialSource> sources;
-            for (const auto &agent : active_->agents) {
-                if (!HasActiveEndpoints(agent))
-                    continue;
-                const auto entity = agent.record.owner;
-                const auto position = std::ranges::lower_bound(positions, entity, {}, byEntity);
-                if (position == positions.end() || position->entity != entity)
-                    return Publication::Failure(MakeError(AIErrors::PerceptionDependencyMissing));
-                AppendEndpoints(agent, position->position, listeners, sources);
-            }
-            return spatial.Publish(scene, revision, listeners, sources, filtering);
-        } catch (const std::bad_alloc &) {
-            return Publication::Failure(MakeError(AIErrors::AgentCapacityExceeded));
-        }
+        auto prepared = Detail::PerceptionGroupPublication::PrepareScene(spatial, scene, revision, positions, filtering, active_->agents);
+        if (prepared.HasError())
+            return Publication::Failure(prepared.ErrorValue());
+        auto candidate = std::move(prepared).Value();
+        candidate.Publish();
+        return Publication::Success(spatial.Current());
     }
 
     /** @copydoc ProjectPerceptionSource */

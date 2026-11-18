@@ -1,4 +1,5 @@
 #include "AiSceneTestSupport.h"
+#include "Horo/AI/PerceptionSpatialBroadphase.h"
 
 namespace Horo::AI {
     namespace {
@@ -176,6 +177,91 @@ namespace Horo::AI {
             REQUIRE(snapshot.Value().Agents().size() == 1);
             CHECK(snapshot.Value().Agents().front().owner.runtime == Runtime::SceneRuntimeId{47});
             CHECK(snapshot.Value().Agents().front().owner.entity.generation == 1);
+        }
+
+        TEST_CASE("AI scene activation stages and retires its exact Perception authorization",
+                  "[unit][ai][scene][activation][perception]") {
+            auto runtime = std::move(AiSceneRuntime::Create()).Value();
+            PerceptionSpatialBroadphase spatial;
+            bool capturePositions = true;
+            const AiScenePerceptionPositionSource positions = [&](const Runtime::RuntimeSceneView &) {
+                if (!capturePositions)
+                    return Result<std::vector<AiScenePerceptionPosition>>::Failure(MakeError(AIErrors::PerceptionDependencyMissing));
+                return Result<std::vector<AiScenePerceptionPosition>>::Success({});
+            };
+            AiSceneActivationParticipant participant{runtime, {}, AiScenePerceptionActivationInput{spatial, {}, positions}};
+            Runtime::SceneDefinitionBuilder builder{{71}, {1}};
+            builder.Add({.object = {1}});
+            auto definition = std::move(builder).Build();
+            REQUIRE(definition.HasValue());
+            const auto first = Runtime::RuntimeScene::Create(definition.Value(), {31});
+            const auto second = Runtime::RuntimeScene::Create(definition.Value(), {32});
+            REQUIRE(first.HasValue());
+            REQUIRE(second.HasValue());
+
+            auto initial = participant.Prepare(definition.Value(), first.Value()->View());
+            REQUIRE(initial.HasValue());
+            CHECK_FALSE(spatial.Current());
+            REQUIRE(initial.Value()->ValidatePublication().HasValue());
+            initial.Value()->Publish();
+            auto previous = spatial.Current();
+            REQUIRE(previous);
+            CHECK(previous->Scene() == Runtime::SceneRuntimeId{31});
+            CHECK(previous->ReadAuthorization()->IsCurrent());
+
+            SECTION("failed position capture retains the published predecessor") {
+                capturePositions = false;
+                ExpectError(participant.Prepare(definition.Value(), second.Value()->View()), AIErrors::PerceptionDependencyMissing);
+                CHECK(spatial.Current() == previous);
+                CHECK(previous->ReadAuthorization()->IsCurrent());
+            }
+            SECTION("abandoning a staged replacement has no publication effect") {
+                auto abandoned = participant.Prepare(definition.Value(), second.Value()->View());
+                REQUIRE(abandoned.HasValue());
+                CHECK(spatial.Current() == previous);
+                abandoned.Value()->Shutdown();
+                CHECK(spatial.Current() == previous);
+                CHECK(previous->ReadAuthorization()->IsCurrent());
+            }
+            SECTION("changed candidate Scene invalidates the detached spatial proof") {
+                auto stale = participant.Prepare(definition.Value(), second.Value()->View());
+                REQUIRE(stale.HasValue());
+                Runtime::SceneCommandBuffer commands;
+                REQUIRE(commands.Create({}).IsValid());
+                REQUIRE(second.Value()->Commit(commands).HasValue());
+                ExpectError(stale.Value()->ValidatePublication(), AIErrors::PerceptionSpatialStale);
+                stale.Value()->Shutdown();
+                CHECK(spatial.Current() == previous);
+                CHECK(previous->ReadAuthorization()->IsCurrent());
+            }
+            SECTION("stale predecessor fences the detached replacement until it is staged again") {
+                auto stale = participant.Prepare(definition.Value(), second.Value()->View());
+                REQUIRE(stale.HasValue());
+                const auto refreshed = spatial.Publish(first.Value()->View(), 2, {}, {});
+                REQUIRE(refreshed.HasValue());
+                ExpectError(stale.Value()->ValidatePublication(), AIErrors::PerceptionSpatialStale);
+                stale.Value()->Shutdown();
+                CHECK(spatial.Current() == refreshed.Value());
+                CHECK(refreshed.Value()->ReadAuthorization()->IsCurrent());
+
+                auto replacement = participant.Prepare(definition.Value(), second.Value()->View());
+                REQUIRE(replacement.HasValue());
+                REQUIRE(replacement.Value()->ValidatePublication().HasValue());
+                replacement.Value()->Publish();
+                auto current = spatial.Current();
+                REQUIRE(current);
+                CHECK(current->Scene() == Runtime::SceneRuntimeId{32});
+                CHECK_FALSE(refreshed.Value()->ReadAuthorization()->IsCurrent());
+                initial.Value()->Shutdown();
+                CHECK(spatial.Current() == current);
+                CHECK(current->ReadAuthorization()->IsCurrent());
+                replacement.Value()->Shutdown();
+                CHECK_FALSE(current->ReadAuthorization()->IsCurrent());
+            }
+
+            initial.Value()->Shutdown();
+            CHECK_FALSE(spatial.Current());
+            CHECK_FALSE(previous->ReadAuthorization()->IsCurrent());
         }
 
     }  // namespace

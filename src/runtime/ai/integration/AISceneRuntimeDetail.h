@@ -25,7 +25,14 @@ namespace Horo::AI::Detail {
         PerceptionSpatialBroadphase *owner{};
         std::shared_ptr<const PerceptionSpatialSnapshot> previous;
         std::shared_ptr<const PerceptionSpatialSnapshot> next;
+        Runtime::RuntimeSceneView preparedScene; /**< Exact Scene revision used to build the detached endpoints. */
 
+        /** @brief Projects the complete detached initial population or a committed recapture using the same position rules. */
+        [[nodiscard]] static Result<PerceptionGroupPublication> PrepareScene(PerceptionSpatialBroadphase &spatial,
+                                                                             const Runtime::RuntimeSceneView &scene, std::uint64_t revision,
+                                                                             std::span<const AiScenePerceptionPosition> positions,
+                                                                             const PerceptionFilteringPolicy &filtering,
+                                                                             std::span<const AgentRuntimeState> agents);
         /** @brief Projects exact new and surviving endpoints before any structural publication. */
         [[nodiscard]] static Result<std::optional<PerceptionGroupPublication>> Prepare(const AiScenePerceptionGroupInput &input,
                                                                                        const Runtime::RuntimeSceneView &scene,
@@ -36,6 +43,8 @@ namespace Horo::AI::Detail {
         [[nodiscard]] bool IsCurrent() const noexcept;
         /** @brief Publishes detached spatial state while every Scene owner commits. */
         void Publish() noexcept;
+        /** @brief Revokes only the retiring Scene's spatial authority, including later structural revisions. */
+        void RetireScene(Runtime::SceneRuntimeId scene) noexcept;
     };
 
     /** @brief Exact Scene/entity generation hash for the owner index. */
