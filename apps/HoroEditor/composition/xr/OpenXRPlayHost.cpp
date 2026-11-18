@@ -226,8 +226,13 @@ namespace Horo::Application::Internal {
             if (auto refreshed =
                     composition_.session.RefreshInputProfiles(sessions_.Snapshot().session, composition_.bindings->schema.genericFallback);
                 refreshed.HasError()) {
+                const auto &error = refreshed.ErrorValue();
                 RevokeEventAdmission();
-                return Result<bool>::Failure(refreshed.ErrorValue());
+                if (ErrorChainContains(error, XRErrors::TrackingSnapshotStale.domain, XRErrors::TrackingSnapshotStale.code)) {
+                    LOG_WARN("editor.xr", "Controller profile changed. Start a new XR Play session to use the current profile.");
+                    return Result<bool>::Success(false);
+                }
+                return Result<bool>::Failure(error);
             }
         }
         if (const auto &change = observed.referenceChange; change && scene_ && scene_->projection && change->session == scene_->session) {

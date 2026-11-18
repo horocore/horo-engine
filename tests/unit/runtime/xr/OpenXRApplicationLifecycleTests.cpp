@@ -962,11 +962,36 @@ namespace Horo::Tests::OpenXRApplication {
 
         fixture.script.actions.currentProfiles[0] = XR_NULL_PATH;
         fixture.script.events.interactionProfileChanged = true;
-        const auto loss = fixture.play->PollEvents();
-        REQUIRE(loss.HasError());
-        CHECK(loss.ErrorValue().code.Value() == XR::XRErrors::TrackingSnapshotStale.code.Value());
-        CHECK(fixture.play->ReadInspection().trackingRevision == 0);
-        CHECK_FALSE(runCutoff().down);
+        RequireValue(fixture.play->PollEvents());
+        const auto retired = fixture.play->ReadInspection();
+        CHECK(retired.status == EditorXrInspectionStatus::Stale);
+        CHECK(retired.trackingRevision == 0);
+        CHECK_FALSE(fixture.play->UsesXrScene());
+        const auto unplugged = runCutoff();
+        CHECK_FALSE(unplugged.down);
+        CHECK(unplugged.released);
+
+        RequireValue(fixture.play->PollEvents());
+        CHECK(fixture.script.native.liveSessions == 0);
+        RequireValue(fixture.play->SetPlayState(Editor::EditorPlayState::Idle));
+        fixture.script.actions.currentProfiles[0] = fixture.script.actions.Find(profilePath);
+        auto replacement = RequireValue(Runtime::RuntimeScene::Create(fixture.definition, {2}));
+        auto participant = fixture.play->MakeSceneParticipant();
+        auto replacementScene = RequireValue(participant->Prepare(fixture.definition, replacement->View()));
+        RequireValue(replacementScene->ValidatePublication());
+        replacementScene->Publish();
+        RequireValue(fixture.play->SetPlayState(Editor::EditorPlayState::Playing));
+        fixture.script.events.session = fixture.script.native.lastSession;
+        fixture.script.events.Push(XR_SESSION_STATE_READY);
+        fixture.script.events.Push(XR_SESSION_STATE_SYNCHRONIZED);
+        fixture.script.events.Push(XR_SESSION_STATE_VISIBLE);
+        fixture.script.events.Push(XR_SESSION_STATE_FOCUSED);
+        RequireValue(fixture.play->PollEvents());
+        scene->Shutdown();
+        CHECK(fixture.play->UsesXrScene());
+        CHECK(fixture.play->ReadInspection().sessionGeneration != generation);
+        CHECK(runCutoff().pressed);
+        replacementScene->Shutdown();
     }
 
     TEST_CASE("Real installed Play samples bounded hands before Input and revokes candidates on focus or invalid evidence",
