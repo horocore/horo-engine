@@ -43,8 +43,8 @@ namespace Horo::Application::Internal {
         /** @brief Requires the complete closed wire shape. */
         void RequireFields(const Json &object, std::initializer_list<std::string_view> fields) {
             if (!object.is_object() || object.size() != fields.size() || std::ranges::any_of(fields, [&](const auto field) {
-                    return !object.contains(field);
-                }))
+                return !object.contains(field);
+            }))
                 throw std::invalid_argument("Incomplete Perception policy object");
         }
 
@@ -87,11 +87,11 @@ namespace Horo::Application::Internal {
             auto controller = AI::ControllerTypeId::Create(Unsigned(object["controller"]));
             if (controller.HasError())
                 throw std::invalid_argument("Invalid controller identity");
-            HeadlessPerceptionControllerSelection result{
-                .controller = controller.Value(),
-                .listeners = ReadSelectors<AI::PerceptionListenerTypeId>(object["listeners"]),
-                .sources = ReadSelectors<AI::SenseTypeId>(object["sources"]),
-                .participant = {.layers = Unsigned(object["layers"]), .mask = Unsigned(object["mask"])}};
+            HeadlessPerceptionControllerSelection result{.controller = controller.Value(),
+                                                         .listeners = ReadSelectors<AI::PerceptionListenerTypeId>(object["listeners"]),
+                                                         .sources = ReadSelectors<AI::SenseTypeId>(object["sources"]),
+                                                         .participant = {.layers = Unsigned(object["layers"]),
+                                                                         .mask = Unsigned(object["mask"])}};
             if (result.participant.layers == 0 || (result.listeners.empty() && result.sources.empty()))
                 throw std::invalid_argument("Controller requires declared endpoint layers and a listener or source");
             return result;
@@ -143,7 +143,7 @@ namespace Horo::Application::Internal {
                 const auto live = scene.Get(*entity.parent);
                 if (live.HasError())
                     return Output::Failure(MakeError(AI::AIErrors::PerceptionDependencyMissing,
-                                                      "Perception cannot capture a detached ancestor outside its admitted views."));
+                                                     "Perception cannot capture a detached ancestor outside its admitted views."));
                 entity = live.Value();
             }
             return Output::Failure(MakeError(AI::AIErrors::PerceptionSpatialLimitExceeded));
@@ -183,15 +183,20 @@ namespace Horo::Application::Internal {
             if (!selected.HasValue())
                 return Output::Failure(selected.ErrorValue());
             if (selected.Value() != asset || Unsigned(root["sceneRevision"]) != definition.Revision().value)
-                return Output::Failure(MakeError(AI::AIErrors::PerceptionSpatialStale, "Perception policy targets a different Scene revision."));
+                return Output::Failure(
+                    MakeError(AI::AIErrors::PerceptionSpatialStale, "Perception policy targets a different Scene revision."));
             const auto &origin = root["worldOriginMillimeters"];
             const auto &controllers = root["controllers"];
             if (!origin.is_array() || origin.size() != 3 || !controllers.is_array() || controllers.empty() ||
                 controllers.size() > MaximumControllers)
                 throw std::invalid_argument("Incomplete Perception origin or controller inventory");
-            HeadlessPerceptionPolicy policy{asset, definition.Id(), definition.Revision(),
-                                            Math::WorldCoordinate64::FromMillimeters(SignedMillimeters(origin[0]), SignedMillimeters(origin[1]),
-                                                                                     SignedMillimeters(origin[2])), {}};
+            HeadlessPerceptionPolicy policy{asset,
+                                            definition.Id(),
+                                            definition.Revision(),
+                                            Math::WorldCoordinate64::FromMillimeters(SignedMillimeters(origin[0]),
+                                                                                     SignedMillimeters(origin[1]),
+                                                                                     SignedMillimeters(origin[2])),
+                                            {}};
             policy.controllers.reserve(controllers.size());
             for (const auto &controller : controllers)
                 policy.controllers.push_back(ReadController(controller));
@@ -222,11 +227,14 @@ namespace Horo::Application::Internal {
                 const auto chosen = std::ranges::find(bound, selection.controller, &AI::AiControllerDescriptor::controller);
                 if (chosen == bound.end())
                     return Output::Failure(MakeError(AI::AIErrors::PerceptionDependencyMissing, "Selected AI controller is unavailable."));
-                if (chosen->perceptionEndpoints ||
-                    std::ranges::find(std::next(chosen), bound.end(), selection.controller, &AI::AiControllerDescriptor::controller) != bound.end())
+                if (chosen->perceptionEndpoints || std::ranges::find(std::next(chosen), bound.end(), selection.controller,
+                                                                     &AI::AiControllerDescriptor::controller) != bound.end())
                     return Output::Failure(MakeError(AI::AIErrors::PerceptionDescriptorConflict));
-                chosen->perceptionEndpoints = std::make_shared<const AI::AiControllerPerceptionEndpoints>(AI::AiControllerPerceptionEndpoints{
-                    .registry = registry, .listeners = selection.listeners, .sources = selection.sources, .participant = selection.participant});
+                chosen->perceptionEndpoints = std::make_shared<const AI::AiControllerPerceptionEndpoints>(
+                    AI::AiControllerPerceptionEndpoints{.registry = registry,
+                                                        .listeners = selection.listeners,
+                                                        .sources = selection.sources,
+                                                        .participant = selection.participant});
                 if (const auto valid = AI::ValidateAiControllerDescriptor(*chosen); valid.HasError())
                     return Output::Failure(valid.ErrorValue());
             }
@@ -238,39 +246,37 @@ namespace Horo::Application::Internal {
 
     /** @copydoc MakeHeadlessPerceptionPositionSources */
     HeadlessPerceptionPositionSources MakeHeadlessPerceptionPositionSources(std::shared_ptr<const HeadlessPerceptionPolicy> policy) {
-        return {
-            [policy](const Runtime::RuntimeSceneView &scene) {
-                if (!policy || !OwnsDefinition(*policy, scene))
-                    return Positions::Failure(MakeError(AI::AIErrors::PerceptionSpatialStale));
-                std::vector<AI::AiScenePerceptionPosition> result;
-                for (std::size_t index = 0; index < scene.SlotCount(); ++index) {
-                    const auto entity = scene.EntityAt(index);
-                    if (!entity || !Selects(*policy, *entity))
-                        continue;
-                    constexpr auto maximumEndpoints = AI::PerceptionSpatialLimits::Listeners + AI::PerceptionSpatialLimits::Sources;
-                    if (result.size() == maximumEndpoints)
-                        return Positions::Failure(MakeError(AI::AIErrors::PerceptionSpatialLimitExceeded));
-                    const auto position = CapturePosition(*policy, scene, *entity, {});
-                    if (position.HasError())
-                        return Positions::Failure(position.ErrorValue());
-                    result.push_back({entity->entity, position.Value()});
-                }
-                return Positions::Success(std::move(result));
-            },
-            [policy](const Runtime::RuntimeSceneView &scene, const std::span<const Runtime::RuntimeEntityView> prospective) {
-                if (!policy || !OwnsDefinition(*policy, scene))
-                    return Positions::Failure(MakeError(AI::AIErrors::PerceptionSpatialStale));
-                std::vector<AI::AiScenePerceptionPosition> result;
-                result.reserve(prospective.size());
-                for (const auto &entity : prospective) {
-                    if (!Selects(*policy, entity))
-                        return Positions::Failure(MakeError(AI::AIErrors::PerceptionDependencyMissing));
-                    const auto position = CapturePosition(*policy, scene, entity, prospective);
-                    if (position.HasError())
-                        return Positions::Failure(position.ErrorValue());
-                    result.push_back({entity.entity, position.Value()});
-                }
-                return Positions::Success(std::move(result));
-            }};
+        return {[policy](const Runtime::RuntimeSceneView &scene) {
+            if (!policy || !OwnsDefinition(*policy, scene))
+                return Positions::Failure(MakeError(AI::AIErrors::PerceptionSpatialStale));
+            std::vector<AI::AiScenePerceptionPosition> result;
+            for (std::size_t index = 0; index < scene.SlotCount(); ++index) {
+                const auto entity = scene.EntityAt(index);
+                if (!entity || !Selects(*policy, *entity))
+                    continue;
+                constexpr auto maximumEndpoints = AI::PerceptionSpatialLimits::Listeners + AI::PerceptionSpatialLimits::Sources;
+                if (result.size() == maximumEndpoints)
+                    return Positions::Failure(MakeError(AI::AIErrors::PerceptionSpatialLimitExceeded));
+                const auto position = CapturePosition(*policy, scene, *entity, {});
+                if (position.HasError())
+                    return Positions::Failure(position.ErrorValue());
+                result.push_back({entity->entity, position.Value()});
+            }
+            return Positions::Success(std::move(result));
+        }, [policy](const Runtime::RuntimeSceneView &scene, const std::span<const Runtime::RuntimeEntityView> prospective) {
+            if (!policy || !OwnsDefinition(*policy, scene))
+                return Positions::Failure(MakeError(AI::AIErrors::PerceptionSpatialStale));
+            std::vector<AI::AiScenePerceptionPosition> result;
+            result.reserve(prospective.size());
+            for (const auto &entity : prospective) {
+                if (!Selects(*policy, entity))
+                    return Positions::Failure(MakeError(AI::AIErrors::PerceptionDependencyMissing));
+                const auto position = CapturePosition(*policy, scene, entity, prospective);
+                if (position.HasError())
+                    return Positions::Failure(position.ErrorValue());
+                result.push_back({entity.entity, position.Value()});
+            }
+            return Positions::Success(std::move(result));
+        }};
     }
 }  // namespace Horo::Application::Internal

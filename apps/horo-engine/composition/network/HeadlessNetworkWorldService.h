@@ -314,7 +314,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 catalog = record_->admittedControllers;
             }
             if (OwnsPerception() && input.perceptionProject) {
-                auto prepared = BindHeadlessPerceptionEndpoints(*input.perceptionProject->policy, input.perceptionProject->registry, catalog);
+                auto prepared =
+                    BindHeadlessPerceptionEndpoints(*input.perceptionProject->policy, input.perceptionProject->registry, catalog);
                 if (prepared.HasError())
                     return Result<void>::Failure(prepared.ErrorValue());
                 record_->admittedControllers = std::move(prepared).Value();

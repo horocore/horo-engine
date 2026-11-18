@@ -32,8 +32,8 @@ namespace Horo::Application::Internal {
      * @param definition Definition decoded by the committed asset owner. @return Frozen policy or typed failure.
      */
     [[nodiscard]] Result<std::shared_ptr<const HeadlessPerceptionPolicy>> CaptureHeadlessPerceptionPolicy(
-        const Platform::IProjectReadFiles &files, const Platform::ProjectReadContext &context, std::string_view path,
-        Assets::AssetId asset, const Runtime::RuntimeSceneDefinition &definition);
+        const Platform::IProjectReadFiles &files, const Platform::ProjectReadContext &context, std::string_view path, Assets::AssetId asset,
+        const Runtime::RuntimeSceneDefinition &definition);
 
     /** @brief Resolves durable controller selections against exactly the admitted controller and descriptor catalogs.
      * @param policy Frozen project selection. @param registry Exact frozen Perception descriptor registry.

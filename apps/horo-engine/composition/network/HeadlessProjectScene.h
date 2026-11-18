@@ -52,7 +52,8 @@ namespace Horo::Application::Internal {
         std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition;
         Assets::AssetId sceneAsset; /**< Exact selected cooked Scene identity, including the full UUID. */
         std::shared_ptr<const ProjectSceneNavigationSelection> navigation;
-        std::shared_ptr<const HeadlessPerceptionPolicy> perceptionPolicy; /**< Matched source and definition, without provider activation. */
+        std::shared_ptr<const HeadlessPerceptionPolicy>
+            perceptionPolicy; /**< Matched source and definition, without provider activation. */
         std::optional<Physics::PhysicsSceneActivationSettings> settings;
         Prefab::PrefabMetricHandles prefabMetrics; /**< Process-prebound numeric observations retained by host resources. */
         Prefab::PrefabProjectPolicy prefabPolicy;  /**< Project-launch capture, passed by value to source-free world composition. */

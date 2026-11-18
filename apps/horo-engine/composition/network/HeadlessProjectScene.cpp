@@ -178,7 +178,7 @@ namespace Horo::Application::Internal {
         resources->definition = std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(definition).Value());
         if (!launch.perceptionPolicyPath.empty()) {
             auto policy = CaptureHeadlessPerceptionPolicy(*resources->sourceFiles, resources->sourceContext, launch.perceptionPolicyPath,
-                                                         resources->sceneAsset, *resources->definition);
+                                                          resources->sceneAsset, *resources->definition);
             if (policy.HasError())
                 return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(policy.ErrorValue());
             resources->perceptionPolicy = std::move(policy).Value();
