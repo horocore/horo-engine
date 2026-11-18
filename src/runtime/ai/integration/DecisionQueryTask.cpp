@@ -208,18 +208,22 @@ namespace Horo::AI {
 
     /** @copydoc DecisionQueryTask::AdvanceQuery */
     void DecisionQueryTask::AdvanceQuery(const std::uint64_t tick, const QueryExecutionBudget budget) {
-        if (query_ && operation_.IsCancellationRequested())
-            Discard();
-        if (query_)
+        if (!query_)
+            return;
+        if (!operation_.IsCancellationRequested())
             query_->Advance(tick, budget);
+        if (operation_.IsCancellationRequested())
+            Discard();
     }
 
     /** @copydoc DecisionQueryTask::SyncQuery */
     void DecisionQueryTask::SyncQuery(const std::uint64_t tick) {
-        if (query_ && operation_.IsCancellationRequested())
-            Discard();
-        if (query_)
+        if (!query_)
+            return;
+        if (!operation_.IsCancellationRequested())
             (void)query_->Sync(tick);
+        if (operation_.IsCancellationRequested())
+            Discard();
     }
 
     /** @copydoc DecisionQueryTask::CommitOutput */

@@ -44,6 +44,8 @@ namespace Horo::AI {
             int attempts{};
             int polls{};
             int cancelled{};
+            CancellationSource *revokeOnStart{};
+            CancellationSource *revokeOnPoll{};
             QueryStageId lastStage;
             std::optional<Runtime::EntityRef> actor;
             std::size_t pointCount{2};
@@ -85,11 +87,15 @@ namespace Horo::AI {
                 sample_ = {.stage = stage,
                            .filter = probe_.filter,
                            .metric = point ? static_cast<double>(point->Millimeters()[0]) / 2.0 : 1.0};
+                if (probe_.revokeOnStart)
+                    probe_.revokeOnStart->RequestCancellation();
                 return Result<bool>::Success(true);
             }
 
             Result<std::optional<QueryTestSample>> PollTest() override {
                 ++probe_.polls;
+                if (probe_.revokeOnPoll)
+                    probe_.revokeOnPoll->RequestCancellation();
                 if (probe_.failure == SourceFailure::Poll)
                     throw std::runtime_error("poll failed");
                 if (probe_.failure == SourceFailure::DiagnosticPoll) {
@@ -282,13 +288,19 @@ namespace Horo::AI {
                                                plan, registry, tree, host);
             }
 
-            std::unique_ptr<BehaviorTreeInstance> Start(const BlackboardValueKind kind = BlackboardValueKind::WorldCoordinate) {
+            std::unique_ptr<BehaviorTreeInstance> Start(const BlackboardValueKind kind = BlackboardValueKind::WorldCoordinate,
+                                                        CancellationToken owner = {}) {
                 const auto tree = BuildTree(kind);
                 auto bound = Bind(*tree);
                 REQUIRE(bound.HasValue());
                 auto implementation = std::move(bound).Value();
                 executor = implementation.get();
-                auto instance = BehaviorTreeInstance::Create(tree, {agent, {}, 100, 1, blackboard->Binding()}, std::move(implementation));
+                auto instance = BehaviorTreeInstance::Create(tree,
+                                                             {.agent = agent,
+                                                              .firstTaskSlot = 100,
+                                                              .blackboard = blackboard->Binding(),
+                                                              .ownerCancellation = std::move(owner)},
+                                                             std::move(implementation));
                 REQUIRE(instance.HasValue());
                 return std::move(instance).Value();
             }
@@ -424,6 +436,32 @@ namespace Horo::AI {
             CHECK(fixture.host.probe.cancelled == 1);
             CHECK_FALSE(fixture.executor->CommitOutput(9, fixture.scene->View(), *fixture.blackboard).Value());
             CHECK_FALSE(fixture.blackboard->Snapshot().Value().Read(fixture.output).Value());
+        }
+
+        TEST_CASE("EQS retires provider work within the owner phase that revokes its agent", "[unit][ai][eqs][task]") {
+            QueryTaskFixture fixture;
+            CancellationSource owner;
+            fixture.host.probe.ready = false;
+            auto tree = fixture.Start(BlackboardValueKind::WorldCoordinate, owner.Token());
+            REQUIRE(fixture.Evaluate(*tree, 4) == AiTaskState::Running);
+            fixture.executor->SyncQuery(5);
+            AiWorkBudget budget{64};
+            SECTION("revocation during provider start") {
+                fixture.host.probe.revokeOnStart = &owner;
+                fixture.executor->AdvanceQuery(5, {budget, budget, budget});
+            }
+            SECTION("revocation during provider polling") {
+                fixture.executor->AdvanceQuery(5, {budget, budget, budget});
+                REQUIRE(fixture.host.probe.cancelled == 0);
+                fixture.host.probe.revokeOnPoll = &owner;
+                fixture.executor->SyncQuery(6);
+            }
+            REQUIRE(owner.Token().IsCancellationRequested());
+            CHECK(fixture.host.probe.attempts == 1);
+            CHECK(fixture.host.probe.cancelled == 1);
+            REQUIRE(fixture.Evaluate(*tree, 6) == AiTaskState::Cancelled);
+            CHECK_FALSE(fixture.executor->CommitOutput(7, fixture.scene->View(), *fixture.blackboard).Value());
+            CHECK(fixture.host.probe.cancelled == 1);
         }
 
         TEST_CASE("EQS cache retains complete results under exact scene, dependency and owner bounds", "[unit][ai][eqs][cache]") {
