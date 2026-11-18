@@ -69,6 +69,31 @@ TEST_CASE("Optional packaged Vulkan XR motion requires its own complete authenti
     CHECK(LoadPackagedVulkanMultiviewShader(bundle.root).HasValue());
 }
 
+TEST_CASE("Packaged Vulkan scene raster admission requires its distinct compiled stage and matched reflection",
+          "[editor][shader-cook][assets][reconstruction]") {
+    Bundle bundle;
+    constexpr std::string_view prefix = "viewport-scene-linear-vulkan";
+    CHECK(LoadPackagedVulkanSceneLinearShader(bundle.root).HasError());
+    bundle.WriteCook(prefix, bundle.viewport);
+    CHECK(LoadPackagedVulkanSceneLinearShader(bundle.root).HasError());
+
+    auto reflected = Evidence();
+    reflected[1].entryPoint = "PSSceneLinear";
+    ReplaceEvidence(reflected[1].json, "PSMain", "PSSceneLinear");
+    const std::array stages{ShaderArtifactStage{ShaderStage::Vertex, "VSMain", {1}},
+                            ShaderArtifactStage{ShaderStage::Fragment, "PSSceneLinear", {2}}};
+    const CookFixture scene{CookFixtureRole::SceneLinear, reflected, stages};
+    bundle.WriteCook(prefix, scene);
+    const auto loaded = LoadPackagedVulkanSceneLinearShader(bundle.root);
+    REQUIRE(loaded.HasValue());
+    CHECK(loaded.Value().metadata.cookedArtifactKey == scene.reflected.cookedArtifactKey);
+    CHECK(LoadEditorVulkanViewportCook(scene.compiled.payload, EncodeReflectedShaderArtifact(scene.reflected).Value()).HasError());
+
+    const CookFixture incorrectNativeStage{CookFixtureRole::SceneLinear, reflected};
+    bundle.WriteCook(prefix, incorrectNativeStage);
+    CHECK(LoadPackagedVulkanSceneLinearShader(bundle.root).HasError());
+}
+
 TEST_CASE("Packaged Vulkan viewport loading requires and owns both canonical lit and shadow artifacts", "[editor][shader-cook][assets]") {
     Bundle bundle;
     const auto loaded = LoadPackagedVulkanViewportShader(bundle.root);

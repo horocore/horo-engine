@@ -342,6 +342,18 @@ shader entries. The editor logs readiness and the authenticated inventory
 digest during startup. This command performs inspection before provider
 initialization or scene work.
 
+The Vulkan viewport cook has a separate `--scene-linear` variant of
+`assets/shaders/editor/viewport.hlsl`. The variant shares the canonical mesh,
+light and shadow inputs and outputs unexposed linear ACEScg into an FP16
+scene attachment. The installed pair uses the
+`shaders/editor/viewport-scene-linear-vulkan` prefix and is admitted only
+against the distinct `PSSceneLinear` fragment stage and its bound reflection.
+The normal Vulkan viewport still produces display-encoded color through its
+existing material pass. Scene reconstruction requires a graph that consumes
+the new pre-display raster and comes before exposure/display mapping and
+overlays. Temporal reconstruction also requires same-view positive linear
+depth and jitter-free motion producers.
+
 The release cook uses the existing locked Ubuntu 26.04 x86-64 shader host.
 Run `HoroEditorVulkanShaderCook --describe-tools` for the approved external
 tool identities and pass the release job's existing candidate ID:

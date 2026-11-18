@@ -3,6 +3,7 @@
 #include "EditorViewportShaderRecipe.h"
 #include "Horo/Runtime/Render/MultiviewShaderParameters.h"
 #include "Horo/Runtime/Render/RenderScene.h"
+#include "Horo/Runtime/Render/ShaderArtifact.h"
 #include "Horo/Runtime/Render/ShaderReflectionErrors.h"
 
 namespace Horo::Editor {
@@ -75,28 +76,78 @@ namespace Horo::Editor {
                 {{3}, "DirectionalShadowSampler", {}}};
     }
 
-    /** @copydoc LoadEditorVulkanViewportCook */
-    Result<EditorVulkanViewportCook> LoadEditorVulkanViewportCook(const std::span<const std::uint8_t> payload,
-                                                                  const std::span<const std::uint8_t> metadata) {
-        const auto reflection = Render::DecodeReflectedShaderArtifact(EditorVulkanViewportShaderManifest(),
-                                                                      EditorVulkanViewportShaderTarget(), payload, metadata);
-        if (reflection.HasError())
-            return Result<EditorVulkanViewportCook>::Failure(reflection.ErrorValue());
-        bool position{}, normal{};
-        for (const auto &attribute : reflection.Value().reflection.stageInterface) {
-            if (attribute.stage != Render::ShaderStage::Vertex || attribute.direction != Render::ShaderInterfaceDirection::Input)
-                continue;
-            const auto columns = attribute.location == 2 ? 2 : 3;
-            if (attribute.location > 2 || attribute.type != Render::ShaderValueType::Float32 || attribute.rows != 1 ||
-                attribute.columns != columns || attribute.arrayCount != 1)
-                return Result<EditorVulkanViewportCook>::Failure(MakeError(Render::ShaderReflectionErrors::StageInterfaceMismatch));
-            position = position || attribute.location == 0;
-            normal = normal || attribute.location == 1;
+    namespace {
+        /** @brief Validates the real mesh vertex ABI used by either viewport program. */
+        Result<void> ValidateViewportMeshLayout(const Render::NormalizedShaderReflection &reflection) {
+            bool position{}, normal{};
+            for (const auto &attribute : reflection.stageInterface) {
+                if (attribute.stage != Render::ShaderStage::Vertex || attribute.direction != Render::ShaderInterfaceDirection::Input)
+                    continue;
+                const auto columns = attribute.location == 2 ? 2 : 3;
+                if (attribute.location > 2 || attribute.type != Render::ShaderValueType::Float32 || attribute.rows != 1 ||
+                    attribute.columns != columns || attribute.arrayCount != 1)
+                    return Result<void>::Failure(MakeError(Render::ShaderReflectionErrors::StageInterfaceMismatch));
+                position = position || attribute.location == 0;
+                normal = normal || attribute.location == 1;
+            }
+            // UV may disappear after optimization. Position and normal drive both shipped mesh recipes.
+            if (!position || !normal)
+                return Result<void>::Failure(MakeError(Render::ShaderReflectionErrors::StageInterfaceMismatch));
+            return Result<void>::Success();
         }
-        // UV is allowed to disappear after optimization; position and normal drive the shipped mesh recipe.
-        if (!position || !normal)
-            return Result<EditorVulkanViewportCook>::Failure(MakeError(Render::ShaderReflectionErrors::StageInterfaceMismatch));
-        return Result<EditorVulkanViewportCook>::Success({{payload.begin(), payload.end()}, reflection.Value()});
+
+        /** @brief Decodes bound artifacts without duplicating mesh layout policy across the two owned programs. */
+        template <typename Cook>
+        Result<Cook> LoadViewportProgram(const Render::ShaderManifest &manifest, std::span<const std::uint8_t> payload,
+                                         std::span<const std::uint8_t> metadata) {
+            auto reflection = Render::DecodeReflectedShaderArtifact(manifest, EditorVulkanViewportShaderTarget(), payload, metadata);
+            if (reflection.HasError())
+                return Result<Cook>::Failure(reflection.ErrorValue());
+            if (auto valid = ValidateViewportMeshLayout(reflection.Value().reflection); valid.HasError())
+                return Result<Cook>::Failure(valid.ErrorValue());
+            return Result<Cook>::Success({{payload.begin(), payload.end()}, std::move(reflection).Value()});
+        }
+    }  // namespace
+
+    /** @copydoc LoadEditorVulkanViewportCook */
+    Result<EditorVulkanViewportCook> LoadEditorVulkanViewportCook(std::span<const std::uint8_t> payload,
+                                                                  std::span<const std::uint8_t> metadata) {
+        return LoadViewportProgram<EditorVulkanViewportCook>(EditorVulkanViewportShaderManifest(), payload, metadata);
+    }
+
+    /** @copydoc EditorVulkanSceneLinearShaderManifest */
+    Render::ShaderManifest EditorVulkanSceneLinearShaderManifest() {
+        auto manifest = EditorVulkanViewportShaderManifest();
+        manifest.entryPoints.back().name = "PSSceneLinear";
+        return manifest;
+    }
+
+    /** @copydoc EditorVulkanSceneLinearPipelineState */
+    Render::RenderGraphicsPipelineState EditorVulkanSceneLinearPipelineState() noexcept {
+        return {.cull = Render::RenderCullMode::None,
+                .colorFormat = Render::RenderTextureFormat::Rgba16Float,
+                .depthFormat = Render::RenderTextureFormat::Depth32Float};
+    }
+
+    /** @copydoc LoadEditorVulkanSceneLinearCook */
+    Result<EditorVulkanSceneLinearCook> LoadEditorVulkanSceneLinearCook(std::span<const std::uint8_t> payload,
+                                                                        std::span<const std::uint8_t> metadata) {
+        using namespace Render;
+        using Outcome = Result<EditorVulkanSceneLinearCook>;
+        const auto manifest = EditorVulkanSceneLinearShaderManifest();
+        const auto target = EditorVulkanViewportShaderTarget();
+        const auto stages = DecodeShaderArtifactStages(payload, target.backend, target.payloadFormat, 16U * 1024U * 1024U);
+        if (stages.HasError())
+            return Outcome::Failure(stages.ErrorValue());
+        if (stages.Value().stageCount != manifest.entryPoints.size())
+            return Outcome::Failure(MakeError(ShaderReflectionErrors::StageInterfaceMismatch));
+        for (std::size_t index = 0; index < manifest.entryPoints.size(); ++index) {
+            const auto &expected = manifest.entryPoints[index];
+            const auto &native = stages.Value().stages[index];
+            if (native.stage != expected.stage || native.entryPoint != expected.name)
+                return Outcome::Failure(MakeError(ShaderReflectionErrors::StageInterfaceMismatch));
+        }
+        return LoadViewportProgram<EditorVulkanSceneLinearCook>(manifest, payload, metadata);
     }
 
     Render::ShaderManifest EditorVulkanShadowShaderManifest() {

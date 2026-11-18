@@ -89,11 +89,7 @@ float DirectionalVisibility(float3 relativePosition, float3 normal, float3 light
     return lerp(visibility, 1.0, blend);
 }
 
-float4 PSMain(VertexOutput input) : SV_Target0 {
-    // Shared overlay geometry uses UV.x as its bounded authored batch palette index.
-    // This is a real shader consumer of canonical UV, retained through the uniform-selected material mode.
-    if (Tint.w < 0.0)
-        return float4(OverlayColors[min((uint)input.uv.x, 2)].xyz, 1.0);
+float3 EvaluateViewportLighting(VertexOutput input) {
     float3 normal = normalize(input.normal);
     float3 viewDirection = normalize(CameraAndLightCount.xyz - input.worldPosition);
     const float3 baseColor = BaseColor.xyz;
@@ -124,6 +120,21 @@ float4 PSMain(VertexOutput input) : SV_Target0 {
         float visibility = index == (uint)ShadowSettings.y ? DirectionalVisibility(input.worldPosition, normal, lightDirection) : 1.0;
         lighting += radiance * (baseColor * diffuse + specular) * visibility;
     }
+    return lighting;
+}
+
+// Scene graph input preserves signed, unexposed linear AP1 radiance for downstream reconstruction and display mapping.
+// The owner draws only scene meshes with this entry; selection and overlay colors are separate display contributions.
+float4 PSSceneLinear(VertexOutput input) : SV_Target0 {
+    return float4(EvaluateViewportLighting(input), 1.0);
+}
+
+float4 PSMain(VertexOutput input) : SV_Target0 {
+    // Shared overlay geometry uses UV.x as its bounded authored batch palette index.
+    // This is a real shader consumer of canonical UV, retained through the uniform-selected material mode.
+    if (Tint.w < 0.0)
+        return float4(OverlayColors[min((uint)input.uv.x, 2)].xyz, 1.0);
+    const float3 lighting = EvaluateViewportLighting(input);
     float3 mapped = lighting / (lighting + 1.0);
     float3 displayColor = pow(max(mapped, 0.0), 1.0 / 2.2);
     return float4(lerp(displayColor, Tint.xyz, Tint.w), 1.0);

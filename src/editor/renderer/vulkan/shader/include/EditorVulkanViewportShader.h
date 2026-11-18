@@ -1,6 +1,7 @@
 #pragma once
 /** @file EditorVulkanViewportShader.h
  * @brief Portable authored viewport interface and final-artifact loading shared by offline cook and runtime consumer. */
+#include "Horo/Runtime/Render/RenderShaderResources.h"
 #include "ShaderReflectionCook.h"
 
 namespace Horo::Editor {
@@ -29,6 +30,26 @@ namespace Horo::Editor {
     /** @brief Rejects altered/mismatched cooked payload/layout before any native shader object is created. */
     [[nodiscard]] Result<EditorVulkanViewportCook> LoadEditorVulkanViewportCook(std::span<const std::uint8_t> payload,
                                                                                 std::span<const std::uint8_t> metadata);
+
+    /** @brief Owning cold recipe for the opaque scene-only FP16 Vulkan raster program. */
+    struct EditorVulkanSceneLinearCook final {
+        std::vector<std::uint8_t> payload;
+        Render::ReflectedShaderArtifact metadata;
+    };
+
+    /** @brief Returns the same scene mesh/light/shadow ABI with the exact unexposed scene fragment stage. */
+    [[nodiscard]] Render::ShaderManifest EditorVulkanSceneLinearShaderManifest();
+
+    /** @brief Returns the exact single-view FP16 color and native depth pipeline state for this program. */
+    [[nodiscard]] Render::RenderGraphicsPipelineState EditorVulkanSceneLinearPipelineState() noexcept;
+
+    /** @brief Loads only the actual scene-linear cook and its bound reflection.
+     * @param payload Exact Vulkan stage payload from compilation.
+     * @param metadata Canonical same-operation reflection.
+     * @return Owned scene-only program or typed target/stage/layout mismatch.
+     */
+    [[nodiscard]] Result<EditorVulkanSceneLinearCook> LoadEditorVulkanSceneLinearCook(std::span<const std::uint8_t> payload,
+                                                                                      std::span<const std::uint8_t> metadata);
 
     /** @brief Exact canonical runtime multiview interface, consumed through the same compiled/reflected producer. */
     [[nodiscard]] Render::ShaderManifest EditorVulkanMultiviewShaderManifest();

@@ -89,6 +89,7 @@ namespace Horo::Tests::ShaderCook {
 
     enum class CookFixtureRole {
         Viewport,
+        SceneLinear,
         Multiview,
         MultiviewMotion,
         Shadow
@@ -98,6 +99,8 @@ namespace Horo::Tests::ShaderCook {
         switch (role) {
             case CookFixtureRole::Viewport:
                 return EditorVulkanViewportShaderManifest();
+            case CookFixtureRole::SceneLinear:
+                return EditorVulkanSceneLinearShaderManifest();
             case CookFixtureRole::Multiview:
                 return EditorVulkanMultiviewShaderManifest();
             case CookFixtureRole::MultiviewMotion:
@@ -111,6 +114,7 @@ namespace Horo::Tests::ShaderCook {
     inline std::vector<ShaderReflectionBindingName> FixtureNames(CookFixtureRole role) {
         switch (role) {
             case CookFixtureRole::Viewport:
+            case CookFixtureRole::SceneLinear:
                 return EditorVulkanViewportReflectionNames();
             case CookFixtureRole::Multiview:
                 return EditorVulkanMultiviewReflectionNames();

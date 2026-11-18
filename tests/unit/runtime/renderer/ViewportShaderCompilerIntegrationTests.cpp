@@ -1,4 +1,5 @@
 #include "EditorViewportShaderRecipe.h"
+#include "EditorVulkanViewportShader.h"
 #include "support/ShaderCompilerToolchainFixture.h"
 
 #include <array>
@@ -86,5 +87,58 @@ TEST_CASE("Reviewed Linux tools compile the complete canonical viewport shader f
                   second.Value().artifacts.front().reflection->cookedArtifactKey);
         }
     }
+#endif
+}
+
+TEST_CASE("Reviewed Vulkan tools cook and separate the linear scene raster from display viewport output",
+          "[runtime][renderer][shader-compiler][toolchain][integration][viewport][reconstruction]") {
+#ifndef __linux__
+    SKIP("Actual viewport compiler qualification requires the reviewed Linux tool artifacts on Linux.");
+#else
+    using namespace Horo::Editor;
+    const auto dxc = Installation(ShaderCompilerTool::Dxc, "HORO_TEST_SHADER_DXC");
+    const auto spirvTools = Installation(ShaderCompilerTool::SpirvTools, "HORO_TEST_SHADER_SPIRV_VAL");
+    const auto spirvCross = Installation(ShaderCompilerTool::SpirvCross, "HORO_TEST_SHADER_SPIRV_CROSS");
+    if (!dxc || !spirvTools || !spirvCross)
+        SKIP("Set the three HORO_TEST_SHADER_* paths to the reviewed Vulkan compiler artifacts.");
+
+    TemporaryDirectory temporary;
+    ShaderCompilerToolchainConfiguration configuration;
+    configuration.hostPlatform = "linux-x86_64-ubuntu-26.04";
+    configuration.scratchRoot = temporary.Path() / "scratch";
+    configuration.tools = {*dxc, *spirvTools, *spirvCross};
+    const auto adapter = ExternalShaderCompilerAdapter::Create(std::move(configuration), std::make_shared<NativeExternalProcessRunner>());
+    REQUIRE(adapter.HasValue());
+    auto request = Request(ShaderTargetBackend::Vulkan, ShaderPayloadFormat::SpirV16, {dxc->identity, spirvTools->identity});
+    request.source = Read(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/shaders/editor/viewport.hlsl");
+    request.dependencies.clear();
+    request.targets.front().requirement = EditorVulkanViewportShaderTarget();
+    request.reflection = ShaderCompilerReflectionRequest{spirvCross->identity, EditorVulkanViewportReflectionNames()};
+
+    request.manifest = EditorVulkanViewportShaderManifest();
+    const auto display = CompileShaderTargets(request, adapter.Value(), {});
+    INFO((display.HasError() ? display.ErrorValue().message : "compiled display recipe"));
+    REQUIRE(display.HasValue());
+    const auto &displayArtifact = display.Value().artifacts.front();
+    REQUIRE(displayArtifact.reflection);
+    const auto displayMetadata = EncodeReflectedShaderArtifact(*displayArtifact.reflection);
+    REQUIRE(displayMetadata.HasValue());
+    CHECK(LoadEditorVulkanViewportCook(displayArtifact.payload, displayMetadata.Value()).HasValue());
+    CHECK(LoadEditorVulkanSceneLinearCook(displayArtifact.payload, displayMetadata.Value()).HasError());
+
+    request.manifest = EditorVulkanSceneLinearShaderManifest();
+    const auto scene = CompileShaderTargets(request, adapter.Value(), {});
+    INFO((scene.HasError() ? scene.ErrorValue().message : "compiled scene-linear recipe"));
+    REQUIRE(scene.HasValue());
+    const auto &sceneArtifact = scene.Value().artifacts.front();
+    REQUIRE(sceneArtifact.reflection);
+    const auto sceneMetadata = EncodeReflectedShaderArtifact(*sceneArtifact.reflection);
+    REQUIRE(sceneMetadata.HasValue());
+    CHECK(LoadEditorVulkanSceneLinearCook(sceneArtifact.payload, sceneMetadata.Value()).HasValue());
+    CHECK(LoadEditorVulkanViewportCook(sceneArtifact.payload, sceneMetadata.Value()).HasError());
+    CHECK(sceneArtifact.artifactKey != displayArtifact.artifactKey);
+    const auto state = EditorVulkanSceneLinearPipelineState();
+    CHECK(state.colorFormat == RenderTextureFormat::Rgba16Float);
+    CHECK(state.depthFormat == RenderTextureFormat::Depth32Float);
 #endif
 }

@@ -37,20 +37,20 @@ namespace Horo::Editor {
             return LoadEditorVulkanShadowCook(payload.Value(), metadata.Value());
         }
 
-        using MultiviewLoader = decltype(&LoadEditorVulkanMultiviewCook);
-
         /** @brief Reads a bounded runtime pair and delegates identity/interface validation to its actual program loader. */
-        Result<EditorVulkanMultiviewCook> LoadPackagedMultiview(const std::filesystem::path &prefix, MultiviewLoader load) {
+        template <typename Cook>
+        Result<Cook> LoadPackagedProgram(const std::filesystem::path &prefix,
+                                         Result<Cook> (*load)(std::span<const std::uint8_t>, std::span<const std::uint8_t>)) {
             auto payloadPath = prefix;
             payloadPath += ".horoshdr";
             const auto payload = ReadArtifact(payloadPath, 16U * 1024U * 1024U);
             if (payload.HasError())
-                return Result<EditorVulkanMultiviewCook>::Failure(payload.ErrorValue());
+                return Result<Cook>::Failure(payload.ErrorValue());
             auto metadataPath = prefix;
             metadataPath += ".reflection.json";
             const auto metadata = ReadArtifact(metadataPath, 1024U * 1024U);
             if (metadata.HasError())
-                return Result<EditorVulkanMultiviewCook>::Failure(metadata.ErrorValue());
+                return Result<Cook>::Failure(metadata.ErrorValue());
             return load(payload.Value(), metadata.Value());
         }
     }  // namespace
@@ -74,13 +74,18 @@ namespace Horo::Editor {
         return Result<EditorVulkanViewportCook>::Success(std::move(cooked));
     }
 
+    /** @copydoc LoadPackagedVulkanSceneLinearShader */
+    Result<EditorVulkanSceneLinearCook> LoadPackagedVulkanSceneLinearShader(const std::filesystem::path &assetRoot) {
+        return LoadPackagedProgram(assetRoot / "shaders/editor/viewport-scene-linear-vulkan", &LoadEditorVulkanSceneLinearCook);
+    }
+
     /** @copydoc LoadPackagedVulkanMultiviewShader */
     Result<EditorVulkanMultiviewCook> LoadPackagedVulkanMultiviewShader(const std::filesystem::path &assetRoot) {
-        return LoadPackagedMultiview(assetRoot / "shaders/runtime/multiview-vulkan", &LoadEditorVulkanMultiviewCook);
+        return LoadPackagedProgram(assetRoot / "shaders/runtime/multiview-vulkan", &LoadEditorVulkanMultiviewCook);
     }
 
     /** @copydoc LoadPackagedVulkanMultiviewMotionShader */
     Result<EditorVulkanMultiviewCook> LoadPackagedVulkanMultiviewMotionShader(const std::filesystem::path &assetRoot) {
-        return LoadPackagedMultiview(assetRoot / "shaders/runtime/multiview-motion-vulkan", &LoadEditorVulkanMultiviewMotionCook);
+        return LoadPackagedProgram(assetRoot / "shaders/runtime/multiview-motion-vulkan", &LoadEditorVulkanMultiviewMotionCook);
     }
 }  // namespace Horo::Editor

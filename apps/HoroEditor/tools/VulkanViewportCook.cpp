@@ -21,6 +21,7 @@ namespace {
 
     enum class CookMode {
         Viewport,
+        SceneLinear,
         Multiview,
         Shadow,
         MultiviewMotion
@@ -31,6 +32,8 @@ namespace {
             using enum CookMode;
             case Viewport:
                 return Editor::EditorVulkanViewportShaderManifest();
+            case SceneLinear:
+                return Editor::EditorVulkanSceneLinearShaderManifest();
             case Multiview:
                 return Editor::EditorVulkanMultiviewShaderManifest();
             case Shadow:
@@ -45,6 +48,7 @@ namespace {
         switch (mode) {
             using enum CookMode;
             case Viewport:
+            case SceneLinear:
                 return Editor::EditorVulkanViewportReflectionNames();
             case Multiview:
                 return Editor::EditorVulkanMultiviewReflectionNames();
@@ -61,6 +65,8 @@ namespace {
             using enum CookMode;
             case Viewport:
                 return "viewport";
+            case SceneLinear:
+                return "scene-linear";
             case Multiview:
                 return "multiview";
             case Shadow:
@@ -149,6 +155,8 @@ namespace {
             using enum CookMode;
             case Viewport:
                 return Admit(Editor::LoadEditorVulkanViewportCook(artifact.payload, metadata));
+            case SceneLinear:
+                return Admit(Editor::LoadEditorVulkanSceneLinearCook(artifact.payload, metadata));
             case Multiview:
                 return Admit(Editor::LoadEditorVulkanMultiviewCook(artifact.payload, metadata));
             case Shadow:
@@ -260,6 +268,8 @@ namespace {
             return Viewport;
         if (argc != 8)
             return std::nullopt;
+        if (std::string_view{argv[7]} == "--scene-linear")
+            return SceneLinear;
         if (std::string_view{argv[7]} == "--multiview")
             return Multiview;
         if (std::string_view{argv[7]} == "--shadow")
@@ -279,7 +289,7 @@ int main(int argc, char **argv) {
     const auto reconstruction = ParseReconstruction(argc, argv);
     if (!mode && !reconstruction) {
         std::cerr << "Usage: HoroEditorVulkanShaderCook source.hlsl output-prefix scratch-root dxc spirv-val spirv-cross "
-                     "[--multiview|--multiview-motion|--shadow]\n"
+                     "[--scene-linear|--multiview|--multiview-motion|--shadow]\n"
                      "       HoroEditorVulkanShaderCook source.hlsl absolute-new-stage scratch-root dxc spirv-val spirv-cross "
                      "--native-reconstruction candidate-id\n";
         return 2;
