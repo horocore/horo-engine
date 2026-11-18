@@ -5,6 +5,12 @@
 
 #include "Horo/AI/EnvironmentQuerySchema.h"
 
+#include <cstddef>
+#include <cstdint>
+#include <span>
+#include <string_view>
+#include <vector>
+
 namespace Horo::AI {
     /** @brief Asset Registry type identity for an authored EQS source with a .horo_eqs file extension. */
     inline constexpr std::string_view EnvironmentQuerySourceAssetType = "core.environment_query";

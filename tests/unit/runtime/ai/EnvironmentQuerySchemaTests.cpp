@@ -3,6 +3,7 @@
 #include "Horo/AI/EnvironmentQueryScoring.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
