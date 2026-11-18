@@ -183,10 +183,22 @@ namespace Horo::Application::Internal {
                                             HeadlessSceneActivationInput &input) {
             if (!input.perceptionProject)
                 return Result<void>::Success();
-            const auto &[policy, registry] = *input.perceptionProject;
-            if (!definition || !policy || !registry || input.perceptionPositions || input.perceptionGroupPositions)
+            const auto &[policy, registry, provider] = *input.perceptionProject;
+            if (!definition || !policy || input.perceptionPositions || input.perceptionGroupPositions)
                 return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionDependencyMissing,
                                                        "Project Perception needs one complete position and descriptor authority."));
+            switch (provider) {
+                case HeadlessPerceptionProvider::CapturedRegistry:
+                    if (!registry)
+                        return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionDependencyMissing));
+                    break;
+                case HeadlessPerceptionProvider::SelectedNativeGameplay:
+                    if (registry || input.perceptionExecution || !policy->native || !input.cookedDecisions ||
+                        input.cookedDecisions->provider != HeadlessDecisionProvider::SelectedNativeGameplay)
+                        return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionDependencyMissing,
+                                                               "Native Perception requires schema two and a selected prepared module."));
+                    break;
+            }
             if (definition->Id() != policy->definition || definition->Revision() != policy->revision)
                 return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionSpatialStale));
             auto sources = MakeHeadlessPerceptionPositionSources(policy);

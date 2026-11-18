@@ -356,8 +356,8 @@ namespace Horo::AI {
                 if (admitted.HasError())
                     return admitted;
                 state_->perceptionExecution = input.execution;
-                state_->perceptionSpatial = &input.spatial;
             }
+            state_->perceptionSpatial = &input.spatial;
             perception_ = std::make_unique<Detail::PerceptionGroupPublication>(std::move(prepared).Value());
             return Result<void>::Success();
         } catch (const std::bad_alloc &) {

@@ -97,6 +97,35 @@ namespace Horo::Application::Internal {
             return result;
         }
 
+        /** @brief Validates explicit native listeners and a bounded execution window for schema two. */
+        HeadlessNativePerceptionPolicy ReadNative(const Json &object) {
+            RequireFields(object, {"listeners", "radiusMillimeters", "visibleLayers", "workUnitsPerTick"});
+            const auto &listeners = object["listeners"];
+            const auto radius = Unsigned(object["radiusMillimeters"]);
+            const auto layers = Unsigned(object["visibleLayers"]);
+            const auto units = Unsigned(object["workUnitsPerTick"]);
+            if (!listeners.is_array() || listeners.empty() ||
+                listeners.size() > AI::PerceptionDescriptorRegistryHardLimits::ListenerTypes ||
+                radius > AI::PerceptionSpatialLimits::RadiusMillimeters || layers == 0 || units == 0 ||
+                units > AI::AiTaskSchedulerSettings::HardWorkUnits)
+                throw std::invalid_argument("Native Perception execution policy exceeds its bounds");
+            HeadlessNativePerceptionPolicy policy{{}, radius, layers, static_cast<std::size_t>(units)};
+            policy.listeners.reserve(listeners.size());
+            for (const auto &entry : listeners) {
+                RequireFields(entry, {"id", "sense"});
+                const auto listener = AI::PerceptionListenerTypeId::Create(Unsigned(entry["id"]));
+                const auto sense = AI::SenseTypeId::Create(Unsigned(entry["sense"]));
+                if (listener.HasError() || sense.HasError())
+                    throw std::invalid_argument("Invalid native Perception listener identity");
+                policy.listeners.push_back({listener.Value(), sense.Value()});
+            }
+            constexpr auto key = &HeadlessPerceptionListenerSelection::listener;
+            std::ranges::sort(policy.listeners, {}, key);
+            if (std::ranges::adjacent_find(policy.listeners, {}, key) != policy.listeners.end())
+                throw std::invalid_argument("Duplicate native Perception listener");
+            return policy;
+        }
+
         /** @brief Quantizes canonical local meters once and checks exact signed addition to the authored origin. */
         Result<Math::WorldCoordinate64> GlobalPosition(const Math::WorldCoordinate64 origin, const Math::Vec3 local) {
             using Output = Result<Math::WorldCoordinate64>;
@@ -176,9 +205,15 @@ namespace Horo::Application::Internal {
             return Output::Failure(read.ErrorValue());
         try {
             const auto root = ParsePolicy(*read.Value().text);
-            RequireFields(root, {"schema", "sceneAsset", "sceneRevision", "worldOriginMillimeters", "controllers"});
-            if (Unsigned(root["schema"]) != 1 || !root["sceneAsset"].is_string())
+            const auto schema = root.is_object() && root.contains("schema") ? Unsigned(root["schema"]) : 0;
+            if (schema == 1)
+                RequireFields(root, {"schema", "sceneAsset", "sceneRevision", "worldOriginMillimeters", "controllers"});
+            else if (schema == 2)
+                RequireFields(root, {"schema", "sceneAsset", "sceneRevision", "worldOriginMillimeters", "controllers", "native"});
+            else
                 throw std::invalid_argument("Unsupported Perception policy schema");
+            if (!root["sceneAsset"].is_string())
+                throw std::invalid_argument("Perception policy requires a Scene AssetId");
             const auto selected = Assets::AssetId::Parse(root["sceneAsset"].get<std::string>());
             if (!selected.HasValue())
                 return Output::Failure(selected.ErrorValue());
@@ -204,11 +239,55 @@ namespace Horo::Application::Internal {
             std::ranges::sort(policy.controllers, {}, key);
             if (std::ranges::adjacent_find(policy.controllers, {}, key) != policy.controllers.end())
                 throw std::invalid_argument("Duplicate Perception controller");
+            if (schema == 2)
+                policy.native = ReadNative(root["native"]);
             return Output::Success(std::make_shared<const HeadlessPerceptionPolicy>(std::move(policy)));
         } catch (const Json::exception &) {
             return Output::Failure(MakeError(AI::AIErrors::PerceptionDescriptorInvalid, "Malformed project Perception policy."));
         } catch (const std::invalid_argument &error) {
             return Output::Failure(MakeError(AI::AIErrors::PerceptionDescriptorInvalid, error.what()));
+        } catch (const std::bad_alloc &) {
+            return Output::Failure(MakeError(AI::AIErrors::AgentCapacityExceeded));
+        }
+    }
+
+    /** @copydoc FreezeHeadlessNativePerceptionRegistry */
+    Result<std::shared_ptr<const AI::PerceptionDescriptorRegistry>> FreezeHeadlessNativePerceptionRegistry(
+        const HeadlessNativePerceptionPolicy &policy, const std::span<const AI::PerceptionSenseContract> contracts) {
+        using Output = Result<std::shared_ptr<const AI::PerceptionDescriptorRegistry>>;
+        try {
+            std::vector<AI::SenseTypeDescriptor> senses;
+            std::vector<AI::StimulusTypeDescriptor> stimuli;
+            std::vector<AI::PerceptionListenerDescriptor> listeners;
+            senses.reserve(contracts.size());
+            stimuli.reserve(contracts.size());
+            listeners.reserve(policy.listeners.size());
+            for (const auto &contract : contracts) {
+                senses.push_back(contract.sense);
+                const auto existing = std::ranges::find(stimuli, contract.stimulus.identity, &AI::StimulusTypeDescriptor::identity);
+                if (existing == stimuli.end())
+                    stimuli.push_back(contract.stimulus);
+                else if (*existing != contract.stimulus)
+                    return Output::Failure(MakeError(AI::AIErrors::PerceptionDescriptorConflict));
+            }
+            for (const auto &listener : policy.listeners) {
+                const auto owner = std::ranges::find(contracts, listener.sense, [](const auto &item) {
+                    return item.sense.identity;
+                });
+                if (owner == contracts.end())
+                    return Output::Failure(MakeError(AI::AIErrors::PerceptionDependencyMissing,
+                                                     "The selected native module did not declare a requested Perception sense."));
+                listeners.push_back({.identity = listener.listener,
+                                     .origin = owner->sense.origin,
+                                     .displayName = owner->sense.displayName,
+                                     .sense = owner->sense.identity,
+                                     .stimuli = {{owner->stimulus.identity}},
+                                     .stimulusCount = 1});
+            }
+            auto captured = AI::PerceptionDescriptorRegistry::Capture({senses, stimuli, listeners}, policy.capabilities);
+            if (captured.HasError())
+                return Output::Failure(captured.ErrorValue());
+            return Output::Success(std::make_shared<const AI::PerceptionDescriptorRegistry>(std::move(captured).Value()));
         } catch (const std::bad_alloc &) {
             return Output::Failure(MakeError(AI::AIErrors::AgentCapacityExceeded));
         }

@@ -341,6 +341,40 @@ namespace Horo::AI {
         return Publication::Success(spatial.Current());
     }
 
+    /** @copydoc AiSceneRuntime::ActivatePerceptionAtSafePoint */
+    Result<void> AiSceneRuntime::ActivatePerceptionAtSafePoint(const Runtime::RuntimeSceneView &scene,
+                                                               const PerceptionSpatialBroadphase &spatial,
+                                                               const AiScenePerceptionExecution &execution) {
+        if (auto owner = CapabilityAtSafePoint().ValidateAtSafePoint(); owner.HasError())
+            return owner;
+        if (active_->perceptionExecution)
+            return Result<void>::Failure(MakeError(AIErrors::PerceptionDescriptorConflict));
+        const auto snapshot = spatial.Current();
+        if (!scene.IsCurrent() || active_->binding.scene != scene.RuntimeId() || active_->perceptionSpatial != &spatial || !snapshot ||
+            snapshot->Scene() != scene.RuntimeId() || !snapshot->ReadAuthorization()->IsCurrent())
+            return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
+        const auto rollback = [&] {
+            for (auto &agent : active_->agents)
+                agent.sensing.reset();
+        };
+        try {
+            const auto admitted = Detail::PreparePerceptionSenses(execution, {}, active_->agents);
+            if (admitted.HasError()) {
+                rollback();
+                return admitted;
+            }
+            if (!scene.IsCurrent() || snapshot != spatial.Current() || !execution.generation->CanAdmit()) {
+                rollback();
+                return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
+            }
+            active_->perceptionExecution = execution;
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
+            rollback();
+            return Result<void>::Failure(MakeError(AIErrors::AgentCapacityExceeded));
+        }
+    }
+
     /** @copydoc AiSceneRuntime::PollPerceptionAtSensePoll */
     Result<void> AiSceneRuntime::PollPerceptionAtSensePoll(const Runtime::RuntimeSceneView &scene,
                                                            const PerceptionSpatialBroadphase &spatial, const std::uint64_t tick,

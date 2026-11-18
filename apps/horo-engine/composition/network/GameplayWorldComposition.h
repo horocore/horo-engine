@@ -15,6 +15,7 @@
 
 namespace Horo::AI {
     class AiSceneRuntime;
+    class PerceptionSpatialBroadphase;
     struct AiSceneCookedDecisionExecution;
 }  // namespace Horo::AI
 
@@ -75,12 +76,21 @@ namespace Horo::Application::Internal {
         CancellationToken cancellation;
     };
 
+    struct HeadlessNativePerceptionPolicy;
+
+    /** @brief Exact spatial publisher and authored settings, borrowed until this private Scene activates. */
+    struct GameplayPreparedPerception final {
+        const AI::PerceptionSpatialBroadphase &spatial;
+        const HeadlessNativePerceptionPolicy &policy;
+    };
+
     /** @brief Borrows an exact private Scene and its prepared native provider until startup completes. */
     struct GameplayPreparedDecisions final {
         Gameplay::PreparedGameModuleImage &image;
         const CancellationToken &cancellation;
         AI::AiSceneRuntime &scene;
         const AI::AiSceneCookedDecisionExecution &execution;
+        const GameplayPreparedPerception *perception{};
     };
 
     /** @brief Owner-thread gameplay lifetime borrowing an explicit world and Scene.

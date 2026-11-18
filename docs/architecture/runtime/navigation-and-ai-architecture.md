@@ -1306,9 +1306,18 @@ IDs with stable listener/sense selectors and endpoint layers/masks. Provider and
 stimulus declarations still come from the admitted frozen registry. Scene position
 evidence composes the available current or prospective entity hierarchy in
 canonical local meters and adds the explicit origin after millimeter quantization.
-Missing detached ancestry or a mismatched Scene revision denies capture. This is
-a typed host input; a terminal launch still needs to select the policy and grant
-the same selected native controller catalog and callable provider generation.
+Missing detached ancestry or a mismatched Scene revision denies capture.
+
+Standalone terminal launches can add `--game-perception-policy <project-relative path>`
+to the existing explicit native cooked controller selection. The policy uses schema
+2 and adds a `native` object with `listeners` (stable `id` and registered `sense`),
+`radiusMillimeters`, `visibleLayers`, and `workUnitsPerTick`. The host grants
+only its spatial candidate capability and uses the canonical fixed-tick memory
+policy. The same prepared gameplay image supplies inert sense/stimulus contracts
+for registry admission, then issues the callable generation after real module
+startup on the already paired Scene. A listener cannot name an unregistered
+sense, and an insufficient aggregate allowance fails startup before exposing the
+world. Connected hosts receive no native Perception grant.
 
 The native public capture path rejects Script origins. The private VM admission
 path is available only to `Gameplay::LuaPerceptionSenseProgram`, which uses the

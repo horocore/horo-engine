@@ -836,6 +836,7 @@ namespace Horo::Application::PrefabAtomicTest {
         struct DecisionProductTerminalOptions final {
             std::optional<Assets::AssetId> prefab;
             std::string_view missingController;
+            std::string_view perceptionPolicy;
             std::string_view refusal{"Selected cooked AI artifact has the wrong family."};
         };
 
@@ -879,6 +880,8 @@ namespace Horo::Application::PrefabAtomicTest {
                 request.arguments.insert(request.arguments.end(), {options.prefab->ToString(), "--prefab", "grant"});
             if (!options.missingController.empty())
                 request.arguments.insert(request.arguments.end(), {"--ai-missing-controller", std::string{options.missingController}});
+            if (!options.perceptionPolicy.empty())
+                request.arguments.insert(request.arguments.end(), {"--game-perception-policy", std::string{options.perceptionPolicy}});
             auto result = NativeExternalProcessRunner{}.Run(request, {});
             INFO(output);
             REQUIRE(result.HasValue());
@@ -918,6 +921,8 @@ namespace Horo::Application::PrefabAtomicTest {
             bool prepareNative = false;
             bool cancelBeforeNativeActivation = false;
             bool runTerminal = false;
+            bool selectNativePerception = false;
+            std::optional<AI::PerceptionSenseContract> nativeSense;
             bool prefabOnly = false;
             bool rollbackPrefab = false;
             bool preserveInactive = false;
@@ -971,6 +976,15 @@ namespace Horo::Application::PrefabAtomicTest {
                 prefabOnly = true;
                 wrongAuthoredSchema = true;
                 expected = &AI::AIErrors::ControllerDescriptorIncompatible;
+            }
+            SECTION("terminal admits authored Perception through the selected module and refuses a finite undersized budget") {
+                prepareNative = true;
+                runTerminal = true;
+                selectNativePerception = true;
+            }
+            SECTION("selected prepared image freezes inert Perception before and binds one real native provider after startup") {
+                prepareNative = true;
+                selectNativePerception = true;
             }
             SECTION("actual terminal process publishes the selected cooked native decision and rejects the wrong artifact type") {
                 prepareNative = true;
@@ -1086,6 +1100,13 @@ namespace Horo::Application::PrefabAtomicTest {
                 auto nodes = image.Value()->AcquireDecisionNodes();
                 REQUIRE(nodes.HasValue());
                 environment.nodes = std::move(nodes).Value();
+                if (selectNativePerception) {
+                    const auto metadata = image.Value()->DescribePerceptionSenses();
+                    REQUIRE(metadata.HasValue());
+                    REQUIRE(metadata.Value().size() == 1);
+                    nativeSense = metadata.Value().front();
+                    CHECK((nativeProbe->module == std::array<std::uint32_t, 4>{}));
+                }
                 cookImage = std::move(image).Value();
             }
             auto compiled = AI::DecisionGraphCompiler::Compile(graphSource.asset, std::span{&graphSource, 1}, environment);
@@ -1148,11 +1169,21 @@ namespace Horo::Application::PrefabAtomicTest {
                 records.push_back({schemaId, schemaType, ProjectPath::Parse("assets/guard.horo_bb").Value(),
                                    ProjectPath::Parse("assets/guard.horo_bb.horo").Value()});
             }
+            if (selectNativePerception)
+                controller.agent.controller->requiredCapabilities =
+                    controller.agent.controller->requiredCapabilities.Union(AI::AiCapabilitySet::Of(AI::AiCapability::Perception));
             Runtime::SceneDefinitionBuilder source{SceneCook::SceneDefinitionIdForAsset(sceneId), {1}};
             if (prefabOnly) {
                 source.Add({.object = {1}, .components = {.behaviors = {{{1}, BehaviorType("game.ai.tests.prefab_capability_probe")}}}});
             } else {
                 source.Add({.object = {1}, .components = {.aiAgent = controller.agent.agent, .aiController = controller.agent.controller}});
+            }
+            if (selectNativePerception) {
+                auto peer = controller.agent.agent;
+                peer.agent = Decisions::MakeIdentity<AI::AgentId>(2);
+                source.Add({.object = {2},
+                            .localTransform = {.translation = {1.0F, 0.0F, 0.0F}},
+                            .components = {.aiAgent = peer, .aiController = controller.agent.controller}});
             }
             if (preserveInactive && runTerminal)
                 source.Add({.object = {2},
@@ -1166,6 +1197,26 @@ namespace Horo::Application::PrefabAtomicTest {
             }
             auto definition = std::move(source).Build();
             REQUIRE(definition.HasValue());
+            nlohmann::json perception;
+            if (selectNativePerception) {
+                constexpr std::uint32_t authoredListener = 91;
+                const auto sense = nativeSense->sense.identity.Value();
+                const auto units = nativeSense->workUnits + AI::PerceptionSenseGeneration::ValidationWorkUnits + 1;
+                const nlohmann::json endpoint{{"controller", controller.descriptor.controller.Value()},
+                                              {"listeners", {authoredListener}},
+                                              {"sources", {sense}},
+                                              {"layers", 1},
+                                              {"mask", 1}};
+                const nlohmann::json listener{{"id", authoredListener}, {"sense", sense}};
+                perception =
+                    {{"schema", 2},
+                     {"sceneAsset", sceneId.ToString()},
+                     {"sceneRevision", definition.Value().Revision().value},
+                     {"worldOriginMillimeters", {100, 200, -300}},
+                     {"controllers", {endpoint}},
+                     {"native",
+                      {{"listeners", {listener}}, {"radiusMillimeters", 4000}, {"visibleLayers", 1}, {"workUnitsPerTick", units * 2}}}};
+            }
             Output::TempDir directory;
             if (runTerminal) {
                 const auto sceneType = Output::Type("core.scene");
@@ -1185,6 +1236,30 @@ namespace Horo::Application::PrefabAtomicTest {
                 Output::TempDir project;
                 WriteDecisionProductSources(project.path, records);
                 DecisionProductTerminalOptions options{.prefab = prefabOnly ? std::optional{prefabId} : std::nullopt};
+                if (selectNativePerception) {
+                    options.perceptionPolicy = "perception.json";
+                    const auto write = [&] {
+                        std::ofstream stream{project.path / options.perceptionPolicy};
+                        stream << perception;
+                        REQUIRE(stream.good());
+                    };
+                    write();
+                    ExpectDecisionProductExit(0, project.path, directory.path, target, sceneId, *gameplay, controller.descriptor.controller,
+                                              artifactId, options);
+                    const auto admittedBudget = perception["native"]["workUnitsPerTick"];
+                    perception["native"]["workUnitsPerTick"] = 1;
+                    write();
+                    options.refusal = AI::AIErrors::SchedulerBudgetExhausted.summary;
+                    ExpectDecisionProductExit(3, project.path, directory.path, target, sceneId, *gameplay, controller.descriptor.controller,
+                                              artifactId, options);
+                    perception["native"]["workUnitsPerTick"] = admittedBudget;
+                    perception["native"]["listeners"][0]["sense"] = nativeSense->sense.identity.Value() + 1;
+                    write();
+                    options.refusal = "selected native module did not";
+                    ExpectDecisionProductExit(3, project.path, directory.path, target, sceneId, *gameplay, controller.descriptor.controller,
+                                              artifactId, options);
+                    return;
+                }
                 if (malformed) {
                     options.missingController = "degrade";
                     options.refusal = AI::AIErrors::DecisionAssetSchemaInvalid.summary;
@@ -1255,6 +1330,13 @@ namespace Horo::Application::PrefabAtomicTest {
                                                                                 : AI::AiMissingControllerPolicy::Reject},
                                                          .prefabLoads = prefabOnly ? &prefabLoader : nullptr,
                                                          .cookedDecisions = decisions};
+            if (selectNativePerception) {
+                auto captured = CaptureProjectPerception(definition.Value(), sceneId, perception.dump());
+                REQUIRE(captured.HasValue());
+                input.perceptionProject =
+                    Internal::HeadlessPerceptionProjectAdmission{.policy = std::move(captured).Value(),
+                                                                 .provider = Internal::HeadlessPerceptionProvider::SelectedNativeGameplay};
+            }
             const auto composed = Internal::ComposeHeadlessSceneNetworkServices(std::make_shared<const Runtime::RuntimeSceneDefinition>(
                                                                                     std::move(definition).Value()),
                                                                                 std::move(input), {}, gameplay);
@@ -1273,7 +1355,7 @@ namespace Horo::Application::PrefabAtomicTest {
                 REQUIRE(physics.HasValue());
                 REQUIRE(physics.Value()->Prepare().HasValue());
                 if (nativeProbe) {
-                    CHECK(nativeProbe->module[3] == 0);
+                    CHECK((nativeProbe->module == std::array<std::uint32_t, 4>{}));
                     CHECK(nativeProbe->decision[0] == 0);
                 }
                 if (cancelBeforeNativeActivation) {
@@ -1282,7 +1364,19 @@ namespace Horo::Application::PrefabAtomicTest {
                 } else {
                     REQUIRE(physics.Value()->Activate().HasValue());
                 }
-                if (nativeProbe && prefabOnly) {
+                if (selectNativePerception) {
+                    CHECK((nativeProbe->module == std::array<std::uint32_t, 4>{2, 0, 0, 1}));
+                    const auto scene = Internal::InspectHeadlessScene(*physics.Value());
+                    REQUIRE(scene);
+                    REQUIRE(physics.Value()->RunFixedTick({1, Duration::FromNanoseconds(16'666'667), startup.Token()}).HasValue());
+                    CHECK((nativeProbe->module == std::array<std::uint32_t, 4>{2, 2, 0, 1}));
+                    const auto recipient = scene->Find({1});
+                    REQUIRE(recipient);
+                    const auto memory = Internal::InspectHeadlessPerceptionMemory(*physics.Value(), *recipient);
+                    REQUIRE(memory.HasValue());
+                    REQUIRE(memory.Value().count == 1);
+                    CHECK(memory.Value().entries.front().lastKnownPosition == Math::WorldCoordinate64::FromMillimeters(1100, 200, -300));
+                } else if (nativeProbe && prefabOnly) {
                     CHECK(nativeProbe->module[3] == 1);
                     const auto degraded =
                         preserveInactive ? std::optional{UnavailableController(*controller.agent.controller)} : std::nullopt;
@@ -1315,9 +1409,11 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(ai.probe.cleanups == (ranCaptured ? 1 : 0));
             if (nativeProbe) {
                 const auto modules = cancelBeforeNativeActivation || expected ? 0u : 1u;
-                const auto activeDecisions = prefabOnly && !preserveInactive ? 2u : 1u;
+                const auto activeDecisions = selectNativePerception || (prefabOnly && !preserveInactive) ? 2u : 1u;
                 const auto tasks = modules == 0 || rollbackPrefab ? 0u : activeDecisions;
                 CHECK(nativeProbe->module[3] == modules);
+                if (selectNativePerception)
+                    CHECK((nativeProbe->module == std::array<std::uint32_t, 4>{2, 2, 2, 1}));
                 CHECK((nativeProbe->decision == std::array{tasks, tasks, tasks}));
                 REQUIRE(gameplay->moduleRetirements->Close().HasValue());
             }

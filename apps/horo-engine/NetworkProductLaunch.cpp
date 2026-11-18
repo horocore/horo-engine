@@ -355,6 +355,10 @@ namespace Horo::Application::Internal {
                                                 .execution = AI::AiSceneCookedDecisionExecution{resources->jobs, {}, {}},
                                                 .provider = HeadlessDecisionProvider::SelectedNativeGameplay});
             }
+            if (resources->perceptionPolicy)
+                input.perceptionProject =
+                    HeadlessPerceptionProjectAdmission{.policy = resources->perceptionPolicy,
+                                                       .provider = HeadlessPerceptionProvider::SelectedNativeGameplay};
             if (input.navigation && launch.role == Net::NetworkProjectRole::Client)
                 return Result<NetworkProductComposition>::Failure(
                     MakeError(Net::NetworkErrors::NetworkModeInvalid, "Navigation requires an authoritative world."));

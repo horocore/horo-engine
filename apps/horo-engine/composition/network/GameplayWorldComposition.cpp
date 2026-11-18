@@ -1,5 +1,6 @@
 #include "GameplayWorldComposition.h"
 
+#include "HeadlessPerceptionPolicy.h"
 #include "Horo/AI/AISceneActivation.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/GameplayVfxScene.h"
@@ -309,6 +310,20 @@ namespace Horo::Application::Internal {
         if (auto registered = composition->RegisterModule(selection, prepared); registered.HasError())
             return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(registered.ErrorValue());
         if (prepared) {
+            if (prepared->perception) {
+                auto generation = composition->native_->AcquirePerceptionSenses();
+                if (generation.HasError())
+                    return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(generation.ErrorValue());
+                const auto &policy = prepared->perception->policy;
+                const AI::AiScenePerceptionExecution execution{.generation = std::move(generation).Value(),
+                                                               .capabilities = policy.capabilities,
+                                                               .radiusMillimeters = policy.radiusMillimeters,
+                                                               .visibleLayers = policy.visibleLayers,
+                                                               .workUnitsPerTick = policy.workUnitsPerTick};
+                const auto activated = prepared->scene.ActivatePerceptionAtSafePoint(*active, prepared->perception->spatial, execution);
+                if (activated.HasError())
+                    return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(activated.ErrorValue());
+            }
             if (auto activated = prepared->scene.ActivateCookedDecisionsAtSafePoint(prepared->execution); activated.HasError())
                 return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(activated.ErrorValue());
         }

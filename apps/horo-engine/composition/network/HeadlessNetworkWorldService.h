@@ -260,6 +260,9 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             if (input.navigationPath && request_.world != Network::NetworkModeWorldKind::Standalone)
                 return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid,
                                                        "The best-effort Navigation path scope requires standalone authority."));
+            if (SelectsNativePerception() && request_.world != Network::NetworkModeWorldKind::Standalone)
+                return Result<void>::Failure(
+                    MakeError(Network::NetworkErrors::NetworkModeInvalid, "Native project Perception requires standalone authority."));
             const auto &boundary = input.load;
             record_->sceneCancellation = boundary.cancellation;
             record_->scenes = std::make_unique<Runtime::RuntimeSceneService>(input.registry, input.loads,
@@ -314,8 +317,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 catalog = record_->admittedControllers;
             }
             if (OwnsPerception() && input.perceptionProject) {
-                auto prepared =
-                    BindHeadlessPerceptionEndpoints(*input.perceptionProject->policy, input.perceptionProject->registry, catalog);
+                auto prepared = PreparePerceptionControllers(catalog, *input.perceptionProject);
                 if (prepared.HasError())
                     return Result<void>::Failure(prepared.ErrorValue());
                 record_->admittedControllers = std::move(prepared).Value();
@@ -344,6 +346,23 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 added.HasError())
                 return added;
             return Result<void>::Success();
+        }
+
+        /** @brief Resolves authored endpoints using either the explicit registry or the same prepared native image. */
+        Result<std::vector<AI::AiControllerDescriptor>> PreparePerceptionControllers(
+            std::span<const AI::AiControllerDescriptor> catalog, const HeadlessPerceptionProjectAdmission &project) const {
+            using Output = Result<std::vector<AI::AiControllerDescriptor>>;
+            if (!SelectsNativePerception())
+                return BindHeadlessPerceptionEndpoints(*project.policy, project.registry, catalog);
+            if (!record_->preparedGameplay)
+                return Output::Failure(MakeError(AI::AIErrors::PerceptionDependencyMissing));
+            const auto contracts = record_->preparedGameplay->DescribePerceptionSenses();
+            if (contracts.HasError())
+                return Output::Failure(contracts.ErrorValue());
+            auto registry = FreezeHeadlessNativePerceptionRegistry(*project.policy->native, contracts.Value());
+            if (registry.HasError())
+                return Output::Failure(registry.ErrorValue());
+            return BindHeadlessPerceptionEndpoints(*project.policy, std::move(registry).Value(), catalog);
         }
 
         /** @brief Captures exact native provider metadata before any platform scope or game callback is exposed. */
@@ -392,6 +411,12 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         bool OwnsCookedDecisionExecution() const noexcept {
             const auto &selection = owners_->configured->cookedDecisions;
             return IsAuthoritativeWorld() && selection && selection->execution;
+        }
+
+        /** @brief Identifies the selected native mode without constructing registry or provider state. */
+        bool SelectsNativePerception() const noexcept {
+            const auto &project = owners_->configured->perceptionProject;
+            return project && project->provider == HeadlessPerceptionProvider::SelectedNativeGameplay;
         }
 
         /** @brief Only an authoritative host with explicit global positions owns a Perception publication. */
@@ -494,8 +519,12 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                                                                                     Physics::PhysicsWorld &world,
                                                                                     Character::CharacterWorld &character) const {
             if (record_->preparedGameplay) {
+                const auto &input = *owners_->configured;
+                std::optional<GameplayPreparedPerception> perception;
+                if (SelectsNativePerception())
+                    perception.emplace(GameplayPreparedPerception{record_->perception, *input.perceptionProject->policy->native});
                 const GameplayPreparedDecisions prepared{*record_->preparedGameplay, record_->sceneCancellation, *record_->ai,
-                                                         *owners_->configured->cookedDecisions->execution};
+                                                         *input.cookedDecisions->execution, perception ? &*perception : nullptr};
                 return GameplayWorldComposition::CreatePrepared(*record_->scenes, record_->templates.get(), world, request_.scene.value,
                                                                 selected, character, prepared);
             }
@@ -537,7 +566,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
 
         /** @brief Polls native observations once on the configured authority's exact fixed tick and Scene. */
         Result<void> RunConfiguredPerception(const Runtime::FixedStepContext &context) const {
-            if (!OwnsPerception() || !owners_->configured->perceptionExecution)
+            if (!OwnsPerception() || (!owners_->configured->perceptionExecution && !SelectsNativePerception()))
                 return Result<void>::Success();
             if (context.cancellation.IsCancellationRequested())
                 return JobCancelled();

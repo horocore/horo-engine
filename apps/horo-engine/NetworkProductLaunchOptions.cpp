@@ -291,6 +291,20 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Reads the one project-relative policy path without resolving an executable or source file. */
+        Result<void> ReadPerceptionPolicy(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch) {
+            if (!launch.sceneInput.perceptionPolicyPath.empty() || arguments.size() - index < 2)
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "Use --game-perception-policy <project-relative path> once."));
+            const std::string_view path{arguments[index + 1]};
+            if (path.empty() || path.starts_with("--"))
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "Native Perception requires an explicit project policy path."));
+            launch.sceneInput.perceptionPolicyPath = path;
+            index += 2;
+            return Result<void>::Success();
+        }
+
         /** @brief Decodes the Scene's missing-controller policy independently of explicit asset selection. */
         Result<void> ReadMissingControllerPolicy(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch) {
             if (launch.aiMissingController || arguments.size() - index < 2)
@@ -308,6 +322,10 @@ namespace Horo::Application::Internal {
 
         /** @brief Requires the authoritative terminal path and the matching native/cooked authority. */
         Result<void> ValidateCookedDecisions(const ProductLaunch &launch) {
+            if (!launch.sceneInput.perceptionPolicyPath.empty() && launch.cookedDecisionBindings.empty())
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                              "Native Perception requires explicit standalone native cooked controller selection."));
             if (launch.aiMissingController && (launch.role != Net::NetworkProjectRole::Standalone || launch.sceneInput.scene.empty()))
                 return Result<void>::Failure(
                     MakeError(Net::NetworkErrors::NetworkModeInvalid, "AI controller policy requires a configured standalone Scene."));
@@ -351,6 +369,11 @@ namespace Horo::Application::Internal {
                 }
                 if (key == "--game-navigation-path") {
                     if (auto policy = ReadNavigationPathPolicy(arguments, index, launch); policy.HasError())
+                        return policy;
+                    continue;
+                }
+                if (key == "--game-perception-policy") {
+                    if (auto policy = ReadPerceptionPolicy(arguments, index, launch); policy.HasError())
                         return policy;
                     continue;
                 }

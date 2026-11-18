@@ -23,10 +23,17 @@ namespace Horo::Application::Internal {
     struct ProjectSceneNavigationSelection;
     struct HeadlessPerceptionPolicy;
 
-    /** @brief Exact authored selection and frozen descriptor authorities granted by the configured host. */
+    /** @brief Selects the sole descriptor authority for an authored Perception policy. */
+    enum class HeadlessPerceptionProvider {
+        CapturedRegistry,
+        SelectedNativeGameplay,
+    };
+
+    /** @brief Exact authored selection and descriptor authority granted by the configured host. */
     struct HeadlessPerceptionProjectAdmission final {
         std::shared_ptr<const HeadlessPerceptionPolicy> policy;
         std::shared_ptr<const AI::PerceptionDescriptorRegistry> registry;
+        HeadlessPerceptionProvider provider{HeadlessPerceptionProvider::CapturedRegistry};
     };
     struct HeadlessCookedDecisionInput;
 

@@ -3,6 +3,7 @@
  * @brief Project-authored Perception selection and matched Scene position evidence for the headless owner.
  */
 #include "Horo/AI/AISceneActivation.h"
+#include "Horo/AI/PerceptionSenseProvider.h"
 #include "Horo/Assets/AssetId.h"
 #include "Horo/Platform/ProjectReadFiles.h"
 
@@ -17,6 +18,21 @@ namespace Horo::Application::Internal {
         AI::PerceptionParticipantFilter participant;
     };
 
+    /** @brief Stable listener authored for exactly one registered custom sense. */
+    struct HeadlessPerceptionListenerSelection final {
+        AI::PerceptionListenerTypeId listener;
+        AI::SenseTypeId sense;
+    };
+
+    /** @brief Explicit written native execution selection. The generation itself is bound only after module startup. */
+    struct HeadlessNativePerceptionPolicy final {
+        static constexpr auto capabilities = AI::PerceptionCapabilitySet::Of(AI::PerceptionCapability::SpatialCandidateQuery);
+        std::vector<HeadlessPerceptionListenerSelection> listeners;
+        std::uint64_t radiusMillimeters{};
+        std::uint64_t visibleLayers{};
+        std::size_t workUnitsPerTick{};
+    };
+
     /** @brief Project-authored spatial selection tied to one admitted cooked Scene definition. */
     struct HeadlessPerceptionPolicy final {
         Assets::AssetId asset;
@@ -24,6 +40,7 @@ namespace Horo::Application::Internal {
         Runtime::SceneDefinitionRevision revision;
         Math::WorldCoordinate64 origin;
         std::vector<HeadlessPerceptionControllerSelection> controllers;
+        std::optional<HeadlessNativePerceptionPolicy> native;
     };
 
     /** @brief Reads and freezes explicit project policy for the exact verified cooked Scene selection.
@@ -34,6 +51,13 @@ namespace Horo::Application::Internal {
     [[nodiscard]] Result<std::shared_ptr<const HeadlessPerceptionPolicy>> CaptureHeadlessPerceptionPolicy(
         const Platform::IProjectReadFiles &files, const Platform::ProjectReadContext &context, std::string_view path, Assets::AssetId asset,
         const Runtime::RuntimeSceneDefinition &definition);
+
+    /** @brief Combines authored listener identities with the prepared image's exact inert sense/stimulus contracts.
+     * @param policy Explicit native listener declarations. @param contracts Owner-copied inert metadata from one prepared image.
+     * @return Immutable registry or typed descriptor/capability failure without starting a module or constructing a sense.
+     */
+    [[nodiscard]] Result<std::shared_ptr<const AI::PerceptionDescriptorRegistry>> FreezeHeadlessNativePerceptionRegistry(
+        const HeadlessNativePerceptionPolicy &policy, std::span<const AI::PerceptionSenseContract> contracts);
 
     /** @brief Resolves durable controller selections against exactly the admitted controller and descriptor catalogs.
      * @param policy Frozen project selection. @param registry Exact frozen Perception descriptor registry.

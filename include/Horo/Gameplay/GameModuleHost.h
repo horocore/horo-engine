@@ -184,6 +184,7 @@ namespace Horo::Gameplay {
 
     private:
         friend class GameModuleHost;
+        friend class PreparedGameModuleImage;
         static void AttachPersistenceBinder(const std::shared_ptr<Impl> &, const Runtime::SaveParticipantId &,
                                             Runtime::GameplayPersistenceAdapter &);
         [[nodiscard]] static Result<Runtime::GameplayPersistenceInstallation> BindPersistenceCandidate(std::shared_ptr<Impl>,
@@ -203,6 +204,11 @@ namespace Horo::Gameplay {
 
         /** @brief Returns the exact compiler metadata lease. Factories remain gated until this image activates successfully. */
         [[nodiscard]] Result<std::shared_ptr<const AI::DecisionNodeGeneration>> AcquireDecisionNodes() const;
+
+        /** @brief Copies the prepared image's inert custom sense contracts on its owner lane.
+         * @return Owned contract metadata or typed unavailable/storage failure. This supplies no callable provider authority.
+         */
+        [[nodiscard]] Result<std::vector<AI::PerceptionSenseContract>> DescribePerceptionSenses() const;
 
     private:
         friend class GameModuleHost;

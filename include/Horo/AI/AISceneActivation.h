@@ -331,6 +331,15 @@ namespace Horo::AI {
          */
         [[nodiscard]] Result<void> CommitRestoreAtSafePoint(std::unique_ptr<AiSceneRestoreCandidate> candidate);
 
+        /** @brief Binds the now-callable generation to a privately staged Scene and its exact spatial owner.
+         * @param scene Current private Scene view. @param spatial The Scene's already admitted endpoint owner.
+         * @param execution Selected native generation and explicit host policy.
+         * @return Success or typed refusal with no installed sensing instances after failure.
+         */
+        [[nodiscard]] Result<void> ActivatePerceptionAtSafePoint(const Runtime::RuntimeSceneView &scene,
+                                                                 const PerceptionSpatialBroadphase &spatial,
+                                                                 const AiScenePerceptionExecution &execution);
+
         /** @brief Advances admitted native senses on the exact committed owner lane.
          * @param scene Current Scene and endpoint lifetime fence. @param spatial Current Scene's admitted spatial owner.
          * @param tick Authoritative simulation tick. @param fixedStep Exact host quantum.

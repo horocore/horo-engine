@@ -40,6 +40,23 @@ namespace Horo::Gameplay {
         return owner_->AcquireDecisionNodes();
     }
 
+    /** @copydoc PreparedGameModuleImage::DescribePerceptionSenses */
+    Result<std::vector<AI::PerceptionSenseContract>> PreparedGameModuleImage::DescribePerceptionSenses() const {
+        using Output = Result<std::vector<AI::PerceptionSenseContract>>;
+        if (!owner_ || owner_->impl_->ownerThread != std::this_thread::get_id() ||
+            !owner_->impl_->runtimeLeaseAdmission.load(std::memory_order_acquire))
+            return Output::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+        try {
+            std::vector<AI::PerceptionSenseContract> contracts;
+            contracts.reserve(owner_->impl_->perceptionSenses.size());
+            for (const auto &registration : owner_->impl_->perceptionSenses)
+                contracts.push_back(registration.contract);
+            return Output::Success(std::move(contracts));
+        } catch (const std::bad_alloc &) {
+            return Output::Failure(MakeError(AI::AIErrors::AgentCapacityExceeded));
+        }
+    }
+
     LoadedGameModule::LoadedGameModule(const ConstructionKey &, std::shared_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
     LoadedGameModule::~LoadedGameModule() {
