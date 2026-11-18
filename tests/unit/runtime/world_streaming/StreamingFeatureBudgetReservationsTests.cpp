@@ -1,3 +1,4 @@
+#include "Horo/WorldStreaming/StreamingFairQueue.h"
 #include "Horo/WorldStreaming/StreamingFeatureBudgetReservations.h"
 #include "WorldStreamingTestUtils.h"
 
@@ -456,6 +457,154 @@ namespace Horo::WorldStreaming {
             REQUIRE(ledger.ReplaceServices(ledger.Context(), IdentityFrom<StreamingRuntimeCompositionRevision>(2), fixture.host.Bindings())
                         .HasValue());
             REQUIRE(ledger.Runtime().Revision() == IdentityFrom<StreamingRuntimeCompositionRevision>(2));
+        }
+
+        TEST_CASE("Scheduler pressure preserves fair admission and exact resource retirement through shutdown",
+                  "[unit][world_streaming][scheduler][qualification]") {
+            using Transition = StreamingCellOperationTransition;
+            using enum StreamingFairQueueEligibility;
+            Host host;
+            auto ledger = host.Ledger(1);
+            const auto residentCost = Amounts(12, 5);
+            const auto pendingPlan = Plan(Feature::Foliage, residentCost);
+            const auto initial = Admit(ledger, Plan(Feature::Terrain, Amounts(20, 8, 4, 2))).Value();
+            const auto initialLease = Realize(ledger, initial, residentCost, residentCost).Value();
+
+            const auto queueId = IdentityFrom<StreamingFairQueueId>(41);
+            const auto priority = StreamingPriorityPolicy::Create({.id = IdentityFrom<StreamingPriorityPolicyId>(1),
+                                                                   .revision = IdentityFrom<StreamingPriorityPolicyRevision>(1),
+                                                                   .maximumCandidates = 2});
+            REQUIRE(priority.HasValue());
+            auto created = StreamingFairQueue::Create({.id = queueId,
+                                                       .partition = ledger.Context().owner.partition,
+                                                       .epoch = ledger.Context().owner.epoch,
+                                                       .maximumEntries = 2,
+                                                       .maximumPriorityDispatches = 1},
+                                                      priority.Value());
+            REQUIRE(created.HasValue());
+            auto queue = std::move(created).Value();
+            std::uint64_t now{};
+            const auto context = [&] {
+                return StreamingFairQueueContext{queueId, queue.Revision(), now};
+            };
+
+            const auto queueEntry = [&](const std::uint64_t id, const float score) {
+                auto fence = initial.scheduler.operation.fence;
+                fence.cell.x = static_cast<std::int32_t>(id);
+                return StreamingFairQueueEntry{.operation = {IdentityFrom<StreamingCellOperationId>(id), fence},
+                                               .priority = {.source = {.id = IdentityFrom<StreamingSourceId>(id),
+                                                                       .owner = TestSupport::Owner(),
+                                                                       .intent = StreamingSourceIntent::Camera,
+                                                                       .priority = StreamingSourcePriority::Create(score).Value(),
+                                                                       .revision = IdentityFrom<StreamingSourceRevision>(1)},
+                                                            .cell = fence.cell}};
+            };
+            const auto reserve = [&](const StreamingCellOperationHandle &handle) {
+                const auto operation = StreamingCellOperation::Create(handle, StreamingCellOperationKind::Load);
+                REQUIRE(operation.HasValue());
+                return ledger.TryAdmit(ledger.Context(), operation.Value(), pendingPlan, 1, handle.fence);
+            };
+            const auto older = queueEntry(2, 0.0F);
+            const auto urgent = queueEntry(3, 1'000.0F);
+            const auto arrival = queueEntry(4, 1'000.0F);
+            REQUIRE(queue.Enqueue(context(), older).HasValue());
+            ++now;
+            REQUIRE(queue.Enqueue(context(), urgent).HasValue());
+            const auto fullQueue = queue.Revision();
+            const auto fullLedger = ledger.Context().revision;
+            RequireError(queue.Enqueue(context(), arrival), FairQueueCapacityExceeded);
+            RequireError(reserve(urgent.operation), SchedulerCapacityExceeded);
+            CHECK(queue.Revision() == fullQueue);
+            CHECK(ledger.Context().revision == fullLedger);
+            CHECK(ledger.Used(Axis::CpuResidentBytes).Value() == 20);
+            CHECK(ledger.Used(Axis::StagingBytes).Value() == 4);
+            const std::array blocked{StreamingFairQueueAdmission{older.operation, Deferred},
+                                     StreamingFairQueueAdmission{urgent.operation, Deferred}};
+            const auto deferred = queue.Select(context(), blocked);
+            REQUIRE(deferred.HasValue());
+            CHECK_FALSE(deferred.Value());
+            CHECK(queue.Size() == 2);
+
+            Complete(ledger, initial);
+            CHECK(ledger.Used(Axis::CpuResidentBytes).Value() == 12);
+            const std::array eligible{StreamingFairQueueAdmission{older.operation, Admissible},
+                                      StreamingFairQueueAdmission{urgent.operation, Admissible}};
+            const auto firstChoice = queue.Select(context(), eligible).Value();
+            REQUIRE(firstChoice);
+            CHECK(firstChoice->operation == urgent.operation);
+            CHECK(firstChoice->reason == StreamingFairQueueDispatchReason::Priority);
+            const auto admitted = reserve(firstChoice->operation);
+            REQUIRE(admitted.HasValue());
+            REQUIRE(queue.CommitDispatch(context(), *firstChoice).HasValue());
+            const auto urgentReservation = admitted.Value();
+            const auto urgentLease = Realize(ledger, urgentReservation, residentCost, residentCost, Key(), Feature::Foliage).Value();
+            CHECK(urgentLease.charge == initialLease.charge);
+            CHECK(ledger.SharedAssets().ChargedCount() == 1);
+            CHECK(ledger.SharedAssets().LeaseCount() == 2);
+            CHECK(ledger.Used(Axis::CpuResidentBytes).Value() == 12);
+            CHECK(ledger.Used(Axis::GpuResidentBytes).Value() == 5);
+
+            REQUIRE(ledger.Advance(ledger.Context(), urgentReservation, Transition::BeginPreparation).HasValue());
+            const auto workerContext = ledger.Context();
+            REQUIRE(ledger.Advance(workerContext, urgentReservation, Transition::Cancel).HasValue());
+            const auto cancelled = ledger.Context().revision;
+            RequireError(ledger.Advance(workerContext, urgentReservation, Transition::Complete), FeatureBudgetStale);
+            RequireError(ledger.Advance(ledger.Context(), urgentReservation, Transition::Fail), CellOperationTransitionInvalid);
+            RequireError(ledger.Release(ledger.Context(), urgentReservation), SchedulerLifecycleUnavailable);
+            CHECK(ledger.Context().revision == cancelled);
+            const auto cancelledResult = ledger.Advance(ledger.Context(), urgentReservation, Transition::AcknowledgeRetirement);
+            REQUIRE(cancelledResult.HasValue());
+            CHECK(cancelledResult.Value().Outcome() == StreamingCellOperationOutcome::Cancelled);
+            RequireError(ledger.Advance(ledger.Context(), urgentReservation, Transition::AcknowledgeRetirement),
+                         CellOperationTransitionInvalid);
+            REQUIRE(ledger.Release(ledger.Context(), urgentReservation).HasValue());
+
+            ++now;
+            REQUIRE(queue.Enqueue(context(), arrival).HasValue());
+            const std::array competing{StreamingFairQueueAdmission{arrival.operation, Admissible},
+                                       StreamingFairQueueAdmission{older.operation, Admissible}};
+            const auto secondChoice = queue.Select(context(), competing).Value();
+            REQUIRE(secondChoice);
+            CHECK(secondChoice->operation == older.operation);
+            CHECK(secondChoice->reason == StreamingFairQueueDispatchReason::OldestAdmissible);
+            const auto retained = reserve(secondChoice->operation);
+            REQUIRE(retained.HasValue());
+            REQUIRE(queue.CommitDispatch(context(), *secondChoice).HasValue());
+            CHECK(queue.Size() == 1);
+            REQUIRE(ledger.Advance(ledger.Context(), retained.Value(), Transition::BeginPreparation).HasValue());
+
+            REQUIRE(queue.Shutdown(context()).HasValue());
+            REQUIRE(ledger.BeginShutdown(ledger.Context()).HasValue());
+            const auto shutdown = ledger.Context().revision;
+            REQUIRE(ledger.BeginShutdown(ledger.Context()).HasValue());
+            CHECK(ledger.Context().revision == shutdown);
+            CHECK(queue.Size() == 0);
+            RequireError(reserve(arrival.operation), SchedulerLifecycleUnavailable);
+            CHECK(ledger.Runtime().Scheduler().ReservedCount() == 1);
+            REQUIRE(ledger.Advance(ledger.Context(), retained.Value(), Transition::Shutdown).HasValue());
+            RequireError(ledger.Advance(ledger.Context(), retained.Value(), Transition::Complete), CellOperationTransitionInvalid);
+            const auto stopped = ledger.Advance(ledger.Context(), retained.Value(), Transition::AcknowledgeRetirement);
+            REQUIRE(stopped.HasValue());
+            CHECK(stopped.Value().Outcome() == StreamingCellOperationOutcome::Shutdown);
+            REQUIRE(ledger.Release(ledger.Context(), retained.Value()).HasValue());
+            RequireError(ledger.Advance(ledger.Context(), retained.Value(), Transition::AcknowledgeRetirement), FeatureBudgetStale);
+            CHECK(ledger.State() == StreamingSchedulerAdmissionState::Draining);
+            CHECK(ledger.Used(Axis::CpuResidentBytes).Value() == 12);
+
+            REQUIRE(ledger.ReleaseShared(ledger.Context(), initialLease).HasValue());
+            RequireError(ledger.BeginRetireShared(ledger.Context(), urgentLease.key, urgentLease.charge), SharedAssetLifecycleUnavailable);
+            REQUIRE(ledger.ReleaseShared(ledger.Context(), urgentLease).HasValue());
+            const auto retirement = ledger.BeginRetireShared(ledger.Context(), urgentLease.key, urgentLease.charge);
+            REQUIRE(retirement.HasValue());
+            CHECK(ledger.Used(Axis::GpuResidentBytes).Value() == 5);
+            REQUIRE(ledger.AcknowledgeSharedRetired(ledger.Context(), retirement.Value()).HasValue());
+            RequireError(ledger.AcknowledgeSharedRetired(ledger.Context(), retirement.Value()), FeatureBudgetStale);
+            CHECK(ledger.State() == StreamingSchedulerAdmissionState::Closed);
+            CHECK(ledger.Runtime().Scheduler().ReservedCapacityUnits() == 0);
+            CHECK(ledger.SharedAssets().LeaseCount() == 0);
+            CHECK(ledger.SharedAssets().ChargedCount() == 0);
+            for (const auto &axis : residentCost.Entries())
+                CHECK(ledger.Used(axis.dimension).Value() == 0);
         }
 
         TEST_CASE("Shutdown closes admission but drains old exact operations and cache charges",
