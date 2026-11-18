@@ -155,6 +155,8 @@ namespace Horo::Editor {
                 std::uint64_t radius{};
                 bool preferNearer{};
                 std::uint64_t weight{};
+                AI::QueryContextId center;
+                std::vector<AI::QueryContextId> centers;
             };
 
             EnvironmentQueryDocumentFence fence;
@@ -163,6 +165,7 @@ namespace Horo::Editor {
             std::uint64_t inner{};
             std::uint64_t maximum{};
             bool annulus{};
+            AI::QueryContextId center;
             std::vector<Distance> distances;
             std::uint64_t newDistanceRadius{};
             std::string widgetId;

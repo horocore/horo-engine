@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <span>
 #include <string>
 #include <variant>
@@ -153,6 +154,12 @@ namespace Horo::AI {
         constexpr auto operator<=>(const QueryContextRequirement &) const noexcept = default;
     };
 
+    /** @brief One optional stable-ID property that selects a context requirement from an inert descriptor. */
+    struct QueryContextChoice final {
+        QueryPropertyId property;
+        std::vector<QueryContextRequirement> options; /**< The first option is used when the property is omitted. */
+    };
+
     /** @brief Inert generator metadata; execution callbacks belong to a later host-composed provider seam. */
     struct QueryGeneratorDescriptor final {
         QueryGeneratorId id;
@@ -161,6 +168,7 @@ namespace Horo::AI {
         QueryVersionRange outputItemVersion;
         std::vector<QueryContextRequirement> contexts;
         std::vector<QueryPropertyDescriptor> properties;
+        std::optional<QueryContextChoice> contextChoice;
     };
 
     /** @brief Inert test metadata over one typed candidate item. */
@@ -171,6 +179,7 @@ namespace Horo::AI {
         QueryVersionRange inputItemVersion;
         std::vector<QueryContextRequirement> contexts;
         std::vector<QueryPropertyDescriptor> properties;
+        std::optional<QueryContextChoice> contextChoice;
     };
 
     /** @brief Hard ceilings for untrusted EQS metadata, independent of product profile settings. */
@@ -291,6 +300,7 @@ namespace Horo::AI {
         QueryTestId test;
         std::vector<QueryContextRequirement> contexts;
         std::vector<QueryPropertyValue> properties;
+        QueryContextId selectedContext; /**< Resolved authored or default context when the descriptor provides a choice. */
 
         bool operator==(const QueryPlanStage &) const = default;
     };

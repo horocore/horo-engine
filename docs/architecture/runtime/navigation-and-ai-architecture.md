@@ -2324,6 +2324,12 @@ The source tab can append a native distance stage and remove a distance stage by
 its exact identity. A structural edit includes the current field values in one
 undoable transaction. Appending preserves the semantic order of existing stages.
 
+The lattice generator and each distance test choose a location independently
+from the installed descriptor options. The native options are querier location
+and world origin. Old sources use querier location. A compiled stage retains
+only its selected requirement, and preview evaluates each test against its
+own captured location from the pinned Scene.
+
 Each native distance stage can store a positive integer relative score weight.
 An omitted weight means `1` and keeps existing source payloads valid. The scorer
 normalizes enabled scoring stages by their total weight. A filter-only stage

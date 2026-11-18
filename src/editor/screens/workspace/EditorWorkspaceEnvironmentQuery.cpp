@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <format>
 #include <limits>
 #include <set>
@@ -24,6 +25,49 @@ namespace Horo::Editor {
         using EnvironmentQueryWorkspaceSource::CaptureQuerySource;
         using EnvironmentQueryWorkspaceSource::DescriptorAvailability;
         using EnvironmentQueryWorkspaceSource::RegisteredQueryDocument;
+
+        /** @brief Current localized names shared by all point controls in an editor section. */
+        struct PointContextLabels final {
+            std::string heading;
+            std::string querier;
+            std::string origin;
+        };
+
+        /** @brief Resolves point labels once for the generator or distance-test controls. */
+        PointContextLabels LocalizePointContexts(const ILocalizationService &localization) {
+            return {localization.Get("editor", "workspace.environment_query.center_context"),
+                    localization.Get("editor", "workspace.environment_query.context_querier"),
+                    localization.Get("editor", "workspace.environment_query.context_world_origin")};
+        }
+
+        /** @brief Projects installed context identities into the shared editor dropdown. */
+        void DrawPointContextChoice(const PointContextLabels &labels, const Theme::Fonts &fonts, AI::QueryContextId &selected,
+                                    std::span<const AI::QueryContextId> contexts) {
+            if (contexts.empty())
+                return;
+            const auto querier = AI::BuiltinQueryContextId(AI::BuiltinQueryContext::QuerierLocation);
+            const auto origin = AI::BuiltinQueryContextId(AI::BuiltinQueryContext::WorldOrigin);
+            std::array<std::array<char, std::numeric_limits<std::uint64_t>::digits10 + 2>,
+                       AI::EnvironmentQuerySchemaLimits::DescriptorContexts>
+                unknown;
+            std::array<const char *, AI::EnvironmentQuerySchemaLimits::DescriptorContexts> entries;
+            for (std::size_t index = 0; index < contexts.size(); ++index) {
+                if (contexts[index] == querier)
+                    entries[index] = labels.querier.c_str();
+                else if (contexts[index] == origin)
+                    entries[index] = labels.origin.c_str();
+                else {
+                    auto &buffer = unknown[index];
+                    const auto rendered = std::to_chars(buffer.data(), buffer.data() + buffer.size() - 1, contexts[index].Value());
+                    *rendered.ptr = '\0';
+                    entries[index] = buffer.data();
+                }
+            }
+            const auto found = std::ranges::find(contexts, selected);
+            auto index = found == contexts.end() ? 0 : static_cast<int>(found - contexts.begin());
+            if (Ui::DrawComboPropRow(labels.heading.c_str(), "##center_context", index, std::span{entries}.first(contexts.size()), fonts))
+                selected = contexts[static_cast<std::size_t>(index)];
+        }
 
         /** @brief Pins the selected authored object in the existing editor preview Scene for a native lattice. */
         Result<std::shared_ptr<const AI::QueryContextSnapshot>> CaptureLatticePreviewContext(const AI::EnvironmentQueryPlan &plan,
@@ -81,10 +125,11 @@ namespace Horo::Editor {
         }
 
         /** @brief Evaluates one bounded set of native stages without consulting mutable Scene state. */
-        Result<void> EvaluateLatticeTests(std::span<const AI::BuiltinPointDistanceQuery> tests, Math::WorldCoordinate64 origin,
-                                          Math::WorldCoordinate64 point, std::span<AI::QueryTestSample> facts) {
+        Result<void> EvaluateLatticeTests(std::span<const AI::BuiltinPointDistanceQuery> tests,
+                                          std::span<const Math::WorldCoordinate64> centers, const Math::WorldCoordinate64 &point,
+                                          std::span<AI::QueryTestSample> facts) {
             for (std::size_t index = 0; index < tests.size(); ++index) {
-                const auto evaluated = tests[index].Evaluate(origin, point);
+                const auto evaluated = tests[index].Evaluate(centers[index], point);
                 if (evaluated.HasError())
                     return Result<void>::Failure(evaluated.ErrorValue());
                 facts[index] = evaluated.Value();
@@ -166,10 +211,14 @@ namespace Horo::Editor {
             const auto samples = std::min(snapshot.generated, AI::QueryDebugCaptureSettings::MaximumSamples);
             snapshot.candidates.reserve(samples);
             snapshot.stages.reserve(samples * scoring.tests.size());
-            const auto *center = context.Find(AI::BuiltinQueryContextId(AI::BuiltinQueryContext::QuerierLocation));
-            if (!center || !std::holds_alternative<Math::WorldCoordinate64>(center->value))
-                return Preview::Failure(MakeError(AI::AIErrors::EnvironmentQueryContextMissing));
-            const auto origin = std::get<Math::WorldCoordinate64>(center->value);
+            std::array<Math::WorldCoordinate64, AI::EnvironmentQuerySchemaLimits::Stages> centers;
+            for (std::size_t index = 0; index < scoring.tests.size(); ++index) {
+                const auto *captured = context.Find(scoring.tests[index].Settings().center);
+                const auto *center = captured ? std::get_if<Math::WorldCoordinate64>(&captured->value) : nullptr;
+                if (!center)
+                    return Preview::Failure(MakeError(AI::AIErrors::EnvironmentQueryContextMissing));
+                centers[index] = *center;
+            }
             std::vector<AI::QueryCandidateScore> scores;
             scores.reserve(snapshot.generated);
             std::array<AI::QueryTestSample, AI::EnvironmentQuerySchemaLimits::Stages> scratch;
@@ -178,7 +227,7 @@ namespace Horo::Editor {
                 if (cancel.IsCancellationRequested())
                     return cancelled();
                 const auto point = std::get<Math::WorldCoordinate64>(items[index]);
-                if (const auto evaluated = EvaluateLatticeTests(scoring.tests, origin, point, facts); evaluated.HasError())
+                if (const auto evaluated = EvaluateLatticeTests(scoring.tests, centers, point, facts); evaluated.HasError())
                     return Preview::Failure(evaluated.ErrorValue());
                 scores.push_back(scoring.plan.Evaluate(index, 0, facts));
                 const auto sampled = snapshot.candidates.size();
@@ -323,9 +372,7 @@ namespace Horo::Editor {
         if (plan.HasError())
             return Result<void>::Failure(plan.ErrorValue());
         const auto stages = plan.Value().Stages();
-        const auto required = plan.Value().RequiredContexts();
-        if (stages.empty() || stages.front().kind != AI::QueryStageKind::Generator || required.size() != 1 ||
-            required.front().id != AI::BuiltinQueryContextId(AI::BuiltinQueryContext::QuerierLocation))
+        if (!document.settings)
             return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
         const auto *generator = m_querySchema->Find(stages.front().generator);
         if (!generator)
@@ -541,15 +588,16 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceView::EnvironmentQueryFields::Capture */
     AI::BuiltinPointQuerySettings EditorWorkspaceView::EnvironmentQueryFields::Capture() const {
-        AI::BuiltinPointQuerySettings settings{{static_cast<std::uint32_t>(step), static_cast<std::uint32_t>(outer), {}},
+        AI::BuiltinPointQuerySettings settings{{static_cast<std::uint32_t>(step), static_cast<std::uint32_t>(outer), {}, center},
                                                static_cast<std::uint32_t>(maximum)};
         if (annulus)
             settings.lattice.innerSteps = static_cast<std::uint32_t>(inner);
         settings.distanceTests.reserve(distances.size());
         for (const auto &distance : distances)
-            settings.distanceTests.emplace_back(distance.stage, AI::QueryPointDistanceTest{static_cast<std::uint32_t>(distance.radius),
-                                                                                           distance.preferNearer,
-                                                                                           static_cast<std::uint32_t>(distance.weight)});
+            settings.distanceTests.emplace_back(distance.stage,
+                                                AI::QueryPointDistanceTest{static_cast<std::uint32_t>(distance.radius),
+                                                                           distance.preferNearer,
+                                                                           static_cast<std::uint32_t>(distance.weight), distance.center});
         return settings;
     }
 
@@ -560,10 +608,12 @@ namespace Horo::Editor {
             return m_context.localization.Get("editor", key);
         };
         const auto &fonts = m_context.theme.fonts;
+        const auto contextLabels = LocalizePointContexts(m_context.localization);
         for (auto &distance : fields.distances) {
             const auto id = std::format("##query-distance-{}", distance.stage.Value());
             ImGui::PushID(id.c_str());
             Ui::FieldLabel(std::format("{} {}", text("workspace.environment_query.test"), distance.stage.Value()).c_str(), fonts);
+            DrawPointContextChoice(contextLabels, fonts, distance.center, distance.centers);
             static_cast<void>(
                 Ui::DrawUnsignedPropRow(text("workspace.environment_query.create_radius").c_str(), "##radius", distance.radius, fonts));
             static_cast<void>(
@@ -599,11 +649,13 @@ namespace Horo::Editor {
                       .inner = current.lattice.innerSteps.value_or(0),
                       .maximum = current.maximumResults,
                       .annulus = current.lattice.innerSteps.has_value(),
+                      .center = current.lattice.center,
                       .newDistanceRadius = current.lattice.stepMillimeters,
                       .widgetId = std::format("##EqsSettings/{}/{}", fence.instance.Value(), fence.revision)};
             fields.distances.reserve(current.distanceTests.size());
             for (const auto &entry : current.distanceTests)
-                fields.distances.emplace_back(entry.stage, entry.test.radiusMillimeters, entry.test.preferNearer, entry.test.scoreWeight);
+                fields.distances.emplace_back(entry.stage, entry.test.radiusMillimeters, entry.test.preferNearer, entry.test.scoreWeight,
+                                              entry.test.center, entry.centers);
         }
         ImGui::PushID(fields.widgetId.c_str());
         const auto number = [&](std::string_view label, const char *id, std::uint64_t &value) {
@@ -615,6 +667,7 @@ namespace Horo::Editor {
         if (fields.annulus)
             number("workspace.environment_query.create_inner", "##inner", fields.inner);
         number("workspace.environment_query.create_limit", "##limit", fields.maximum);
+        DrawPointContextChoice(LocalizePointContexts(m_context.localization), fonts, fields.center, current.latticeCenters);
         const auto remove = DrawEnvironmentQueryDistanceStages(fields);
         const bool roomForStage = document.query->Stages().size() < AI::EnvironmentQuerySchemaLimits::Stages;
         if (roomForStage)

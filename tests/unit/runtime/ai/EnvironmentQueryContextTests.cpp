@@ -96,6 +96,40 @@ namespace Horo::AI {
             }
         }
 
+        TEST_CASE("EQS compiles independently authored point contexts and retains only selected requirements",
+                  "[unit][ai][eqs][generator]") {
+            const auto registry = CaptureBuiltinQuerySchema();
+            REQUIRE(registry.HasValue());
+            const auto world = BuiltinQueryContextId(BuiltinQueryContext::WorldOrigin);
+            const auto querier = BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation);
+            const auto generator =
+                CreateBuiltinLatticeQuery(MakeIdentity<QueryId>(2), MakeIdentity<QueryStageId>(3), MakeIdentity<QueryResultSchemaId>(4),
+                                          "World points", {.stepMillimeters = 100, .outerSteps = 1, .center = world}, 9);
+            REQUIRE(generator.HasValue());
+            const auto stage = MakeIdentity<QueryStageId>(5);
+            const auto asset = AddBuiltinPointDistanceTest(generator.Value(), stage, {300, false});
+            REQUIRE(asset.HasValue());
+            const auto bytes = EnvironmentQuerySourceCodec::Encode(asset.Value());
+            REQUIRE(bytes.HasValue());
+            const auto restored = EnvironmentQuerySourceCodec::Decode(bytes.Value());
+            REQUIRE(restored.HasValue());
+            const auto plan = EnvironmentQueryPlan::Compile(restored.Value(), registry.Value());
+            REQUIRE(plan.HasValue());
+            REQUIRE(plan.Value().RequiredContexts().size() == 2);
+            CHECK(plan.Value().Stages().front().selectedContext == world);
+            CHECK(plan.Value().Stages().back().selectedContext == querier);
+            const auto settings = ReadBuiltinPointQuerySettings(restored.Value(), registry.Value());
+            REQUIRE(settings.HasValue());
+            CHECK(settings.Value().lattice.center == world);
+            REQUIRE(settings.Value().latticeCenters.size() == 2);
+            CHECK(settings.Value().latticeCenters.front() == querier);
+            CHECK(settings.Value().distanceTests.front().test.center == querier);
+            const auto foreign =
+                AddBuiltinPointDistanceTest(generator.Value(), stage, {300, false, 1, BuiltinQueryContextId(BuiltinQueryContext::Target)});
+            REQUIRE(foreign.HasValue());
+            ExpectError(EnvironmentQueryPlan::Compile(foreign.Value(), registry.Value()), AIErrors::EnvironmentQueryContextInvalid);
+        }
+
         TEST_CASE("EQS lattice uses canonical ordering and rejects overflow without writing partial results",
                   "[unit][ai][eqs][generator]") {
             QueryFixture fixture;

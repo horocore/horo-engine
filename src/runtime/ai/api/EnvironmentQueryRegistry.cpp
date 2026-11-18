@@ -64,6 +64,25 @@ namespace Horo::AI {
             return Result<void>::Success();
         }
 
+        /** @brief Validates and resolves the bounded choices exposed by a stage descriptor. */
+        template <typename Stage> [[nodiscard]] Result<void> ResolveContextChoice(const QuerySchemaRegistry &registry, const Stage &stage) {
+            if (!stage.contextChoice)
+                return Result<void>::Success();
+            const auto &choice = *stage.contextChoice;
+            if (const auto property = std::ranges::find(stage.properties, choice.property, &QueryPropertyDescriptor::id);
+                choice.options.empty() || property == stage.properties.end() || property->required ||
+                property->kind != QueryPropertyKind::Unsigned64)
+                return Result<void>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+            if (stage.contexts.size() == EnvironmentQuerySchemaLimits::DescriptorContexts)
+                return Result<void>::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
+            if (const auto valid = ValidateContexts(choice.options); valid.HasError())
+                return valid;
+            for (const auto &option : choice.options)
+                if (std::ranges::find(stage.contexts, option.id, &QueryContextRequirement::id) != stage.contexts.end())
+                    return Result<void>::Failure(MakeError(AIErrors::EnvironmentQueryIdentityConflict));
+            return ResolveContexts(registry, choice.options);
+        }
+
         /** @brief Checks one generator's item and context dependencies after the registry is captured. */
         [[nodiscard]] Result<void> ResolveGenerator(const QuerySchemaRegistry &registry, const QueryGeneratorDescriptor &generator) {
             const auto *item = registry.Find(generator.outputItemType);
@@ -71,7 +90,9 @@ namespace Horo::AI {
                 return Result<void>::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
             if (!generator.outputItemVersion.Contains(item->origin.version))
                 return Result<void>::Failure(MakeError(AIErrors::EnvironmentQueryVersionIncompatible));
-            return ResolveContexts(registry, generator.contexts);
+            if (const auto fixed = ResolveContexts(registry, generator.contexts); fixed.HasError())
+                return fixed;
+            return ResolveContextChoice(registry, generator);
         }
 
         /** @brief Checks one test's item and context dependencies after the registry is captured. */
@@ -81,7 +102,9 @@ namespace Horo::AI {
                 return Result<void>::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
             if (!test.inputItemVersion.Contains(item->origin.version))
                 return Result<void>::Failure(MakeError(AIErrors::EnvironmentQueryVersionIncompatible));
-            return ResolveContexts(registry, test.contexts);
+            if (const auto fixed = ResolveContexts(registry, test.contexts); fixed.HasError())
+                return fixed;
+            return ResolveContextChoice(registry, test);
         }
 
         /** @brief Validates bounded item payload contracts before any dependency resolution. */

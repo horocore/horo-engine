@@ -17,19 +17,22 @@ namespace Horo::AI {
         std::uint32_t stepMillimeters{};
         std::uint32_t outerSteps{};
         std::optional<std::uint32_t> innerSteps; /**< Absent for a square; present for a closed annulus. */
+        QueryContextId center;                   /**< An invalid identity selects the registered default. */
     };
 
-    /** @brief Filters lattice candidates by distance from the captured querier, with optional nearest-first scoring. */
+    /** @brief Filters lattice candidates by distance from a captured location, with optional nearest-first scoring. */
     struct QueryPointDistanceTest final {
         std::uint32_t radiusMillimeters{};
         bool preferNearer{};
         std::uint32_t scoreWeight{1}; /**< Positive relative weight when nearest-first scoring is enabled. */
+        QueryContextId center;        /**< An invalid identity selects the registered default. */
     };
 
     /** @brief Existing distance stage and its editable controls, keyed by durable identity. */
     struct QueryPointDistanceStageSettings final {
         QueryStageId stage;
         QueryPointDistanceTest test;
+        std::vector<QueryContextId> centers; /**< Available authored choices in registered order. */
     };
 
     /** @brief Editable settings of the admitted native lattice and its existing distance stages. */
@@ -37,6 +40,7 @@ namespace Horo::AI {
         QueryPointLattice lattice;
         std::uint32_t maximumResults{};
         std::vector<QueryPointDistanceStageSettings> distanceTests; /**< Admitted semantic execution order. */
+        std::vector<QueryContextId> latticeCenters;                 /**< Available generator choices in registered order. */
     };
 
     /** @brief Pure initial-source factory installed by the application with the matching provider registry. */

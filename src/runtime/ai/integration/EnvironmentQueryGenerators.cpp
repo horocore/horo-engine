@@ -24,6 +24,29 @@ namespace Horo::AI {
         constexpr std::uint64_t DistanceRadius = LatticeProvider + 7;
         constexpr std::uint64_t DistancePreferNearer = LatticeProvider + 8;
         constexpr std::uint64_t DistanceScoreWeight = LatticeProvider + 9;
+        constexpr std::uint64_t PointCenter = LatticeProvider + 10;
+
+        /** @brief Supplies the capturable native location alternatives for a point stage. */
+        QueryContextChoice PointCenterChoice() {
+            return {.property = QueryPropertyId::Create(PointCenter).Value(),
+                    .options = {{BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation), LatticeVersion},
+                                {BuiltinQueryContextId(BuiltinQueryContext::WorldOrigin), LatticeVersion}}};
+        }
+
+        /** @brief Retains the original serialized shape for the default native location. */
+        void EncodePointCenter(std::vector<QueryPropertyValue> &properties, QueryContextId center) {
+            if (center.IsValid() && center != BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation))
+                properties.emplace_back(QueryPropertyId::Create(PointCenter).Value(), center.Value());
+        }
+
+        /** @brief Projects the installed choice list into editor-owned settings. */
+        std::vector<QueryContextId> PointCenterOptions(const std::optional<QueryContextChoice> &choice) {
+            std::vector<QueryContextId> options;
+            if (choice)
+                for (const auto &option : choice->options)
+                    options.push_back(option.id);
+            return options;
+        }
 
         /** @brief Encodes only the native editable controls for one distance stage. */
         std::vector<QueryPropertyValue> DistanceProperties(const QueryPointDistanceTest settings) {
@@ -32,6 +55,7 @@ namespace Horo::AI {
                                                        {QueryPropertyId::Create(DistancePreferNearer).Value(), settings.preferNearer}};
             if (settings.scoreWeight != QueryPointDistanceTest{}.scoreWeight)
                 properties.emplace_back(QueryPropertyId::Create(DistanceScoreWeight).Value(), std::uint64_t{settings.scoreWeight});
+            EncodePointCenter(properties, settings.center);
             return properties;
         }
 
@@ -80,11 +104,11 @@ namespace Horo::AI {
                 return {};
             const auto inner = QueryPropertyId::Create(InnerSteps).Value();
             if (std::ranges::find(stage.properties, inner, &QueryPropertyValue::id) == stage.properties.end())
-                return QueryPointLattice{*step, *outer};
+                return QueryPointLattice{*step, *outer, {}, stage.selectedContext};
             const auto innerValue = UnsignedProperty(stage, inner);
             if (!innerValue)
                 return {};
-            return QueryPointLattice{*step, *outer, *innerValue};
+            return QueryPointLattice{*step, *outer, *innerValue, stage.selectedContext};
         }
 
         /** @brief Adds a bounded lattice offset while preserving the full global millimeter range. */
@@ -176,19 +200,21 @@ namespace Horo::AI {
                                      .origin = origin,
                                      .outputItemType = item,
                                      .outputItemVersion = LatticeVersion,
-                                     .contexts = {{BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation), LatticeVersion}},
                                      .properties = {{QueryPropertyId::Create(StepMillimeters).Value(), QueryPropertyKind::Unsigned64, true},
                                                     {QueryPropertyId::Create(OuterSteps).Value(), QueryPropertyKind::Unsigned64, true},
-                                                    {QueryPropertyId::Create(InnerSteps).Value(), QueryPropertyKind::Unsigned64, false}}}};
+                                                    {QueryPropertyId::Create(InnerSteps).Value(), QueryPropertyKind::Unsigned64, false},
+                                                    {QueryPropertyId::Create(PointCenter).Value(), QueryPropertyKind::Unsigned64, false}},
+                                     .contextChoice = PointCenterChoice()}};
         const std::array tests{QueryTestDescriptor{
             .id = QueryTestId::Create(PointDistanceTest).Value(),
             .origin = origin,
             .inputItemType = item,
             .inputItemVersion = LatticeVersion,
-            .contexts = {{BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation), LatticeVersion}},
             .properties = {{QueryPropertyId::Create(DistanceRadius).Value(), QueryPropertyKind::Unsigned64, true},
                            {QueryPropertyId::Create(DistancePreferNearer).Value(), QueryPropertyKind::Boolean, true},
-                           {QueryPropertyId::Create(DistanceScoreWeight).Value(), QueryPropertyKind::Unsigned64, false}},
+                           {QueryPropertyId::Create(DistanceScoreWeight).Value(), QueryPropertyKind::Unsigned64, false},
+                           {QueryPropertyId::Create(PointCenter).Value(), QueryPropertyKind::Unsigned64, false}},
+            .contextChoice = PointCenterChoice(),
         }};
         return QuerySchemaRegistry::Capture({items, contexts, generators, tests});
     }
@@ -207,6 +233,7 @@ namespace Horo::AI {
                                                  {QueryPropertyId::Create(OuterSteps).Value(), std::uint64_t{lattice.outerSteps}}}};
         if (lattice.innerSteps)
             generator.properties.push_back({QueryPropertyId::Create(InnerSteps).Value(), std::uint64_t{*lattice.innerSteps}});
+        EncodePointCenter(generator.properties, lattice.center);
         const QueryResultSchema results{.id = result,
                                         .version = LatticeVersion.minimum,
                                         .itemType = QueryItemTypeId::Create(PointItem).Value(),
@@ -263,19 +290,21 @@ namespace Horo::AI {
         if (plan.HasError())
             return Settings::Failure(plan.ErrorValue());
         const auto stages = plan.Value().Stages();
-        if (const auto *generator = registry.Find(stages.front().generator);
-            !generator || generator->origin != BuiltinOrigin() || generator->id != QueryGeneratorId::Create(LatticeGenerator).Value())
+        const auto *generator = registry.Find(stages.front().generator);
+        if (!generator || generator->origin != BuiltinOrigin() || generator->id != QueryGeneratorId::Create(LatticeGenerator).Value())
             return Settings::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
         const auto lattice = PlanLattice(stages.front());
         if (!lattice || !ValidLattice(*lattice))
             return Settings::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
         BuiltinPointQuerySettings settings{*lattice, asset.ResultSchema().maximumResults};
+        settings.latticeCenters = PointCenterOptions(generator->contextChoice);
         settings.distanceTests.reserve(stages.size() - 1);
         for (const auto &stage : stages.subspan(1)) {
             const auto distance = BuiltinPointDistanceQuery::Capture(stage, registry);
             if (distance.HasError())
                 return Settings::Failure(distance.ErrorValue());
-            settings.distanceTests.push_back({stage.id, distance.Value().Settings()});
+            settings.distanceTests.emplace_back(stage.id, distance.Value().Settings(),
+                                                PointCenterOptions(registry.Find(stage.test)->contextChoice));
         }
         return Settings::Success(std::move(settings));
     }
@@ -331,7 +360,7 @@ namespace Horo::AI {
         const auto *scoring = scoringProperty == stage.properties.end() ? nullptr : std::get_if<bool>(&scoringProperty->value);
         if (radius.value_or(0) == 0 || weight.value_or(0) == 0 || !scoring)
             return Captured::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-        return Captured::Success(BuiltinPointDistanceQuery{stage.id, {*radius, *scoring, *weight}});
+        return Captured::Success(BuiltinPointDistanceQuery{stage.id, {*radius, *scoring, *weight, stage.selectedContext}});
     }
 
     /** @copydoc BuiltinPointDistanceQuery::Rule */
@@ -368,7 +397,7 @@ namespace Horo::AI {
         const auto lattice = PlanLattice(*stage);
         if (!lattice)
             return Generation::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-        return GenerateQueryLattice(contexts, BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation), *lattice, output);
+        return GenerateQueryLattice(contexts, lattice->center, *lattice, output);
     }
 
     /** @copydoc GenerateQueryPerceivedEntities */

@@ -241,6 +241,23 @@ TEST_CASE("Environment Query workspace previews the saved native lattice from an
     auto expected = Ready;
     std::optional<QueryStageId> distanceStage;
     std::optional<QueryStageId> filterStage;
+    bool mixedContexts = false;
+    SECTION("generation and distance tests use the distinct captured locations") {
+        mixedContexts = true;
+        const auto origin = BuiltinQueryContextId(BuiltinQueryContext::WorldOrigin);
+        const auto lattice =
+            CreateBuiltinLatticeQuery(query.Value().Id(), query.Value().Stages().front().id, query.Value().ResultSchema().id,
+                                      "World points", {.stepMillimeters = 1000, .outerSteps = 1, .center = origin}, 9);
+        REQUIRE(lattice.HasValue());
+        const auto staged = AddBuiltinPointDistanceTest(lattice.Value(), QueryStageId::Create(12).Value(), {1000, true});
+        REQUIRE(staged.HasValue());
+        project.WriteAsset(staged.Value());
+        Project::Open(controller, Project::Path);
+        auto edited = pinned;
+        edited.source = document.source;
+        submit(edited);
+        REQUIRE(document.preview.status == Running);
+    }
     SECTION("the saved native test filters and reports the actual distance contribution") {
         const auto small = CreateBuiltinLatticeQuery(query.Value().Id(), query.Value().Stages().front().id, query.Value().ResultSchema().id,
                                                      "Distance points", {.stepMillimeters = 1000, .outerSteps = 2}, 7);
@@ -305,6 +322,15 @@ TEST_CASE("Environment Query workspace previews the saved native lattice from an
     }
     REQUIRE(document.preview.snapshot);
     const auto &preview = *document.preview.snapshot;
+    if (mixedContexts) {
+        REQUIRE(preview.candidates.size() == 9);
+        CHECK(preview.candidates[4].point == Math::WorldCoordinate64{});
+        CHECK(preview.winnerCount == 0);
+        REQUIRE(preview.stages.size() == 9);
+        CHECK(preview.stages[4].score.status == QueryScoreStatus::Filtered);
+        CHECK(active->IsCurrent());
+        return;
+    }
     if (filterStage) {
         REQUIRE(preview.candidates.size() == 25);
         REQUIRE(preview.stages.size() == 50);
@@ -423,7 +449,8 @@ TEST_CASE("Registered Query settings use shared history and tracked source publi
     changed.lattice = {.stepMillimeters = 800, .outerSteps = 4, .innerSteps = 1};
     changed.maximumResults = 7;
     changed.distanceTests[0].test = {2400, false, 2};
-    changed.distanceTests[1].test = {1900, true, 3};
+    const auto worldOrigin = BuiltinQueryContextId(BuiltinQueryContext::WorldOrigin);
+    changed.distanceTests[1].test = {1900, true, 3, worldOrigin};
     auto invalidWeight = changed;
     invalidWeight.distanceTests[1].test.scoreWeight = 0;
     issue(Apply, invalidWeight);
@@ -490,6 +517,7 @@ TEST_CASE("Registered Query settings use shared history and tracked source publi
         CHECK(reopened.settings->distanceTests[1].test.radiusMillimeters == 1900);
         CHECK(reopened.settings->distanceTests[1].test.preferNearer);
         CHECK(reopened.settings->distanceTests[1].test.scoreWeight == 3);
+        CHECK(reopened.settings->distanceTests[1].test.center == worldOrigin);
         CHECK_FALSE(reopened.canUndo);
     }
     SECTION("insertion and removal replay and save alongside ordinary field changes") {

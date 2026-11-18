@@ -85,15 +85,15 @@ namespace Horo::Editor {
             auto edited = AI::EditBuiltinPointQuerySettings(source, registry, settings);
             if (edited.HasError())
                 return Prepared::Failure(edited.ErrorValue());
-            if (std::holds_alternative<std::monostate>(change))
-                return Prepared::Success({std::move(edited).Value(), settings});
-            auto changed = ChangeDistanceStages(edited.Value(), change);
-            if (changed.HasError())
-                return Prepared::Failure(changed.ErrorValue());
-            auto projected = AI::ReadBuiltinPointQuerySettings(changed.Value(), registry);
+            if (!std::holds_alternative<std::monostate>(change)) {
+                edited = ChangeDistanceStages(edited.Value(), change);
+                if (edited.HasError())
+                    return Prepared::Failure(edited.ErrorValue());
+            }
+            auto projected = AI::ReadBuiltinPointQuerySettings(edited.Value(), registry);
             if (projected.HasError())
                 return Prepared::Failure(projected.ErrorValue());
-            return Prepared::Success({std::move(changed).Value(), std::move(projected).Value()});
+            return Prepared::Success({std::move(edited).Value(), std::move(projected).Value()});
         }
     }  // namespace
 
