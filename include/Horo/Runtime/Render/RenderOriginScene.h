@@ -1,6 +1,6 @@
 #pragma once
 
-/** @file RenderOriginScene.h @brief Renderer-owned origin projection and retained camera-relative frame storage. */
+/** @file RenderOriginScene.h @brief Renderer-owned origin projection and retained frame storage. */
 #include "Horo/Runtime/Render/RenderScene.h"
 #include "Horo/Runtime/Render/TemporalHistory.h"
 #include "Horo/WorldStreaming/OriginRebaseTransaction.h"
@@ -49,6 +49,19 @@ namespace Horo::Render {
         std::size_t materialIdBytes{MaximumMaterialIdBytes};
     };
 
+    /** @brief Coordinate space of camera, mesh translations and light positions in one retained frame. */
+    enum class RenderOriginCoordinateBasis {
+        CameraRelative,
+        OriginRelative
+    };
+
+    /** @brief Synchronous scene borrow in the exact World origin generation used to project its geometry. */
+    struct RenderOriginLocalScene final {
+        RenderSceneView scene;
+        RenderViewId view;
+        WorldStreaming::OriginFrameLease origin;
+    };
+
     namespace Detail {
         struct RenderOriginSceneState;
         struct RenderOriginFrameStorage;
@@ -59,10 +72,17 @@ namespace Horo::Render {
     public:
         /** @brief Borrows a scene for one synchronous frontend preparation/submission.
          * @param meshes Existing caller-owned resource views, pinned by the ordinary mesh producer through submission.
-         * @return Camera-relative scene or typed rejection for a stale/replaced/closed origin.
+         * @return Camera-relative scene or typed rejection for a different basis or stale/replaced/closed origin.
          * @pre Retain this packet through any work that borrows its scene. No prior raw borrow creates fresh submission authority.
          */
         [[nodiscard]] Result<RenderSceneView> Scene(std::span<const RenderMeshResourceView> meshes) const;
+
+        /** @brief Borrows geometry for composition with another pose expressed in the exact same World origin.
+         * @param meshes Caller-owned resource views pinned through the borrow.
+         * @return Origin-relative scene, exact renderer view and current origin lease, or typed rejection.
+         * @pre Retain the frame and mesh owners while borrowing scene data. The lease grants no new submission authority.
+         */
+        [[nodiscard]] Result<RenderOriginLocalScene> OriginScene(std::span<const RenderMeshResourceView> meshes) const;
 
         /** @brief Joins this origin to the temporal history of the same frontend-issued render view.
          * @param history Existing validated history inputs and view; the adapter owns its scene-origin generation.
@@ -79,6 +99,8 @@ namespace Horo::Render {
 
         /** @brief Identifies the one still-current renderer view for this immutable packet. */
         [[nodiscard]] Result<RenderViewId> Current() const;
+        /** @brief Builds a borrowed scene after the caller validates the frame and coordinate basis. */
+        [[nodiscard]] RenderSceneView ViewData(std::span<const RenderMeshResourceView> meshes) const noexcept;
         std::shared_ptr<const Detail::RenderOriginFrameStorage> storage_;
         std::weak_ptr<const Detail::RenderOriginSceneState> owner_;
     };
@@ -115,10 +137,12 @@ namespace Horo::Render {
 
         /** @brief Projects one complete camera/instance/light set from the same committed origin.
          * @param source Canonical immutable source and finite resource spans.
+         * @param basis Explicit coordinate basis for the complete projection.
          * @return Owned frame or typed capacity, range, stale or malformed input failure.
          * @post Success allocates no storage. Failure leaves every already published frame unchanged.
          */
-        [[nodiscard]] Result<RenderOriginFrame> Capture(const RenderOriginSceneSource &source);
+        [[nodiscard]] Result<RenderOriginFrame> Capture(const RenderOriginSceneSource &source,
+                                                        RenderOriginCoordinateBasis basis = RenderOriginCoordinateBasis::CameraRelative);
         /** @brief Revokes new captures/submissions; existing accepted packet data remains pinned by its frame owners. */
         void Shutdown() noexcept;
 

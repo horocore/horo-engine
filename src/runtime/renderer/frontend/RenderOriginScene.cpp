@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <limits>
 #include <new>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -13,6 +14,7 @@ namespace Horo::Render {
         /** @brief Storage remains immutable while any frame pins the slot, independent of origin lifetime. */
         struct RenderOriginFrameStorage final {
             WS::OriginFrameBinding binding;
+            std::optional<WS::OriginFrameLease> localOrigin;
             RenderCameraView camera;
             std::vector<RenderStaticMeshInstance> instances;
             std::size_t instanceCount{};
@@ -95,19 +97,32 @@ namespace Horo::Render {
                                                 static_cast<float>(static_cast<double>(delta[2]) / 1000.0)});
         }
 
+        /** @brief Checks origin extent before projecting a point in the selected coordinate basis. */
+        Result<Math::Vec3> ProjectPoint(const WS::OriginFrame &frame, const Math::WorldCoordinate64 &point,
+                                        const std::array<std::int64_t, 3> &camera, RenderOriginCoordinateBasis basis) {
+            const auto local = frame.ToLocal(point);
+            if (local.HasError())
+                return Result<Math::Vec3>::Failure(local.ErrorValue());
+            if (basis == RenderOriginCoordinateBasis::OriginRelative)
+                return Result<Math::Vec3>::Success(local.Value().Value());
+            return Relative(point, camera);
+        }
+
         /** @brief Stages a complete converted packet. The caller reserves the slot and publishes only on success. */
         Result<void> Project(Detail::RenderOriginFrameStorage &slot, const WS::OriginFrame &frame, const RenderOriginSceneSource &source,
-                             std::size_t materialIdBytes) {
-            if (const auto camera = frame.ToLocal(source.camera.position); camera.HasError())
-                return Result<void>::Failure(camera.ErrorValue());
-            if (const auto target = frame.ToLocal(source.camera.target); target.HasError())
-                return Result<void>::Failure(target.ErrorValue());
+                             std::size_t materialIdBytes, RenderOriginCoordinateBasis basis) {
+            const auto position = frame.ToLocal(source.camera.position);
+            if (position.HasError())
+                return Result<void>::Failure(position.ErrorValue());
             const auto camera = source.camera.position.Millimeters();
-            const auto target = Relative(source.camera.target, camera);
+            const auto target = ProjectPoint(frame, source.camera.target, camera, basis);
             if (target.HasError())
                 return Result<void>::Failure(target.ErrorValue());
-            slot.camera = {{}, target.Value(), source.camera.up, source.camera.projection};
-            if (!slot.camera.IsValid() || Math::Length(Math::Cross(slot.camera.target, slot.camera.up)) <= Math::DefaultEpsilon)
+            const auto originRelative = basis == RenderOriginCoordinateBasis::OriginRelative;
+            slot.camera = {originRelative ? position.Value().Value() : Math::Vec3{}, target.Value(), source.camera.up,
+                           source.camera.projection};
+            if (!slot.camera.IsValid() ||
+                Math::Length(Math::Cross(slot.camera.target - slot.camera.position, slot.camera.up)) <= Math::DefaultEpsilon)
                 return Reject<void>(WS::WorldStreamingErrors::OriginFrameInvalid);
 
             slot.instanceCount = 0;
@@ -117,9 +132,7 @@ namespace Horo::Render {
                     return Reject<void>(WS::WorldStreamingErrors::OriginFrameInvalid);
                 if (sourceDraw.material.value.size() > materialIdBytes)
                     return Reject<void>(WS::WorldStreamingErrors::OriginRebaseCapacityExceeded);
-                if (const auto point = frame.ToLocal(sourceInstance.position); point.HasError())
-                    return Result<void>::Failure(point.ErrorValue());
-                const auto relative = Relative(sourceInstance.position, camera);
+                const auto relative = ProjectPoint(frame, sourceInstance.position, camera, basis);
                 if (relative.HasError())
                     return Result<void>::Failure(relative.ErrorValue());
                 auto *material = slot.materialBytes.data() + slot.instanceCount * materialIdBytes;
@@ -135,9 +148,7 @@ namespace Horo::Render {
             for (const auto &sourceLight : source.lights) {
                 if (!sourceLight.light.IsValid() || sourceLight.light.position != Math::Vec3{})
                     return Reject<void>(WS::WorldStreamingErrors::OriginFrameInvalid);
-                if (const auto point = frame.ToLocal(sourceLight.position); point.HasError())
-                    return Result<void>::Failure(point.ErrorValue());
-                const auto relative = Relative(sourceLight.position, camera);
+                const auto relative = ProjectPoint(frame, sourceLight.position, camera, basis);
                 if (relative.HasError())
                     return Result<void>::Failure(relative.ErrorValue());
                 auto light = sourceLight.light;
@@ -220,12 +231,13 @@ namespace Horo::Render {
     }
 
     /** @copydoc RenderOriginSceneAdapter::Capture */
-    Result<RenderOriginFrame> RenderOriginSceneAdapter::Capture(const RenderOriginSceneSource &source) {
+    Result<RenderOriginFrame> RenderOriginSceneAdapter::Capture(const RenderOriginSceneSource &source, RenderOriginCoordinateBasis basis) {
         if (!state_->UsesOwnerLane() || !state_->active)
             return Reject<RenderOriginFrame>(WS::WorldStreamingErrors::OriginFrameLifecycleUnavailable);
         if (!state_->source->Publishes(state_->frame))
             return Reject<RenderOriginFrame>(WS::WorldStreamingErrors::OriginFrameStale);
-        if (source.sceneDomain == 0)
+        if (source.sceneDomain == 0 ||
+            (basis != RenderOriginCoordinateBasis::CameraRelative && basis != RenderOriginCoordinateBasis::OriginRelative))
             return Reject<RenderOriginFrame>(WS::WorldStreamingErrors::OriginFrameInvalid);
         if (source.instances.size() > state_->limits.instances || source.lights.size() > state_->limits.lights ||
             state_->revision == std::numeric_limits<std::uint64_t>::max())
@@ -235,10 +247,18 @@ namespace Horo::Render {
         });
         if (free == state_->slots.end())
             return Reject<RenderOriginFrame>(WS::WorldStreamingErrors::OriginRebaseCapacityExceeded);
+        std::optional<WS::OriginFrameLease> localOrigin;
+        if (basis == RenderOriginCoordinateBasis::OriginRelative) {
+            auto lease = state_->source->Lease();
+            if (lease.HasError())
+                return Result<RenderOriginFrame>::Failure(lease.ErrorValue());
+            localOrigin.emplace(std::move(lease).Value());
+        }
         auto &slot = **free;
-        if (auto projected = Project(slot, state_->frame, source, state_->limits.materialIdBytes); projected.HasError())
+        if (auto projected = Project(slot, state_->frame, source, state_->limits.materialIdBytes, basis); projected.HasError())
             return Result<RenderOriginFrame>::Failure(projected.ErrorValue());
         slot.binding = state_->frame.Binding();
+        slot.localOrigin = std::move(localOrigin);
         slot.sceneDomain = source.sceneDomain;
         slot.revision = ++state_->revision;
         return Result<RenderOriginFrame>::Success(RenderOriginFrame{*free, state_});
@@ -266,8 +286,29 @@ namespace Horo::Render {
     Result<RenderSceneView> RenderOriginFrame::Scene(std::span<const RenderMeshResourceView> meshes) const {
         if (const auto current = Current(); current.HasError())
             return Result<RenderSceneView>::Failure(current.ErrorValue());
-        return Result<RenderSceneView>::Success({storage_->camera, meshes, std::span{storage_->instances}.first(storage_->instanceCount),
-                                                 storage_->lights, storage_->sceneDomain, storage_->revision});
+        if (storage_->localOrigin)
+            return Reject<RenderSceneView>(WS::WorldStreamingErrors::OriginFrameInvalid);
+        return Result<RenderSceneView>::Success(ViewData(meshes));
+    }
+
+    /** @copydoc RenderOriginFrame::OriginScene */
+    Result<RenderOriginLocalScene> RenderOriginFrame::OriginScene(std::span<const RenderMeshResourceView> meshes) const {
+        const auto current = Current();
+        if (current.HasError())
+            return Result<RenderOriginLocalScene>::Failure(current.ErrorValue());
+        if (!storage_->localOrigin)
+            return Reject<RenderOriginLocalScene>(WS::WorldStreamingErrors::OriginFrameInvalid);
+        return Result<RenderOriginLocalScene>::Success({ViewData(meshes), current.Value(), *storage_->localOrigin});
+    }
+
+    /** @copydoc RenderOriginFrame::ViewData */
+    RenderSceneView RenderOriginFrame::ViewData(std::span<const RenderMeshResourceView> meshes) const noexcept {
+        return {storage_->camera,
+                meshes,
+                std::span{storage_->instances}.first(storage_->instanceCount),
+                storage_->lights,
+                storage_->sceneDomain,
+                storage_->revision};
     }
 
     /** @copydoc RenderOriginFrame::StampHistory */

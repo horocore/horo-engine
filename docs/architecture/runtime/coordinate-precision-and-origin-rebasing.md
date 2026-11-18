@@ -346,6 +346,15 @@ retained packet pins its camera, matrices, light and material bytes until its
 last holder releases it. Slot exhaustion reports backpressure before publishing
 any work.
 
+The mounted World composition can request an origin-relative packet for a
+consumer whose pose shares the canonical World origin. The same selected
+camera, mesh, and light anchors are projected into the committed origin frame.
+Its typed borrow carries the renderer view and a lease for the exact origin
+generation. The desktop packet API accepts camera-relative captures only. A
+mounted packet also requires the originating RuntimeScene incarnation to remain
+current. A pose consumer still owns admission, phase ordering, and replacement
+of its own pose source.
+
 A prepared rebase receipt advances the renderer only when its own canonical
 owner publishes the exact successor. Retained packets then fail new submission
 and history admission. Already accepted work keeps its immutable packet

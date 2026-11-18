@@ -22,7 +22,7 @@ namespace Horo::Render {
         }
 
         /** @brief Four kilometres of valid local extent around a very distant canonical world anchor. */
-        constexpr std::int64_t Anchor = 8'000'000'000'000;
+        constexpr std::int64_t Anchor = 9'007'199'254'740'993;
         constexpr std::int64_t Travel = 2'000'000;
 
         Math::WorldCoordinate64 Position(std::int64_t x = 0, std::int64_t y = 0, std::int64_t z = 0) {
@@ -111,6 +111,54 @@ namespace Horo::Render {
             }
         };
     }  // namespace
+
+    TEST_CASE("Origin-relative renderer packets track the exact committed origin and reject the desktop basis", "[renderer][origin]") {
+        Fixture f;
+        const auto desktop = RequireValue(f.adapter->Capture(f.Source()));
+        REQUIRE(desktop.OriginScene({}).HasError());
+
+        const auto capturesBefore = Tests::AllocationProbe::Count();
+        auto captured = f.adapter->Capture(f.Source(), RenderOriginCoordinateBasis::OriginRelative);
+        const auto capturesAfter = Tests::AllocationProbe::Count();
+        const auto retained = RequireValue(std::move(captured));
+        CHECK(capturesAfter == capturesBefore);
+        REQUIRE(retained.Scene({}).HasError());
+        const auto previous = RequireValue(retained.OriginScene({}));
+        CHECK(previous.view == f.view);
+        CHECK(RequireValue(previous.origin.Get()) == f.initial);
+        CHECK(previous.scene.camera.position == Math::Vec3{2000.0F, 0, 0});
+        CHECK(previous.scene.camera.target == Math::Vec3{2000.0F, 0, -1});
+        CHECK(previous.scene.instances.front().localToWorld.At(0, 3) == 2001.234F);
+        CHECK(previous.scene.lights.front().position == Math::Vec3{2002, 1, -3.5F});
+
+        auto cancelled = f.Rebase(f.initial);
+        cancelled.Rollback();
+        CHECK(RequireValue(previous.origin.Get()) == f.initial);
+        REQUIRE(retained.OriginScene({}).HasValue());
+
+        auto committed = f.Rebase(f.initial);
+        REQUIRE(committed.Commit(*f.origin, WS::OriginRebaseCommitPoint::PostSimulation, WS::OriginRebaseLifecycle::Active).HasValue());
+        CHECK(previous.origin.Get().HasError());
+        CHECK(retained.OriginScene({}).HasError());
+    }
+
+    TEST_CASE("Rebased origin-relative geometry retains signed millimeter deltas from the new origin", "[renderer][origin]") {
+        Fixture f;
+        auto transaction = f.Rebase(f.initial);
+        const auto successor = transaction.Event().replacementFrame;
+        REQUIRE(transaction.Commit(*f.origin, WS::OriginRebaseCommitPoint::PostSimulation, WS::OriginRebaseLifecycle::Active).HasValue());
+
+        const auto frame = RequireValue(f.adapter->Capture(f.Source(), RenderOriginCoordinateBasis::OriginRelative));
+        const auto origin = RequireValue(frame.OriginScene({}));
+        CHECK(RequireValue(origin.origin.Get()) == successor);
+        CHECK(origin.scene.camera.position == Math::Vec3{});
+        CHECK(origin.scene.camera.target == Math::Vec3{0, 0, -1});
+        CHECK(origin.scene.instances.front().localToWorld.At(0, 3) == 1.234F);
+        CHECK(origin.scene.lights.front().position == Math::Vec3{2, 1, -3.5F});
+        f.origin->Shutdown();
+        CHECK(origin.origin.Get().HasError());
+        CHECK(frame.OriginScene({}).HasError());
+    }
 
     TEST_CASE("Renderer origin sends consistent view, culling and GPU data through the active frontend", "[renderer][origin]") {
         Fixture f;

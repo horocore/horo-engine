@@ -676,7 +676,8 @@ namespace Horo::Application::Internal {
                                                                    const Runtime::SceneObjectId camera,
                                                                    const std::span<const Runtime::SceneObjectId> meshes,
                                                                    Runtime::PrimitiveMeshCache &primitives,
-                                                                   Render::RenderOriginSceneAdapter &renderer) const {
+                                                                   Render::RenderOriginSceneAdapter &renderer,
+                                                                   const Render::RenderOriginCoordinateBasis basis) const {
         using Output = Result<MountedWorldRenderPacket>;
         constexpr std::size_t MaximumSelectedMeshes = 64;
         if (meshes.size() > MaximumSelectedMeshes)
@@ -736,14 +737,14 @@ namespace Horo::Application::Internal {
             }
             auto transform = *entity.localTransform;
             transform.translation = {};
-            auto basis = transform.TryToMatrix();
-            if (basis.HasError())
-                return Output::Failure(basis.ErrorValue());
+            auto matrix = transform.TryToMatrix();
+            if (matrix.HasError())
+                return Output::Failure(matrix.ErrorValue());
             instances.emplace_back(Global(placed.Value().anchor.positionMillimeters),
-                                   Render::RenderStaticMeshInstance{handle, basis.Value(), resource.localBounds});
+                                   Render::RenderStaticMeshInstance{handle, matrix.Value(), resource.localBounds});
         }
 
-        auto frame = renderer.Capture({originCamera.Value(), instances, {}, parent.RuntimeId().value});
+        auto frame = renderer.Capture({originCamera.Value(), instances, {}, parent.RuntimeId().value}, basis);
         if (frame.HasError())
             return Output::Failure(frame.ErrorValue());
         return Output::Success(MountedWorldRenderPacket{parent, std::move(frame).Value(), std::move(leases), std::move(resources)});
@@ -759,6 +760,13 @@ namespace Horo::Application::Internal {
         if (!parent_.IsCurrent())
             return Result<Render::RenderSceneView>::Failure(MakeError(WS::WorldArtifactErrors::Stale));
         return frame_.Scene(resources_);
+    }
+
+    /** @copydoc MountedWorldRenderPacket::OriginScene */
+    Result<Render::RenderOriginLocalScene> MountedWorldRenderPacket::OriginScene() const {
+        if (!parent_.IsCurrent())
+            return Result<Render::RenderOriginLocalScene>::Failure(MakeError(WS::WorldArtifactErrors::Stale));
+        return frame_.OriginScene(resources_);
     }
 
     MountedWorld::MountedWorld(std::unique_ptr<State> state) noexcept : state_(std::move(state)) {}

@@ -271,7 +271,7 @@ namespace Horo::WorldCook {
                                                 published.Value().publication->manifestDigest,
                                                 release.indexArtifact,
                                                 release.dependencyArtifact,
-                                                Math::WorldCoordinate64::FromMillimeters(cameraPosition[0], cameraPosition[1],
+                                                Math::WorldCoordinate64::FromMillimeters(cameraPosition[0] - 1250, cameraPosition[1],
                                                                                          cameraPosition[2]),
                                                 request};
 
@@ -348,6 +348,23 @@ namespace Horo::WorldCook {
             CHECK(renderScene.Value().instances.front().localToWorld == expectedTransform.ToMatrix());
             CHECK_FALSE(renderScene.Value().meshResources.front().vertices.empty());
 
+            auto capturedWorld = mount->CaptureGeometry(*live, cameraEntity.object, drawObjects, primitives, *renderer,
+                                                        Render::RenderOriginCoordinateBasis::OriginRelative);
+            REQUIRE(capturedWorld.HasValue());
+            auto worldFrame = std::move(capturedWorld).Value();
+            CHECK(worldFrame.Scene().HasError());
+            CHECK(gameFrame.OriginScene().HasError());
+            const auto worldScene = worldFrame.OriginScene();
+            REQUIRE(worldScene.HasValue());
+            REQUIRE(worldScene.Value().scene.IsValid());
+            CHECK(worldScene.Value().view == Render::RenderViewId{2});
+            CHECK(worldScene.Value().origin.Get().Value() == lease.Get().Value());
+            CHECK(worldScene.Value().scene.camera.position == Math::Vec3{1.25F, 0, 0});
+            CHECK(worldScene.Value().scene.camera.target == Math::Vec3{2.25F, 0, 0});
+            expectedTransform.translation = {1.25F, 0, 0};
+            CHECK(worldScene.Value().scene.instances.front().localToWorld == expectedTransform.ToMatrix());
+            CHECK(worldScene.Value().scene.instances.front().mesh == renderScene.Value().instances.front().mesh);
+
             const auto liveEntity = live->Find(cameraEntity.object);
             REQUIRE(liveEntity);
             S::SceneCommandBuffer changed;
@@ -368,6 +385,8 @@ namespace Horo::WorldCook {
             CHECK_FALSE(live->IsCurrent());
             CHECK(lease.Get().HasError());
             CHECK(gameFrame.Scene().HasError());
+            CHECK(worldScene.Value().origin.Get().HasError());
+            CHECK(worldFrame.OriginScene().HasError());
         }
     }
 

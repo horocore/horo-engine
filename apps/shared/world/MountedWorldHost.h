@@ -72,6 +72,12 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<Render::RenderSceneView> Scene() const;
 
+        /** @brief Borrows the origin-relative geometry and exact owning origin for the active mounted Scene.
+         * @return Current renderer packet or typed stale/coordinate basis error.
+         * @pre The packet and its primitive resource leases must outlive scene borrows.
+         */
+        [[nodiscard]] Result<Render::RenderOriginLocalScene> OriginScene() const;
+
     private:
         friend class MountedWorld;
         MountedWorldRenderPacket(Runtime::RuntimeSceneView parent, Render::RenderOriginFrame frame,
@@ -123,15 +129,15 @@ namespace Horo::Application::Internal {
          * @param meshes Strictly ascending authored object identities, all required and owned by the same cell.
          * @param primitives Existing CPU mesh cache; returned resource leases outlive cache eviction.
          * @param renderer Same-World renderer adapter; its view and origin must remain valid during capture.
+         * @param basis Renderer coordinate basis for all geometry from this mounted selection.
          * @return Complete cold renderer packet or a typed absence/stale/unsupported/capacity failure.
          * @details Admits root objects only. World positions remain signed millimeter anchors. Local rotation and scale carry no
          * global translation authority. A local position edit since cell admission requires a new World position publication.
          */
-        [[nodiscard]] Result<MountedWorldRenderPacket> CaptureGeometry(const Runtime::RuntimeSceneView &parent,
-                                                                       Runtime::SceneObjectId camera,
-                                                                       std::span<const Runtime::SceneObjectId> meshes,
-                                                                       Runtime::PrimitiveMeshCache &primitives,
-                                                                       Render::RenderOriginSceneAdapter &renderer) const;
+        [[nodiscard]] Result<MountedWorldRenderPacket> CaptureGeometry(
+            const Runtime::RuntimeSceneView &parent, Runtime::SceneObjectId camera, std::span<const Runtime::SceneObjectId> meshes,
+            Runtime::PrimitiveMeshCache &primitives, Render::RenderOriginSceneAdapter &renderer,
+            Render::RenderOriginCoordinateBasis basis = Render::RenderOriginCoordinateBasis::CameraRelative) const;
 
         /** @brief Observe the exact mounted World frame; the caller keeps this complete mount alive. */
         [[nodiscard]] const WorldStreaming::OriginFrameOwner &Origin() const noexcept;
