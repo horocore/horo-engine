@@ -34,10 +34,11 @@ namespace Horo::Editor::PrefabWorkspaceTestSupport {
         std::optional<std::filesystem::path> diagnosticPath;
         bool diagnosticRoute{};
         bool persistenceAvailable{true};
+        JobSystem *recoveryJobs{};
         std::unique_ptr<EditorWorkspaceController> controller;
 
-        explicit Workspace(const std::string &sourceName = "hierarchy", const bool useDiagnosticRoute = false)
-            : project(sourceName), diagnosticRoute(useDiagnosticRoute) {
+        explicit Workspace(const std::string &sourceName = "hierarchy", const bool useDiagnosticRoute = false, JobSystem *jobs = nullptr)
+            : project(sourceName), diagnosticRoute(useDiagnosticRoute), recoveryJobs(jobs) {
             project.WriteScene();
             Open(PrefabAsset(9).Asset());
         }
@@ -68,6 +69,7 @@ namespace Horo::Editor::PrefabWorkspaceTestSupport {
                                            EditorWorkspaceDependencies{.world = {.documentSessionOwner = session},
                                                                        .mutations = persistenceAvailable ? &project.mutations : nullptr,
                                                                        .durableFiles = persistenceAvailable ? &project.files : nullptr,
+                                                                       .jobs = recoveryJobs,
                                                                        .sourceNavigation =
                                                                            {.sourceOpenNavigator =
                                                                                 diagnosticRoute

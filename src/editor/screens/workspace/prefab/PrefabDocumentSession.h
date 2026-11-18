@@ -71,7 +71,7 @@ namespace Horo::Editor {
 
     /** @brief Encodes and persists only the captured recovery slot, without borrowing a live document session. */
     [[nodiscard]] Result<void> WritePrefabRecovery(const PrefabRecoveryCheckpoint &checkpoint, DocumentRecoveryService &recovery,
-                                                  const CancellationToken &cancellation = {});
+                                                   const CancellationToken &cancellation = {});
 
     /** @brief Owner-thread session. Source edits use exact semantic history; the stage owns no save authority.
      * @details Load/command time only. Caller serializes requests on the creating thread. The shared

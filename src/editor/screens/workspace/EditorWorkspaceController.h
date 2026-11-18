@@ -591,10 +591,12 @@ namespace Horo::Editor {
         EditorViewportSceneSnapshot m_prefabViewportScene;
         std::uint64_t m_nextPrefabRuntime{EditorFirstPrefabStage.value};
         float m_prefabAutosaveSeconds{};
+
         struct PrefabRecoveryWork final {
             JobHandle job;
             std::shared_ptr<const PrefabRecoveryCheckpoint> checkpoint;
         };
+
         std::optional<PrefabRecoveryWork> m_prefabRecoveryWork;
         std::vector<DocumentInstanceId> m_prefabRecoveryQueue;
         std::uint64_t m_prefabStageAttemptRevision{};

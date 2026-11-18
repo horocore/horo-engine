@@ -396,7 +396,8 @@ namespace Horo::Editor {
                   .identity != Assets::AssetSourceIdentity{});
     }
 
-    TEST_CASE("Detached prefab recovery checkpoints retain the captured state while the owner continues editing", "[editor][prefab][session]") {
+    TEST_CASE("Detached prefab recovery checkpoints retain the captured state while the owner continues editing",
+              "[editor][prefab][session]") {
         Fixture fixture;
         fixture.Rename("Scheduled intent");
         const auto original = fixture.document->Snapshot();
@@ -415,8 +416,7 @@ namespace Horo::Editor {
 
         fixture.Rename("Later intent");
         JobSystem jobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
-        auto submitted = jobs.SubmitResult({.resource = JobResource::Io},
-                                          [&checkpoint, &recovery](const CancellationToken &token) {
+        auto submitted = jobs.SubmitResult({.resource = JobResource::Io}, [&checkpoint, &recovery](const CancellationToken &token) {
             return WritePrefabRecovery(*checkpoint.Value(), recovery, token);
         });
         REQUIRE(submitted.HasValue());
@@ -434,8 +434,10 @@ namespace Horo::Editor {
         fixture.Autosave();
         fixture.document->AcknowledgeRecovery(*checkpoint.Value());
         CHECK(fixture.document->Snapshot().recoveryRevision == newer.fence.revision);
-        CHECK(Assets::CaptureAssetSource(fixture.project.directory.path, fixture.project.source, Prefab::PrefabHardLimits::SourceDocumentBytes)
-                  .Value().identity == original.acceptedSource);
+        CHECK(Assets::CaptureAssetSource(fixture.project.directory.path, fixture.project.source,
+                                         Prefab::PrefabHardLimits::SourceDocumentBytes)
+                  .Value()
+                  .identity == original.acceptedSource);
     }
 
     TEST_CASE("Explicit prefab recovery discard preserves edits and refuses a replaced candidate", "[editor][prefab][session]") {

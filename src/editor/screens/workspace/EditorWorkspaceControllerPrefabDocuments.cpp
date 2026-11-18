@@ -410,13 +410,12 @@ namespace Horo::Editor {
         if (!captured.Value())
             return;
         auto checkpoint = std::make_shared<const PrefabRecoveryCheckpoint>(std::move(captured).Value().value());
-        auto submitted = m_sourceRecoveryJobs->SubmitResult(
-            {.priority = JobPriority::Background, .resource = JobResource::Io},
-            [root = std::filesystem::path(ProjectRoot()), mutations = m_mutations, files = m_durableFiles,
-             checkpoint](const CancellationToken &cancellation) {
-                DocumentRecoveryService recovery(root, *mutations, *files);
-                return WritePrefabRecovery(*checkpoint, recovery, cancellation);
-            });
+        auto submitted = m_sourceRecoveryJobs->SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Io},
+                                                            [root = std::filesystem::path(ProjectRoot()), mutations = m_mutations,
+                                                             files = m_durableFiles, checkpoint](const CancellationToken &cancellation) {
+            DocumentRecoveryService recovery(root, *mutations, *files);
+            return WritePrefabRecovery(*checkpoint, recovery, cancellation);
+        });
         if (submitted.HasError()) {
             m_viewModel.prefabDocumentError = submitted.ErrorValue();
             return;

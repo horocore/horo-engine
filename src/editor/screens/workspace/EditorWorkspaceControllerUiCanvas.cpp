@@ -260,8 +260,8 @@ namespace Horo::Editor {
             return;
         auto checkpoint = std::make_shared<const UiCanvasRecoveryCheckpoint>(std::move(captured).Value().value());
         auto submitted = m_sourceRecoveryJobs->SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Io},
-                                                              [root = std::filesystem::path(ProjectRoot()), mutations = m_mutations,
-                                                               files = m_durableFiles, checkpoint](const CancellationToken &cancellation) {
+                                                            [root = std::filesystem::path(ProjectRoot()), mutations = m_mutations,
+                                                             files = m_durableFiles, checkpoint](const CancellationToken &cancellation) {
             DocumentRecoveryService recovery(root, *mutations, *files);
             return WriteUiCanvasRecovery(*checkpoint, recovery, cancellation);
         });

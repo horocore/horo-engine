@@ -1,4 +1,5 @@
 #include "Horo/Editor/GuiScreen.h"
+#include "Horo/Foundation/JobSystem.h"
 #include "PrefabWorkspaceTestSupport.h"
 #include "editor/screens/workspace/EditorWorkspaceView.h"
 #include "editor_ui/HeadlessEditorGuiFixture.h"
@@ -85,6 +86,43 @@ namespace Horo::Editor {
             {.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = initial.identity.instance});
         CHECK(owner.ViewModel().prefabDocuments.empty());
         CHECK(initial.source->Data().objects.front().name == "Source root");
+    }
+
+    TEST_CASE("Prefab periodic recovery joins the workspace I/O lane and fences source close", "[editor][prefab][native][recovery]") {
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
+        Workspace workspace{"hierarchy", false, &jobs};
+        workspace.OpenPrefab();
+        const auto initial = workspace.controller->ViewModel().prefabDocuments.front();
+        workspace.Rename("Draft from I/O recovery");
+        const auto dirty = workspace.controller->ViewModel().prefabDocuments.front();
+        REQUIRE(dirty.dirty);
+        workspace.controller->UpdatePrefabAutosave(60.0F, 1);
+        DocumentRecoveryService recovery(workspace.project.directory.path, workspace.project.mutations, workspace.project.files);
+
+        SECTION("Completion acknowledges the exact detached capture") {
+            CHECK(workspace.controller->ViewModel().prefabDocuments.front().recoveryRevision == 0);
+            jobs.Shutdown(ShutdownPolicy::Drain);
+            workspace.controller->UpdatePrefabAutosave(0.0F, 1);
+            CHECK(workspace.controller->ViewModel().prefabDocuments.front().recoveryRevision == dirty.fence.revision);
+            const auto persisted = recovery.Inspect(initial.source->Data().assetId, initial.identity.key);
+            REQUIRE(persisted.HasValue());
+            REQUIRE(persisted.Value().has_value());
+            CHECK(persisted.Value()->revision == dirty.fence.revision);
+        }
+        SECTION("Discard and close cancels or consumes the old recovery before reopening") {
+            workspace.Action(PrefabDocumentAction::DiscardAndClose);
+            REQUIRE(workspace.controller->ViewModel().prefabDocuments.empty());
+            jobs.Shutdown(ShutdownPolicy::Drain);
+            const auto persisted = recovery.Inspect(initial.source->Data().assetId, initial.identity.key);
+            REQUIRE(persisted.HasValue());
+            CHECK_FALSE(persisted.Value().has_value());
+            workspace.OpenPrefab();
+            CHECK_FALSE(workspace.controller->ViewModel().prefabDocuments.front().dirty);
+        }
+        const auto canonical = Assets::CaptureAssetSource(workspace.project.directory.path, workspace.project.source,
+                                                          Prefab::PrefabHardLimits::SourceDocumentBytes);
+        REQUIRE(canonical.HasValue());
+        CHECK(canonical.Value().identity == initial.acceptedSource);
     }
 
     TEST_CASE("Typed prefab asset activation focuses its persistent document and preserves dirty history",

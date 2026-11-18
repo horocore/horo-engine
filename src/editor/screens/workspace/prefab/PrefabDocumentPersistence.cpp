@@ -72,8 +72,15 @@ namespace Horo::Editor {
         if (state_ == saved_ || (recoveryRevision_ == revision_ && !acceptedRecovery_))
             return Return::Success(std::nullopt);
         const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-        DocumentRecoveryRecord record{source_->Data().assetId, identity_.key, owner_, identity_.instance.Value(),
-                                      revision_, static_cast<std::uint64_t>(seconds), accepted_, state_, {}};
+        DocumentRecoveryRecord record{source_->Data().assetId,
+                                      identity_.key,
+                                      owner_,
+                                      identity_.instance.Value(),
+                                      revision_,
+                                      static_cast<std::uint64_t>(seconds),
+                                      accepted_,
+                                      state_,
+                                      {}};
         return Return::Success(PrefabRecoveryCheckpoint{std::move(record), source_, limits_, acceptedRecovery_});
     }
 
