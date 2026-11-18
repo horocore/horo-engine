@@ -92,6 +92,7 @@ namespace Horo::Runtime {
         RetirePublicationReceipt(ScenePublicationStatus::Rejected);
         publicationCheck_.reset();
         initialActivatedChildren_.reset();
+        initialStreamedCommands_.reset();
         if (transfer.retiredChildren)
             transfer.retiredChildren->CancelPending();
         transfer.retiredChildren.reset();
@@ -174,6 +175,10 @@ namespace Horo::Runtime {
                 RejectPendingPublication(JobCancelled().ErrorValue());
                 return Result<void>::Success();
             }
+            if (const auto valid = ValidateInitialStreamedAdmission(pending_.scene->View().RuntimeId(), cancellation); valid.HasError()) {
+                RejectPendingPublication(valid.ErrorValue());
+                return Result<void>::Success();
+            }
             if (const auto published = PublishPendingAggregate(); published.HasError()) {
                 RejectPendingPublication(published.ErrorValue());
                 return Result<void>::Success();
@@ -195,6 +200,7 @@ namespace Horo::Runtime {
         initialActivatedChildren_.reset();
         ScenePublicationDetail::ShutdownCandidates(pending_.candidates);
         pending_.scene.reset();
+        initialStreamedCommands_.reset();
         RetirePublicationReceipt(ScenePublicationStatus::Rejected);
         publicationCheck_.reset();
         transition_ = TransitionKind::None;

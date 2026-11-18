@@ -1,6 +1,8 @@
 #include "Horo/Runtime/Scene/RuntimeSceneCellPayload.h"
 
+#include <algorithm>
 #include <new>
+#include <thread>
 #include <utility>
 
 namespace Horo::Runtime {
@@ -16,6 +18,15 @@ namespace Horo::Runtime {
                                                std::shared_ptr<const SceneBaselineOwnership> ownership,
                                                std::shared_ptr<const SceneStructuralReceipt> receipt) noexcept {
                 return SceneInstanceOperation{address, revision, std::move(ownership), std::move(receipt)};
+            }
+
+            static bool CanPrepare(const RuntimeSceneService &service, SceneRuntimeId runtime) noexcept {
+                return std::this_thread::get_id() == service.restoreRetirementOwner_ && service.NextRuntimeId() == runtime;
+            }
+
+            static Result<ScenePublicationReceipt> Prepare(RuntimeSceneService &service, const RuntimeSceneDefinition &parent,
+                                                           SceneCommandBuffer commands) {
+                return service.QueuePreparationInternal(parent, {}, {}, std::move(commands));
             }
         };
     }  // namespace Detail
@@ -79,17 +90,38 @@ namespace Horo::Runtime {
         };
 
         /** @brief Rejects invalid or foreign cell/runtime evidence before consuming resources. */
-        Result<void> ValidateRequest(const RuntimeSceneService &service, const SceneCellPayloadIdentity &identity,
-                                     const SceneCellAttachmentRequest &request,
-                                     const std::shared_ptr<const SceneCellPayloadAuthority> &authority) {
+        Result<void> ValidateCellRequest(const SceneCellPayloadIdentity &identity, const SceneCellAttachmentRequest &request,
+                                         const std::shared_ptr<const SceneCellPayloadAuthority> &authority) {
             if (!identity.partition.IsValid() || !identity.cell.IsValid() || !identity.scene.IsValid() || identity.revision.value == 0 ||
                 !authority || !request.fence.IsValid() || !request.runtime.IsValid())
                 return Result<void>::Failure(MakeError(SceneCellPayloadErrors::Invalid));
             if (request.fence.partition != identity.partition || request.fence.cell != identity.cell)
                 return Result<void>::Failure(MakeError(SceneCellPayloadErrors::Stale));
+            return Result<void>::Success();
+        }
+
+        /** @brief Requires that ordinary attachment addresses the live runtime, separate from startup admission. */
+        Result<void> ValidateRequest(const RuntimeSceneService &service, const SceneCellPayloadIdentity &identity,
+                                     const SceneCellAttachmentRequest &request,
+                                     const std::shared_ptr<const SceneCellPayloadAuthority> &authority) {
+            if (const auto valid = ValidateCellRequest(identity, request, authority); valid.HasError())
+                return valid;
             if (const auto active = service.ActiveScene(); !active || active->RuntimeId() != request.runtime)
                 return Result<void>::Failure(MakeError(SceneCellPayloadErrors::Stale));
             return Result<void>::Success();
+        }
+
+        /** @brief Restricts startup materialization to portable data that needs no separate structural subsystem publication. */
+        bool IsStartupBaselineSupported(const RuntimeSceneDefinition &definition) {
+            if (!definition.AssetDependencies().empty() || !definition.ChildScenes().empty())
+                return false;
+            RuntimeComponentSet supported;
+            return std::ranges::all_of(definition.Entities(), [&](const auto &entity) {
+                const auto &components = entity.components;
+                supported.camera = components.camera;
+                supported.light = components.light;
+                return components == supported;
+            });
         }
 
         /** @brief Stages ordinary and Streamed cells through the same bounded structural attach command. */
@@ -145,6 +177,41 @@ namespace Horo::Runtime {
         const auto found = scene.FindBaseline(identity.scene);
         const auto *owner = found ? dynamic_cast<const AttachmentOwnership *>(found->ownership) : nullptr;
         return owner && found->revision == identity.revision && owner->IsCell(identity, epoch) ? found : std::nullopt;
+    }
+
+    /** @copydoc QueuePreparationWithInitialStreamedScene */
+    Result<ScenePublicationReceipt> QueuePreparationWithInitialStreamedScene(RuntimeSceneService &service,
+                                                                             const RuntimeSceneDefinition &parent,
+                                                                             const SceneInstanceAddress &address,
+                                                                             const RuntimeSceneCellPayload &payload,
+                                                                             const SceneCellAttachmentRequest &request,
+                                                                             std::shared_ptr<const SceneCellPayloadAuthority> authority) {
+        using Outcome = Result<ScenePublicationReceipt>;
+        const auto &identity = payload.Identity();
+        if (!address.parent.IsValid() || !address.instance.IsValid() || address.definition != identity.scene ||
+            address.mode > SceneInstanceMode::Activated)
+            return Outcome::Failure(MakeError(SceneCellPayloadErrors::Invalid));
+        if (const auto valid = ValidateCellRequest(identity, request, authority); valid.HasError())
+            return Outcome::Failure(valid.ErrorValue());
+        if (address.parent != request.runtime || request.expectedRevision.value != 0 ||
+            !Detail::StreamedSceneInstanceAccess::CanPrepare(service, address.parent))
+            return Outcome::Failure(MakeError(SceneCellPayloadErrors::Stale));
+        const auto &baseline = payload.Definition();
+        if (baseline.Entities().size() > request.limits.maximumEntities)
+            return Outcome::Failure(MakeError(SceneCellPayloadErrors::CapacityExceeded));
+        if (address.mode != SceneInstanceMode::Streamed)
+            return Outcome::Failure(MakeError(SceneCellPayloadErrors::Unsupported));
+        try {
+            if (!IsStartupBaselineSupported(baseline))
+                return Outcome::Failure(MakeError(SceneCellPayloadErrors::Unsupported));
+            SceneCommandBuffer commands;
+            auto ownership = std::make_shared<const AttachmentOwnership>(identity, request.fence, address);
+            if (auto staged = StageAttach(commands, payload, request, {}, std::move(authority), std::move(ownership)); staged.HasError())
+                return Outcome::Failure(staged.ErrorValue());
+            return Detail::StreamedSceneInstanceAccess::Prepare(service, parent, std::move(commands));
+        } catch (const std::bad_alloc &) {
+            return Outcome::Failure(MakeError(SceneCellPayloadErrors::CapacityExceeded));
+        }
     }
 
     /** @copydoc CancelRuntimeSceneCellOperation */

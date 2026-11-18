@@ -133,7 +133,7 @@ namespace Horo::Runtime {
 
     /** @brief Complete immutable owner evidence and explicit resident limits for a cell attachment. */
     struct SceneCellAttachmentRequest final {
-        SceneRuntimeId runtime; /**< Receiving canonical domain; never a candidate runtime ID. */
+        SceneRuntimeId runtime; /**< Exact receiving domain: live ordinarily, next unpublished ID for startup. */
         WorldStreaming::StreamingFence fence;
         Assets::AssetRegistryRevision registry;
         SceneBaselineAttachmentLimits limits;
@@ -186,6 +186,22 @@ namespace Horo::Runtime {
         RuntimeSceneService &service, const SceneInstanceAddress &address, const RuntimeSceneCellPayload &payload,
         const SceneCellAttachmentRequest &request, std::vector<RuntimeGroupAssetLease> resources,
         std::shared_ptr<const SceneCellPayloadAuthority> authority, const SceneInstanceOperation *replaces = nullptr);
+
+    /** @brief Prepares one Streamed baseline inside the exact unpublished root before Scene activation callbacks.
+     * @param service Receiving Scene service on its construction lane.
+     * @param parent Immutable root definition, using normal Scene preparation and asset discovery.
+     * @param address Exact next Scene runtime, Streamed occurrence and child definition.
+     * @param payload Verified assetless Core ECS cell baseline. Camera, light and procedural mesh data are supported.
+     * @param request Exact catalog and streaming admission evidence, cancellation and attachment limits. Replacement must be absent.
+     * @param authority Shared streaming readiness authority retained until root publication or rejection.
+     * @return Tracked root publication receipt or typed admission error. Deferred failure preserves the current active Scene.
+     * @details The cell is visible to activation participants in the private root. The regular root safe point commits both together.
+     * The caller owns its streaming reservation and observes the receipt before exposing Active residency.
+     */
+    [[nodiscard]] Result<ScenePublicationReceipt> QueuePreparationWithInitialStreamedScene(
+        RuntimeSceneService &service, const RuntimeSceneDefinition &parent, const SceneInstanceAddress &address,
+        const RuntimeSceneCellPayload &payload, const SceneCellAttachmentRequest &request,
+        std::shared_ptr<const SceneCellPayloadAuthority> authority);
 
     /** @brief Observes an exact current streamed instance through its parent's canonical cell attachment.
      * @param parent Current parent view. @param address Expected Streamed occurrence.

@@ -186,6 +186,14 @@ namespace Horo::Runtime {
     Result<ScenePublicationReceipt> RuntimeSceneService::QueuePreparationWithPublicationCheck(
         const RuntimeSceneDefinition &definition, std::unique_ptr<ScenePublicationCheck> publicationCheck,
         const RuntimeSceneConfig config) {
+        return QueuePreparationInternal(definition, std::move(publicationCheck), config, {});
+    }
+
+    /** @copydoc RuntimeSceneService::QueuePreparationInternal */
+    Result<ScenePublicationReceipt> RuntimeSceneService::QueuePreparationInternal(const RuntimeSceneDefinition &definition,
+                                                                                  std::unique_ptr<ScenePublicationCheck> publicationCheck,
+                                                                                  const RuntimeSceneConfig config,
+                                                                                  std::optional<SceneCommandBuffer> initialStreamed) {
         if (shutdown_)
             return Result<ScenePublicationReceipt>::Failure(MakeError(SceneErrors::ServiceShutdown));
         if (mutatingLifecycle_ || transition_ != TransitionKind::None || structuralCommands_ || preparation_)
@@ -199,10 +207,13 @@ namespace Horo::Runtime {
         }
         try {
             // Receipt storage is admitted before world preparation. Publication fills only bounded values, with no callbacks.
-            auto receipt = publicationCheck ? std::make_shared<ScenePublicationDetail::State>() : nullptr;
+            auto receipt = (publicationCheck || initialStreamed) ? std::make_shared<ScenePublicationDetail::State>() : nullptr;
             operationError_.reset();
-            if (const auto admitted = BeginPreparation(definition, config); admitted.HasError())
+            initialStreamedCommands_ = std::move(initialStreamed);
+            if (const auto admitted = BeginPreparation(definition, config); admitted.HasError()) {
+                initialStreamedCommands_.reset();
                 return Result<ScenePublicationReceipt>::Failure(admitted.ErrorValue());
+            }
             if (pending_.scene && publicationCheck) {
                 const auto composition = publicationCheck->ValidatePreparedComposition(pending_.datasets);
                 if (composition.HasError()) {
@@ -214,6 +225,7 @@ namespace Horo::Runtime {
             publicationReceipt_ = receipt;
             return Result<ScenePublicationReceipt>::Success(ScenePublicationReceipt{std::move(receipt)});
         } catch (const std::bad_alloc &) {
+            initialStreamedCommands_.reset();
             return Result<ScenePublicationReceipt>::Failure(
                 MakeError(SceneErrors::InvalidCandidate, "Scene publication receipt allocation failed."));
         }
@@ -372,6 +384,7 @@ namespace Horo::Runtime {
         ScenePublicationDetail::ShutdownCandidates(pending_.candidates);
         pending_.scene.reset();
         initialActivatedChildren_.reset();
+        initialStreamedCommands_.reset();
         RetirePublicationReceipt(ScenePublicationStatus::Cancelled);
         publicationCheck_.reset();
         transition_ = None;
@@ -495,6 +508,13 @@ namespace Horo::Runtime {
                 RejectPendingPublication(JobCancelled().ErrorValue());
                 return Result<void>::Success();
             }
+            if (preparation_) {
+                if (const auto valid = ValidateInitialStreamedAdmission({nextRuntimeId_}, context.cancellation); valid.HasError()) {
+                    CancelPreparation(false);
+                    RejectPendingPublication(valid.ErrorValue());
+                    return Result<void>::Success();
+                }
+            }
             if (preparation_ && publicationCheck_) {
                 if (const auto valid = publicationCheck_->ValidatePublication(); valid.HasError()) {
                     operationError_ = valid.ErrorValue();
@@ -538,6 +558,7 @@ namespace Horo::Runtime {
         ScenePublicationDetail::ShutdownCandidates(pending_.candidates);
         pending_.scene.reset();
         initialActivatedChildren_.reset();
+        initialStreamedCommands_.reset();
         RetirePublicationReceipt(ScenePublicationStatus::Cancelled);
         publicationCheck_.reset();
         RetireActivatedInstances();
@@ -835,6 +856,16 @@ namespace Horo::Runtime {
                active_.scene.get() != &candidate;
     }
 
+    /** @copydoc RuntimeSceneService::ValidateInitialStreamedAdmission */
+    Result<void> RuntimeSceneService::ValidateInitialStreamedAdmission(const SceneRuntimeId runtime,
+                                                                       const CancellationToken &cancellation) const {
+        if (!initialStreamedCommands_)
+            return Result<void>::Success();
+        if (cancellation.IsCancellationRequested())
+            return JobCancelled();
+        return initialStreamedCommands_->ValidateAdmission(runtime, StructuralRegistryRevision(assetPreparationServices_.registry));
+    }
+
     /** @copydoc RuntimeSceneService::StageCandidate */
     Result<void> RuntimeSceneService::StageCandidate(const RuntimeSceneDefinition &definition, const RuntimeSceneConfig config,
                                                      const Assets::AssetRegistryRevision revision,
@@ -847,6 +878,14 @@ namespace Horo::Runtime {
             if (candidate.HasError())
                 return Result<void>::Failure(candidate.ErrorValue());
             pending_.scene = std::move(candidate).Value();
+            if (initialStreamedCommands_) {
+                // The sealed batch admits only Core ECS. Whole-Scene activation participants own any derived state.
+                const auto attached = pending_.scene->CommitWithRegistry(*initialStreamedCommands_, assetPreparationServices_.registry);
+                if (attached.HasError()) {
+                    pending_.scene.reset();
+                    return Result<void>::Failure(attached.ErrorValue());
+                }
+            }
             if (aggregateRestore_) {
                 RestoreCandidateCommands commands{*this, *pending_.scene};
                 if (const auto prepared = aggregateRestore_->PrepareScene(*pending_.scene, commands); prepared.HasError()) {

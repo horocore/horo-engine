@@ -34,6 +34,7 @@ namespace Horo::Runtime {
 
     namespace Detail {
         class ActivatedSceneInstances;
+        class StreamedSceneInstanceAccess;
         struct InitialActivatedSceneChildren;
     }  // namespace Detail
 
@@ -1212,6 +1213,7 @@ namespace Horo::Runtime {
 
     private:
         friend class Detail::ActivatedSceneInstances;
+        friend class Detail::StreamedSceneInstanceAccess;
         enum class TransitionKind : std::uint8_t {
             None,
             Activate,
@@ -1246,6 +1248,13 @@ namespace Horo::Runtime {
         };
 
         [[nodiscard]] Result<void> BeginPreparation(const RuntimeSceneDefinition &definition, RuntimeSceneConfig config);
+        /** @brief Admits ordinary root preparation or one sealed startup baseline from the Streamed integration. */
+        [[nodiscard]] Result<ScenePublicationReceipt> QueuePreparationInternal(const RuntimeSceneDefinition &definition,
+                                                                               std::unique_ptr<ScenePublicationCheck> publicationCheck,
+                                                                               RuntimeSceneConfig config,
+                                                                               std::optional<SceneCommandBuffer> initialStreamed);
+        /** @brief Rechecks startup cell admission before asynchronous work or the final aggregate transfer. */
+        [[nodiscard]] Result<void> ValidateInitialStreamedAdmission(SceneRuntimeId runtime, const CancellationToken &cancellation) const;
         /** @brief Stages the validated runtime scene and its detached participant candidates without publication. */
         [[nodiscard]] Result<void> StageCandidate(const RuntimeSceneDefinition &definition, RuntimeSceneConfig config,
                                                   Assets::AssetRegistryRevision revision,
@@ -1302,6 +1311,7 @@ namespace Horo::Runtime {
         std::unique_ptr<ScenePublicationCheck> publicationCheck_;
         std::shared_ptr<ScenePublicationDetail::State> publicationReceipt_;
         std::unique_ptr<SceneAggregateRestore> aggregateRestore_;
+        std::optional<SceneCommandBuffer> initialStreamedCommands_; /**< One sealed attachment retained through root publication. */
         std::optional<SceneCommandBuffer> structuralCommands_;
         std::shared_ptr<SceneStructuralReceipt> structuralReceipt_;
         std::optional<StructuralCommitResult> structuralResult_;

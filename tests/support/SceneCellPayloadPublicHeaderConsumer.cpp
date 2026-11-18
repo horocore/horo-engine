@@ -29,6 +29,12 @@ static_assert(
                        const Horo::Runtime::RuntimeSceneCellPayload &, const Horo::Runtime::SceneCellAttachmentRequest &,
                        std::vector<Horo::Runtime::RuntimeGroupAssetLease>, std::shared_ptr<const Horo::Runtime::SceneCellPayloadAuthority>,
                        const Horo::Runtime::SceneInstanceOperation *)>);
+static_assert(std::is_same_v<decltype(&Horo::Runtime::QueuePreparationWithInitialStreamedScene),
+                             Horo::Result<Horo::Runtime::ScenePublicationReceipt> (*)(
+                                 Horo::Runtime::RuntimeSceneService &, const Horo::Runtime::RuntimeSceneDefinition &,
+                                 const Horo::Runtime::SceneInstanceAddress &, const Horo::Runtime::RuntimeSceneCellPayload &,
+                                 const Horo::Runtime::SceneCellAttachmentRequest &,
+                                 std::shared_ptr<const Horo::Runtime::SceneCellPayloadAuthority>)>);
 static_assert(!std::is_copy_constructible_v<Horo::Runtime::IncrementalSceneCellCook>);
 static_assert(std::is_base_of_v<Horo::Runtime::SceneActivationParticipant, Horo::Runtime::SceneCellAttachmentParticipant>);
 

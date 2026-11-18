@@ -770,6 +770,19 @@ authority. Parent cancellation ends pending publication; replacing or retiring
 the parent discards all its attached children. Streamed admission neither
 selects residency nor mounts a partition.
 
+Cold startup can admit one verified Streamed baseline for the Scene service's
+exact next runtime. The service applies the ordinary baseline topology and
+resource checks to the private root before preparing activation participants.
+This route admits assetless Core ECS with optional camera, light and procedural
+mesh data. Structural callbacks for a live Scene remain on the live path.
+The host supplies a current streaming reservation, the complete catalog
+fence and cancellation. The final root publication gate rechecks that evidence
+after activation participants validate. Observers receive a tracked aggregate
+receipt. Only a published receipt authorizes the host to expose Active cell
+residency. Prepare failure, cancellation or stale admission releases the private
+root and its cell together. Save restore continues to use its own private
+candidate authority.
+
 Activated instances use a separate, one-use RuntimeSceneService and entity
 domain. The canonical parent reserves the child's runtime identity from its
 monotonic cursor and supplies the existing asset authorities. An explicitly
