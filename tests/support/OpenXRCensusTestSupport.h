@@ -15,6 +15,8 @@ namespace Horo::Tests::OpenXR {
         bool duplicateSpaces{};
         bool invalidView{};
         bool handsSupported{};
+        XrBool32 gazeSupport{XR_FALSE};
+        XrResult gazeResult{XR_SUCCESS};
         bool invalidReprojectionExtent{};
         std::uint32_t synthesisEyeWidthStep{160};
         std::string_view fail;
@@ -47,6 +49,12 @@ namespace Horo::Tests::OpenXR {
             value->trackingProperties = {XR_TRUE, XR_TRUE};
             if (value->next) {
                 const auto *header = static_cast<const XrBaseOutStructure *>(value->next);
+                if (header->type == XR_TYPE_SYSTEM_EYE_GAZE_INTERACTION_PROPERTIES_EXT) {
+                    auto &eyes = *static_cast<XrSystemEyeGazeInteractionPropertiesEXT *>(value->next);
+                    eyes.supportsEyeGazeInteraction = active->gazeSupport;
+                    active->calls.push_back("eye-gaze-properties");
+                    return active->gazeResult;
+                }
                 if (header->type == XR_TYPE_SYSTEM_SPACE_WARP_PROPERTIES_FB) {
                     auto &warp = *static_cast<XrSystemSpaceWarpPropertiesFB *>(value->next);
                     warp.recommendedMotionVectorImageRectWidth = active->invalidReprojectionExtent ? 4096 : 640;

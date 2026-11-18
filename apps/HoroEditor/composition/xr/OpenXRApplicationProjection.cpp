@@ -116,6 +116,7 @@ namespace Horo::Application::Internal {
             XRCapabilityState hands;
             XRCapabilityState stage;
             XRCapabilityState reprojection;
+            XRCapabilityState eyeGaze;
         };
 
         /** @brief Forms immutable capability evidence from validated native census and exact target support. */
@@ -151,6 +152,7 @@ namespace Horo::Application::Internal {
             fact(XRCapability::ExternalColorTargets, targets.exactImages);
             descriptor.states[static_cast<std::size_t>(XRCapability::HandTracking)] = optional.hands;
             descriptor.states[static_cast<std::size_t>(XRCapability::SpaceWarp)] = optional.reprojection;
+            descriptor.states[static_cast<std::size_t>(XRCapability::EyeGaze)] = optional.eyeGaze;
             return XRCapabilitySnapshot::Create(descriptor);
         }
     }  // namespace
@@ -236,7 +238,8 @@ namespace Horo::Application::Internal {
         auto revision = XRCapabilityRevision::Create(lastCapabilityRevision_ + 1);
         if (revision.HasError())
             return Outcome::Failure(revision.ErrorValue());
-        OptionalProjectionEvidence optional{input_.handAvailability, input_.stageAvailability, XRCapabilityState::Unsupported};
+        OptionalProjectionEvidence optional{input_.handAvailability, input_.stageAvailability, XRCapabilityState::Unsupported,
+                                            EyeGazeAvailability()};
         if (std::ranges::any_of(settings_.Features(), [](const XRFeatureRequest &feature) {
             return feature.capability == XRCapability::SpaceWarp && feature.kind == XRFeatureRequirementKind::Optional;
         })) {

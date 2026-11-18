@@ -311,6 +311,7 @@ namespace {
             "workspace.xr_setup.inspect_action_space",
             "workspace.xr_setup.inspect_action_projection",
             "workspace.xr_setup.inspect_hands",
+            "workspace.xr_setup.inspect_eye_gaze",
             "workspace.xr_setup.inspect_unsupported",
             "workspace.xr_setup.inspect_not_available",
             "workspace.xr_setup.inspect_available",

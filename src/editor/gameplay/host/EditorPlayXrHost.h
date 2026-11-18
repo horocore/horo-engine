@@ -119,7 +119,7 @@ namespace Horo::Editor {
     /** @brief Owned redacted snapshot copied on the application owner lane without any native API access. */
     struct EditorXrInspectionSnapshot final {
         static constexpr std::size_t MaximumDisplayedActions = 12;
-        static constexpr std::size_t CapabilityCount = 6;
+        static constexpr std::size_t CapabilityCount = 7;
         EditorXrInspectionStatus status{EditorXrInspectionStatus::Unavailable};
         EditorXrInspectionPrivacy privacy{EditorXrInspectionPrivacy::Redacted};
         std::optional<XR::XRSessionState> session;

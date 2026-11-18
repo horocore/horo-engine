@@ -51,6 +51,28 @@ namespace Horo::XR::OpenXRInternal {
             return true;
         }
 
+        /** @brief Identity of an extension already enabled on the selected instance. */
+        bool Enabled(const NativeDiscoveryBorrow &owner, std::string_view extension) {
+            return std::ranges::find(owner.enabledExtensions, extension, [](const char *name) {
+                return std::string_view{name};
+            }) != owner.enabledExtensions.end();
+        }
+
+        /** @brief Observes cold system support independently of pose actions and any privacy grant. */
+        XRCapabilityState EyeGazeProvider(PFN_xrGetSystemProperties query, const NativeDiscoveryBorrow &owner) {
+            XrSystemEyeGazeInteractionPropertiesEXT eyes{XR_TYPE_SYSTEM_EYE_GAZE_INTERACTION_PROPERTIES_EXT};
+            XrSystemProperties properties{XR_TYPE_SYSTEM_PROPERTIES, &eyes};
+            const auto result = query(owner.instance, owner.system, &properties);
+            if (result == XR_ERROR_PERMISSION_INSUFFICIENT)
+                return XRCapabilityState::Denied;
+            if (result != XR_SUCCESS)
+                return XRCapabilityState::Unavailable;
+            if (properties.systemId != owner.system || properties.type != XR_TYPE_SYSTEM_PROPERTIES || properties.next != &eyes ||
+                eyes.type != XR_TYPE_SYSTEM_EYE_GAZE_INTERACTION_PROPERTIES_EXT || eyes.next || eyes.supportsEyeGazeInteraction > XR_TRUE)
+                return XRCapabilityState::Incompatible;
+            return eyes.supportsEyeGazeInteraction == XR_TRUE ? XRCapabilityState::Available : XRCapabilityState::Unsupported;
+        }
+
         /** @brief Queries observed runtime identity and tracking/graphics system limits independently of any session. */
         Result<void> ReadProperties(const NativeDiscoveryBorrow &owner, NativeSystemCensus &census) {
             const auto instance = Resolve<PFN_xrGetInstanceProperties>(owner, "xrGetInstanceProperties");
@@ -63,9 +85,7 @@ namespace Horo::XR::OpenXRInternal {
             if (system.HasError())
                 return Result<void>::Failure(system.ErrorValue());
             XrSystemHandTrackingPropertiesEXT hands{XR_TYPE_SYSTEM_HAND_TRACKING_PROPERTIES_EXT};
-            const bool handRoute = std::ranges::any_of(owner.enabledExtensions, [](const char *name) {
-                return std::string_view{name} == XR_EXT_HAND_TRACKING_EXTENSION_NAME;
-            });
+            const bool handRoute = Enabled(owner, XR_EXT_HAND_TRACKING_EXTENSION_NAME);
             if (handRoute)
                 census.system.next = &hands;
             result = system.Value()(owner.instance, owner.system, &census.system);
@@ -84,6 +104,8 @@ namespace Horo::XR::OpenXRInternal {
                 return Result<void>::Failure(MakeError(XRErrors::OperationInvalid, "Malformed native system properties"));
             if (handRoute && hands.supportsHandTracking == XR_TRUE)
                 census.handTracking = XRCapabilityState::Available;
+            if (Enabled(owner, XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME))
+                census.eyeGazeProvider = EyeGazeProvider(system.Value(), owner);
             return Result<void>::Success();
         }
 

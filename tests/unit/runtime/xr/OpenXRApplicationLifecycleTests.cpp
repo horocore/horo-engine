@@ -438,6 +438,9 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(row.extensionRoutes[graphics].state == Native::NativeExtensionState::Enabled);
         CHECK(row.extensionRoutes[time].state == Native::NativeExtensionState::Enabled);
         CHECK(row.extensionRoutes[hands].state == Native::NativeExtensionState::Absent);
+        CHECK(row.extensionRoutes[static_cast<std::size_t>(Host::OpenXRPackagedRoute::EyeGazeObservation)].state ==
+              Native::NativeExtensionState::Absent);
+        CHECK(row.eyeGaze == XR::XRCapabilityState::Unsupported);
         CHECK(row.extensionRoutes[time].discoveredVersion > 0);
         CHECK(fixture.script.native.liveSessions == 0);
         REQUIRE(fixture.session->ValidateDeviceQualification(admitted).HasValue());
@@ -761,6 +764,51 @@ namespace Horo::Tests::OpenXRApplication {
             return candidate;
         }
     }  // namespace
+
+    TEST_CASE("Signed XR Setup can observe gaze hardware while Play creates only ordinary tracking actions",
+              "[xr][application][setup][gaze]") {
+        using enum XR::XRCapabilityState;
+        ApplicationFixture fixture{true};
+        fixture.script.native.gazeExtension = true;
+        ++fixture.script.native.extensionCount;
+        fixture.script.census.gazeSupport = XR_TRUE;
+        SECTION("reversible packaged Setup reports only policy-gated capability") {
+            fixture.CreatePlay();
+            RequireValue(fixture.play->RequestSetupTest());
+            fixture.play->PumpSetupTest();
+            REQUIRE(fixture.play->ReadSetup().test == Editor::EditorXrSetupTestState::Passed);
+            const auto receipt = RequireValue(fixture.play->ReadDeviceQualificationPreflight());
+            const auto &compatibility = receipt.Compatibility();
+            CHECK(compatibility.eyeGaze == DisabledByPolicy);
+            constexpr auto route = static_cast<std::size_t>(Host::OpenXRPackagedRoute::EyeGazeObservation);
+            CHECK(compatibility.extensionRoutes[route].state == Native::NativeExtensionState::Enabled);
+            CHECK(fixture.script.actions.actionNames.empty());
+            CHECK(fixture.script.native.liveSessions == 0);
+            REQUIRE(RequireValue(fixture.ClosePlay()));
+            fixture.play.reset();
+            REQUIRE(fixture.session->Close().HasValue());
+            CHECK(fixture.session->ValidateDeviceQualification(receipt).HasError());
+        }
+        SECTION("normal Play never prepares a gaze action") {
+            auto scene = PublishPlay(fixture);
+            const auto inspector = fixture.play->ReadInspection();
+            const auto gaze =
+                std::ranges::find(inspector.capabilities, XR::XRCapability::EyeGaze, &Editor::EditorXrInspectionCapability::kind);
+            REQUIRE(gaze != inspector.capabilities.end());
+            CHECK(gaze->observed == DisabledByPolicy);
+            CHECK(gaze->decision == XR::XRFeatureDecisionState::NotRequested);
+            CHECK(std::ranges::find(fixture.script.native.enabledExtensions, XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME) !=
+                  fixture.script.native.enabledExtensions.end());
+            CHECK_FALSE(fixture.script.actions.actionNames.empty());
+            CHECK(std::ranges::none_of(fixture.script.actions.actionNames, [](const auto &name) {
+                return std::string_view{name}.find("gaze") != std::string_view::npos;
+            }));
+            REQUIRE(RequireValue(fixture.ClosePlay()));
+            CHECK(fixture.script.actions.liveActions == 0);
+            CHECK(fixture.script.native.liveSessions == 0);
+        }
+        CHECK(std::ranges::count(fixture.script.census.calls, "eye-gaze-properties") == 1);
+    }
 
     TEST_CASE("XR inspection bounds action metadata and ignores action payload values", "[xr][application][inspection]") {
         const XR::XRSessionId session{{RequireValue(XR::XRRuntimeGeneration::Create(1)), {1, 1}}, {1, 1}};

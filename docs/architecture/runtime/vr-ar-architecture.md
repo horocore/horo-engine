@@ -771,6 +771,10 @@ failure states.
   dumps, metrics, replay, analytics, AI context and support bundles.
 - Permission revocation removes derived capability state and invalidates
   outstanding work.
+- Signed OpenXR Setup checks eye-gaze hardware support using the selected
+  instance's cold system properties. A supported device remains disabled by
+  policy in Setup and Play until a purpose-bound consent authority exists.
+  This check creates no gaze action or space and retains no eye sample.
 - Persistent anchors identify localization state and failure; they do not imply
   that every runtime supports cross-session restore.
 - Renderer consumes admitted passthrough/composition descriptors without owning

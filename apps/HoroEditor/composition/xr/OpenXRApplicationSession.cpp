@@ -80,8 +80,10 @@ namespace Horo::Application::Internal {
                                           XR_VERSION_PATCH(XR_CURRENT_API_VERSION)};
         // The editor composition owns a time provider and color projection; its renderer has no native depth provider.
         const std::array extensions{NativeExtensionRequest{OpenXRPlatformTimeRoute().extension, true},
+                                    NativeExtensionRequest{XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME},
                                     NativeExtensionRequest{XR_EXT_HAND_TRACKING_EXTENSION_NAME}};
-        const auto requested = std::span{extensions}.first(WantsHands() ? extensions.size() : 1);
+        // The eye extension is used only for a cold system property census. No gaze action or space is created.
+        const auto requested = std::span{extensions}.first(WantsHands() ? extensions.size() : extensions.size() - 1);
         const NativeDiscoveryRequest request{selection_,
                                              std::min(compiled, selection_.admittedLoaderVersions.maximum),
                                              requested,
@@ -115,6 +117,12 @@ namespace Horo::Application::Internal {
         preflight_.emplace(std::move(preflight).Value());
         getProc_ = borrow.Value().getProc;
         return Current();
+    }
+
+    /** @copydoc OpenXRApplicationSession::EyeGazeAvailability */
+    XRCapabilityState OpenXRApplicationSession::EyeGazeAvailability() const noexcept {
+        const auto observed = system_ ? system_->eyeGazeProvider : XRCapabilityState::Unsupported;
+        return observed == XRCapabilityState::Available ? XRCapabilityState::DisabledByPolicy : observed;
     }
 
     /** @copydoc OpenXRApplicationSession::AttachGraphics */
@@ -182,7 +190,7 @@ namespace Horo::Application::Internal {
 
         constexpr auto handRoute = XR_EXT_HAND_TRACKING_EXTENSION_NAME;
         const std::array names{std::string_view{graphics_.RequiredExtension()}, OpenXRPlatformTimeRoute().extension,
-                               std::string_view{handRoute}};
+                               std::string_view{handRoute}, std::string_view{XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME}};
         std::array<NativeExtensionAdmission, static_cast<std::size_t>(OpenXRPackagedRoute::Count)> extensions{};
         static_assert(names.size() == extensions.size());
         for (std::size_t index = 0; index < names.size(); ++index) {
@@ -204,7 +212,8 @@ namespace Horo::Application::Internal {
         return Outcome::Success({*preflight_, selection_.admittedLoaderVersions, runtime, preparedSystem.Value(), manifest.platform,
                                  manifest.identity, settings_.Profile(), component.IdentityDigest(), manifest.loader.digest,
                                  deployment.Evidence().ArtifactDigest(), manifest.licenses, device.Value(), observed.handTracking,
-                                 extensions, session.spaceCount, session.formatCount, deployment.OsAbiDependencyCount()});
+                                 extensions, session.spaceCount, session.formatCount, deployment.OsAbiDependencyCount(),
+                                 EyeGazeAvailability()});
     }
 
     /** @copydoc OpenXRApplicationSession::RunPackagedPreflight */

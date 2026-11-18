@@ -35,6 +35,7 @@ namespace Horo::Tests::OpenXR {
         bool handExtension{};
         bool synthesisExtension{};
         bool spaceWarpExtension{};
+        bool gazeExtension{};
         bool legacyVulkan{};   /**< Selects the existing Vulkan-enable1 application bridge in real-loader fixtures. */
         bool clockExtension{}; /**< Optional official native clock extension for same-production-clock tests. */
         std::uint32_t extensionCount{1};
@@ -108,6 +109,9 @@ namespace Horo::Tests::OpenXR {
                         CopyNativeLiteral(properties[index].extensionName, XR_EXT_FRAME_SYNTHESIS_EXTENSION_NAME);
                     if (!layer && active->spaceWarpExtension && index == synthesisIndex + active->synthesisExtension)
                         CopyNativeLiteral(properties[index].extensionName, XR_FB_SPACE_WARP_EXTENSION_NAME);
+                    if (!layer && active->gazeExtension &&
+                        index == synthesisIndex + active->synthesisExtension + active->spaceWarpExtension)
+                        CopyNativeLiteral(properties[index].extensionName, XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME);
                     properties[index].extensionVersion = 1;
                     if (active->malformedExtension)
                         properties[index].type = XR_TYPE_UNKNOWN;

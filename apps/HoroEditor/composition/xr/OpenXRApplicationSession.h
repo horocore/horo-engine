@@ -79,6 +79,7 @@ namespace Horo::Application::Internal {
         Graphics,
         PlatformTime,
         HandTracking,
+        EyeGazeObservation,
         Count
     };
 
@@ -101,6 +102,7 @@ namespace Horo::Application::Internal {
         std::uint32_t referenceSpaceCount{};
         std::uint32_t runtimeSwapchainFormatCount{}; /**< Total native format inventory, including non-color formats. */
         std::uint8_t externallySuppliedOsAbiCount{}; /**< Signed OS dependencies, never bundled vendor runtime paths. */
+        XR::XRCapabilityState eyeGaze{XR::XRCapabilityState::Unsupported}; /**< Policy-gated diagnostic state without gaze samples. */
     };
 
     /** @brief Runtime-reported HMD selection admitted by the local Desktop probe. */
@@ -342,6 +344,9 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> Current() const;
         [[nodiscard]] Result<void> DiscoverRuntime();
         [[nodiscard]] bool WantsHands() const noexcept;
+        /** @brief Projects observed hardware support through current host policy before publishing capability facts.
+         * @return Provider failure or disabled policy. Setup and Play have no gaze consent issuer. */
+        [[nodiscard]] XR::XRCapabilityState EyeGazeAvailability() const noexcept;
         /** @brief Collects only bounded normalized facts while the exact private native test session exists. */
         [[nodiscard]] Result<OpenXRPackagedCompatibility> CollectPackagedCompatibility(
             const XR::OpenXRInternal::NativeSessionCensus &session);

@@ -19,7 +19,8 @@ namespace Horo::XR::OpenXRInternal {
         std::uint32_t primaryViewCount{};
         std::array<XrEnvironmentBlendMode, 16> primaryBlendModes{};
         std::uint32_t primaryBlendModeCount{};
-        XRCapabilityState handTracking{XRCapabilityState::Unsupported}; /**< Observed system support for the admitted EXT route. */
+        XRCapabilityState handTracking{XRCapabilityState::Unsupported};    /**< Observed system support for the admitted EXT route. */
+        XRCapabilityState eyeGazeProvider{XRCapabilityState::Unsupported}; /**< Hardware support from the exact native census. */
     };
 
     /** @brief Known native frame synthesis wire routes; discovery never grants a provider. */

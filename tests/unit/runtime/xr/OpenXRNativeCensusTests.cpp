@@ -46,6 +46,52 @@ namespace Horo::Tests::OpenXR {
         REQUIRE(fixture.owner.Close().HasValue());
     }
 
+    TEST_CASE("OpenXR eye gaze support is a bounded cold census and malformed optional data leaves baseline available",
+              "[unit][xr][native][gaze]") {
+        using enum XRCapabilityState;
+        CensusFixture fixture;
+        fixture.native.gazeExtension = true;
+        fixture.native.extensionCount = 2;
+        fixture.census.gazeSupport = XR_TRUE;
+        XRCapabilityState expected = Available;
+        bool request = true;
+        SECTION("extension advertisement without instance enablement") {
+            request = false;
+            expected = Unsupported;
+        }
+        SECTION("runtime reports a supported device") {}
+        SECTION("runtime reports an unsupported device") {
+            fixture.census.gazeSupport = XR_FALSE;
+            expected = Unsupported;
+        }
+        SECTION("native permission denial grants no authority") {
+            fixture.census.gazeResult = XR_ERROR_PERMISSION_INSUFFICIENT;
+            expected = Denied;
+        }
+        SECTION("unavailable optional system property") {
+            fixture.census.gazeResult = XR_ERROR_RUNTIME_FAILURE;
+            expected = Unavailable;
+        }
+        SECTION("malformed boolean fails the optional observation") {
+            fixture.census.gazeSupport = 9;
+            expected = Incompatible;
+        }
+        const std::array routes{NativeExtensionRequest{XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME}};
+        auto discovery = fixture.Discovery();
+        if (request)
+            discovery.extensions = routes;
+        REQUIRE(fixture.owner.PrepareDiscovery(discovery).HasValue());
+        const auto actual = fixture.owner.DiscoverSystem(fixture.preflight.Attempt());
+        REQUIRE(actual.HasValue());
+        CHECK(actual.Value().eyeGazeProvider == expected);
+        CHECK(actual.Value().system.next == nullptr);
+        CHECK(actual.Value().primaryViewCount == 2);
+        CHECK(std::ranges::count(fixture.census.calls, "eye-gaze-properties") == static_cast<int>(request));
+        CHECK(fixture.native.liveSessions == 0);
+        REQUIRE(fixture.owner.Close().HasValue());
+        CHECK(fixture.owner.DiscoverSystem(fixture.preflight.Attempt()).HasError());
+    }
+
     TEST_CASE("OpenXR reprojection census observes advertised routes without enabling them or issuing sizing calls",
               "[unit][xr][native][reprojection]") {
         CensusFixture fixture;

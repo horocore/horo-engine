@@ -3392,6 +3392,7 @@
     "workspace.xr_setup.inspect_action_space": {"text": "Eylem uzayı"},
     "workspace.xr_setup.inspect_action_projection": {"text": "Girdi eylemi yansıtması"},
     "workspace.xr_setup.inspect_hands": {"text": "El takibi"},
+    "workspace.xr_setup.inspect_eye_gaze": {"text": "Bakış takibi"},
     "workspace.xr_setup.inspect_unsupported": {"text": "Desteklenmiyor"},
     "workspace.xr_setup.inspect_not_available": {"text": "Kullanılamıyor"},
     "workspace.xr_setup.inspect_available": {"text": "Kullanılabilir"},

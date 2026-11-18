@@ -136,7 +136,7 @@ namespace Horo::Application::Internal {
         report.capabilityRevision = state.capabilityRevision.Value();
         report.focused = state.admitsActions && !eventsPending_;
         using enum XR::XRCapability;
-        constexpr std::array kinds{Projection, ViewSpace, LocalSpace, StageSpace, CanonicalInputProjection, HandTracking};
+        constexpr std::array kinds{Projection, ViewSpace, LocalSpace, StageSpace, CanonicalInputProjection, HandTracking, EyeGaze};
         static_assert(kinds.size() == Editor::EditorXrInspectionSnapshot::CapabilityCount);
         for (std::size_t index = 0; index < kinds.size(); ++index) {
             const auto kind = kinds[index];

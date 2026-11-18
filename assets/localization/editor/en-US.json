@@ -3392,6 +3392,7 @@
     "workspace.xr_setup.inspect_action_space": {"text": "Action space"},
     "workspace.xr_setup.inspect_action_projection": {"text": "Input action projection"},
     "workspace.xr_setup.inspect_hands": {"text": "Hand tracking"},
+    "workspace.xr_setup.inspect_eye_gaze": {"text": "Eye-gaze tracking"},
     "workspace.xr_setup.inspect_unsupported": {"text": "Unsupported"},
     "workspace.xr_setup.inspect_not_available": {"text": "Unavailable"},
     "workspace.xr_setup.inspect_available": {"text": "Available"},

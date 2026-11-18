@@ -120,6 +120,8 @@ namespace Horo::Editor {
                     return "inspect_action_projection";
                 case HandTracking:
                     return "inspect_hands";
+                case EyeGaze:
+                    return "inspect_eye_gaze";
                 default:
                     return "inspect_unavailable";
             }
