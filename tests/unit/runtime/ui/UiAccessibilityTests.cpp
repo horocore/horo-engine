@@ -1,5 +1,7 @@
 #include "Horo/Runtime/Ui/UiAccessibility.h"
+#include "Horo/Runtime/Ui/UiCanvasSpace.h"
 #include "Horo/Runtime/Ui/UiErrors.h"
+#include "Horo/Runtime/Ui/UiLayout.h"
 #include "UiAccessibilityTestUtils.h"
 
 #include <array>
@@ -10,6 +12,7 @@
 #include <new>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 void *operator new(const std::size_t size) {
@@ -64,6 +67,78 @@ namespace Horo::Runtime::Ui {
             fixture.nodes[2].value.number = 0.9;
             REQUIRE(snapshot.Text(snapshot.Nodes()[0].name) == "Main menu");
             REQUIRE(snapshot.Nodes()[2].value.number == 0.5);
+        }
+
+        TEST_CASE("Semantic reference snapshots preserve accessible labels across viewport evidence",
+                  "[runtime_ui][accessibility][reference]") {
+            struct Case final {
+                UiCanvasViewportEvidence viewport;
+                std::string_view label;
+                UiCanvasLogicalExtent logicalExtent;
+            };
+
+            constexpr std::array cases{
+                Case{{{1280, 720}, {192, 96}, {0, 0, 0, 0}}, "Main menu", {640 * 64, 360 * 64}},
+                Case{{{900, 1600}, {144, 96}, {30, 90, 30, 70}}, "Ana menü", {560 * 64, 960 * 64}},
+            };
+            const UiCanvasDescriptor canvas{.id = Stable<UiCanvasId>(2),
+                                            .rootElement = Stable<UiElementId>(1),
+                                            .renderMode = UiRenderMode::ScreenSpaceOverlay,
+                                            .referenceResolution = {640, 360},
+                                            .scaleMode = UiScaleMode::ConstantPhysicalSize,
+                                            .presentation = {.safeArea = UiSafeAreaMode::Inset}};
+            auto tree = MakeTree();
+            std::array<UiElementHandle, 8> handles{};
+            const auto traversed = tree.Preorder(handles);
+            REQUIRE(traversed.HasValue());
+            REQUIRE(traversed.Value() == 5);
+            std::array<UiLayoutElementDescriptor, 5> descriptors{};
+            for (std::size_t index = 0; index < descriptors.size(); ++index)
+                descriptors[index].element = handles[index];
+            const auto evaluator = UiDeclarativeLayoutEvaluator::Create(descriptors);
+            REQUIRE(evaluator.HasValue());
+            const auto interaction = UiInteractionRevision::Create(7).Value();
+            const UiLayoutSourceRevisions revisions{tree.SourceDocumentRevision(),
+                                                    tree.Revision(),
+                                                    UiLayoutContentRevision::Create(1).Value(),
+                                                    UiLayoutStyleRevision::Create(1).Value(),
+                                                    UiLayoutIntrinsicRevision::Create(1).Value(),
+                                                    UiLayoutCanvasRevision::Create(1).Value(),
+                                                    UiLayoutPolicyRevision::Create(1).Value()};
+            for (const auto &entry : cases) {
+                CAPTURE(entry.label);
+                const auto resolved = ResolveUiScreenCanvasWithEvidence(canvas, entry.viewport);
+                REQUIRE(resolved.HasValue());
+                REQUIRE(resolved.Value().logicalExtent == entry.logicalExtent);
+                ProjectionFixture source;
+                source.nodes.front().name = {entry.label, UiAccessibilityTextSource::ResolvedMessage};
+                const auto &extent = resolved.Value().logicalExtent;
+                const UiLogicalExtent logical{extent.width, extent.height};
+                const auto layout = UiLayoutEngine::Create({tree.Instance(), tree.Canvas(), tree.SourceDocument(), 8, 8, 2, interaction});
+                REQUIRE(layout.HasValue());
+                const auto arranged =
+                    layout.Value().Update(tree, {revisions, {{}, logical}, {{}, logical}, &evaluator.Value(), resolved.Value().fontScale});
+                REQUIRE(arranged.HasValue());
+                REQUIRE(arranged.Value().Descriptor().interaction == interaction);
+                const auto root = arranged.Value().Get(handles.front());
+                REQUIRE(root.HasValue());
+                CHECK(root.Value().arrangement.borderBox == UiLogicalRect{{}, logical});
+                source.nodes.front().bounds = root.Value().arrangement.borderBox;
+                auto extractor = MakeExtractor(tree);
+                const auto first = extractor.Extract(tree, Descriptor(tree), source.View());
+                REQUIRE(first.HasValue());
+                const auto second = extractor.Extract(tree, Descriptor(tree, 2), source.View());
+                REQUIRE(second.HasValue());
+                const auto &initial = first.Value().Nodes().front();
+                const auto &refreshed = second.Value().Nodes().front();
+                CHECK(initial.elementId == refreshed.elementId);
+                CHECK(initial.role == UiAccessibilityRole::Screen);
+                CHECK(initial.role == refreshed.role);
+                CHECK(initial.bounds == source.nodes.front().bounds);
+                CHECK(initial.bounds == refreshed.bounds);
+                CHECK(first.Value().Text(initial.name) == entry.label);
+                CHECK(second.Value().Text(refreshed.name) == entry.label);
+            }
         }
 
         TEST_CASE("Runtime UI accessibility validation rejects malformed role state relations and actions",

@@ -1065,6 +1065,15 @@ configuration. Run the individual executables with `[fuzz]` to select just
 the generated cases. Each case limits its inputs without relying on a
 wall-clock assertion, and validates accepted evidence or transactional refusal.
 
+The `[accessibility][reference]` case in `HoroRuntimeUiAccessibilityTests`
+checks detached layout and semantic snapshots for desktop and portrait
+viewport evidence with different DPI, safe-area insets and supplied localized
+labels. Its expected geometry and semantic fields are independent of native
+renderers. The separate Metal UI paint smoke suite measures native pixels of
+rounded masks, opacity and nested groups when its cooked shader fixture and a
+Metal device are available. Cross-backend reference images require the same
+paint features to be available in each participating native renderer.
+
 ### Render-graph composition admission
 
 `Horo/Runtime/Render/UiRenderComposition.h` is the single typed bridge from an

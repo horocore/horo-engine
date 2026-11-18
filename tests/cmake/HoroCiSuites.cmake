@@ -246,6 +246,7 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroRuntimeUiDocumentTests
     HoroRuntimeUiBindingTests
     HoroRuntimeUiLayoutTests
+    HoroRuntimeUiAccessibilityTests
     HoroUiTemplateGraphTests
     HoroRuntimeUiUnicodeStartupTests
     HoroRuntimeUiUnicodeLifecycleTests
