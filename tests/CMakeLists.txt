@@ -700,6 +700,13 @@ if(HORO_BUILD_NETWORK_GNS)
     endif()
 endif()
 horo_register_catch_test(HoroNetworkModeHostIntegrationTests LABELS "integration;network;headless")
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND Python3_Interpreter_FOUND)
+    add_test(NAME HoroXRPackageLaunchContract
+        COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/integration/xr_package_launch_contract.py"
+                "$<TARGET_FILE:horo-engine>")
+    set_tests_properties(HoroXRPackageLaunchContract PROPERTIES TIMEOUT 25 LABELS "xr;native;qualification")
+endif()
+
 add_test(NAME HoroNetworkStandaloneProductLaunch COMMAND $<TARGET_FILE:horo-engine> --run-network-product standalone 2)
 set_tests_properties(HoroNetworkStandaloneProductLaunch PROPERTIES LABELS "integration;network;headless;product")
 add_test(NAME HoroNetworkGameplayPurposeRequiresAuthority

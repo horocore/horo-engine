@@ -50,6 +50,7 @@ target_link_libraries(HoroXRSimulatorSample PRIVATE HoroXRSimulatorProjectWorkfl
 # The terminal/headless composition remains available without GUI or GPU targets.
 add_executable(horo-engine
     horo-engine/main.cpp
+    horo-engine/OpenXRPackageProbe.cpp
     horo-engine/cli_host/CliHost.cpp
     horo-engine/cli_host/CliHostProgressPump.cpp
     horo-engine/cli_host/CliHostErrorTranslation.cpp
@@ -74,6 +75,7 @@ target_link_libraries(horo-engine PRIVATE HoroEngine::AnimationCookedAssets)
 target_sources(horo-engine PRIVATE horo-engine/cli_host/ModuleScriptCliExecution.cpp)
 target_link_libraries(horo-engine PRIVATE HoroScriptModuleHostInternal HoroModuleScriptPackageInternal)
 target_compile_features(horo-engine PRIVATE cxx_std_20)
+target_include_directories(horo-engine PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/shared/xr")
 # Only identity consumers depend on the changing Git revision. Keep unrelated
 # application units reusable by compiler and analysis caches across commits.
 set_property(SOURCE horo-engine/main.cpp horo-engine/NetworkProductLaunch.cpp

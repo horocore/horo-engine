@@ -237,6 +237,35 @@ namespace Horo::Application::Internal {
         return Outcome::Success(OpenXRPackagedPreflight{std::move(observed).Value(), loader_, revision});
     }
 
+    /** @copydoc OpenXRApplicationSession::ProbeDesktopTarget */
+    Result<OpenXRPackagedPreflight> OpenXRApplicationSession::ProbeDesktopTarget(const OpenXRApplicationBindings &bindings,
+                                                                                 const OpenXRDesktopProbeTarget &target) {
+        using Outcome = Result<OpenXRPackagedPreflight>;
+        if (auto current = Current(); current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        if (!loader_ || !system_)
+            return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
+        if (target.runtimeName.empty() || target.runtimeName.size() >= XR_MAX_RUNTIME_NAME_SIZE || target.systemName.empty() ||
+            target.systemName.size() >= XR_MAX_SYSTEM_NAME_SIZE)
+            return Outcome::Failure(MakeError(XRErrors::OperationInvalid, "XR probe requires bounded runtime and HMD names."));
+        const auto &component = loader_->Component();
+        const auto platform = component.Manifest().platform.operatingSystem;
+        if ((target.operatingSystem != "windows" && target.operatingSystem != "linux") || target.operatingSystem != platform)
+            return Outcome::Failure(
+                MakeError(XRErrors::OperationUnsupported, "XR probe host does not match the installed Desktop component."));
+        if (target.installDigest != component.IdentityDigest())
+            return Outcome::Failure(MakeError(XRErrors::LoaderPreflightStale, "XR probe installation digest changed."));
+        if (target.runtimeName != system_->runtime.runtimeName || target.systemName != system_->system.systemName)
+            return Outcome::Failure(
+                MakeError(XRErrors::RuntimeRejected, "Default OpenXR runtime or HMD does not match the selected target."));
+        auto result = RunPackagedPreflight(bindings);
+        if (result.HasError())
+            return result;
+        if (auto current = ValidateDeviceQualification(result.Value()); current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        return result;
+    }
+
     /** @copydoc OpenXRApplicationSession::ValidateDeviceQualification */
     Result<void> OpenXRApplicationSession::ValidateDeviceQualification(const OpenXRPackagedPreflight &evidence) const {
         const auto &observed = evidence.Compatibility();

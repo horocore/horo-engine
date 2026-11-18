@@ -809,6 +809,34 @@ packages nor opens a vendor runtime directly. Device qualification consumes this
 row only while the verified installation, runtime attempt and exact graphics
 device remain current. The row contains no physical-device test result.
 
+On Windows and Linux the packaged terminal host can supervise one bounded
+Desktop OpenXR probe through the installed Editor.
+
+```text
+horo-engine --probe-xr-package <windows|linux> system-default <runtime-name>
+  <hmd-system-name> <install-sha256> <editor-executable> <editor-sha256>
+  <installation-root> <project> <trust-roots> <catalog> <catalog-signature>
+```
+
+Pass the command as one argument vector and quote runtime or file names with
+spaces in the calling terminal. Both digests use `sha256:` and 64 lowercase
+hexadecimal digits. The expected installation digest is the selected OpenXR
+component digest from package verification. The expected executable digest
+identifies the installed Editor artifact. The probe holds the installed product
+launch lease, removes OpenXR runtime/layer environment overrides, and passes the
+exact project and signed catalog paths to the child. The child privately
+compares the runtime-reported runtime and HMD names before running reversible
+preflight. The existing terminal interrupt handling and process deadline retire the child and its owned descendants.
+The terminal forwards only the bounded receipt from the child's stdout and
+requires successful exit and a current executable digest.
+
+The receipt records the installed component digest, host, loader route,
+renderer, a digest of the explicit runtime/HMD pair, the runtime and graphics
+versions, the observed space and format counts, and the admitted provider
+routes. Treat it as packaged Desktop preflight evidence. Per-unit headset
+selection, remote installation, connection transport provenance, interaction
+profile, and physical-device smoke results remain separate qualification work.
+
 XR Setup also presents the current session inspector. It joins session/capability
 generation and revision with the latest same-owner Input tracking cutoff. The
 report distinguishes waiting, unfocused, event backlog, current and retired

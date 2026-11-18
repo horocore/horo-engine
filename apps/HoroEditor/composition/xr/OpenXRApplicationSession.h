@@ -103,6 +103,14 @@ namespace Horo::Application::Internal {
         std::uint8_t externallySuppliedOsAbiCount{}; /**< Signed OS dependencies, never bundled vendor runtime paths. */
     };
 
+    /** @brief Runtime-reported HMD selection admitted by the local Desktop probe. */
+    struct OpenXRDesktopProbeTarget final {
+        std::string_view operatingSystem; /**< Exact native host identity from the packaged component. */
+        std::string_view runtimeName;     /**< Exact expected official loader runtime name; never emitted in the receipt. */
+        std::string_view systemName;      /**< Exact expected HMD system name; never emitted in the receipt. */
+        Sha256Digest installDigest;       /**< Exact operator-supplied installed component digest. */
+    };
+
     /** @brief Sealed runtime preflight offered as input to device qualification.
      * @details Holds no native handles or owning loader references. Results say nothing about physical-device test success.
      */
@@ -169,6 +177,15 @@ namespace Horo::Application::Internal {
          * retry. Discovery and the selected device remain usable for subsequent Play preparation.
          */
         [[nodiscard]] Result<OpenXRPackagedPreflight> RunPackagedPreflight(const OpenXRApplicationBindings &bindings);
+        /** @brief Runs an explicit Desktop target probe in the selected packaged process.
+         * @param bindings Same installed declarations used by Play and XR Setup.
+         * @param target Explicit host, runtime-reported HMD and package identity. The desktop connection uses
+         * the OS system-default OpenXR loader, and this target requires the selected runtime to match exactly.
+         * @return Sealed compatibility after actual cold session retirement or preserved typed failure.
+         * @post No physical-device/render-frame result, runtime names or tracking coordinates are published.
+         */
+        [[nodiscard]] Result<OpenXRPackagedPreflight> ProbeDesktopTarget(const OpenXRApplicationBindings &bindings,
+                                                                         const OpenXRDesktopProbeTarget &target);
         /** @brief Rechecks a sealed preflight against the current release installation, runtime and graphics device.
          * @param evidence Previously collected row; safe to retain after shutdown but unavailable for qualification.
          * @return Exact admission or typed stale/trust/device failure. Performs no native OpenXR operation.

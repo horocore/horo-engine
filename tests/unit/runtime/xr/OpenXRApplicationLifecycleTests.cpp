@@ -465,6 +465,50 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(fixture.session->ValidateDeviceQualification(admitted).HasError());
     }
 
+    TEST_CASE("XR setup probes the explicit installed desktop runtime and HMD in the actual package owner",
+              "[xr][application][setup][deployment]") {
+        ApplicationFixture fixture;
+        fixture.CreatePlay();
+        RequireValue(fixture.play->RequestSetupTest());
+        fixture.play->PumpSetupTest();
+        auto prior = RequireValue(fixture.play->ReadDeviceQualificationPreflight());
+        const auto &row = prior.Compatibility();
+        Host::OpenXRDesktopProbeTarget target{row.platform.operatingSystem, "Actual scripted runtime", "Observed native system",
+                                              row.installDigest};
+        const ErrorCodeDescriptor *error = nullptr;
+        SECTION("matches the selected package/runtime/system and retires the new probe") {}
+        SECTION("runtime was replaced") {
+            target.runtimeName = "A different runtime";
+            error = &XR::XRErrors::RuntimeRejected;
+        }
+        SECTION("explicit target is disconnected or mismatched") {
+            target.systemName = "A different headset";
+            error = &XR::XRErrors::RuntimeRejected;
+        }
+        SECTION("host platform is unsupported") {
+            target.operatingSystem = "android";
+            error = &XR::XRErrors::OperationUnsupported;
+        }
+        SECTION("package digest was replaced") {
+            target.installDigest.bytes[0] ^= 1U;
+            error = &XR::XRErrors::LoaderPreflightStale;
+        }
+        const auto created = std::ranges::count(fixture.script.native.calls, "session");
+        const auto probed = fixture.session->ProbeDesktopTarget(*fixture.bindings, target);
+        if (error) {
+            REQUIRE(probed.HasError());
+            CHECK(probed.ErrorValue().code.Value() == error->code.Value());
+            CHECK(std::ranges::count(fixture.script.native.calls, "session") == created);
+        } else {
+            REQUIRE(probed.HasValue());
+            REQUIRE(fixture.session->ValidateDeviceQualification(probed.Value()).HasValue());
+            CHECK(fixture.session->ValidateDeviceQualification(prior).HasError());
+            CHECK(std::ranges::count(fixture.script.native.calls, "session") == created + 1);
+        }
+        CHECK(fixture.script.native.liveSessions == 0);
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+    }
+
     TEST_CASE("XR setup rejects an ambiguous signed external dependency inventory before opening the native loader",
               "[xr][application][setup]") {
         OpenXRProduct::Json dependencies = {"libc.so.6", "libc.so.6"};

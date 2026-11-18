@@ -22,6 +22,7 @@
 #endif
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
 #include "OpenXRApplicationSession.h"
+#include "OpenXRPackageProbeWire.h"
 #include "OpenXRPlayHost.h"
 #endif
 
@@ -4237,6 +4238,73 @@ namespace Horo::Editor {
             session.rendererRestart.reset();
     }
 
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+    /** @brief Parses the dedicated installed-child probe arguments before any application startup. */
+    [[nodiscard]] static Result<std::optional<Application::Internal::OpenXRDesktopProbeTarget>> ParseDesktopXrProbe(
+        std::vector<char *> &arguments) {
+        using Target = Application::Internal::OpenXRDesktopProbeTarget;
+        using Outcome = Result<std::optional<Target>>;
+        std::optional<Target> target;
+        for (std::size_t index = 1; index < arguments.size(); ++index) {
+            if (std::string_view{arguments[index]} != Application::Internal::OpenXRProbeWire::Command)
+                continue;
+            if (target || arguments.size() - index < 6)
+                return Outcome::Failure(MakeError(XR::XRErrors::OperationInvalid, "Malformed XR process probe invocation."));
+            if (std::string_view{arguments[index + 2]} != Application::Internal::OpenXRProbeWire::Route)
+                return Outcome::Failure(
+                    MakeError(XR::XRErrors::OperationUnsupported, "XR process probe requires the Desktop system-default route."));
+            const auto digest = ParseSha256(arguments[index + 5]);
+            if (digest.HasError())
+                return Outcome::Failure(
+                    MakeError(XR::XRErrors::OperationInvalid, "XR process probe requires a canonical installation digest."));
+            target = Target{arguments[index + 1], arguments[index + 3], arguments[index + 4], digest.Value()};
+            arguments.erase(arguments.begin() + static_cast<std::ptrdiff_t>(index),
+                            arguments.begin() + static_cast<std::ptrdiff_t>(index + 6));
+            --index;
+        }
+        return Outcome::Success(std::move(target));
+    }
+
+    /** @brief Emits a finite process-scoped receipt after the real selected graphics/runtime owners drain. */
+    [[nodiscard]] static int CompleteDesktopXrProbe(PreparedEditorStartup &startup, EditorPresentation &presentation,
+                                                    const Application::Internal::OpenXRDesktopProbeTarget &target) {
+        using namespace Application::Internal;
+        std::optional<OpenXRPackagedPreflight> evidence;
+        if (startup.xrNative && startup.xrHost && startup.xrHost->bindings) {
+            auto observed = startup.xrNative->ProbeDesktopTarget(*startup.xrHost->bindings, target);
+            if (observed.HasValue())
+                evidence.emplace(std::move(observed).Value());
+        }
+        EditorSessionResult terminal{std::nullopt, evidence.has_value()};
+        RetireEditorSessionPresentation(presentation, terminal);
+        RetireEditorXrStartup(startup);
+        if (terminal.healthy) {
+            const auto &observed = evidence->Compatibility();
+            const auto digest = FormatSha256(observed.installDigest);
+            const auto targetIdentity = FormatSha256(OpenXRProbeWire::TargetDigest(target.runtimeName, target.systemName));
+            const auto &runtime = observed.runtimeVersion;
+            const auto &graphics = observed.graphicsApi;
+            unsigned admittedRoutes{};
+            for (std::size_t index = 0; index < observed.extensionRoutes.size(); ++index) {
+                using enum XR::OpenXRInternal::NativeExtensionState;
+                const auto state = observed.extensionRoutes[index].state;
+                if (state == Enabled || state == PromotedToCore)
+                    admittedRoutes |= 1U << index;
+            }
+            // Closed vocabulary on the pipe. Native labels, paths and tracking data stay in the child.
+            terminal.healthy = std::fprintf(stdout, "%s %s %s %s %s %s %u %u %u %u %u %u %u %u %u\n", OpenXRProbeWire::Record.data(),
+                                            digest.c_str(), observed.platform.operatingSystem.c_str(), OpenXRProbeWire::Route.data(),
+                                            OpenXRProbeWire::Renderer.data(), targetIdentity.c_str(), static_cast<unsigned>(runtime.major),
+                                            static_cast<unsigned>(runtime.minor), static_cast<unsigned>(runtime.patch),
+                                            static_cast<unsigned>(graphics.major), static_cast<unsigned>(graphics.minor),
+                                            static_cast<unsigned>(graphics.patch), static_cast<unsigned>(observed.referenceSpaceCount),
+                                            static_cast<unsigned>(observed.colorFormatCount), admittedRoutes) > 0 &&
+                               std::fflush(stdout) == 0;
+        }
+        return CompleteEditorSession(startup, terminal, nullptr);
+    }
+#endif
+
     // ── public entry ─────────────────────────────────────────────────────────
 
     /** @copydoc RunEditorGuiApp */
@@ -4274,7 +4342,21 @@ namespace Horo::Editor {
             return 1;
         }
         auto launch = std::move(captured).Value();
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+        const auto packageProbe = ParseDesktopXrProbe(launch.hostArguments);
+        if (packageProbe.HasError())
+            return 1;
+#else
+        if (std::ranges::any_of(launch.hostArguments, [](const char *argument) {
+            return std::string_view{argument} == "--xr-package-probe";
+        }))
+            return 1;
+#endif
         auto opts = ParseOptions(launch.hostArguments);
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+        if (packageProbe.Value() && (opts.textPreview || opts.xrSimulator))
+            return 1;
+#endif
         std::vector<RecentProjectEntry> recentProjects = LoadRecentProjectsFromDisk();
         WelcomeScreenController ctrl{recentProjects};
         auto vm = ctrl.BuildViewModel();
@@ -4306,6 +4388,12 @@ namespace Horo::Editor {
             return 1;
         }
 
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+        if (packageProbe.Value()) {
+            saveTelemetry.reset();
+            return CompleteDesktopXrProbe(*prepared, *presentation, *packageProbe.Value());
+        }
+#endif
         LOG_INFO("editor.startup", "Editor initialised with renderer '%s' — entering main loop", prepared->options.rendererBackend.c_str());
 
         EditorSessionResult session =
