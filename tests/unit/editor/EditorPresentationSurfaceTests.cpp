@@ -78,6 +78,60 @@ namespace Horo::Editor {
         CHECK(native.calls == 1);
     }
 
+    TEST_CASE("Editor surface republishes a display transition with unchanged drawable pixels", "[editor][surface]") {
+        NativeSurface native;
+        auto host = Surface(native);
+        native.host = &host;
+        constexpr Render::FramebufferExtent pixels{1280, 720};
+        using enum EditorSurfaceAdmission;
+        using enum EditorSurfaceRecovery;
+
+        const auto initial = host.Observe(pixels, Mode, Idle, Defer, 1);
+        REQUIRE(initial.HasValue());
+        CHECK(initial.Value().snapshot.active->displayRevision == 1);
+        const auto changed = host.Observe(pixels, Mode, Idle, Retry, 2);
+        REQUIRE(changed.HasValue());
+        REQUIRE(changed.Value().snapshot.active);
+        CHECK(changed.Value().snapshot.active->displayRevision == 2);
+        CHECK(changed.Value().snapshot.active->extent == pixels);
+        CHECK(changed.Value().snapshot.surface.generation > initial.Value().snapshot.surface.generation);
+        CHECK(native.frozenBeforeNative);
+        CHECK(native.calls == 2);
+        CHECK(host.Observe(pixels, Mode, Idle, Retry, 2).Value().snapshot == changed.Value().snapshot);
+        CHECK(host.Observe(pixels, Mode, Idle, Retry, 1).HasError());
+        CHECK(host.Observe(pixels, Mode, Idle, Retry, 0).HasError());
+        CHECK(host.Snapshot().Value() == changed.Value().snapshot);
+        CHECK(native.calls == 2);
+    }
+
+    TEST_CASE("Newer window display supersedes pending native work at the same extent", "[editor][surface]") {
+        NativeSurface native;
+        auto host = Surface(native);
+        native.host = &host;
+        constexpr Render::FramebufferExtent pixels{640, 480};
+        using enum EditorSurfaceAdmission;
+        using enum EditorSurfaceRecovery;
+
+        native.pending = true;
+        const auto starting = host.Observe(pixels, Mode, Idle, Defer, 1);
+        REQUIRE(starting.HasValue());
+        REQUIRE(starting.Value().snapshot.inFlightSequence);
+        const auto replacement = host.Observe(pixels, Mode, Idle, Retry, 2);
+        REQUIRE(replacement.HasValue());
+        REQUIRE(replacement.Value().snapshot.inFlightSequence);
+        CHECK(replacement.Value().snapshot.inFlightSequence != starting.Value().snapshot.inFlightSequence);
+        CHECK(host.Observe(pixels, Mode, Idle, Retry, 1).HasError());
+        CHECK(native.calls == 2);
+
+        native.pending = false;
+        const auto committed = host.Observe(pixels, Mode, Idle, Defer, 2);
+        REQUIRE(committed.HasValue());
+        REQUIRE(committed.Value().snapshot.active);
+        CHECK(committed.Value().snapshot.active->displayRevision == 2);
+        CHECK(committed.Value().snapshot.state == Render::RenderSurfaceState::Ready);
+        CHECK(native.calls == 3);
+    }
+
     TEST_CASE("Production surface retries exactly one frozen temporary realization", "[editor][surface]") {
         NativeSurface native;
         auto host = Surface(native);

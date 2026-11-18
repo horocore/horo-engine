@@ -2110,9 +2110,18 @@ namespace Horo::Editor {
                     LOG_ERROR("editor.shader_reload", "%s", result.ErrorValue().message.c_str());
             }
 
-            /** @brief Admits one recovery attempt only after an owner-window presentation observation. */
+            /** @brief Coalesces display identity changes and recovery at the next owner-thread frame boundary. */
             void ObserveSurfaceRecoveryEvent(const SDL_Event &event) {
                 switch (event.type) {
+                    case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
+                    case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
+                    case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
+                    case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
+                        if (event.window.windowID == SDL_GetWindowID(p_->presentation.window)) {
+                            displayChangePending_ = true;
+                            surfaceRecovery_ = EditorSurfaceRecovery::Retry;
+                        }
+                        break;
                     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
                     case SDL_EVENT_WINDOW_RESTORED:
                     case SDL_EVENT_WINDOW_EXPOSED:
@@ -2323,8 +2332,16 @@ namespace Horo::Editor {
                     return Result<void>::Failure(extent.ErrorValue());
                 frameState_.nativePresentationPending = false;
                 const auto mode = SurfacePresentMode();
-                auto observed = pacing_.surface->Observe(extent.Value(), {mode, mode, Render::PresentModeResolution::Exact, 0},
-                                                         SurfaceAdmission(), std::exchange(surfaceRecovery_, EditorSurfaceRecovery::Defer));
+                if (displayChangePending_) {
+                    if (windowDisplayRevision_ == (std::numeric_limits<std::uint64_t>::max)())
+                        return Result<void>::Failure(MakeEditorRendererError("editor.renderer.display_revision_exhausted",
+                                                                             "Window display observation revision is exhausted."));
+                    ++windowDisplayRevision_;
+                    displayChangePending_ = false;
+                }
+                auto observed =
+                    pacing_.surface->Observe(extent.Value(), {mode, mode, Render::PresentModeResolution::Exact, 0}, SurfaceAdmission(),
+                                             std::exchange(surfaceRecovery_, EditorSurfaceRecovery::Defer), windowDisplayRevision_);
                 if (observed.HasError())
                     return Result<void>::Failure(observed.ErrorValue());
                 if (observed.Value().nativeFailure) {
@@ -2650,6 +2667,8 @@ namespace Horo::Editor {
             bool qualificationPassed_{};
 #endif
             EditorSurfaceRecovery surfaceRecovery_{EditorSurfaceRecovery::Defer};
+            std::uint64_t windowDisplayRevision_{1};
+            bool displayChangePending_{};
 
             /** @brief One frame's native admission, GUI extraction and prepared scope, retaining the original lifetime order. */
             struct FrameState final {

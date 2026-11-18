@@ -1802,6 +1802,12 @@ the immutable request and invokes negotiation before a renderer-owned surface li
 applies the resolved value. Surface reconfiguration, pacing, HDR, and backend-native
 translation remain in their owning downstream contracts.
 
+The editor's owning window coalesces monitor, display-scale, and fullscreen
+notifications into a monotonic display revision at an idle frame boundary.
+Surface candidates bind that revision even when the drawable pixel extent is
+unchanged. Pending native work from an earlier display revision cannot commit
+after a newer observation.
+
 ### Metal exact output and drawable admission
 
 `RenderPresentationOutputRequest` is an exact native-free final-pixel encoding request.

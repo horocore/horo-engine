@@ -7,15 +7,6 @@
 #include <utility>
 
 namespace Horo::Editor {
-    namespace {
-        /** @brief Detects an unchanged usable output without creating a new surface generation. */
-        bool MatchesActiveOutput(const Render::RenderSurfaceSnapshot &snapshot, const Render::FramebufferExtent extent,
-                                 const Render::ResolvedPresentMode mode) {
-            return snapshot.state == Render::RenderSurfaceState::Ready && snapshot.active && snapshot.active->extent == extent &&
-                   snapshot.active->presentMode == mode;
-        }
-    }  // namespace
-
     /** @copydoc EditorPresentationSurface::Create */
     Result<EditorPresentationSurface> EditorPresentationSurface::Create(const std::uint64_t owner, EditorSurfaceRealizer &realizer) {
         auto created = Render::RenderSurfaceLifecycle::Create(owner);
@@ -43,7 +34,7 @@ namespace Horo::Editor {
     Result<Render::RenderSurfaceSnapshot> EditorPresentationSurface::Update(const std::optional<Render::FramebufferExtent> extent,
                                                                             const Render::ResolvedPresentMode mode,
                                                                             const EditorSurfaceAdmission admission) {
-        auto observed = Observe(extent, mode, admission, EditorSurfaceRecovery::Retry);
+        auto observed = Observe(extent, mode, admission, EditorSurfaceRecovery::Retry, observedDisplayRevision_);
         if (observed.HasError())
             return Result<Render::RenderSurfaceSnapshot>::Failure(observed.ErrorValue());
         if (observed.Value().nativeFailure)
@@ -55,15 +46,24 @@ namespace Horo::Editor {
     Result<EditorSurfaceObservation> EditorPresentationSurface::Observe(const std::optional<Render::FramebufferExtent> extent,
                                                                         const Render::ResolvedPresentMode mode,
                                                                         const EditorSurfaceAdmission admission,
-                                                                        const EditorSurfaceRecovery recovery) {
+                                                                        const EditorSurfaceRecovery recovery,
+                                                                        const std::uint64_t displayRevision) {
         auto current = surface_.Snapshot();
         if (current.HasError())
             return Result<EditorSurfaceObservation>::Failure(current.ErrorValue());
         if (const auto admitted = ValidateAdmission(mode, admission); admitted.HasError())
             return Result<EditorSurfaceObservation>::Failure(admitted.ErrorValue());
+        if (displayRevision == 0 || displayRevision < observedDisplayRevision_)
+            return Result<EditorSurfaceObservation>::Failure(
+                MakeError(Render::RenderSurfaceLifecycleErrors::InvalidCommand, "Window display revision is missing or stale."));
+        if (extent && !extent->IsValid())
+            return Result<EditorSurfaceObservation>::Failure(MakeError(Render::RenderSurfaceLifecycleErrors::InvalidCommand,
+                                                                       "A drawable observation with pixels requires a valid extent."));
+        observedDisplayRevision_ = displayRevision;
+        const auto target = extent ? std::optional{Render::RenderSurfaceConfiguration{*extent, mode, displayRevision}} : std::nullopt;
         bool replacedPending = false;
         if (pending_) {
-            if (extent && pending_->command.target->extent == *extent)
+            if (pending_->command.target == target)
                 return CompletePending();
             if (auto cancelled = CancelPending(); cancelled.HasError())
                 return Result<EditorSurfaceObservation>::Failure(cancelled.ErrorValue());
@@ -72,13 +72,13 @@ namespace Horo::Editor {
                 return Result<EditorSurfaceObservation>::Failure(current.ErrorValue());
             replacedPending = true;
         }
-        if (!extent)
+        if (!target)
             return Suspend(current.Value());
         if (current.Value().state == Render::RenderSurfaceState::Lost && recovery == EditorSurfaceRecovery::Defer && !replacedPending)
             return Result<EditorSurfaceObservation>::Success({current.Value(), std::nullopt});
-        if (MatchesActiveOutput(current.Value(), *extent, mode))
+        if (current.Value().state == Render::RenderSurfaceState::Ready && current.Value().active == target)
             return Result<EditorSurfaceObservation>::Success({current.Value(), std::nullopt});
-        return Realize(*extent, mode, current.Value().state);
+        return Realize(*target, current.Value().state);
     }
 
     /** @copydoc EditorPresentationSurface::ValidateAdmission */
@@ -109,18 +109,17 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorPresentationSurface::Realize */
-    Result<EditorSurfaceObservation> EditorPresentationSurface::Realize(const Render::FramebufferExtent extent,
-                                                                        const Render::ResolvedPresentMode mode,
+    Result<EditorSurfaceObservation> EditorPresentationSurface::Realize(const Render::RenderSurfaceConfiguration &target,
                                                                         const Render::RenderSurfaceState state) {
         auto kind = Render::RenderSurfaceCommandKind::Resize;
         if (state == Render::RenderSurfaceState::Unattached)
             kind = Render::RenderSurfaceCommandKind::Attach;
         else if (state == Render::RenderSurfaceState::Lost)
             kind = Render::RenderSurfaceCommandKind::Recover;
-        auto transition = Begin(kind, Render::RenderSurfaceConfiguration{extent, mode, sequence_ + 1});
+        auto transition = Begin(kind, target);
         if (transition.HasError())
             return Result<EditorSurfaceObservation>::Failure(transition.ErrorValue());
-        admittedMode_ = mode;
+        admittedMode_ = target.presentMode;
         pending_ = transition.Value();
         return CompletePending();
     }
