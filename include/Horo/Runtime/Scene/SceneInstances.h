@@ -12,16 +12,6 @@ namespace Horo::Runtime {
     namespace Detail {
         class StreamedSceneInstanceAccess;
     }
-    /** @brief Separates child composition policies at the Scene ownership boundary. */
-    enum class SceneInstanceMode : std::uint8_t {
-        Embedded,  /**< Child entities share the parent's canonical runtime. */
-        Streamed,  /**< A streaming authority controls residency relative to the parent. */
-        Activated, /**< Independent child runtime linked to its parent's lifetime. */
-    };
-
-    struct SceneInstanceIdentityTag;
-    /** @brief Stable authored child occurrence identity within one parent. */
-    using SceneInstanceId = SceneStableId<SceneInstanceIdentityTag>;
 
     /** @brief Logical occurrence scoped to an exact live parent and captured source definition. */
     struct SceneInstanceAddress final {
@@ -100,8 +90,6 @@ namespace Horo::Runtime {
      */
     [[nodiscard]] std::optional<SceneBaselineAttachmentView> FindEmbeddedSceneInstance(const RuntimeSceneView &parent,
                                                                                        const SceneInstanceAddress &address) noexcept;
-    /** @brief Absolute concurrent Activated child ceiling for one live parent. */
-    inline constexpr std::size_t MaximumActivatedSceneInstances = 32;
 
     /** @brief Scope and explicit budget for a separate runtime activated under this parent. */
     struct ActivatedSceneInstanceRequest final {

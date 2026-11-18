@@ -4,9 +4,8 @@
  * @file SceneSourceModel.h
  * @brief Backend-neutral authored Scene values shared by bounded source decoding and editor documents.
  *
- * Legacy-only documents retain Scene schema1; Character requires schema2 explicit navigation sources require schema3 and animation bindings
- * require schema4. Older readers reject newer document schemas rather than dropping authored data. Editor visibility and lock fields are
- * retained as inert authoring data and never grant runtime capabilities.
+ * The writer selects the earliest schema that preserves the values, from legacy schema 1 to schema 6 for direct Activated children.
+ * Editor visibility, lock state and child references are inert authoring data. Owning runtime composition admits their use explicitly.
  */
 
 #include "Horo/AI/AISceneComponents.h"
@@ -22,12 +21,21 @@
 #include "Horo/Runtime/Scene/NavigationSceneComponents.h"
 #include "Horo/Runtime/Scene/PhysicsSceneComponents.h"
 #include "Horo/Runtime/Scene/PrimitiveMeshDescriptor.h"
+#include "Horo/Runtime/Scene/SceneIdentity.h"
 
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace Horo::SceneSource {
+    /** @brief Inert direct subscene intent. The project catalog owns exact selected asset/cook revision and cycle checks. */
+    struct SceneChildReference final {
+        Runtime::SceneInstanceId occurrence;
+        Assets::AssetId asset;
+        Runtime::SceneInstanceMode mode{Runtime::SceneInstanceMode::Activated};
+        [[nodiscard]] bool operator==(const SceneChildReference &) const noexcept = default;
+    };
+
     /** @brief Stable identity of an authored scene object within one document session. */
     struct SceneObjectId {
         std::uint64_t value{0};

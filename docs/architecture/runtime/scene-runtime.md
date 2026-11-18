@@ -780,6 +780,16 @@ direct children only. Authoring, nested dependency loading, and aggregation
 into a parent's renderer or subsystem simulation require explicit host
 composition.
 
+Scene source schema 6 represents a direct Activated occurrence as
+`childScenes` with a nonzero `instanceId`, stable `sourceAsset`, and explicit
+`"mode": "activated"`. Each parent document has unique occurrence IDs. Two
+occurrences may select the same asset. Documents without children retain their
+existing encoding. The opt-in child-aware decoder preserves the whole list
+and rejects other modes. Existing readers reject these references until a
+project composition can resolve the exact committed child asset revision,
+validate the cross-file graph, and retain the child readiness gate through
+Play activation.
+
 ## Editor Interaction
 
 The editor session owns `SceneDocument`, history, selection, and dirty state.

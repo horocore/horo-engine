@@ -3,6 +3,7 @@
 #include "SceneSourceInternal.h"
 
 #include <algorithm>
+#include <array>
 #include <format>
 #include <functional>
 #include <stdexcept>
@@ -11,6 +12,8 @@
 
 namespace Horo::SceneSource::Detail {
     namespace {
+        constexpr std::string_view ActivatedSceneMode = "activated";
+
         /** @brief Empties the depth-admitted DOM before flattening destruction; checked-iterator proxy allocations remain STL-specific. */
         void ClearSceneJson(Json &value) noexcept {
             if (value.is_structured())
@@ -51,6 +54,34 @@ namespace Horo::SceneSource::Detail {
             }
             return character ? kCharacterSceneSchemaVersion : kSceneSchemaVersion;
         }
+
+        /** @brief Checks the full bounded occurrence set before encoding or returning detached source. */
+        bool ValidChildReferences(const std::span<const SceneChildReference> children) {
+            if (children.size() > Runtime::MaximumActivatedSceneInstances)
+                return false;
+            std::array<Runtime::SceneInstanceId, Runtime::MaximumActivatedSceneInstances> occurrences{};
+            for (std::size_t index = 0; index < children.size(); ++index) {
+                const auto &child = children[index];
+                if (!child.occurrence.IsValid() || !child.asset.IsValid() || child.mode != Runtime::SceneInstanceMode::Activated)
+                    return false;
+                occurrences[index] = child.occurrence;
+            }
+            const auto used = std::span{occurrences}.first(children.size());
+            std::ranges::sort(used);
+            return std::ranges::adjacent_find(used) == used.end();
+        }
+
+        /** @brief Projects complete typed references without changing authored order. */
+        WireJson ChildReferencesJson(const std::span<const SceneChildReference> children) {
+            if (!ValidChildReferences(children))
+                throw std::invalid_argument("Scene contains invalid child references.");
+            WireJson value = WireJson::array();
+            for (const auto &child : children)
+                value.push_back(WireJson{{"instanceId", child.occurrence.value},
+                                         {"sourceAsset", child.asset.ToString()},
+                                         {"mode", ActivatedSceneMode}});
+            return value;
+        }
     }  // namespace
 
     [[nodiscard]] WireJson SceneJson(const SceneSourceView &snapshot) {
@@ -87,9 +118,13 @@ namespace Horo::SceneSource::Detail {
             }
             prefabInstances.push_back(std::move(value));
         }
-        return WireJson{{"schemaVersion", RequiredSceneSchema(snapshot.objects)},
-                        {"objects", std::move(objects)},
-                        {"prefabInstances", std::move(prefabInstances)}};
+        const bool hasChildren = !snapshot.childScenes.empty();
+        WireJson root{{"schemaVersion", hasChildren ? kChildSceneSchemaVersion : RequiredSceneSchema(snapshot.objects)},
+                      {"objects", std::move(objects)},
+                      {"prefabInstances", std::move(prefabInstances)}};
+        if (hasChildren)
+            root["childScenes"] = ChildReferencesJson(snapshot.childScenes);
+        return root;
     }
 
     /** @brief Parses an optional authored parent identity. */
@@ -228,7 +263,8 @@ namespace Horo::SceneSource::Detail {
             const auto &schema = document["schemaVersion"];
             return schema == kSceneSchemaVersion || schema == kCharacterSceneSchemaVersion ||
                    schema == kNavigationSourceSceneSchemaVersion ||
-                   (schema.is_number_unsigned() && (schema == kAnimationSceneSchemaVersion || schema == kUiCanvasSceneSchemaVersion));
+                   (schema.is_number_unsigned() && (schema == kAnimationSceneSchemaVersion || schema == kUiCanvasSceneSchemaVersion ||
+                                                    schema == kChildSceneSchemaVersion));
         }
 
         /** @brief Checks bounded object/prefab inventory independently from feature-version admission. */
@@ -244,9 +280,41 @@ namespace Horo::SceneSource::Detail {
             return !KnownSceneSchema(document) || InvalidSceneInventory(document);
         }
 
+        /** @brief Decodes only the schema's supported direct child mode and rejects downgraded or ignored references. */
+        Result<void> ParseChildReferences(const Json &document, const SceneChildReadMode mode, ParsedScene &scene) {
+            const bool childSchema = document["schemaVersion"] == kChildSceneSchemaVersion;
+            const auto children = document.find("childScenes");
+            if (!childSchema && children == document.end())
+                return Result<void>::Success();
+            if (!childSchema || children == document.end() || !children->is_array() || children->empty() ||
+                children->size() > Runtime::MaximumActivatedSceneInstances)
+                return Result<void>::Failure(
+                    PersistenceError(SceneInvalid, "Scene child references require a bounded nonempty schema 6 list."));
+            if (mode != SceneChildReadMode::Activated)
+                return Result<void>::Failure(PersistenceError(SceneChildReferencesUnsupported, "This consumer has no child Scene owner."));
+
+            scene.childScenes.reserve(children->size());
+            for (const auto &child : *children) {
+                if (!child.is_object() || child.size() != 3 || !HasFields(child, {"instanceId", "sourceAsset", "mode"}) ||
+                    !child["instanceId"].is_number_unsigned() || !child["sourceAsset"].is_string() || !child["mode"].is_string())
+                    return Result<void>::Failure(PersistenceError(SceneInvalid, "Scene child reference fields are invalid."));
+                if (child["mode"].get_ref<const std::string &>() != ActivatedSceneMode)
+                    return Result<void>::Failure(
+                        PersistenceError(SceneChildReferencesUnsupported, "Only direct Activated children are supported in Scene source."));
+                const auto asset = Assets::AssetId::Parse(child["sourceAsset"].get_ref<const std::string &>());
+                if (asset.HasError())
+                    return Result<void>::Failure(PersistenceError(SceneInvalid, "Scene child asset identity is invalid."));
+                scene.childScenes.push_back(
+                    {{child["instanceId"].get<std::uint64_t>()}, asset.Value(), Runtime::SceneInstanceMode::Activated});
+            }
+            if (!ValidChildReferences(scene.childScenes))
+                return Result<void>::Failure(
+                    PersistenceError(SceneInvalid, "Scene child references must have distinct nonzero occurrences and valid assets."));
+            return Result<void>::Success();
+        }
     }  // namespace
 
-    [[nodiscard]] Result<ParsedScene> ParseScene(const std::string_view contents) {
+    [[nodiscard]] Result<ParsedScene> ParseScene(const std::string_view contents, const SceneChildReadMode mode) {
         try {
             Foundation::JsonParseGuard guard{64};
             BoundedSceneJson parsed;
@@ -258,6 +326,8 @@ namespace Horo::SceneSource::Detail {
                 return Result<ParsedScene>::Failure(PersistenceError(SceneInvalid, "Scene schema is unsupported or incomplete."));
 
             ParsedScene scene;
+            if (const auto children = ParseChildReferences(document, mode, scene); children.HasError())
+                return Result<ParsedScene>::Failure(children.ErrorValue());
             scene.objects.reserve(document["objects"].size());
             for (const Json &value : document["objects"]) {
                 bool unsupported{};

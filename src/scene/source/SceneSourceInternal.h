@@ -31,6 +31,7 @@ namespace Horo::SceneSource::Detail {
     inline constexpr std::uint32_t kNavigationSourceSceneSchemaVersion = 3;
     inline constexpr std::uint32_t kAnimationSceneSchemaVersion = 4;
     inline constexpr std::uint32_t kUiCanvasSceneSchemaVersion = 5;
+    inline constexpr std::uint32_t kChildSceneSchemaVersion = 6;
     inline constexpr std::uintmax_t kMaximumProjectMetadataBytes = 64U * 1024U;
     inline constexpr std::uintmax_t kMaximumSceneBytes = 16U * 1024U * 1024U;
     inline constexpr std::uintmax_t kMaximumRecoveryBytes = 20U * 1024U * 1024U;
@@ -39,6 +40,7 @@ namespace Horo::SceneSource::Detail {
     extern const ErrorCodeDescriptor ScenePathInvalid;
     extern const ErrorCodeDescriptor SceneReadFailed;
     extern const ErrorCodeDescriptor SceneInvalid;
+    extern const ErrorCodeDescriptor SceneChildReferencesUnsupported;
 
     /** @brief Creates a persistence-domain error with operation context. */
     [[nodiscard]] Error PersistenceError(const ErrorCodeDescriptor &descriptor, std::string message);
@@ -110,7 +112,12 @@ namespace Horo::SceneSource::Detail {
 
     using ParsedScene = SceneSourceDocument;
     [[nodiscard]] WireJson SceneJson(const SceneSourceView &snapshot);
-    [[nodiscard]] Result<ParsedScene> ParseScene(std::string_view contents);
+    /** @brief Codec opt-in only, never project authority or activation permission. */
+    enum class SceneChildReadMode : std::uint8_t {
+        Reject,
+        Activated,
+    };
+    [[nodiscard]] Result<ParsedScene> ParseScene(std::string_view contents, SceneChildReadMode mode);
 
     /** @brief Encode exact inert generation evidence without activating its producer. */
     [[nodiscard]] WireJson SceneGeneratedOwnershipJson(const SceneGeneratedOwnership &value);
