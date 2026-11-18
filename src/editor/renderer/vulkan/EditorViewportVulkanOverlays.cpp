@@ -1,6 +1,9 @@
 #include "EditorViewportRendererVulkan.h"
 #include "editor/renderer/EditorRendererErrors.h"
+#include "editor/renderer/EditorViewportDisplayColor.h"
 #include "editor/screens/workspace/panels/viewport/visualizers/light/LightVisualizerGeometry.h"
+
+#include <algorithm>
 
 namespace Horo::Editor {
     namespace {
@@ -92,6 +95,24 @@ namespace Horo::Editor {
         if (const auto written = bridge_.Port()->WriteFrameBuffer(frame, slot.vertexInstance, std::as_bytes(std::span{overlayVertices_}));
             written.HasError())
             return Outcome::Failure(written.ErrorValue());
+        if (color_) {
+            for (std::size_t index = 0; index < 8; index += 4) {
+                const auto decoded = DecodeEditorOverlaySrgbV1({palette[index], palette[index + 1], palette[index + 2]});
+                if (decoded.HasError())
+                    return Outcome::Failure(decoded.ErrorValue());
+                palette[index] = decoded.Value().x;
+                palette[index + 1] = decoded.Value().y;
+                palette[index + 2] = decoded.Value().z;
+            }
+            if (requestedLightVisualizer_.selectedLight) {
+                const auto display = LightOverlayDisplayLinearV1(requestedLightVisualizer_.selectedLight->color);
+                if (display.HasError())
+                    return Outcome::Failure(display.ErrorValue());
+                palette[8] = std::clamp(display.Value().x, 0.35F, 1.0F);
+                palette[9] = std::clamp(display.Value().y, 0.35F, 1.0F);
+                palette[10] = std::clamp(display.Value().z, 0.20F, 1.0F);
+            }
+        }
         if (const auto written = WriteOverlayUniforms(frame, slot, pass.scene.camera, pass.extent, palette); written.HasError())
             return Outcome::Failure(written.ErrorValue());
         return Outcome::Success(true);

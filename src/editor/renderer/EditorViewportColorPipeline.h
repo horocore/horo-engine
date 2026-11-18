@@ -50,6 +50,12 @@ namespace Horo::Editor {
          * @param scene Exact canonical scene view. @param display Exact display-linear view.
          * @return Original bounded resource/material failure. */
         [[nodiscard]] Result<void> PrepareBindings(Render::RenderTextureViewHandle scene, Render::RenderTextureViewHandle display);
+
+        /** @brief Returns the current bounded ring index for matching a cached graph to these exact uniforms. */
+        [[nodiscard]] std::size_t CandidateSlot() const noexcept {
+            return candidateSlot_;
+        }
+
         /** @brief Returns current scene/encode material leases. @param role Zero scene or one encode. @return Synchronous borrow. */
         [[nodiscard]] const std::shared_ptr<const Render::ResidentMaterialBinding> &Material(std::size_t role) const noexcept;
         /** @brief Returns actual fullscreen mesh and its owned vertex/index handles. @return Exact frontend-issued recipe. */

@@ -77,7 +77,8 @@ namespace Horo::Editor {
             static_cast<void>(deltaSeconds);
         }
 
-        /** @brief Finishes a prepared candidate only after actual native Present, or cancels it. @param accepted Actual frame acceptance.
+        /** @brief Resolves prepared color after the host finishes or cancels the frame.
+         * @param accepted The host present result; a viewport with its own exact native submission receipt uses that authority.
          */
         virtual void FinishColorFrame(bool accepted) noexcept {
             static_cast<void>(accepted);

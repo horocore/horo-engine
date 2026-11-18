@@ -1,6 +1,7 @@
 /** @file EditorVulkanPresentationSmoke.cpp
  * @brief Real SDL/Vulkan GUI and cooked viewport composition; no simulated native admission. */
 #include "CameraCutNativeTestSupport.h"
+#include "ColorOutputPackage.h"
 #include "EditorVulkanShaderAssets.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "VulkanBackendModule.h"
@@ -148,13 +149,18 @@ namespace Horo::Tests::VulkanEditor {
                       << ",\"format\":" << static_cast<unsigned>(device.outputFormat) << "}\n";
         }
 
-        void CreateViewport(const RenderSceneView &scene = {}) {
+        void CreateViewport(const RenderSceneView &scene = {}, const EditorViewportColorInputs *color = nullptr) {
             const char *root = std::getenv("HORO_EDITOR_VULKAN_ASSET_ROOT");
             REQUIRE(root);
             auto cooked = LoadPackagedVulkanViewportShader(std::filesystem::path{root});
             Check(cooked);
             viewport = std::make_unique<EditorViewportRendererVulkan>(*frontend, *bridge, std::move(cooked).Value());
             Check(viewport->Initialize());
+            if (color) {
+                auto linear = LoadPackagedVulkanSceneLinearShader(std::filesystem::path{root});
+                Check(linear, "load exact scene-linear material");
+                Check(viewport->PrepareManualColor(std::move(linear).Value(), *color, {}), "activate manual Vulkan viewport color");
+            }
             const auto view = frontend->CreateRenderViewIdentity();
             Check(view);
             Check(viewport->BindLightingViewIdentity(view.Value()));
@@ -212,11 +218,11 @@ namespace Horo::Tests::VulkanEditor {
         }
 
         void ExecuteSceneAndGui(RenderFrameScope &frame, const RenderSceneView &scene = {}) {
-            const auto view = viewport->TextureView();
-            REQUIRE(view.IsValid());
             const std::array passes{RenderPassDescriptor{.kind = RenderPassKind::Graphics, .staticMesh = ViewportPass(scene)},
                                     RenderPassDescriptor{.kind = RenderPassKind::Graphics, .primaryOutput = PrimaryOutputAttachment{}}};
             Check(viewport->ExecutePreparedFrame(frame, passes));
+            const auto view = viewport->TextureView();
+            REQUIRE(view.IsValid());
             Check(gui->BeginFrame());
             ImGui::NewFrame();
             ImGui::GetForegroundDrawList()->AddImage(static_cast<ImTextureID>(view.textureId), {0, 0}, {320, 240});
@@ -320,6 +326,59 @@ namespace Horo::Tests::VulkanEditor {
         CHECK(host.frontend->MemorySnapshot().allocationCount == 0);
         CHECK(host.port->GetInstanceProcAddr() == nullptr);
         CHECK(SDL_GetWindowID(host.window.get()) != 0);
+    }
+
+    TEST_CASE("Native Vulkan manual ColorOutput preserves graph acceptance and publishes the encoded GUI view",
+              "[native-smoke][vulkan][gui][manual-color]") {
+        const auto *root = std::getenv("HORO_TEST_VULKAN_COLOR_OUTPUT_PACKAGE");
+        if (!root)
+            SKIP("Supply HORO_TEST_VULKAN_COLOR_OUTPUT_PACKAGE with an actual Vulkan manual ColorOutput generation.");
+        Host host;
+        const auto presentation = host.frontend->PresentationOutput();
+        if (presentation.HasError() && presentation.ErrorValue().code.Value() == RenderPresentationErrors::OutputUnsupported.code.Value())
+            SKIP("Selected surface lacks the qualified BGRA8 unmanaged SDR attachment.");
+        Check(presentation);
+
+        auto package = Render::Internal::LoadColorOutputCookPackage(std::filesystem::path{root}, ShaderTargetBackend::Vulkan);
+        Check(package, "load exact Vulkan manual color package");
+        const EditorViewportColorInputs color{
+            .package = std::make_shared<const Render::Internal::ColorOutputCookPackage>(std::move(package).Value())};
+        host.CreateViewport({}, &color);
+        CHECK(host.viewport->ColorDiagnostics().active);
+        CHECK_FALSE(host.viewport->ColorDiagnostics().automatic);
+        CHECK_FALSE(host.viewport->TextureView().IsValid());
+        const auto rejectedSetting = host.viewport->RequestColorSettings({.mode = ExposureMode::AutomaticHistogram});
+        REQUIRE(rejectedSetting.HasError());
+        CHECK(rejectedSetting.ErrorValue().code.Value() == ExposureGpuErrors::Unsupported.code.Value());
+        {
+            host.PrepareScene();
+            auto frame = host.Frame(1);
+            host.ExecuteSceneAndGui(frame);
+            CHECK(host.viewport->ColorDiagnostics().acceptedSubmission == 0);
+            frame.Cancel();
+            host.viewport->FinishColorFrame(false);
+            CHECK_FALSE(host.viewport->TextureView().IsValid());
+            CHECK(host.viewport->ColorDiagnostics().acceptedSubmission == 0);
+        }
+        {
+            host.viewport->RequestGrid({.visible = true});
+            host.PrepareScene();
+            auto frame = host.Frame(2);
+            host.ExecuteSceneAndGui(frame);
+            Check(frame.Present(), "submit scene-linear output and GUI tail");
+            host.viewport->FinishColorFrame(false);
+            CHECK(host.viewport->ColorDiagnostics().acceptedSubmission == 1);
+            CHECK(host.viewport->TextureView().IsValid());
+        }
+        {
+            host.PrepareScene();
+            auto frame = host.Frame(3);
+            host.ExecuteSceneAndGui(frame);
+            Check(frame.Present(), "resample the accepted analytic tables without another upload");
+            host.viewport->FinishColorFrame(true);
+            CHECK(host.viewport->ColorDiagnostics().acceptedSubmission == 2);
+        }
+        REQUIRE(host.Drain());
     }
 
     TEST_CASE("Native Vulkan empty viewport GUI tail and cancellation share canonical retirement", "[native-smoke][vulkan][gui]") {

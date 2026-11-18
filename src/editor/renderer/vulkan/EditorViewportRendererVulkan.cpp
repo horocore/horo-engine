@@ -1,5 +1,6 @@
 #include "EditorViewportRendererVulkan.h"
 
+#include "EditorViewportColorPipeline.h"
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
 #include "RenderFrontendResourceAccess.h"
 #include "editor/renderer/EditorRendererErrors.h"
@@ -55,20 +56,29 @@ namespace Horo::Editor {
         ~ProgramGeneration() {
             owner.RetireProgram(program, slots);
             owner.RetireProgram(shadowProgram, {});
+            owner.RetireProgram(sceneLinearProgram, {});
         }
 
         EditorViewportRendererVulkan &owner;
         Render::ShaderHotReloadTargetState expected;
         ShaderResources program;
         ShaderResources shadowProgram;
+        ShaderResources sceneLinearProgram;
         std::array<FrameSlot, 8> slots;
     };
 
     Result<void> EditorViewportRendererVulkan::PrepareProgram(ProgramGeneration &candidate) {
-        if (const auto pipeline = ProgramResources::CreatePipeline(frontend_, candidate.program, device_.frames); pipeline.HasError())
+        const bool displayLinear = !candidate.sceneLinearProgram.payload.empty();
+        if (const auto pipeline = ProgramResources::CreatePipeline(frontend_, candidate.program, device_.frames, displayLinear);
+            pipeline.HasError())
             return pipeline;
-        if (const auto slots = ProgramResources::CreateDrawSlots(frontend_, candidate.program, candidate.slots, device_.frames,
-                                                                 resources_.ShadowTextureView());
+        if (displayLinear)
+            if (const auto scene = ProgramResources::CreateSceneLinearPipeline(frontend_, candidate.sceneLinearProgram, device_.frames);
+                scene.HasError())
+                return scene;
+        const auto &sceneProgram = displayLinear ? candidate.sceneLinearProgram : candidate.program;
+        if (const auto slots =
+                ProgramResources::CreateDrawSlots(frontend_, sceneProgram, candidate.slots, device_.frames, resources_.ShadowTextureView());
             slots.HasError())
             return slots;
         if (auto overlay = CreateOverlaySlots(candidate.program, candidate.slots); overlay.HasError())
@@ -76,11 +86,38 @@ namespace Horo::Editor {
         return PrepareShadowProgram(candidate.shadowProgram, candidate.slots);
     }
 
+    /** @copydoc EditorViewportRendererVulkan::PrepareManualColor */
+    Result<void> EditorViewportRendererVulkan::PrepareManualColor(EditorVulkanSceneLinearCook scene,
+                                                                  const EditorViewportColorInputs &inputs,
+                                                                  const Render::ExposureSettings &settings) {
+        if (!initialized_ || recordedEver_ || color_ || resources_.ColorTexture().IsValid() ||
+            !frontend_.Capabilities().supportsMaterialRasterGraph || scene.payload.empty() || settings.mode != Render::ExposureMode::Manual)
+            return Result<void>::Failure(MakeError(Render::ExposureGpuErrors::Unsupported));
+        auto color = MakeViewportColor(inputs, settings);
+        if (color.HasError())
+            return Result<void>::Failure(color.ErrorValue());
+        auto candidate = std::make_unique<ProgramGeneration>(*this);
+        candidate->program.payload = shader_.payload;
+        candidate->program.metadata = shader_.metadata;
+        candidate->shadowProgram.payload = shadowShader_.payload;
+        candidate->shadowProgram.metadata = shadowShader_.metadata;
+        candidate->sceneLinearProgram.payload = std::move(scene.payload);
+        candidate->sceneLinearProgram.metadata = std::move(scene.metadata);
+        if (const auto prepared = PrepareProgram(*candidate); prepared.HasError())
+            return prepared;
+        if (const auto enabled = resources_.EnableColorPipeline(); enabled.HasError())
+            return enabled;
+        AdoptProgram(*candidate);
+        color_ = std::move(color).Value();
+        return Result<void>::Success();
+    }
+
     /** @copydoc EditorViewportRendererVulkan::AdoptProgram */
     void EditorViewportRendererVulkan::AdoptProgram(ProgramGeneration &candidate) noexcept {
         viewportRasterGraphs_.reset();
         std::swap(shader_, candidate.program);
         std::swap(shadowShader_, candidate.shadowProgram);
+        std::swap(sceneLinearShader_, candidate.sceneLinearProgram);
         std::swap(slots_, candidate.slots);
         boundShadowAtlas_ = resources_.ShadowTextureView();
     }
@@ -180,6 +217,8 @@ namespace Horo::Editor {
         const auto boundary = Render::Detail::RenderFrontendResourceAccess::RequirePreparationBoundary(frontend_);
         if (boundary.HasError())
             return Outcome::Failure(boundary.ErrorValue());
+        if (color_)
+            return Outcome::Failure(MakeError(Render::ExposureGpuErrors::Unsupported));
         if (!initialized_ || !childAttached_ || !shader_.pipeline.IsValid())
             return Outcome::Failure(MakeError(RendererErrors::ViewportNotInitialized));
         return Outcome::Success({Render::ShaderTargetBackend::Vulkan, boundary.Value().value, liveGeneration_});
@@ -253,7 +292,13 @@ namespace Horo::Editor {
         for (auto &cascade : preparedShadowDraws_)
             for (auto &draw : cascade)
                 draw = {};
+        FinishColorFrame(false);
+        color_.reset();
+        acceptedColorView_ = {};
         ProgramResources::ReleaseMaterials(slots_);
+        if (sceneLinearShader_.materials)
+            static_cast<void>(sceneLinearShader_.materials->Shutdown());
+        sceneLinearShader_.materials.reset();
         if (shader_.materials)
             static_cast<void>(shader_.materials->Shutdown());
         shader_.materials.reset();
@@ -289,6 +334,7 @@ namespace Horo::Editor {
         auto metadata = std::move(shader_.metadata);
         RetireProgram(shader_, slots_);
         RetireProgram(shadowShader_, {});
+        RetireProgram(sceneLinearShader_, {});
         shader_.payload = std::move(source);
         shader_.metadata = std::move(metadata);
         RetireXrProgram();
@@ -321,7 +367,7 @@ namespace Horo::Editor {
         const auto prepared = resources_.Prepare(scene, requestedExtent_);
         if (prepared.HasError())
             return prepared;
-        if (prepared.Value() && resources_.ColorTexture() != emptyGraphTexture_) {
+        if (prepared.Value() && !color_ && resources_.ColorTexture() != emptyGraphTexture_) {
             if (const auto clear = CreateEmptyGraph(); clear.HasError())
                 return Result<std::optional<Render::RenderTargetHandle>>::Failure(clear.ErrorValue());
         }
@@ -357,9 +403,10 @@ namespace Horo::Editor {
     EditorViewportTextureView EditorViewportRendererVulkan::TextureView() const noexcept {
         if (const auto projection = XrLogicalProjection(); projection.IsValid())
             return projection;
-        return resources_.IsReady()
-                   ? EditorViewportTextureView{.textureId = resources_.ImageIdentity(), .sampledView = resources_.ColorTextureView()}
-                   : EditorViewportTextureView{};
+        const auto view = resources_.PresentationTextureView();
+        if (!resources_.IsReady() || (color_ && view != pendingColorSubmission_.output && view != acceptedColorView_))
+            return {};
+        return {.textureId = resources_.ImageIdentity(), .sampledView = view};
     }
 
     bool EditorViewportRendererVulkan::IsReady() const noexcept {

@@ -46,9 +46,10 @@ namespace Horo::Editor {
             return Result<void>::Success();
         if (!atlas.IsValid())
             return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleTarget));
+        const auto &scene = SceneProgram();
         for (std::uint32_t frame = 0; frame < device_.frames; ++frame) {
             for (auto &draw : slots_[frame].draws)
-                if (auto bound = ProgramResources::BindUniformSlot(shader_, draw, shader_.pipeline, atlas); bound.HasError())
+                if (auto bound = ProgramResources::BindUniformSlot(scene, draw, scene.pipeline, atlas); bound.HasError())
                     return bound;
             if (auto bound = ProgramResources::BindUniformSlot(shader_, slots_[frame].overlay.uniforms, shader_.overlayPipeline, atlas);
                 bound.HasError())

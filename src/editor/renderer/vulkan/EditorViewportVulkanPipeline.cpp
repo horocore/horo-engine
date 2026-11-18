@@ -5,7 +5,7 @@
 namespace Horo::Editor {
     /** @copydoc EditorViewportRendererVulkan::ProgramResources::CreatePipeline */
     Result<void> EditorViewportRendererVulkan::ProgramResources::CreatePipeline(Render::RenderFrontend &frontend, ShaderResources &program,
-                                                                                const std::uint32_t frames) {
+                                                                                const std::uint32_t frames, bool displayLinearOverlay) {
         using namespace Render;
         const auto encoded = EncodeReflectedShaderArtifact(program.metadata);
         if (encoded.HasError())
@@ -22,6 +22,8 @@ namespace Horo::Editor {
         program.pipeline = pipeline.Value();
         auto overlayState = state;
         overlayState.depthWrite = false;
+        if (displayLinearOverlay)
+            overlayState.colorFormat = RenderTextureFormat::Rgba16Float;
         const auto overlay = CreatePipelineState(frontend, program, EditorVulkanViewportShaderManifest(), overlayState);
         if (overlay.HasError())
             return Result<void>::Failure(overlay.ErrorValue());
@@ -33,9 +35,34 @@ namespace Horo::Editor {
         return CreateMaterialLayout(frontend, program, program.metadata.reflection, frames);
     }
 
+    /** @copydoc EditorViewportRendererVulkan::ProgramResources::CreateSceneLinearPipeline */
+    Result<void> EditorViewportRendererVulkan::ProgramResources::CreateSceneLinearPipeline(Render::RenderFrontend &frontend,
+                                                                                           ShaderResources &program,
+                                                                                           const std::uint32_t frames) {
+        using namespace Render;
+        const auto metadata = EncodeReflectedShaderArtifact(program.metadata);
+        if (metadata.HasError())
+            return Result<void>::Failure(metadata.ErrorValue());
+        const auto checked = LoadEditorVulkanSceneLinearCook(program.payload, metadata.Value());
+        if (checked.HasError())
+            return Result<void>::Failure(checked.ErrorValue());
+        if (const auto stages = CreateProgramStages(frontend, program, "PSSceneLinear"); stages.HasError())
+            return stages;
+        const auto pipeline =
+            CreatePipelineState(frontend, program, EditorVulkanSceneLinearShaderManifest(), EditorVulkanSceneLinearPipelineState());
+        if (pipeline.HasError())
+            return Result<void>::Failure(pipeline.ErrorValue());
+        program.pipeline = pipeline.Value();
+        const auto sampler = frontend.CreateSampler({});
+        if (sampler.HasError())
+            return Result<void>::Failure(sampler.ErrorValue());
+        program.shadowSampler = sampler.Value().handle;
+        return CreateMaterialLayout(frontend, program, program.metadata.reflection, frames);
+    }
+
     /** @copydoc EditorViewportRendererVulkan::ProgramResources::CreateProgramStages */
     Result<void> EditorViewportRendererVulkan::ProgramResources::CreateProgramStages(Render::RenderFrontend &frontend,
-                                                                                     ShaderResources &program) {
+                                                                                     ShaderResources &program, const char *fragmentEntry) {
         using namespace Render;
         const auto target = EditorVulkanViewportShaderTarget();
         const auto &reflection = program.metadata.reflection;
@@ -47,7 +74,7 @@ namespace Horo::Editor {
         if (vertex.HasError())
             return Result<void>::Failure(vertex.ErrorValue());
         program.vertex = vertex.Value().handle;
-        const auto fragment = stage(ShaderStage::Fragment, "PSMain");
+        const auto fragment = stage(ShaderStage::Fragment, fragmentEntry);
         if (fragment.HasError())
             return Result<void>::Failure(fragment.ErrorValue());
         program.fragment = fragment.Value().handle;

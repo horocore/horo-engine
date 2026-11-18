@@ -1364,11 +1364,37 @@ namespace Horo::Editor {
 
         /** @brief Admits explicit color/lighting asset options only on the currently implemented native product route. */
         Result<void> ValidateColorBackendSelection(const EditorGuiOptions &options) {
+            if (options.rendererBackend == "vulkan" && options.color.root && !options.color.lookRoot && !options.lightingRoot &&
+                options.color.exposure.mode == Render::ExposureMode::Manual)
+                return Result<void>::Success();
             if ((options.color.root || options.color.lookRoot || options.color.settingsRequested || options.lightingRoot) &&
                 options.rendererBackend != "metal")
                 return Result<void>::Failure(MakeError(Render::ExposureGpuErrors::Unsupported));
             return Result<void>::Success();
         }
+
+#if defined(HORO_HAS_RENDER_VULKAN)
+        /** @brief Prepares the explicit Vulkan manual color recipe on the normal selected viewport. */
+        Result<Render::RenderLightPreparationReadiness> PrepareVulkanEditorColor(EditorViewportRendererVulkan &viewport,
+                                                                                 const EditorGuiOptions &options) {
+            using Outcome = Result<Render::RenderLightPreparationReadiness>;
+            if (!options.color.root)
+                return Outcome::Success({});
+            const auto root = ResolveEditorColorPipelineRoot(options.color.root, EditorAssetRoot());
+            if (root.HasError())
+                return Outcome::Failure(root.ErrorValue());
+            if (!root.Value())
+                return Outcome::Failure(MakeError(Render::ExposureGpuErrors::Unsupported));
+            const auto inputs = LoadEditorVulkanManualColorInputs(*root.Value());
+            if (inputs.HasError())
+                return Outcome::Failure(inputs.ErrorValue());
+            auto scene = LoadPackagedVulkanSceneLinearShader(EditorAssetRoot());
+            if (scene.HasError())
+                return Outcome::Failure(scene.ErrorValue());
+            const auto applied = viewport.PrepareManualColor(std::move(scene).Value(), inputs.Value(), options.color.exposure);
+            return applied.HasError() ? Outcome::Failure(applied.ErrorValue()) : Outcome::Success({});
+        }
+#endif
 
         /** @brief Installs the concrete GUI/viewport pair for the already selected and owned frontend. */
         [[nodiscard]] Result<void> InstallSelectedEditorRenderers(SDL_Window &window, const EditorGuiOptions &options,
@@ -1397,10 +1423,14 @@ namespace Horo::Editor {
                 if (cooked.HasError())
                     return Result<void>::Failure(cooked.ErrorValue());
                 auto &bridge = *composition.vulkanGraphicsBridge;
+                const auto prepare = [&options](EditorViewportRendererVulkan &viewport, Render::RenderFrontend &,
+                                                const EditorViewportLightingProfile &) {
+                    return PrepareVulkanEditorColor(viewport, options);
+                };
                 return InstallEditorRenderers(composition, std::make_unique<EditorGuiRendererVulkan>(window, *composition.frontend, bridge),
                                               std::make_unique<EditorViewportRendererVulkan>(*composition.frontend, bridge,
                                                                                              std::move(cooked).Value()),
-                                              *options.directionalShadows, *options.lighting);
+                                              *options.directionalShadows, *options.lighting, prepare);
 #endif
             }
             return Result<void>::Success();
@@ -1411,6 +1441,8 @@ namespace Horo::Editor {
                                                                       EditorRenderComposition &composition) {
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
             if (composition.xrSession) {
+                if (options.color.root || options.color.lookRoot || options.color.settingsRequested || options.lightingRoot)
+                    return Result<void>::Failure(MakeError(Render::ExposureGpuErrors::Unsupported));
                 if (options.rendererBackend != "vulkan" || !composition.vulkanGraphicsBridge)
                     return Result<void>::Failure(
                         MakeEditorRendererError("editor.xr.renderer_unavailable",

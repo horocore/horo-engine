@@ -16,13 +16,29 @@
 #include <thread>
 
 namespace Horo::Editor {
+    class EditorViewportColorPipeline;
+
     class EditorViewportRendererVulkan final : public IEditorViewportRenderer,
                                                public Render::Detail::IVulkanEditorDeviceChild,
                                                public Render::IShaderHotReloadTarget {
     public:
         EditorViewportRendererVulkan(Render::RenderFrontend &frontend, Render::Detail::VulkanEditorGraphicsBridge &bridge,
                                      EditorVulkanViewportCook cooked) noexcept;
+        /** @brief Installs the explicit validated scene-linear shader and Vulkan manual color package before resources or frames.
+         * @param scene Exact scene-linear cook. @param inputs Selected decoded color package.
+         * @param settings Authored manual exposure settings.
+         * @return Success only after complete native material/color admission, or typed failure. */
+        [[nodiscard]] Result<void> PrepareManualColor(EditorVulkanSceneLinearCook scene, const EditorViewportColorInputs &inputs,
+                                                      const Render::ExposureSettings &settings);
         ~EditorViewportRendererVulkan() override;
+        /** @copydoc IEditorViewportRenderer::RequestColorSettings */
+        [[nodiscard]] Result<void> RequestColorSettings(const Render::ExposureSettings &settings) override;
+        /** @copydoc IEditorViewportRenderer::SetColorFrameDelta */
+        void SetColorFrameDelta(float deltaSeconds) noexcept override;
+        /** @copydoc IEditorViewportRenderer::FinishColorFrame */
+        void FinishColorFrame(bool presented) noexcept override;
+        /** @copydoc IEditorViewportRenderer::ColorDiagnostics */
+        [[nodiscard]] EditorViewportColorDiagnostics ColorDiagnostics() const noexcept override;
         [[nodiscard]] Result<void> Initialize();
         /** @brief Cold-prepares the actual canonical multiview program before selected XR can publish Ready.
          * @param cooked Same admitted compiler/reflection output loaded from the explicit packaged asset root.
@@ -212,9 +228,13 @@ namespace Horo::Editor {
         struct ProgramResources final {
             /** @brief Admits the desktop program and its overlay against one frontend and frame capacity. */
             [[nodiscard]] static Result<void> CreatePipeline(Render::RenderFrontend &frontend, ShaderResources &program,
-                                                             std::uint32_t frames);
+                                                             std::uint32_t frames, bool displayLinearOverlay = false);
             /** @brief Creates native shader stages into the same retained program, preserving partial prefixes. */
-            [[nodiscard]] static Result<void> CreateProgramStages(Render::RenderFrontend &frontend, ShaderResources &program);
+            [[nodiscard]] static Result<void> CreateProgramStages(Render::RenderFrontend &frontend, ShaderResources &program,
+                                                                  const char *fragmentEntry = "PSMain");
+            /** @brief Realizes the exact dedicated scene-linear Vulkan material. */
+            [[nodiscard]] static Result<void> CreateSceneLinearPipeline(Render::RenderFrontend &frontend, ShaderResources &program,
+                                                                        std::uint32_t frames);
             /** @brief Creates a pipeline using exact selected-device and cooked-program identity. */
             [[nodiscard]] static Result<Render::RenderPipelineHandle> CreatePipelineState(Render::RenderFrontend &frontend,
                                                                                           const ShaderResources &program,
@@ -253,6 +273,20 @@ namespace Horo::Editor {
                                                                     const Render::DirectionalShadowFrame *shadow);
         };
 
+        /** @brief Polls the exact selected device's last reader before reusing a color uniform. */
+        [[nodiscard]] static Result<EditorViewportColorReadiness> ObserveColorBuffer(void *context, Render::RenderBufferHandle buffer);
+        /** @brief Writes one complete idle native uniform through the selected device owner. */
+        [[nodiscard]] static Result<void> WriteColorBuffer(void *context, Render::RenderBufferHandle buffer,
+                                                           std::span<const std::byte> bytes);
+        /** @brief Realizes one explicit Vulkan manual ColorOutput owner with the selected device's preparation ports. */
+        [[nodiscard]] Result<std::unique_ptr<EditorViewportColorPipeline>> MakeViewportColor(const EditorViewportColorInputs &inputs,
+                                                                                             const Render::ExposureSettings &settings);
+        /** @brief Prepares actual sampled attachment bindings and a free native-backed uniform pair before BeginFrame. */
+        [[nodiscard]] Result<void> PrepareViewportColor(Render::RenderViewId view, Render::FramebufferExtent extent);
+        /** @brief Publishes only the exact last recorded color graph ticket and records its acceptance owner. */
+        void RecordViewportColor(Render::RenderTimelinePoint signal) noexcept;
+        /** @brief Returns the selected scene program alongside the independently owned display overlay. */
+        [[nodiscard]] const ShaderResources &SceneProgram() const noexcept;
         struct ProgramGeneration;
         [[nodiscard]] Result<void> PrepareProgram(ProgramGeneration &candidate);
         [[nodiscard]] Result<void> PrepareShadowProgram(ShaderResources &program, std::span<FrameSlot> slots);
@@ -303,6 +337,18 @@ namespace Horo::Editor {
         const std::thread::id owner_{std::this_thread::get_id()};
         Render::RenderFrontend &frontend_;
         Render::Detail::VulkanEditorGraphicsBridge &bridge_;
+        std::unique_ptr<EditorViewportColorPipeline> color_;
+
+        struct ColorSubmission final {
+            Render::RenderTimelinePoint signal;
+            Render::RenderTextureViewHandle output;
+            std::uint64_t deviceIncarnation{};
+        };
+
+        ColorSubmission pendingColorSubmission_;
+        Render::RenderTextureViewHandle acceptedColorView_;
+        float colorFrameDelta_{};
+        ShaderResources sceneLinearShader_;
         ShaderResources shader_;
         ShaderResources shadowShader_;
         ShaderResources xrShader_;

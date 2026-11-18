@@ -17,7 +17,13 @@ namespace Horo::Editor {
             return Result<void>::Success();
         if (view != LightingViewIdentity())
             return Result<void>::Failure(MakeError(Render::LightCullingErrors::InvalidInput));
-        return PrepareViewportRasterGraphs(pass);
+        if (color_)
+            if (const auto ready = PrepareViewportColor(view, pass.extent); ready.HasError())
+                return ready;
+        const auto prepared = PrepareViewportRasterGraphs(pass);
+        if (prepared.HasError() && color_)
+            FinishColorFrame(false);
+        return prepared;
     }
 
     Result<void> EditorViewportRendererVulkan::PrepareViewportOutput(Render::RenderFrameScope &frame,
@@ -42,7 +48,7 @@ namespace Horo::Editor {
         auto drawScene = scene;
         drawScene.lights = std::span{forwardDrawLights_}.first(selection.Value().count);
         const auto &shadow = remapped.Value();
-        return ProgramResources::WriteDraw(bridge_, shader_, resources_.AllocatedExtent(), frame, draw, instance, drawScene,
+        return ProgramResources::WriteDraw(bridge_, SceneProgram(), resources_.AllocatedExtent(), frame, draw, instance, drawScene,
                                            shadow ? &*shadow : nullptr);
     }
 }  // namespace Horo::Editor

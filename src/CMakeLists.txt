@@ -4091,6 +4091,7 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_VULKAN AND TARGET HoroThirdParty
         editor/renderer/vulkan/EditorViewportRendererVulkan.cpp
         editor/renderer/vulkan/EditorViewportVulkanExecution.cpp
         editor/renderer/vulkan/EditorViewportVulkanRasterGraph.cpp
+        editor/renderer/vulkan/EditorViewportVulkanColor.cpp
         editor/renderer/vulkan/EditorViewportVulkanShadows.cpp
         editor/renderer/vulkan/EditorViewportVulkanLighting.cpp
         editor/renderer/vulkan/EditorViewportVulkanXr.cpp
@@ -4102,7 +4103,7 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_VULKAN AND TARGET HoroThirdParty
     target_include_directories(HoroEditorVulkanGuiInternal PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(HoroEditorVulkanGuiInternal
         PUBLIC HoroRenderVulkanHostInterface HoroEngine::RenderFrontend HoroEditorVulkanShaderInternal HoroEngine::EditorViewportResources
-        PRIVATE HoroRenderFrontendResourceAccessInternal HoroRenderGraphTemplateInterface HoroEngine::RenderVulkan HoroThirdParty::ImGuiVulkan ${HORO_SDL3_TARGET})
+        PRIVATE HoroRenderFrontendResourceAccessInternal HoroRenderGraphTemplateInterface HoroEditorViewportColorInternal HoroColorOutputPackageInternal HoroEngine::RenderVulkan HoroThirdParty::ImGuiVulkan ${HORO_SDL3_TARGET})
     set(_horo_editor_vulkan_xr_headers "${CMAKE_CURRENT_BINARY_DIR}/editor_vulkan_xr_host_headers")
     file(MAKE_DIRECTORY "${_horo_editor_vulkan_xr_headers}")
     # Forward this deliberate internal contract so source and App consumers share
