@@ -402,6 +402,10 @@ namespace Horo::Runtime {
             !matches)
             return Result<void>::Failure(MakeError(SceneErrors::BaselineStale));
         const LifecycleMutation mutation{*this};
+        if (structuralReceipt_) {
+            structuralReceipt_->error_ = JobCancelled().ErrorValue();
+            structuralReceipt_.reset();
+        }
         structuralCommands_.reset();
         return Result<void>::Success();
     }

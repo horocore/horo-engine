@@ -1,4 +1,5 @@
 #include "Horo/Runtime/Scene/RuntimeScene.h"
+#include "Horo/Runtime/Scene/SceneInstances.h"
 
 #include <memory>
 #include <type_traits>
@@ -16,3 +17,7 @@ using StructuralParticipant = Horo::Runtime::SceneStructuralParticipant;
 using StructuralSignature = Horo::Result<std::unique_ptr<Horo::Runtime::SceneStructuralCandidate>> (StructuralParticipant::*)(
     const Horo::Runtime::RuntimeSceneView &, std::span<const Horo::Runtime::RuntimeEntityView>, std::span<const Horo::Runtime::EntityRef>);
 static_assert(std::is_same_v<decltype(&StructuralParticipant::Prepare), StructuralSignature>);
+
+using InstanceOperation = Horo::Runtime::SceneInstanceOperation;
+static_assert(!std::is_default_constructible_v<InstanceOperation>);
+static_assert(std::is_copy_constructible_v<InstanceOperation>);

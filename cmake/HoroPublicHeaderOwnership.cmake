@@ -604,6 +604,7 @@ horo_configure_target_header_boundary(HoroRuntimeScene PUBLIC_HEADERS
     Horo/Runtime/Scene/SceneRestoreBundle.h
     Horo/Runtime/Scene/RuntimeScene.h
     Horo/Runtime/Scene/RuntimeSceneDefinition.h
+    Horo/Runtime/Scene/SceneInstances.h
     Horo/Runtime/Scene/SavedSceneBootstrap.h
     Horo/Runtime/Scene/SaveContentRequirements.h
     Horo/Runtime/Scene/SaveContentReconciliation.h

@@ -747,6 +747,16 @@ reference is:
 Reference loading participates in the parent task group and cancellation tree.
 An unloaded parent cannot receive a late child activation.
 
+Embedded child instances enter the normal Scene structural transaction from
+a prepared child definition and verified dependency leases. The exact live
+parent, authored occurrence, child definition, source publication and
+cancellation guard that transaction. A replacement must present the
+current published child operation and source revision. Only one resident embedded occurrence
+of a child definition can occupy a parent; the same definition can be
+embedded by another parent. Cancelling an operation resolves its receipt
+without affecting another attempt or a published child. Parent retirement
+removes the complete child attachment with the parent runtime.
+
 ## Editor Interaction
 
 The editor session owns `SceneDocument`, history, selection, and dirty state.
