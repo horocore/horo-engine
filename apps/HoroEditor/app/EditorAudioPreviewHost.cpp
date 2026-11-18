@@ -49,6 +49,11 @@ namespace Horo::Editor {
                 return selected_.output->CommitRendering(epoch);
             }
 
+            std::optional<Audio::Backend::PlaybackLatencyEstimate> ReadPlaybackLatency(
+                const Audio::AudioDeviceEpoch &epoch) noexcept override {
+                return selected_.output->ReadPlaybackLatency(epoch);
+            }
+
             Result<Audio::Backend::CancelDisposition> Cancel(const Audio::Backend::OperationId &operation) override {
                 return selected_.output->Cancel(operation);
             }

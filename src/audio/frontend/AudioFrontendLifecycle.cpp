@@ -180,7 +180,26 @@ namespace Horo::Audio {
             rendering = true;
             phase = closing ? AudioFrontendPhase::Closing : AudioFrontendPhase::Active;
         }
+        ObservePlaybackLatency();
         return Result<void>::Success();
+    }
+
+    /** @copydoc AudioFrontend::State::ObservePlaybackLatency */
+    void AudioFrontend::State::ObservePlaybackLatency() noexcept {
+        if (!rendering || closing || !outputTiming ||
+            outputTiming->observations.endToEndLatency.quality != AudioObservationQuality::Unknown)
+            return;
+        auto &report = outputTiming->observations;
+        const auto estimate = output->backend->ReadPlaybackLatency(report.epoch);
+        if (!estimate || !MatchesAudioDeviceEpoch(report.epoch, estimate->epoch) ||
+            estimate->latency.quality != AudioObservationQuality::Estimated ||
+            estimate->latency.source != AudioObservationSource::BackendApi || !ValidateAudioDurationObservation(estimate->latency) ||
+            estimate->latency.observedAt->clockDomain != report.capturedAt.clockDomain ||
+            estimate->latency.observedAt->nanoseconds < report.capturedAt.nanoseconds ||
+            output->backend->Kind() == AudioBackendKind::NullAudio)
+            return;
+        report.capturedAt = *estimate->latency.observedAt;
+        report.endToEndLatency = estimate->latency;
     }
 
     /** @copydoc AudioFrontend::State::Release */

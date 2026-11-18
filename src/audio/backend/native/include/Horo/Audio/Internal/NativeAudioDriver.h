@@ -67,6 +67,16 @@ namespace Horo::Audio::Backend {
          * Retained serial entry. @return Native start result.
          */
         [[nodiscard]] virtual Result<void> Start(NativeAudioRenderPort render) = 0;
+
+        /** @brief Queries a backend-owned estimate on serialized control without waiting for callback work.
+         * @param sampleRate Accepted native stream rate in frames per second.
+         * @return Estimate in the retained host clock domain, or empty if this peer cannot currently report it.
+         */
+        [[nodiscard]] virtual std::optional<AudioDurationObservation> ReadPlaybackLatency(std::uint32_t sampleRate) noexcept {
+            (void)sampleRate;
+            return std::nullopt;
+        }
+
         /** @brief Poll native stop/join without turning Pending into detachment proof. @param deadline Host steady-clock deadline.
          * @return Complete only after all native readers retire; Pending/failure retains port, driver, workers and code. */
         [[nodiscard]] virtual NativeRetirementResult Stop(AudioMonotonicTimestamp deadline) = 0;

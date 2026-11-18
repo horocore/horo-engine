@@ -66,8 +66,26 @@ namespace Horo::Audio::Backend {
             !impl_->facts[0].load(std::memory_order_acquire) || impl_->phase.load() != RenderPhase::Priming ||
             impl_->facts[2].load(std::memory_order_acquire))
             return Failure(AudioErrors::RuntimeInactive);
+        impl_->renderingSince = Now(impl_->config.clockDomain).nanoseconds;
         impl_->phase.store(RenderPhase::Rendering, std::memory_order_release);
         return Result<void>::Success();
+    }
+
+    /** @copydoc NativeAudioBackend::ReadPlaybackLatency */
+    std::optional<PlaybackLatencyEstimate> NativeAudioBackend::ReadPlaybackLatency(const AudioDeviceEpoch &epoch) noexcept {
+        const auto current = [&] {
+            return epoch == impl_->epoch && impl_->state == Impl::State::Started && !impl_->lost &&
+                   impl_->phase.load(std::memory_order_acquire) == RenderPhase::Rendering &&
+                   !impl_->facts[2].load(std::memory_order_acquire) && !impl_->driver->HasUndrainedRequiredFacts();
+        };
+        if (!current())
+            return std::nullopt;
+        auto latency = impl_->driver->ReadPlaybackLatency(impl_->opened.format.nativeSignal.sampleRate);
+        if (!latency || latency->quality != AudioObservationQuality::Estimated || latency->source != AudioObservationSource::BackendApi ||
+            !ValidateAudioDurationObservation(*latency) || latency->observedAt->clockDomain != impl_->config.clockDomain ||
+            latency->observedAt->nanoseconds < impl_->renderingSince || !current())
+            return std::nullopt;
+        return PlaybackLatencyEstimate{epoch, *latency};
     }
 
     /** @copydoc NativeAudioBackend::Cancel */

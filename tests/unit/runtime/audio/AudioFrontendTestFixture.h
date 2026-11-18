@@ -17,6 +17,8 @@ namespace Horo::Tests::VoiceRenderFixture {
                 std::move(Audio::Backend::CreateNullAudioBackend({MixerFixture::Owner, 1, 1, 1}).Value());
             std::array<float, 16> left{};
             Audio::Backend::RenderPort port;
+            AudioBackendKind reportedKind{AudioBackendKind::NullAudio}; /**< Permits non-Null estimate protocol tests. */
+            std::optional<Audio::Backend::PlaybackLatencyEstimate> playbackLatency;
             bool primingSilent{};
             bool quiescingSilent{};
             bool rejectOpenedFormat{};
@@ -25,7 +27,7 @@ namespace Horo::Tests::VoiceRenderFixture {
             std::size_t callbackEntries{};
 
             AudioBackendKind Kind() const noexcept override {
-                return null->Kind();
+                return reportedKind;
             }
 
             AudioRuntimeId Owner() const noexcept override {
@@ -45,13 +47,18 @@ namespace Horo::Tests::VoiceRenderFixture {
                 return null->CommitRendering(epoch);
             }
 
+            std::optional<Audio::Backend::PlaybackLatencyEstimate> ReadPlaybackLatency(const AudioDeviceEpoch &) noexcept override {
+                return playbackLatency;
+            }
+
             Result<Audio::Backend::CancelDisposition> Cancel(const Audio::Backend::OperationId &operation) override {
                 return null->Cancel(operation);
             }
 
             Result<std::optional<Audio::Backend::Completion>> Poll(const Audio::Backend::OperationId &operation) override {
                 auto completion = null->Poll(operation);
-                if (completion.HasError() || (!rejectOpenedFormat && !foreignOpenedClock && !estimateAdapterLatency))
+                if (completion.HasError() ||
+                    (!rejectOpenedFormat && !foreignOpenedClock && !estimateAdapterLatency && reportedKind == AudioBackendKind::NullAudio))
                     return completion;
                 auto captured = std::move(completion).Value();
                 if (captured.has_value())
@@ -63,6 +70,8 @@ namespace Horo::Tests::VoiceRenderFixture {
                         if (estimateAdapterLatency)
                             opened->timing.adapterLatency = {AudioObservationQuality::Estimated, AudioObservationSource::Adapter, 1000,
                                                              opened->timing.capturedAt};
+                        if (reportedKind != AudioBackendKind::NullAudio)
+                            opened->timing.endToEndLatency = {};
                     }
                 return Result<std::optional<Audio::Backend::Completion>>::Success(std::move(captured));
             }
@@ -104,10 +113,12 @@ namespace Horo::Tests::VoiceRenderFixture {
                                              const AudioLatencyProfile profile = AudioLatencyProfile::Balanced,
                                              const std::uint64_t formatRevision = 1) {
             const AudioDeviceEpoch epoch{{MixerFixture::Owner, 1, 1}, formatRevision, Scope.epoch};
+            const auto kind = backend->Kind();
+            const auto deviceClass = kind == AudioBackendKind::NullAudio ? AudioDeviceClass::Headless : AudioDeviceClass::Virtual;
             AudioDeviceSnapshot devices{.owner = MixerFixture::Owner,
-                                        .backend = AudioBackendKind::NullAudio,
+                                        .backend = kind,
                                         .revision = 1,
-                                        .devices = {{epoch.device, "Null Audio", AudioDeviceClass::Headless}},
+                                        .devices = {{epoch.device, "Preview Fixture", deviceClass}},
                                         .defaults = {epoch.device, epoch.device, epoch.device}};
             Audio::Backend::Open open{epoch,
                                       {epoch.device, {48'000, MixerFixture::Profile().outputLayout}, {}, {period, period, period}},
@@ -134,9 +145,10 @@ namespace Horo::Tests::VoiceRenderFixture {
             std::unique_ptr<AudioFrontend> frontend;
 
             explicit PreviewRig(const std::uint32_t period = 16, const AudioLatencyProfile profile = AudioLatencyProfile::Balanced,
-                                const std::uint64_t formatRevision = 1) {
+                                const std::uint64_t formatRevision = 1, const AudioBackendKind reportedKind = AudioBackendKind::NullAudio) {
                 auto backend = std::make_unique<CapturingOutput>();
                 output = backend.get();
+                output->reportedKind = reportedKind;
                 auto candidate = Output(std::move(backend), period, profile, formatRevision);
                 auto voice = AudioVoiceRenderRuntime::CreateResident(registry, samples.Source(), Playback(), Descriptor());
                 REQUIRE(voice.HasValue());

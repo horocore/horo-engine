@@ -2292,7 +2292,12 @@ observations. Closing or losing output clears the admitted facts from the
 current snapshot. The prepared mixer DSP delay, converter input look-ahead and
 current decoder queue depth use separate frame-rate pairs. These fields retain
 their own meanings and provenance. End-to-end latency stays unavailable without
-separate backend or measurement evidence. Audio frontend snapshot consumers
+separate backend or measurement evidence. PipeWire provides a submission-to-playback
+estimate after the exact output epoch begins rendering. Its timing API accounts for
+stream-queued frames, converter buffering and graph delay in their respective domains.
+The snapshot preserves Estimated and BackendApi provenance. This excludes earlier
+engine processing and decoder buffering and carries no physical measurement claim.
+Closing the output withdraws the observation. Audio frontend snapshot consumers
 rebuild for the appended fields. No persisted format or backend ownership changes.
 
 `AudioCallbackEvent` is a trivially copyable bounded record with epoch, sample

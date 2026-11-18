@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <nlohmann/json.hpp>
@@ -27,6 +28,21 @@ namespace Horo::Audio::Backend {
         std::uint64_t Nanoseconds() noexcept {
             return static_cast<std::uint64_t>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+        }
+
+        /** @brief Estimates a newly queued sample's delay at the native timing snapshot.
+         * @details PipeWire accounts for disjoint stream-queue, stream-converter and graph components.
+         * Our submitted buffer sizes count native frames. The graph delay uses its independent rate.
+         */
+        std::optional<std::uint64_t> SubmissionDelay(const pw_time &time, const std::uint32_t sampleRate) noexcept {
+            if (sampleRate == 0 || time.rate.num == 0 || time.rate.denom == 0)
+                return std::nullopt;
+            const auto streamFrames = static_cast<long double>(time.queued) + static_cast<long double>(time.buffered);
+            const auto graphTicks = static_cast<long double>(std::max<std::int64_t>(0, time.delay));
+            const auto nanoseconds = (streamFrames / sampleRate + graphTicks * time.rate.num / time.rate.denom) * 1'000'000'000.0L;
+            if (nanoseconds >= std::ldexp(1.0L, std::numeric_limits<std::uint64_t>::digits))
+                return std::nullopt;
+            return static_cast<std::uint64_t>(nanoseconds);
         }
 
         /** @brief Bounded native metadata copy, rejecting truncation rather than aliasing endpoint identity. */
@@ -165,6 +181,22 @@ namespace Horo::Audio::Backend {
                     return Result<void>::Failure(NativeError("PipeWire start", status));
                 }
                 return Result<void>::Success();
+            }
+
+            /** @copydoc NativeAudioDriver::ReadPlaybackLatency */
+            std::optional<AudioDurationObservation> ReadPlaybackLatency(const std::uint32_t sampleRate) noexcept override {
+                if (!stream_ || !running_ || stopWorkerOwned_ || !render_.process || failed_.load())
+                    return std::nullopt;
+                // The control lane owns stream lifetime. PipeWire snapshots its concurrent RT timing without the loop lock.
+                pw_time time{};
+                if (pw_stream_get_time_n(stream_, &time, sizeof(time)) < 0 || time.now <= 0 || failed_.load())
+                    return std::nullopt;
+                const auto observed = static_cast<std::uint64_t>(time.now);
+                const auto delay = SubmissionDelay(time, sampleRate);
+                if (!delay || observed > Nanoseconds())
+                    return std::nullopt;
+                return AudioDurationObservation{AudioObservationQuality::Estimated, AudioObservationSource::BackendApi, delay,
+                                                AudioMonotonicTimestamp{config_.clockDomain, observed}};
             }
 
             NativeRetirementResult Stop(const AudioMonotonicTimestamp deadline) override {

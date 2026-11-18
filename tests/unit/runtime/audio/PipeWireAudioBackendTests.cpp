@@ -101,6 +101,7 @@ namespace Horo::Audio::Backend {
         /** @brief Requires native callback readiness and actual rendered blocks for this exact epoch. */
         void StartRendering(NativeAudioBackend &backend, const AudioDeviceEpoch &epoch, RenderTrace &trace) {
             CHECK(Complete<Started>(backend, Start{epoch, {&trace, Render}}).epoch == epoch);
+            CHECK_FALSE(backend.ReadPlaybackLatency(epoch).has_value());
             REQUIRE(WaitFor(backend, [&epoch](const Event &event) {
                 const auto *callback = std::get_if<AudioCallbackEvent>(&event.fact);
                 return callback && callback->epoch == epoch && std::holds_alternative<AudioCallbackReady>(callback->fact);
@@ -110,6 +111,17 @@ namespace Horo::Audio::Backend {
             while (Clock::now() < end && trace.rendering.load(std::memory_order_acquire) == 0)
                 std::this_thread::sleep_for(2ms);
             REQUIRE(trace.rendering.load(std::memory_order_acquire) != 0);
+        }
+
+        /** @brief Waits for a genuine native snapshot captured after this output epoch began rendering. */
+        std::optional<PlaybackLatencyEstimate> WaitForLatency(NativeAudioBackend &backend, const AudioDeviceEpoch &epoch) {
+            const auto end = Clock::now() + 2s;
+            while (Clock::now() < end) {
+                if (auto timing = backend.ReadPlaybackLatency(epoch))
+                    return timing;
+                std::this_thread::sleep_for(2ms);
+            }
+            return std::nullopt;
         }
 
         /** @brief Proves native detachment before releasing the port and drains the previous epoch's facts. */
@@ -140,12 +152,22 @@ namespace Horo::Audio::Backend {
 
         RenderTrace oldTrace;
         const auto before = OpenAvailable(*backend, 48000, 1);
+        CHECK_FALSE(backend->ReadPlaybackLatency(before).has_value());
         StartRendering(*backend, before, oldTrace);
+        const auto oldEstimate = WaitForLatency(*backend, before);
+        CHECK(oldEstimate.has_value());
+        if (oldEstimate) {
+            CHECK(oldEstimate->epoch == before);
+            CHECK(oldEstimate->latency.quality == AudioObservationQuality::Estimated);
+            CHECK(oldEstimate->latency.source == AudioObservationSource::BackendApi);
+            CHECK(ValidateAudioDurationObservation(oldEstimate->latency));
+        }
         std::ofstream(control / "started").put('\n');
         REQUIRE(WaitFor(*backend, [&before](const Event &event) {
             const auto *lost = std::get_if<DeviceLost>(&event.fact);
             return lost && lost->device == before.device;
         }));
+        CHECK_FALSE(backend->ReadPlaybackLatency(before).has_value());
         CloseOutput(*backend, before);
         const auto stoppedCalls = oldTrace.calls.load(std::memory_order_relaxed);
         std::ofstream(control / "detached").put('\n');
@@ -157,10 +179,23 @@ namespace Horo::Audio::Backend {
         RenderTrace newTrace;
         const auto after = OpenAvailable(*backend, 44100, 2);
         CHECK(after.device != before.device);
+        CHECK_FALSE(backend->ReadPlaybackLatency(after).has_value());
         CHECK(backend->Begin(Start{before, {&oldTrace, Render}}, Deadline(Clock::now() + 1s)).HasError());
         StartRendering(*backend, after, newTrace);
+        const auto estimate = WaitForLatency(*backend, after);
+        CHECK(estimate.has_value());
+        if (estimate) {
+            CHECK(estimate->epoch == after);
+            CHECK(estimate->latency.quality == AudioObservationQuality::Estimated);
+            CHECK(estimate->latency.source == AudioObservationSource::BackendApi);
+            CHECK(ValidateAudioDurationObservation(estimate->latency));
+            if (oldEstimate && oldEstimate->latency.observedAt && estimate->latency.observedAt)
+                CHECK(estimate->latency.observedAt->nanoseconds > oldEstimate->latency.observedAt->nanoseconds);
+        }
+        CHECK_FALSE(backend->ReadPlaybackLatency(before).has_value());
         CHECK(oldTrace.calls.load(std::memory_order_relaxed) == stoppedCalls);
         CloseOutput(*backend, after);
+        CHECK_FALSE(backend->ReadPlaybackLatency(after).has_value());
         CHECK(oldTrace.calls.load(std::memory_order_relaxed) == stoppedCalls);
     }
 }  // namespace Horo::Audio::Backend

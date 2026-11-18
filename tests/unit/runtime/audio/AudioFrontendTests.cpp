@@ -121,6 +121,38 @@ namespace Horo::Tests::VoiceRenderFixture {
             CHECK(configured.opened->observations.epoch.formatRevision == 1);
         }
 
+        TEST_CASE("AudioFrontend accepts playback estimates only for the current committed epoch and clock", "[audio][frontend][timing]") {
+            constexpr AudioMonotonicTimestamp deadline{1, 1'000'000'000};
+            PreviewRig rig{16, AudioLatencyProfile::Balanced, 1, AudioBackendKind::SDL3Audio};
+            rig.Activate();
+            const auto current = rig.frontend->Snapshot();
+            REQUIRE(current.outputTiming.opened.has_value());
+            CHECK(current.outputTiming.opened->observations.endToEndLatency.quality == AudioObservationQuality::Unknown);
+            const AudioMonotonicTimestamp observed{deadline.clockDomain,
+                                                   current.outputTiming.opened->observations.capturedAt.nanoseconds + 1};
+            const Audio::Backend::PlaybackLatencyEstimate estimate{current.device,
+                                                                   {AudioObservationQuality::Estimated, AudioObservationSource::BackendApi,
+                                                                    2000, observed}};
+            auto invalid = estimate;
+            ++invalid.epoch.formatRevision;
+            rig.output->playbackLatency = invalid;
+            REQUIRE(rig.frontend->Pump(deadline).HasValue());
+            CHECK(rig.frontend->Snapshot().outputTiming.opened->observations.endToEndLatency.quality == AudioObservationQuality::Unknown);
+            invalid = estimate;
+            ++invalid.latency.observedAt->clockDomain;
+            rig.output->playbackLatency = invalid;
+            REQUIRE(rig.frontend->Pump(deadline).HasValue());
+            CHECK(rig.frontend->Snapshot().outputTiming.opened->observations.endToEndLatency.quality == AudioObservationQuality::Unknown);
+            rig.output->playbackLatency = estimate;
+            REQUIRE(rig.frontend->Pump(deadline).HasValue());
+            const auto report = rig.frontend->Snapshot().outputTiming.opened->observations;
+            CHECK(report.endToEndLatency.quality == AudioObservationQuality::Estimated);
+            CHECK(report.endToEndLatency.source == AudioObservationSource::BackendApi);
+            CHECK(report.endToEndLatency.nanoseconds == 2000);
+            CHECK(report.hardwareLatency.quality == AudioObservationQuality::Unsupported);
+            CHECK(report.capturedAt.nanoseconds == observed.nanoseconds);
+        }
+
         TEST_CASE("AudioFrontend preserves callback allocation safety and explicit transport retry", "[audio][frontend][realtime-safety]") {
             PreviewRig rig;
             rig.Activate();

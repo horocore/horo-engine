@@ -122,6 +122,12 @@ namespace Horo::Audio::Backend {
         AccessMode access{AccessMode::Shared};
     };
 
+    /** @brief Backend estimate for a newly submitted sample at one exact output epoch. */
+    struct PlaybackLatencyEstimate final {
+        AudioDeviceEpoch epoch;
+        AudioDurationObservation latency;
+    };
+
     /** @brief Native start succeeded, not Runtime Active. */
     struct Started final {
         AudioDeviceEpoch epoch;
@@ -259,6 +265,16 @@ namespace Horo::Audio::Backend {
          * @return Success or stale/invalid-transition error; never activates the parent runtime itself.
          */
         [[nodiscard]] virtual Result<void> CommitRendering(const AudioDeviceEpoch &epoch) = 0;
+
+        /** @brief Queries the current output's submission-to-playback estimate on the control owner.
+         * @param epoch Exact committed output epoch.
+         * @return Estimated BackendApi evidence, or empty while unsupported, unready, lost or foreign.
+         * @post Does not change native admission, wait for a render callback, or promise hardware latency.
+         */
+        [[nodiscard]] virtual std::optional<PlaybackLatencyEstimate> ReadPlaybackLatency(const AudioDeviceEpoch &epoch) noexcept {
+            (void)epoch;
+            return std::nullopt;
+        }
 
         /**
          * @brief Requests cancellation of Probe, Enumerate, Open or Start without blocking.

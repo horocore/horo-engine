@@ -36,6 +36,8 @@ namespace Horo::Audio::Backend {
         [[nodiscard]] Result<OperationId> Begin(const Request &request, const AudioMonotonicTimestamp &deadline) override;
         /** @copydoc AudioBackend::CommitRendering */
         [[nodiscard]] Result<void> CommitRendering(const AudioDeviceEpoch &epoch) override;
+        /** @copydoc AudioBackend::ReadPlaybackLatency */
+        [[nodiscard]] std::optional<PlaybackLatencyEstimate> ReadPlaybackLatency(const AudioDeviceEpoch &epoch) noexcept override;
         /** @copydoc AudioBackend::Cancel */
         [[nodiscard]] Result<CancelDisposition> Cancel(const OperationId &operation) override;
         /** @copydoc AudioBackend::Poll */

@@ -81,6 +81,8 @@ namespace Horo::Audio {
         Result<void> AdmitOpened(const Backend::Opened &value);
         /** @brief Validates lifecycle facts and commits readiness only on matching epochs. */
         Result<void> Drain();
+        /** @brief Copies an explicitly estimated playback delay after the exact render epoch commits. */
+        void ObservePlaybackLatency() noexcept;
         /** @brief Validates and retains one backend fact independently of Start completion ordering. */
         Result<void> Observe(const Backend::Event &event);
         /** @brief Advances teardown only after preceding exact completion proofs. */

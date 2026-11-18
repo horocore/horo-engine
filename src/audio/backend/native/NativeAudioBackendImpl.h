@@ -63,7 +63,8 @@ namespace Horo::Audio::Backend {
         bool cancelled{};
         bool detached{true};
         bool lost{};
-        bool prepared{};  // Control-only; native ownership after a failed Open is not an admitted render candidate.
+        bool prepared{};                 // Control-only; native ownership after a failed Open is not an admitted render candidate.
+        std::uint64_t renderingSince{};  // Control clock fence for the exact committed epoch.
         Opened opened;
         RenderPort render;
         std::unique_ptr<float, AlignedDelete> scratch;
