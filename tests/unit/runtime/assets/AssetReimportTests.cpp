@@ -46,7 +46,7 @@ namespace {
 
 TEST_CASE("Asset reimport preserves identity and records all detected reasons", "[native][assets]") {
     TemporaryProject project;
-    const std::filesystem::path source = project.root / "source.obj";
+    const auto source = project.root / std::filesystem::path{u8"\u0130stanbul source.obj"};
     const std::filesystem::path asset = project.root / "assets/model.horoasset";
     const std::filesystem::path sidecar = asset.string() + ".horo";
     WriteText(source, "old");
@@ -117,6 +117,7 @@ TEST_CASE("Asset reimport preserves identity and records all detected reasons", 
     auto updated = ReadAssetImportMetadata(std::filesystem::absolute(sidecar));
     REQUIRE(updated.HasValue());
     REQUIRE(updated.Value().assetId == id);
+    CHECK(updated.Value().absoluteSourcePath == metadata.absoluteSourcePath);
     REQUIRE(updated.Value().importerVersion == "1.1.0");
     REQUIRE(updated.Value().importerModuleVersion == "2.0.0");
     REQUIRE(updated.Value().sourceHash == reimported.Value().sourceHash);
