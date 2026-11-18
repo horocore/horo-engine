@@ -44,3 +44,12 @@ Windows native activation also requires an OS ABI policy that controls actual
 dependency resolution and the loaded-module lifetime. Until that policy is
 available, the Windows loader lease returns typed unsupported before opening any
 library. Device qualification remains separate.
+
+The Platform mapped-image owner can retain one already loaded System32 module.
+It compares the mapped image against an independently opened, read-only system
+file through the Windows kernel and retains both until the lease ends. An
+ambiguous basename in the observed module inventory or a foreign file is
+unavailable. This evidence supports inspection of retained bytes on a cold path.
+Runtime admission still needs the complete dependency closure, including
+forwarders and redirection, and control of concurrent changes to module
+resolution through activation.

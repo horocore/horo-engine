@@ -1127,14 +1127,17 @@ if(WIN32)
     add_executable(HoroProcessImageIdentityChild support/ProcessImageIdentityWindowsChild.cpp)
     target_compile_features(HoroProcessImageIdentityChild PRIVATE cxx_std_20)
     target_link_libraries(HoroProcessImageIdentityChild PRIVATE HoroPlatformProcessImageInternal)
+    add_library(HoroSystemImageFixture MODULE fixtures/platform/WindowsSystemImageFixture.c)
+    set_target_properties(HoroSystemImageFixture PROPERTIES PREFIX "")
     add_executable(HoroProcessImageIdentityTests
         support/AllocationProbe.cpp unit/platform/ProcessImageIdentityWindowsTests.cpp)
     target_include_directories(HoroProcessImageIdentityTests PRIVATE
         "${_horo_windows_image_test_headers}" "${CMAKE_CURRENT_SOURCE_DIR}/support")
     target_link_libraries(HoroProcessImageIdentityTests PRIVATE HoroPlatformProcessImageInternal)
     target_compile_definitions(HoroProcessImageIdentityTests PRIVATE
-        HORO_PROCESS_IMAGE_CHILD_PATH=L"$<TARGET_FILE:HoroProcessImageIdentityChild>")
-    add_dependencies(HoroProcessImageIdentityTests HoroProcessImageIdentityChild)
+        HORO_PROCESS_IMAGE_CHILD_PATH=L"$<TARGET_FILE:HoroProcessImageIdentityChild>"
+        HORO_SYSTEM_IMAGE_FIXTURE_PATH=L"$<TARGET_FILE:HoroSystemImageFixture>")
+    add_dependencies(HoroProcessImageIdentityTests HoroProcessImageIdentityChild HoroSystemImageFixture)
     horo_register_catch_test(HoroProcessImageIdentityTests LABELS "unit;platform;process-image;headless;ci-windows")
 endif()
 

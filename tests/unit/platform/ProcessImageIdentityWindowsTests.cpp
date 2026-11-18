@@ -19,6 +19,7 @@
 #include <iterator>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace Horo::Platform {
@@ -370,5 +371,44 @@ namespace Horo::Platform {
         const auto before = HandleCount();
         Replacement(true);
         REQUIRE(HandleCount() == before);
+    }
+
+    TEST_CASE("Windows system ABI evidence retains exact bytes from an already loaded image", "[unit][platform][system-module]") {
+        const auto before = HandleCount();
+        {
+            auto retained = RetainLoadedWindowsSystemModule("KeRnEl32.dll");
+            REQUIRE(retained.HasValue());
+            auto owner = std::move(retained).Value();
+            REQUIRE(retained.Value().ReadVerifiedFile().HasError());
+            const auto bytes = owner.ReadVerifiedFile();
+            REQUIRE(bytes.HasValue());
+            REQUIRE(bytes.Value().size() > 64);
+            CHECK(bytes.Value()[0] == std::byte{0x4d});
+            CHECK(bytes.Value()[1] == std::byte{0x5a});
+            const auto repeated = owner.ReadVerifiedFile();
+            REQUIRE(repeated.HasValue());
+            CHECK(bytes.Value().data() == repeated.Value().data());
+            CHECK(bytes.Value().size() == repeated.Value().size());
+        }
+        CHECK(HandleCount() == before);
+    }
+
+    TEST_CASE("Windows system ABI evidence refuses absent, foreign and path-selected modules", "[unit][platform][system-module]") {
+        REQUIRE(RetainLoadedWindowsSystemModule("../kernel32.dll").HasError());
+        REQUIRE(RetainLoadedWindowsSystemModule("kernel32.dll:stream").HasError());
+        REQUIRE(RetainLoadedWindowsSystemModule("HoroSystemImageFixture.dll").HasError());
+
+        struct LoadedFixture final {
+            HMODULE value = LoadLibraryExW(HORO_SYSTEM_IMAGE_FIXTURE_PATH, nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+
+            ~LoadedFixture() {
+                if (value)
+                    FreeLibrary(value);
+            }
+        } fixture;
+
+        REQUIRE(fixture.value);
+        REQUIRE(RetainLoadedWindowsSystemModule("HoroSystemImageFixture.dll").HasError());
+        CHECK(GetModuleHandleW(L"HoroSystemImageFixture.dll") == fixture.value);
     }
 }  // namespace Horo::Platform

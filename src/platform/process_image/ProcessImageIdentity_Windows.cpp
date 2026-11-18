@@ -7,12 +7,17 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+// Tool Help needs the Win32 base types first.
+// clang-format off
 #include <Windows.h>
+#include <TlHelp32.h>
+// clang-format on
 #include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
 #include <new>
+#include <string>
 
 namespace Horo::Platform {
     namespace {
@@ -113,6 +118,21 @@ namespace Horo::Platform {
             return Detail::VerifyWindowsMainImageFileView(state.view.value);
         }
 
+        /** @brief Retains disk bytes with a read-only mapping and denies write/delete opens for the full lease. */
+        Result<void> OpenReadOnlyFileView(NativeState &state, const wchar_t *path, DWORD flags) {
+            // Deny new write/delete access for the complete evidence lifetime, including hashing and foreign-thread leases.
+            state.file.value = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, flags, nullptr);
+            if (state.file.value == INVALID_HANDLE_VALUE || !ReadEvidence(state.file.value, state.evidence))
+                return Failure<void>("Cannot retain bounded immutable image file evidence.");
+            state.mapping.value = CreateFileMappingW(state.file.value, nullptr, PAGE_READONLY, 0, 0, nullptr);
+            if (!state.mapping.value)
+                return Failure<void>("Cannot retain the image file mapping.");
+            state.view.value = MapViewOfFile(state.mapping.value, FILE_MAP_READ, 0, 0, 0);
+            if (!state.view.value)
+                return Failure<void>("Cannot retain the read-only image file view.");
+            return Result<void>::Success();
+        }
+
         /** @brief The OS path locates a candidate only; kernel comparison binds it to the actual mapped image. */
         Result<void> OpenImage(NativeState &state) {
             state.main = GetModuleHandleW(nullptr);
@@ -122,17 +142,8 @@ namespace Horo::Platform {
             if (const auto length = GetModuleFileNameW(state.main, path.data(), static_cast<DWORD>(path.size()));
                 length == 0 || length >= path.size())
                 return Failure<void>("The actual main-image candidate path is unavailable or oversized.");
-            // Deny new write/delete access for the complete evidence lifetime, including hashing and foreign-thread leases.
-            state.file.value =
-                CreateFileW(path.data(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-            if (state.file.value == INVALID_HANDLE_VALUE || !ReadEvidence(state.file.value, state.evidence))
-                return Failure<void>("Cannot retain bounded immutable executable file evidence.");
-            state.mapping.value = CreateFileMappingW(state.file.value, nullptr, PAGE_READONLY, 0, 0, nullptr);
-            if (!state.mapping.value)
-                return Failure<void>("Cannot retain the executable file mapping.");
-            state.view.value = MapViewOfFile(state.mapping.value, FILE_MAP_READ, 0, 0, 0);
-            if (!state.view.value)
-                return Failure<void>("Cannot retain the read-only executable file view.");
+            if (const auto file = OpenReadOnlyFileView(state, path.data(), FILE_ATTRIBUTE_NORMAL); file.HasError())
+                return file;
             return VerifyNative(state);
         }
 
@@ -155,16 +166,165 @@ namespace Horo::Platform {
         }
     }  // namespace
 
+    namespace {
+        /** @brief Validates the exact file object behind an already loaded image by OS comparison. */
+        Result<void> VerifyMappedImageFileView(HMODULE image, const void *view) {
+            MEMORY_BASIC_INFORMATION imageRegion{}, dataRegion{};
+            if (!image || !Region(image, MEM_IMAGE, image, imageRegion) || !Region(view, MEM_MAPPED, view, dataRegion) ||
+                (dataRegion.Protect & 0xFFU) != PAGE_READONLY)
+                return Failure<void>("A committed image and retained read-only file view are required.");
+            if (const auto compare = MappedFileComparator(); !compare || compare(image, const_cast<void *>(view)) != 0)
+                return Failure<void>("The kernel did not bind the retained file to the actual loaded image.");
+            return Result<void>::Success();
+        }
+    }  // namespace
+
     /** @copydoc Detail::VerifyWindowsMainImageFileView */
     Result<void> Detail::VerifyWindowsMainImageFileView(const void *view) {
-        const auto main = GetModuleHandleW(nullptr);
-        MEMORY_BASIC_INFORMATION imageRegion{}, dataRegion{};
-        if (!main || !Region(main, MEM_IMAGE, main, imageRegion) || !Region(view, MEM_MAPPED, view, dataRegion) ||
-            (dataRegion.Protect & 0xFFU) != PAGE_READONLY)
-            return Failure<void>("A committed main image and retained read-only file view are required.");
-        if (const auto compare = MappedFileComparator(); !compare || compare(main, const_cast<void *>(view)) != 0)
-            return Failure<void>("The kernel did not bind the retained file to the actual main executable image.");
-        return Result<void>::Success();
+        return VerifyMappedImageFileView(GetModuleHandleW(nullptr), view);
+    }
+
+    namespace {
+        /** @brief Owns a reversible reference to a module already mapped by Windows. */
+        struct ModuleReference final {
+            HMODULE value{};
+            ModuleReference() = default;
+            ModuleReference(const ModuleReference &) = delete;
+            ModuleReference &operator=(const ModuleReference &) = delete;
+
+            ~ModuleReference() {
+                if (value)
+                    FreeLibrary(value);
+            }
+        };
+
+        /** @brief Compares length-bounded paths or names without locale-dependent case mapping. */
+        bool EqualOrdinal(std::wstring_view first, std::wstring_view second) noexcept {
+            return CompareStringOrdinal(first.data(), static_cast<int>(first.size()), second.data(), static_cast<int>(second.size()),
+                                        TRUE) == CSTR_EQUAL;
+        }
+
+        /** @brief Accepts only finite ASCII DLL basenames that cannot select an alternate path. */
+        bool IsDllBasename(std::wstring_view name) noexcept {
+            if (name.size() <= 4 || name.size() > 128 || !EqualOrdinal(name.substr(name.size() - 4), L".dll"))
+                return false;
+            return std::ranges::all_of(name.substr(0, name.size() - 4), [](wchar_t ch) {
+                return (ch >= L'a' && ch <= L'z') || (ch >= L'A' && ch <= L'Z') || (ch >= L'0' && ch <= L'9') || ch == L'-' || ch == L'_';
+            });
+        }
+
+        /** @brief Rejects absent, ambiguous, incomplete or oversized observed module inventories. */
+        HMODULE FindUniqueLoadedModule(std::wstring_view basename) noexcept {
+            constexpr unsigned maximumModules = 1024;
+            HandleOwner snapshot;
+            snapshot.value = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, GetCurrentProcessId());
+            if (snapshot.value == INVALID_HANDLE_VALUE)
+                return nullptr;
+            MODULEENTRY32W entry{};
+            entry.dwSize = sizeof(entry);
+            if (!Module32FirstW(snapshot.value, &entry))
+                return nullptr;
+            HMODULE found{};
+            unsigned count{};
+            do {
+                if (++count > maximumModules)
+                    return nullptr;
+                if (!EqualOrdinal(entry.szModule, basename))
+                    continue;
+                if (found)
+                    return nullptr;
+                found = entry.hModule;
+            } while (Module32NextW(snapshot.value, &entry));
+            return GetLastError() == ERROR_NO_MORE_FILES ? found : nullptr;
+        }
+
+        /** @brief Constructs the absolute OS system candidate independently of the observed module. */
+        std::wstring SystemFile(std::wstring_view basename) {
+            std::array<wchar_t, 32768> directory{};
+            const auto length = GetSystemDirectoryW(directory.data(), static_cast<UINT>(directory.size()));
+            if (length < 3 || length >= directory.size() || directory[1] != L':' || directory[2] != L'\\')
+                return {};
+            std::wstring result{L"\\\\?\\"};
+            result.append(directory.data(), length);
+            if (result.back() != L'\\')
+                result.push_back(L'\\');
+            result.append(basename);
+            return result;
+        }
+
+        /** @brief Refuses redirection away from the OS system path or through a reparse-point leaf. */
+        bool MatchesFinalSystemPath(const NativeState &state, std::wstring_view expected) noexcept {
+            if ((state.evidence.basic.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+                return false;
+            std::array<wchar_t, 32768> actual{};
+            const auto length = GetFinalPathNameByHandleW(state.file.value, actual.data(), static_cast<DWORD>(actual.size()),
+                                                          FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+            return length > 0 && length < actual.size() && EqualOrdinal(std::wstring_view{actual.data(), length}, expected);
+        }
+    }  // namespace
+
+    /** @brief Releases the file view and handles before decrementing the loader reference. */
+    struct WindowsSystemModuleImage::State final {
+        ModuleReference module;
+        NativeState image;
+        std::wstring basename;
+    };
+
+    /** @copydoc WindowsSystemModuleImage::WindowsSystemModuleImage */
+    WindowsSystemModuleImage::WindowsSystemModuleImage(WindowsSystemModuleImage &&) noexcept = default;
+
+    /** @copydoc WindowsSystemModuleImage::operator= */
+    WindowsSystemModuleImage &WindowsSystemModuleImage::operator=(WindowsSystemModuleImage &&) noexcept = default;
+
+    /** @copydoc WindowsSystemModuleImage::~WindowsSystemModuleImage */
+    WindowsSystemModuleImage::~WindowsSystemModuleImage() = default;
+
+    /** @copydoc WindowsSystemModuleImage::WindowsSystemModuleImage */
+    WindowsSystemModuleImage::WindowsSystemModuleImage(std::unique_ptr<State> state) noexcept : state_(std::move(state)) {}
+
+    /** @copydoc WindowsSystemModuleImage::ReadVerifiedFile */
+    Result<std::span<const std::byte>> WindowsSystemModuleImage::ReadVerifiedFile() const {
+        using Bytes = std::span<const std::byte>;
+        FileEvidence current;
+        if (!state_ || FindUniqueLoadedModule(state_->basename) != state_->module.value ||
+            !ReadEvidence(state_->image.file.value, current) || !SameFile(state_->image.evidence, current))
+            return Failure<Bytes>("The observed system module inventory or retained image file changed.");
+        if (const auto mapped = VerifyMappedImageFileView(state_->module.value, state_->image.view.value); mapped.HasError())
+            return Result<Bytes>::Failure(mapped.ErrorValue());
+        return Result<Bytes>::Success(
+            Bytes{static_cast<const std::byte *>(state_->image.view.value), static_cast<std::size_t>(current.standard.EndOfFile.QuadPart)});
+    }
+
+    /** @copydoc RetainLoadedWindowsSystemModule */
+    Result<WindowsSystemModuleImage> RetainLoadedWindowsSystemModule(std::string_view basename) {
+        using Outcome = Result<WindowsSystemModuleImage>;
+        try {
+            if (basename.size() <= 4 || basename.size() > 128)
+                return Failure<WindowsSystemModuleImage>("A bounded Windows system DLL basename is required.");
+            auto state = std::make_unique<WindowsSystemModuleImage::State>();
+            state->basename.assign(basename.begin(), basename.end());
+            if (!IsDllBasename(state->basename))
+                return Failure<WindowsSystemModuleImage>("A bounded Windows system DLL basename is required.");
+            const auto observed = FindUniqueLoadedModule(state->basename);
+            if (!observed ||
+                !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, reinterpret_cast<const wchar_t *>(observed),
+                                    &state->module.value) ||
+                state->module.value != observed)
+                return Failure<WindowsSystemModuleImage>("An unambiguous preloaded Windows module could not be retained.");
+            const auto path = SystemFile(state->basename);
+            if (path.empty())
+                return Failure<WindowsSystemModuleImage>("The absolute Windows system directory is unavailable.");
+            if (const auto file = OpenReadOnlyFileView(state->image, path.c_str(), FILE_FLAG_OPEN_REPARSE_POINT); file.HasError())
+                return Outcome::Failure(file.ErrorValue());
+            if (!MatchesFinalSystemPath(state->image, path))
+                return Failure<WindowsSystemModuleImage>("The Windows system file has been redirected.");
+            WindowsSystemModuleImage evidence{std::move(state)};
+            if (const auto bytes = evidence.ReadVerifiedFile(); bytes.HasError())
+                return Outcome::Failure(bytes.ErrorValue());
+            return Outcome::Success(std::move(evidence));
+        } catch (const std::bad_alloc &) {
+            return Failure<WindowsSystemModuleImage>("System module evidence allocation failed.");
+        }
     }
 
     /** @copydoc ProcessImageIdentity::Verify */
