@@ -296,11 +296,12 @@ TEST_CASE("GitHub publishes exact verified detached release metadata alongside t
         CHECK(client.commits == 0);
     }
     SECTION("A receipt without the frozen envelope identity cannot verify or finalize") {
-        auto receipt = adapter.Upload(request);
-        REQUIRE(receipt.HasValue());
-        receipt.Value().manifestSignature.reset();
-        CHECK(adapter.VerifyRemote(request, receipt.Value()).HasError());
-        CHECK(adapter.CommitChannel(request, receipt.Value()).HasError());
+        auto uploaded = adapter.Upload(request);
+        REQUIRE(uploaded.HasValue());
+        auto receipt = std::move(uploaded).Value();
+        receipt.manifestSignature.reset();
+        CHECK(adapter.VerifyRemote(request, receipt).HasError());
+        CHECK(adapter.CommitChannel(request, receipt).HasError());
         CHECK(client.commits == 0);
     }
 }
