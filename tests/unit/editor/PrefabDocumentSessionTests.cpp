@@ -446,6 +446,47 @@ namespace Horo::Editor {
         CHECK(reloaded.source->Data().objects.front().name == "Disk version");
     }
 
+    TEST_CASE("Prefab compares recurring disk bytes against the new draft after source restoration", "[editor][prefab][session]") {
+        Fixture fixture;
+        const auto accepted = Assets::CaptureAssetSource(fixture.project.directory.path, fixture.project.source,
+                                                         Prefab::PrefabHardLimits::SourceDocumentBytes);
+        REQUIRE(accepted.HasValue());
+        fixture.Rename("First draft");
+        fixture.project.WriteSource("Repeatable disk content");
+        const auto firstWatch = fixture.document->CaptureExternalInspection();
+        const auto first = ComparePrefabExternal(firstWatch);
+        REQUIRE(first.HasValue());
+        REQUIRE(first.Value());
+        REQUIRE(fixture.document->ObserveExternal(firstWatch, first.Value()));
+        CHECK(fixture.document->Execute(firstWatch.fence, RenamePrefabObject{{0}, "Blocked"}).HasError());
+        CHECK(fixture.document->Replay(firstWatch.fence, false).HasError());
+
+        {
+            const auto &bytes = accepted.Value().bytes;
+            std::ofstream restored(fixture.project.source, std::ios::binary | std::ios::trunc);
+            restored.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+            REQUIRE(restored.good());
+        }
+        const auto restoredWatch = fixture.document->CaptureExternalInspection();
+        const auto restored = ComparePrefabExternal(restoredWatch);
+        REQUIRE(restored.HasValue());
+        REQUIRE_FALSE(restored.Value());
+        REQUIRE(fixture.document->ObserveExternal(restoredWatch, restored.Value()));
+        fixture.Rename("Second draft");
+        fixture.project.WriteSource("Repeatable disk content");
+
+        const auto newWatch = fixture.document->CaptureExternalInspection();
+        const auto compared = ComparePrefabExternal(newWatch);
+        REQUIRE(compared.HasValue());
+        REQUIRE(compared.Value());
+        REQUIRE(compared.Value()->members.size() == 1);
+        CHECK(compared.Value()->observed == first.Value()->observed);
+        CHECK(compared.Value()->members.front().draftName == "Second draft");
+        REQUIRE(fixture.document->ObserveExternal(newWatch, compared.Value()));
+        CHECK(fixture.document->KeepExternalDraft(newWatch.fence, *first.Value()).HasError());
+        REQUIRE(fixture.document->KeepExternalDraft(newWatch.fence, *compared.Value()).HasValue());
+    }
+
     TEST_CASE("Malformed external prefab comparison retains the local draft and reports disk rejection", "[editor][prefab][session]") {
         Fixture fixture;
         fixture.Rename("Retained draft");

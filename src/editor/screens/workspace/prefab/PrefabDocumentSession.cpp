@@ -192,6 +192,8 @@ namespace Horo::Editor {
         source_ = std::move(candidate).Value();
         history_.Commit(*retained);
         state_ = digest.Value();
+        externalComparison_.reset();
+        keepExternalDraft_ = false;
         ++revision_;
         ReleaseStage();
         return Result<void>::Success();
@@ -215,6 +217,8 @@ namespace Horo::Editor {
         source_ = std::move(candidate).Value();
         state_ = digest.Value();
         history_.DidReplay(redo);
+        externalComparison_.reset();
+        keepExternalDraft_ = false;
         ++revision_;
         ReleaseStage();
         return Result<void>::Success();
@@ -302,12 +306,15 @@ namespace Horo::Editor {
         state_ = prepared.state;
         saved_ = state_;
         accepted_ = durable;
+        externalComparison_.reset();
+        keepExternalDraft_ = false;
         ++revision_;
     }
 
     /** @copydoc PrefabDocumentSession::CaptureExternalInspection */
     PrefabExternalInspection PrefabDocumentSession::CaptureExternalInspection() const {
-        return {root_, path_, {owner_, identity_.instance, revision_}, accepted_, source_, limits_, externalComparison_};
+        return {root_, path_, {owner_, identity_.instance, revision_}, accepted_, source_, limits_,
+                conflict_ ? externalComparison_ : nullptr};
     }
 
     /** @copydoc PrefabDocumentSession::ObserveExternal */
