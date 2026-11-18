@@ -469,19 +469,36 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiDeclarativeLayoutEvaluator::Create */
     Result<UiDeclarativeLayoutEvaluator> UiDeclarativeLayoutEvaluator::Create(const std::span<const UiLayoutElementDescriptor> descriptors,
                                                                               const UiLayoutIntrinsicProvider *intrinsic) {
+        return Create(descriptors, intrinsic, nullptr);
+    }
+
+    /** @copydoc UiDeclarativeLayoutEvaluator::Create */
+    Result<UiDeclarativeLayoutEvaluator> UiDeclarativeLayoutEvaluator::Create(const std::span<const UiLayoutElementDescriptor> descriptors,
+                                                                              const UiLayoutIntrinsicProvider *intrinsic,
+                                                                              UiElementHandle *failedElement) {
+        if (failedElement)
+            *failedElement = {};
         if (descriptors.empty())
             return Failure<UiDeclarativeLayoutEvaluator>(UiErrors::LayoutInvalid);
-        bool requiresProvider = false;
+        UiElementHandle firstRequiredIntrinsic;
         for (std::size_t index = 0; index < descriptors.size(); ++index) {
-            if (!descriptors[index].IsValid())
+            const auto &descriptor = descriptors[index];
+            if (index > 0 && descriptors[index - 1].element >= descriptor.element)
                 return Failure<UiDeclarativeLayoutEvaluator>(UiErrors::LayoutInvalid);
-            if (index > 0 && descriptors[index - 1].element >= descriptors[index].element)
+            if (!descriptor.IsValid()) {
+                if (failedElement)
+                    *failedElement = descriptor.element;
                 return Failure<UiDeclarativeLayoutEvaluator>(UiErrors::LayoutInvalid);
-            requiresProvider = requiresProvider ||
-                               (descriptors[index].intrinsic.kind != UiLayoutIntrinsicKind::None && descriptors[index].intrinsic.required);
+            }
+            if (!intrinsic && !firstRequiredIntrinsic.IsValid() && descriptor.intrinsic.kind != UiLayoutIntrinsicKind::None &&
+                descriptor.intrinsic.required)
+                firstRequiredIntrinsic = descriptor.element;
         }
-        if (requiresProvider && intrinsic == nullptr)
+        if (firstRequiredIntrinsic.IsValid()) {
+            if (failedElement)
+                *failedElement = firstRequiredIntrinsic;
             return Failure<UiDeclarativeLayoutEvaluator>(UiErrors::LayoutIntrinsicUnavailable);
+        }
         return Result<UiDeclarativeLayoutEvaluator>::Success(UiDeclarativeLayoutEvaluator{descriptors, intrinsic});
     }
 

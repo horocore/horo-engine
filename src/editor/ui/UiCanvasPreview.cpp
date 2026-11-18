@@ -285,11 +285,11 @@ namespace Horo::Editor {
         /** @brief Evaluate the complete shared layout authority and return its immutable publication lease. */
         Result<UiLayoutSnapshot> EvaluatePreviewLayout(const UiDocument &source, const UiElementTree &tree,
                                                        const std::vector<UiLayoutElementDescriptor> &descriptors,
-                                                       const UiResolvedScreenCanvas &resolved) {
+                                                       const UiResolvedScreenCanvas &resolved, UiElementHandle &failedElement) {
             const auto capacity = tree.Size();
             const auto instance = tree.Instance();
             const auto canvas = tree.Canvas();
-            auto evaluator = UiDeclarativeLayoutEvaluator::Create(descriptors);
+            auto evaluator = UiDeclarativeLayoutEvaluator::Create(descriptors, nullptr, &failedElement);
             if (evaluator.HasError())
                 return Result<UiLayoutSnapshot>::Failure(evaluator.ErrorValue());
             auto engine = UiLayoutEngine::Create({instance, canvas, source.Id(), capacity, std::min(capacity, MaximumUiStructuralCommands),
@@ -304,8 +304,12 @@ namespace Horo::Editor {
                                                     UiLayoutIntrinsicRevision::Create(1).Value(),
                                                     UiLayoutCanvasRevision::Create(1).Value(),
                                                     UiLayoutPolicyRevision::Create(1).Value()};
-            auto layout =
-                engine.Value().Update(tree, {revisions, {extent, extent}, {{0, 0}, extent}, &evaluator.Value(), resolved.fontScale});
+            auto layout = engine.Value().Update(tree, {.sources = revisions,
+                                                       .rootConstraints = {extent, extent},
+                                                       .rootContent = {{0, 0}, extent},
+                                                       .evaluator = &evaluator.Value(),
+                                                       .fontScale = resolved.fontScale,
+                                                       .failedElement = &failedElement});
             if (layout.HasError())
                 return Result<UiLayoutSnapshot>::Failure(layout.ErrorValue());
             return layout;
@@ -363,9 +367,12 @@ namespace Horo::Editor {
                     *styleProblem = problemProperty;
                 return fail(UiDiagnosticCategory::Render, styled.ErrorValue(), problemElement);
             }
-            auto layout = EvaluatePreviewLayout(source, tree, descriptors, result.canvas);
-            if (layout.HasError())
-                return fail(UiDiagnosticCategory::Layout, layout.ErrorValue());
+            UiElementHandle failedLayoutElement;
+            auto layout = EvaluatePreviewLayout(source, tree, descriptors, result.canvas, failedLayoutElement);
+            if (layout.HasError()) {
+                const auto affected = tree.Get(failedLayoutElement);
+                return fail(UiDiagnosticCategory::Layout, layout.ErrorValue(), affected.HasValue() ? affected.Value().id : UiElementId{});
+            }
             result.boxes.reserve(tree.Size());
             for (const auto &record : layout.Value().Records()) {
                 const auto element = tree.Get(record.element);

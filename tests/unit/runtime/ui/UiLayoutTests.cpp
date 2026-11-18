@@ -992,19 +992,34 @@ namespace Horo::Runtime::Ui {
                 Descriptor(image, imageStyle, {UiLayoutIntrinsicKind::Image, false, {40, 20}}),
                 Descriptor(remaining, {}),
             };
+            auto failedElement = image;
+            RequireError(UiDeclarativeLayoutEvaluator::Create(descriptors, nullptr, &failedElement), UiErrors::LayoutIntrinsicUnavailable);
+            CHECK(failedElement == text);
             IntrinsicProvider provider;
-            auto evaluator = UiDeclarativeLayoutEvaluator::Create(descriptors, &provider);
+            auto evaluator = UiDeclarativeLayoutEvaluator::Create(descriptors, &provider, &failedElement);
             REQUIRE(evaluator.HasValue());
+            CHECK_FALSE(failedElement.IsValid());
             auto engine = Engine();
             auto first = engine.Update(tree, Request(evaluator.Value()));
             REQUIRE(first.HasValue());
             const auto firstInteraction = first.Value().Descriptor().interaction;
             provider.failText = true;
             REQUIRE(engine.Invalidate({text, tree.Revision(), UiLayoutDirtyKind::Measure}).HasValue());
-            RequireError(engine.Update(tree, Request(evaluator.Value(), 2)), UiErrors::LayoutIntrinsicUnavailable);
-            REQUIRE(first.Value().Descriptor().interaction == firstInteraction);
+            auto request = Request(evaluator.Value(), 2);
+            request.failedElement = &failedElement;
+            RequireError(engine.Update(tree, request), UiErrors::LayoutIntrinsicUnavailable);
+            CHECK(failedElement == text);
+            CHECK(first.Value().Descriptor().interaction == firstInteraction);
+            auto invalid = request;
+            invalid.evaluator = nullptr;
+            RequireError(engine.Update(tree, invalid), UiErrors::LayoutInvalid);
+            CHECK_FALSE(failedElement.IsValid());
             provider.failText = false;
-            REQUIRE(engine.Update(tree, Request(evaluator.Value(), 2)).HasValue());
+            failedElement = image;
+            const auto recovered = engine.Update(tree, request);
+            REQUIRE(recovered.HasValue());
+            CHECK(recovered.Value().Descriptor().interaction.Value() == firstInteraction.Value() + 1);
+            CHECK_FALSE(failedElement.IsValid());
             provider.failImage = true;
             REQUIRE(engine.Invalidate({image, tree.Revision(), UiLayoutDirtyKind::Measure}).HasValue());
             REQUIRE(engine.Update(tree, Request(evaluator.Value(), 3)).Value().Get(image).Value().measurement.desired ==

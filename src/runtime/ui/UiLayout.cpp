@@ -19,6 +19,14 @@ namespace Horo::Runtime::Ui {
             return Result<T>::Failure(MakeError(descriptor));
         }
 
+        /** @brief Reports the element under evaluation without changing the canonical failure. */
+        template <typename T = void>
+        [[nodiscard]] Result<T> ElementLayoutFailure(const UiLayoutUpdateRequest &request, const UiElementHandle element, Error error) {
+            if (request.failedElement)
+                *request.failedElement = element;
+            return Result<T>::Failure(std::move(error));
+        }
+
         /** @brief Accumulates inert candidate evidence without changing layout admission or dirty state. */
         void AddCause(UiLayoutWork &work, const UiLayoutWorkCause cause) noexcept {
             work.causes = static_cast<UiLayoutWorkCause>(static_cast<std::uint16_t>(work.causes) | static_cast<std::uint16_t>(cause));
@@ -341,11 +349,11 @@ namespace Horo::Runtime::Ui {
                 ++node.work.constraintResolutions;
                 const UiLayoutChildConstraintRequest childRequest{node.element, node.constraints, ChildHandles(node)};
                 if (const auto resolved = request.evaluator->ResolveChildConstraints(childRequest, constraintScratch); resolved.HasError())
-                    return Result<void>::Failure(resolved.ErrorValue());
+                    return ElementLayoutFailure(request, node.element, resolved.ErrorValue());
                 for (std::uint32_t offset = 0; offset < node.childCount; ++offset) {
-                    if (!constraintScratch[offset].IsValid())
-                        return Failure(UiErrors::LayoutInvalid);
                     auto &child = candidateTree.nodes[candidateTree.children[node.firstChild + offset]];
+                    if (!constraintScratch[offset].IsValid())
+                        return ElementLayoutFailure(request, child.element, MakeError(UiErrors::LayoutInvalid));
                     if (child.constraints != constraintScratch[offset]) {
                         child.constraints = constraintScratch[offset];
                         AddCause(child.work, UiLayoutWorkCause::InheritedConstraints);
@@ -369,9 +377,9 @@ namespace Horo::Runtime::Ui {
                                                             request.fontScale};
                 const auto measured = request.evaluator->Measure(measureRequest);
                 if (measured.HasError())
-                    return Result<void>::Failure(measured.ErrorValue());
+                    return ElementLayoutFailure(request, node.element, measured.ErrorValue());
                 if (!measured.Value().IsValid(node.constraints))
-                    return Failure(UiErrors::LayoutInvalid);
+                    return ElementLayoutFailure(request, node.element, MakeError(UiErrors::LayoutInvalid));
                 if (node.measurement != measured.Value()) {
                     node.arrangeDirty = true;
                     AddCause(node.work, UiLayoutWorkCause::MeasurementChanged);
@@ -396,9 +404,15 @@ namespace Horo::Runtime::Ui {
                                    remeasure,    std::span{placementScratch}, std::span{lineScratch}, request.inlineDirection};
                 const auto arranged = request.evaluator->Arrange(arrangeRequest, rectangleScratch);
                 if (arranged.HasError())
-                    return Result<bool>::Failure(arranged.ErrorValue());
-                if (!arranged.Value().IsValid() || !std::ranges::all_of(rectangleScratch, &UiLogicalRect::IsValid))
-                    return Failure<bool>(UiErrors::LayoutInvalid);
+                    return ElementLayoutFailure<bool>(request, node.element, arranged.ErrorValue());
+                if (!arranged.Value().IsValid())
+                    return ElementLayoutFailure<bool>(request, node.element, MakeError(UiErrors::LayoutInvalid));
+                const auto invalid = std::ranges::find_if_not(rectangleScratch, &UiLogicalRect::IsValid);
+                if (invalid != rectangleScratch.end()) {
+                    const auto offset = static_cast<std::size_t>(invalid - rectangleScratch.begin());
+                    const auto &child = candidateTree.nodes[candidateTree.children[node.firstChild + offset]];
+                    return ElementLayoutFailure<bool>(request, child.element, MakeError(UiErrors::LayoutInvalid));
+                }
                 node.arrangement = arranged.Value();
                 node.arrangeDirty = false;
                 for (std::uint32_t offset = 0; offset < node.childCount; ++offset) {
@@ -710,14 +724,19 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiLayoutEngine::PrepareDerived */
     Result<UiLayoutEngine::PreparedUpdate> UiLayoutEngine::PrepareDerived(const UiElementTree &tree, const UiLayoutUpdateRequest &request,
                                                                           const PreparedUpdate &primary) const {
-        if (primary.owner_ == storage_ || primary.CanPublish(tree).HasError())
+        if (primary.owner_ == storage_ || primary.CanPublish(tree).HasError()) {
+            if (request.failedElement)
+                *request.failedElement = {};
             return Failure<PreparedUpdate>(UiErrors::LayoutSourceStale);
+        }
         return PrepareInternal(tree, request, &primary);
     }
 
     /** @copydoc UiLayoutEngine::PrepareInternal */
     Result<UiLayoutEngine::PreparedUpdate> UiLayoutEngine::PrepareInternal(const UiElementTree &tree, const UiLayoutUpdateRequest &request,
                                                                            const PreparedUpdate *primary) const {
+        if (request.failedElement)
+            *request.failedElement = {};
         const auto owner = storage_;
         if (!owner)
             return Failure<PreparedUpdate>(UiErrors::LayoutLifecycleUnavailable);

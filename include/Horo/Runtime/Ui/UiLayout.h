@@ -568,6 +568,16 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] static Result<UiDeclarativeLayoutEvaluator> Create(std::span<const UiLayoutElementDescriptor> descriptors,
                                                                          const UiLayoutIntrinsicProvider *intrinsic = nullptr);
 
+        /** @brief Creates an evaluator and optionally identifies a rejected descriptor by its handle.
+         * @param descriptors Current-generation element descriptors sorted by handle.
+         * @param intrinsic Revision-frozen provider for required intrinsic sources.
+         * @param failedElement Optional immediate output. Reset on entry; populated only for descriptor-local failure.
+         * @return The same evaluator or canonical error as the two-argument overload.
+         */
+        [[nodiscard]] static Result<UiDeclarativeLayoutEvaluator> Create(std::span<const UiLayoutElementDescriptor> descriptors,
+                                                                         const UiLayoutIntrinsicProvider *intrinsic,
+                                                                         UiElementHandle *failedElement);
+
         UiDeclarativeLayoutEvaluator(UiDeclarativeLayoutEvaluator &&) noexcept = default;
         UiDeclarativeLayoutEvaluator &operator=(UiDeclarativeLayoutEvaluator &&) noexcept = default;
         UiDeclarativeLayoutEvaluator(const UiDeclarativeLayoutEvaluator &) = delete;
@@ -645,6 +655,7 @@ namespace Horo::Runtime::Ui {
         const UiLayoutEvaluator *evaluator{}; /**< Borrowed only for this synchronous call. */
         UiCanvasScaleFactor fontScale{};      /**< Accessibility text scale forwarded to intrinsic measurement. */
         UiLayoutInlineDirection inlineDirection{UiLayoutInlineDirection::LeftToRight}; /**< Reading direction forwarded to arrangement. */
+        UiElementHandle *failedElement{}; /**< Optional synchronous failure output. Reset on entry; never retained. */
     };
 
     /** @brief Explicit admission lifecycle for one canvas layout cache. */

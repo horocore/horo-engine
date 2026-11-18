@@ -394,7 +394,9 @@ TEST_CASE("Preview preserves typed missing style and intrinsic capability failur
     REQUIRE(missingIntrinsic.HasError());
     REQUIRE(problem);
     CHECK(problem->category == UiDiagnosticCategory::Layout);
-    CHECK(problem->correlationCount == 2);
+    REQUIRE(problem->correlationCount == 3);
+    CHECK(problem->correlation[1].key == UiDiagnosticCorrelationKey::Element);
+    CHECK(std::get<UiElementId>(problem->correlation[1].value) == source.Elements().back().id);
     CHECK(missingIntrinsic.ErrorValue().domain.Value() == UiErrors::LayoutIntrinsicUnavailable.domain.Value());
     CHECK(missingIntrinsic.ErrorValue().code.Value() == UiErrors::LayoutIntrinsicUnavailable.code.Value());
     CHECK(SerializeUiDocument(source).Value() == before);

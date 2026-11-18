@@ -1592,6 +1592,10 @@ reuse Runtime UI identities; player, viewport and Foundation operation values ar
 dependency-neutral scalar projections used only as evidence and never establish
 new identity authority. The operation `Error` remains control-flow authority. A
 diagnostic record is inert and owns no log sink, store, renderer or runtime state.
+Layout preparation can optionally identify the exact evaluated element or invalid
+child output. The synchronous call resets that output and never retains it.
+Owner, revision and whole-layout failures carry no element. The Canvas resolves
+a reported handle in its current preview tree before offering navigation.
 
 ### Optional input debugger
 
