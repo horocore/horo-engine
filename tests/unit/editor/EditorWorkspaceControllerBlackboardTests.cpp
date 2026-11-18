@@ -267,7 +267,7 @@ TEST_CASE("Recent AI assets resolve current registered identity after an ordinar
     }
     SECTION("missing identity leaves the visible untyped source unchanged") {
         const auto sourcePath = project.root / project.Path;
-        const auto original = Assets::CaptureAssetSource(project.root, sourcePath);
+        const auto original = Assets::CaptureAssetSource(project.root, sourcePath, AI::BlackboardSchemaSourceCodec::MaximumBytes);
         REQUIRE(original.HasValue());
         REQUIRE(std::filesystem::remove(project.root / (std::string{project.Path} + ".horo")));
         REQUIRE(project.registry.Snapshot().Find(project.asset));
@@ -288,7 +288,7 @@ TEST_CASE("Recent AI assets resolve current registered identity after an ordinar
         controller.ProcessCommand(project.Open());
         CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.blackboard.invalid");
         CHECK(controller.ViewModel().blackboardDocuments.empty());
-        const auto preserved = Assets::CaptureAssetSource(project.root, sourcePath);
+        const auto preserved = Assets::CaptureAssetSource(project.root, sourcePath, AI::BlackboardSchemaSourceCodec::MaximumBytes);
         REQUIRE(preserved.HasValue());
         CHECK(preserved.Value().bytes == original.Value().bytes);
     }
