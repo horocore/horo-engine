@@ -74,6 +74,7 @@ namespace Horo::XR::OpenXRInternal {
     struct NativePassthroughProjection final {
         XRFrameId frame;
         XRPassthroughScope scope;
+        std::optional<XRPoseSample> referenceToWorld{}; /**< Same prediction's native-reference calibration, when eyes use that space. */
     };
 
     /** @brief Explicit normalized depth range and matching metric clip planes used to render every submitted view. */

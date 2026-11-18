@@ -5,7 +5,6 @@
 namespace Horo::XR::OpenXRInternal {
     namespace {
         constexpr std::string_view Extension = XR_FB_PASSTHROUGH_EXTENSION_NAME;
-        constexpr std::uint32_t PropertiesVersion = 3;
 
         /** @brief Fences a synchronous native borrow against reentrant retirement. */
         struct PassthroughOperation final {
@@ -98,7 +97,7 @@ namespace Horo::XR::OpenXRInternal {
         if (extension.state == NativeExtensionState::Denied)
             return Result<void>::Failure(MakeError(XRErrors::PermissionDenied));
         if (extension.state == NativeExtensionState::VersionIncompatible ||
-            (extension.state == NativeExtensionState::Enabled && extension.discoveredVersion < PropertiesVersion))
+            (extension.state == NativeExtensionState::Enabled && extension.discoveredVersion < NativePassthroughPropertiesVersion))
             return Result<void>::Failure(MakeError(XRErrors::ContractVersionIncompatible));
         if (extension.state != NativeExtensionState::Enabled || extension.minimumVersion == 0)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported, "Passthrough was not requested and enabled"));
@@ -167,6 +166,22 @@ namespace Horo::XR::OpenXRInternal {
         }
         passthrough_.admitted = true;
         return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRNativeSession::ReadPassthrough */
+    NativePassthroughState OpenXRNativeSession::ReadPassthrough(const XRPassthroughScope &scope) const noexcept {
+        if (controlThread_ != std::this_thread::get_id() || passthrough_.scope != scope || passthrough_.feature == XR_NULL_HANDLE)
+            return NativePassthroughState::Absent;
+        return passthrough_.admitted ? NativePassthroughState::Active : NativePassthroughState::Retiring;
+    }
+
+    /** @copydoc OpenXRNativeSession::RevokePassthrough(const XRPassthroughScope &) */
+    void OpenXRNativeSession::RevokePassthrough(const XRPassthroughScope &scope) noexcept {
+        if (ReadPassthrough(scope) == NativePassthroughState::Absent)
+            return;
+        passthrough_.admitted = false;
+        if (!passthroughCall_ && !lightCall_ && !retirementCall_)
+            RevokePassthrough();
     }
 
     /** @copydoc OpenXRNativeSession::StopPassthrough */

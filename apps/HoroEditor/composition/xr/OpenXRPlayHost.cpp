@@ -123,6 +123,7 @@ namespace Horo::Application::Internal {
             composition_.session.RequestHapticCancellation();
             RevokeEyeGaze();
             RevokePlaneCapture();
+            RevokePassthrough();
         }
         if (state == Idle || state == Stopping || state == Failed)
             RevokeSource();
@@ -136,6 +137,7 @@ namespace Horo::Application::Internal {
         tracking_.Revoke();
         RevokeEyeGaze();
         RevokePlaneCapture();
+        RevokePassthrough();
         composition_.session.RequestHapticCancellation();
         if (busy_) {
             if (scene_ && !scene_->activated)
@@ -193,6 +195,7 @@ namespace Horo::Application::Internal {
             if (!applied.Value())
                 return Result<void>::Success();
         }
+        ProgressPassthrough();
         if (auto tail = ProgressTail(); tail.HasError()) {
             RevokeEventAdmission();
             return tail;
@@ -217,6 +220,7 @@ namespace Horo::Application::Internal {
             tracking_.Revoke();
             RevokeEyeGaze();
             RevokePlaneCapture();
+            RevokePassthrough();
             input_.neutralPending = true;
         }
         const bool invalidateOutput = observed.actionsInterrupted || observed.bindingsChanged;

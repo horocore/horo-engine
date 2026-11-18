@@ -235,6 +235,10 @@ namespace Horo::Application::Internal {
                                                 const XR::OpenXRInternal::NativeTrackingSpaceRequest &tracking, bool gazeConsent = false);
         /** @return Whether policy and exact native evidence permit requesting plane consent. */
         [[nodiscard]] bool MayArmPlaneCapture() const noexcept;
+        /** @brief Reports whether the installed platform and negotiated extension support the next-Play request. */
+        [[nodiscard]] bool MayArmPassthrough() const;
+        /** @brief Checks the installed platform's current permission for the exact Play scope, without native I/O. */
+        [[nodiscard]] bool AllowsPassthrough(const XR::XRPassthroughScope &scope) const noexcept;
         /** @brief Transfers the one-use Setup grant to the prepared Play owner. @param allowed Granted by Setup. */
         void SetPlaneCaptureConsent(bool allowed) noexcept;
         /** @brief Immediately withdraws geometry before beginning native retirement. */

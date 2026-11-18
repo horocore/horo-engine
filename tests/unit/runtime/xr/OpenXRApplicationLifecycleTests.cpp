@@ -8,6 +8,7 @@
 #include "editor/renderer/vulkan/EditorViewportRendererVulkan.h"
 #include "support/OpenXRApplicationNativeTestSupport.h"
 #include "support/OpenXRInstalledProductTestFixture.h"
+#include "support/OpenXRPassthroughTestSupport.h"
 #include "support/OpenXRPlaneCaptureTestSupport.h"
 #include "unit/editor/SceneDocumentHierarchyFixture.h"
 
@@ -93,7 +94,8 @@ namespace Horo::Tests::OpenXRApplication {
                                         const XR::XRProjectFeaturePolicy stage = XR::XRProjectFeaturePolicy::Unrequested,
                                         const bool synthesis = false, std::optional<std::string> controllerBindings = std::nullopt,
                                         const XR::XRProjectFeaturePolicy gaze = XR::XRProjectFeaturePolicy::Unrequested,
-                                        const bool planePreview = false)
+                                        const bool planePreview = false,
+                                        std::shared_ptr<const Host::IOpenXRPassthroughPermission> passthrough = {})
                 : product{HORO_TEST_OPENXR_LOADER, std::move(controllerBindings)} {
                 ConfigurationResolutionRequest request;
                 request.invocation.emplace(SettingKey{"xr.enabled"}, ConfigurationInputValue{true, std::nullopt});
@@ -135,6 +137,7 @@ namespace Horo::Tests::OpenXRApplication {
                 request.invocation.emplace(SettingKey{"xr.limits.spaces"}, ConfigurationInputValue{maximumSpaces, std::nullopt});
                 REQUIRE(configuration.ResolveAndCommit(request).HasValue());
                 const auto settings = RequireValue(XR::ResolveXRProjectSettings(configuration.Snapshot()));
+                product.policy->passthroughPermission = std::move(passthrough);
                 session = std::make_unique<Host::OpenXRApplicationSession>(Host::OpenXRApplicationAuthorities{configuration, *product.host,
                                                                                                               product.Root(),
                                                                                                               product.host->Generation(),
@@ -828,6 +831,123 @@ namespace Horo::Tests::OpenXRApplication {
             CHECK(fixture.script.native.liveSessions == 0);
         }
         CHECK(std::ranges::count(fixture.script.census.calls, "eye-gaze-properties") == 1);
+    }
+
+    TEST_CASE("Signed XR Play submits reconstruction only with platform and operator grants and the exact alpha frame",
+              "[xr][application][play][passthrough]") {
+        using enum XR::XRProjectFeaturePolicy;
+
+        struct PlatformPermission final : Host::IOpenXRPassthroughPermission {
+            bool permitted{true};
+            mutable std::optional<XR::XRPassthroughScope> observed;
+
+            bool SupportsReconstruction() const noexcept override {
+                return true;
+            }
+
+            bool Allows(const XR::XRPassthroughScope &scope) const noexcept override {
+                if (!observed)
+                    observed = scope;
+                return permitted && observed == scope && scope.session == scope.world.id.session &&
+                       scope.world.kind == XR::XRSpaceKind::World;
+            }
+        };
+
+        bool installAuthority = true;
+        bool arm = true;
+        bool revokeInFlight = false;
+        bool denyNative = false;
+        std::uint32_t layerLimit = 2;
+        const auto permission = std::make_shared<PlatformPermission>();
+        SECTION("authority and next-session consent") {}
+        SECTION("advertisement cannot create platform permission") {
+            installAuthority = false;
+            arm = false;
+        }
+        SECTION("an installed permission port does not provide operator consent") {
+            arm = false;
+        }
+        SECTION("the exact scoped platform permission was denied") {
+            permission->permitted = false;
+        }
+        SECTION("the runtime denies the compositor feature even with platform and operator consent") {
+            denyNative = true;
+        }
+        SECTION("the exact native system supports only its ordinary projection layer") {
+            layerLimit = 1;
+        }
+        SECTION("platform revocation prevents an already rendered alpha frame from submitting underlay") {
+            revokeInFlight = true;
+        }
+
+        OpenXR::PassthroughScript native;
+        if (denyNative)
+            native.createResult = XR_ERROR_NOT_PERMITTED_PASSTHROUGH_FB;
+        ApplicationFixture fixture{true,         5,
+                                   Unrequested,  Unrequested,
+                                   Unrequested,  false,
+                                   std::nullopt, Unrequested,
+                                   false,        installAuthority ? permission : nullptr};
+        constexpr std::array<std::string_view, 1> extensions{XR_FB_PASSTHROUGH_EXTENSION_NAME};
+        fixture.script.native.extraExtensions = extensions;
+        fixture.script.native.extraExtensionVersion = XR::OpenXRInternal::NativePassthroughPropertiesVersion;
+        ++fixture.script.native.extensionCount;
+        fixture.script.native.resolveExtra = &OpenXR::PassthroughScript::Resolve;
+        fixture.script.census.passthroughCapabilities = XR_PASSTHROUGH_CAPABILITY_BIT_FB;
+        fixture.script.census.maximumLayers = layerLimit;
+        fixture.CreatePlay();
+        CHECK((std::ranges::find(fixture.script.native.enabledExtensions, XR_FB_PASSTHROUGH_EXTENSION_NAME) !=
+               fixture.script.native.enabledExtensions.end()) == installAuthority);
+        if (arm)
+            RequireValue(fixture.play->ArmPassthrough());
+        if (!installAuthority)
+            CHECK(fixture.play->ArmPassthrough().HasError());
+        CHECK(native.featuresCreated == 0);
+        CHECK_FALSE(permission->observed);
+
+        auto scene = ActivatePlay(fixture, std::nullopt);
+        const bool active = arm && permission->permitted && !denyNative && layerLimit >= 2;
+        CHECK((fixture.play->ReadPassthroughState() == XR::XRCapabilityState::Available) == active);
+        CHECK(native.featuresCreated == (active ? 1U : 0U));
+        CHECK(native.running == active);
+        if (denyNative)
+            CHECK(fixture.play->ReadPassthroughState() == XR::XRCapabilityState::Denied);
+        if (arm)
+            REQUIRE(permission->observed);
+        if (active) {
+            CHECK(permission->observed->session == *fixture.session->RetainedSession());
+            CHECK(permission->observed->world == RequireValue(fixture.session->WorldSpace(permission->observed->session)));
+        }
+        fixture.script.clock.sample = 1;
+        REQUIRE(RequireValue(fixture.play->PrepareRenderFrame(1)));
+        auto frame = RequireValue(fixture.frontend->BeginFrame({1, {8, 8}}));
+        RequireValue(fixture.play->ExecuteRenderFrame(frame, {}));
+        RequireValue(frame.Present());
+        RequireValue(fixture.play->FinishGui(true));
+        RequireValue(fixture.play->ProgressRenderTail());
+        CHECK(fixture.script.frames.ends == 0);
+        if (revokeInFlight) {
+            permission->permitted = false;
+            RequireValue(fixture.play->PollEvents());
+            CHECK_FALSE(native.running);
+            CHECK(fixture.play->ReadPassthroughState() == XR::XRCapabilityState::Denied);
+        }
+        fixture.vulkan->native.commandState.state.Complete();
+        RequireValue(fixture.play->ProgressRenderTail());
+        CHECK(fixture.script.frames.ends == 1);
+        const bool composed = active && !revokeInFlight;
+        CHECK(fixture.script.frames.layers == (composed ? 2U : 1U));
+        CHECK(fixture.script.frames.projectionFlags ==
+              (composed ? std::uint64_t{XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT} : 0U));
+        CHECK((fixture.script.frames.passthroughLayer != XR_NULL_HANDLE) == composed);
+        RequireValue(fixture.play->SetPlayState(Editor::EditorPlayState::Paused));
+        RequireValue(fixture.play->PollEvents());
+        CHECK_FALSE(native.running);
+        CHECK_FALSE(native.liveFeature);
+        CHECK(native.layersDestroyed == (active ? 1U : 0U));
+        CHECK(fixture.play->ReadPassthroughState() == XR::XRCapabilityState::Unavailable);
+        scene->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
     }
 
     TEST_CASE("Signed XR Setup spatial plane policy and operator consent are independent", "[xr][application][play][planes]") {

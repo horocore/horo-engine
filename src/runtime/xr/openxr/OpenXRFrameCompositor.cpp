@@ -465,9 +465,21 @@ namespace Horo::XR::OpenXRInternal {
         const ProjectionEncoding encoding{plan, targets, depth};
         if (const auto valid = ValidateProjection(frame, encoding); valid.HasError())
             return valid;
-        if (passthrough.frame != frame || passthrough.scope.session != frame.session ||
-            std::ranges::any_of(plan.Views(), [&](const auto &view) {
-            return view.pose.target != passthrough.scope.world;
+        const auto &scope = passthrough.scope;
+        if (passthrough.frame != frame || scope.session != frame.session)
+            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        auto expectedSpace = scope.world;
+        if (const auto &calibration = passthrough.referenceToWorld) {
+            const auto reference = calibration->Source().kind;
+            if ((reference != XRSpaceKind::Local && reference != XRSpaceKind::Stage) || calibration->Session() != frame.session ||
+                calibration->Target() != scope.world || calibration->Purpose() != XRPosePurpose::PresentationPrediction ||
+                calibration->Time().renderPrediction != plan.PredictedDisplayTime() || !calibration->Components().positionMeters.value ||
+                !calibration->Components().orientation.value)
+                return Result<void>::Failure(MakeError(XRErrors::IdentityStale, "Passthrough World calibration is stale"));
+            expectedSpace = calibration->Source();
+        }
+        if (std::ranges::any_of(plan.Views(), [&](const auto &view) {
+            return view.pose.target != expectedSpace;
         }))
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         if (!std::ranges::all_of(plan.Targets(), HasProjectionAlpha))

@@ -22,6 +22,14 @@ namespace Horo::XR::OpenXRInternal {
     inline constexpr std::size_t MaximumNativeExtensions = 128;
     inline constexpr std::size_t MaximumNativeLayers = 32;
     inline constexpr std::size_t MaximumEnabledExtensions = 16;
+    inline constexpr std::uint32_t NativePassthroughPropertiesVersion = 3; /**< First version with capability flags. */
+
+    /** @brief Current selected native ownership for one exact passthrough scope. */
+    enum class NativePassthroughState : std::uint8_t {
+        Absent,
+        Active,
+        Retiring,
+    };
 
     /** @brief Host facts established before making a native extension eligible for discovery. */
     enum class NativeExtensionEligibility : std::uint8_t {
@@ -366,6 +374,10 @@ namespace Horo::XR::OpenXRInternal {
          * @param scope Exact current grant. @return Success or retryable native cleanup debt.
          */
         [[nodiscard]] Result<void> StopPassthrough(const XRPassthroughScope &scope);
+        /** @brief Reads exact scope authorization and retained cleanup on the native control lane. */
+        [[nodiscard]] NativePassthroughState ReadPassthrough(const XRPassthroughScope &scope) const noexcept;
+        /** @brief Withdraws exact scope admission and requests pause; retains native cleanup ownership. */
+        void RevokePassthrough(const XRPassthroughScope &scope) noexcept;
 
     private:
         friend class OpenXRFrameCompositor;

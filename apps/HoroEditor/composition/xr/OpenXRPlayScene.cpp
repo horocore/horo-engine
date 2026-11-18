@@ -262,6 +262,7 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XRSessionErrors::ActivationCancelled));
         const bool planeConsent = std::exchange(host.planesArmed_, false);
         const bool gazeConsent = std::exchange(host.gazeArmed_, false);
+        passthroughGrant = std::exchange(host.passthroughArmed_, std::nullopt);
         if (auto prepared = host.composition_.session.PrepareInput(*host.input_.port, *host.input_.router, *host.composition_.bindings,
                                                                    tracking, gazeConsent);
             prepared.HasError())

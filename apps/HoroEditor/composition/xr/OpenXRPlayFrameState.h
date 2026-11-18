@@ -27,6 +27,15 @@ namespace Horo::Application::Internal {
         std::optional<XR::OpenXRInternal::NativeSwapchainAcquisition> acquisition;
         std::array<Render::RenderTextureViewHandle, 2> eyeViews{};
         std::optional<XR::XRViewRenderPlan> plan;
+
+        /** @brief Exact renderer alpha intent and installed World mapping for the bound native prediction. */
+        struct PassthroughFrame final {
+            XR::XRPassthroughScope scope;
+            Render::MultiviewPublication publication;
+            XR::XRPoseSample referenceToWorld;
+        };
+
+        std::optional<PassthroughFrame> passthrough;
         std::optional<Render::MultiviewMotionFrame> motionFrame;
         std::optional<XR::OpenXRInternal::NativePresentationViews> views;
         std::uint64_t hostFrameNumber{}; /**< Exact successful bind receipt, not another frame issuer. */
@@ -62,6 +71,7 @@ namespace Horo::Application::Internal {
             guiFinished = false;
             views.reset();
             plan.reset();
+            passthrough.reset();
             motionFrame.reset();
             const auto waited = compositor.Wait();
             if (waited.HasError())
@@ -213,6 +223,9 @@ namespace Horo::Application::Internal {
         Result<XrSpace> Borrow(const XR::XRCoordinateSpace &space) const override {
             return host.composition_.session.BorrowPresentationReference(space);
         }
+
+        /** @brief Ends a fully released projection, adding the underlay only for the exact live alpha proof. */
+        [[nodiscard]] Result<void> EndRenderedProjection(const XR::XRFrameId &frame);
 
         /** @brief Reports the exact compositor result to the existing selected viewport after successful native end. */
         void CompleteMotion(bool projected) noexcept;

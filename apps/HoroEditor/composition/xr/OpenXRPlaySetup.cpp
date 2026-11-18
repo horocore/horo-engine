@@ -361,6 +361,110 @@ namespace Horo::Application::Internal {
         composition_.session.RevokePlaneCapture();
     }
 
+    /** @copydoc OpenXRPlayHost::ArmPassthrough */
+    Result<void> OpenXRPlayHost::ArmPassthrough() {
+        if (auto lane = Lane(); lane.HasError())
+            return lane;
+        if (!SetupIdle() || passthroughArmed_ || passthroughScope_)
+            return Result<void>::Failure(MakeError(XR::XRErrors::OperationUnavailable));
+        if (!composition_.session.MayArmPassthrough())
+            return Result<void>::Failure(MakeError(XR::XRErrors::OperationUnsupported));
+        if (nextPassthroughGrant_ == std::numeric_limits<std::uint64_t>::max())
+            return Result<void>::Failure(MakeError(XR::XRErrors::CapacityExceeded));
+        const auto next = XR::XRPassthroughGrant::Create(nextPassthroughGrant_ + 1);
+        if (next.HasError())
+            return Result<void>::Failure(next.ErrorValue());
+        nextPassthroughGrant_ = next.Value().Value();
+        passthroughArmed_ = next.Value();
+        passthroughState_ = XR::XRCapabilityState::TemporarilyUnavailable;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRPlayHost::RevokePassthrough */
+    void OpenXRPlayHost::RevokePassthrough() noexcept {
+        if (std::this_thread::get_id() != lane_)
+            return;
+        passthroughArmed_.reset();
+        if (scene_)
+            scene_->passthroughGrant.reset();
+        passthroughState_ = XR::XRCapabilityState::Unavailable;
+        if (passthroughScope_)
+            native_.RevokePassthrough(*passthroughScope_);
+    }
+
+    /** @copydoc OpenXRPlayHost::HasPassthrough */
+    bool OpenXRPlayHost::HasPassthrough(const XR::XRPassthroughScope &scope) const noexcept {
+        const auto state = sessions_.Snapshot();
+        return !closing_ && !eventsPending_ && scene_ && scene_->published && !scene_->retiring && scene_->session == scope.session &&
+               scene_->passthroughGrant == scope.grant && input_.admitted && input_.play == Editor::EditorPlayState::Playing &&
+               input_.origin == scope.world.worldOriginRevision && state.session == scope.session && state.admitsActions &&
+               native_.ReadPassthrough(scope) == XR::OpenXRInternal::NativePassthroughState::Active &&
+               composition_.session.AllowsPassthrough(scope);
+    }
+
+    /** @copydoc OpenXRPlayHost::ReadPassthroughState */
+    XR::XRCapabilityState OpenXRPlayHost::ReadPassthroughState() const noexcept {
+        if (std::this_thread::get_id() != lane_ || closing_ || busy_ || instanceLost_)
+            return XR::XRCapabilityState::Unavailable;
+        if (passthroughState_ == XR::XRCapabilityState::Available && (!passthroughScope_ || !HasPassthrough(*passthroughScope_)))
+            return XR::XRCapabilityState::Unavailable;
+        return passthroughState_;
+    }
+
+    /** @copydoc OpenXRPlayHost::ProgressPassthrough */
+    void OpenXRPlayHost::ProgressPassthrough() {
+        const bool idle = frames_.Snapshot().phase == XR::XRFramePhase::Idle;
+        if (passthroughScope_) {
+            const auto scope = *passthroughScope_;
+            if (HasPassthrough(scope))
+                return;
+            if (scene_ && scene_->passthroughGrant) {
+                const bool permitted = composition_.session.AllowsPassthrough(scope);
+                RevokePassthrough();
+                if (!permitted)
+                    passthroughState_ = XR::XRCapabilityState::Denied;
+            }
+            if (!idle)
+                return;
+            if (native_.ReadPassthrough(scope) == XR::OpenXRInternal::NativePassthroughState::Absent ||
+                native_.StopPassthrough(scope).HasValue())
+                passthroughScope_.reset();
+            return;
+        }
+        if (!idle || !scene_ || !scene_->published || scene_->retiring || !scene_->passthroughGrant || !input_.admitted ||
+            input_.play != Editor::EditorPlayState::Playing || !sessions_.Snapshot().admitsActions)
+            return;
+        const auto session = scene_->session;
+        const auto grant = *scene_->passthroughGrant;
+        const auto world = composition_.session.WorldSpace(session);
+        if (world.HasError() || !scene_ || scene_->session != session || scene_->retiring || scene_->passthroughGrant != grant) {
+            RevokePassthrough();
+            return;
+        }
+        const XR::XRPassthroughScope scope{session, world.Value(), grant};
+        if (!composition_.session.AllowsPassthrough(scope)) {
+            RevokePassthrough();
+            passthroughState_ = XR::XRCapabilityState::Denied;
+            return;
+        }
+        // Preserve exact scope even when native creation failed partway and left a cleanup prefix.
+        passthroughScope_ = scope;
+        const auto started = native_.StartPassthrough(scope);
+        if (started.HasError()) {
+            RevokePassthrough();
+            passthroughState_ =
+                ErrorChainContains(started.ErrorValue(), XR::XRErrors::PermissionDenied.domain, XR::XRErrors::PermissionDenied.code)
+                    ? XR::XRCapabilityState::Denied
+                    : XR::XRCapabilityState::Unavailable;
+            return;
+        }
+        if (!HasPassthrough(scope)) {
+            RevokePassthrough();
+            return;
+        }
+        passthroughState_ = XR::XRCapabilityState::Available;
+    }
+
     /** @copydoc Editor::IEditorXrEyeGazePreview::ReadEyeGazeState */
     Editor::EditorXrEyeGazeState OpenXRPlayHost::ReadEyeGazeState() const noexcept {
         using enum Editor::EditorXrEyeGazeState;

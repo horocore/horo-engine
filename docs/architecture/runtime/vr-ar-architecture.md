@@ -869,6 +869,15 @@ produce the exact alpha-bearing projection receipt. The native session owner
 withdraws the layer on focus, origin, runtime or consent loss and retires its
 native objects before retiring the session.
 
+The signed Editor Play composition accepts this permission from an explicit
+installed platform authority. Its next-Play operator grant is consumed once.
+The app validates the grant against the current session and the same prediction
+that maps the native reference space into calibrated World. The compositor
+uses the exact renderer alpha receipt only after the acquired image and GUI
+references retire. Without a platform authority or live grant, Play submits its
+ordinary opaque projection. The current installed platform compositions do
+not supply a passthrough permission authority.
+
 ## Android And Standalone XR
 
 Standalone Android-class headsets require the Android runtime host in addition

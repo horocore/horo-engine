@@ -166,6 +166,14 @@ namespace Horo::Application::Internal {
          * finite ray.
          * @return Ordered placement candidates without mutating authored or runtime Scene objects. */
         [[nodiscard]] Result<XR::XRSpatialHits> QueryPlaneHits(const XR::XRSpatialHitRequest &request) const;
+        /** @brief Arms one next-Play operator grant through the selected Setup owner.
+         * @return Success or typed busy, capacity or missing-platform/extension evidence. No native feature is started.
+         */
+        [[nodiscard]] Result<void> ArmPassthrough();
+        /** @brief Withdraws queued and live compositor intent on the owner lane, retaining native cleanup debt. */
+        void RevokePassthrough() noexcept;
+        /** @brief Reads redacted current owner-lane availability; exposes no native handle or camera data. */
+        [[nodiscard]] XR::XRCapabilityState ReadPassthroughState() const noexcept;
         /** @brief Supplies bounded, current runtime prerequisites to the separate device qualification runner. */
         [[nodiscard]] Result<OpenXRPackagedPreflight> ReadDeviceQualificationPreflight() const;
         [[nodiscard]] Result<void> AttachInput(const Input::InputActionCollection &input,
@@ -277,6 +285,10 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<void> AdmitReferenceReplacement() const;
         struct FrameState;
+        /** @brief Drives one cold activation/retirement step on the actual native event cutoff. */
+        void ProgressPassthrough();
+        /** @brief Checks current consent, platform authority, focus, calibration and native activation. */
+        [[nodiscard]] bool HasPassthrough(const XR::XRPassthroughScope &scope) const noexcept;
         [[nodiscard]] Result<void> ProgressTail();
         [[nodiscard]] Result<void> AbortRenderFrame();
         [[nodiscard]] Result<void> BindRenderFrame(std::uint64_t frameNumber);
@@ -287,6 +299,7 @@ namespace Horo::Application::Internal {
             std::optional<OpenXRApplicationProjection> projection;
             XR::XRReferenceSpaceSnapshot references; /**< Same cold native preparation as this Scene candidate. */
             XR::XRSessionId session;
+            std::optional<XR::XRPassthroughGrant> passthroughGrant;
             CancellationSource preparationCancellation; /**< Exact unpublished attempt; revocation cannot affect a replacement. */
             bool activated{};
             bool published{};
@@ -401,6 +414,10 @@ namespace Horo::Application::Internal {
         std::uint64_t nextHapticPreview_{};
         bool planesArmed_{}; /**< One-use Setup consent, consumed by an actual Play preparation. */
         bool gazeArmed_{};   /**< In-memory grant consumed by one actual Play preparation. */
+        std::uint64_t nextPassthroughGrant_{};
+        std::optional<XR::XRPassthroughGrant> passthroughArmed_;
+        std::optional<XR::XRPassthroughScope> passthroughScope_; /**< Retained until the native owner confirms retirement. */
+        XR::XRCapabilityState passthroughState_{XR::XRCapabilityState::Unavailable};
 
         struct InputState final {
             Input::InputRouter *router{};

@@ -95,6 +95,8 @@ namespace Horo::Application::Internal {
             Selection{{XR_EXT_FUTURE_EXTENSION_NAME}, planePreview},
             Selection{{.name = XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME, .dependencies = spatialDependencies}, planePreview},
             Selection{{.name = XR_EXT_SPATIAL_PLANE_TRACKING_EXTENSION_NAME, .dependencies = planeDependencies}, planePreview},
+            Selection{{.name = XR_FB_PASSTHROUGH_EXTENSION_NAME, .minimumVersion = NativePassthroughPropertiesVersion},
+                      policy_.passthroughPermission && policy_.passthroughPermission->SupportsReconstruction()},
         };
         std::array<NativeExtensionRequest, routes.size()> extensions{};
         std::size_t count{};
@@ -135,6 +137,20 @@ namespace Horo::Application::Internal {
         preflight_.emplace(std::move(preflight).Value());
         getProc_ = borrow.Value().getProc;
         return Current();
+    }
+
+    /** @copydoc OpenXRApplicationSession::MayArmPassthrough */
+    bool OpenXRApplicationSession::MayArmPassthrough() const {
+        if (!policy_.passthroughPermission || !policy_.passthroughPermission->SupportsReconstruction() || !native_)
+            return false;
+        const auto evidence = native_->ReadExtensionAdmission(selection_.attempt, XR_FB_PASSTHROUGH_EXTENSION_NAME);
+        return evidence.HasValue() && evidence.Value().state == NativeExtensionState::Enabled &&
+               evidence.Value().discoveredVersion >= NativePassthroughPropertiesVersion;
+    }
+
+    /** @copydoc OpenXRApplicationSession::AllowsPassthrough */
+    bool OpenXRApplicationSession::AllowsPassthrough(const XRPassthroughScope &scope) const noexcept {
+        return policy_.passthroughPermission && policy_.passthroughPermission->Allows(scope);
     }
 
     /** @copydoc OpenXRApplicationSession::MayArmEyeGaze */

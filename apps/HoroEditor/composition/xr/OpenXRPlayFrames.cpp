@@ -113,8 +113,9 @@ namespace Horo::Application::Internal {
     Result<void> OpenXRPlayHost::FinishFrameResources(const XRSessionId &candidate, const XRCapabilitySnapshot &capabilities) {
         if (!render_ || render_->session != candidate || sessions_.Snapshot().session != candidate || events_)
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        const std::uint32_t layerLimit = scene_ && scene_->passthroughGrant ? 2U : 1U;
         if (const auto configured = frames_.BindConfiguration({candidate, {.index = 0, .generation = 1}}, capabilities,
-                                                              {.maximumViews = 2, .maximumImages = 1, .maximumLayers = 1});
+                                                              {.maximumViews = 2, .maximumImages = 1, .maximumLayers = layerLimit});
             configured != XRFrameStatus::Ok)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
         if (auto bound = render_->compositor.Bind({getProc_}, {}); bound.HasError())
@@ -246,9 +247,17 @@ namespace Horo::Application::Internal {
         const Editor::EditorVulkanXrViewportAccess::MotionInput motion{{publication, frame.frame.sequence,
                                                                         frame.predictedDisplayTime.Nanoseconds()},
                                                                        scene_->geometry->MotionObjects()};
-        if (auto bound = Editor::EditorVulkanXrViewportAccess::Bind(composition_.viewport, render_->acquisition->texture, render_->eyeViews,
-                                                                    publication, converted.Value().Scene().Views(),
-                                                                    scene_->geometry->Instances(), prepareMotion ? &motion : nullptr);
+        render_->passthrough.reset();
+        if (passthroughScope_ && HasPassthrough(*passthroughScope_) && observed.referenceToWorld.target == passthroughScope_->world) {
+            auto calibrated = XRPoseSample::Create(observed.referenceToWorld, render_->session, input_.origin);
+            if (calibrated.HasValue())
+                render_->passthrough.emplace(*passthroughScope_, publication, std::move(calibrated).Value());
+        }
+        const auto alpha = render_->passthrough ? Editor::EditorXrProjectionAlpha::Premultiplied : Editor::EditorXrProjectionAlpha::Opaque;
+        if (auto bound =
+                Editor::EditorVulkanXrViewportAccess::Bind(composition_.viewport, render_->acquisition->texture, render_->eyeViews,
+                                                           publication, converted.Value().Scene().Views(), scene_->geometry->Instances(),
+                                                           prepareMotion ? &motion : nullptr, alpha);
             bound.HasError())
             return bound;
         if (prepareMotion)
@@ -338,19 +347,37 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
         const bool projected = render_->rendered && render_->plan && render_->acquisition;
         Result<void> ended = Result<void>::Success();
-        if (projected) {
-            const std::array targets{NativeProjectionTarget{&render_->color, render_->acquisition->image}};
-            ended = render_->compositor.EndProjection(state.frame, *render_->plan, targets);
-        } else {
+        if (projected)
+            ended = render_->EndRenderedProjection(state.frame);
+        else
             ended = render_->compositor.EndEmpty(state.frame);
-        }
         if (ended.HasError())
             return ended;
         render_->CompleteMotion(projected);
         render_->acquisition.reset();
         render_->plan.reset();
+        render_->passthrough.reset();
         render_->views.reset();
         return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRPlayHost::FrameState::EndRenderedProjection */
+    Result<void> OpenXRPlayHost::FrameState::EndRenderedProjection(const XRFrameId &frame) {
+        const std::array targets{NativeProjectionTarget{&color, acquisition->image}};
+        if (passthrough && host.passthroughScope_ == passthrough->scope && host.scene_ && host.scene_->passthroughGrant &&
+            !host.composition_.session.AllowsPassthrough(passthrough->scope)) {
+            host.RevokePassthrough();
+            host.passthroughState_ = XRCapabilityState::Denied;
+        }
+        if (passthrough && host.HasPassthrough(passthrough->scope)) {
+            const auto receipt =
+                Editor::EditorVulkanXrViewportAccess::TakePremultipliedProjection(host.composition_.viewport, passthrough->publication,
+                                                                                  acquisition->texture);
+            if (receipt)
+                return compositor.EndPassthroughProjection(frame, *plan, targets,
+                                                           {frame, passthrough->scope, passthrough->referenceToWorld});
+        }
+        return compositor.EndProjection(frame, *plan, targets);
     }
 
     /** @copydoc OpenXRPlayHost::FrameState::CompleteMotion */
@@ -445,6 +472,7 @@ namespace Horo::Application::Internal {
         eventsPending_ = false;
         events_.reset();
         render_.reset();
+        passthroughScope_.reset();
         return Result<void>::Success();
     }
 
