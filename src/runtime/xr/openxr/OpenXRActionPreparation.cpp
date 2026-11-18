@@ -110,7 +110,9 @@ namespace Horo::XR::OpenXRInternal {
         };
         Result<void> prepared = Result<void>::Success();
         try {
-            prepared = tracking_.ValidatePosePaths(request, maximumActions);
+            const auto haptics = ValidateHapticPaths(request, maximumActions);
+            prepared = haptics.HasError() ? Result<void>::Failure(haptics.ErrorValue())
+                                          : tracking_.ValidatePosePaths(request, maximumActions - haptics.Value());
             if (prepared.HasValue()) {
                 tracking_.request = request.tracking;
                 prepared = dispatch_.Resolve(request, native_.instance);

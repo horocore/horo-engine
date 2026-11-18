@@ -177,4 +177,115 @@ namespace {
         REQUIRE(fixture.script.liveActions == 0);
         REQUIRE(fixture.script.liveSets == 0);
     }
+
+    constexpr NativeHapticActionPath LeftVibration{{1},
+                                                   {1},
+                                                   XRTrackedDeviceRole::LeftController,
+                                                   "/user/hand/left/output/haptic",
+                                                   "Vibration"};
+    constexpr NativeHapticVibration Pulse{0.5F, Duration::FromNanoseconds(40'000'000)};
+
+    TEST_CASE("OpenXR submits a bounded baseline pulse through the exact bound controller action", "[xr][openxr][haptics]") {
+        ActionFixture fixture;
+        const std::array catalog{LeftVibration};
+        REQUIRE(fixture.Create(catalog).HasValue());
+        auto &native = fixture.script.haptic;
+        CHECK(fixture.script.liveActions == 2);
+        CHECK(fixture.script.attaches == 1);
+        CHECK(native.hand == fixture.script.Find("/user/hand/left"));
+        CHECK(native.source == fixture.script.Find("/user/hand/left/output/haptic"));
+        CHECK(native.suggestedProfile == fixture.script.Find("/interaction_profiles/khr/simple_controller"));
+        fixture.script.currentProfiles[0] = native.suggestedProfile;
+        native.boundCount = 1;
+        const auto session = fixture.session.Request().candidate;
+        REQUIRE(fixture.owner.ApplyHaptic(session, LeftVibration.role, Pulse).HasValue());
+        CHECK(native.applies == 1);
+        CHECK(native.vibration.duration == Pulse.duration.ToNanoseconds());
+        CHECK(native.vibration.amplitude == Pulse.amplitude);
+        CHECK(native.vibration.frequency == XR_FREQUENCY_UNSPECIFIED);
+
+        // Cancellation targets the original native action even after the profile is removed.
+        fixture.script.currentProfiles[0] = XR_NULL_PATH;
+        REQUIRE(fixture.owner.StopHaptic(session, LeftVibration.role).HasValue());
+        REQUIRE(fixture.owner.StopHaptic(session, LeftVibration.role).HasValue());
+        CHECK(native.stops == 1);
+        REQUIRE(fixture.owner.Close().HasValue());
+        CHECK(fixture.script.liveActions == 0);
+        CHECK(fixture.script.liveSets == 0);
+    }
+
+    TEST_CASE("OpenXR refuses malformed stale or unsupported vibration without submitting", "[xr][openxr][haptics]") {
+        ActionFixture fixture;
+        auto &native = fixture.script.haptic;
+        const auto session = fixture.session.Request().candidate;
+        auto route = LeftVibration;
+        SECTION("malformed native output route") {
+            route.path = "/user/hand/right/output/haptic";
+            CHECK(fixture.Create(std::span{&route, 1}).HasError());
+            CHECK(fixture.script.liveActions == 0);
+            CHECK(fixture.script.attaches == 0);
+        }
+        SECTION("missing optional dispatch changes neither action sets nor baseline installation") {
+            fixture.session.script.absent = "xrStopHapticFeedback";
+            CHECK(fixture.Create(std::span{&route, 1}).HasError());
+            CHECK(fixture.script.liveActions == 0);
+            REQUIRE(fixture.Create().HasValue());
+            const auto unsupported = fixture.owner.ApplyHaptic(session, route.role, Pulse);
+            REQUIRE(unsupported.HasError());
+            CHECK(unsupported.ErrorValue().code.Value() == XRErrors::OperationUnsupported.code.Value());
+        }
+        SECTION("a valid catalog rejects foreign sessions profiles sources and amplitudes") {
+            REQUIRE(fixture.Create(std::span{&route, 1}).HasValue());
+            const auto expected = [&](const auto &result, const auto &error) {
+                REQUIRE(result.HasError());
+                CHECK(result.ErrorValue().code.Value() == error.code.Value());
+            };
+            auto stale = session;
+            ++stale.slot.generation;
+            expected(fixture.owner.ApplyHaptic(stale, route.role, Pulse), XRErrors::IdentityStale);
+            expected(fixture.owner.ApplyHaptic(session, route.role, {std::numeric_limits<float>::quiet_NaN(), Pulse.duration}),
+                     XRErrors::OperationInvalid);
+            expected(fixture.owner.ApplyHaptic(session, route.role, {1.0F, Duration{}}), XRErrors::OperationInvalid);
+            fixture.script.currentProfiles[0] = fixture.script.Find("/interaction_profiles/oculus/touch_controller");
+            expected(fixture.owner.ApplyHaptic(session, route.role, Pulse), XRErrors::OperationUnsupported);
+            fixture.script.currentProfiles[0] = native.suggestedProfile;
+            expected(fixture.owner.ApplyHaptic(session, route.role, Pulse), XRErrors::OperationUnsupported);
+            native.boundCount = 2;
+            native.boundResult = XR_ERROR_SIZE_INSUFFICIENT;
+            expected(fixture.owner.ApplyHaptic(session, route.role, Pulse), XRErrors::CapacityExceeded);
+        }
+        CHECK(native.applies == 0);
+        REQUIRE(fixture.owner.Close().HasValue());
+    }
+
+    TEST_CASE("OpenXR distinguishes focus refusal and retires a submitted output before native action destruction",
+              "[xr][openxr][haptics]") {
+        ActionFixture fixture;
+        const std::array catalog{LeftVibration};
+        REQUIRE(fixture.Create(catalog).HasValue());
+        auto &native = fixture.script.haptic;
+        fixture.script.currentProfiles[0] = native.suggestedProfile;
+        native.boundCount = 1;
+        const auto session = fixture.session.Request().candidate;
+        native.applyResult = XR_SESSION_NOT_FOCUSED;
+        CHECK(fixture.owner.ApplyHaptic(session, LeftVibration.role, Pulse).HasError());
+        REQUIRE(fixture.owner.StopHaptic(session, LeftVibration.role).HasValue());
+        CHECK(native.stops == 0);
+        native.applyResult = XR_SUCCESS;
+        REQUIRE(fixture.owner.ApplyHaptic(session, LeftVibration.role, Pulse).HasValue());
+        native.stopResult = XR_SESSION_NOT_FOCUSED;
+        CHECK(fixture.owner.StopHaptic(session, LeftVibration.role).HasError());
+        CHECK(native.stops == 1);
+        native.stopResult = XR_ERROR_RUNTIME_FAILURE;
+        CHECK(fixture.owner.Close().HasError());
+        CHECK(native.stops == 2);
+        CHECK(fixture.script.liveActions == 2);
+        CHECK(fixture.owner.ApplyHaptic(session, LeftVibration.role, Pulse).HasError());
+        native.stopResult = XR_SUCCESS;
+        REQUIRE(fixture.owner.Close().HasValue());
+        CHECK(native.stops == 3);
+        CHECK(fixture.script.liveActions == 0);
+        const auto &calls = fixture.session.script.calls;
+        CHECK(std::ranges::find(calls, "stop-vibration") < std::ranges::find(calls, "destroy-action"));
+    }
 }  // namespace

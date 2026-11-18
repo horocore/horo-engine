@@ -2543,6 +2543,7 @@ if(HORO_BUILD_XR_OPENXR)
         runtime/xr/openxr/OpenXRActionBindings.cpp
         runtime/xr/openxr/OpenXRActionSampling.cpp
         runtime/xr/openxr/OpenXRActionPreparation.cpp
+        runtime/xr/openxr/OpenXRHaptics.cpp
         runtime/xr/openxr/OpenXRTrackingActions.cpp
         runtime/xr/openxr/OpenXRTrackingSpaces.cpp
         runtime/xr/openxr/OpenXRPoseSampling.cpp

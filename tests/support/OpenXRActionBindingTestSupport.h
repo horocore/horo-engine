@@ -38,6 +38,20 @@ namespace Horo::Tests::OpenXRAction {
             bool closeRejected{};
         } sample;
 
+        struct HapticState final {
+            XrAction action{XR_NULL_HANDLE};
+            XrPath hand{XR_NULL_PATH};
+            XrPath source{XR_NULL_PATH};
+            XrPath suggestedProfile{XR_NULL_PATH};
+            XrHapticVibration vibration{};
+            XrResult applyResult{XR_SUCCESS};
+            XrResult stopResult{XR_SUCCESS};
+            XrResult boundResult{XR_SUCCESS};
+            std::uint32_t boundCount{};
+            unsigned applies{};
+            unsigned stops{};
+        } haptic;
+
         struct TrackingState final {
             unsigned spaces{};
             std::vector<XrReferenceSpaceCreateInfo> references;
@@ -106,14 +120,20 @@ namespace Horo::Tests::OpenXRAction {
                 REQUIRE(active->tracking.enabled);
                 const std::string_view label{info->localizedActionName};
                 REQUIRE((label == "Grip" || label == "Aim"));
+            } else if (info->actionType == XR_ACTION_TYPE_VIBRATION_OUTPUT) {
+                REQUIRE(std::string_view{info->localizedActionName} == "Vibration");
+                active->haptic.hand = info->subactionPaths[0];
             } else {
                 REQUIRE(info->actionType == active->sample.expectedType);
                 REQUIRE(std::string_view{info->localizedActionName} == "Select");
             }
             active->actionNames.emplace_back(info->actionName);
             const auto result = Script::Record("create-action");
-            if (XR_SUCCEEDED(result))
+            if (XR_SUCCEEDED(result)) {
                 *action = NativeHandle<XrAction>(200 + ++active->liveActions);
+                if (info->actionType == XR_ACTION_TYPE_VIBRATION_OUTPUT)
+                    active->haptic.action = *action;
+            }
             if (active->throwFormat)
                 throw std::format_error("scripted action formatting exception");
             if (active->throwRuntime)
@@ -138,7 +158,13 @@ namespace Horo::Tests::OpenXRAction {
         static XRAPI_ATTR XrResult XRAPI_CALL Suggest(XrInstance, const XrInteractionProfileSuggestedBinding *info) {
             REQUIRE(info->type == XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING);
             REQUIRE(info->interactionProfile != XR_NULL_PATH);
-            REQUIRE(info->countSuggestedBindings == (active->tracking.enabled ? 2 : 1));
+            const auto suggestions = std::span{info->suggestedBindings, info->countSuggestedBindings};
+            const auto vibration = std::ranges::find(suggestions, active->haptic.action, &XrActionSuggestedBinding::action);
+            if (vibration != suggestions.end()) {
+                active->haptic.source = vibration->binding;
+                active->haptic.suggestedProfile = info->interactionProfile;
+            }
+            REQUIRE(info->countSuggestedBindings == (active->tracking.enabled ? 2U : 1U) + (vibration != suggestions.end() ? 1U : 0U));
             REQUIRE(info->suggestedBindings[0].action != XR_NULL_HANDLE);
             ++active->suggestions;
             return Script::Record("suggest");
@@ -159,6 +185,37 @@ namespace Horo::Tests::OpenXRAction {
             state->interactionProfile = active->currentProfiles[left->second == hand ? 0 : 1];
             const auto result = Script::Record("profile");
             return XR_FAILED(result) ? result : active->profileResult;
+        }
+
+        static XRAPI_ATTR XrResult XRAPI_CALL BoundHaptics(XrSession, const XrBoundSourcesForActionEnumerateInfo *info, uint32_t capacity,
+                                                           uint32_t *count, XrPath *sources) {
+            REQUIRE(info->type == XR_TYPE_BOUND_SOURCES_FOR_ACTION_ENUMERATE_INFO);
+            REQUIRE(info->action == active->haptic.action);
+            REQUIRE(capacity == 1);
+            *count = active->haptic.boundCount;
+            if (*count == 1)
+                sources[0] = active->haptic.source;
+            return active->haptic.boundResult;
+        }
+
+        static XRAPI_ATTR XrResult XRAPI_CALL ApplyHaptic(XrSession, const XrHapticActionInfo *info, const XrHapticBaseHeader *effect) {
+            REQUIRE(info->type == XR_TYPE_HAPTIC_ACTION_INFO);
+            REQUIRE(info->action == active->haptic.action);
+            REQUIRE(info->subactionPath == active->haptic.hand);
+            REQUIRE(effect->type == XR_TYPE_HAPTIC_VIBRATION);
+            ++active->haptic.applies;
+            active->haptic.vibration = *reinterpret_cast<const XrHapticVibration *>(effect);
+            (void)Script::Record("apply-vibration");
+            return active->haptic.applyResult;
+        }
+
+        static XRAPI_ATTR XrResult XRAPI_CALL StopHaptic(XrSession, const XrHapticActionInfo *info) {
+            REQUIRE(info->type == XR_TYPE_HAPTIC_ACTION_INFO);
+            REQUIRE(info->action == active->haptic.action);
+            REQUIRE(info->subactionPath == active->haptic.hand);
+            ++active->haptic.stops;
+            (void)Script::Record("stop-vibration");
+            return active->haptic.stopResult;
         }
 
         static XRAPI_ATTR XrResult XRAPI_CALL Sync(XrSession, const XrActionsSyncInfo *info) {
@@ -300,7 +357,10 @@ namespace Horo::Tests::OpenXRAction {
                                      Entry{"xrCreateActionSpace", std::bit_cast<PFN_xrVoidFunction>(&ActionSpace)},
                                      Entry{"xrGetReferenceSpaceBoundsRect", std::bit_cast<PFN_xrVoidFunction>(&Bounds)},
                                      Entry{"xrDestroySpace", std::bit_cast<PFN_xrVoidFunction>(&DestroySpace)},
-                                     Entry{"xrLocateSpace", std::bit_cast<PFN_xrVoidFunction>(&LocateSpace)}};
+                                     Entry{"xrLocateSpace", std::bit_cast<PFN_xrVoidFunction>(&LocateSpace)},
+                                     Entry{"xrEnumerateBoundSourcesForAction", std::bit_cast<PFN_xrVoidFunction>(&BoundHaptics)},
+                                     Entry{"xrApplyHapticFeedback", std::bit_cast<PFN_xrVoidFunction>(&ApplyHaptic)},
+                                     Entry{"xrStopHapticFeedback", std::bit_cast<PFN_xrVoidFunction>(&StopHaptic)}};
             const auto found = std::ranges::find(entries, std::string_view{name}, &Entry::name);
             if (found == entries.end())
                 return Script::GetProc(instance, name, function);
@@ -377,7 +437,7 @@ namespace Horo::Tests::OpenXRAction {
             return record;
         }
 
-        Result<void> Create() {
+        Result<void> Create(std::span<const NativeHapticActionPath> haptics = {}) {
             const std::array labels{NativeActionLabel{Input::ActionId{"select"}, "Select"}};
             const std::array setLabels{NativeActionSetLabel{{1}, "Gameplay"}};
             return owner.Create(session.Request().candidate, {&ActionScript::GetProc,
@@ -386,7 +446,10 @@ namespace Horo::Tests::OpenXRAction {
                                                               {},
                                                               profilePaths,
                                                               controlPaths,
-                                                              {labels, setLabels}});
+                                                              {labels, setLabels},
+                                                              {},
+                                                              {},
+                                                              haptics});
         }
 
         Result<void> Prepare(const std::uint32_t maximumActions = 1) {

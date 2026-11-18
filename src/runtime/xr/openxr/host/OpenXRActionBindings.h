@@ -4,6 +4,7 @@
  * @brief Non-installed OpenXR action ownership, suggested paths and active-profile adapter.
  */
 
+#include "Horo/Foundation/Time.h"
 #include "Horo/XR/XRActionBindings.h"
 #include "OpenXRNativeSession.h"
 
@@ -50,6 +51,21 @@ namespace Horo::XR::OpenXRInternal {
         std::string_view label;
     };
 
+    /** @brief Installer-declared baseline controller output, kept outside the scalar Input action schema. */
+    struct NativeHapticActionPath final {
+        XRInteractionProfileId profile;
+        XRActionSetId set;
+        XRTrackedDeviceRole role;
+        std::string_view path;
+        std::string_view label;
+    };
+
+    /** @brief Resolved finite vibration parameters; the application coordinator owns request and device admission. */
+    struct NativeHapticVibration final {
+        float amplitude{}; /**< Finite normalized amplitude in [0,1]. */
+        Duration duration; /**< Positive, bounded by the admitting application policy. */
+    };
+
     /** @brief Exact current origin and observed reference-space choice for private tracking preparation. */
     struct NativeTrackingSpaceRequest final {
         XRWorldOriginRevision origin;
@@ -70,6 +86,7 @@ namespace Horo::XR::OpenXRInternal {
         NativeActionLabels labels;
         std::span<const NativePoseActionPath> posePaths;
         std::optional<NativeTrackingSpaceRequest> tracking;
+        std::span<const NativeHapticActionPath> hapticPaths;
     };
 
     /** @brief Fixed scalar sample packet; the canonical XRRuntime owner supplies revision/time and publishes it atomically. */
@@ -257,6 +274,24 @@ namespace Horo::XR::OpenXRInternal {
          * @return Current copied evidence or original authority failure; no live native objects are exposed.
          */
         [[nodiscard]] Result<XRReferenceSpaceSnapshot> References(const XRSessionId &session) const;
+        /**
+         * @brief Submit one admitted baseline controller vibration to the exact attached native session.
+         * @param session Current lifecycle-issued session.
+         * @param role Controller role of the generation validated by the application coordinator.
+         * @param vibration Finite admitted effect. Runtime-selected frequency is the only baseline mode.
+         * @return Accepted native submission or typed stale, invalid, unavailable or unsupported failure.
+         * @pre Owner lane; application already checked focus, owner scope and exact device generation.
+         * @post Success confirms native submission only. Zero allocations on success.
+         */
+        [[nodiscard]] Result<void> ApplyHaptic(const XRSessionId &session, XRTrackedDeviceRole role, NativeHapticVibration vibration);
+        /**
+         * @brief Stops the retained output for one role, independent of its current profile selection.
+         * @param session Exact session that submitted the output.
+         * @param role Original controller role.
+         * @return Success once inactive or stopped, or original typed failure while retaining native cleanup debt.
+         * @pre Owner lane; the application has already closed affected command admission.
+         */
+        [[nodiscard]] Result<void> StopHaptic(const XRSessionId &session, XRTrackedDeviceRole role);
         /** @brief Quiescent idempotent reverse-order retirement; failed destruction retains exact handles for retry.
          * @return Success or native retirement failure. No further sync/profile query is admitted after Close begins.
          */
@@ -318,6 +353,9 @@ namespace Horo::XR::OpenXRInternal {
             PFN_xrDestroySpace destroySpace{};
             PFN_xrLocateSpace locate{};
             PFN_xrLocateViews locateViews{};
+            PFN_xrEnumerateBoundSourcesForAction boundHaptics{};
+            PFN_xrApplyHapticFeedback applyHaptic{};
+            PFN_xrStopHapticFeedback stopHaptic{};
 
             [[nodiscard]] Result<void> Resolve(const NativeActionBindingRequest &request, XrInstance instance);
             /** @brief Resolves optional complete tracking dispatch before acquiring any tracking child. */
@@ -369,6 +407,14 @@ namespace Horo::XR::OpenXRInternal {
             XrSession native{XR_NULL_HANDLE};
             std::uint64_t incarnation{};
             XRSessionId owner;
+        };
+
+        struct HapticAction final {
+            XrAction native{XR_NULL_HANDLE};
+            XrPath source{XR_NULL_PATH};
+            std::array<XRInteractionProfileId, XRActionBindingLimits::MaximumProfiles> profiles{};
+            std::size_t profileCount{};
+            bool submitted{};
         };
 
         struct PoseAction final {
@@ -493,6 +539,19 @@ namespace Horo::XR::OpenXRInternal {
             std::optional<std::span<const XRTrackedDeviceRecord>> devices) const;
         /** @brief Captures the existing request's borrowed catalogs before native creation and attachment. */
         [[nodiscard]] Result<void> Prepare(const NativeActionBindingRequest &request, std::uint32_t maximumActions);
+        /** @brief Validates the bounded exact per-role output catalog and returns its native action count. */
+        [[nodiscard]] Result<std::uint32_t> ValidateHapticPaths(const NativeActionBindingRequest &request,
+                                                                std::uint32_t maximumActions) const;
+        /** @brief Prepares optional vibration actions while the existing action sets are still unattached. */
+        [[nodiscard]] Result<void> CreateHapticActions(std::span<const NativeHapticActionPath> paths);
+        /** @brief Appends explicitly catalogued outputs to the existing native suggestion call for this profile. */
+        [[nodiscard]] Result<std::uint32_t> SuggestHaptics(const Profile &profile, std::span<XrActionSuggestedBinding> output) const;
+        /** @brief Checks that the current registered profile and actual bound output source match the admitted baseline. */
+        [[nodiscard]] Result<void> ValidateHapticSource(std::size_t hand) const;
+        /** @brief Dispatches stop for one submitted native action. On terminal session loss, Close retires the native parent. */
+        [[nodiscard]] Result<void> StopNativeHaptic(std::size_t hand, bool retiring);
+        /** @brief Stops retained outputs before destroying their native actions. Failed destruction remains retryable. */
+        [[nodiscard]] Result<void> CloseHaptics();
         /** @brief Attaches the validated native sets once, then prepares spaces under the same retained rollback owner.
          * @return Original native attachment, space preparation or owner-currentness failure.
          */
@@ -547,5 +606,6 @@ namespace Horo::XR::OpenXRInternal {
         mutable bool sampling_{};                /**< Prevents reentrant native mutation while action references are borrowed. */
         std::optional<Preparation> preparation_; /**< Attempt-only admission; contains no canonical session or frame authority. */
         Tracking tracking_;
+        std::array<HapticAction, 2> haptics_;
     };
 }  // namespace Horo::XR::OpenXRInternal
