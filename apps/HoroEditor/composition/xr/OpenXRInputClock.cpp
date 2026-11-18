@@ -22,13 +22,6 @@
 
 namespace Horo::Application::Internal {
     namespace {
-#if defined(_WIN32)
-        constexpr const char *ConversionExtension = "XR_KHR_win32_convert_performance_counter_time";
-        constexpr const char *ConversionFunction = "xrConvertWin32PerformanceCounterToTimeKHR";
-#else
-        constexpr const char *ConversionExtension = "XR_KHR_convert_timespec_time";
-        constexpr const char *ConversionFunction = "xrConvertTimespecTimeToTimeKHR";
-#endif
         /** @brief Clears only the synchronous native-call reservation, including exception/reentry failure paths. */
         struct ReadScope final {
             ReadScope(const ReadScope &) = delete;
@@ -103,7 +96,7 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XR::XRErrors::OperationIncompatible));
         ReadScope scope{reading_};
         const auto selected = native_->Session();
-        auto provider = native_->RegisterFeatureProvider(selected, {ConversionExtension, ConversionFunction});
+        auto provider = native_->RegisterFeatureProvider(selected, OpenXRPlatformTimeRoute());
         if (provider.HasError())
             return Result<void>::Failure(provider.ErrorValue());
         if (source_.BindingStatus() != status) {
@@ -149,8 +142,9 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(MakeError(XR::XRErrors::OperationUnavailable));
         if (const auto result = std::bit_cast<NativeCounterConversion>(provider.function)(provider.native.instance, &counter, &sample);
             result != XR_SUCCESS)
-            return Outcome::Failure(MakeError(XR::XRErrors::OperationUnavailable, std::format("{} failed (XrResult {})", ConversionFunction,
-                                                                                              static_cast<std::int32_t>(result))));
+            return Outcome::Failure(MakeError(XR::XRErrors::OperationUnavailable,
+                                              std::format("{} failed (XrResult {})", OpenXRPlatformTimeRoute().extensionSymbol,
+                                                          static_cast<std::int32_t>(result))));
         return XR::XRRuntimeTime::Create(sample);
     }
 

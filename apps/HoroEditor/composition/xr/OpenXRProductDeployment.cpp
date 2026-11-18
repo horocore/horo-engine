@@ -3,10 +3,34 @@
 #include "Horo/XR/XRErrors.h"
 #include "JsonUtils.h"
 
+#include <algorithm>
+#include <array>
 #include <bit>
 
 namespace Horo::Application::Internal {
     namespace {
+        /** @brief Accepts only a finite unique list of signed OS ABI names. */
+        bool ValidOsAbiDependencies(const Foundation::Json &dependencies) {
+            std::array<std::string_view, 32> names{};
+            if (!dependencies.is_array() || dependencies.empty() || dependencies.size() > names.size())
+                return false;
+            std::size_t count = 0;
+            for (const auto &entry : dependencies) {
+                if (!entry.is_string())
+                    return false;
+                const std::string_view name = entry.get_ref<const std::string &>();
+                const auto existing = std::span{names}.first(count);
+                if (name.empty() || name.size() > 128 || std::ranges::find(existing, name) != existing.end() ||
+                    !std::ranges::all_of(name, [](const unsigned char character) {
+                    return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+                           (character >= '0' && character <= '9') || character == '.' || character == '_' || character == '-';
+                }))
+                    return false;
+                names[count++] = name;
+            }
+            return true;
+        }
+
         /** @brief Matches signed deployment facts to the exact component and installer-owned contract. */
         bool Matches(const Foundation::Json &root, const VerifiedOpenXRComponent &component, const OpenXRComponentHostPolicy &policy) {
             const auto &manifest = component.Manifest();
@@ -24,20 +48,7 @@ namespace Horo::Application::Internal {
                 platform.at("sdkAbi") != policy.platform.sdkAbi || !root.at("bundledDependencies").is_array() ||
                 !root.at("bundledDependencies").empty() || !manifest.dependencies.empty())
                 return false;
-            const auto &dependencies = root.at("osAbiDependencies");
-            if (!dependencies.is_array() || dependencies.empty() || dependencies.size() > 32)
-                return false;
-            for (const auto &dependency : dependencies) {
-                if (!dependency.is_string())
-                    return false;
-                const auto &name = dependency.get_ref<const std::string &>();
-                if (name.empty() || name.size() > 128 || !std::ranges::all_of(name, [](const unsigned char character) {
-                    return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
-                           (character >= '0' && character <= '9') || character == '.' || character == '_' || character == '-';
-                }))
-                    return false;
-            }
-            return true;
+            return ValidOsAbiDependencies(root.at("osAbiDependencies"));
         }
     }  // namespace
 
@@ -65,15 +76,17 @@ namespace Horo::Application::Internal {
             const auto root = guard.Parse(text, text + bytes.size());
             if (guard.HasDuplicate() || guard.IsTooDeep() || !Matches(root, component, policy))
                 return Outcome::Failure(MakeError(XR::XRErrors::OperationUnavailable));
+            const auto dependencyCount = static_cast<std::uint8_t>(root.at("osAbiDependencies").size());
+            return Outcome::Success(VerifiedOpenXRDeployment{component.IdentityDigest(), std::move(evidence).Value(), dependencyCount});
         } catch (const Foundation::Json::exception &) {
             return Outcome::Failure(MakeError(XR::XRErrors::OperationUnavailable));
         }
-        return Outcome::Success(VerifiedOpenXRDeployment{component.IdentityDigest(), std::move(evidence).Value()});
     }
 
     /** @copydoc VerifiedOpenXRDeployment::VerifiedOpenXRDeployment */
-    VerifiedOpenXRDeployment::VerifiedOpenXRDeployment(const Sha256Digest &component, Security::VerifiedArtifactEvidence evidence)
-        : component_(component), evidence_(std::move(evidence)) {}
+    VerifiedOpenXRDeployment::VerifiedOpenXRDeployment(const Sha256Digest &component, Security::VerifiedArtifactEvidence evidence,
+                                                       std::uint8_t osAbiDependencies)
+        : component_(component), evidence_(std::move(evidence)), osAbiDependencies_(osAbiDependencies) {}
 
     /** @copydoc VerifiedOpenXRDeployment::ComponentIdentity */
     const Sha256Digest &VerifiedOpenXRDeployment::ComponentIdentity() const noexcept {
@@ -83,5 +96,10 @@ namespace Horo::Application::Internal {
     /** @copydoc VerifiedOpenXRDeployment::Evidence */
     const Security::VerifiedArtifactEvidence &VerifiedOpenXRDeployment::Evidence() const noexcept {
         return evidence_;
+    }
+
+    /** @copydoc VerifiedOpenXRDeployment::OsAbiDependencyCount */
+    std::uint8_t VerifiedOpenXRDeployment::OsAbiDependencyCount() const noexcept {
+        return osAbiDependencies_;
     }
 }  // namespace Horo::Application::Internal

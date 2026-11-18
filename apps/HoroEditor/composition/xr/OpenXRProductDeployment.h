@@ -32,11 +32,15 @@ namespace Horo::Application::Internal {
         [[nodiscard]] const Sha256Digest &ComponentIdentity() const noexcept;
         /** @brief Returns actual trusted signature evidence retained through native retirement. @return Immutable evidence. */
         [[nodiscard]] const Security::VerifiedArtifactEvidence &Evidence() const noexcept;
+        /** @brief Number of externally supplied OS ABI entries in the signed deployment contract. */
+        [[nodiscard]] std::uint8_t OsAbiDependencyCount() const noexcept;
 
     private:
         /** @brief Stores only completely verified exact deployment evidence. */
-        VerifiedOpenXRDeployment(const Sha256Digest &component, Security::VerifiedArtifactEvidence evidence);
+        VerifiedOpenXRDeployment(const Sha256Digest &component, Security::VerifiedArtifactEvidence evidence,
+                                 std::uint8_t osAbiDependencies);
         Sha256Digest component_;
         Security::VerifiedArtifactEvidence evidence_;
+        std::uint8_t osAbiDependencies_;
     };
 }  // namespace Horo::Application::Internal

@@ -168,6 +168,7 @@ namespace Horo::Application::Internal {
             return Request::Failure(MakeError(XR::XRErrors::OperationUnavailable));
         if (lastSetupTest_ == std::numeric_limits<std::uint64_t>::max())
             return Request::Failure(MakeError(XR::XRErrors::CapacityExceeded));
+        setupPreflight_.reset();
         queuedSetupTest_ = {++lastSetupTest_};
         setup_.test = Editor::EditorXrSetupTestState::Queued;
         return Request::Success(queuedSetupTest_);
@@ -200,13 +201,26 @@ namespace Horo::Application::Internal {
             }
             setupCleanupPending_ = false;
         }
-        const auto result = composition_.session.RunSetupSessionTest(*composition_.bindings);
+        auto result = composition_.session.RunPackagedPreflight(*composition_.bindings);
         if (result.HasError()) {
             setup_.issue = SetupIssue(result.ErrorValue());
             setupCleanupPending_ = setup_.issue == Editor::EditorXrSetupIssue::Cleanup;
             return;
         }
+        setupPreflight_.emplace(std::move(result).Value());
         setup_.test = Editor::EditorXrSetupTestState::Passed;
         setup_.issue = Editor::EditorXrSetupIssue::None;
+    }
+
+    /** @copydoc OpenXRPlayHost::ReadDeviceQualificationPreflight */
+    Result<OpenXRPackagedPreflight> OpenXRPlayHost::ReadDeviceQualificationPreflight() const {
+        using Outcome = Result<OpenXRPackagedPreflight>;
+        if (std::this_thread::get_id() != lane_ || closing_ || busy_)
+            return Outcome::Failure(MakeError(XR::XRErrors::OperationIncompatible));
+        if (!setupPreflight_)
+            return Outcome::Failure(MakeError(XR::XRErrors::OperationUnavailable));
+        if (const auto allowed = composition_.session.ValidateDeviceQualification(*setupPreflight_); allowed.HasError())
+            return Outcome::Failure(allowed.ErrorValue());
+        return Outcome::Success(*setupPreflight_);
     }
 }  // namespace Horo::Application::Internal

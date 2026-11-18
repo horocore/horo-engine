@@ -189,7 +189,10 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRPlayHost::ApplyEventObservation */
     bool OpenXRPlayHost::ApplyEventObservation(const NativeSessionEventObservation &observed) noexcept {
         eventsPending_ = observed.morePending;
-        instanceLost_ |= observed.loss == NativeSessionEventLoss::Instance;
+        if (observed.loss == NativeSessionEventLoss::Instance) {
+            instanceLost_ = true;
+            composition_.session.RevokePackagedPreflight();
+        }
         if (observed.loss != NativeSessionEventLoss::None || observed.exitRequested) {
             if (scene_)
                 scene_->Retire(*this);

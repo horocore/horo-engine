@@ -124,6 +124,11 @@ namespace Horo::Application::Internal {
         }
     }  // namespace
 
+    /** @copydoc OpenXRApplicationSession::ValidateProjectionDispatch */
+    Result<void> OpenXRApplicationSession::ValidateProjectionDispatch(XrInstance instance) const {
+        return ValidateProjectionProtocol(getProc_, instance);
+    }
+
     /** @copydoc OpenXRApplicationSession::ValidateProjectionPolicy */
     Result<void> OpenXRApplicationSession::ValidateProjectionPolicy(const OpenXRApplicationBindings &bindings) const {
         if (settings_.Profile() != XRFeatureProfile::Projection1_0)
@@ -156,7 +161,7 @@ namespace Horo::Application::Internal {
         const auto nativeSession = native_->BorrowPreparedSession({*preflight_, selection_.attempt});
         if (nativeSession.HasError())
             return Outcome::Failure(nativeSession.ErrorValue());
-        if (auto protocol = ValidateProjectionProtocol(getProc_, nativeSession.Value().instance); protocol.HasError())
+        if (auto protocol = ValidateProjectionDispatch(nativeSession.Value().instance); protocol.HasError())
             return Outcome::Failure(protocol.ErrorValue());
         const auto stillPrepared = native_->BorrowPreparedSession({*preflight_, selection_.attempt});
         if (stillPrepared.HasError())

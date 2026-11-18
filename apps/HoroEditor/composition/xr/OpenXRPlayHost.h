@@ -94,6 +94,8 @@ namespace Horo::Application::Internal {
         void CancelSetupTest(Editor::EditorXrSetupTestId request) noexcept override;
         /** @brief Performs one queued cold setup test outside RuntimeHost frames. */
         void PumpSetupTest();
+        /** @brief Supplies bounded, current runtime prerequisites to the separate device qualification runner. */
+        [[nodiscard]] Result<OpenXRPackagedPreflight> ReadDeviceQualificationPreflight() const;
         [[nodiscard]] Result<void> AttachInput(const Input::InputActionCollection &input,
                                                const Editor::EditorXrSceneSourcePort &geometry) override;
         [[nodiscard]] Result<void> UpdateScene(const Runtime::RuntimeSceneView &scene) override;
@@ -292,6 +294,7 @@ namespace Horo::Application::Internal {
         InputState input_;
         std::shared_ptr<SceneState> scene_;
         Editor::EditorXrSetupReport setup_;
+        std::optional<OpenXRPackagedPreflight> setupPreflight_;
         Editor::EditorXrSetupTestId queuedSetupTest_;
         std::uint64_t lastSetupTest_{};
         const std::thread::id lane_{std::this_thread::get_id()};

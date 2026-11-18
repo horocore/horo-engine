@@ -15,13 +15,14 @@ namespace Horo::Tests::OpenXRApplication {
         std::array<std::string, 1> instanceExtensions{"VK_KHR_get_physical_device_properties2"};
         std::array<std::string, 1> deviceExtensions{"VK_KHR_external_memory"};
         bool available{true};
+        std::uintptr_t deviceIdentity{3};
 
         Result<RenderNative::VulkanEditorDevice> QueryDevice() const override {
             if (!available)
                 return Result<RenderNative::VulkanEditorDevice>::Failure(MakeError(XR::XRErrors::OperationUnavailable));
             return Result<RenderNative::VulkanEditorDevice>::Success({.instance = OpenXR::NativeHandle<VkInstance>(2),
                                                                       .physical = OpenXR::NativeHandle<VkPhysicalDevice>(7),
-                                                                      .device = OpenXR::NativeHandle<VkDevice>(3),
+                                                                      .device = OpenXR::NativeHandle<VkDevice>(deviceIdentity),
                                                                       .graphicsQueue = OpenXR::NativeHandle<VkQueue>(4),
                                                                       .graphicsFamily = 0,
                                                                       .frames = 2,

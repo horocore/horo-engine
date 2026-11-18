@@ -389,6 +389,97 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(fixture.play->RequestSetupTest().HasError());
     }
 
+    TEST_CASE("XR setup hands sealed packaged compatibility to the current device qualification", "[xr][application][setup]") {
+        using enum Editor::EditorXrSetupTestState;
+        ApplicationFixture fixture;
+        fixture.script.census.implementationVersion = XR_MAKE_VERSION(9, 8, 70'000);
+        fixture.CreatePlay();
+        REQUIRE(fixture.play->ReadDeviceQualificationPreflight().HasError());
+        RequireValue(fixture.play->RequestSetupTest());
+        fixture.play->PumpSetupTest();
+        REQUIRE(fixture.play->ReadSetup().test == Passed);
+        const auto admitted = RequireValue(fixture.play->ReadDeviceQualificationPreflight());
+        const auto &row = admitted.Compatibility();
+        CHECK(row.loader.LoaderSource() == XR::XRLoaderSourcePolicy::BundledVerified);
+        CHECK(row.loader.RuntimeSelection() == XR::XRRuntimeSelectionPolicy::SystemDefault);
+        const Host::OpenXRRuntimeVersion implementation{9, 8, 70'000};
+        CHECK(row.runtimeVersion == implementation);
+        CHECK(row.loader.LoaderApiVersion() >= row.admittedLoaderApis.minimum);
+        CHECK(row.loader.LoaderApiVersion() <= row.admittedLoaderApis.maximum);
+        CHECK(row.system.IsValid());
+        CHECK(row.system.runtime == row.loader.RuntimeGeneration());
+        CHECK(row.platform == fixture.product.platform);
+        CHECK(row.component.rendererBridge == fixture.product.policy->component.rendererBridge);
+        CHECK(row.profile == XR::XRFeatureProfile::Projection1_0);
+        CHECK(row.loaderDigest == fixture.product.loaderSignature.artifactDigest);
+        CHECK(row.signedDeploymentDigest == fixture.product.policy->deploymentSignature.artifactDigest);
+        const Render::VulkanApiVersion renderer{1, 3, 0};
+        CHECK(row.graphicsApi == renderer);
+        CHECK(row.externallySuppliedOsAbiCount > 0);
+        CHECK(row.referenceSpaceCount == fixture.script.census.spaces);
+        CHECK(row.colorFormatCount == fixture.script.census.formats);
+        const auto graphics = static_cast<std::size_t>(Host::OpenXRPackagedRoute::Graphics);
+        const auto time = static_cast<std::size_t>(Host::OpenXRPackagedRoute::PlatformTime);
+        const auto hands = static_cast<std::size_t>(Host::OpenXRPackagedRoute::HandTracking);
+        CHECK(row.extensionRoutes[graphics].state == Native::NativeExtensionState::Enabled);
+        CHECK(row.extensionRoutes[time].state == Native::NativeExtensionState::Enabled);
+        CHECK(row.extensionRoutes[hands].state == Native::NativeExtensionState::Absent);
+        CHECK(row.extensionRoutes[time].discoveredVersion > 0);
+        CHECK(fixture.script.native.liveSessions == 0);
+        REQUIRE(fixture.session->ValidateDeviceQualification(admitted).HasValue());
+
+        SECTION("a changed native device invalidates the retained report") {
+            fixture.graphics.deviceIdentity = 9;
+            const auto stale = fixture.play->ReadDeviceQualificationPreflight();
+            REQUIRE(stale.HasError());
+            CHECK(stale.ErrorValue().code.Value() == XR::XRErrors::CapabilityStale.code.Value());
+        }
+        SECTION("a failed replacement probe revokes the old result and retires the test session") {
+            fixture.script.native.instanceDispatchAbsent = "xrWaitFrame";
+            RequireValue(fixture.play->RequestSetupTest());
+            fixture.play->PumpSetupTest();
+            CHECK(fixture.play->ReadSetup().test == Failed);
+            CHECK(fixture.play->ReadDeviceQualificationPreflight().HasError());
+            CHECK(fixture.session->ValidateDeviceQualification(admitted).HasError());
+            CHECK(fixture.script.native.liveSessions == 0);
+            CHECK(fixture.script.native.liveInstances == 1);
+            fixture.script.native.instanceDispatchAbsent = {};
+            RequireValue(fixture.play->RequestSetupTest());
+            fixture.play->PumpSetupTest();
+            const auto replacement = RequireValue(fixture.play->ReadDeviceQualificationPreflight());
+            CHECK(fixture.session->ValidateDeviceQualification(replacement).HasValue());
+            CHECK(fixture.session->ValidateDeviceQualification(admitted).HasError());
+        }
+        SECTION("changing installed-host admission invalidates the prerequisite") {
+            fixture.admission = false;
+            CHECK(fixture.play->ReadDeviceQualificationPreflight().HasError());
+        }
+
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+        fixture.play.reset();
+        RequireValue(fixture.session->Close());
+        CHECK(fixture.session->ValidateDeviceQualification(admitted).HasError());
+    }
+
+    TEST_CASE("XR setup rejects an ambiguous signed external dependency inventory before opening the native loader",
+              "[xr][application][setup]") {
+        OpenXRProduct::Json dependencies = {"libc.so.6", "libc.so.6"};
+        SECTION("over capacity") {
+            dependencies = OpenXRProduct::Json::array();
+            for (std::size_t index = 0; index < 33; ++index)
+                dependencies.push_back("lib" + std::to_string(index) + ".so");
+        }
+        SECTION("path rather than ABI name") {
+            dependencies = {"vendor/libopenxr_runtime.so"};
+        }
+        SECTION("duplicate ABI names") {}
+        OpenXRProduct::InstalledProductFixture fixture{HORO_TEST_OPENXR_LOADER, std::nullopt, std::move(dependencies)};
+        const auto rejected =
+            Host::SelectInstalledOpenXRProduct(*fixture.host, fixture.Root(), fixture.host->Generation(), &*fixture.policy, {});
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == XR::XRErrors::OperationUnavailable.code.Value());
+    }
+
     TEST_CASE("XR setup distinguishes busy Play, permission denial, and retained cleanup", "[xr][application][setup]") {
         ApplicationFixture fixture;
         fixture.CreatePlay();

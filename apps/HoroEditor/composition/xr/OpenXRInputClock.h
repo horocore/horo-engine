@@ -7,6 +7,15 @@
 #include "OpenXRNativeSession.h"
 
 namespace Horo::Application::Internal {
+    /** @brief Returns the single platform time route shared by cold discovery, preflight and actual runtime sampling. */
+    [[nodiscard]] constexpr XR::OpenXRInternal::NativeFeatureProviderRoute OpenXRPlatformTimeRoute() noexcept {
+#if defined(_WIN32)
+        return {"XR_KHR_win32_convert_performance_counter_time", "xrConvertWin32PerformanceCounterToTimeKHR"};
+#else
+        return {"XR_KHR_convert_timespec_time", "xrConvertTimespecTimeToTimeKHR"};
+#endif
+    }
+
     /** @brief One same-owner native conversion bound to the existing scheduler, never a clock or tick issuer.
      * @details Bind is cold composition. Read accepts only the SAME scheduler's active BuildInputSnapshot dispatch,
      * uses its committed tick and immutable fixed step, samples the actual platform native counter and invokes

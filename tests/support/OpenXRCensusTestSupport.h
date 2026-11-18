@@ -7,6 +7,7 @@
 namespace Horo::Tests::OpenXR {
     struct CensusScript {
         static inline CensusScript *active{};
+        XrVersion implementationVersion{XR_MAKE_VERSION(9, 8, 7)};
         std::uint32_t views{2};
         std::uint32_t spaces{2};
         std::uint32_t formats{2};
@@ -32,7 +33,7 @@ namespace Horo::Tests::OpenXR {
 
         static XRAPI_ATTR XrResult XRAPI_CALL Instance(XrInstance, XrInstanceProperties *value) {
             CopyNativeLiteral(value->runtimeName, "Actual scripted runtime");
-            value->runtimeVersion = XR_MAKE_VERSION(9, 8, 7);
+            value->runtimeVersion = active->implementationVersion;
             return Record("instance-properties");
         }
 

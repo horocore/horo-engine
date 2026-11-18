@@ -66,6 +66,65 @@ namespace Horo::Application::Internal {
         std::array<Render::FramebufferExtent, 2> maximum;
     };
 
+    /** @brief Vendor implementation version observed through the official loader. Independently versioned from the wire API. */
+    struct OpenXRRuntimeVersion final {
+        std::uint16_t major{};
+        std::uint16_t minor{};
+        std::uint32_t patch{};
+        constexpr auto operator<=>(const OpenXRRuntimeVersion &) const noexcept = default;
+    };
+
+    /** @brief Finite installed application runtime requirements; no vendor names, native paths or handles. */
+    enum class OpenXRPackagedRoute : std::uint8_t {
+        Graphics,
+        PlatformTime,
+        HandTracking,
+        Count
+    };
+
+    /** @brief Owns one bounded row of runtime compatibility evidence from the real reversible session probe. */
+    struct OpenXRPackagedCompatibility final {
+        XR::XRLoaderPreflightSnapshot loader;
+        XR::XRLoaderApiVersionRange admittedLoaderApis;
+        OpenXRRuntimeVersion runtimeVersion;
+        XR::XRSystemId system;
+        Packages::PackagePlatform platform;
+        OpenXRComponentIdentity component;
+        XR::XRFeatureProfile profile;
+        Sha256Digest installDigest;
+        Sha256Digest loaderDigest;
+        Sha256Digest signedDeploymentDigest;
+        Sha256Digest declaredLicensesDigest;
+        Render::VulkanApiVersion graphicsApi;
+        XR::XRCapabilityState handTracking;
+        std::array<XR::OpenXRInternal::NativeExtensionAdmission, static_cast<std::size_t>(OpenXRPackagedRoute::Count)> extensionRoutes;
+        std::uint32_t referenceSpaceCount{};
+        std::uint32_t colorFormatCount{};
+        std::uint8_t externallySuppliedOsAbiCount{}; /**< Signed OS dependencies, never bundled vendor runtime paths. */
+    };
+
+    /** @brief Sealed runtime preflight offered as input to device qualification.
+     * @details Holds no native handles or owning loader references. Results say nothing about physical-device test success.
+     */
+    class OpenXRPackagedPreflight final {
+    public:
+        /** @brief Returns immutable owned normalized compatibility facts. */
+        [[nodiscard]] const OpenXRPackagedCompatibility &Compatibility() const noexcept {
+            return compatibility_;
+        }
+
+    private:
+        friend class OpenXRApplicationSession;
+
+        OpenXRPackagedPreflight(OpenXRPackagedCompatibility compatibility, std::weak_ptr<const OpenXRLoaderLease> lease,
+                                std::uint64_t revision)
+            : compatibility_(std::move(compatibility)), lease_(std::move(lease)), revision_(revision) {}
+
+        OpenXRPackagedCompatibility compatibility_;
+        std::weak_ptr<const OpenXRLoaderLease> lease_;
+        std::uint64_t revision_;
+    };
+
     /** @brief Application-owned native preparation, retained beside its selected renderer through explicit retirement.
      * @details This is the actual composition fence, not a second session/frame authority. Native discovery observes facts;
      * canonical XRSessionLifecycle alone issues a Horo session candidate after complete feature negotiation.
@@ -109,7 +168,14 @@ namespace Horo::Application::Internal {
          * @post No native session is retained after success. Failure retains cleanup with this owner for an explicit
          * retry. Discovery and the selected device remain usable for subsequent Play preparation.
          */
-        [[nodiscard]] Result<void> RunSetupSessionTest(const OpenXRApplicationBindings &bindings);
+        [[nodiscard]] Result<OpenXRPackagedPreflight> RunPackagedPreflight(const OpenXRApplicationBindings &bindings);
+        /** @brief Rechecks a sealed preflight against the current release installation, runtime and graphics device.
+         * @param evidence Previously collected row; safe to retain after shutdown but unavailable for qualification.
+         * @return Exact admission or typed stale/trust/device failure. Performs no native OpenXR operation.
+         */
+        [[nodiscard]] Result<void> ValidateDeviceQualification(const OpenXRPackagedPreflight &evidence) const;
+        /** @brief Revokes retained compatibility after the selected native instance becomes unusable. */
+        void RevokePackagedPreflight() noexcept;
         /** @brief Borrows actual complete native census and immutable policy from the SAME retained preparation.
          * @return Synchronous owner/attempt-fenced facts or original typed failure; no IDs, limits or flags are synthesized.
          * @pre PrepareSession succeeded; no borrow survives another owner operation.
@@ -238,6 +304,11 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> Current() const;
         [[nodiscard]] Result<void> DiscoverRuntime();
         [[nodiscard]] bool WantsHands() const noexcept;
+        /** @brief Collects only bounded normalized facts while the exact private native test session exists. */
+        [[nodiscard]] Result<OpenXRPackagedCompatibility> CollectPackagedCompatibility(
+            const XR::OpenXRInternal::NativeSessionCensus &session);
+        /** @brief Verifies the required projection protocol through the one selected native instance. */
+        [[nodiscard]] Result<void> ValidateProjectionDispatch(XrInstance instance) const;
         [[nodiscard]] Result<void> PrepareHands();
         [[nodiscard]] Result<void> RetireHands();
         /** @brief Validates the same selected profile and static capacity required by Play. */
@@ -293,6 +364,8 @@ namespace Horo::Application::Internal {
         XR::XRLoaderPreflightRequest selection_;
         std::uint32_t lastAttempt_{};
         std::uint64_t lastCapabilityRevision_{};
+        std::uint64_t packagedPreflightRevision_{};
+        bool packagedPreflightCurrent_{};
 
         struct InputPreparation final {
             std::unique_ptr<XR::OpenXRInternal::OpenXRActionBindings> native;

@@ -111,4 +111,9 @@ namespace Horo::Application::Internal {
     const VerifiedOpenXRComponent &OpenXRLoaderLease::Component() const noexcept {
         return files_->component;
     }
+
+    /** @copydoc OpenXRLoaderLease::Deployment */
+    const VerifiedOpenXRDeployment &OpenXRLoaderLease::Deployment() const noexcept {
+        return files_->deployment;
+    }
 }  // namespace Horo::Application::Internal

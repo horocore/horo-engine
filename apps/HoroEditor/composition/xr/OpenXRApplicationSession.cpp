@@ -2,6 +2,7 @@
 
 #include "Horo/Foundation/Assertions.h"
 #include "Horo/XR/XRSessionErrors.h"
+#include "OpenXRInputClock.h"
 
 #include <algorithm>
 #include <limits>
@@ -77,13 +78,8 @@ namespace Horo::Application::Internal {
     Result<void> OpenXRApplicationSession::DiscoverRuntime() {
         const XRLoaderApiVersion compiled{XR_VERSION_MAJOR(XR_CURRENT_API_VERSION), XR_VERSION_MINOR(XR_CURRENT_API_VERSION),
                                           XR_VERSION_PATCH(XR_CURRENT_API_VERSION)};
-#if defined(_WIN32)
-        constexpr const char *timeExtension = "XR_KHR_win32_convert_performance_counter_time";
-#else
-        constexpr const char *timeExtension = "XR_KHR_convert_timespec_time";
-#endif
         // The editor composition owns a time provider and color projection; its renderer has no native depth provider.
-        const std::array extensions{NativeExtensionRequest{timeExtension, true},
+        const std::array extensions{NativeExtensionRequest{OpenXRPlatformTimeRoute().extension, true},
                                     NativeExtensionRequest{XR_EXT_HAND_TRACKING_EXTENSION_NAME}};
         const auto requested = std::span{extensions}.first(WantsHands() ? extensions.size() : 1);
         const NativeDiscoveryRequest request{selection_,
@@ -158,22 +154,105 @@ namespace Horo::Application::Internal {
         return observed;
     }
 
-    /** @copydoc OpenXRApplicationSession::RunSetupSessionTest */
-    Result<void> OpenXRApplicationSession::RunSetupSessionTest(const OpenXRApplicationBindings &bindings) {
+    /** @copydoc OpenXRApplicationSession::CollectPackagedCompatibility */
+    Result<OpenXRPackagedCompatibility> OpenXRApplicationSession::CollectPackagedCompatibility(const NativeSessionCensus &session) {
+        using Outcome = Result<OpenXRPackagedCompatibility>;
+        const auto preparedSystem = native_->PreparedSystem({*preflight_, selection_.attempt});
+        if (preparedSystem.HasError())
+            return Outcome::Failure(preparedSystem.ErrorValue());
+        const auto discovery = native_->BorrowDiscovery(selection_.attempt);
+        if (discovery.HasError())
+            return Outcome::Failure(discovery.ErrorValue());
+
+        const auto &observed = *system_;
+        const auto blends = std::span{observed.primaryBlendModes}.first(observed.primaryBlendModeCount);
+        const auto spaces = std::span{session.spaces}.first(session.spaceCount);
+        if (observed.primaryViewCount != 2 || std::ranges::find(blends, XR_ENVIRONMENT_BLEND_MODE_OPAQUE) == blends.end() ||
+            std::ranges::find(spaces, XR_REFERENCE_SPACE_TYPE_VIEW) == spaces.end() ||
+            std::ranges::find(spaces, XR_REFERENCE_SPACE_TYPE_LOCAL) == spaces.end())
+            return Outcome::Failure(
+                MakeError(XRErrors::OperationUnsupported, "The packaged projection profile needs opaque stereo and view/local spaces."));
+        if (const auto dispatch = ValidateProjectionDispatch(discovery.Value().instance); dispatch.HasError())
+            return Outcome::Failure(dispatch.ErrorValue());
+        PFN_xrVoidFunction timeConverter{};
+        if (const auto result = getProc_(discovery.Value().instance, OpenXRPlatformTimeRoute().extensionSymbol.data(), &timeConverter);
+            result != XR_SUCCESS || !timeConverter)
+            return Outcome::Failure(
+                MakeError(XRErrors::LoaderIncompatible, "The selected loader did not expose required time conversion."));
+
+        constexpr auto handRoute = XR_EXT_HAND_TRACKING_EXTENSION_NAME;
+        const std::array names{std::string_view{graphics_.RequiredExtension()}, OpenXRPlatformTimeRoute().extension,
+                               std::string_view{handRoute}};
+        std::array<NativeExtensionAdmission, static_cast<std::size_t>(OpenXRPackagedRoute::Count)> extensions{};
+        static_assert(names.size() == extensions.size());
+        for (std::size_t index = 0; index < names.size(); ++index) {
+            const auto admission = native_->ReadExtensionAdmission(selection_.attempt, names[index]);
+            if (admission.HasError())
+                return Outcome::Failure(admission.ErrorValue());
+            extensions[index] = admission.Value();
+        }
+        const auto device = graphics_.CaptureCompatibilityDevice();
+        if (device.HasError())
+            return Outcome::Failure(device.ErrorValue());
+
+        const auto implementation = observed.runtime.runtimeVersion;
+        const OpenXRRuntimeVersion runtime{XR_VERSION_MAJOR(implementation), XR_VERSION_MINOR(implementation),
+                                           XR_VERSION_PATCH(implementation)};
+        const auto &component = loader_->Component();
+        const auto &manifest = component.Manifest();
+        const auto &deployment = loader_->Deployment();
+        return Outcome::Success({*preflight_, selection_.admittedLoaderVersions, runtime, preparedSystem.Value(), manifest.platform,
+                                 manifest.identity, settings_.Profile(), component.IdentityDigest(), manifest.loader.digest,
+                                 deployment.Evidence().ArtifactDigest(), manifest.licenses, device.Value(), observed.handTracking,
+                                 extensions, session.spaceCount, session.formatCount, deployment.OsAbiDependencyCount()});
+    }
+
+    /** @copydoc OpenXRApplicationSession::RunPackagedPreflight */
+    Result<OpenXRPackagedPreflight> OpenXRApplicationSession::RunPackagedPreflight(const OpenXRApplicationBindings &bindings) {
+        using Outcome = Result<OpenXRPackagedPreflight>;
         if (auto current = Current(); current.HasError())
-            return current;
+            return Outcome::Failure(current.ErrorValue());
         if (!native_ || !preflight_ || !system_ || sessionOwner_ || input_.native)
-            return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
+            return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
+        packagedPreflightCurrent_ = false;
+        if (packagedPreflightRevision_ == std::numeric_limits<std::uint64_t>::max())
+            return Outcome::Failure(MakeError(XRErrors::CapacityExceeded));
+        const auto revision = ++packagedPreflightRevision_;
         if (auto admitted = ValidateProjectionPolicy(bindings); admitted.HasError())
-            return admitted;
+            return Outcome::Failure(admitted.ErrorValue());
         if (auto retired = RetirePreparation(); retired.HasError())
-            return Result<void>::Failure(WrapError(XRSessionErrors::SetupCleanupPending, std::move(retired).ErrorValue()));
+            return Outcome::Failure(WrapError(XRSessionErrors::SetupCleanupPending, std::move(retired).ErrorValue()));
         const auto prepared = PrepareSession(NativeSessionPreparationScope::Session);
+        auto observed = prepared.HasError() ? Result<OpenXRPackagedCompatibility>::Failure(prepared.ErrorValue())
+                                            : CollectPackagedCompatibility(prepared.Value());
         if (auto retired = RetirePreparation(); retired.HasError())
-            return Result<void>::Failure(WrapError(XRSessionErrors::SetupCleanupPending, std::move(retired).ErrorValue()));
-        if (prepared.HasError())
-            return Result<void>::Failure(prepared.ErrorValue());
-        return Current();
+            return Outcome::Failure(WrapError(XRSessionErrors::SetupCleanupPending, std::move(retired).ErrorValue()));
+        if (observed.HasError())
+            return Outcome::Failure(std::move(observed).ErrorValue());
+        if (auto current = Current(); current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        if (auto device = graphics_.ValidateCompatibilityDevice(); device.HasError())
+            return Outcome::Failure(device.ErrorValue());
+        packagedPreflightCurrent_ = true;
+        return Outcome::Success(OpenXRPackagedPreflight{std::move(observed).Value(), loader_, revision});
+    }
+
+    /** @copydoc OpenXRApplicationSession::ValidateDeviceQualification */
+    Result<void> OpenXRApplicationSession::ValidateDeviceQualification(const OpenXRPackagedPreflight &evidence) const {
+        const auto &observed = evidence.Compatibility();
+        if (auto selected = ValidatePreparation(observed.loader, observed.loader.Attempt()); selected.HasError())
+            return selected;
+        if (!packagedPreflightCurrent_ || !loader_ || evidence.revision_ != packagedPreflightRevision_ ||
+            evidence.lease_.owner_before(loader_) || loader_.owner_before(evidence.lease_) ||
+            observed.installDigest != loader_->Component().IdentityDigest())
+            return Result<void>::Failure(MakeError(XRErrors::LoaderPreflightStale));
+        return graphics_.ValidateCompatibilityDevice();
+    }
+
+    /** @copydoc OpenXRApplicationSession::RevokePackagedPreflight */
+    void OpenXRApplicationSession::RevokePackagedPreflight() noexcept {
+        if (std::this_thread::get_id() == lane_)
+            packagedPreflightCurrent_ = false;
     }
 
     /** @copydoc OpenXRApplicationSession::BorrowPreparation */

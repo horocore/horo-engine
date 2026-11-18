@@ -782,6 +782,17 @@ reporting success. Native permission denial is reported separately. Test teardow
 failures keep ownership in the application for a bounded explicit retry, and block
 Play preparation until the owner has retired the abandoned session.
 
+The same packaged preflight produces a sealed runtime compatibility row after
+its private session is retired. The row keeps the signed component, deployment
+and loader digests, the accepted wire API and its declared interval, the vendor
+implementation version, the exact system/renderer facts, and finite graphics,
+time and hand extension evidence. The verified package owns the redistributable
+loader. The official loader selects the external runtime, and signed deployment
+metadata declares unique OS ABI dependency names. The application neither
+packages nor opens a vendor runtime directly. Device qualification consumes this
+row only while the verified installation, runtime attempt and exact graphics
+device remain current. The row contains no physical-device test result.
+
 XR Setup also presents the current session inspector. It joins session/capability
 generation and revision with the latest same-owner Input tracking cutoff. The
 report distinguishes waiting, unfocused, event backlog, current and retired
