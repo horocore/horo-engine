@@ -53,6 +53,8 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @brief Installer-declared baseline controller output, kept outside the scalar Input action schema. */
     struct NativeHapticActionPath final {
+        static constexpr std::size_t MaximumRoutes = XRActionBindingLimits::MaximumProfiles * 2;
+
         XRInteractionProfileId profile;
         XRActionSetId set;
         XRTrackedDeviceRole role;

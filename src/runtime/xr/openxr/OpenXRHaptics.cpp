@@ -35,7 +35,7 @@ namespace Horo::XR::OpenXRInternal {
     Result<std::uint32_t> OpenXRActionBindings::ValidateHapticPaths(const NativeActionBindingRequest &request,
                                                                     const std::uint32_t maximumActions) const {
         using Count = Result<std::uint32_t>;
-        if (request.hapticPaths.size() > XRActionBindingLimits::MaximumProfiles * HapticPaths.size())
+        if (request.hapticPaths.size() > NativeHapticActionPath::MaximumRoutes)
             return Count::Failure(MakeError(XRErrors::CapacityExceeded));
         std::array<const NativeHapticActionPath *, HapticPaths.size()> routes{};
         std::uint32_t count{};

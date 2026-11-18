@@ -49,6 +49,15 @@ namespace Horo::Application::Internal {
         std::string label;
     };
 
+    /** @brief Installer-owned profile-specific baseline vibration output; grants no Input, device or player authority. */
+    struct OpenXRApplicationHaptic final {
+        XR::XRInteractionProfileId profile;
+        XR::XRActionSetId set;
+        XR::XRTrackedDeviceRole role;
+        std::string path;
+        std::string label;
+    };
+
     /** @brief Official native dispatch borrowed from the same admitted instance; no callable allocation or ABI conversion. */
     struct OpenXRApplicationActionDispatch final {
         PFN_xrGetInstanceProcAddr getProc{};
@@ -66,6 +75,10 @@ namespace Horo::Application::Internal {
         std::vector<OpenXRApplicationActionLabel> actionLabels;
         std::vector<OpenXRApplicationSetLabel> setLabels;
         std::vector<OpenXRApplicationPose> poses;
+        std::vector<OpenXRApplicationHaptic> haptics;
+
+        /** @brief Counts reserved scalar, pose and unique baseline vibration actions. @return Cold native preparation budget. */
+        [[nodiscard]] std::size_t PreparedActionCount() const noexcept;
 
         /** @brief Prepares real native actions on the exact unpublished session then resolves actual profile evidence.
          * @param native Same native action owner retained by the application across failure and cleanup debt.

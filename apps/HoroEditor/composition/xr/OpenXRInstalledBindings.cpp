@@ -31,8 +31,10 @@ namespace Horo::Application::Internal {
 
         /** @brief Fixed schema-one collection bounds, validated before allocating any entry. */
         bool Shape(const Json &root) {
-            if (!Foundation::HasAllowedFields(root, {"schemaVersion", "genericFallback", "profiles", "sets", "actions", "controls",
-                                                     "suggestions", "poses"}) ||
+            if (!Foundation::HasAllowedFields(root,
+                                              {"schemaVersion", "genericFallback", "profiles", "sets", "actions", "controls", "suggestions",
+                                               "poses"},
+                                              {"haptics"}) ||
                 !root.at("schemaVersion").is_number_unsigned() || root.at("schemaVersion") != 1 ||
                 !Number(root.at("genericFallback"), std::numeric_limits<std::uint32_t>::max(), true))
                 return false;
@@ -42,6 +44,10 @@ namespace Horo::Application::Internal {
                                     std::pair{"controls", XR::XRActionBindingLimits::MaximumBindings},
                                     std::pair{"suggestions", XR::XRActionBindingLimits::MaximumBindings},
                                     std::pair{"poses", std::size_t{4}}};
+            const auto haptics = root.find("haptics");
+            if (haptics != root.end() &&
+                (!haptics->is_array() || haptics->size() > XR::OpenXRInternal::NativeHapticActionPath::MaximumRoutes))
+                return false;
             return std::ranges::all_of(counts, [&root](const auto &count) {
                 const auto &[name, maximum] = count;
                 return root.at(name).is_array() && root.at(name).size() <= maximum;
@@ -140,6 +146,25 @@ namespace Horo::Application::Internal {
             }
             return Result<void>::Success();
         }
+
+        /** @brief Retains only bounded physical output declarations from the already verified installer package. */
+        Result<void> Haptics(const Json &root, OpenXRApplicationBindings &output) {
+            const auto routes = root.find("haptics");
+            if (routes == root.end())
+                return Result<void>::Success();
+            for (const auto &entry : *routes) {
+                if (!Foundation::HasAllowedFields(entry, {"profile", "set", "role", "path", "label"}) || !Identity(entry.at("profile")) ||
+                    !Identity(entry.at("set")) || !Role(entry.at("role")) || !Text(entry.at("path"), XR_MAX_PATH_LENGTH - 1) ||
+                    !Text(entry.at("label"), XR_MAX_LOCALIZED_ACTION_NAME_SIZE - 1))
+                    return Result<void>::Failure(InvalidBindings());
+                output.haptics.push_back({{entry.at("profile").get<std::uint32_t>()},
+                                          {entry.at("set").get<std::uint32_t>()},
+                                          static_cast<XR::XRTrackedDeviceRole>(entry.at("role").get<std::uint64_t>()),
+                                          entry.at("path").get<std::string>(),
+                                          entry.at("label").get<std::string>()});
+            }
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc ReadInstalledOpenXRBindings */
@@ -169,6 +194,8 @@ namespace Horo::Application::Internal {
                 return Outcome::Failure(controls.ErrorValue());
             if (auto poses = Poses(root, *output); poses.HasError())
                 return Outcome::Failure(poses.ErrorValue());
+            if (auto haptics = Haptics(root, *output); haptics.HasError())
+                return Outcome::Failure(haptics.ErrorValue());
             return Outcome::Success(std::move(output));
         } catch (const Foundation::Json::exception &) {
             return Outcome::Failure(InvalidBindings());

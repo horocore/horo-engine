@@ -270,8 +270,15 @@ Admission joins selected metadata to the exact registered Input descriptor span;
 unregistered actions or mismatched context/type/required policy fail before native creation.
 Catalog profiles and physical controls use registered persistent Horo IDs; native
 paths, glyphs and localized labels are separate provider data. The initial action
-value vocabulary is digital, 1D and 2D, with one explicit controller role per action;
-pose/gesture/haptic action types are outside this initial binding contract.
+value vocabulary is digital, 1D and 2D, with one explicit controller role per action.
+
+The signed installed schema-one file can declare optional `haptics` routes with
+registered profile and set IDs, a controller role, the baseline native vibration
+path, and a localized label. Routes for the same role share a native output action
+and consume the existing action budget. The action remains separate from the
+canonical Input action schema. Product request admission requires its own active
+output scope and current device ownership. An installer declaration carries no
+player assignment or permission to submit effects.
 
 Schemas, suggestions, catalogs and persisted overrides have finite lifecycle-time
 bounds. Resolution validates all inputs before publishing canonical action order.

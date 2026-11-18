@@ -179,7 +179,7 @@ namespace Horo::Application::Internal {
         if (settings_.Profile() != XRFeatureProfile::Projection1_0)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
         const auto &budget = settings_.Limits();
-        if (const auto preparedActions = bindings.schema.actions.size() + bindings.poses.size();
+        if (const auto preparedActions = bindings.PreparedActionCount();
             preparedActions > budget.maximumActions || budget.maximumSpaces < 5 + bindings.poses.size() ||
             budget.maximumActions > XRActionBindingLimits::MaximumActions || budget.maximumDevices > 5 ||
             budget.maximumSpaces > XRHardLimits::MaximumSpaces)

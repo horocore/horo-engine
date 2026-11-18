@@ -1,5 +1,7 @@
 #include "OpenXRApplicationBindings.h"
 
+#include <algorithm>
+
 namespace Horo::Application::Internal {
     using namespace XR;
     using namespace XR::OpenXRInternal;
@@ -13,6 +15,7 @@ namespace Horo::Application::Internal {
             std::array<NativeActionLabel, XRActionBindingLimits::MaximumActions> labels{};
             std::array<NativeActionSetLabel, XRActionBindingLimits::MaximumSets> sets{};
             std::array<NativePoseActionPath, 4> poses{};
+            std::array<NativeHapticActionPath, NativeHapticActionPath::MaximumRoutes> haptics{};
 
             /** @brief Copies only bounded views after the caller has validated every collection size. */
             explicit NativeBindingViews(const OpenXRApplicationBindings &source) {
@@ -31,6 +34,10 @@ namespace Horo::Application::Internal {
                     const auto &entry = source.poses[index];
                     poses[index] = {entry.profile, entry.set, entry.role, entry.kind, entry.path, entry.label};
                 }
+                for (std::size_t index = 0; index < source.haptics.size(); ++index) {
+                    const auto &entry = source.haptics[index];
+                    haptics[index] = {entry.profile, entry.set, entry.role, entry.path, entry.label};
+                }
             }
         };
 
@@ -40,9 +47,19 @@ namespace Horo::Application::Internal {
                    source.controls.size() <= XRActionBindingLimits::MaximumBindings &&
                    source.actionLabels.size() <= XRActionBindingLimits::MaximumActions &&
                    source.setLabels.size() <= XRActionBindingLimits::MaximumSets && source.poses.size() <= 4 &&
-                   source.schema.actions.size() <= XRActionBindingLimits::MaximumActions - source.poses.size();
+                   source.haptics.size() <= NativeHapticActionPath::MaximumRoutes &&
+                   source.PreparedActionCount() <= XRActionBindingLimits::MaximumActions;
         }
     }  // namespace
+
+    /** @copydoc OpenXRApplicationBindings::PreparedActionCount */
+    std::size_t OpenXRApplicationBindings::PreparedActionCount() const noexcept {
+        constexpr std::array roles{XRTrackedDeviceRole::LeftController, XRTrackedDeviceRole::RightController};
+        const auto outputCount = std::ranges::count_if(roles, [this](const auto role) {
+            return std::ranges::find(haptics, role, &OpenXRApplicationHaptic::role) != haptics.end();
+        });
+        return schema.actions.size() + poses.size() + static_cast<std::size_t>(outputCount);
+    }
 
     /** @copydoc OpenXRApplicationBindings::Prepare */
     Result<XRResolvedActionBindings> OpenXRApplicationBindings::Prepare(OpenXRActionBindings &native,
@@ -70,8 +87,9 @@ namespace Horo::Application::Internal {
                                                  {std::span{views.labels}.first(actionLabels.size()),
                                                   std::span{views.sets}.first(setLabels.size())},
                                                  std::span{views.poses}.first(poses.size()),
-                                                 tracking};
-        const auto maximumActions = static_cast<std::uint32_t>(schema.actions.size() + poses.size());
+                                                 tracking,
+                                                 std::span{views.haptics}.first(haptics.size())};
+        const auto maximumActions = static_cast<std::uint32_t>(PreparedActionCount());
         if (auto prepared = native.PrepareAttempt(preparation, maximumActions, request); prepared.HasError())
             return Outcome::Failure(prepared.ErrorValue());
         auto observed = native.PreparedProfiles(preparation);

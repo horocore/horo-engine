@@ -132,4 +132,40 @@ namespace Horo::Editor::Tests {
             CHECK(parsed.Value()->actionLabels.front().text == label);
         }
     }
+
+    TEST_CASE("Installed XR bindings retain only bounded explicitly signed baseline haptic metadata",
+              "[xr][host][bootstrap][install][haptics]") {
+        using Horo::XR::XRTrackedDeviceRole;
+        auto root = nlohmann::json::parse(InstalledProductFixture::BindingDocument());
+        auto route = nlohmann::json{{"profile", 1},
+                                    {"set", 1},
+                                    {"role", static_cast<unsigned>(XRTrackedDeviceRole::LeftController)},
+                                    {"path", "/user/hand/left/output/haptic"},
+                                    {"label", "Vibration"}};
+        bool malformed{};
+        SECTION("complete declaration") {}
+        SECTION("cannot assign a player in native binding files") {
+            route["player"] = 0;
+            malformed = true;
+        }
+        SECTION("roles are limited to controllers") {
+            route["role"] = static_cast<unsigned>(XRTrackedDeviceRole::Head);
+            malformed = true;
+        }
+        root["haptics"] = nlohmann::json::array({route});
+        InstalledProductFixture fixture{HORO_TEST_OPENXR_LOADER, root.dump()};
+        const auto candidate = fixture.Candidate();
+        const auto parsed =
+            Application::Internal::ReadInstalledOpenXRBindings(candidate.component,
+                                                               RequireValue(Packages::PackagePath::Parse("runtime/xr/bindings.json")));
+        if (malformed) {
+            CHECK(parsed.HasError());
+        } else {
+            REQUIRE(parsed.HasValue());
+            REQUIRE(parsed.Value()->haptics.size() == 1);
+            const auto &output = parsed.Value()->haptics.front();
+            CHECK(output.role == XRTrackedDeviceRole::LeftController);
+            CHECK(output.path == "/user/hand/left/output/haptic");
+        }
+    }
 }  // namespace Horo::Editor::Tests
