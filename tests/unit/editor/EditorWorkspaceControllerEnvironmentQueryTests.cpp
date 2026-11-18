@@ -1,3 +1,4 @@
+#include "Horo/AI/EnvironmentQueryGenerators.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "OwnedTestDirectory.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
@@ -51,7 +52,11 @@ namespace {
                             .opaquePayload = {std::byte{0x27}}}},
             });
             REQUIRE(query.HasValue());
-            const auto encoded = EnvironmentQuerySourceCodec::Encode(query.Value());
+            WriteAsset(query.Value());
+        }
+
+        void WriteAsset(const EnvironmentQueryAsset &query) const {
+            const auto encoded = EnvironmentQuerySourceCodec::Encode(query);
             REQUIRE(encoded.HasValue());
             std::ofstream source(root / Path, std::ios::binary | std::ios::trunc);
             source.write(reinterpret_cast<const char *>(encoded.Value().data()), static_cast<std::streamsize>(encoded.Value().size()));
@@ -86,6 +91,7 @@ TEST_CASE("Environment Query sources open saved typed tabs and duplicate through
     CHECK(ParseDocumentKind("environment_query").Value() == DocumentKind::EnvironmentQuery);
     CHECK(documents.front().asset == project.asset);
     CHECK(documents.front().query->DisplayName() == "Saved query");
+    CHECK(documents.front().descriptors == QueryDescriptorAvailability::RegistryUnavailable);
     CHECK(controller.ViewModel().workspacePanelHost.ActiveDocument() == instance);
     CHECK_FALSE(controller.HasDirtySourceDocuments());
 
@@ -148,4 +154,27 @@ TEST_CASE("Environment Query sources open saved typed tabs and duplicate through
         CHECK_FALSE(std::filesystem::exists(project.root / Project::Copy));
         CHECK_FALSE(std::filesystem::exists(project.root / (std::string{Project::Copy} + ".horo")));
     }
+}
+
+TEST_CASE("Environment Query workspace uses the composed native descriptor registry without hiding unknown source",
+          "[unit][editor][eqs][workspace]") {
+    Project project;
+    const auto registry = CaptureBuiltinQuerySchema();
+    REQUIRE(registry.HasValue());
+    EditorWorkspaceController controller(project.root, project.runtime, project.registry.Snapshot(), {.querySchema = &registry.Value()});
+    Project::Open(controller, Project::Path);
+    const auto &documents = controller.ViewModel().environmentQueryDocuments;
+    REQUIRE(documents.size() == 1);
+    CHECK(documents.front().descriptors == QueryDescriptorAvailability::Incompatible);
+    CHECK(documents.front().query->Stages().front().kind == QueryStageKind::Unknown);
+
+    const auto query =
+        CreateBuiltinLatticeQuery(QueryId::Create(9).Value(), QueryStageId::Create(10).Value(), QueryResultSchemaId::Create(11).Value(),
+                                  "Local points", {.stepMillimeters = 750, .outerSteps = 2}, 25);
+    REQUIRE(query.HasValue());
+    project.WriteAsset(query.Value());
+    Project::Open(controller, Project::Path);
+    REQUIRE(documents.size() == 1);
+    CHECK(documents.front().query->Id() == query.Value().Id());
+    CHECK(documents.front().descriptors == QueryDescriptorAvailability::Validated);
 }

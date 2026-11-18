@@ -1,4 +1,5 @@
 #include "EditorWorkspaceScreen.h"
+#include "Horo/AI/EnvironmentQuerySchema.h"
 #include "Horo/Application/ProjectSourceDocument.h"
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorSettingsStore.h"
@@ -234,7 +235,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                                       .stageFactory = BindPrefabStageFactory(projectRoot)},
                                            .procedural = {.catalog = std::move(catalog), .previewInputs = std::move(previewInputs)},
                                            .terrainCook = services_.TryGetConst<Application::TerrainAuthoringCookFactory>(),
-                                           .terrainAssets = services_.TryGetConst<Application::TerrainAuthoringAssetFactory>()};
+                                           .terrainAssets = services_.TryGetConst<Application::TerrainAuthoringAssetFactory>(),
+                                           .querySchema = services_.TryGetConst<AI::QuerySchemaRegistry>()};
     }
 
     /** @copydoc EditorWorkspaceScreen::RestoreExtensionWorkspace */

@@ -130,6 +130,7 @@ namespace Horo::Editor {
         std::optional<SceneSource::TriggerVolumeConversionContext> triggerBinding; /**< Immutable project capture; omitted in Null. */
         const Application::TerrainAuthoringCookFactory *terrainCook{};
         const Application::TerrainAuthoringAssetFactory *terrainAssets{};
+        const AI::QuerySchemaRegistry *querySchema{}; /**< Application-owned immutable descriptor registry. */
     };
 
     class EditorWorkspaceController {  // NOSONAR(cpp:S1820, cpp:S1448) Authoritative workspace controller
@@ -657,6 +658,7 @@ namespace Horo::Editor {
         CancellationSource m_prefabCancellation;
 
         Assets::AssetRegistry *m_mutableAssetRegistry{};
+        const AI::QuerySchemaRegistry *m_querySchema{};
         UiInspectorResources *m_uiInspectorResources{};
         JobSystem *m_sourceRecoveryJobs{};
         CollisionInventoryEvidence *m_collisionInventory{};

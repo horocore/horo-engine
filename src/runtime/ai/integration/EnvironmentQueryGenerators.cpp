@@ -6,10 +6,53 @@
 #include <array>
 #include <limits>
 #include <tuple>
+#include <utility>
 
 namespace Horo::AI {
     namespace {
         using Generation = Result<QueryGenerationResult>;
+
+        // Stable native contribution identities are shared by descriptor capture, initial authoring and dispatch.
+        constexpr std::uint64_t LatticeProvider = 0x484f524f00020000ULL;
+        constexpr std::uint64_t PointItem = LatticeProvider + 1;
+        constexpr std::uint64_t LatticeGenerator = LatticeProvider + 2;
+        constexpr std::uint64_t StepMillimeters = LatticeProvider + 3;
+        constexpr std::uint64_t OuterSteps = LatticeProvider + 4;
+        constexpr std::uint64_t InnerSteps = LatticeProvider + 5;
+        constexpr QueryVersionRange LatticeVersion{1, 1};
+        constexpr std::uint32_t MaximumOuterSteps = 31;  // (2 * 31 + 1)^2 bounded visits per pass.
+
+        /** @brief Uses the same numeric admission for authored settings and actual candidate generation. */
+        bool ValidLattice(const QueryPointLattice &settings) {
+            return settings.stepMillimeters > 0 && settings.outerSteps <= MaximumOuterSteps &&
+                   settings.innerSteps.value_or(0) <= settings.outerSteps;
+        }
+
+        /** @brief Projects an admitted unsigned source property without narrowing unchecked values. */
+        std::optional<std::uint32_t> LatticeProperty(const QueryPlanStage &stage, const QueryPropertyId id) {
+            const auto entry = std::ranges::find(stage.properties, id, &QueryPropertyValue::id);
+            if (entry == stage.properties.end())
+                return {};
+            const auto *value = std::get_if<std::uint64_t>(&entry->value);
+            if (!value || *value > std::numeric_limits<std::uint32_t>::max())
+                return {};
+            return static_cast<std::uint32_t>(*value);
+        }
+
+        /** @brief Reads the exact authored property identities retained in the compiled plan. */
+        std::optional<QueryPointLattice> PlanLattice(const QueryPlanStage &stage) {
+            const auto step = LatticeProperty(stage, QueryPropertyId::Create(StepMillimeters).Value());
+            const auto outer = LatticeProperty(stage, QueryPropertyId::Create(OuterSteps).Value());
+            if (!step || !outer)
+                return {};
+            const auto inner = QueryPropertyId::Create(InnerSteps).Value();
+            if (std::ranges::find(stage.properties, inner, &QueryPropertyValue::id) == stage.properties.end())
+                return QueryPointLattice{*step, *outer};
+            const auto innerValue = LatticeProperty(stage, inner);
+            if (!innerValue)
+                return {};
+            return QueryPointLattice{*step, *outer, *innerValue};
+        }
 
         /** @brief Adds a bounded lattice offset while preserving the full global millimeter range. */
         [[nodiscard]] std::optional<std::int64_t> Offset(const std::int64_t base, const std::int64_t delta) {
@@ -62,9 +105,7 @@ namespace Horo::AI {
     /** @copydoc GenerateQueryLattice */
     Result<QueryGenerationResult> GenerateQueryLattice(const QueryContextSnapshot &contexts, const QueryContextId center,
                                                        const QueryPointLattice &lattice, const QueryGeneratorOutput &output) {
-        constexpr std::uint32_t maxOuterSteps = 31;  // (2 * 31 + 1)^2 bounded lattice visits per pass.
-        if (!output.IsValid() || lattice.stepMillimeters == 0 || lattice.outerSteps > maxOuterSteps ||
-            lattice.innerSteps.value_or(0) > lattice.outerSteps)
+        if (!output.IsValid() || !ValidLattice(lattice))
             return Generation::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
         if (contexts.Revision() != output.provenance.revision)
             return Generation::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
@@ -89,6 +130,64 @@ namespace Horo::AI {
             return Generation::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
         std::ranges::copy(points, output.items.begin());
         return Generation::Success({.provenance = output.provenance, .itemCount = points.size()});
+    }
+
+    /** @copydoc CaptureBuiltinQuerySchema */
+    Result<QuerySchemaRegistry> CaptureBuiltinQuerySchema() {
+        const QueryDescriptorOrigin origin{.provider = QueryProviderId::Create(LatticeProvider).Value(), .version = LatticeVersion.minimum};
+        const auto item = QueryItemTypeId::Create(PointItem).Value();
+        const std::array items{QueryItemTypeDescriptor{.id = item, .origin = origin, .kind = QueryItemKind::Point}};
+        const auto contexts = BuiltinQueryContextDescriptors();
+        const std::array generators{
+            QueryGeneratorDescriptor{.id = QueryGeneratorId::Create(LatticeGenerator).Value(),
+                                     .origin = origin,
+                                     .outputItemType = item,
+                                     .outputItemVersion = LatticeVersion,
+                                     .contexts = {{BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation), LatticeVersion}},
+                                     .properties = {{QueryPropertyId::Create(StepMillimeters).Value(), QueryPropertyKind::Unsigned64, true},
+                                                    {QueryPropertyId::Create(OuterSteps).Value(), QueryPropertyKind::Unsigned64, true},
+                                                    {QueryPropertyId::Create(InnerSteps).Value(), QueryPropertyKind::Unsigned64, false}}}};
+        return QuerySchemaRegistry::Capture({items, contexts, generators, {}});
+    }
+
+    /** @copydoc CreateBuiltinLatticeQuery */
+    Result<EnvironmentQueryAsset> CreateBuiltinLatticeQuery(QueryId query, QueryStageId stage, QueryResultSchemaId result,
+                                                            std::string displayName, const QueryPointLattice &lattice,
+                                                            std::uint32_t maximumResults) {
+        if (!ValidLattice(lattice))
+            return Result<EnvironmentQueryAsset>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+        QueryAssetStage generator{.id = stage,
+                                  .kind = QueryStageKind::Generator,
+                                  .generator = QueryGeneratorId::Create(LatticeGenerator).Value(),
+                                  .descriptorVersion = LatticeVersion,
+                                  .properties = {{QueryPropertyId::Create(StepMillimeters).Value(), std::uint64_t{lattice.stepMillimeters}},
+                                                 {QueryPropertyId::Create(OuterSteps).Value(), std::uint64_t{lattice.outerSteps}}}};
+        if (lattice.innerSteps)
+            generator.properties.push_back({QueryPropertyId::Create(InnerSteps).Value(), std::uint64_t{*lattice.innerSteps}});
+        const QueryResultSchema results{.id = result,
+                                        .version = LatticeVersion.minimum,
+                                        .itemType = QueryItemTypeId::Create(PointItem).Value(),
+                                        .itemVersion = LatticeVersion,
+                                        .maximumResults = maximumResults};
+        return EnvironmentQueryAsset::Capture(
+            {.id = query, .displayName = std::move(displayName), .result = results, .stages = {std::move(generator)}});
+    }
+
+    /** @copydoc GenerateBuiltinQueryCandidates */
+    Result<QueryGenerationResult> GenerateBuiltinQueryCandidates(const EnvironmentQueryPlan &plan, const QueryContextSnapshot &contexts,
+                                                                 const QueryGeneratorOutput &output) {
+        const auto stage = std::ranges::find(plan.Stages(), output.provenance.stage, &QueryPlanStage::id);
+        const auto generator = QueryGeneratorId::Create(LatticeGenerator).Value();
+        if (stage == plan.Stages().end() || stage->kind != QueryStageKind::Generator || stage->generator != generator ||
+            output.provenance.generator != generator || output.provenance.provider != QueryProviderId::Create(LatticeProvider).Value() ||
+            plan.ResultSchema().itemType != QueryItemTypeId::Create(PointItem).Value())
+            return Generation::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
+        if (contexts.Query() != plan.Id())
+            return Generation::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
+        const auto lattice = PlanLattice(*stage);
+        if (!lattice)
+            return Generation::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+        return GenerateQueryLattice(contexts, BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation), *lattice, output);
     }
 
     /** @copydoc GenerateQueryPerceivedEntities */

@@ -88,7 +88,16 @@ TEST_CASE("Blackboard workspace controls resolve in both shipped locales", "[uni
 TEST_CASE("Environment Query workspace labels resolve in both shipped locales", "[unit][editor][eqs][localization]") {
     using namespace Horo::Editor;
     constexpr GuiLocalizationScope text{"workspace.environment_query"};
-    constexpr std::array keys{"invalid", "limit", "copy_failed", "read_only", "generator", "test", "unknown"};
+    constexpr std::array keys{"invalid",
+                              "limit",
+                              "copy_failed",
+                              "read_only",
+                              "generator",
+                              "test",
+                              "unknown",
+                              "descriptors_valid",
+                              "descriptors_incompatible",
+                              "descriptors_unavailable"};
     const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
     const std::array locales{"en-US", "tr-TR"};
     LocalizationService service{{"en-US"}};

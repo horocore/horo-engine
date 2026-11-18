@@ -79,6 +79,29 @@ namespace Horo::Editor {
             return Copy::Failure(MakeError(AI::AIErrors::EnvironmentQueryIdentityConflict));
         }
 
+        /** @brief Checks source descriptors without activating the plan or hiding unresolved authored stages. */
+        QueryDescriptorAvailability DescriptorAvailability(const AI::EnvironmentQueryAsset &query,
+                                                           const AI::QuerySchemaRegistry *registry) {
+            if (!registry)
+                return QueryDescriptorAvailability::RegistryUnavailable;
+            return AI::EnvironmentQueryPlan::Compile(query, *registry).HasValue() ? QueryDescriptorAvailability::Validated
+                                                                                  : QueryDescriptorAvailability::Incompatible;
+        }
+
+        /** @brief Localizes the exact qualification state of this saved document. */
+        std::string_view DescriptorLabel(QueryDescriptorAvailability availability) {
+            using enum QueryDescriptorAvailability;
+            switch (availability) {
+                case Validated:
+                    return "workspace.environment_query.descriptors_valid";
+                case Incompatible:
+                    return "workspace.environment_query.descriptors_incompatible";
+                case RegistryUnavailable:
+                    return "workspace.environment_query.descriptors_unavailable";
+            }
+            return "workspace.environment_query.descriptors_unavailable";
+        }
+
         /** @brief Keeps unknown contributed stages visible and distinguishable from executable stage families. */
         std::string_view StageLabel(AI::QueryStageKind kind) {
             using enum AI::QueryStageKind;
@@ -137,6 +160,7 @@ namespace Horo::Editor {
         }
         EnvironmentQueryWorkspaceDocument candidate{opened.identity, record->id, source.sourceDigest,
                                                     std::make_shared<const AI::EnvironmentQueryAsset>(std::move(query).Value())};
+        candidate.descriptors = DescriptorAvailability(*candidate.query, m_querySchema);
         auto &host = m_viewModel.workspacePanelHost;
         if (host.OpenDocument(opened.identity.key).HasError()) {
             fail("workspace.source_open.unavailable");
@@ -228,6 +252,7 @@ namespace Horo::Editor {
         if (!query.DisplayName().empty())
             label(query.DisplayName(), Theme::Text());
         label(text("workspace.environment_query.read_only"), Theme::Muted());
+        label(text(DescriptorLabel(opened->descriptors)), Theme::Muted());
         for (const auto &stage : query.Stages()) {
             const auto stageType = text(StageLabel(stage.kind));
             label(std::format("{} / {} ({})", stageType, stage.displayName, stage.id.Value()), Theme::Text());

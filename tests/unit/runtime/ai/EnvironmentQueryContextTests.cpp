@@ -2,6 +2,7 @@
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/EnvironmentQueryContexts.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
+#include "Horo/AI/EnvironmentQuerySourceCodec.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -27,6 +28,66 @@ namespace Horo::AI {
             auto &provider = *static_cast<ProviderState *>(state);
             ++provider.calls;
             return Result<QueryContextValue>::Success(provider.value);
+        }
+
+        TEST_CASE("EQS native lattice descriptor admits a saved query and dispatches the same provider", "[unit][ai][eqs][generator]") {
+            const auto registry = CaptureBuiltinQuerySchema();
+            REQUIRE(registry.HasValue());
+            const auto queryId = MakeIdentity<QueryId>(105);
+            const auto stageId = MakeIdentity<QueryStageId>(106);
+            const auto resultId = MakeIdentity<QueryResultSchemaId>(107);
+            const QueryPointLattice settings{.stepMillimeters = 25, .outerSteps = 1};
+            auto asset = CreateBuiltinLatticeQuery(queryId, stageId, resultId, "Local movement points", settings, 9);
+            REQUIRE(asset.HasValue());
+            const auto bytes = EnvironmentQuerySourceCodec::Encode(asset.Value());
+            REQUIRE(bytes.HasValue());
+            const auto loaded = EnvironmentQuerySourceCodec::Decode(bytes.Value());
+            REQUIRE(loaded.HasValue());
+            const auto plan = EnvironmentQueryPlan::Compile(loaded.Value(), registry.Value());
+            REQUIRE(plan.HasValue());
+            const auto *item = registry.Value().Find(plan.Value().ResultSchema().itemType);
+            REQUIRE(item);
+            CHECK(item->kind == QueryItemKind::Point);
+            REQUIRE(plan.Value().Stages().size() == 1);
+            const auto *generator = registry.Value().Find(plan.Value().Stages().front().generator);
+            REQUIRE(generator);
+            REQUIRE(plan.Value().RequiredContexts().size() == 1);
+            CHECK(plan.Value().RequiredContexts().front().id == BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation));
+
+            const auto contextProviders = QueryContextProviderRegistry::Capture({}, registry.Value());
+            REQUIRE(contextProviders.HasValue());
+            auto scene = MakeScene();
+            const auto view = scene->View();
+            auto source = Source(view);
+            source.querierLocation = Math::WorldCoordinate64::FromMillimeters(100, 20, 200);
+            QueryContextCapture capture;
+            const auto contexts = capture.Capture(plan.Value(), registry.Value(), contextProviders.Value(), view, source);
+            REQUIRE(contexts.HasValue());
+            std::array<QueryGeneratedItem, 9> items;
+            const auto untouched = items;
+            QueryGeneratorOutput output{{stageId, generator->id, generator->origin.provider, source.executionRevision}, 9, items};
+            SECTION("unknown provider cannot use the registered dispatch") {
+                output.provenance.provider = MakeIdentity<QueryProviderId>(5);
+                ExpectError(GenerateBuiltinQueryCandidates(plan.Value(), *contexts.Value(), output),
+                            AIErrors::EnvironmentQueryDescriptorUnavailable);
+                CHECK(items == untouched);
+            }
+            SECTION("registered dispatch retains the owner context revision and canonical coordinates") {
+                const auto generated = GenerateBuiltinQueryCandidates(plan.Value(), *contexts.Value(), output);
+                REQUIRE(generated.HasValue());
+                CHECK(generated.Value().itemCount == 9);
+                CHECK(items.front() == QueryGeneratedItem{Math::WorldCoordinate64::FromMillimeters(75, 20, 175)});
+                CHECK(items.back() == QueryGeneratedItem{Math::WorldCoordinate64::FromMillimeters(125, 20, 225)});
+                ++output.provenance.revision;
+                ExpectError(GenerateBuiltinQueryCandidates(plan.Value(), *contexts.Value(), output),
+                            AIErrors::EnvironmentQueryContextStale);
+            }
+            SECTION("initial source refuses invalid lattice settings before authoring") {
+                ExpectError(CreateBuiltinLatticeQuery(queryId, stageId, resultId, "Invalid", {0, 1}, 9),
+                            AIErrors::EnvironmentQuerySchemaInvalid);
+                ExpectError(CreateBuiltinLatticeQuery(queryId, stageId, resultId, "Invalid", {25, 1, 2}, 9),
+                            AIErrors::EnvironmentQuerySchemaInvalid);
+            }
         }
 
         TEST_CASE("EQS lattice uses canonical ordering and rejects overflow without writing partial results",

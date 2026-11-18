@@ -171,6 +171,7 @@ if(HORO_BUILD_EDITOR_GUI)
             HoroEngine::Runtime
             HoroEngine::RuntimeScene
             HoroEngine::PhysicsSceneIntegration
+            HoroEngine::AISceneIntegration
             HoroEditorSceneProductHost
             HoroEditorPlaySceneHostInternal
             HoroScenePhysicsHost

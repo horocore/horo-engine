@@ -5,6 +5,7 @@
 #include "EditorConsoleLaunch.h"
 #include "EditorDirectionalShadowOptions.h"
 #include "EditorLightingOptions.h"
+#include "Horo/AI/EnvironmentQueryGenerators.h"
 #include "Horo/Accessibility/VisualSafety.h"
 #include "Horo/Editor/XRSimulatorModel.h"
 #include "Horo/Platform/NativeProjectIoOwners.h"
@@ -3369,6 +3370,9 @@ namespace Horo::Editor {
                 MakeEditorTerrainCookFactory(p.background.jobs, assetRegistry, mutationCoordinator, durableFiles,
                                              p.operationServices.operationStore, p.operationServices.buildOutputStore);
             auto terrainAssetsFactory = MakeEditorTerrainAssetFactory(assetRegistry, mutationCoordinator, durableFiles);
+            const auto querySchema = AI::CaptureBuiltinQuerySchema();
+            if (querySchema.HasError())
+                LOG_ERROR("editor.ai", "Cannot compose the built-in query schema: %s", querySchema.ErrorValue().message.c_str());
             WorldStreamingPreviewHost streamingPreview;
             auto streamingPolicy = MakeWorldStreamingPreviewRuntimePolicy();
             if (streamingPolicy.HasError()) {
@@ -3435,6 +3439,8 @@ namespace Horo::Editor {
             const EditorWorkerShutdown jobShutdown{p.background.jobs, p.operationServices.shaderBuild,  &screenHost,
                                                    packages,          p.operationServices.shaderReload, playSaveRetirement};
             screenHost.Services().Register<EditorPlaySaveRetirement>(*playSaveRetirement);
+            if (querySchema.HasValue())
+                screenHost.Services().RegisterConst(querySchema.Value());
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
             RegisterEditorXrPlayServices(screenHost, xrComposition.xrPlay.get());
 #endif

@@ -43,7 +43,8 @@
 
 namespace Horo::AI {
     class EnvironmentQueryAsset;
-}
+    class QuerySchemaRegistry;
+}  // namespace Horo::AI
 
 namespace Horo::Application {
     struct TerrainAuthoringCookCompletion;
@@ -322,15 +323,23 @@ namespace Horo::Editor {
         std::uint32_t column{};
     };
 
-    /** @brief Workspace-owned source lease and separate transient presentation state. */
+    /** @brief Result of checking a saved query against the application's current descriptor registry. */
+    enum class QueryDescriptorAvailability : std::uint8_t {
+        RegistryUnavailable,
+        Incompatible,
+        Validated
+    };
+
     /** @brief An immutable, registered Environment Query source in a normal workspace document. */
     struct EnvironmentQueryWorkspaceDocument final {
         DocumentIdentity identity;
         Assets::AssetId asset;
         Sha256Digest source;
         std::shared_ptr<const AI::EnvironmentQueryAsset> query;
+        QueryDescriptorAvailability descriptors{QueryDescriptorAvailability::RegistryUnavailable};
     };
 
+    /** @brief Workspace-owned source lease and separate transient presentation state. */
     struct SequenceWorkspaceDocument {
         std::shared_ptr<const SequenceDocument> source;
         SequenceTimelineState timeline;

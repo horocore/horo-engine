@@ -70,6 +70,34 @@ namespace Horo::AI {
     [[nodiscard]] Result<QueryGenerationResult> GenerateQueryPoints(std::span<const Math::WorldCoordinate64> points,
                                                                     const QueryGeneratorOutput &output);
 
+    /**
+     * @brief Captures the registered native point-lattice provider and existing built-in context descriptors.
+     * @return Immutable validated registry or the owning descriptor diagnostic.
+     * @details Composition owns this registry. Capturing metadata performs no Scene access or execution.
+     */
+    [[nodiscard]] Result<QuerySchemaRegistry> CaptureBuiltinQuerySchema();
+
+    /**
+     * @brief Constructs one initial source through the installed point-lattice provider's typed wire contract.
+     * @param query Stable authoring-issued query identity. @param stage Stable stage identity.
+     * @param result Stable result schema identity. @param displayName Authored UTF-8 query label.
+     * @param lattice Explicit typed user-selected grid or ring settings. @param maximumResults Maximum published ranked results.
+     * @return A validated immutable source, or a typed lattice/schema error. Source capture performs no reads or writes.
+     */
+    [[nodiscard]] Result<EnvironmentQueryAsset> CreateBuiltinLatticeQuery(QueryId query, QueryStageId stage, QueryResultSchemaId result,
+                                                                          std::string displayName, const QueryPointLattice &lattice,
+                                                                          std::uint32_t maximumResults);
+
+    /**
+     * @brief Dispatches an admitted point-lattice stage through its exact native provider and current query context.
+     * @param plan Immutable compiled query. @param contexts Context captured for the same query revision.
+     * @param output Caller-owned destination and exact registered provenance.
+     * @return Generation evidence or a typed incompatible/stale/budget failure, with no partial output on failure.
+     */
+    [[nodiscard]] Result<QueryGenerationResult> GenerateBuiltinQueryCandidates(const EnvironmentQueryPlan &plan,
+                                                                               const QueryContextSnapshot &contexts,
+                                                                               const QueryGeneratorOutput &output);
+
     /** @brief Borrows the recipient's current authorized perception publication on the scene owner lane. */
     struct QueryPerceivedEntitySource final {
         const Runtime::RuntimeSceneView &scene;
