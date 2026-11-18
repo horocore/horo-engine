@@ -581,7 +581,7 @@ namespace Horo::Editor {
         const auto action = text(running ? "workspace.environment_query.preview_cancel" : "workspace.environment_query.preview_run");
         if (Ui::Button({.label = action.c_str(),
                         .enabled = running || (sceneAvailable && opened->descriptors == QueryDescriptorAvailability::Validated),
-                        .font = m_context.theme.fonts}))
+                        .font = m_context.theme.fonts.sans}))
             outCommand = {.command = EditorWorkspaceViewCommand::PreviewEnvironmentQuery,
                           .environmentQueryPreview = EnvironmentQueryPreviewRequest{opened->identity.instance, opened->source,
                                                                                     viewModel.documentRevision, viewModel.primarySelection,
