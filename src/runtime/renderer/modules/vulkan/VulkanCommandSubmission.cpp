@@ -133,6 +133,16 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
+    /** @copydoc VulkanCommandRuntime::WasSubmissionAccepted */
+    Result<bool> VulkanCommandRuntime::WasSubmissionAccepted(RenderTimelinePoint signal, std::uint64_t deviceIncarnation) const {
+        if (const auto access = impl_->Access(); access.HasError())
+            return Result<bool>::Failure(access.ErrorValue());
+        const auto *queue = impl_->FindQueue(signal.queue);
+        if (!signal.IsValid() || deviceIncarnation != impl_->deviceIncarnation || !queue)
+            return Result<bool>::Failure(MakeError(VulkanBackendErrors::TimelineInvalid));
+        return Result<bool>::Success(queue->WasIssued(signal.value));
+    }
+
     /** @copydoc VulkanCommandRuntime::Poll */
     Result<void> VulkanCommandRuntime::Poll() {
         if (const auto access = impl_->Access(); access.HasError())

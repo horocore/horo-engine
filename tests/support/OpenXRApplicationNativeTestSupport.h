@@ -58,6 +58,10 @@ namespace Horo::Tests::OpenXRApplication {
             return Unavailable();
         }
 
+        Result<bool> WasSubmissionAccepted(Render::RenderTimelinePoint, std::uint64_t) const override {
+            return Result<bool>::Failure(MakeError(XR::XRErrors::OperationUnavailable));
+        }
+
         Result<void> AttachDeviceChild(RenderNative::IVulkanEditorDeviceChild &) override {
             return Result<void>::Success();
         }

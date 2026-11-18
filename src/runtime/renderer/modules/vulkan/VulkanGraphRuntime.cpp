@@ -365,6 +365,11 @@ namespace Horo::Render::Detail {
         return impl_->resources->UpdateVfxFrame(update, impl_->lifecycle.closing);
     }
 
+    /** @copydoc VulkanGraphRuntime::WasSubmissionAccepted */
+    Result<bool> VulkanGraphRuntime::WasSubmissionAccepted(RenderTimelinePoint signal, std::uint64_t deviceIncarnation) const {
+        return impl_->commands.WasSubmissionAccepted(signal, deviceIncarnation);
+    }
+
     /** @copydoc VulkanGraphRuntime::ObserveSubmission */
     Result<bool> VulkanGraphRuntime::ObserveSubmission(const RenderCpuWait &wait) {
         if (auto access = impl_->Access(false); access.HasError())

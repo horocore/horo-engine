@@ -61,6 +61,11 @@ Result<void> WritePreparationUniform(const std::uint64_t instance, const std::sp
     return graph_.WritePreparationUniform(instance, bytes);
 }
 
+/** @copydoc IVulkanEditorGraphicsPort::WasSubmissionAccepted */
+Result<bool> WasSubmissionAccepted(RenderTimelinePoint signal, std::uint64_t deviceIncarnation) const override {
+    return graph_.WasSubmissionAccepted(signal, deviceIncarnation);
+}
+
 /** @copydoc IVulkanEditorGraphicsPort::AttachDeviceChild */
 Result<void> AttachDeviceChild(Detail::IVulkanEditorDeviceChild &child) override {
     if (editorOwner_ != std::this_thread::get_id())

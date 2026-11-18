@@ -86,6 +86,13 @@ namespace Horo::Render::Detail {
          * @return Success or typed busy, owner, lifecycle or resource failure. Never waits or starts a native frame.
          */
         [[nodiscard]] virtual Result<void> WritePreparationUniform(std::uint64_t instance, std::span<const std::byte> bytes) = 0;
+        /** @brief Checks exact queue acceptance of previously recorded editor graph work.
+         * @param signal That graph submission's frontend-issued point, independent of the later GUI/WSI tail.
+         * @param deviceIncarnation The originating selected frontend's device incarnation.
+         * @return True for native queue acceptance, false if still unissued, or typed identity/owner failure.
+         * @details Call on the owner immediately after Present/cancel. No presentation success, GPU completion or wait is implied.
+         */
+        [[nodiscard]] virtual Result<bool> WasSubmissionAccepted(RenderTimelinePoint signal, std::uint64_t deviceIncarnation) const = 0;
         [[nodiscard]] virtual Result<void> AttachDeviceChild(IVulkanEditorDeviceChild &child) = 0;
         virtual void DetachDeviceChild(IVulkanEditorDeviceChild &child) noexcept = 0;
     };

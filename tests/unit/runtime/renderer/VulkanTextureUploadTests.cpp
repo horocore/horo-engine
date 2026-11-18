@@ -1,4 +1,5 @@
 #include "VulkanGraphTestSupport.h"
+#include "VulkanPresentationTestSupport.h"
 
 #include <algorithm>
 #include <array>
@@ -45,7 +46,7 @@ namespace {
 
     /** @brief Authors the real closed copy workload with exact imported-state and submission evidence. */
     UploadPacket MakeUploadPacket(UploadResources resources, std::size_t bytes = 16,
-                                  RenderTextureFormat format = RenderTextureFormat::Rgba8Unorm) {
+                                  RenderTextureFormat format = RenderTextureFormat::Rgba8Unorm, std::uint64_t signalValue = 1) {
         using SubmissionTest::Take;
         auto builder = Take(RenderGraphBuilder::Create({.maxPasses = 1, .maxResources = 2, .maxUsages = 2, .maxDependencies = 1}));
         const auto pass = Take(builder.AddPass(RenderPassKind::Copy, RenderQueueRole::Graphics));
@@ -68,7 +69,7 @@ namespace {
         return {std::move(graph),
                 {RenderGraphPassWorkload{pass, RenderGraphTextureUpload{buffer, texture, {2, 2}, bytes, format}}},
                 {RenderGraphResourceInstance{buffer, resources.buffer}, RenderGraphResourceInstance{texture, resources.texture}},
-                {RenderGraphQueueSubmission{{{1}, {1}, {}, {{1}, 1}}, {0, 1}}}};
+                {RenderGraphQueueSubmission{{{1}, {1}, {}, {{1}, signalValue}}, {0, 1}}}};
     }
 
     /** @brief Executes only through the existing actual graph owner and submission/lease protocol. */
@@ -134,6 +135,55 @@ TEST_CASE("Vulkan texture upload records the two exact analytic float layouts", 
     fixture.resources.DestroyTexture(resources.texture);
 }
 
+TEST_CASE("Vulkan WSI failure preserves accepted analytic table graph state", "[renderer][vulkan][texture-upload][wsi][protocol-fake]") {
+    NativeGraphFixture fixture;
+    VulkanPresentationTest::Fixture presentation;
+    presentation.Realize();
+    presentation.AcquireReady();
+    constexpr FrameToken frame{1};
+    constexpr std::uint64_t deviceIncarnation = 11;
+    REQUIRE(presentation.runtime.BeginFrame(frame).HasValue());
+
+    const auto resources = CreateUploadResources(fixture, true, 64, RenderTextureFormat::Rgba32Float);
+    auto packet = MakeUploadPacket(resources, 64, RenderTextureFormat::Rgba32Float, 3);
+    const auto signal = packet.submissions.front().submission.signal;
+    RenderGraphLeaseTransfer transfer;
+    const auto request = Request(packet, fixture, transfer, frame);
+    REQUIRE(fixture.graph.BeginFrame(frame).HasValue());
+    REQUIRE(fixture.graph.ExecuteGraph(request).HasValue());
+    CHECK_FALSE(fixture.graph.WasSubmissionAccepted(signal, deviceIncarnation).Value());
+
+    Detail::VulkanCommandRetention capture;
+    capture.resources.reserve(packet.instances.size());
+    std::array<Detail::VulkanGraphResource, 2> bindings;
+    REQUIRE(fixture.resources.CaptureGraphResources(request, bindings, capture).HasValue());
+    const auto &table = *bindings[packet.instances.size() - 1].state;
+    CHECK_FALSE(table.contentsDefined);
+
+    REQUIRE(fixture.graph.SubmitFrame(frame).HasValue());
+    REQUIRE(presentation.runtime.Submitted(frame, signal).HasValue());
+    presentation.state.presentResult = VK_ERROR_OUT_OF_DATE_KHR;
+    REQUIRE(presentation.runtime.Present(frame).HasError());
+    fixture.graph.AbortFrame(frame);
+    presentation.runtime.Abort(frame);
+
+    const auto counterCalls = fixture.commandState.state.counterCalls;
+    REQUIRE(fixture.graph.WasSubmissionAccepted(signal, deviceIncarnation).Value());
+    CHECK_FALSE(fixture.graph.WasSubmissionAccepted({signal.queue, 2}, deviceIncarnation).Value());
+    CHECK(fixture.graph.WasSubmissionAccepted(signal, deviceIncarnation + 1).HasError());
+    CHECK(fixture.commandState.state.counterCalls == counterCalls);
+    CHECK(fixture.commandState.state.waitCalls == 0);
+    CHECK(fixture.lease.releases == 0);
+    CHECK(table.contentsDefined);
+    CHECK(table.completion == signal);
+    CHECK(table.logical.layout == RenderGraphTextureLayout::CopyDestination);
+
+    fixture.commandState.state.Complete();
+    REQUIRE(fixture.graph.BeginShutdown().HasValue());
+    REQUIRE(fixture.graph.PollDrain().Value() == RenderBackendDrainProgress::Drained);
+    CHECK(fixture.lease.releases == 1);
+}
+
 TEST_CASE("Vulkan texture upload protocol rejects undefined or mismatched native resources before recording",
           "[renderer][vulkan][texture-upload][protocol-fake]") {
     NativeGraphFixture fixture;
@@ -171,6 +221,7 @@ TEST_CASE("Vulkan unsent texture upload abort leaves the same discarded destinat
     REQUIRE(fixture.graph.ExecuteGraph(Request(packet, fixture, first)).HasValue());
     fixture.graph.AbortFrame({1});
     CHECK(fixture.commandState.state.accepted.empty());
+    CHECK_FALSE(fixture.graph.WasSubmissionAccepted(packet.submissions.front().submission.signal, 11).Value());
     CHECK(fixture.lease.releases == 1);
     RenderGraphLeaseTransfer retry;
     REQUIRE(fixture.graph.BeginFrame({2}).HasValue());

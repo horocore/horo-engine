@@ -95,6 +95,8 @@ namespace Horo::Render::Detail {
         /** @brief Submits exact copied Horo records; partial success retains accepted work and closes admission on failure. */
         [[nodiscard]] Result<void> SubmitFrame(FrameToken frame);
         void AbortFrame(FrameToken frame) noexcept;
+        /** @copydoc IVulkanEditorGraphicsPort::WasSubmissionAccepted */
+        [[nodiscard]] Result<bool> WasSubmissionAccepted(RenderTimelinePoint signal, std::uint64_t deviceIncarnation) const;
         [[nodiscard]] Result<bool> ObserveSubmission(const RenderCpuWait &wait);
         [[nodiscard]] Result<void> BeginShutdown();
         [[nodiscard]] Result<RenderBackendDrainProgress> PollDrain();
