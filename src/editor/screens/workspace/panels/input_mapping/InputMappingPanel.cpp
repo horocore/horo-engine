@@ -170,11 +170,13 @@ namespace Horo::Editor {
         if (Ui::ComboControl("##InputMappingPage", &selected, labels.data(), static_cast<int>(labels.size()), context.theme.fonts,
                              {.componentSize = Ui::ComponentSize::Medium}))
             page_ = static_cast<Page>(selected);
+        ImGui::EndDisabled();
         const float usedHeight = ImGui::GetCursorScreenPos().y - position.y;
         const ImVec2 contentSize{std::max(1.0F, std::min(size.x, ImGui::GetContentRegionAvail().x)),
                                  std::max(1.0F, std::min(size.y - usedHeight, ImGui::GetContentRegionAvail().y))};
         ImGui::BeginChild("##InputMappingContent", contentSize, false, ImGuiWindowFlags_NoSavedSettings);
         PollBindingCapture(context);
+        ImGui::BeginDisabled(capturing);
         if (page_ == Page::Actions)
             DrawActions(context, command);
         else if (page_ == Page::Devices)
