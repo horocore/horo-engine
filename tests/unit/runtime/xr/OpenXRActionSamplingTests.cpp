@@ -74,14 +74,14 @@ namespace {
         REQUIRE(fixture.owner.Sync(session).HasValue());
         const auto lost = fixture.owner.Sample(session, plan, devices, confirmed.Value().Profiles());
         REQUIRE(lost.HasError());
-        CHECK(lost.ErrorValue().code == XRErrors::ActionProfileChanged.code);
+        CHECK(lost.ErrorValue().code.Value() == XRErrors::ActionProfileChanged.code.Value());
         CHECK(std::ranges::count(fixture.session.script.calls, "sample-boolean") == scalarQueries);
 
         ++devices.front().id.session.slot.generation;
         REQUIRE(fixture.owner.Sync(session).HasValue());
         const auto stale = fixture.owner.Sample(session, plan, devices, confirmed.Value().Profiles());
         REQUIRE(stale.HasError());
-        CHECK(stale.ErrorValue().code == XRErrors::IdentityStale.code);
+        CHECK(stale.ErrorValue().code.Value() == XRErrors::IdentityStale.code.Value());
     }
 
     TEST_CASE("OpenXR scalar sampling preserves native errors and rejects malformed Boolean states atomically", "[xr][openxr][actions]") {
