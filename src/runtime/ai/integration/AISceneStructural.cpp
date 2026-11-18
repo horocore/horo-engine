@@ -1,5 +1,6 @@
 #include "AISceneRuntimeDetail.h"
 #include "Horo/AI/AIErrors.h"
+#include "Horo/AI/AIScenePerceptionSource.h"
 
 #include <algorithm>
 #include <limits>
@@ -34,6 +35,7 @@ namespace Horo::AI::Detail {
             std::vector<AgentRuntimeState> tombstones;
             decltype(AiSceneRuntimeState::agentsByOwner) owners;
             std::optional<PerceptionGroupPublication> perception;
+            std::vector<PerceptionSourceRef> retiredPerceptionSources;
             AiTaskScheduler *scheduler{};
             std::unique_ptr<AiTaskScheduler::PopulationChange> decisions;
             bool published{};
@@ -84,6 +86,10 @@ namespace Horo::AI::Detail {
                 }
                 additions.clear();
                 state->agentsByOwner.swap(owners);
+                if (!retiredPerceptionSources.empty())
+                    for (auto &agent : state->agents)
+                        if (agent.sensing)
+                            agent.sensing->memory.ForgetRetiredSources(retiredPerceptionSources);
                 if (decisions)
                     decisions->Publish();
                 state->lastAgentIdentity = lastAgentIdentity;
@@ -148,6 +154,12 @@ namespace Horo::AI::Detail {
                 return Failure<std::unique_ptr<Runtime::SceneStructuralCandidate>>("AI structural mutation revision is exhausted.");
 
             auto &state = *candidate->state;
+            if (state.perceptionExecution && !destroyed.empty()) {
+                candidate->retiredPerceptionSources.reserve(destroyed.size());
+                for (const auto entity : destroyed)
+                    candidate->retiredPerceptionSources.push_back(ProjectPerceptionSource(entity));
+                std::ranges::sort(candidate->retiredPerceptionSources);
+            }
             for (std::size_t index = 0; index < state.agents.size(); ++index) {
                 const auto &agent = state.agents[index];
                 if (!agent.retired && std::ranges::find(destroyed, agent.record.owner) != destroyed.end())

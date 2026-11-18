@@ -524,6 +524,8 @@ namespace Horo::Application::PrefabAtomicTest {
                 if (operation.State() == Prefab::PrefabSpawnState::Pending)
                     std::this_thread::sleep_for(std::chrono::milliseconds{1});
             }
+            if (const auto failure = operation.Failure())
+                UNSCOPED_INFO(failure->code.Value() << ": " << failure->message);
             REQUIRE(operation.State() == expected);
         }
 

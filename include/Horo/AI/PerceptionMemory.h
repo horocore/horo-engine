@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 
 namespace Horo::AI {
     struct PerceptionEventDelivery;
@@ -101,7 +102,8 @@ namespace Horo::AI {
 
     /**
      * @brief One agent's scene-owned, allocation-free memory of typed listener/source stimuli.
-     * @details Owner-thread mutation occurs at PerceptionSensePoll. Queries revalidate weak sources and return value copies;
+     * @details Owner-thread mutation occurs at PerceptionSensePoll and committed structural retirement.
+     * Queries revalidate weak sources and return value copies;
      * blackboard publication is a separate safe-point concern. No wall clock is read here.
      */
     class AIPerceptionMemory final {
@@ -150,6 +152,12 @@ namespace Horo::AI {
          * @return Success or a typed foreign/invalid source failure.
          */
         [[nodiscard]] Result<void> ForgetSource(PerceptionSourceRef source);
+
+        /** @brief Removes every observation of a retired subject or emitter in one owner-thread pass.
+         * @param retired Generation-qualified retirements sorted by full weak reference. A different generation is independent.
+         * @pre The caller has admitted the exact Scene retirements and is publishing the same structural transaction.
+         */
+        void ForgetRetiredSources(std::span<const PerceptionSourceRef> retired) noexcept;
 
         /**
          * @brief Returns an exact stimulus only after aging and checking subject and provenance residency.

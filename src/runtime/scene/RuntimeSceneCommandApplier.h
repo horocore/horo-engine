@@ -394,9 +394,9 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
-        /** @brief New animation components use the same structural owner transaction even outside a prefab group. */
-        static bool NeedsOwnerPreparation(const Slot &slot) noexcept {
-            return slot.groupResources || slot.components.animation.has_value();
+        /** @brief Includes exact ordinary AI agents only when the Scene has a corresponding typed owner. */
+        static bool NeedsOwnerPreparation(const Slot &slot, const bool hasAiOwner) noexcept {
+            return slot.groupResources || slot.components.animation.has_value() || (hasAiOwner && slot.components.aiAgent.has_value());
         }
 
         /** @brief Selects only genuinely new active entity incarnations from the detached candidate. */
@@ -406,7 +406,7 @@ namespace Horo::Runtime {
                                    scene.storage_.slots[index].generation != slot.generation);
         }
 
-        /** @brief Borrows exact candidate fields; ordinary animation entities have no fabricated group resources. */
+        /** @brief Borrows exact candidate fields; ordinary owner-bearing entities have no fabricated group resources. */
         RuntimeEntityView OwnerEntity(std::size_t index) const {
             const auto &slot = candidate.slots[index];
             const EntityRef entity{scene.runtimeId_, {static_cast<std::uint32_t>(index), slot.generation}};
@@ -428,20 +428,20 @@ namespace Horo::Runtime {
         }
 
         /** @brief Detects exact retired owner-bearing entities without treating a recycled slot as the old entity. */
-        bool IsRetiredOwnerSlot(std::size_t index) const noexcept {
+        bool IsRetiredOwnerSlot(std::size_t index, const bool hasAiOwner) const noexcept {
             const auto &old = scene.storage_.slots[index];
-            return old.active && NeedsOwnerPreparation(old) &&
+            return old.active && NeedsOwnerPreparation(old, hasAiOwner) &&
                    (!candidate.slots[index].active || candidate.slots[index].generation != old.generation);
         }
 
         /** @brief Projects additions and retirements through the existing sole owner transaction. */
-        bool ProjectResourceGroup(std::vector<RuntimeEntityView> &created, std::vector<EntityRef> &destroyed) const {
+        bool ProjectResourceGroup(std::vector<RuntimeEntityView> &created, std::vector<EntityRef> &destroyed, const bool hasAiOwner) const {
             created.reserve(candidate.slots.size());
             for (std::size_t index = 0; index < candidate.slots.size(); ++index)
-                if (IsCreatedSlot(index) && NeedsOwnerPreparation(candidate.slots[index]))
+                if (IsCreatedSlot(index) && NeedsOwnerPreparation(candidate.slots[index], hasAiOwner))
                     created.push_back(OwnerEntity(index));
             for (std::size_t index = 0; index < scene.storage_.slots.size(); ++index)
-                if (IsRetiredOwnerSlot(index))
+                if (IsRetiredOwnerSlot(index, hasAiOwner))
                     destroyed.emplace_back(scene.runtimeId_,
                                            EntityId{static_cast<std::uint32_t>(index), scene.storage_.slots[index].generation});
             return !created.empty() || !destroyed.empty();
@@ -642,7 +642,10 @@ namespace Horo::Runtime {
                 return characters;
             if (const auto valid = ValidateGroupReferences(); valid.HasError())
                 return valid;
-            resourceGroup = ProjectResourceGroup(created, destroyed);
+            const bool hasAiOwner = std::ranges::any_of(participants, [](const auto &participant) {
+                return participant->Owner() == SceneStructuralOwner::AI;
+            });
+            resourceGroup = ProjectResourceGroup(created, destroyed, hasAiOwner);
             return ValidateOwners(created, destroyed, participants);
         }
 

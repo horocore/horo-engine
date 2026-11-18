@@ -169,13 +169,20 @@ namespace Horo::AI {
     Result<void> AIPerceptionMemory::ForgetSource(const PerceptionSourceRef source) {
         if (!source.IsValid() || source.sceneIncarnation != sceneIncarnation_)
             return Result<void>::Failure(MakeError(AIErrors::PerceptionMemoryInvalid));
-        for (std::size_t index = 0; index < count_;) {
-            if (entries_[index].key.source == source || entries_[index].provenance == source)
-                Erase(index);
-            else
-                ++index;
-        }
+        ForgetRetiredSources(std::span{&source, 1});
         return Result<void>::Success();
+    }
+
+    /** @copydoc AIPerceptionMemory::ForgetRetiredSources */
+    void AIPerceptionMemory::ForgetRetiredSources(const std::span<const PerceptionSourceRef> retired) noexcept {
+        if (retired.empty())
+            return;
+        const auto active = std::span{entries_}.first(count_);
+        const auto removed = std::ranges::remove_if(active, [retired](const PerceivedStimulus &stimulus) {
+            return std::ranges::binary_search(retired, stimulus.key.source) || std::ranges::binary_search(retired, stimulus.provenance);
+        });
+        count_ -= static_cast<std::size_t>(removed.size());
+        std::ranges::fill(removed, PerceivedStimulus{});
     }
 
     /** @brief Removes stale weak references before exposing decision-visible memory. */

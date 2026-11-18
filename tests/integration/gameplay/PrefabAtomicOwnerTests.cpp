@@ -1562,6 +1562,130 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(native.probe.module[2] == 3);
         }
 
+        TEST_CASE("Committed cooked prefab despawn frees stimulus storage before the next native sense pass",
+                  "[prefab][integration][atomic][ai][perception][retirement]") {
+            constexpr Runtime::SceneObjectId listenerId{1};
+            constexpr Runtime::SceneObjectId witnessId{2};
+            constexpr Runtime::SceneObjectId replacementId{3};
+            AI::PerceptionSpatialBroadphase spatial;
+            NativePerceptionFixture native;
+            native.execution.memory.profileMaximumEntries = 2;
+            native.execution.workUnitsPerTick = native.RequiredUnits() * 6;
+            bool witnessInRange = true;
+            const auto position = [&](const Runtime::RuntimeEntityView &entity) {
+                std::int64_t x = 1000;
+                if (entity.authoredObject == listenerId)
+                    x = 0;
+                else if ((entity.authoredObject == witnessId && !witnessInRange) || entity.parent)
+                    x = 5000;
+                return AI::AiScenePerceptionPosition{entity.entity, Math::WorldCoordinate64::FromMillimeters(x, 0, 0)};
+            };
+            const auto positions = [&](const Runtime::RuntimeSceneView &scene) {
+                std::vector<AI::AiScenePerceptionPosition> result;
+                for (std::size_t index = 0; index < scene.SlotCount(); ++index)
+                    if (const auto entity = scene.EntityAt(index); entity && entity->components->aiController)
+                        result.push_back(position(*entity));
+                return Result<std::vector<AI::AiScenePerceptionPosition>>::Success(std::move(result));
+            };
+            const AI::AiScenePerceptionActivationInput initial{spatial, {}, positions, native.execution};
+            const AI::AiScenePerceptionGroupInput group{spatial,
+                                                        {},
+                                                        [&](const Runtime::RuntimeSceneView &,
+                                                            const std::span<const Runtime::RuntimeEntityView> prospective) {
+                std::vector<AI::AiScenePerceptionPosition> result;
+                for (const auto &entity : prospective)
+                    result.push_back(position(entity));
+                return Result<std::vector<AI::AiScenePerceptionPosition>>::Success(std::move(result));
+            }};
+            auto fault = Fault::None;
+            SECTION("published despawn retains the older unrelated memory under a tight capacity") {}
+            SECTION("cancelled despawn preserves both observations") {
+                fault = Fault::CancelRetirement;
+            }
+            Fixture fixture{true, fault, {.requirePerceptionEndpoints = true}, native.endpoints, group, nullptr, {}, initial};
+            const auto addSource = [&](const Runtime::SceneObjectId object, const std::uint64_t agentId) {
+                Runtime::SceneCommandBuffer pending;
+                auto agent = fixture.controller.agent.agent;
+                agent.agent = AI::TestSupport::MakeIdentity<AI::AgentId>(agentId);
+                (void)pending.Create(
+                    {.authoredObject = object, .components = {.aiAgent = agent, .aiController = fixture.controller.agent.controller}});
+                REQUIRE(fixture.scenes.QueueStructuralCommands(std::move(pending)).HasValue());
+            };
+            const auto poll = [&](const std::uint64_t tick) {
+                const auto active = fixture.scenes.ActiveScene();
+                REQUIRE(active);
+                const auto fixedStep = Duration::FromNanoseconds(native.execution.memory.fixedStep.count());
+                REQUIRE(fixture.ai.PollPerceptionAtSensePoll(*active, spatial, tick, fixedStep).HasValue());
+            };
+
+            addSource(witnessId, 2);
+            fixture.Reach(2);
+            const auto initialScene = *fixture.scenes.ActiveScene();
+            const auto listener = initialScene.Find(listenerId);
+            const auto witness = initialScene.Find(witnessId);
+            REQUIRE(listener);
+            REQUIRE(witness);
+            const auto capability = fixture.ai.CapabilityAtSafePoint();
+            const auto witnessAgent = AI::TestSupport::MakeIdentity<AI::AgentId>(2);
+            const auto witnessHandle = capability.ResolveAgent(witnessAgent);
+            REQUIRE(witnessHandle.HasValue());
+            REQUIRE(fixture.ai.Snapshot().Value().Find(witnessHandle.Value()).Value().owner == *witness);
+            poll(1);
+            witnessInRange = false;
+            REQUIRE(
+                fixture.ai
+                    .PublishPerceptionAtSafePoint(initialScene, spatial.Current()->Revision() + 1, positions(initialScene).Value(), spatial)
+                    .HasValue());
+
+            fixture.Tick(1);
+            fixture.AwaitState(fixture.SpawnOperation(), Prefab::PrefabSpawnState::Committed);
+            REQUIRE(fixture.Count() == 4);
+            poll(2);
+            fixture.Tick(2);
+            if (fault == Fault::CancelRetirement) {
+                fixture.retirementToCancel = fixture.DespawnOperation();
+                fixture.AwaitState(fixture.retirementToCancel, Prefab::PrefabSpawnState::Cancelled);
+                const auto memory = fixture.ai.ReadPerceptionAtSafePoint(*fixture.scenes.ActiveScene(), *listener);
+                REQUIRE(memory.HasValue());
+                CHECK(memory.Value().count == 2);
+                REQUIRE(capability.ResolveAgent(witnessAgent).Value() == witnessHandle.Value());
+
+                fixture.RestartGameplay();
+                fixture.Tick(3);
+                fixture.AwaitState(fixture.SpawnOperation(), Prefab::PrefabSpawnState::Committed);
+                RequireAllOwners(fixture, 6, 2);
+                REQUIRE(capability.ResolveAgent(AI::TestSupport::MakeIdentity<AI::AgentId>(5)).HasValue());
+                REQUIRE(capability.ResolveAgent(AI::TestSupport::MakeIdentity<AI::AgentId>(6)).HasValue());
+                return;
+            }
+            fixture.Reach(2);
+
+            // Do not read memory between despawn and the next sense pass. A retained prefab entry would fill the profile
+            // and incorrectly evict the older unrelated witness before a read could prune the stale generation.
+            addSource(replacementId, 99);
+            fixture.Reach(3);
+            poll(3);
+            const auto current = *fixture.scenes.ActiveScene();
+            const auto replacement = current.Find(replacementId);
+            REQUIRE(replacement);
+            const auto memory = fixture.ai.ReadPerceptionAtSafePoint(current, *listener);
+            REQUIRE(memory.HasValue());
+            REQUIRE(memory.Value().count == 2);
+            CHECK(memory.Value().entries[0].key.source == AI::ProjectPerceptionSource(*witness));
+            CHECK(memory.Value().entries[0].lastSensedTick == 1);
+            CHECK(memory.Value().entries[1].key.source == AI::ProjectPerceptionSource(*replacement));
+            CHECK(memory.Value().entries[1].lastSensedTick == 3);
+
+            const auto replacementAgent = AI::TestSupport::MakeIdentity<AI::AgentId>(99);
+            REQUIRE(capability.ResolveAgent(replacementAgent).HasValue());
+            Runtime::SceneCommandBuffer retirement;
+            retirement.Destroy(*replacement);
+            REQUIRE(fixture.scenes.QueueStructuralCommands(std::move(retirement)).HasValue());
+            fixture.Reach(2);
+            CHECK(capability.ResolveAgent(replacementAgent).HasError());
+            CHECK(capability.ResolveAgent(witnessAgent).Value() == witnessHandle.Value());
+        }
+
         /** @brief Observes whether aggregate retirement revokes the actual owner token before scheduler callbacks. */
         struct RetirementProbe final : AI::IAiScheduledDecision {
             CancellationToken owner;

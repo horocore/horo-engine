@@ -1293,8 +1293,13 @@ against the same spatial publication before making either owner visible. The
 fixed host polls the current publication before decisions and gameplay. Retrying
 the same tick preserves the first result without replaying native callbacks.
 Aggregate rejection discards detached instances. Despawn revokes the retired
-agent before destroying its instances, and memory reads discard weak references
-to retired Scene entities. This scope covers custom spatial observations and
+agent before destroying its instances. The same structural publication removes
+retired subject and emitter generations from surviving agents' memory, so those
+records cannot consume capacity before the next native sense pass. In a Scene
+with an installed AI structural participant, ordinary authored agent creation
+and retirement use the same owner transaction and reserve identity before
+subsequent prefab admission. This scope
+covers custom spatial observations and
 keeps Gameplay-event admission and blackboard projection in their existing
 owners. Canonical AI restore is unavailable for this opt-in until the restore
 transaction can stage fresh sensing instances and the paired endpoint publication.
