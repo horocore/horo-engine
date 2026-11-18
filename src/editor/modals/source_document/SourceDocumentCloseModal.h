@@ -6,6 +6,7 @@
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorModalHost.h"
 #include "Horo/Editor/SourceFileOpenService.h"
+#include "Horo/Editor/UiCanvasDocument.h"
 
 namespace Horo::Editor {
     class EditorWorkspaceController;
@@ -23,6 +24,9 @@ namespace Horo::Editor {
          * @param source Validated source identity shown to the user. */
         SourceDocumentCloseModal(const EditorGuiContext &context, EditorWorkspaceController &controller, std::weak_ptr<const void> lifetime,
                                  SourceSaveRequest request, std::string source);
+        /** @brief Captures a canvas owner state using the same workspace close presentation. */
+        SourceDocumentCloseModal(const EditorGuiContext &context, EditorWorkspaceController &controller, std::weak_ptr<const void> lifetime,
+                                 UiCanvasDocumentStateId request, std::string source);
         [[nodiscard]] ModalId Id() const override;
         [[nodiscard]] ModalPresentation Presentation() const override;
         [[nodiscard]] ModalClosePolicy ClosePolicy() const override;
@@ -43,7 +47,7 @@ namespace Horo::Editor {
         const EditorGuiContext &context_;
         EditorWorkspaceController *controller_;
         std::weak_ptr<const void> lifetime_;
-        SourceSaveRequest request_;
+        std::variant<SourceSaveRequest, UiCanvasDocumentStateId> request_;
         std::string source_;
         bool failed_{};
     };

@@ -14,6 +14,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             leaveCapture_.prefabSettingsRevision = controller_->PrefabSettingsRevision();
             static_cast<void>(controller_->HasDirtySourceDocuments());
             leaveCapture_.sourceDocuments = controller_->ViewModel().sourceDocuments;
+            leaveCapture_.uiCanvasStates = controller_->UiCanvasStates();
             leaveCapture_.terrainRevisions = controller_->TerrainDocumentRevisions();
             leaveCapture_.prefabDocuments = controller_->ViewModel().prefabDocuments;
             auto graphs = controller_->PCGDocuments().Snapshots();
@@ -63,6 +64,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             return Result<LeaveDecision>::Failure(prefabs.ErrorValue());
         if (const auto graphs = controller_->ShutdownPCGDocuments(); graphs.HasError())
             return Result<LeaveDecision>::Failure(graphs.ErrorValue());
+        if (const auto canvases = controller_->ShutdownUiCanvasDocuments(); canvases.HasError())
+            return Result<LeaveDecision>::Failure(canvases.ErrorValue());
         return Result<LeaveDecision>::Success({.disposition = Allow, .requirement = std::nullopt});
     }
 
@@ -90,6 +93,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             return Result<LeaveDecision>::Failure(world.ErrorValue());
         if (const auto graphs = controller_->ShutdownPCGDocuments(true); graphs.HasError())
             return Result<LeaveDecision>::Failure(graphs.ErrorValue());
+        if (const auto canvases = controller_->ShutdownUiCanvasDocuments(true); canvases.HasError())
+            return Result<LeaveDecision>::Failure(canvases.ErrorValue());
         return Result<LeaveDecision>::Success({.disposition = Allow, .requirement = std::nullopt});
     }
 
@@ -105,7 +110,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             if (controller_->PrefabSettingsRevision() != leaveCapture_.prefabSettingsRevision)
                 return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
             static_cast<void>(controller_->HasDirtySourceDocuments());
-            if (controller_->ViewModel().sourceDocuments.size() != leaveCapture_.sourceDocuments.size())
+            if (controller_->ViewModel().sourceDocuments.size() != leaveCapture_.sourceDocuments.size() ||
+                controller_->UiCanvasStates() != leaveCapture_.uiCanvasStates)
                 return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
             for (const auto &captured : leaveCapture_.sourceDocuments) {
                 const auto current = controller_->SourceDocuments().Snapshot(captured.Identity().instance);
@@ -147,6 +153,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                 static_cast<void>(packages_.retire(std::filesystem::path{controller_->ViewModel().projectRoot}));
             SaveExtensionWorkspace();
             controller_->FlushAutosave();
+            if (const auto canvases = controller_->ShutdownUiCanvasDocuments(); canvases.HasError())
+                LOG_ERROR("editor.ui_canvas", "Canvas recovery shutdown incomplete: %s", canvases.ErrorValue().message.c_str());
             if (const auto terrain = controller_->ShutdownTerrainDocuments(); terrain.HasError())
                 LOG_ERROR("editor.terrain", "Terrain document shutdown incomplete: %s", terrain.ErrorValue().message.c_str());
             if (const auto prefabs = controller_->ShutdownPrefabDocuments(); prefabs.HasError())

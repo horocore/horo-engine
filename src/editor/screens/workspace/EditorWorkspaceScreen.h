@@ -110,6 +110,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         Result<void> ValidateLeavePCGDocuments(EditorWorkspaceController &controller) const;
 
         std::vector<SourceDocumentSnapshot> sourceDocuments;
+        std::vector<UiCanvasDocumentStateId> uiCanvasStates;
         std::vector<PCGDocumentSnapshot> pcgDocuments;
         std::vector<PrefabDocumentSnapshot> prefabDocuments;
         std::weak_ptr<CollisionProjectSettingsSession> collisionOwner;

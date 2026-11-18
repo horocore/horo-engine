@@ -191,8 +191,8 @@ namespace Horo::Editor {
 
     /** @copydoc UiCanvasDocument::Execute */
     Result<void> UiCanvasDocument::Execute(const UiCanvasDocumentStateId expected, const UiCanvasElementCommand &command) {
-        if (closed_)
-            return Failure(UiCanvasDocumentErrors::Closed);
+        if (closed_ || persisting_)
+            return Failure(closed_ ? UiCanvasDocumentErrors::Closed : UiCanvasDocumentErrors::Conflict);
         if (expected != currentState_)
             return Failure(UiCanvasDocumentErrors::Conflict);
         if (historyCursor_ == MaximumHistory)
@@ -238,8 +238,8 @@ namespace Horo::Editor {
 
     /** @copydoc UiCanvasDocument::RestoreHistory */
     Result<void> UiCanvasDocument::RestoreHistory(const UiCanvasDocumentStateId expected, const bool redo) {
-        if (closed_)
-            return Failure(UiCanvasDocumentErrors::Closed);
+        if (closed_ || persisting_)
+            return Failure(closed_ ? UiCanvasDocumentErrors::Closed : UiCanvasDocumentErrors::Conflict);
         if (expected != currentState_)
             return Failure(UiCanvasDocumentErrors::Conflict);
         if ((redo && historyCursor_ == history_.size()) || (!redo && historyCursor_ == 0))
@@ -336,8 +336,8 @@ namespace Horo::Editor {
 
     /** @copydoc UiCanvasDocument::Select */
     Result<void> UiCanvasDocument::Select(const UiCanvasDocumentStateId expected, const UiElementId element) {
-        if (closed_)
-            return Failure(UiCanvasDocumentErrors::Closed);
+        if (closed_ || persisting_)
+            return Failure(closed_ ? UiCanvasDocumentErrors::Closed : UiCanvasDocumentErrors::Conflict);
         if (expected != currentState_)
             return Failure(UiCanvasDocumentErrors::Conflict);
         if (const bool legacyRoot = Document().Elements().empty() && std::ranges::any_of(Document().Canvases(),

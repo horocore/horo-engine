@@ -5,6 +5,7 @@
 
 #include <cassert>
 #include <cctype>
+#include <chrono>
 #include <fstream>
 #include <limits>
 #include <span>
@@ -79,8 +80,8 @@ namespace Horo::Editor {
             std::string contents(static_cast<std::size_t>(size), '\0');
             if (size != 0)
                 input.read(contents.data(), static_cast<std::streamsize>(size));
-            if (!input && !input.eof())
-                return Failure<std::string>(UiCanvasDocumentErrors::ReadFailed, "UI Canvas source could not be read completely.");
+            if (input.gcount() != static_cast<std::streamsize>(size) || input.bad() || input.peek() != std::char_traits<char>::eof())
+                return Failure<std::string>(UiCanvasDocumentErrors::ReadFailed, "UI Canvas source changed during the bounded read.");
             return Result<std::string>::Success(std::move(contents));
         }
 
@@ -93,13 +94,41 @@ namespace Horo::Editor {
             };
         }
 
-        [[nodiscard]] std::vector<std::byte> Bytes(const std::string_view value) {
-            std::vector<std::byte> bytes;
-            bytes.reserve(value.size());
-            for (const char character : value)
-                bytes.push_back(static_cast<std::byte>(static_cast<unsigned char>(character)));
-            return bytes;
+        /** @brief Bridges the UI session's byte fingerprint to the shared tracked source identity. */
+        Result<Assets::AssetSourceIdentity> SourceIdentity(const UiCanvasFileFingerprint &fingerprint) {
+            if (!fingerprint.exists)
+                return Result<Assets::AssetSourceIdentity>::Success({});
+            if (fingerprint.byteSize > MaximumUiCanvasDocumentBytes)
+                return Result<Assets::AssetSourceIdentity>::Failure(MakeError(Assets::AssetSourceErrors::Limit));
+            auto digest = ParseSha256(fingerprint.checksum);
+            if (digest.HasError())
+                return Result<Assets::AssetSourceIdentity>::Failure(digest.ErrorValue());
+            return Result<Assets::AssetSourceIdentity>::Success({true, static_cast<std::size_t>(fingerprint.byteSize), digest.Value()});
         }
+
+        /** @brief Projects the shared durable source receipt back into the existing UI session API. */
+        UiCanvasFileFingerprint Fingerprint(const Assets::AssetSourceIdentity &identity) {
+            return identity.exists ? UiCanvasFileFingerprint{true, identity.bytes, FormatSha256(identity.digest)}
+                                   : UiCanvasFileFingerprint{};
+        }
+
+        /** @brief Rejects reentrant commands while a borrowed filesystem may call back into the editor. */
+        class PersistenceGuard final {
+        public:
+            explicit PersistenceGuard(bool &active) noexcept : active_(active) {
+                active_ = true;
+            }
+
+            PersistenceGuard(const PersistenceGuard &) = delete;
+            PersistenceGuard &operator=(const PersistenceGuard &) = delete;
+
+            ~PersistenceGuard() {
+                active_ = false;
+            }
+
+        private:
+            bool &active_;
+        };
 
         /** @brief Validates and serializes a detached snapshot before admitting any filesystem mutation. */
         Result<std::string> SerializeSnapshot(const UiCanvasDocumentSnapshot &snapshot) {
@@ -244,36 +273,38 @@ namespace Horo::Editor {
         if (lease.HasError())
             return Result<UiCanvasDocumentSaveResult>::Failure(lease.ErrorValue());
 
-        const Result<UiCanvasFileFingerprint> current = InspectUiCanvasDocumentFingerprint(destination.Value());
-        if (current.HasError())
-            return Result<UiCanvasDocumentSaveResult>::Failure(current.ErrorValue());
-        if (!overwriteConflict && current.Value() != expectedFingerprint)
-            return Result<UiCanvasDocumentSaveResult>::Success(
-                {.status = UiCanvasDocumentSaveStatus::Conflict, .fingerprint = current.Value()});
+        auto lockPath = Assets::AssetSourcePublicationLockPath(absoluteProjectRoot, destination.Value());
+        if (lockPath.HasError())
+            return Result<UiCanvasDocumentSaveResult>::Failure(lockPath.ErrorValue());
+        auto nativeLease = files.TryAcquireExclusive(lockPath.Value(), "ui-canvas-save");
+        if (nativeLease.HasError())
+            return Result<UiCanvasDocumentSaveResult>::Failure(nativeLease.ErrorValue());
 
-        std::filesystem::path prepared = destination.Value();
-        prepared += ".save.tmp";
-        const std::vector<std::byte> bytes = Bytes(serialized);
-        if (const Result<void> written = files.WriteDurable(prepared, bytes); written.HasError()) {
-            static_cast<void>(files.RemoveDurable(prepared));
-            return Result<UiCanvasDocumentSaveResult>::Failure(written.ErrorValue());
+        auto expected = SourceIdentity(expectedFingerprint);
+        if (overwriteConflict) {
+            const auto latest = Assets::CaptureAssetSource(absoluteProjectRoot, destination.Value(), MaximumUiCanvasDocumentBytes);
+            if (latest.HasError())
+                return Result<UiCanvasDocumentSaveResult>::Failure(latest.ErrorValue());
+            expected = Result<Assets::AssetSourceIdentity>::Success(latest.Value().identity);
         }
-        const Result<UiCanvasFileFingerprint> rechecked = InspectUiCanvasDocumentFingerprint(destination.Value());
-        if (rechecked.HasError()) {
-            static_cast<void>(files.RemoveDurable(prepared));
-            return Result<UiCanvasDocumentSaveResult>::Failure(rechecked.ErrorValue());
-        }
-        if (!overwriteConflict && rechecked.Value() != expectedFingerprint) {
-            static_cast<void>(files.RemoveDurable(prepared));
+        if (expected.HasError())
+            return Result<UiCanvasDocumentSaveResult>::Failure(expected.ErrorValue());
+        const auto published = Assets::PublishAssetSource(absoluteProjectRoot, destination.Value(), expected.Value(),
+                                                          std::as_bytes(std::span{serialized}), nativeLease.Value(), files);
+        if (published.HasError()) {
+            if (published.ErrorValue().code.Value() != Assets::AssetSourceErrors::Conflict.code.Value())
+                return Result<UiCanvasDocumentSaveResult>::Failure(published.ErrorValue());
+            const auto latest = InspectUiCanvasDocumentFingerprint(destination.Value());
+            if (latest.HasError())
+                return Result<UiCanvasDocumentSaveResult>::Failure(latest.ErrorValue());
             return Result<UiCanvasDocumentSaveResult>::Success(
-                {.status = UiCanvasDocumentSaveStatus::Conflict, .fingerprint = rechecked.Value()});
+                {.status = UiCanvasDocumentSaveStatus::Conflict, .fingerprint = latest.Value()});
         }
-        if (const Result<void> replaced = files.AtomicReplace(prepared, destination.Value()); replaced.HasError()) {
-            static_cast<void>(files.RemoveDurable(prepared));
-            return Result<UiCanvasDocumentSaveResult>::Failure(replaced.ErrorValue());
-        }
+        if (published.Value().status != Assets::AssetSourcePublicationStatus::Durable)
+            return Result<UiCanvasDocumentSaveResult>::Failure(
+                published.Value().durabilityError.value_or(MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed)));
         return Result<UiCanvasDocumentSaveResult>::Success(
-            {.status = UiCanvasDocumentSaveStatus::Saved, .fingerprint = Fingerprint(serialized)});
+            {.status = UiCanvasDocumentSaveStatus::Saved, .fingerprint = Fingerprint(published.Value().identity)});
     }
 
     /** @copydoc UiCanvasDocument::Open */
@@ -306,7 +337,8 @@ namespace Horo::Editor {
         : history_(std::move(other.history_)), historyCursor_(other.historyCursor_), selection_(other.selection_),
           identity_(std::move(other.identity_)), path_(std::move(other.path_)), document_(std::move(other.document_)),
           fingerprint_(std::move(other.fingerprint_)), currentState_(other.currentState_), savedState_(other.savedState_),
-          contentState_(other.contentState_), savedContentState_(other.savedContentState_), closed_(other.closed_) {
+          contentState_(other.contentState_), savedContentState_(other.savedContentState_),
+          acceptedRecovery_(std::move(other.acceptedRecovery_)), recoveredState_(other.recoveredState_), closed_(other.closed_) {
         other.document_.reset();
         other.history_.clear();
         other.historyCursor_ = 0;
@@ -329,6 +361,8 @@ namespace Horo::Editor {
         savedState_ = other.savedState_;
         contentState_ = other.contentState_;
         savedContentState_ = other.savedContentState_;
+        acceptedRecovery_ = std::move(other.acceptedRecovery_);
+        recoveredState_ = other.recoveredState_;
         closed_ = other.closed_;
         other.document_.reset();
         other.history_.clear();
@@ -353,8 +387,8 @@ namespace Horo::Editor {
 
     /** @copydoc UiCanvasDocument::Replace */
     Result<void> UiCanvasDocument::Replace(Runtime::Ui::UiDocument document) {
-        if (closed_)
-            return Failure(UiCanvasDocumentErrors::Closed);
+        if (closed_ || persisting_)
+            return Failure(closed_ ? UiCanvasDocumentErrors::Closed : UiCanvasDocumentErrors::Conflict);
         if (!document.Id().IsValid() || !document.Revision().IsValid() || document.Canvases().empty())
             return Failure(UiCanvasDocumentErrors::InvalidDocument);
         if (document.Id() != Document().Id())
@@ -377,8 +411,9 @@ namespace Horo::Editor {
     Result<UiCanvasDocumentSaveResult> UiCanvasDocument::Save(const std::filesystem::path &absoluteProjectRoot,
                                                               const ProjectMutationCoordinator &mutations, DurableFileSystem &files,
                                                               const bool overwriteConflict) {
-        if (closed_)
-            return Failure<UiCanvasDocumentSaveResult>(UiCanvasDocumentErrors::Closed);
+        if (closed_ || persisting_)
+            return Failure<UiCanvasDocumentSaveResult>(closed_ ? UiCanvasDocumentErrors::Closed : UiCanvasDocumentErrors::Conflict);
+        const PersistenceGuard guard(persisting_);
         const Result<UiCanvasDocumentSaveResult> saved =
             SaveUiCanvasDocument(absoluteProjectRoot, path_, UiCanvasDocumentSnapshot{.document = Document(), .state = currentState_},
                                  fingerprint_, overwriteConflict, mutations, files);
@@ -390,10 +425,152 @@ namespace Horo::Editor {
         return saved;
     }
 
+    /** @copydoc UiCanvasDocument::InspectRecovery */
+    Result<std::optional<DocumentRecoveryRecord>> UiCanvasDocument::InspectRecovery(const DocumentRecoveryService &recovery) const {
+        if (closed_)
+            return Failure<std::optional<DocumentRecoveryRecord>>(UiCanvasDocumentErrors::Closed);
+        return recovery.Inspect(Assets::AssetId::FromBytes(Document().Id().Bytes()), identity_.key);
+    }
+
+    /** @copydoc UiCanvasDocument::CaptureRecovery */
+    Result<std::optional<UiCanvasRecoveryCheckpoint>> UiCanvasDocument::CaptureRecovery(const Assets::AssetId sessionOwner) const {
+        using Return = Result<std::optional<UiCanvasRecoveryCheckpoint>>;
+        if (closed_ || persisting_)
+            return Return::Failure(MakeError(closed_ ? UiCanvasDocumentErrors::Closed : UiCanvasDocumentErrors::Conflict));
+        if (!IsDirty() || recoveredState_ == currentState_)
+            return Return::Success({});
+        if (!sessionOwner.IsValid())
+            return Return::Failure(MakeError(Assets::AssetSourceErrors::Authority));
+        auto encoded = UiCanvasDocumentSerialization::Serialize(Document());
+        if (encoded.HasError())
+            return Return::Failure(encoded.ErrorValue());
+        if (encoded.Value().size() > DocumentRecoveryLimits{}.maximumRecordBytes)
+            return Return::Failure(MakeError(Assets::AssetSourceErrors::Limit));
+        auto accepted = SourceIdentity(fingerprint_);
+        if (accepted.HasError())
+            return Return::Failure(accepted.ErrorValue());
+        const auto now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+        const auto bytes = std::as_bytes(std::span{encoded.Value()});
+        return Return::Success(UiCanvasRecoveryCheckpoint{currentState_,
+                                                          {Assets::AssetId::FromBytes(Document().Id().Bytes()),
+                                                           identity_.key,
+                                                           sessionOwner,
+                                                           identity_.instance.Value(),
+                                                           currentState_.value,
+                                                           static_cast<std::uint64_t>(now),
+                                                           accepted.Value(),
+                                                           ComputeSha256(bytes),
+                                                           {bytes.begin(), bytes.end()}},
+                                                          acceptedRecovery_});
+    }
+
+    /** @copydoc WriteUiCanvasRecovery */
+    Result<void> WriteUiCanvasRecovery(const UiCanvasRecoveryCheckpoint &checkpoint, DocumentRecoveryService &recovery,
+                                       const CancellationToken cancellation) {
+        return checkpoint.accepted ? recovery.ReplaceAccepted(checkpoint.record, *checkpoint.accepted, cancellation)
+                                   : recovery.Write(checkpoint.record, cancellation);
+    }
+
+    /** @copydoc UiCanvasDocument::AcknowledgeRecovery */
+    void UiCanvasDocument::AcknowledgeRecovery(const UiCanvasRecoveryCheckpoint &checkpoint) noexcept {
+        if (closed_ || checkpoint.state.instance != identity_.instance || checkpoint.state.value > currentState_.value ||
+            checkpoint.state.value < recoveredState_.value || checkpoint.accepted != acceptedRecovery_ ||
+            checkpoint.record.document != identity_.key || checkpoint.record.asset != Assets::AssetId::FromBytes(Document().Id().Bytes()))
+            return;
+        acceptedRecovery_.reset();
+        recoveredState_ = checkpoint.state;
+    }
+
+    /** @copydoc UiCanvasDocument::Autosave */
+    Result<void> UiCanvasDocument::Autosave(const Assets::AssetId sessionOwner, DocumentRecoveryService &recovery) {
+        if (closed_ || persisting_)
+            return Failure(closed_ ? UiCanvasDocumentErrors::Closed : UiCanvasDocumentErrors::Conflict);
+        if (IsDirty() && recoveredState_ == currentState_) {
+            // Explicit shutdown cannot rely on an old receipt after another workspace removed its record.
+            const auto current = InspectRecovery(recovery);
+            if (current.HasError())
+                return Result<void>::Failure(current.ErrorValue());
+            if (current.Value()) {
+                const auto &record = *current.Value();
+                if ((acceptedRecovery_ && *acceptedRecovery_ == record) ||
+                    (record.sessionOwner == sessionOwner && record.sessionGeneration == identity_.instance.Value() &&
+                     record.revision == currentState_.value))
+                    return Result<void>::Success();
+            } else {
+                acceptedRecovery_.reset();
+            }
+            recoveredState_ = {};
+        }
+        const auto checkpoint = CaptureRecovery(sessionOwner);
+        if (checkpoint.HasError())
+            return Result<void>::Failure(checkpoint.ErrorValue());
+        if (!checkpoint.Value())
+            return !IsDirty() && HasRecoveryCheckpoint() ? DiscardRecovery(sessionOwner, recovery) : Result<void>::Success();
+        const PersistenceGuard guard(persisting_);
+        auto written = WriteUiCanvasRecovery(*checkpoint.Value(), recovery);
+        if (written.HasValue())
+            AcknowledgeRecovery(*checkpoint.Value());
+        return written;
+    }
+
+    /** @copydoc UiCanvasDocument::Recover */
+    Result<void> UiCanvasDocument::Recover(const UiCanvasDocumentStateId expected, const DocumentRecoveryRecord &record,
+                                           const DocumentRecoveryService &recovery) {
+        if (closed_ || persisting_)
+            return Failure(closed_ ? UiCanvasDocumentErrors::Closed : UiCanvasDocumentErrors::Conflict);
+        if (expected != currentState_ || IsDirty())
+            return Failure(UiCanvasDocumentErrors::Conflict);
+        const auto latest = InspectRecovery(recovery);
+        if (latest.HasError())
+            return Result<void>::Failure(latest.ErrorValue());
+        if (!latest.Value() || *latest.Value() != record || ComputeSha256(record.payload) != record.state)
+            return Failure(UiCanvasDocumentErrors::Conflict);
+        const std::string_view text{reinterpret_cast<const char *>(record.payload.data()), record.payload.size()};
+        auto document = UiCanvasDocumentSerialization::Parse(text);
+        if (document.HasError())
+            return Result<void>::Failure(document.ErrorValue());
+        const auto disk = InspectUiCanvasDocumentFingerprint(path_);
+        if (disk.HasError())
+            return Result<void>::Failure(disk.ErrorValue());
+        if (disk.Value() != fingerprint_ || Fingerprint(record.acceptedSource) != fingerprint_)
+            return Failure(UiCanvasDocumentErrors::Conflict);
+        auto accepted = std::make_shared<const DocumentRecoveryRecord>(record);
+        if (auto restored = Replace(std::move(document).Value()); restored.HasError())
+            return restored;
+        acceptedRecovery_.swap(accepted);
+        recoveredState_ = currentState_;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiCanvasDocument::DiscardRecovery */
+    Result<void> UiCanvasDocument::DiscardRecovery(const Assets::AssetId sessionOwner, DocumentRecoveryService &recovery,
+                                                   const DocumentRecoveryRecord *explicitRecord) {
+        if (persisting_)
+            return Failure(UiCanvasDocumentErrors::Conflict);
+        const PersistenceGuard guard(persisting_);
+        auto latest = InspectRecovery(recovery);
+        if (latest.HasError())
+            return Result<void>::Failure(latest.ErrorValue());
+        if (explicitRecord && (!latest.Value() || *explicitRecord != *latest.Value()))
+            return Failure(UiCanvasDocumentErrors::Conflict);
+        if (!latest.Value())
+            return Result<void>::Success();
+        const auto &record = *latest.Value();
+        const bool owned = record.sessionOwner == sessionOwner && record.sessionGeneration == identity_.instance.Value();
+        if (!explicitRecord && !owned && (!acceptedRecovery_ || *acceptedRecovery_ != record))
+            return Result<void>::Success();
+        auto result = recovery.Discard(record);
+        if (result.HasValue()) {
+            acceptedRecovery_.reset();
+            recoveredState_ = {};
+        }
+        return result;
+    }
+
     /** @copydoc UiCanvasDocument::Reload */
     Result<void> UiCanvasDocument::Reload(const UiCanvasReloadPolicy policy) {
-        if (closed_)
-            return Failure(UiCanvasDocumentErrors::Closed);
+        if (closed_ || persisting_)
+            return Failure(closed_ ? UiCanvasDocumentErrors::Closed : UiCanvasDocumentErrors::Conflict);
         if (IsDirty() && policy == UiCanvasReloadPolicy::RequireClean)
             return Failure(UiCanvasDocumentErrors::DirtyDocument);
         Result<UiCanvasDocumentSnapshot> loaded = LoadUiCanvasDocument(path_);
@@ -419,8 +596,8 @@ namespace Horo::Editor {
 
     /** @copydoc UiCanvasDocument::Close */
     Result<void> UiCanvasDocument::Close(const UiCanvasClosePolicy policy) {
-        if (closed_)
-            return Failure(UiCanvasDocumentErrors::Closed);
+        if (closed_ || persisting_)
+            return Failure(closed_ ? UiCanvasDocumentErrors::Closed : UiCanvasDocumentErrors::Conflict);
         if (IsDirty() && policy == UiCanvasClosePolicy::RequireClean)
             return Failure(UiCanvasDocumentErrors::DirtyDocument);
         document_.reset();

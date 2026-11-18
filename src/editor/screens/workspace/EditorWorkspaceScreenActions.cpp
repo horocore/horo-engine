@@ -125,6 +125,24 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                 controller->ProcessCommand(command);
                 return true;
             }
+            const auto canvas = std::ranges::find_if(model.uiCanvasDocuments, [&](const auto &entry) {
+                return entry.identity.instance == model.workspacePanelHost.ActiveDocument();
+            });
+            if (canvas != model.uiCanvasDocuments.end()) {
+                EditorWorkspaceViewCommandData command;
+                command.documentInstance = canvas->identity.instance;
+                command.uiCanvasState = canvas->state;
+                if (action == EditorMenuAction::SaveScene) {
+                    if (!canvas->dirty)
+                        return true;
+                    command.command = EditorWorkspaceViewCommand::UiCanvasSave;
+                } else {
+                    command.command = action == EditorMenuAction::Undo ? EditorWorkspaceViewCommand::UiCanvasUndo
+                                                                       : EditorWorkspaceViewCommand::UiCanvasRedo;
+                }
+                controller->ProcessCommand(command);
+                return true;
+            }
         }
         return false;
     }
@@ -261,12 +279,21 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (!command.documentInstance)
             return false;
         const auto snapshot = controller.SourceDocuments().Snapshot(*command.documentInstance);
-        if (snapshot.HasError() || !snapshot.Value().Dirty())
+        if (snapshot.HasValue() && snapshot.Value().Dirty()) {
+            static_cast<void>(modalHost.OpenRoot(
+                std::make_unique<SourceDocumentCloseModal>(context, controller, closeLifetime_,
+                                                           SourceSaveRequest{*command.documentInstance, snapshot.Value().Revision(), {}},
+                                                           snapshot.Value().Identity().key.source.Value())));
+            return true;
+        }
+        const auto &canvases = controller.ViewModel().uiCanvasDocuments;
+        const auto canvas = std::ranges::find_if(canvases, [&](const auto &document) {
+            return document.identity.instance == *command.documentInstance && document.dirty;
+        });
+        if (canvas == canvases.end())
             return false;
-        static_cast<void>(modalHost.OpenRoot(
-            std::make_unique<SourceDocumentCloseModal>(context, controller, closeLifetime_,
-                                                       SourceSaveRequest{*command.documentInstance, snapshot.Value().Revision(), {}},
-                                                       snapshot.Value().Identity().key.source.Value())));
+        static_cast<void>(modalHost.OpenRoot(std::make_unique<SourceDocumentCloseModal>(context, controller, closeLifetime_, canvas->state,
+                                                                                        canvas->identity.key.source.Value())));
         return true;
     }
 

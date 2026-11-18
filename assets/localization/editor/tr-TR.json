@@ -4498,6 +4498,8 @@
       "text": "Yinele"
     },
     "workspace.ui_canvas.reload": {
+    "workspace.ui_canvas.recover": {"text": "Kurtarma taslağını geri yükle"},
+    "workspace.ui_canvas.discard_recovery": {"text": "Kurtarma taslağını sil"},
       "text": "Yeniden yükle"
     },
     "workspace.ui_canvas.command_failed": {

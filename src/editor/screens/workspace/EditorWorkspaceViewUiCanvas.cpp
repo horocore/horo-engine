@@ -72,6 +72,12 @@ namespace Horo::Editor {
             ImGui::SameLine();
             ToolbarButton(context, "workspace.ui_canvas.redo", UiCanvasRedo, document.canRedo, output);
             ToolbarButton(context, "workspace.ui_canvas.reload", UiCanvasReload, !document.dirty, output);
+            if (document.recovery) {
+                ToolbarButton(context, "workspace.ui_canvas.recover", UiCanvasRecover, !document.dirty, output);
+                ToolbarButton(context, "workspace.ui_canvas.discard_recovery", UiCanvasDiscardRecovery, true, output);
+                if (output.command == UiCanvasRecover || output.command == UiCanvasDiscardRecovery)
+                    output.uiCanvasRecovery = document.recovery;
+            }
             if (document.diagnostic)
                 Ui::ErrorText(Text(context, "workspace.ui_canvas.command_failed").c_str(), context.theme.fonts);
             std::array<char, 257> search{};
@@ -477,7 +483,7 @@ namespace Horo::Editor {
         }
         ImGui::PopID();
         if (outCommand.command >= EditorWorkspaceViewCommand::UiCanvasSelect &&
-            outCommand.command <= EditorWorkspaceViewCommand::UiCanvasReload) {
+            outCommand.command <= EditorWorkspaceViewCommand::UiCanvasDiscardRecovery) {
             outCommand.documentInstance = document->identity.instance;
             outCommand.uiCanvasState = document->state;
         }

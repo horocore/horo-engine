@@ -14,6 +14,7 @@ namespace Horo::Editor {
     void EditorWorkspaceController::UpdateAutosave(const float elapsedSeconds, const int intervalMinutes) {
         UpdatePCGAutosave(elapsedSeconds, intervalMinutes);
         UpdatePrefabAutosave(elapsedSeconds, intervalMinutes);
+        UpdateUiCanvasAutosave(elapsedSeconds, intervalMinutes);
         if (intervalMinutes <= 0 || !std::isfinite(elapsedSeconds) || elapsedSeconds <= 0.0F || !m_document.IsDirty() ||
             m_viewModel.recoveryAvailable || m_autosaveSuppressedForDiscard) {
             if (!m_document.IsDirty())

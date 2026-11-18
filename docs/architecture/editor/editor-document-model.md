@@ -454,6 +454,24 @@ The session header is a non-installed exact-header internal contract, staged by
 inherit the stage host capability. No public ownership or repository-wide include
 root is added.
 
+## UI Canvas Persistence
+
+The UI Canvas document owner keeps its typed Runtime UI snapshot and history.
+Canonical save holds the project writer and source publication lease, uses the
+accepted byte fingerprint, and marks the document saved only after a durable
+replacement. The workspace shares Save All and the revision-fenced
+Save/Discard/Cancel close modal with other source documents.
+
+Canvas checkpoints use the shared recovery store and the same authored codec.
+The editor submits one detached periodic checkpoint at a time to the shared I/O
+lane and polls results without waiting. Explicit saving, close and workspace
+shutdown settle accepted work before changing persistence authority.
+Opening a document offers the cached candidate for explicit restoration or
+discard. Restoration verifies both the accepted canonical bytes and the exact
+recovery record and opens the result as a dirty edit. Graceful workspace
+shutdown checkpoints dirty canvases before retiring their owners. Recovery
+storage limits and source conflicts leave the canonical document untouched.
+
 ## Preview Edits
 
 Continuous tools may maintain preview state during an interaction. Preview state

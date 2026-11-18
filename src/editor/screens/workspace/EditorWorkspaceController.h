@@ -271,7 +271,14 @@ namespace Horo::Editor {
             return m_sourceSaveAllOutcome;
         }
 
-        /** @brief Last explicit source close choice outcome; false retains the document after Cancel. */
+        /** @brief Applies an explicit revision-fenced canvas close decision, preserving dirty state on failure. */
+        [[nodiscard]] Result<bool> ResolveUiCanvasClose(UiCanvasDocumentStateId state, SourceCloseDecision decision);
+        /** @brief Captures the current canvas instances and their exact publication fences for leave consent. */
+        [[nodiscard]] std::vector<UiCanvasDocumentStateId> UiCanvasStates() const;
+        /** @brief Retires all canvases after durable recovery or explicit discard. */
+        [[nodiscard]] Result<void> ShutdownUiCanvasDocuments(bool discard = false);
+
+        /** @brief Last explicit source close choice outcome. False retains the document after Cancel. */
         [[nodiscard]] const std::optional<Result<bool>> &SourceCloseOutcome() const noexcept {
             return m_sourceCloseOutcome;
         }
@@ -623,6 +630,7 @@ namespace Horo::Editor {
 
         Assets::AssetRegistry *m_mutableAssetRegistry{};
         UiInspectorResources *m_uiInspectorResources{};
+        JobSystem *m_uiCanvasRecoveryJobs{};
         CollisionInventoryEvidence *m_collisionInventory{};
         CollisionActivationEvidence *m_collisionActivation{};
         const EditorPreviewCollisionReceiptSource *m_previewCollisionReceipt{};
@@ -760,6 +768,15 @@ namespace Horo::Editor {
         Sha256Digest m_contentBrowserPreviewSchemaRevision;
         std::size_t m_contentBrowserNextPreviewEntry{};
         std::vector<UiCanvasDocument> m_uiCanvasDocuments;
+        float m_uiCanvasAutosaveSeconds{};
+
+        struct CanvasRecoveryWork final {
+            JobHandle job;
+            std::shared_ptr<const UiCanvasRecoveryCheckpoint> checkpoint;
+        };
+
+        std::optional<CanvasRecoveryWork> m_uiCanvasRecovery;
+        std::vector<DocumentInstanceId> m_uiCanvasRecoveryQueue;
         float m_pcgAutosaveElapsedSeconds{};
         float m_pcgAutosaveRetrySeconds{};
         bool m_pcgAutosaveErrorPresented{};
@@ -931,9 +948,21 @@ namespace Horo::Editor {
                                                           const EditorWorkspaceViewCommandData &command,
                                                           const UiInspectorResourceSnapshot &resources);
         /** @brief Saves one canvas through the shared project mutation boundary and returns its typed outcome. */
-        [[nodiscard]] Result<void> SaveUiCanvasSource(UiCanvasDocument &owner) const;
+        [[nodiscard]] Result<void> SaveUiCanvasSource(UiCanvasDocument &owner);
         /** @brief Joins explicit canvas close admission with workspace routing and presents dirty-state errors. */
         void CloseUiCanvasSource(DocumentInstanceId instance);
+        /** @brief Refreshes a cached recovery choice only at an explicit cold persistence boundary. */
+        void InspectUiCanvasRecovery(const UiCanvasDocument &owner, UiCanvasWorkspaceDocument &view);
+        /** @brief Checks due canvas recovery on the existing workspace autosave cadence. */
+        void UpdateUiCanvasAutosave(float seconds, int minutes);
+        /** @brief Polls one pending checkpoint without waiting, and retires it only at a terminal state. */
+        bool ObserveUiCanvasRecovery();
+        /** @brief Cancels and joins accepted work before mutating or releasing its host authorities. */
+        [[nodiscard]] Result<void> DrainUiCanvasRecovery(std::optional<DocumentInstanceId> instance = {});
+        /** @brief Places an immutable checkpoint on the dedicated shared I/O lane. */
+        void ScheduleUiCanvasRecovery(UiCanvasDocument &canvas);
+        /** @brief Presents a recovery failure only on the still-live matching document. */
+        void ReportUiCanvasRecoveryError(DocumentInstanceId instance, const Error &error);
         /** @brief Writes to a selected destination, optionally preserving active document identity. */
         void SaveSceneToPath(const std::filesystem::path &absolutePath, bool copyOnly);
         /** @brief Completes default metadata and active identity only after a successful destination source save.

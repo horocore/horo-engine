@@ -4498,6 +4498,8 @@
       "text": "Redo"
     },
     "workspace.ui_canvas.reload": {
+    "workspace.ui_canvas.recover": {"text": "Restore recovery draft"},
+    "workspace.ui_canvas.discard_recovery": {"text": "Discard recovery draft"},
       "text": "Reload"
     },
     "workspace.ui_canvas.command_failed": {

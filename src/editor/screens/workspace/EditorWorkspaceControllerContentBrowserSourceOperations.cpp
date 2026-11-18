@@ -34,6 +34,13 @@ namespace Horo::Editor {
             if (addedSession)
                 m_uiCanvasDocuments.pop_back();
             m_viewModel.contentBrowserOperationError = "workspace.source_open.unavailable";
+            return;
+        }
+        if (addedSession) {
+            RefreshUiCanvasProjection();
+            const auto view = std::ranges::find(m_viewModel.uiCanvasDocuments, document.identity, &UiCanvasWorkspaceDocument::identity);
+            if (view != m_viewModel.uiCanvasDocuments.end())
+                InspectUiCanvasRecovery(m_uiCanvasDocuments.back(), *view);
         }
     }
 

@@ -148,6 +148,8 @@ namespace Horo::Editor {
         UiCanvasUpdatePreview,
         UiCanvasCommitLayout,
         UiCanvasReload,
+        UiCanvasRecover,
+        UiCanvasDiscardRecovery,
         SaveScene,
         SaveSceneAs,
         SaveSceneCopyAs,
@@ -329,6 +331,7 @@ namespace Horo::Editor {
         std::optional<Runtime::Ui::UiDocumentElement> selectedElement;
         std::vector<UiCanvasHierarchyRow> rows;
         std::string search;
+        std::shared_ptr<const DocumentRecoveryRecord> recovery;
         std::optional<Error> diagnostic;
         bool canUndo{};
         bool canRedo{};
@@ -402,6 +405,7 @@ namespace Horo::Editor {
         std::optional<SourceSaveRequest> sourceSave;
         SourceCloseDecision sourceCloseDecision{SourceCloseDecision::Cancel};
         UiCanvasDocumentStateId uiCanvasState;
+        std::shared_ptr<const DocumentRecoveryRecord> uiCanvasRecovery;
         Runtime::Ui::UiElementId uiCanvasElement;
         Runtime::Ui::UiElementKind uiCanvasKind{Runtime::Ui::UiElementKind::Panel};
         std::optional<UiCanvasPreviewState> uiCanvasPreviewState;

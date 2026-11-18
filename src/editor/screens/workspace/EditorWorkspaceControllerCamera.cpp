@@ -46,6 +46,7 @@ namespace Horo::Editor {
           crossings(runtime.ServiceSnapshot().budget.maximumBoundaryOccurrences) {}
 
     EditorWorkspaceController::~EditorWorkspaceController() {
+        static_cast<void>(DrainUiCanvasRecovery());
         static_cast<void>(ShutdownTerrainDocuments(true));
         ShutdownTerrainCook();
         static_cast<void>(ShutdownPrefabSettings(true));
