@@ -255,11 +255,7 @@ namespace Horo::AI {
         try {
             if (auto admitted = AdmitSource(source, *decision); admitted.HasError())
                 return Result<Output>::Failure(admitted.ErrorValue());
-            std::ranges::sort(source.transitions, [](const auto &left, const auto &right) {
-                if (left.priority != right.priority)
-                    return left.priority > right.priority;
-                return left.id < right.id;
-            });
+            std::ranges::sort(source.transitions, StateMachineTransitionPrecedes);
             return Result<Output>::Success(
                 std::make_shared<const CookedStateMachinePlan>(ConstructionToken{}, std::move(decision), std::move(source)));
         } catch (const std::bad_alloc &) {

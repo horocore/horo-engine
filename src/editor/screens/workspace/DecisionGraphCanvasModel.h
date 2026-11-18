@@ -12,6 +12,8 @@
 
 namespace Horo::AI {
     struct DecisionGraphSource;
+    struct StateMachineAssetDescriptor;
+    struct StateMachineTransition;
 }  // namespace Horo::AI
 
 namespace Horo::Editor {
@@ -102,6 +104,21 @@ namespace Horo::Editor {
     /** @brief Projects immutable family-specific sources without invoking a provider or compiler. */
     [[nodiscard]] GraphViewSnapshot ProjectDecisionCanvas(const AI::DecisionGraphSource &source, DecisionGraphDocumentFence fence,
                                                           bool editable);
+
+    /** @brief Authored transition priority and its one-based position among transitions from the same source state. */
+    struct StateMachineTransitionOrder final {
+        std::int32_t priority{};
+        std::size_t rank{};
+    };
+
+    /** @brief Projects source-local precedence without evaluating guards, events, or the current active path.
+     * @param machine The exact authored graph shown in the editor.
+     * @param transition The selected transition from that graph.
+     * @return Its signed priority and source-local order.
+     */
+    [[nodiscard]] StateMachineTransitionOrder ProjectStateMachineTransitionOrder(const AI::StateMachineAssetDescriptor &machine,
+                                                                                 const AI::StateMachineTransition &transition);
+
     /** @brief Maps supported visual intents into the canonical typed Decision document command. */
     [[nodiscard]] std::optional<StateMachineEditRequest> ResolveDecisionCanvasEdit(const GraphViewSnapshot &snapshot,
                                                                                    const GraphEditCommand &intent);

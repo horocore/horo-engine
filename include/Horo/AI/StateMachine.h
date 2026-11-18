@@ -92,6 +92,16 @@ namespace Horo::AI {
         SourceLocation location;
     };
 
+    /** @brief Orders transitions after the active source state has been chosen.
+     * @param left Candidate to consider first. @param right Candidate to compare.
+     * @return True for higher priority or, on a tie, a lower stable transition identity.
+     * @details The runner chooses source states from the active leaf toward its ancestors before applying this order.
+     */
+    [[nodiscard]] constexpr bool StateMachineTransitionPrecedes(const StateMachineTransition &left,
+                                                                const StateMachineTransition &right) noexcept {
+        return left.priority != right.priority ? left.priority > right.priority : left.id < right.id;
+    }
+
     /** @brief Borrowed-by-value .horo_sm semantic source with no editor layout or runtime pointers. */
     struct StateMachineAssetDescriptor final {
         DecisionNodeId initial;

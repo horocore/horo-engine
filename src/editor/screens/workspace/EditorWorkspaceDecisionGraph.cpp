@@ -1622,9 +1622,26 @@ namespace Horo::Editor {
             label(text(key), Theme::Warn());
         }
 
+        const auto drawTransitionOrder = [&](const AI::StateMachineAssetDescriptor &machine, const AI::StateMachineTransition &transition) {
+            const auto order = ProjectStateMachineTransitionOrder(machine, transition);
+            label(std::format("{} → {}", transition.source.Value(), transition.target.Value()), Theme::Text());
+            label(std::format("{} {}", text("workspace.decision_graph.transition_priority"), order.priority), Theme::Text());
+            label(std::format("{} {}", text("workspace.decision_graph.transition_order"), order.rank), Theme::Text());
+            label(text("workspace.decision_graph.transition_precedence"), Theme::Muted());
+        };
         if (!opened->editable) {
             label(text("workspace.decision_graph.read_only"), Theme::Muted());
-            static_cast<void>(m_decisionGraphCanvas.Draw(*opened, m_context));
+            const auto canvas = m_decisionGraphCanvas.Draw(*opened, m_context);
+            if (const auto *machine = std::get_if<AI::StateMachineAssetDescriptor>(&opened->graph->body)) {
+                auto &selection = m_stateMachineSelection;
+                if (selection.instance != opened->identity.instance)
+                    selection = {.instance = opened->identity.instance};
+                if (canvas.transition)
+                    selection.transition = *canvas.transition;
+                const auto transition = std::ranges::find(machine->transitions, selection.transition, &AI::StateMachineTransition::id);
+                if (transition != machine->transitions.end())
+                    drawTransitionOrder(*machine, *transition);
+            }
             return true;
         }
         AI::DecisionNodeId selected;
@@ -1721,7 +1738,7 @@ namespace Horo::Editor {
         select("workspace.decision_graph.edit_transition", machine.transitions, selection.transition);
         const auto transition = std::ranges::find(machine.transitions, selection.transition, &AI::StateMachineTransition::id);
         if (transition != machine.transitions.end()) {
-            label(std::format("{} → {}", transition->source.Value(), transition->target.Value()), Theme::Text());
+            drawTransitionOrder(machine, *transition);
             if (button("workspace.decision_graph.edit_remove_transition", true))
                 emit(RemoveTransition, transition->id);
         }

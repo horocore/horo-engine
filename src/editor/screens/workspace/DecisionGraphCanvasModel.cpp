@@ -136,6 +136,15 @@ namespace Horo::Editor {
         return projection;
     }
 
+    /** @copydoc ProjectStateMachineTransitionOrder */
+    StateMachineTransitionOrder ProjectStateMachineTransitionOrder(const AI::StateMachineAssetDescriptor &machine,
+                                                                   const AI::StateMachineTransition &transition) {
+        const auto predecessors = std::ranges::count_if(machine.transitions, [&](const AI::StateMachineTransition &candidate) {
+            return candidate.source == transition.source && AI::StateMachineTransitionPrecedes(candidate, transition);
+        });
+        return {transition.priority, static_cast<std::size_t>(predecessors) + 1};
+    }
+
     /** @copydoc ResolveDecisionCanvasEdit */
     std::optional<StateMachineEditRequest> ResolveDecisionCanvasEdit(const GraphViewSnapshot &snapshot, const GraphEditCommand &intent) {
         if (!snapshot.editable || snapshot.family != AI::DecisionPlanKind::StateMachine || snapshot.instance != intent.fence.instance ||

@@ -8,6 +8,7 @@
 #include "editor/screens/workspace/DecisionGraphCanvas.h"
 #include "editor/screens/workspace/DecisionGraphCanvasModel.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
+#include "support/DecisionGraphCompilerTestSupport.h"
 
 #include <algorithm>
 #include <array>
@@ -229,6 +230,50 @@ namespace Horo::Editor {
         reveal(first, 640.0F);
         CHECK(document.revision == fence.revision);
         CHECK(document.graph == graph);
+    }
+
+    TEST_CASE("State-machine transition inspection reflects the cooked source-local order and real leaf selection",
+              "[unit][editor][decision][canvas]") {
+        using namespace AI::DecisionGraphTestSupport;
+        Fixture fixture;
+        auto source = TerminalMachine(1);
+        const auto root = Node(1), leaf = Node(2), target = Node(3);
+        auto &machine = std::get<AI::StateMachineAssetDescriptor>(source.body);
+        machine = {
+            .initial = root,
+            .states = {{.id = root, .initialChild = leaf},
+                       {.id = leaf, .parent = root},
+                       {.id = target, .parent = root, .terminal = AI::DecisionStateTerminal::Succeeded}},
+            .transitions = {{.id = Node(11), .source = leaf, .target = target, .priority = -2},
+                            {.id = Node(4), .source = leaf, .target = target, .priority = -8},
+                            {.id = Node(9), .source = root, .target = target, .priority = 99},
+                            {.id = Node(10), .source = leaf, .target = target, .priority = -2}},
+        };
+        const auto compiled = fixture.Compile(std::span{&source, 1}, 1);
+        REQUIRE(compiled->Graphs().size() == 1);
+        const auto &cooked = std::get<std::shared_ptr<const AI::CookedStateMachinePlan>>(compiled->Graphs().front().execution);
+        REQUIRE(cooked->Transitions().size() == machine.transitions.size());
+        CHECK(cooked->Transitions().front().id == Node(9));
+        std::size_t leafRank{};
+        for (const auto &runtime : cooked->Transitions()) {
+            const auto authored = std::ranges::find(machine.transitions, runtime.id, &AI::StateMachineTransition::id);
+            REQUIRE(authored != machine.transitions.end());
+            const auto order = ProjectStateMachineTransitionOrder(machine, *authored);
+            CHECK(order.priority == runtime.priority);
+            CHECK(order.rank == (runtime.source == leaf ? ++leafRank : 1));
+        }
+        CHECK(leafRank == 3);
+
+        auto instance = fixture.Instance(compiled);
+        const auto snapshot = fixture.blackboard->Snapshot();
+        REQUIRE(snapshot.HasValue());
+        AI::DecisionStepTrace trace;
+        REQUIRE(instance->StepWithTrace({1, fixture.binding, snapshot.Value(), {}}, trace).HasValue());
+        const auto committed =
+            std::ranges::find(trace.Records(), AI::DecisionStepRecordKind::StateMachineTransition, &AI::DecisionStepRecord::kind);
+        REQUIRE(committed != trace.Records().end());
+        CHECK(committed->node == Node(10));
+        CHECK(fixture.probe.factories == 0);
     }
 
     TEST_CASE("Utility canvas labels options in the real selector evaluation order", "[unit][editor][decision][canvas]") {
