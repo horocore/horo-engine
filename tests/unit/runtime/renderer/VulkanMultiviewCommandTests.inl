@@ -162,6 +162,38 @@ TEST_CASE("Vulkan multiview emits real indexed multipass and instanced view indi
     CHECK(fixture.lease.releases == 1);
 }
 
+TEST_CASE("Vulkan stores requested XR projection alpha in both acquired eye attachments", "[vulkan][multiview][command][alpha]") {
+    bool premultiplied = false;
+    SECTION("ordinary opaque projection") {}
+    SECTION("premultiplied projection clears to transparent black") {
+        premultiplied = true;
+    }
+    NativeGraphFixture fixture(false);
+    MultiviewPacket packet(fixture, false);
+    if (premultiplied)
+        packet.Workload().clearColor = {0, 0, 0, 0};
+    RenderGraphLeaseTransfer transfer;
+    REQUIRE(fixture.graph.BeginFrame({1}).HasValue());
+    REQUIRE(fixture.graph.ExecuteGraph(packet.Request(fixture, transfer)).HasValue());
+    const auto &calls = fixture.encoded.renderingCalls;
+    REQUIRE(calls.size() == 2);
+    REQUIRE(calls[0].colorView != VK_NULL_HANDLE);
+    REQUIRE(calls[1].colorView != VK_NULL_HANDLE);
+    CHECK(calls[0].colorView != calls[1].colorView);
+    const std::array expected = premultiplied ? std::array{0.0F, 0.0F, 0.0F, 0.0F} : std::array{0.035F, 0.045F, 0.070F, 1.0F};
+    for (const auto &call : calls) {
+        CHECK(call.colorLoad == VK_ATTACHMENT_LOAD_OP_CLEAR);
+        CHECK(call.colorStore == VK_ATTACHMENT_STORE_OP_STORE);
+        const auto &rgba = call.colorClear.color.float32;
+        const std::array actual{rgba[0], rgba[1], rgba[2], rgba[3]};
+        CHECK(actual == expected);
+    }
+    REQUIRE(fixture.graph.SubmitFrame({1}).HasValue());
+    fixture.commandState.state.Complete();
+    REQUIRE(fixture.graph.BeginShutdown().HasValue());
+    CHECK(fixture.graph.PollDrain().Value() == RenderBackendDrainProgress::Drained);
+}
+
 TEST_CASE("Vulkan motion graph records paired floating and depth attachments only with exact forward state",
           "[vulkan][multiview][motion][command]") {
     auto format = RenderTextureFormat::Rgba16Float;

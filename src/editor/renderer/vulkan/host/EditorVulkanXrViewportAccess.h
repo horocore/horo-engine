@@ -3,6 +3,7 @@
  * @brief Non-installed explicit App access to the SAME selected viewport's XR resource/graph owner.
  */
 #include "../../EditorViewportTextureView.h"
+#include "EditorVulkanXrProjectionAlpha.h"
 #include "Horo/Runtime/Render/MultiviewMotionHistory.h"
 #include "Horo/Runtime/Render/RenderGraphSynchronization.h"
 #include "Horo/Runtime/Render/RenderScene.h"
@@ -55,13 +56,23 @@ namespace Horo::Editor {
          * @param publication Current Scene/frame/origin/device evidence. @param cameras Actual native view matrices.
          * @param instances Canonical scene instance values.
          * @param motion Optional exact compositor prediction and stable object IDs for the selected frame-synthesis route.
+         * @param alpha Explicit projection color policy for this acquisition.
          * @return Original typed validation/binding outcome.
          */
         [[nodiscard]] static Result<void> Bind(EditorViewportRendererVulkan &viewport, Render::RenderTextureHandle color,
                                                const std::array<Render::RenderTextureViewHandle, 2> &views,
                                                const Render::MultiviewPublication &publication,
                                                std::span<const Render::MultiviewSceneView> cameras,
-                                               std::span<const Render::RenderStaticMeshInstance> instances, const MotionInput *motion);
+                                               std::span<const Render::RenderStaticMeshInstance> instances, const MotionInput *motion,
+                                               EditorXrProjectionAlpha alpha = EditorXrProjectionAlpha::Opaque);
+        /** @brief Takes the renderer's one-shot premultiplied scene evidence after observing the actual queue.
+         * @param viewport Same selected renderer owner. @param publication Exact staged Scene/frame/origin/view/device.
+         * @param color Exact acquired color target generation. @return Completed evidence or empty.
+         * @pre Owner lane. The compositor must independently retain exact acquisition identity and verify image release.
+         */
+        [[nodiscard]] static std::optional<EditorXrPremultipliedProjection> TakePremultipliedProjection(
+            EditorViewportRendererVulkan &viewport, const Render::MultiviewPublication &publication,
+            Render::RenderTextureHandle color) noexcept;
 
         /** @brief The previous successful projection's immutable owned depth and actual committed import state. */
         struct PreviousEyeDepth final {
@@ -96,7 +107,7 @@ namespace Horo::Editor {
          */
         [[nodiscard]] static EditorViewportTextureView Mirror(const EditorViewportRendererVulkan &viewport, std::uint64_t frame,
                                                               Render::RenderTextureViewHandle expected) noexcept;
-        /** @brief Revokes only the borrowed mirror receipt on exact Scene loss/retirement; native queue debt stays owned. */
+        /** @brief Revokes the mirror and projection evidence on exact Scene loss/retirement; native queue debt stays owned. */
         static void RevokeMirror(const EditorViewportRendererVulkan &viewport) noexcept;
         /** @brief Releases cold XR graph backing only after the App proved every acquisition/scene/GUI reference retired.
          * @param viewport SAME selected owner. @pre Exact native image retirement is already complete; owner lane.

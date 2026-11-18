@@ -10,6 +10,7 @@
 #include "VulkanEditorGraphicsBridge.h"
 #include "editor/renderer/EditorViewportResources.h"
 #include "editor/renderer/grid/ViewportOverlayTriangles.h"
+#include "host/EditorVulkanXrProjectionAlpha.h"
 
 #include <array>
 #include <thread>
@@ -67,6 +68,7 @@ namespace Horo::Editor {
          * @param publication Canonical Scene/frame/origin/view and actual device/capability evidence.
          * @param views Complete actual runtime-ordered view matrices. @param instances SAME canonical geometry projection.
          * @param motion Optional exact native prediction. @param motionObjects Stable object IDs aligned with instances.
+         * @param alpha Explicit color policy for the selected canonical XR program.
          * @return Success or original stale/capacity/tuple failure; no compilation, heap allocation or native wait.
          * @pre Previous acquisition's scene AND GUI tail references have retired. A failed bind cannot be executed.
          */
@@ -76,8 +78,10 @@ namespace Horo::Editor {
                                                std::span<const Render::MultiviewSceneView> views,
                                                std::span<const Render::RenderStaticMeshInstance> instances,
                                                const Render::MultiviewMotionFrame *motion,
-                                               std::span<const Render::RenderMotionObjectId> motionObjects);
-        /** @brief Admits exact native-projection completion into the selected graph's transform history. */
+                                               std::span<const Render::RenderMotionObjectId> motionObjects, EditorXrProjectionAlpha alpha);
+        /** @brief Ends current projection evidence and admits exact native projection into transform history.
+         * @pre Same frame's successful native compositor end on the render owner lane.
+         */
         void CompleteXrMotion(const std::optional<Render::MultiviewMotionFrame> &frame, bool projected) noexcept;
         /** @brief Executes the bound eye scene through the SAME canonical frame and primary-output/UI/GUI tail.
          * @param frame Existing App scope. @param output Existing desktop output preparation; mirror is composed later by GUI.
@@ -142,6 +146,9 @@ namespace Horo::Editor {
         friend class EditorVulkanXrViewportAccess;
         struct XrProjectionGraph;
         struct XrGraph;
+        /** @copydoc EditorVulkanXrViewportAccess::TakePremultipliedProjection */
+        [[nodiscard]] std::optional<EditorXrPremultipliedProjection> TakeXrPremultipliedProjection(
+            const Render::MultiviewPublication &publication, Render::RenderTextureHandle color) noexcept;
         /** @brief Drops only cold scene graph/depth resources after their canonical scene/GUI lease has drained. */
         void ReleaseXrGraph() noexcept;
         /** @brief Retires cold graph/depth storage with retryable typed errors and exact successful-prefix bookkeeping.

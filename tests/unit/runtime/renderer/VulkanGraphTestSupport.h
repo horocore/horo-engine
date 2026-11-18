@@ -32,6 +32,10 @@ namespace Horo::Render::VulkanGraphTest {
             bool depth{};
             VkAttachmentLoadOp load{};
             VkExtent2D extent{};
+            VkImageView colorView{};
+            VkAttachmentLoadOp colorLoad{};
+            VkAttachmentStoreOp colorStore{};
+            VkClearValue colorClear{};
         };
 
         std::vector<RenderingCall> renderingCalls;
@@ -71,9 +75,17 @@ namespace Horo::Render::VulkanGraphTest {
         encodedGraph->operations.emplace_back("begin-rendering");
         encodedGraph->layers = info->layerCount;
         encodedGraph->depthAttachment = info->pDepthAttachment != nullptr;
-        encodedGraph->renderingCalls.push_back({info->colorAttachmentCount, info->pDepthAttachment != nullptr,
-                                                info->pDepthAttachment ? info->pDepthAttachment->loadOp : VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-                                                info->renderArea.extent});
+        auto &call = encodedGraph->renderingCalls.emplace_back(info->colorAttachmentCount, info->pDepthAttachment != nullptr,
+                                                               info->pDepthAttachment ? info->pDepthAttachment->loadOp
+                                                                                      : VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                                                               info->renderArea.extent);
+        if (info->colorAttachmentCount != 0) {
+            const auto &color = info->pColorAttachments[0];
+            call.colorView = color.imageView;
+            call.colorLoad = color.loadOp;
+            call.colorStore = color.storeOp;
+            call.colorClear = color.clearValue;
+        }
         ++encodedGraph->renderingBegins;
     }
 

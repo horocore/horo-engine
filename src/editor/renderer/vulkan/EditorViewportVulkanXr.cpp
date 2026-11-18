@@ -38,9 +38,16 @@ namespace Horo::Editor {
     Result<void> EditorVulkanXrViewportAccess::Bind(EditorViewportRendererVulkan &viewport, RenderTextureHandle color,
                                                     const std::array<RenderTextureViewHandle, 2> &views,
                                                     const MultiviewPublication &publication, std::span<const MultiviewSceneView> cameras,
-                                                    std::span<const RenderStaticMeshInstance> instances, const MotionInput *motion) {
+                                                    std::span<const RenderStaticMeshInstance> instances, const MotionInput *motion,
+                                                    const EditorXrProjectionAlpha alpha) {
         return viewport.BindXrFrame(color, views, publication, cameras, instances, motion ? &motion->frame : nullptr,
-                                    motion ? motion->objects : std::span<const RenderMotionObjectId>{});
+                                    motion ? motion->objects : std::span<const RenderMotionObjectId>{}, alpha);
+    }
+
+    /** @copydoc EditorVulkanXrViewportAccess::TakePremultipliedProjection */
+    std::optional<EditorXrPremultipliedProjection> EditorVulkanXrViewportAccess::TakePremultipliedProjection(
+        EditorViewportRendererVulkan &viewport, const MultiviewPublication &publication, const RenderTextureHandle color) noexcept {
+        return viewport.TakeXrPremultipliedProjection(publication, color);
     }
 
     /** @copydoc EditorVulkanXrViewportAccess::CompleteMotion */
@@ -355,6 +362,7 @@ namespace Horo::Editor {
         std::size_t drawCount{};
         const CompiledRenderGraphExecution *bound{};
         EditorVulkanXrMirrorProjection mirror;
+        EditorVulkanXrProjectionAlphaState alpha;
         RenderTimelinePoint submitted;
         MultiviewMotionHistory motion;
         std::optional<MultiviewMotionFrame> motionFrame;
@@ -472,15 +480,17 @@ namespace Horo::Editor {
     Result<void> EditorViewportRendererVulkan::BindXrFrame(
         RenderTextureHandle color, const std::array<RenderTextureViewHandle, 2> &eyeViews, const MultiviewPublication &publication,
         std::span<const MultiviewSceneView> views, std::span<const RenderStaticMeshInstance> instances, const MultiviewMotionFrame *motion,
-        std::span<const RenderMotionObjectId> motionObjects) {
+        std::span<const RenderMotionObjectId> motionObjects, const EditorXrProjectionAlpha alpha) {
         if (owner_ == std::this_thread::get_id() && xrGraph_) {
             xrGraph_->bound = nullptr;
             xrGraph_->mirror.ClearAcquisition();
+            xrGraph_->alpha.Reset();
             xrGraph_->motionFrame.reset();
             xrGraph_->motionSubmitted = false;
         }
         if (owner_ != std::this_thread::get_id() || !initialized_ || !xrGraph_ || !publication.IsValid() || views.size() != 2 ||
-            instances.size() > RenderMaterialPass::MaximumDraws)
+            instances.size() > RenderMaterialPass::MaximumDraws ||
+            (alpha != EditorXrProjectionAlpha::Opaque && alpha != EditorXrProjectionAlpha::Premultiplied))
             return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
         auto &storage = *xrGraph_;
         if (const auto &support = frontend_.Capabilities().support;
@@ -518,6 +528,7 @@ namespace Horo::Editor {
             storage.bound = nullptr;
             return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleTarget));
         }
+        storage.alpha.Bind(alpha, storage.scene->Publication(), color);
         if (motion && storage.motion.Stage(*motion, *storage.scene, motionObjects))
             storage.motionFrame = *motion;
         return Result<void>::Success();
@@ -546,8 +557,24 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportRendererVulkan::RevokeXrMirror */
     void EditorViewportRendererVulkan::RevokeXrMirror() const noexcept {
-        if (owner_ == std::this_thread::get_id() && xrGraph_)
+        if (owner_ == std::this_thread::get_id() && xrGraph_) {
             xrGraph_->mirror.Revoke();
+            xrGraph_->alpha.Reset();
+        }
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::TakeXrPremultipliedProjection */
+    std::optional<EditorXrPremultipliedProjection> EditorViewportRendererVulkan::TakeXrPremultipliedProjection(
+        const MultiviewPublication &publication, const RenderTextureHandle color) noexcept {
+        if (owner_ != std::this_thread::get_id() || !initialized_ || !xrGraph_)
+            return std::nullopt;
+        const auto &support = frontend_.Capabilities().support;
+        if (support.deviceIncarnation != publication.deviceIncarnation || support.capabilityRevision != publication.capabilityRevision)
+            return std::nullopt;
+        const auto completion = xrGraph_->alpha.Take(publication, color, xrGraph_->observed);
+        if (!completion)
+            return std::nullopt;
+        return EditorXrPremultipliedProjection{publication, color, *completion};
     }
 
     /** @copydoc EditorViewportRendererVulkan::ExecuteXrFrame */
@@ -582,15 +609,20 @@ namespace Horo::Editor {
         if (reserved.HasError())
             return fail(reserved.ErrorValue());
         const RenderGraphQueueSubmission submission{reserved.Value(), {0, 1}};
-        const std::array workloads{
-            RenderGraphPassWorkload{storage.active->pass, RenderGraphMultiview{storage.scene, storage.scene->Publication(), storage.targets,
-                                                                               std::span{storage.draws}.first(storage.drawCount)}}};
+        RenderGraphMultiview projection{storage.scene, storage.scene->Publication(), storage.targets,
+                                        std::span{storage.draws}.first(storage.drawCount)};
+        // The immutable packaged XR program writes alpha one for covered pixels. With blending disabled,
+        // clearing uncovered pixels to zero RGBA gives the compositor a premultiplied image.
+        if (storage.alpha.IsPremultiplied())
+            projection.clearColor = {0.0F, 0.0F, 0.0F, 0.0F};
+        const std::array workloads{RenderGraphPassWorkload{storage.active->pass, projection}};
         recordedEver_ = true;
         auto executed = frame.ExecuteSubmittedGraph(*bound, workloads, std::span{&submission, 1});
         if (executed.HasError())
             frame.Cancel();
         else {
             storage.submitted = reserved.Value().signal;
+            storage.alpha.Submit(storage.submitted);
             storage.motionSubmitted = storage.motionFrame.has_value();
         }
         return executed;
@@ -601,6 +633,7 @@ namespace Horo::Editor {
         if (owner_ != std::this_thread::get_id() || !xrGraph_)
             return;
         auto &storage = *xrGraph_;
+        storage.alpha.Reset();
         if (!frame) {
             storage.motion.Reset();
             storage.previousDepth.reset();
@@ -631,8 +664,10 @@ namespace Horo::Editor {
         // completion is NOT sufficient to release the acquired image or end the compositor frame.
         const auto observed = frontend_.ObserveSubmission(
             {.completion = xrGraph_->submitted, .expectedDeviceIncarnation = frontend_.Capabilities().support.deviceIncarnation});
-        if (observed.HasError())
+        if (observed.HasError()) {
+            xrGraph_->alpha.Reset();
             return Result<void>::Failure(observed.ErrorValue());
+        }
         if (observed.Value())
             xrGraph_->observed = xrGraph_->submitted;
         return Result<void>::Success();
