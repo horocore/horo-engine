@@ -1,3 +1,5 @@
+#include "Horo/Application/BlackboardUsageReview.h"
+#include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Assets/AssetSourcePublication.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
@@ -58,7 +60,8 @@ namespace Horo::Editor {
             return;
         }
         m_blackboardDocuments.push_back(std::move(loaded).Value());
-        views.push_back({std::move(snapshot).Value(), {}});
+        views.push_back({.snapshot = std::move(snapshot).Value(),
+                         .usageReviewAvailable = m_mutableAssetRegistry && m_mutations && m_sourceRecoveryJobs});
     }
 
     /** @copydoc EditorWorkspaceController::SaveBlackboardDocument */
@@ -79,6 +82,11 @@ namespace Horo::Editor {
             return;
         auto snapshot = document.Snapshot();
         if (snapshot.HasValue()) {
+            if (snapshot.Value().revision != found->snapshot.revision) {
+                found->usageReview.reset();
+                if (m_blackboardUsageWork && m_blackboardUsageWork->fence.instance == document.Identity().instance)
+                    static_cast<void>(m_blackboardUsageWork->job.RequestCancel());
+            }
             static_cast<void>(m_viewModel.workspacePanelHost.SetDocumentDirty(document.Identity().instance, snapshot.Value().dirty));
             found->snapshot = std::move(snapshot).Value();
         }
@@ -110,11 +118,98 @@ namespace Horo::Editor {
                     return SaveBlackboardDocument(*document, request.fence.revision);
                 case Reload:
                     return document->Reload(request.fence.revision, m_assetRegistry);
+                case ReviewUsages:
+                    return StartBlackboardUsageReview(request, *document);
             }
             return Result<void>::Failure(MakeError(BlackboardDocumentErrors::InvalidEdit));
         };
         RefreshBlackboardDocument(*document, execute());
         return true;
+    }
+
+    /** @copydoc EditorWorkspaceController::StartBlackboardUsageReview */
+    Result<void> EditorWorkspaceController::StartBlackboardUsageReview(const BlackboardWorkspaceRequest &request,
+                                                                       const BlackboardSchemaDocument &document) {
+        if (!request.reviewKey || !m_mutableAssetRegistry || !m_mutations || !m_sourceRecoveryJobs)
+            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Authority));
+        if (m_blackboardUsageWork)
+            return Result<void>::Failure(MakeError(BlackboardDocumentErrors::Busy));
+        const auto current = document.Snapshot();
+        if (current.HasError())
+            return Result<void>::Failure(current.ErrorValue());
+        const auto &snapshot = current.Value();
+        if (snapshot.revision != request.fence.revision)
+            return Result<void>::Failure(MakeError(BlackboardDocumentErrors::StaleRevision));
+        if (snapshot.dirty || snapshot.conflict || !snapshot.sourceDigest)
+            return Result<void>::Failure(MakeError(BlackboardDocumentErrors::Dirty));
+        if (!std::ranges::binary_search(snapshot.durableSchema->Keys(), *request.reviewKey, {}, &AI::BlackboardKeyDescriptor::key))
+            return Result<void>::Failure(MakeError(BlackboardDocumentErrors::InvalidEdit));
+
+        const Application::BlackboardUsageSelection selection{snapshot.source->asset, snapshot.durableSchema->Identity(),
+                                                              snapshot.durableSchema->Version(), *request.reviewKey,
+                                                              *snapshot.sourceDigest};
+        std::optional<Assets::AssetRegistryRevision> complete;
+        if (m_collisionInventory && m_collisionInventory->status == Assets::AssetRegistryBuildStatus::Complete)
+            complete = m_collisionInventory->revision;
+        auto result = std::make_shared<std::shared_ptr<const Application::BlackboardUsageReview>>();
+        auto job = m_sourceRecoveryJobs->SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Io},
+                                                      [root = m_sourceOpenService.ProjectRoot(), assets = m_mutableAssetRegistry,
+                                                       mutations = m_mutations, complete, selection,
+                                                       result](const CancellationToken &cancellation) {
+            auto capture = Application::CaptureBlackboardUsageReview(root, *assets, complete, *mutations, selection, {}, cancellation);
+            if (capture.HasError())
+                return Result<void>::Failure(capture.ErrorValue());
+            *result = std::make_shared<const Application::BlackboardUsageReview>(std::move(capture).Value());
+            return Result<void>::Success();
+        });
+        if (job.HasError())
+            return Result<void>::Failure(job.ErrorValue());
+        m_blackboardUsageWork.emplace(BlackboardUsageWork{std::move(job).Value(), request.fence, std::move(result)});
+        const auto view = std::ranges::find_if(m_viewModel.blackboardDocuments, [&](const auto &entry) {
+            return entry.snapshot.document.instance == request.fence.instance;
+        });
+        if (view != m_viewModel.blackboardDocuments.end()) {
+            view->reviewingUsages = true;
+            view->usageReview.reset();
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorWorkspaceController::UpdateBlackboardUsageReview */
+    void EditorWorkspaceController::UpdateBlackboardUsageReview() {
+        if (!m_blackboardUsageWork)
+            return;
+        const auto job = m_blackboardUsageWork->job.Snapshot();
+        if (!job || !job->terminalResult)
+            return;
+        auto work = std::move(*m_blackboardUsageWork);
+        m_blackboardUsageWork.reset();
+        const auto view = std::ranges::find_if(m_viewModel.blackboardDocuments, [&](const auto &entry) {
+            return entry.snapshot.document.instance == work.fence.instance;
+        });
+        if (view == m_viewModel.blackboardDocuments.end())
+            return;
+        view->reviewingUsages = false;
+        if (view->snapshot.revision != work.fence.revision || job->state == JobState::Cancelled)
+            return;
+        if (job->state != JobState::Succeeded) {
+            view->diagnostic = job->terminalResult->error;
+            return;
+        }
+        auto result = std::move(*work.result);
+        if (result && result->registry == m_mutableAssetRegistry->Snapshot().Revision())
+            view->usageReview = std::move(result);
+        else
+            view->diagnostic = MakeError(Application::DecisionCookErrors::Stale);
+    }
+
+    /** @copydoc EditorWorkspaceController::StopBlackboardUsageReview */
+    void EditorWorkspaceController::StopBlackboardUsageReview() {
+        if (!m_blackboardUsageWork)
+            return;
+        static_cast<void>(m_blackboardUsageWork->job.RequestCancel());
+        static_cast<void>(m_blackboardUsageWork->job.Wait());
+        m_blackboardUsageWork.reset();
     }
 
     /** @copydoc EditorWorkspaceController::ResolveBlackboardClose */
@@ -140,6 +235,8 @@ namespace Horo::Editor {
         const auto closed = m_viewModel.workspacePanelHost.CloseDocument(fence.instance, WorkspaceDocumentClosePolicy::DiscardChanges);
         if (closed.HasError())
             return Result<bool>::Failure(closed.ErrorValue());
+        if (m_blackboardUsageWork && m_blackboardUsageWork->fence.instance == fence.instance)
+            static_cast<void>(m_blackboardUsageWork->job.RequestCancel());
         std::erase_if(m_viewModel.blackboardDocuments, [fence](const auto &entry) {
             return entry.snapshot.document.instance == fence.instance;
         });

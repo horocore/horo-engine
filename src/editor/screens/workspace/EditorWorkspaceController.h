@@ -486,6 +486,8 @@ namespace Horo::Editor {
          * @param elapsedSeconds Host update delta. @param delaySeconds Zero disables source saves.
          */
         void UpdateSourceAutosave(float elapsedSeconds, int delaySeconds);
+        /** @brief Publishes a terminal Project usage review only for its original document and registry revision. */
+        void UpdateBlackboardUsageReview();
         /**
          * @brief Schedules and drains non-blocking canonical scene identity inspections.
          * @param elapsedSeconds Owner-thread elapsed frame time.
@@ -794,6 +796,14 @@ namespace Horo::Editor {
         Sha256Digest m_contentBrowserPreviewSchemaRevision;
         std::size_t m_contentBrowserNextPreviewEntry{};
         std::vector<std::unique_ptr<BlackboardSchemaDocument>> m_blackboardDocuments;
+
+        struct BlackboardUsageWork final {
+            JobHandle job;
+            BlackboardDocumentFence fence;
+            std::shared_ptr<std::shared_ptr<const Application::BlackboardUsageReview>> result;
+        };
+
+        std::optional<BlackboardUsageWork> m_blackboardUsageWork;
         std::vector<UiCanvasDocument> m_uiCanvasDocuments;
         float m_uiCanvasAutosaveSeconds{};
 
@@ -1200,6 +1210,11 @@ namespace Horo::Editor {
         void OpenEmbeddedBlackboardSource(const SourceOpenResult &result);
         /** @brief Dispatches a revision-fenced Blackboard document request. */
         bool ProcessBlackboardDocumentCommand(const EditorWorkspaceViewCommandData &cmd);
+        /** @brief Submits one explicit review of a durable key without blocking the workspace draw path. */
+        [[nodiscard]] Result<void> StartBlackboardUsageReview(const BlackboardWorkspaceRequest &request,
+                                                              const BlackboardSchemaDocument &document);
+        /** @brief Revokes and joins an outstanding Project review before borrowed owners leave scope. */
+        void StopBlackboardUsageReview();
         /** @brief Looks up the existing authored session by tab identity. */
         [[nodiscard]] BlackboardSchemaDocument *FindBlackboardDocument(DocumentInstanceId instance) noexcept;
         /** @brief Saves a Blackboard through the same native source publication owner as Save All. */

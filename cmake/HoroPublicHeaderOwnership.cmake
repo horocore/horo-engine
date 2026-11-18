@@ -488,7 +488,9 @@ horo_configure_target_header_boundary(HoroUiTemplateInstances PUBLIC_HEADERS
     Horo/UiTemplates/UiTemplateDocumentOwner.h
 )
 
-horo_configure_target_header_boundary(HoroDecisionCookHost PUBLIC_HEADERS Horo/Application/DecisionAssetCookHost.h)
+horo_configure_target_header_boundary(HoroDecisionCookHost PUBLIC_HEADERS
+    Horo/Application/BlackboardUsageReview.h
+    Horo/Application/DecisionAssetCookHost.h)
 horo_configure_target_header_boundary(HoroTerrainAuthoringApplication PUBLIC_HEADERS
     Horo/Application/TerrainAuthoringCook.h
     Horo/Application/TerrainAuthoringAssets.h)
@@ -854,6 +856,7 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/DecisionWakePolicy.h
     Horo/AI/BlackboardInstance.h
     Horo/AI/BlackboardSchema.h
+    Horo/AI/BlackboardUsageInspection.h
     Horo/AI/DecisionAssetValidation.h
     Horo/AI/StateMachine.h
     Horo/AI/EnvironmentQuerySchema.h

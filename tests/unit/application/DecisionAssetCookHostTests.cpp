@@ -1,7 +1,10 @@
 #include "DecisionGraphCompilerTestSupport.h"
+#include "Horo/Application/BlackboardUsageReview.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
+#include "Horo/Editor/ProjectMutation.h"
 #include "assets/AssetCookServiceFixture.h"
 
+#include <algorithm>
 #include <catch2/generators/catch_generators.hpp>
 #include <ranges>
 
@@ -118,6 +121,106 @@ namespace {
             return artifacts;
         }
     };
+
+    TEST_CASE("Project Blackboard review pins typed Decision uses and preserves incomplete owners",
+              "[native][decision-cook][blackboard][usage]") {
+        Fixture fixture{true};
+        const auto schemaAsset = Files::Id("00000000-0000-0000-0000-0000000000ca");
+        const auto schemaBytes = BlackboardSchemaCodec::Encode(*fixture.ai.schema);
+        REQUIRE(schemaBytes.HasValue());
+        const auto installSchema = [&](const AssetId asset, const std::string &name) {
+            const auto path = fixture.source.path / "assets" / name;
+            Files::WriteFile(path, schemaBytes.Value());
+            const auto sidecar = Files::SidecarJson(asset.ToString(), BlackboardSchemaAssetType);
+            Files::WriteFile(path.string() + ".horo", {reinterpret_cast<const std::uint8_t *>(sidecar.data()), sidecar.size()});
+        };
+        installSchema(schemaAsset, "guard.horo_bb");
+        const auto rebuild = [&] {
+            const auto result = RebuildAssetRegistry(fixture.registry, fixture.source.path, AssetRegistryOpenMode::ReadOnly);
+            REQUIRE(result.HasValue());
+            REQUIRE(result.Value().status == AssetRegistryBuildStatus::Complete);
+            return result.Value().publishedRevision;
+        };
+        const auto original = rebuild();
+        NativeDurableFileSystem files;
+        Editor::ProjectMutationCoordinator mutations{files};
+        const BlackboardUsageSelection selection{schemaAsset, fixture.ai.schema->Identity(), fixture.ai.schema->Version(),
+                                                 fixture.ai.schema->Keys().front().key,
+                                                 ComputeSha256(std::as_bytes(std::span{schemaBytes.Value()}))};
+        const auto review =
+            CaptureBlackboardUsageReview(fixture.source.path, fixture.registry, original, mutations, selection, fixture.ai.providers);
+        REQUIRE(review.HasValue());
+        CHECK(review.Value().registry == original);
+        CHECK(review.Value().providers.lock() == fixture.ai.providers);
+        CHECK(review.Value().sources.size() == 3);
+        REQUIRE(review.Value().uses.size() == 1);
+        CHECK(review.Value().uses.front().asset == fixture.child);
+        CHECK(review.Value().uses.front().use.requirement.key == selection.key);
+        CHECK(review.Value().uses.front().use.requirement.source.source == "assets/task.horo_utility");
+        CHECK_FALSE((std::ranges::find(review.Value().gaps, BlackboardUsageGapKind::DecisionProvider, &BlackboardUsageGap::kind) !=
+                     review.Value().gaps.end()));
+        CHECK((std::ranges::find(review.Value().gaps, BlackboardUsageGapKind::EnvironmentQueryBindings, &BlackboardUsageGap::kind) !=
+               review.Value().gaps.end()));
+        CHECK((std::ranges::find(review.Value().gaps, BlackboardUsageGapKind::PerceptionPolicy, &BlackboardUsageGap::kind) !=
+               review.Value().gaps.end()));
+
+        const auto partial = CaptureBlackboardUsageReview(fixture.source.path, fixture.registry, {}, mutations, selection);
+        REQUIRE(partial.HasValue());
+        CHECK(partial.Value().uses.size() == 1);
+        CHECK((std::ranges::find(partial.Value().gaps, BlackboardUsageGapKind::DecisionProvider, &BlackboardUsageGap::kind) !=
+               partial.Value().gaps.end()));
+        CHECK((std::ranges::find(partial.Value().gaps, BlackboardUsageGapKind::RegistryInventory, &BlackboardUsageGap::kind) !=
+               partial.Value().gaps.end()));
+
+        SECTION("an observed provider requirement carries its origin without keeping the provider alive") {
+            auto contribution = Registration(fixture.ai.probe);
+            const auto origin = contribution.contract.descriptor.origin;
+            contribution.contract.descriptor.requirements.push_back(
+                {.key = selection.key, .kind = BlackboardValueKind::Scalar, .source = Location()});
+            auto captured = DecisionNodeGeneration::Capture({&contribution, 1}, fixture.ai.admission);
+            REQUIRE(captured.HasValue());
+            auto generation = std::move(captured).Value();
+            const auto supplied =
+                CaptureBlackboardUsageReview(fixture.source.path, fixture.registry, original, mutations, selection, generation);
+            REQUIRE(supplied.HasValue());
+            REQUIRE(supplied.Value().uses.size() == 2);
+            const auto usage = std::ranges::find_if(supplied.Value().uses, [](const BlackboardDecisionUsage &use) {
+                return use.use.provider.has_value();
+            });
+            REQUIRE(usage != supplied.Value().uses.end());
+            CHECK(usage->use.provider == origin);
+            generation.reset();
+            CHECK(supplied.Value().providers.expired());
+        }
+        SECTION("a changed selected source cannot review an older document opening") {
+            std::vector<BlackboardSchemaAuthoringRow> labels;
+            for (const auto &key : fixture.ai.schema->Keys())
+                labels.push_back({key.key, "External name"});
+            const auto changed = BlackboardSchemaSourceCodec::Encode(*fixture.ai.schema, labels);
+            REQUIRE(changed.HasValue());
+            Files::WriteFile(fixture.source.path / "assets/guard.horo_bb", changed.Value());
+            const auto stale = CaptureBlackboardUsageReview(fixture.source.path, fixture.registry, original, mutations, selection);
+            REQUIRE(stale.HasError());
+            CHECK(stale.ErrorValue().code.Value() == DecisionCookErrors::Stale.code.Value());
+        }
+        SECTION("invalid source remains explicitly unresolved") {
+            const std::array<std::uint8_t, 1> malformed{0};
+            Files::WriteFile(fixture.source.path / "assets/task.horo_utility", malformed);
+            const auto invalid = CaptureBlackboardUsageReview(fixture.source.path, fixture.registry, original, mutations, selection);
+            REQUIRE(invalid.HasValue());
+            CHECK(invalid.Value().uses.empty());
+            CHECK(invalid.Value().closure != review.Value().closure);
+            CHECK(std::ranges::any_of(invalid.Value().gaps, [&](const BlackboardUsageGap &gap) {
+                return gap.kind == BlackboardUsageGapKind::DecisionSource && gap.asset == fixture.child && gap.diagnostic;
+            }));
+        }
+        SECTION("distinct registered sources claiming the same schema are ambiguous") {
+            installSchema(Files::Id("00000000-0000-0000-0000-0000000000cb"), "duplicate.horo_bb");
+            const auto duplicate = CaptureBlackboardUsageReview(fixture.source.path, fixture.registry, rebuild(), mutations, selection);
+            REQUIRE(duplicate.HasError());
+            CHECK(duplicate.ErrorValue().code.Value() == AIErrors::DecisionAssetSchemaAmbiguous.code.Value());
+        }
+    }
 
     TEST_CASE("Project registry discovers and cooks authored blackboard schemas for the exact decision environment",
               "[native][decision-cook][blackboard]") {

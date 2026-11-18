@@ -1,5 +1,6 @@
 #include "DecisionCompileDetail.h"
 #include "DecisionSourceReachability.h"
+#include "Horo/AI/BlackboardUsageInspection.h"
 
 #include <algorithm>
 
@@ -249,3 +250,46 @@ namespace Horo::AI::Detail {
         return Result<LoweredDecisionGraph>::Success(std::move(result));
     }
 }  // namespace Horo::AI::Detail
+
+namespace Horo::AI {
+    /** @copydoc InspectDecisionBlackboardUses */
+    Result<DecisionBlackboardSourceUses> InspectDecisionBlackboardUses(const DecisionGraphSource &source, BlackboardKeyId key,
+                                                                       const DecisionNodeGeneration *providers) {
+        using Report = Result<DecisionBlackboardSourceUses>;
+        if (!key.IsValid())
+            return Report::Failure(MakeError(AIErrors::BlackboardSchemaInvalid));
+        auto lowered = Detail::LowerDecisionGraph(source);
+        if (lowered.HasError())
+            return Report::Failure(lowered.ErrorValue());
+        DecisionBlackboardSourceUses result;
+        const auto contracts = providers && providers->CanUse() ? providers->Contracts() : std::span<const DecisionNodeContract>{};
+        const auto append = [&](const DecisionAssetNode &node, std::span<const DecisionBlackboardRequirement> requirements,
+                                std::optional<DecisionDescriptorOrigin> origin = {}) {
+            for (const auto &requirement : requirements)
+                if (requirement.key == key) {
+                    if (result.uses.size() == DecisionAssetValidationHardLimits::TotalRequirements)
+                        return false;
+                    result.uses.push_back({node.id, requirement, origin});
+                }
+            return true;
+        };
+        for (const auto &node : lowered.Value().metadata.nodes) {
+            if (!append(node, node.requirements))
+                return Report::Failure(MakeError(AIErrors::DecisionAssetLimitExceeded));
+            if (node.intrinsic != DecisionControlKind::Unspecified)
+                continue;
+            const auto found = std::ranges::find(contracts, node.type, [](const auto &contract) {
+                return contract.descriptor.type;
+            });
+            if (found == contracts.end() || !node.descriptorVersion.Contains(found->descriptor.origin.version)) {
+                result.unresolvedProviders.push_back(node.id);
+                continue;
+            }
+            if (!append(node, found->descriptor.requirements, found->descriptor.origin))
+                return Report::Failure(MakeError(AIErrors::DecisionAssetLimitExceeded));
+        }
+        if (providers && !contracts.empty() && !providers->CanUse())
+            return Report::Failure(MakeError(AIErrors::RuntimeUnavailable));
+        return Report::Success(std::move(result));
+    }
+}  // namespace Horo::AI

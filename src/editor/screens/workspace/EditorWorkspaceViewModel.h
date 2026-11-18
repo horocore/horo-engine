@@ -44,6 +44,7 @@
 namespace Horo::Application {
     struct TerrainAuthoringCookCompletion;
     struct TerrainAuthoringAssetCreated;
+    struct BlackboardUsageReview;
 }  // namespace Horo::Application
 
 namespace Horo::Editor {
@@ -411,18 +412,23 @@ namespace Horo::Editor {
         Undo,
         Redo,
         Save,
-        Reload
+        Reload,
+        ReviewUsages
     };
 
     struct BlackboardWorkspaceRequest final {
         BlackboardDocumentFence fence;
         BlackboardDocumentOperation operation{BlackboardDocumentOperation::Edit};
         std::optional<BlackboardSchemaEdit> edit;
+        std::optional<AI::BlackboardKeyId> reviewKey;
     };
 
     struct BlackboardWorkspaceDocument final {
         BlackboardSchemaDocumentSnapshot snapshot;
         std::optional<Error> diagnostic;
+        bool usageReviewAvailable{};
+        bool reviewingUsages{};
+        std::shared_ptr<const Application::BlackboardUsageReview> usageReview;
     };
 
     struct EditorWorkspaceViewCommandData {  // NOSONAR(cpp:S1820) Command payload variant container

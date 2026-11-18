@@ -8,6 +8,7 @@
 #include "Horo/Assets/AssetId.h"
 #include "Horo/Editor/EditorSurfaceIdentity.h"
 #include "Horo/Foundation/CancellationToken.h"
+#include "Horo/Foundation/Sha256.h"
 
 #include <filesystem>
 
@@ -102,6 +103,7 @@ namespace Horo::Editor {
         bool conflict{};
         bool canUndo{};
         bool canRedo{};
+        std::optional<Sha256Digest> sourceDigest; /**< Last accepted exact file bytes, when the document owns a file. */
     };
 
     /** @brief Control-thread typed authoring owner for an existing Blackboard asset.

@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <limits>
 
@@ -17,7 +18,7 @@ namespace {
 
     /** @brief Registered source and native publication for the actual workspace admission path. */
     struct BlackboardWorkspaceFixture final {
-        static constexpr auto Path = "guard.horo_bb";
+        static constexpr auto Path = "assets/guard.horo_bb";
         const Assets::AssetId asset = Assets::AssetId::FromBytes({7});
         const AI::BlackboardKeyId key = AI::BlackboardKeyId::Create(4).Value();
         std::filesystem::path root =
@@ -29,14 +30,19 @@ namespace {
         Assets::AssetRegistry registry;
 
         BlackboardWorkspaceFixture() {
-            std::filesystem::create_directories(root);
+            std::filesystem::create_directories(root / "assets");
             root = std::filesystem::canonical(root);
-            const auto type = Assets::AssetTypeId::Parse(AI::BlackboardSchemaAssetType).Value();
-            REQUIRE(registry
-                        .Publish(std::vector<Assets::AssetRecord>{
-                            {asset, type, ProjectPath::Parse(Path).Value(), ProjectPath::Parse("guard.horo_bb.horo").Value()}})
-                        .status == Assets::AssetRegistryBuildStatus::Complete);
             Write("Initial");
+            {
+                std::ofstream sidecar(root / (std::string{Path} + ".horo"), std::ios::binary);
+                sidecar << std::format(R"({{"schemaVersion":1,"assetId":"{}","assetType":"{}"}})", asset.ToString(),
+                                       AI::BlackboardSchemaAssetType);
+                REQUIRE(static_cast<bool>(sidecar));
+            }
+            const auto rebuilt = Assets::RebuildAssetRegistry(registry, root, Assets::AssetRegistryOpenMode::ReadOnly);
+            REQUIRE(rebuilt.HasValue());
+            REQUIRE(rebuilt.Value().status == Assets::AssetRegistryBuildStatus::Complete);
+            REQUIRE(registry.Snapshot().Find(asset));
         }
 
         ~BlackboardWorkspaceFixture() {
@@ -182,4 +188,48 @@ TEST_CASE("Blackboard workspace cannot shrink a typed collection below its autho
     REQUIRE(closed.Value());
     controller.ProcessCommand(project.Open());
     CHECK(project.Snapshot(controller).source->rows.back().descriptor == key);
+}
+
+TEST_CASE("Blackboard workspace publishes a Project usage review only for an unchanged document", "[unit][editor][blackboard][workspace]") {
+    BlackboardWorkspaceFixture project;
+    JobSystem jobs{JobSystemConfig{.ioWorkerCount = 1}};
+    const auto registry = project.registry.Snapshot();
+    CollisionInventoryEvidence inventory{registry.Revision(), Assets::AssetRegistryBuildStatus::Complete};
+    EditorWorkspaceController controller(project.root, project.runtime, registry,
+                                         {.assets = {.mutableAssetRegistry = &project.registry},
+                                          .collision = {.inventory = &inventory},
+                                          .mutations = &project.mutations,
+                                          .durableFiles = &project.files,
+                                          .jobs = &jobs});
+    controller.ProcessCommand(project.Open());
+    const auto issued = project.Current(controller);
+    controller.ProcessCommand({.command = EditorWorkspaceViewCommand::BlackboardDocument,
+                               .blackboard = BlackboardWorkspaceRequest{.fence = issued,
+                                                                        .operation = BlackboardDocumentOperation::ReviewUsages,
+                                                                        .reviewKey = project.key}});
+    REQUIRE(controller.ViewModel().blackboardDocuments.front().reviewingUsages);
+    bool changed = false;
+    SECTION("review publishes on the normal workspace owner lane") {}
+    SECTION("editing the source revokes the pending document review") {
+        project.Rename(controller, issued, "Edited");
+        changed = true;
+    }
+    SECTION("closing and reopening the tab cannot inherit the retired review") {
+        const auto closed = controller.ResolveBlackboardClose(issued, SourceCloseDecision::Save);
+        REQUIRE(closed.HasValue());
+        REQUIRE(closed.Value());
+        REQUIRE(controller.ViewModel().blackboardDocuments.empty());
+        controller.ProcessCommand(project.Open());
+        REQUIRE(project.Current(controller).instance != issued.instance);
+        changed = true;
+    }
+    jobs.Shutdown(ShutdownPolicy::Drain);
+    controller.UpdateBlackboardUsageReview();
+    REQUIRE(controller.ViewModel().blackboardDocuments.size() == 1);
+    const auto &view = controller.ViewModel().blackboardDocuments.front();
+    CHECK_FALSE(view.reviewingUsages);
+    const auto diagnostic = view.diagnostic ? std::format("{} {}", view.diagnostic->code.Value(), view.diagnostic->message) : std::string{};
+    INFO(diagnostic);
+    CHECK(static_cast<bool>(view.usageReview) == !changed);
+    CHECK_FALSE(view.diagnostic);
 }

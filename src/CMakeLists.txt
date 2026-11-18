@@ -1823,6 +1823,7 @@ target_link_libraries(HoroAI PUBLIC HoroEngine::Foundation)
 target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::AI)
 
 add_library(HoroDecisionCookHost STATIC
+        application/ai/BlackboardUsageReview.cpp
         application/ai/DecisionAssetCookHost.cpp
         application/ai/DecisionCookCapture.cpp
         application/ai/DecisionCookCatalog.cpp
@@ -1831,7 +1832,7 @@ add_library(HoroDecisionCookHost STATIC
 )
 add_library(HoroEngine::DecisionCookHost ALIAS HoroDecisionCookHost)
 target_compile_features(HoroDecisionCookHost PUBLIC cxx_std_20)
-target_link_libraries(HoroDecisionCookHost PUBLIC HoroEngine::AI HoroEngine::Assets)
+target_link_libraries(HoroDecisionCookHost PUBLIC HoroEngine::AI HoroEngine::Assets PRIVATE HoroEngine::ProjectMutationGuard)
 
 add_library(HoroAISceneIntegration STATIC
         runtime/ai/integration/AIRuntimeCapability.cpp
@@ -4374,7 +4375,7 @@ if (HORO_BUILD_EDITOR_GUI)
 
     add_library(HoroEngine::Gui ALIAS HoroGui)
     target_link_libraries(HoroGui PUBLIC HoroEngine::Runtime)
-    target_link_libraries(HoroGui PRIVATE HoroEngine::PlatformServices)
+    target_link_libraries(HoroGui PRIVATE HoroEngine::PlatformServices HoroEngine::DecisionCookHost)
     target_link_libraries(HoroGui PUBLIC HoroEngine::EditorXRSimulatorModel)
     target_link_libraries(HoroGui PRIVATE HoroUiInspectorInternal)
     target_link_libraries(HoroGui PRIVATE HoroFoundationJsonInternal)

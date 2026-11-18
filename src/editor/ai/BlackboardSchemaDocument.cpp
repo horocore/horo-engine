@@ -329,7 +329,8 @@ namespace Horo::Editor {
         auto proposed = NextKeyId();
         return Snapshot::Success({state_->document, state_->revision, state_->source, state_->runtime, state_->durable,
                                   proposed.HasValue() ? std::optional{proposed.Value()} : std::nullopt, state_->DirtySource(),
-                                  state_->conflict, state_->CanReplay(false), state_->CanReplay(true)});
+                                  state_->conflict, state_->CanReplay(false), state_->CanReplay(true),
+                                  state_->file ? std::optional{state_->file->accepted.digest} : std::nullopt});
     }
 
     /** @copydoc BlackboardSchemaDocument::EncodeSource */

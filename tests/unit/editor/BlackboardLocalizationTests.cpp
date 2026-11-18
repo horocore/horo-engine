@@ -51,6 +51,21 @@ TEST_CASE("Blackboard workspace controls resolve in both shipped locales", "[uni
         "apply_default",
         "default_invalid",
         "collection_capacity",
+        "usage_review",
+        "usage_pending",
+        "usage_stale",
+        "usage_found",
+        "usage_none",
+        "usage_incomplete",
+        "usage_registry",
+        "usage_decision_source",
+        "usage_decision_provider",
+        "usage_scene",
+        "usage_prefab",
+        "usage_queries",
+        "usage_perception",
+        "usage_previous",
+        "usage_next",
     };
     const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
     const std::array locales{"en-US", "tr-TR"};

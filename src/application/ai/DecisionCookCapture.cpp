@@ -53,30 +53,35 @@ namespace Horo::Application::DecisionCookDetail {
             }
         }
 
-        Result<AI::DecisionGraphSource> Decode(const Assets::AssetCookPinnedSource &file, const State &state) {
-            AI::DecisionGraphAssetId root;
-            auto decoded = AI::DecisionPlanCodec::DecodeSource(file.bytes, root, {.compilation = state.limits});
-            if (decoded.HasError())
-                return Result<AI::DecisionGraphSource>::Failure(decoded.ErrorValue());
-            if (decoded.Value().size() != 1)
-                return Result<AI::DecisionGraphSource>::Failure(MakeError(DecisionCookErrors::Invalid));
-            auto graphs = std::move(decoded).Value();
-            auto source = std::move(graphs.front());
-            constexpr std::array types{DecisionBehaviorTreeSourceType, DecisionStateMachineSourceType, DecisionUtilitySourceType};
-            const bool tree = source.body.index() == 0;
-            if (file.record.type.Value() != types[source.body.index()])
-                return Result<AI::DecisionGraphSource>::Failure(MakeError(DecisionCookErrors::Invalid));
-            source.location = {std::string{file.record.sourcePath.String()}, 0, 0};
-            if (tree) {
-                if (auto rebased = RebaseTree(source, source.location); rebased.HasError())
-                    return Result<AI::DecisionGraphSource>::Failure(rebased.ErrorValue());
-            } else if (auto *machine = std::get_if<AI::StateMachineAssetDescriptor>(&source.body))
-                RebaseMachine(*machine, source.location);
-            else
-                RebaseUtility(std::get<AI::UtilityDecisionSource>(source.body), source.location);
-            return Result<AI::DecisionGraphSource>::Success(std::move(source));
-        }
+    }  // namespace
 
+    /** @copydoc DecodeRegisteredDecisionGraphSource */
+    Result<AI::DecisionGraphSource> DecodeRegisteredDecisionGraphSource(const Assets::AssetCookPinnedSource &file,
+                                                                        AI::DecisionCompilationLimits limits) {
+        AI::DecisionGraphAssetId root;
+        auto decoded = AI::DecisionPlanCodec::DecodeSource(file.bytes, root, {.compilation = limits});
+        if (decoded.HasError())
+            return Result<AI::DecisionGraphSource>::Failure(decoded.ErrorValue());
+        if (decoded.Value().size() != 1 || decoded.Value().front().asset != root)
+            return Result<AI::DecisionGraphSource>::Failure(MakeError(DecisionCookErrors::Invalid));
+        auto graphs = std::move(decoded).Value();
+        auto source = std::move(graphs.front());
+        constexpr std::array types{DecisionBehaviorTreeSourceType, DecisionStateMachineSourceType, DecisionUtilitySourceType};
+        const bool tree = source.body.index() == 0;
+        if (file.record.type.Value() != types[source.body.index()])
+            return Result<AI::DecisionGraphSource>::Failure(MakeError(DecisionCookErrors::Invalid));
+        source.location = {std::string{file.record.sourcePath.String()}, 0, 0};
+        if (tree) {
+            if (auto rebased = RebaseTree(source, source.location); rebased.HasError())
+                return Result<AI::DecisionGraphSource>::Failure(rebased.ErrorValue());
+        } else if (auto *machine = std::get_if<AI::StateMachineAssetDescriptor>(&source.body))
+            RebaseMachine(*machine, source.location);
+        else
+            RebaseUtility(std::get<AI::UtilityDecisionSource>(source.body), source.location);
+        return Result<AI::DecisionGraphSource>::Success(std::move(source));
+    }
+
+    namespace {
         bool SameRecord(const Assets::AssetRecord &left, const Assets::AssetRecord &right) {
             return left.id == right.id && left.type == right.type && left.sourcePath.String() == right.sourcePath.String() &&
                    left.metadataPath.String() == right.metadataPath.String();
@@ -90,7 +95,7 @@ namespace Horo::Application::DecisionCookDetail {
             const auto *file = state.files->Find(record.id);
             if (!file || !SameRecord(record, file->record))
                 return Result<void>::Failure(MakeError(DecisionCookErrors::Stale));
-            auto source = Decode(*file, state);
+            auto source = DecodeRegisteredDecisionGraphSource(*file, state.limits);
             if (source.HasError())
                 return Result<void>::Failure(source.ErrorValue());
             state.inputs.emplace_back(record.id, record.type, file->sourceDigest, std::move(source).Value());

@@ -1,4 +1,5 @@
 #include "Horo/AI/DecisionPlanCodec.h"
+#include "Horo/Application/BlackboardUsageReview.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/LocalizedGui.h"
 #include "editor/screens/workspace/BlackboardScalarInput.h"
@@ -6,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <format>
 
 namespace Horo::Editor {
     namespace {
@@ -199,6 +201,83 @@ namespace Horo::Editor {
                 frame.Edit(EditBlackboardKey{std::move(changed)});
         }
 
+        /** @brief Resolves the stable owner category without inspecting arbitrary authored property values. */
+        const char *UseGapLabel(Application::BlackboardUsageGapKind kind) {
+            using enum Application::BlackboardUsageGapKind;
+            switch (kind) {
+                case RegistryInventory:
+                    return "usage_registry";
+                case DecisionSource:
+                    return "usage_decision_source";
+                case DecisionProvider:
+                    return "usage_decision_provider";
+                case SceneSource:
+                    return "usage_scene";
+                case PrefabSource:
+                    return "usage_prefab";
+                case EnvironmentQueryBindings:
+                    return "usage_queries";
+                case PerceptionPolicy:
+                    return "usage_perception";
+            }
+            return "operation_failed";
+        }
+
+        /** @brief Displays scoped review evidence for the selected durable key. */
+        void DrawUsages(const BlackboardFrame &frame, const BlackboardWorkspaceDocument &document, AI::BlackboardKeyId key,
+                        Assets::AssetRegistryRevision currentRegistry, std::size_t &page) {
+            const auto &snapshot = document.snapshot;
+            if (frame.Button("usage_review",
+                             document.usageReviewAvailable && !document.reviewingUsages && !snapshot.dirty && !snapshot.conflict) &&
+                frame.command.command == EditorWorkspaceViewCommand::None) {
+                frame.command.command = EditorWorkspaceViewCommand::BlackboardDocument;
+                frame.command.blackboard = BlackboardWorkspaceRequest{.fence = frame.fence,
+                                                                      .operation = BlackboardDocumentOperation::ReviewUsages,
+                                                                      .reviewKey = key};
+                page = 0;
+            }
+            if (document.reviewingUsages)
+                frame.Caption("usage_pending");
+            const auto &review = document.usageReview;
+            if (!review || review->selection.key != key)
+                return;
+            if (review->registry != currentRegistry) {
+                frame.Caption("usage_stale");
+                return;
+            }
+            frame.Caption(review->uses.empty() ? "usage_none" : "usage_found");
+            if (!review->gaps.empty())
+                frame.Caption("usage_incomplete");
+            constexpr std::size_t RowsPerPage = 12;
+            const auto count = review->uses.size() + review->gaps.size();
+            if (!count)
+                return;
+            const auto lastPage = (count - 1) / RowsPerPage;
+            page = std::min(page, lastPage);
+            const auto start = page * RowsPerPage;
+            const auto end = std::min(start + RowsPerPage, count);
+            for (auto index = start; index < end; ++index) {
+                if (index < review->uses.size()) {
+                    const auto &usage = review->uses[index];
+                    frame.Label(std::format("{} ({})", usage.sourcePath, usage.use.node.Value()));
+                    continue;
+                }
+                const auto &gap = review->gaps[index - review->uses.size()];
+                frame.Caption(UseGapLabel(gap.kind));
+                if (gap.asset)
+                    frame.Label(gap.asset->ToString());
+                if (gap.node)
+                    frame.Label(std::to_string(gap.node->Value()));
+            }
+            if (lastPage) {
+                frame.Label(std::format("{} / {}", page + 1, lastPage + 1));
+                if (frame.Button("usage_previous", page > 0))
+                    --page;
+                if (frame.Button("usage_next", page < lastPage))
+                    ++page;
+            }
+        }
+
         /** @brief Shows actionable source conflicts alongside shared save and history controls. */
         void DrawSourceTools(const BlackboardFrame &frame, const BlackboardWorkspaceDocument &document) {
             const auto &snapshot = document.snapshot;
@@ -245,6 +324,7 @@ namespace Horo::Editor {
             draft.selected = selectedRow.descriptor.key;
             draft.name = selectedRow.displayName.value_or("");
             draft.numericDefault = BlackboardNumericDefaultText(selectedRow.descriptor.defaultValue);
+            draft.usagePage = 0;
         };
         if (draft.fence.instance != frame.fence.instance || draft.fence.revision != frame.fence.revision) {
             draft.fence = frame.fence;
@@ -291,6 +371,7 @@ namespace Horo::Editor {
                 frame.Edit(RemoveBlackboardKey{draft.selected});
         } else {
             frame.Caption("reference_required");
+            DrawUsages(frame, *document, draft.selected, viewModel.assetRegistryRevision, draft.usagePage);
         }
         DrawTypeFields(frame, row.descriptor, draft.numericDefault, draftKey);
         ImGui::PopID();
