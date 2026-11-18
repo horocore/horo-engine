@@ -23,7 +23,11 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportColorGraph::Table */
     RenderGraphResourceId EditorViewportColorGraph::Table(const EditorViewportColorPipeline &pipeline, std::size_t index) {
+        if (index < analyticTables_.size() && analyticTables_[index].IsValid())
+            return analyticTables_[index];
         const auto resource = Take(builder_->ImportTexture(pipeline.TableTexture(index), RenderGraphResourceClass::Persistent));
+        if (index < analyticTables_.size())
+            analyticTables_[index] = resource;
         tableInitial_ = pipeline.TableInitialState(queue_);
         initial_->push_back({resource, tableInitial_, RenderGraphInitialContents::Preserved});
         return resource;
@@ -71,7 +75,7 @@ namespace Horo::Editor {
                 reads_[role][count++] = {id, {}, *view};
             }
         }
-        auto &raster = std::get<RenderGraphMaterialRaster>(workloads_[role + 1].workload);
+        auto &raster = std::get<RenderGraphMaterialRaster>(workloads_[role + 2].workload);
         raster.draws = draws_[role];
         raster.reads = std::span{reads_[role]}.first(count);
     }
@@ -80,12 +84,61 @@ namespace Horo::Editor {
     void EditorViewportColorGraph::Raster(const EditorViewportColorPipeline &pipeline, std::size_t role, RenderGraphPassRef pass,
                                           RenderGraphResourceId color, RenderTextureViewHandle view) {
         Use(pass, color, RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment);
-        workloads_[role + 1] = {pass, RenderGraphMaterialRaster{.color = color,
+        workloads_[role + 2] = {pass, RenderGraphMaterialRaster{.color = color,
                                                                 .colorView = view,
                                                                 .extent = extent_,
                                                                 .colorOperations = {.loadOperation = AttachmentLoadOperation::Clear},
                                                                 .depthClear = std::nullopt}};
         RasterInputs(pipeline, role, pass);
+    }
+
+    /** @copydoc EditorViewportColorGraph::AppendMeter */
+    RenderGraphPassRef EditorViewportColorGraph::AppendMeter(RenderGraphPassRef after) {
+        const auto meter = Take(builder_->AddPass(RenderPassKind::Compute, RenderQueueRole::Graphics));
+        const auto buffers = pipeline_->MeterBuffers();
+        const auto &previous = pipeline_->Previous();
+        const auto prior = previous.buffer.IsValid() ? previous.buffer : buffers[1];
+        RenderGraphExposureGpu work{scene_,
+                                    Buffer(buffers[0]),
+                                    Buffer(prior),
+                                    Buffer(buffers[2]),
+                                    extent_,
+                                    pipeline_->Dispatch(),
+                                    previous,
+                                    pipeline_->Produced(),
+                                    !previous.buffer.IsValid(),
+                                    pipeline_->Kernel()};
+        Use(meter, work.sceneColor, RenderGraphAccess::Read, RenderGraphUsageKind::Sampled);
+        Use(meter, work.histogram, RenderGraphAccess::ReadWrite, RenderGraphUsageKind::Storage);
+        Use(meter, work.previousExposure, work.resetPrevious ? RenderGraphAccess::ReadWrite : RenderGraphAccess::Read,
+            RenderGraphUsageKind::Storage);
+        Use(meter, work.outputExposure, RenderGraphAccess::Write, RenderGraphUsageKind::Storage);
+        workloads_[1] = {meter, work};
+        Take(builder_->AddDependency({after, meter, RenderGraphDependencyKind::ExecutionOrder}));
+        return meter;
+    }
+
+    /** @copydoc EditorViewportColorGraph::AppendTableUploads */
+    RenderGraphPassRef EditorViewportColorGraph::AppendTableUploads(RenderGraphPassRef after) {
+        using enum Horo::Render::RenderGraphUsageKind;
+        for (std::size_t i = 0; i < analyticTables_.size(); ++i) {
+            const auto &staging = pipeline_->tableStaging_[i];
+            const auto source = Take(builder_->ImportBuffer(staging.source, RenderGraphResourceClass::Persistent));
+            const auto destination = Take(builder_->ImportTexture(pipeline_->TableTexture(i), RenderGraphResourceClass::Persistent));
+            analyticTables_[i] = destination;
+            initial_->push_back({source,
+                                 {RenderGraphSynchronizationAccess::Read, RenderGraphSynchronizationOperation::CopySource,
+                                  RenderGraphPipelineScope::Transfer, RenderGraphTextureLayout::NotApplicable, queue_},
+                                 RenderGraphInitialContents::Preserved});
+            initial_->push_back({destination, {}, RenderGraphInitialContents::Discarded});
+            const auto copy = Take(builder_->AddPass(RenderPassKind::Copy, RenderQueueRole::Graphics));
+            Use(copy, source, RenderGraphAccess::Read, CopySource);
+            Use(copy, destination, RenderGraphAccess::Write, CopyDestination);
+            Take(builder_->AddDependency({after, copy, RenderGraphDependencyKind::ExecutionOrder}));
+            workloads_[i] = {copy, RenderGraphTextureUpload{source, destination, staging.extent, staging.bytes, staging.format}};
+            after = copy;
+        }
+        return after;
     }
 
     /** @copydoc EditorViewportColorGraph::AppendScene */
@@ -104,29 +157,22 @@ namespace Horo::Editor {
             display_ = display;
             extent_ = extent;
             bufferCount_ = 0;
-            const auto meter = Take(builder.AddPass(RenderPassKind::Compute, RenderQueueRole::Graphics));
-            const auto buffers = pipeline.MeterBuffers();
-            const auto &previous = pipeline.Previous();
-            const auto prior = previous.buffer.IsValid() ? previous.buffer : buffers[1];
-            RenderGraphExposureGpu work{scene,
-                                        Buffer(buffers[0]),
-                                        Buffer(prior),
-                                        Buffer(buffers[2]),
-                                        extent,
-                                        pipeline.Dispatch(),
-                                        previous,
-                                        pipeline.Produced(),
-                                        !previous.buffer.IsValid(),
-                                        pipeline.Kernel()};
-            Use(meter, work.sceneColor, RenderGraphAccess::Read, RenderGraphUsageKind::Sampled);
-            Use(meter, work.histogram, RenderGraphAccess::ReadWrite, RenderGraphUsageKind::Storage);
-            Use(meter, work.previousExposure, work.resetPrevious ? RenderGraphAccess::ReadWrite : RenderGraphAccess::Read,
-                RenderGraphUsageKind::Storage);
-            Use(meter, work.outputExposure, RenderGraphAccess::Write, RenderGraphUsageKind::Storage);
-            workloads_[0] = {meter, work};
-            Take(builder.AddDependency({after, meter, RenderGraphDependencyKind::ExecutionOrder}));
+            Require(pipeline.Material(0) && pipeline.Material(1));
+            analyticTables_ = {};
+            tableInitial_ = pipeline.TableInitialState(queue);
+            workloads_[1] = {};
+            auto producer = after;
+            if (!pipeline.manualOnly_) {
+                firstWorkload_ = 1;
+                producer = AppendMeter(after);
+            } else if (!pipeline.tablesUsed_) {
+                firstWorkload_ = 0;
+                producer = AppendTableUploads(after);
+            } else {
+                firstWorkload_ = 2;
+            }
             const auto output = Take(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
-            Take(builder.AddDependency({meter, output, RenderGraphDependencyKind::ExecutionOrder}));
+            Take(builder.AddDependency({producer, output, RenderGraphDependencyKind::ExecutionOrder}));
             Raster(pipeline, 0, output, display, displayView);
             return Result<RenderGraphPassRef>::Success(output);
         } catch (const Failure &failure) {
@@ -154,21 +200,23 @@ namespace Horo::Editor {
         using enum Horo::Render::RenderGraphSynchronizationAccess;
         using enum Horo::Render::RenderGraphPipelineScope;
         using enum Horo::Render::RenderGraphTextureLayout;
-        auto &work = std::get<RenderGraphExposureGpu>(workloads_[0].workload);
-        work.dispatch = pipeline.Dispatch();
-        work.previous = pipeline.Previous();
-        work.produced = pipeline.Produced();
-        work.resetPrevious = !work.previous.buffer.IsValid();
+        auto *work = std::get_if<RenderGraphExposureGpu>(&workloads_[1].workload);
+        if (work) {
+            work->dispatch = pipeline.Dispatch();
+            work->previous = pipeline.Previous();
+            work->produced = pipeline.Produced();
+            work->resetPrevious = !work->previous.buffer.IsValid();
+        }
         for (std::size_t role = 0; role < 2; ++role)
             draws_[role][0].material = pipeline.Material(role);
         for (std::size_t i = 0; i < bufferCount_; ++i) {
             auto state =
                 RenderGraphLogicalState{Read, RenderGraphSynchronizationOperation::GraphicsInputBuffer, Graphics, NotApplicable, queue_};
-            if (buffers_[i].second == work.histogram)
+            if (work && buffers_[i].second == work->histogram)
                 state = {ReadWrite, RenderGraphSynchronizationOperation::Storage, Compute, NotApplicable, queue_};
-            if (buffers_[i].second == work.outputExposure)
+            if (work && buffers_[i].second == work->outputExposure)
                 state = {Write, RenderGraphSynchronizationOperation::Storage, Compute, NotApplicable, queue_};
-            if (buffers_[i].second == work.previousExposure)
+            if (work && buffers_[i].second == work->previousExposure)
                 state = {Read, RenderGraphSynchronizationOperation::Storage, Graphics, NotApplicable, queue_};
             pipeline.StageBufferState(buffers_[i].first, state);
         }

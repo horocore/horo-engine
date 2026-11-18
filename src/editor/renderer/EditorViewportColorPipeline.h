@@ -29,7 +29,8 @@ namespace Horo::Editor {
         ~EditorViewportColorPipeline();
         EditorViewportColorPipeline(const EditorViewportColorPipeline &) = delete;
         EditorViewportColorPipeline &operator=(const EditorViewportColorPipeline &) = delete;
-        /** @brief Realizes genuine cold programs, lookup tables and bounded history storage. @param inputs Host-decoded immutable family.
+        /** @brief Realizes cold programs, lookup tables and history storage when the selected package supports automatic exposure. @param
+         * inputs Host-decoded immutable family.
          * @return Original typed failure; no partial owner is published by its caller. */
         [[nodiscard]] Result<void> Initialize(const EditorViewportColorInputs &inputs);
         /** @brief Selects authored settings without mutating an in-flight candidate. @param settings Exact next settings.
@@ -39,7 +40,8 @@ namespace Horo::Editor {
          * @param extent Exact unexposed scene shape. @param deltaSeconds Host-selected clock delta in [0,1].
          * @return Success, typed pending/capacity or malformed input. */
         [[nodiscard]] Result<void> Prepare(Render::RenderViewId view, Render::FramebufferExtent extent, float deltaSeconds);
-        /** @brief Publishes candidate metadata only after the actual host accepted its native frame. @param accepted Actual Present result.
+        /** @brief Publishes candidate metadata only after the actual host accepted its native graph. @param accepted Actual submission
+         * acceptance.
          * @details False cancels only the unsent candidate and preserves the last accepted state. */
         void Finish(bool accepted) noexcept;
         /** @brief Marks only successful actual graph encoding, before host acceptance. */
@@ -191,6 +193,15 @@ namespace Horo::Editor {
         EditorViewportColorResourcePort port_;
         std::array<Slot, SlotCount> slots_;
         std::array<Program, 2> programs_;
+
+        struct TableStaging final {
+            Render::RenderBufferHandle source;
+            Render::FramebufferExtent extent;
+            std::size_t bytes{};
+            Render::RenderTextureFormat format{};
+        };
+
+        std::array<TableStaging, 2> tableStaging_;
         std::array<Render::RenderTextureHandle, 2> tables_;
         std::array<Render::RenderTextureViewHandle, 2> tableViews_;
         std::array<Render::RenderSamplerHandle, 2> samplers_;
@@ -216,6 +227,7 @@ namespace Horo::Editor {
         std::size_t candidateSlot_{};
         std::size_t nextSlot_{};
         std::size_t activeSlots_{SlotCount};
+        bool manualOnly_{};
         bool candidate_{};
         bool encoded_{};
         bool reset_{true};

@@ -14,6 +14,9 @@ namespace Horo::Editor {
             if (buffer == slot.uniform[0] || buffer == slot.uniform[1])
                 return {RenderGraphSynchronizationAccess::Read, RenderGraphSynchronizationOperation::GraphicsInputBuffer,
                         RenderGraphPipelineScope::Graphics, RenderGraphTextureLayout::NotApplicable, queue};
+        if (manualOnly_ && (buffer == geometry_[0] || buffer == geometry_[1]))
+            return {RenderGraphSynchronizationAccess::Read, RenderGraphSynchronizationOperation::GraphicsInputBuffer,
+                    RenderGraphPipelineScope::Graphics, RenderGraphTextureLayout::NotApplicable, queue};
         // Device-local geometry/history has exact owned initial upload bytes. Actual queue ordering/completion is checked separately.
         return {RenderGraphSynchronizationAccess::Write, RenderGraphSynchronizationOperation::CopyDestination,
                 RenderGraphPipelineScope::Transfer, RenderGraphTextureLayout::NotApplicable, queue};
