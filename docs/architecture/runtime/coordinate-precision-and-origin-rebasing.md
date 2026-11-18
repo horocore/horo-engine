@@ -271,6 +271,17 @@ Subsystem-specific transformation and backend adapters remain separate follow-up
 contracts; this transaction defines only gathering, fencing, atomic application and
 generation publication.
 
+A runtime mount that carries canonical coordinates creates its origin through
+`WorldStreamingRuntimeComposition::CreateWithOrigin` alongside the active
+registry publication for the exact partition, epoch, and runtime owner. The host
+supplies the initial global origin and a unique frame identity. The partition's
+grid anchor remains indexing metadata. Consumers borrow the read-only owner on
+the authority lane and retain generation leases across reads. The composition
+retains one prepared transaction, fences it by the current service revision,
+and commits only at the post-simulation safe point. Cancellation rolls back
+prepared receipts and expires leases before the host retires the registry.
+Compositions without a canonical runtime mount do not provide an origin.
+
 ### 2. Two-Phase Rebasing Execution Flow
 
 ```text
