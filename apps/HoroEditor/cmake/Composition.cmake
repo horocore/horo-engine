@@ -60,10 +60,13 @@ if(HORO_BUILD_XR_OPENXR)
         "${HORO_OPENXR_PRODUCT_HOST_HEADERS}/OpenXRInstalledProductSelection.h" COPYONLY)
     configure_file(HoroEditor/composition/xr/OpenXRInstalledHostCatalog.h
         "${HORO_OPENXR_PRODUCT_HOST_HEADERS}/OpenXRInstalledHostCatalog.h" COPYONLY)
+    configure_file(HoroEditor/composition/xr/OpenXRWindowsLoaderImage.h
+        "${HORO_OPENXR_PRODUCT_HOST_HEADERS}/OpenXRWindowsLoaderImage.h" COPYONLY)
     add_library(HoroOpenXRProductHost STATIC
         HoroEditor/composition/xr/OpenXRComponentManifest.cpp
         HoroEditor/composition/xr/OpenXRComponentVerification.cpp
         HoroEditor/composition/xr/OpenXRProductDeployment.cpp
+        HoroEditor/composition/xr/OpenXRWindowsLoaderImage.cpp
         HoroEditor/composition/xr/OpenXRLoaderLease.cpp
         HoroEditor/composition/xr/OpenXRInstalledProductSelection.cpp
         HoroEditor/composition/xr/OpenXRInstalledHostCatalog.cpp)

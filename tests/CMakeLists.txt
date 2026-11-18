@@ -2188,7 +2188,8 @@ if(HORO_BUILD_XR_OPENXR)
     endif()
 
     add_executable(HoroOpenXRProductHostTests unit/runtime/xr/OpenXRComponentManifestTests.cpp
-        unit/runtime/xr/OpenXRInstalledHostCatalogTests.cpp)
+        unit/runtime/xr/OpenXRInstalledHostCatalogTests.cpp
+        unit/runtime/xr/OpenXRWindowsLoaderImageTests.cpp)
     target_link_libraries(HoroOpenXRProductHostTests PRIVATE HoroOpenXRProductHost HoroHostSignatureDocuments
         nlohmann_json::nlohmann_json MbedTLS::mbedcrypto)
     target_include_directories(HoroOpenXRProductHostTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

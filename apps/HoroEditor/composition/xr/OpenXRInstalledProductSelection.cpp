@@ -33,6 +33,8 @@ namespace Horo::Application::Internal {
                                                            *selected.verifier, selected.component);
         if (deployment.HasError())
             return Outcome::Failure(deployment.ErrorValue());
+        if (cancellation.IsCancellationRequested())
+            return Outcome::Failure(MakeError(XR::XRErrors::LoaderPreflightCancelled));
         // Recheck the canonical authority after all signature/archive work; retained bytes do not grant current activation.
         const auto current = packages.InstalledRecord(projectRoot, generation);
         if (current.HasError())

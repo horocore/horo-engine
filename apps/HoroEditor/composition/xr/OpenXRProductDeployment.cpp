@@ -2,33 +2,45 @@
 
 #include "Horo/XR/XRErrors.h"
 #include "JsonUtils.h"
+#include "OpenXRWindowsLoaderImage.h"
 
 #include <algorithm>
-#include <array>
 #include <bit>
+#include <new>
 
 namespace Horo::Application::Internal {
     namespace {
-        /** @brief Accepts only a finite unique list of signed OS ABI names. */
-        bool ValidOsAbiDependencies(const Foundation::Json &dependencies) {
-            std::array<std::string_view, 32> names{};
-            if (!dependencies.is_array() || dependencies.empty() || dependencies.size() > names.size())
-                return false;
-            std::size_t count = 0;
+        /** @brief Retains the finite unique signed names with Windows' exact case-insensitive spelling rules. */
+        Result<std::vector<std::string>> ReadOsAbiDependencies(const Foundation::Json &dependencies, bool windows) {
+            using Names = Result<std::vector<std::string>>;
+            const auto invalid = [] {
+                return Names::Failure(MakeError(XR::XRErrors::OperationUnavailable, "Invalid signed OpenXR OS ABI dependency inventory."));
+            };
+            if (!dependencies.is_array() || dependencies.empty() || dependencies.size() > MaximumOpenXRAbiDependencies)
+                return invalid();
+            std::vector<std::string> names;
+            names.reserve(dependencies.size());
             for (const auto &entry : dependencies) {
                 if (!entry.is_string())
-                    return false;
-                const std::string_view name = entry.get_ref<const std::string &>();
-                const auto existing = std::span{names}.first(count);
-                if (name.empty() || name.size() > 128 || std::ranges::find(existing, name) != existing.end() ||
-                    !std::ranges::all_of(name, [](const unsigned char character) {
+                    return invalid();
+                auto name = entry.get<std::string>();
+                if (windows) {
+                    if (!IsWindowsOpenXRAbiDll(name))
+                        return invalid();
+                    for (auto &character : name)
+                        if (character >= 'A' && character <= 'Z')
+                            character = static_cast<char>(character + ('a' - 'A'));
+                } else if (name.empty() || name.size() > 128 || !std::ranges::all_of(name, [](const unsigned char character) {
                     return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
                            (character >= '0' && character <= '9') || character == '.' || character == '_' || character == '-';
-                }))
-                    return false;
-                names[count++] = name;
+                })) {
+                    return invalid();
+                }
+                if (std::ranges::find(names, name) != names.end())
+                    return invalid();
+                names.push_back(std::move(name));
             }
-            return true;
+            return Names::Success(std::move(names));
         }
 
         /** @brief Matches signed deployment facts to the exact component and installer-owned contract. */
@@ -48,7 +60,20 @@ namespace Horo::Application::Internal {
                 platform.at("sdkAbi") != policy.platform.sdkAbi || !root.at("bundledDependencies").is_array() ||
                 !root.at("bundledDependencies").empty() || !manifest.dependencies.empty())
                 return false;
-            return ValidOsAbiDependencies(root.at("osAbiDependencies"));
+            return true;
+        }
+
+        /** @brief Binds Windows direct import evidence to exact already verified component archive bytes before any file is staged. */
+        Result<void> VerifyWindowsImage(const VerifiedOpenXRComponent &component, std::span<const std::string> names) {
+            const auto &manifest = component.Manifest();
+            const auto &archive = component.Install()->Graph()->packages[component.PackageIndex()].archive;
+            const auto bytes = archive->ReadDeclaredFile(manifest.loader.path, MaximumOpenXRLoaderImageBytes);
+            if (bytes.HasError())
+                return Result<void>::Failure(bytes.ErrorValue());
+            if (ComputeSha256(bytes.Value()) != manifest.loader.digest)
+                return Result<void>::Failure(
+                    MakeError(XR::XRErrors::RuntimeRejected, "Windows loader bytes changed after component admission."));
+            return VerifyWindowsOpenXRLoaderImage(bytes.Value(), manifest.platform.architecture, names);
         }
     }  // namespace
 
@@ -76,8 +101,19 @@ namespace Horo::Application::Internal {
             const auto root = guard.Parse(text, text + bytes.size());
             if (guard.HasDuplicate() || guard.IsTooDeep() || !Matches(root, component, policy))
                 return Outcome::Failure(MakeError(XR::XRErrors::OperationUnavailable));
-            const auto dependencyCount = static_cast<std::uint8_t>(root.at("osAbiDependencies").size());
-            return Outcome::Success(VerifiedOpenXRDeployment{component.IdentityDigest(), std::move(evidence).Value(), dependencyCount});
+            const bool windows = policy.platform.operatingSystem == "windows";
+            auto names = ReadOsAbiDependencies(root.at("osAbiDependencies"), windows);
+            if (names.HasError())
+                return Outcome::Failure(names.ErrorValue());
+            if (windows) {
+                if (const auto image = VerifyWindowsImage(component, names.Value()); image.HasError())
+                    return Outcome::Failure(image.ErrorValue());
+            }
+            return Outcome::Success(
+                VerifiedOpenXRDeployment{component.IdentityDigest(), std::move(evidence).Value(), std::move(names).Value()});
+        } catch (const std::bad_alloc &) {
+            return Outcome::Failure(
+                MakeError(XR::XRErrors::CapacityExceeded, "Insufficient memory for signed OpenXR deployment evidence."));
         } catch (const Foundation::Json::exception &) {
             return Outcome::Failure(MakeError(XR::XRErrors::OperationUnavailable));
         }
@@ -85,8 +121,8 @@ namespace Horo::Application::Internal {
 
     /** @copydoc VerifiedOpenXRDeployment::VerifiedOpenXRDeployment */
     VerifiedOpenXRDeployment::VerifiedOpenXRDeployment(const Sha256Digest &component, Security::VerifiedArtifactEvidence evidence,
-                                                       std::uint8_t osAbiDependencies)
-        : component_(component), evidence_(std::move(evidence)), osAbiDependencies_(osAbiDependencies) {}
+                                                       std::vector<std::string> osAbiDependencies)
+        : component_(component), evidence_(std::move(evidence)), osAbiDependencies_(std::move(osAbiDependencies)) {}
 
     /** @copydoc VerifiedOpenXRDeployment::ComponentIdentity */
     const Sha256Digest &VerifiedOpenXRDeployment::ComponentIdentity() const noexcept {
@@ -100,6 +136,11 @@ namespace Horo::Application::Internal {
 
     /** @copydoc VerifiedOpenXRDeployment::OsAbiDependencyCount */
     std::uint8_t VerifiedOpenXRDeployment::OsAbiDependencyCount() const noexcept {
+        return static_cast<std::uint8_t>(osAbiDependencies_.size());
+    }
+
+    /** @copydoc VerifiedOpenXRDeployment::OsAbiDependencies */
+    std::span<const std::string> VerifiedOpenXRDeployment::OsAbiDependencies() const noexcept {
         return osAbiDependencies_;
     }
 }  // namespace Horo::Application::Internal
