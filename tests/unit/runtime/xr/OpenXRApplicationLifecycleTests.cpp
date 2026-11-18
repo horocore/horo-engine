@@ -834,17 +834,20 @@ namespace Horo::Tests::OpenXRApplication {
         using enum XR::XRProjectFeaturePolicy;
         using enum Editor::EditorXrPlaneCaptureState;
         const bool policy = GENERATE(false, true);
+        OpenXR::SpatialCaptureScript native;
         ApplicationFixture fixture{true, 6, Unrequested, Unrequested, Unrequested, false, std::nullopt, Unrequested, policy};
         constexpr std::array<std::string_view, 3> extensions{XR_EXT_FUTURE_EXTENSION_NAME, XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME,
                                                              XR_EXT_SPATIAL_PLANE_TRACKING_EXTENSION_NAME};
         fixture.script.native.extraExtensions = extensions;
         fixture.script.native.extensionCount += static_cast<std::uint32_t>(extensions.size());
+        fixture.script.census.extraProc = &OpenXR::SpatialCaptureScript::GetProc;
         fixture.CreatePlay();
         auto &preview = *fixture.play->PlaneCapturePreview();
         CHECK(preview.ReadPlaneCaptureState() == (policy ? Ready : Unavailable));
         CHECK(fixture.play->ReadPlaneObservations().HasError());
         CHECK((std::ranges::find(fixture.script.native.enabledExtensions, XR_EXT_SPATIAL_PLANE_TRACKING_EXTENSION_NAME) !=
                fixture.script.native.enabledExtensions.end()) == policy);
+        CHECK(native.contextStarts == 0);
         if (policy) {
             RequireValue(preview.ArmPlaneCapture());
             CHECK(preview.ReadPlaneCaptureState() == Armed);
@@ -854,16 +857,18 @@ namespace Horo::Tests::OpenXRApplication {
         } else {
             CHECK(preview.ArmPlaneCapture().HasError());
         }
-        CHECK(fixture.script.native.liveSessions == 0);
+        CHECK(native.contextStarts == 0);
+        CHECK_FALSE(native.hasContext);
         REQUIRE(RequireValue(fixture.ClosePlay()));
+        CHECK(fixture.script.native.liveSessions == 0);
     }
 
     TEST_CASE("Signed XR Play captures bounded room planes only under its one-session grant", "[xr][application][play][planes]") {
         using enum XR::XRProjectFeaturePolicy;
         using enum Editor::EditorXrPlaneCaptureState;
-        ApplicationFixture fixture{true, 6, Unrequested, Unrequested, Unrequested, false, std::nullopt, Unrequested, true};
         OpenXR::SpatialCaptureScript native;
         OpenXR::PlaneSnapshotFixture geometry;
+        ApplicationFixture fixture{true, 6, Unrequested, Unrequested, Unrequested, false, std::nullopt, Unrequested, true};
         constexpr std::array<std::string_view, 3> extensions{XR_EXT_FUTURE_EXTENSION_NAME, XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME,
                                                              XR_EXT_SPATIAL_PLANE_TRACKING_EXTENSION_NAME};
         fixture.script.native.extraExtensions = extensions;
@@ -890,6 +895,7 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(sample(100'000'000).HasError());
         native.ready = true;
         CHECK(sample(110'000'000).HasError());
+        CHECK(native.contextStarts == (grant ? 1U : 0U));
         CHECK(native.hasContext == grant);
         CHECK(sample(360'000'000).HasError());
         const auto batch = sample(370'000'000);

@@ -66,6 +66,7 @@ namespace Horo::Tests::OpenXR {
         bool ready{};
         bool failDestroy{};
         XrResult completeResult{XR_SUCCESS};
+        std::uint32_t contextStarts{};
         std::uint32_t scans{};
         std::uint32_t cancels{};
         bool hasContext{};
@@ -84,6 +85,7 @@ namespace Horo::Tests::OpenXR {
             REQUIRE(info->capabilityConfigCount == 1);
             REQUIRE(info->capabilityConfigs[0]->capability == XR_SPATIAL_CAPABILITY_PLANE_TRACKING_EXT);
             REQUIRE(info->capabilityConfigs[0]->enabledComponents[0] == XR_SPATIAL_COMPONENT_TYPE_BOUNDED_2D_EXT);
+            ++current->contextStarts;
             *future = ContextFuture;
             return XR_SUCCESS;
         }
