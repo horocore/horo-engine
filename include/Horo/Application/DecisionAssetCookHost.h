@@ -12,9 +12,9 @@ namespace Horo::Application {
         extern const ErrorCodeDescriptor Cancelled;
     }  // namespace DecisionCookErrors
 
-    inline constexpr std::string_view DecisionBehaviorTreeSourceType = "core.behavior_tree";
-    inline constexpr std::string_view DecisionStateMachineSourceType = "core.state_machine";
-    inline constexpr std::string_view DecisionUtilitySourceType = "core.utility";
+    inline constexpr std::string_view DecisionBehaviorTreeSourceType = AI::DecisionAssetType(AI::DecisionPlanKind::BehaviorTree);
+    inline constexpr std::string_view DecisionStateMachineSourceType = AI::DecisionAssetType(AI::DecisionPlanKind::StateMachine);
+    inline constexpr std::string_view DecisionUtilitySourceType = AI::DecisionAssetType(AI::DecisionPlanKind::Utility);
 
     struct DecisionAssetCookRequest final {
         Assets::AssetCookRequest assets; /**< Actual pinned registry/files, project lease/fence and durable publication authority. */

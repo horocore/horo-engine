@@ -35,6 +35,23 @@ namespace Horo::AI {
             return scene;
         }
 
+        TEST_CASE("Cooked controller publication rejects a provider retired after Scene preparation",
+                  "[unit][ai][scene][decision_reservation][composition]") {
+            Fixture fixture;
+            const std::array sources{TaskTree(1)};
+            const auto plan = fixture.Compile(sources, 1);
+            auto scene = SceneFixture(fixture, *plan);
+            scene.descriptor.cookedPlan = plan;
+            auto runtime = std::move(AiSceneRuntime::Create()).Value();
+            auto prepared = runtime.PrepareScene(scene.binding, std::array{scene.agent}, std::array{scene.descriptor});
+            REQUIRE(prepared.HasValue());
+            REQUIRE(prepared.Value()->ValidatePublication().HasValue());
+            fixture.admission->store(false);
+            TestSupport::ExpectError(prepared.Value()->ValidatePublication(), AIErrors::ControllerDescriptorIncompatible);
+            CHECK(runtime.Snapshot().HasError());
+            CHECK(fixture.probe.factories == 0);
+        }
+
         TEST_CASE("Scene-owned composed decisions retire tasks before reading revoked snapshots",
                   "[unit][ai][scene][decision_reservation][composition]") {
             Fixture fixture;

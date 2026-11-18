@@ -18,6 +18,8 @@
 #include <vector>
 
 namespace Horo::AI {
+    class CookedDecisionPlan;
+
     /** @brief Current semantic version of the authored AI scene component contract. */
     inline constexpr std::uint32_t CurrentAiSceneComponentSchemaVersion = 1;
 
@@ -126,6 +128,7 @@ namespace Horo::AI {
         std::shared_ptr<const BlackboardSchema> blackboardSchema;
         std::shared_ptr<const DecisionAssetPlan> decisionPlan;
         std::shared_ptr<const AiControllerPerceptionEndpoints> perceptionEndpoints;
+        std::shared_ptr<const CookedDecisionPlan> cookedPlan; /**< Optional executable closure with these exact root bindings. */
     };
 
     /**

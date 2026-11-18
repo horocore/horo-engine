@@ -12,6 +12,7 @@ namespace Horo::AI::Detail {
         AiAgentRuntimeRecord record;
         std::shared_ptr<const BlackboardSchema> schema;
         std::shared_ptr<const AiControllerPerceptionEndpoints> perceptionEndpoints;
+        std::shared_ptr<const CookedDecisionPlan> cookedPlan;
         BlackboardInstanceBinding blackboardBinding;
         std::unique_ptr<BlackboardInstance> blackboard;
         std::unique_ptr<AiTaskLifecycle> task;
@@ -71,6 +72,8 @@ namespace Horo::AI::Detail {
                                                     const Telemetry::OperationContext *diagnostics = nullptr);
     /** @brief Cancels tasks and invalidates blackboard leases before releasing transient resources. @param agent Owned slot. */
     void CancelOwnedWork(AgentRuntimeState &agent) noexcept;
+    /** @brief Revalidates provider generations before the aggregate admits new cooked agents. */
+    [[nodiscard]] Result<void> ValidateCurrentCookedDecisions(std::span<const AgentRuntimeState> agents);
     /** @brief Tears down every owned agent. @param state Detached or active population. */
     void ShutdownStateContents(AiSceneRuntimeState &state) noexcept;
 

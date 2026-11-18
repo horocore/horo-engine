@@ -56,6 +56,8 @@ namespace Horo::AI::Detail {
                     return Failure<void>("The staged AI group lost its decision scheduler.");
                 if (perception && !perception->IsCurrent())
                     return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
+                if (auto current = ValidateCurrentCookedDecisions(additions); current.HasError())
+                    return current;
                 return decisions ? decisions->ValidatePublication() : Result<void>::Success();
             }
 

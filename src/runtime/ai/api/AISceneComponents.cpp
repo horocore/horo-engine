@@ -1,6 +1,7 @@
 #include "Horo/AI/AISceneComponents.h"
 
 #include "Horo/AI/AIErrors.h"
+#include "Horo/AI/DecisionGraphCompiler.h"
 
 #include <algorithm>
 #include <array>
@@ -101,6 +102,14 @@ namespace Horo::AI {
             descriptor.blackboardSchema->Version() != planSchema->Version())
             return Failure(AIErrors::ControllerDescriptorIncompatible,
                            "AI controller descriptor dependencies do not agree on decision asset, kind, or blackboard schema.");
+        if (descriptor.cookedPlan) {
+            const auto graphs = descriptor.cookedPlan->Graphs();
+            const auto root = std::ranges::find(graphs, descriptor.decisionAsset, &DecisionCompiledGraph::asset);
+            if (!descriptor.cookedPlan->IsCurrent() || descriptor.cookedPlan->Root() != descriptor.decisionAsset || root == graphs.end() ||
+                root->bindings != descriptor.decisionPlan)
+                return Failure(AIErrors::ControllerDescriptorIncompatible,
+                               "AI cooked decision is stale or does not own the controller's exact root bindings.");
+        }
         if (descriptor.perceptionEndpoints)
             return ValidatePerceptionEndpoints(*descriptor.perceptionEndpoints);
         return Result<void>::Success();

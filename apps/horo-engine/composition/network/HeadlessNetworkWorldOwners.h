@@ -42,6 +42,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         std::unique_ptr<AI::AiSceneRuntime> ai;
         AI::PerceptionSpatialBroadphase perception;
         std::unique_ptr<ProjectSceneNavigationWorld> navigation;
+        std::vector<AI::AiControllerDescriptor> cookedControllers; /**< Outlives the Scene participant's immutable borrow. */
         std::unique_ptr<Runtime::RuntimeSceneService> scenes;
         std::unique_ptr<Prefab::PrefabTemplateProvider> templates; /**< Retired before Scene, borrowing its real loader. */
     };

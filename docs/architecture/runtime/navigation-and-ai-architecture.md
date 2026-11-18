@@ -2812,6 +2812,16 @@ their worker cancellation before Scene commit. Evaluator cancellation runs
 only after all Scene owners have published. Abandoning the staged candidate
 keeps existing handles, budgets and callbacks intact.
 
+The configured headless authority can explicitly select committed decision assets
+for existing controller descriptors. Selection uses the full project AssetId,
+then verifies the cooked root graph identity, decision family, exact schema
+and provider generation against the captured compiler environment. The shared
+initial and structural Scene owners retain the executable closure with its root
+bindings and recheck provider currentness at publication. A missing selected
+artifact rejects startup. An invalid authenticated payload preserves the codec
+error. The configured selection admits the immutable plan; it does not create
+an evaluator or participate in fixed-tick dispatch.
+
 Each registration owns one coalesced wake slot. Existing `DecisionWakePolicy`
 requests can be forwarded as typed `DecisionWakeReasons`; activation, blackboard,
 perception, task completion and explicit requests bypass cadence. Fixed-tick

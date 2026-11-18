@@ -3,6 +3,7 @@
 #include "AISceneRuntimeDetail.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/AIRuntimeCapability.h"
+#include "Horo/AI/DecisionGraphCompiler.h"
 
 #include <algorithm>
 #include <functional>
@@ -105,6 +106,16 @@ namespace Horo::AI {
             if (candidate.retired || candidate.record.handle != handle)
                 return nullptr;
             return &candidate;
+        }
+
+        /** @copydoc ValidateCurrentCookedDecisions */
+        Result<void> ValidateCurrentCookedDecisions(const std::span<const AgentRuntimeState> agents) {
+            if (std::ranges::any_of(agents, [](const auto &agent) {
+                return agent.cookedPlan && !agent.cookedPlan->IsCurrent();
+            }))
+                return Result<void>::Failure(
+                    MakeError(AIErrors::ControllerDescriptorIncompatible, "AI cooked decision provider retired before Scene publication."));
+            return Result<void>::Success();
         }
 
         /** @copydoc ShutdownStateContents */
@@ -233,6 +244,7 @@ namespace Horo::AI {
                                                .hasRunningTask = false},
                 .schema = schemaPublication.schema,
                 .perceptionEndpoints = endpoints,
+                .cookedPlan = descriptor->cookedPlan,
                 .blackboardBinding = schemaPublication.binding,
                 .blackboard = std::move(blackboard).Value(),
             });
@@ -329,7 +341,9 @@ namespace Horo::AI {
             return Result<void>::Success();
         if (runtime_ == nullptr || state_ == nullptr)
             return Failure(AIErrors::SceneActivationInvalid, "The AI scene activation candidate has no owned staged state.");
-        return runtime_->ValidateCandidate(binding_);
+        if (auto valid = runtime_->ValidateCandidate(binding_); valid.HasError())
+            return valid;
+        return Detail::ValidateCurrentCookedDecisions(state_->agents);
     }
 
     /** @copydoc AiSceneActivationCandidate::Publish */

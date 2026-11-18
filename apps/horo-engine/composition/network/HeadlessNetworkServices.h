@@ -20,6 +20,7 @@ namespace Horo::Vfx {
 
 namespace Horo::Application::Internal {
     struct ProjectSceneNavigationSelection;
+    struct HeadlessCookedDecisionInput;
     // Installs the real gameplay-world participants shared by standalone and dedicated products.
     // Network and presentation factories remain explicit application decisions.
     [[nodiscard]] Network::NetworkModeFactories ComposeHeadlessNetworkServices(
@@ -55,6 +56,8 @@ namespace Horo::Application::Internal {
         AI::PerceptionFilteringPolicy perceptionFiltering;
         AI::AiScenePerceptionGroupPositionSource perceptionGroupPositions; /**< Exact detached endpoint coordinates at admission. */
         std::shared_ptr<const ProjectSceneNavigationSelection> navigation;
+        std::shared_ptr<const HeadlessCookedDecisionInput>
+            cookedDecisions; /**< Optional explicit authoritative controller/asset catalog. */
     };
 
     /** @brief Composes actual project Scene services and their sole aggregate-owned Physics/Character pair.

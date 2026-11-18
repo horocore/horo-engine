@@ -1,3 +1,5 @@
+#include "DecisionGraphCompilerTestSupport.h"
+#include "HeadlessCookedDecisionAdmission.h"
 #include "HeadlessNetworkServices.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/PerceptionSpatialBroadphase.h"
@@ -399,6 +401,110 @@ namespace Horo::Application::PrefabAtomicTest {
                 CHECK_FALSE(Internal::InspectHeadlessPerception(sceneService));
             }
             sceneService.Shutdown();
+        }
+
+        TEST_CASE("Configured headless Scene admits exact committed cooked AI plans before publishing its controller",
+                  "[prefab][integration][ai][decisions][host]") {
+            using namespace Network;
+            namespace Decisions = AI::DecisionGraphTestSupport;
+            namespace Output = Assets::OutputTestSupport;
+            Decisions::Fixture ai;
+            const auto graphSource = Decisions::TaskTree(41);
+            const auto plan = ai.Compile(std::span{&graphSource, 1}, 41);
+            auto encoded = AI::DecisionPlanCodec::EncodeCooked(*plan);
+            REQUIRE(encoded.HasValue());
+            auto payload = std::move(encoded).Value();
+            const auto artifactId = Assets::AssetId::Parse("5c881920-450f-4ca7-b938-d151696ea419").Value();
+            const auto target = Output::Target("headless-null");
+            auto artifactType = Output::Type("core.behavior_tree");
+            auto requestedId = artifactId;
+            auto declaredRoot = graphSource.asset;
+            const ErrorCodeDescriptor *expected = nullptr;
+            SECTION("exact cooked root") {}
+            SECTION("foreign project asset identity") {
+                requestedId = Assets::AssetId::Parse("5c881920-450f-4ca7-b938-d151696ea428").Value();
+                expected = &AI::AIErrors::ControllerDescriptorMissing;
+            }
+            SECTION("wrong asset family") {
+                artifactType = Output::Type("core.state_machine");
+                expected = &AI::AIErrors::ControllerDescriptorIncompatible;
+            }
+            SECTION("wrong declared graph identity") {
+                declaredRoot = Decisions::Graph(42);
+                expected = &AI::AIErrors::ControllerDescriptorIncompatible;
+            }
+            SECTION("malformed authenticated semantic payload") {
+                payload.resize(3);
+                expected = &AI::AIErrors::DecisionAssetSchemaInvalid;
+            }
+            SECTION("stale providers from the committed compile environment") {
+                ai.admission->store(false);
+                expected = &AI::AIErrors::RuntimeUnavailable;
+            }
+
+            Assets::MemoryAssetProvider raw;
+            const auto digest = Put(raw, artifactId, artifactType, target, std::move(payload));
+            auto envelope = raw.Load(artifactId, {});
+            REQUIRE(envelope.HasValue());
+            const std::array artifacts{std::move(envelope).Value()};
+            const std::array manifest{Assets::AssetCookManifestEntry{artifactId, artifactType, artifactId.ToString() + ".cooked", digest}};
+            Output::TempDir directory;
+            REQUIRE(Output::PublishFixture(directory.path, target, manifest, artifacts).HasValue());
+            Assets::AssetRegistry registry;
+            REQUIRE(registry
+                        .Publish({{artifactId, artifactType, ProjectPath::Parse("assets/guard.horo_bt").Value(),
+                                   ProjectPath::Parse("assets/guard.horo_bt.horo").Value()}})
+                        .status == Assets::AssetRegistryBuildStatus::Complete);
+            auto committed =
+                Internal::CommittedSceneAssets::Capture(NativeDurableFileSystem{}, {directory.path, target}, registry.Snapshot());
+            REQUIRE(committed.HasValue());
+
+            auto controller = AI::TestSupport::MakeFixture(1, 11, 1, 0);
+            controller.agent.controller->decisionAsset = declaredRoot;
+            controller.agent.controller->blackboardSchema = ai.schema->Identity();
+            controller.descriptor.decisionAsset = declaredRoot;
+            controller.descriptor.blackboardSchema = ai.schema;
+            controller.descriptor.decisionPlan.reset();
+            Runtime::SceneDefinitionBuilder source{{7}, {1}};
+            source.Add({.object = {1}, .components = {.aiAgent = controller.agent.agent, .aiController = controller.agent.controller}});
+            auto definition = std::move(source).Build();
+            REQUIRE(definition.HasValue());
+            JobSystem jobs{{1, 8}};
+            Assets::AssetLoadService loader{jobs, committed.Value()->SceneProvider()};
+            const Internal::HeadlessSceneLoadBoundary load{{}, std::chrono::steady_clock::now() + std::chrono::seconds{5}};
+            const std::array catalog{controller.descriptor};
+            const auto decisions = std::make_shared<const Internal::HeadlessCookedDecisionInput>(
+                Internal::HeadlessCookedDecisionInput{*committed.Value(),
+                                                      ai.Environment(),
+                                                      {{controller.descriptor.controller, requestedId}}});
+            const auto composed = Internal::ComposeHeadlessSceneNetworkServices(std::make_shared<const Runtime::RuntimeSceneDefinition>(
+                                                                                    std::move(definition).Value()),
+                                                                                {.mode = Physics::PhysicsRuntimeMode::Canonical,
+                                                                                 .settings = Physics::Settings(),
+                                                                                 .registry = registry,
+                                                                                 .loads = loader,
+                                                                                 .load = load,
+                                                                                 .aiControllers = catalog,
+                                                                                 .cookedDecisions = decisions});
+            REQUIRE(composed.HasValue());
+            const auto built = composed.Value().factories.services[static_cast<std::size_t>(NetworkModeServiceKind::Scene)](
+                {NetworkModeServiceKind::Scene, NetworkProjectRole::Standalone, {}, NetworkModeWorldKind::Standalone, {7}});
+            REQUIRE(built.HasValue());
+            const auto prepared = built.Value()->Prepare();
+            if (expected) {
+                REQUIRE(prepared.HasError());
+                CHECK(prepared.ErrorValue().code.Value() == expected->code.Value());
+            } else {
+                REQUIRE(prepared.HasValue());
+                const auto physics = composed.Value().factories.services[static_cast<std::size_t>(NetworkModeServiceKind::Physics)](
+                    {NetworkModeServiceKind::Physics, NetworkProjectRole::Standalone, {}, NetworkModeWorldKind::Standalone, {7}});
+                REQUIRE(physics.HasValue());
+                REQUIRE(physics.Value()->Prepare().HasValue());
+                REQUIRE(physics.Value()->Activate().HasValue());
+                physics.Value()->Shutdown();
+            }
+            CHECK(ai.probe.factories == 0);
+            built.Value()->Shutdown();
         }
 
         TEST_CASE("Cooked prefab Perception endpoint positions publish within the actual aggregate Scene lifecycle",

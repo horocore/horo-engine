@@ -1,0 +1,34 @@
+#pragma once
+/** @file HeadlessCookedDecisionAdmission.h
+ * @brief Exact application-owned mapping between controller identities and committed decision assets.
+ */
+#include "Horo/AI/DecisionPlanCodec.h"
+#include "Horo/Assets/AssetId.h"
+
+namespace Horo::Application::Internal {
+    class CommittedSceneAssets;
+
+    /** @brief Durable project asset selection for one existing AI controller descriptor. */
+    struct HeadlessCookedDecisionBinding final {
+        AI::ControllerTypeId controller;
+        Assets::AssetId artifact;
+    };
+
+    /** @brief Authoritative scene opt-in, captured from the actual project asset and provider registries. */
+    struct HeadlessCookedDecisionInput final {
+        const CommittedSceneAssets &committed; /**< Exact immutable generation; outlives this input and all worlds using it. */
+        AI::DecisionCompilationEnvironment environment;
+        std::vector<HeadlessCookedDecisionBinding> bindings;
+        AI::DecisionCodecLimits limits; /**< Per-plan codec limits; compiled bytes also bound total retained unique plans. */
+    };
+
+    /** @brief Builds an immutable staged descriptor catalog from authenticated plans and the exact compiler environment.
+     * @param catalog Existing controller registry, including each selected controller's declared root, kind and schema.
+     * @param input Owning application capture and typed selections. Unselected descriptors keep their existing bindings.
+     * @param cancellation Exact startup/Scene owner ancestry sampled before and between decodes.
+     * @return Owned descriptors for both initial and structural owners, or original typed admission failure.
+     */
+    [[nodiscard]] Result<std::vector<AI::AiControllerDescriptor>> AdmitHeadlessCookedControllers(
+        std::span<const AI::AiControllerDescriptor> catalog, const HeadlessCookedDecisionInput &input,
+        const CancellationToken &cancellation);
+}  // namespace Horo::Application::Internal
