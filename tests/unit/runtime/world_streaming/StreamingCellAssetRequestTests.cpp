@@ -253,12 +253,22 @@ namespace Horo::WorldStreaming {
                 entered.store(true);
                 while (!release.load())
                     std::this_thread::yield();
+                completed.store(true);
                 return Result<std::vector<std::uint8_t>>::Success({1});
             }
 
             mutable std::atomic<bool> entered{};
             mutable std::atomic<bool> release{};
+            mutable std::atomic<bool> completed{};
         };
+
+        /** @brief Bounds a test handoff between the real I/O worker and owner thread. */
+        void WaitForReadSignal(const std::atomic<bool> &signal) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+            while (!signal.load() && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::yield();
+            REQUIRE(signal.load());
+        }
 
         /** @brief Simulates successive owner frames while actual uncancellable reads drain in the regression. */
         Result<StreamingCellOperation> PollNextFrame(StreamingCellDirectionOwner &owner, const StreamingSchedulerAdmissionLedger &scheduler,
@@ -267,6 +277,16 @@ namespace Horo::WorldStreaming {
                                                              IdentityFrom<StreamingOwnerFrameId>(++frame), 2000000, 1})
                               .Value();
             return owner.PollRetirement(budget, 0);
+        }
+
+        /** @brief Polls the exact retirement owner until the delayed worker's result can be consumed. */
+        void DrainAfterRead(StreamingCellDirectionOwner &owner, const StreamingSchedulerAdmissionLedger &scheduler, std::uint64_t &frame) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+            while (!owner.Operation().IsTerminal() && std::chrono::steady_clock::now() < deadline) {
+                REQUIRE(PollNextFrame(owner, scheduler, frame).HasValue());
+                std::this_thread::yield();
+            }
+            REQUIRE(owner.Operation().IsTerminal());
         }
 
         class AssetRetirementParticipant final : public IStreamingCellRetirementParticipant {
@@ -332,7 +352,6 @@ namespace Horo::WorldStreaming {
         RequestFixture fixture;
         DelayedProvider provider;
         LoadHarness loads{provider, 1};
-        ReleaseRead release{provider};
         auto scheduler = RetirementScheduler();
         std::uint64_t frame{};
         const auto operation = StreamingCellOperation::Create(CandidateTestSupport::Operation(), StreamingCellOperationKind::Load).Value();
@@ -346,13 +365,11 @@ namespace Horo::WorldStreaming {
                                                           StreamingDesiredResidency::Loaded, 1, 5},
                                                          participants)
                          .Value();
+        ReleaseRead release{provider};
         REQUIRE(owner.Advance(owner.Operation(), StreamingCellOperationTransition::BeginPreparation).HasValue());
         REQUIRE(scheduler.ReservedCapacityUnits() == 5);
         assets.Start(Submit(loads, fixture).Value());
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
-        while (!provider.entered.load() && std::chrono::steady_clock::now() < deadline)
-            std::this_thread::yield();
-        REQUIRE(provider.entered.load());
+        WaitForReadSignal(provider.entered);
         REQUIRE(owner
                     .UpdateDemand(operation.Handle(), IdentityFrom<StreamingCellDemandRevision>(1),
                                   IdentityFrom<StreamingCellDemandRevision>(2), StreamingDesiredResidency::Unloaded)
@@ -364,16 +381,69 @@ namespace Horo::WorldStreaming {
                                   IdentityFrom<StreamingCellDemandRevision>(3), StreamingDesiredResidency::Loaded)
                     .HasValue());
         provider.release.store(true);
-        const auto drainDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
-        while (!owner.Operation().IsTerminal() && std::chrono::steady_clock::now() < drainDeadline) {
-            REQUIRE(PollNextFrame(owner, scheduler, frame).HasValue());
-            std::this_thread::yield();
-        }
-        REQUIRE(owner.Operation().IsTerminal());
+        DrainAfterRead(owner, scheduler, frame);
         REQUIRE(owner.TakeTerminalResult().Value().Outcome() == StreamingCellOperationOutcome::Cancelled);
         REQUIRE(scheduler.ReservedCapacityUnits() == 0);
         REQUIRE(owner.RequiresFreshAttempt());
         REQUIRE_FALSE(published);
+    }
+
+    TEST_CASE("Scheduler shutdown rejects a late asset worker completion and drains the exact load once",
+              "[unit][world_streaming][asset_request][shutdown][lifecycle]") {
+        using Transition = StreamingCellOperationTransition;
+        using namespace WorldStreamingErrors;
+        RequestFixture fixture;
+        DelayedProvider provider;
+        LoadHarness loads{provider, 1};
+        auto scheduler = RetirementScheduler();
+        std::uint64_t frame{};
+        const auto operation = StreamingCellOperation::Create(CandidateTestSupport::Operation(), StreamingCellOperationKind::Load).Value();
+        std::vector<std::unique_ptr<IStreamingCellRetirementParticipant>> participants;
+        bool published{};
+        auto adapter = std::make_unique<AssetRetirementParticipant>(published);
+        auto &assets = *adapter;
+        participants.push_back(std::move(adapter));
+        auto owner = StreamingCellDirectionOwner::Create(scheduler,
+                                                         {operation, IdentityFrom<StreamingCellDemandRevision>(1),
+                                                          StreamingDesiredResidency::Loaded, 1, 5},
+                                                         participants)
+                         .Value();
+        // Release a blocked provider before tearing down the direction owner or joining the real worker on assertion failure.
+        ReleaseRead release{provider};
+        const auto preparing = owner.Advance(owner.Operation(), Transition::BeginPreparation);
+        REQUIRE(preparing.HasValue());
+        assets.Start(Submit(loads, fixture).Value());
+        WaitForReadSignal(provider.entered);
+
+        scheduler.BeginShutdown();
+        CHECK(scheduler.State() == StreamingSchedulerAdmissionState::Draining);
+        RequireError(scheduler.TryAdmit(operation, 1, scheduler.Limits().concurrency.revision), SchedulerLifecycleUnavailable);
+        RequireError(owner.Advance(preparing.Value(), Transition::Complete), CellDirectionLifecycleUnavailable);
+        REQUIRE(owner.Interrupt(operation.Handle(), Transition::Shutdown).HasValue());
+        REQUIRE(owner.Interrupt(operation.Handle(), Transition::Cancel).HasValue());
+        const auto pending = PollNextFrame(owner, scheduler, frame);
+        REQUIRE(pending.HasValue());
+        CHECK(pending.Value().State() == StreamingCellOperationState::Retiring);
+        CHECK(scheduler.ReservedCount() == 1);
+        CHECK(scheduler.ReservedCapacityUnits() == 5);
+        CHECK_FALSE(provider.completed.load());
+        RequireError(owner.TakeTerminalResult(), CellDirectionLifecycleUnavailable);
+
+        provider.release.store(true);
+        WaitForReadSignal(provider.completed);
+        RequireError(owner.Advance(preparing.Value(), Transition::Complete), CellDirectionStale);
+        CHECK(scheduler.ReservedCapacityUnits() == 5);
+        DrainAfterRead(owner, scheduler, frame);
+        const auto terminal = owner.TakeTerminalResult();
+        REQUIRE(terminal.HasValue());
+        CHECK(terminal.Value().Outcome() == StreamingCellOperationOutcome::Shutdown);
+        CHECK_FALSE(published);
+        CHECK_FALSE(owner.RequiresFreshAttempt());
+        RequireError(owner.TakeTerminalResult(), CellDirectionLifecycleUnavailable);
+        RequireError(owner.TakeSucceededParticipants(), CellDirectionLifecycleUnavailable);
+        CHECK(scheduler.State() == StreamingSchedulerAdmissionState::Closed);
+        CHECK(scheduler.ReservedCount() == 0);
+        CHECK(scheduler.ReservedCapacityUnits() == 0);
     }
 
     TEST_CASE("Packaged cell reads reject missing content before any child admission",
