@@ -10,6 +10,7 @@
 #include "ProjectReplicationTestSupport.h"
 #include "editor/screens/workspace/AiAssetPresentation.h"
 #include "editor/screens/workspace/BlackboardScalarInput.h"
+#include "editor/screens/workspace/DecisionGraphCanvasModel.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/WorkspacePathText.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
@@ -398,7 +399,30 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
         const auto connectedRevision = view.revision;
         edit(Connect, addedId, initial);
         CHECK(view.diagnostic.has_value());
-        edit(RemoveTransition, edge);
+        const DecisionGraphDocumentFence canvasFence{instance, view.revision};
+        const auto projection = ProjectDecisionCanvas(*view.graph, canvasFence, view.editable);
+        REQUIRE(projection.family == AI::DecisionPlanKind::StateMachine);
+        REQUIRE(projection.nodes.size() == 2);
+        REQUIRE(projection.links.size() == 1);
+        CHECK(projection.links.front().authoredId == edge.Value());
+        const auto from = std::ranges::find(projection.pins, GraphPinView{initial, 0, true});
+        const auto to = std::ranges::find(projection.pins, GraphPinView{addedId, 0, false});
+        REQUIRE(from != projection.pins.end());
+        REQUIRE(to != projection.pins.end());
+        const auto newConnection = ResolveDecisionCanvasEdit(projection, {canvasFence, GraphConnectIntent{*to, *from}});
+        REQUIRE(newConnection.has_value());
+        CHECK(newConnection->operation == Connect);
+        CHECK(newConnection->node == initial);
+        CHECK(newConnection->target == addedId);
+        CHECK_FALSE(ResolveDecisionCanvasEdit(projection, {canvasFence, GraphConnectIntent{*from, *from}}));
+        CHECK_FALSE(ResolveDecisionCanvasEdit(projection, {canvasFence, GraphConnectIntent{GraphPinView{addedId, 0, true}, *to}}));
+        CHECK_FALSE(ResolveDecisionCanvasEdit(projection, {{instance, view.revision + 1},
+                                                           GraphRemoveLinkIntent{GraphLinkRole::Transition, edge.Value()}}));
+        CHECK_FALSE(ResolveDecisionCanvasEdit(projection, {canvasFence, GraphRemoveLinkIntent{GraphLinkRole::Hierarchy, edge.Value()}}));
+        const auto remove =
+            ResolveDecisionCanvasEdit(projection, {canvasFence, GraphRemoveLinkIntent{GraphLinkRole::Transition, edge.Value()}});
+        REQUIRE(remove.has_value());
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::EditDecisionStateMachine, .stateMachineEdit = remove});
         CHECK(view.diagnostic.has_value());
         edit(RemoveState, initial);
         CHECK(view.diagnostic.has_value());
@@ -751,6 +775,20 @@ TEST_CASE("Behavior Tree and Utility New use the current registered native task 
         const auto first = std::ranges::find(graph().Edges(), sequence, &AI::BehaviorTreeEdge::sourceNode);
         REQUIRE(first != graph().Edges().end());
         CHECK(first->id == extraEdge);
+        const DecisionGraphDocumentFence canvasFence{instance, view.revision};
+        const auto projection = ProjectDecisionCanvas(*view.graph, canvasFence, view.editable);
+        CHECK(projection.family == AI::DecisionPlanKind::BehaviorTree);
+        CHECK(projection.nodes.size() == graph().Nodes().size());
+        CHECK(projection.links.size() == graph().Edges().size());
+        const auto link = std::ranges::find(projection.links, extraEdge.Value(), &GraphLinkView::authoredId);
+        REQUIRE(link != projection.links.end());
+        CHECK(link->role == GraphLinkRole::Child);
+        CHECK(projection.pins[link->from].authoredPin == first->sourcePin.Value());
+        CHECK(projection.pins[link->to].authoredPin == first->targetPin.Value());
+        const auto node = std::ranges::find(projection.nodes, projection.pins[link->to].node, &GraphNodeView::id);
+        REQUIRE(node != projection.nodes.end());
+        CHECK(node->incomingOrder == 0);
+        CHECK_FALSE(ResolveDecisionCanvasEdit(projection, {canvasFence, GraphRemoveLinkIntent{link->role, link->authoredId}}));
         const auto beforeNoop = view.revision;
         edit(MoveEarlier, task);
         CHECK(view.graph == moved);
@@ -902,6 +940,18 @@ TEST_CASE("Behavior Tree and Utility New use the current registered native task 
         CHECK(secondTask != firstTask);
         CHECK(second->provider.id == secondId);
         CHECK(second->provider.type == installed.type);
+        const DecisionGraphDocumentFence canvasFence{instance, view.revision};
+        const auto projection = ProjectDecisionCanvas(*view.graph, canvasFence, view.editable);
+        CHECK(projection.family == AI::DecisionPlanKind::Utility);
+        REQUIRE(projection.nodes.size() == 3);
+        REQUIRE(projection.links.size() == 2);
+        const auto association = std::ranges::find(projection.links, secondId.Value(), &GraphLinkView::authoredId);
+        REQUIRE(association != projection.links.end());
+        CHECK(association->role == GraphLinkRole::UtilityOption);
+        CHECK(projection.pins[association->from].node == utility().root);
+        CHECK(projection.pins[association->to].node == secondId);
+        CHECK_FALSE(
+            ResolveDecisionCanvasEdit(projection, {canvasFence, GraphRemoveLinkIntent{association->role, association->authoredId}}));
         edit({.operation = SetOptionPolicy, .option = secondId, .priority = 1.25});
         CHECK(view.diagnostic.has_value());
         edit({.operation = SetOptionPolicy, .option = secondId, .priority = 0.5, .compensation = 0.125});

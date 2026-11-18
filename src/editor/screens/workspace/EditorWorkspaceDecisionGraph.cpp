@@ -1182,9 +1182,43 @@ namespace Horo::Editor {
                  DecisionTaskSelection{task.type, task.provider, task.version, viewModel.availableBehaviorsRevision});
     }
 
+    /** @copydoc EditorWorkspaceView::ApplyDecisionCanvasInteraction */
+    void EditorWorkspaceView::ApplyDecisionCanvasInteraction(const DecisionGraphWorkspaceDocument &document,
+                                                             const DecisionCanvasInteraction &interaction,
+                                                             EditorWorkspaceViewCommandData &outCommand) const {
+        const auto instance = document.identity.instance;
+        using enum AI::DecisionPlanKind;
+        switch (document.family) {
+            case StateMachine:
+                if (m_stateMachineSelection.instance != instance)
+                    m_stateMachineSelection = {.instance = instance};
+                if (interaction.node)
+                    m_stateMachineSelection.state = *interaction.node;
+                if (interaction.transition)
+                    m_stateMachineSelection.transition = *interaction.transition;
+                break;
+            case BehaviorTree:
+                if (m_behaviorTreeSelection.instance != instance)
+                    m_behaviorTreeSelection = {.instance = instance};
+                if (interaction.node)
+                    m_behaviorTreeSelection.node = *interaction.node;
+                break;
+            case Utility:
+                if (interaction.node && *interaction.node != std::get<AI::UtilityDecisionSource>(document.graph->body).root &&
+                    (m_utilityGraphSelection.instance != instance || m_utilityGraphSelection.option != *interaction.node))
+                    m_utilityGraphSelection = {.instance = instance, .option = *interaction.node};
+                break;
+            default:
+                break;
+        }
+        if (interaction.edit)
+            outCommand = {.command = EditorWorkspaceViewCommand::EditDecisionStateMachine, .stateMachineEdit = interaction.edit};
+    }
+
     /** @copydoc EditorWorkspaceView::DrawDecisionGraphDocument */
     bool EditorWorkspaceView::DrawDecisionGraphDocument(const EditorWorkspaceViewModel &viewModel,
                                                         EditorWorkspaceViewCommandData &outCommand) const {
+        m_decisionGraphCanvas.Retain(viewModel.decisionGraphDocuments);
         const auto opened = std::ranges::find_if(viewModel.decisionGraphDocuments, [&](const auto &document) {
             return document.identity.instance == viewModel.workspacePanelHost.ActiveDocument();
         });
@@ -1203,12 +1237,17 @@ namespace Horo::Editor {
             label(std::format("{} {}", text("workspace.decision_graph.unknown"), summary.unknown), Theme::Muted());
         if (!opened->editable) {
             label(text("workspace.decision_graph.read_only"), Theme::Muted());
+            static_cast<void>(m_decisionGraphCanvas.Draw(*opened, m_context));
             return true;
         }
         if (opened->diagnostic)
             label(text(opened->conflict ? "workspace.decision_graph.edit_conflict" : "workspace.decision_graph.edit_refused"),
                   Theme::Warn());
 
+        const auto canvas = m_decisionGraphCanvas.Draw(*opened, m_context);
+        ApplyDecisionCanvasInteraction(*opened, canvas, outCommand);
+        if (canvas.edit)
+            return true;
         if (opened->family == AI::DecisionPlanKind::BehaviorTree) {
             DrawBehaviorTreeTopology(viewModel, *opened, outCommand);
             return true;

@@ -486,6 +486,7 @@ if(HORO_BUILD_EDITOR_GUI)
         )
     endif()
     add_library(HoroThirdParty::ImGui ALIAS HoroThirdPartyImGui)
+    include(${CMAKE_CURRENT_LIST_DIR}/DecisionNodeEditorDependency.cmake)
 
     target_compile_features(HoroThirdPartyImGui PUBLIC cxx_std_20)
     # Committed IME input must retain Unicode scalars above U+FFFF in every ImGui consumer.

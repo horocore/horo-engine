@@ -4344,6 +4344,8 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
             editor/screens/workspace/EditorWorkspaceEnvironmentQuery.cpp
             editor/screens/workspace/EditorWorkspaceDecisionGraph.cpp
+            editor/screens/workspace/DecisionGraphCanvasModel.cpp
+            editor/screens/workspace/DecisionGraphCanvas.cpp
             editor/screens/workspace/EditorWorkspaceUtilityGraph.cpp
             editor/screens/workspace/EditorWorkspaceControllerBlackboard.cpp
             editor/screens/workspace/EditorWorkspaceControllerPCG.cpp
@@ -4433,6 +4435,7 @@ target_link_libraries(HoroGui PUBLIC HoroEditorPlayXrHostInterface)
             PRIVATE
             HoroEngine::EditorRenderExtraction
             HoroEngine::VisualAccessibility
+            HoroThirdParty::ImGuiNodeEditor
             nlohmann_json::nlohmann_json
     )
 

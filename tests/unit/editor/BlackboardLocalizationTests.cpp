@@ -215,6 +215,15 @@ TEST_CASE("Decision graph workspace and initial state machine labels resolve in 
     for (const auto locale : locales) {
         REQUIRE(service.Prepare({locale}));
         REQUIRE(service.ActivatePrepared());
+        CHECK_FALSE(service.Get("editor", "workspace.decision_canvas.root").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_canvas.sequence").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_canvas.selector").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_canvas.composite").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_canvas.decorator").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_canvas.service").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_canvas.task").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_canvas.unknown").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_canvas.fit").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.content_browser.action.create_behavior_tree").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.content_browser.action.create_utility").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.content_browser.action.create_state_machine").starts_with("[missing:"));

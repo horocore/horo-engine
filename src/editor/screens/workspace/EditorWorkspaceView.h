@@ -6,6 +6,7 @@
 #include "Horo/Editor/WorkspacePanelRegistry.h"
 #include "UiCanvasDocumentView.h"
 #include "WorkspaceSplitterInteraction.h"
+#include "editor/screens/workspace/DecisionGraphCanvas.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/source_editor/SourceEditorSession.h"
 #include "editor/source_editor/SourceEditorWidget.h"
@@ -169,6 +170,10 @@ namespace Horo::Editor {
         };
 
         mutable StateMachineSelection m_stateMachineSelection;
+        mutable DecisionGraphCanvas m_decisionGraphCanvas;
+        /** @brief Routes neutral canvas selection and link gestures to the ordinary document owner and controls. */
+        void ApplyDecisionCanvasInteraction(const DecisionGraphWorkspaceDocument &document, const DecisionCanvasInteraction &interaction,
+                                            EditorWorkspaceViewCommandData &outCommand) const;
 
         /** @brief Remembers the selected authored node and exact installed Task in one open tree. */
         struct BehaviorTreeSelection final {

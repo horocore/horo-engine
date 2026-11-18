@@ -4094,6 +4094,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/SequenceTimelineRenderTests.cpp
             unit/editor/WorldLayerOutlinerRenderTests.cpp
             unit/editor/PCGAuthoringInspectorRenderTests.cpp
+            unit/editor/DecisionGraphCanvasRenderTests.cpp
     )
 
     target_include_directories(HoroEditorUiComponentsRenderTests PRIVATE

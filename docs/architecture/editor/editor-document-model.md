@@ -720,6 +720,14 @@ contracts. Compiler admission validates the whole candidate before history or
 publication. The source cannot lose its final option or its final score per
 option through these commands.
 
+Decision document tabs project canonical graph nodes, pins and edges into a
+shared visual snapshot. The private imgui-node-editor adapter owns canvas
+navigation and selection for each open revision. Selected authored nodes and
+links drive their family controls. State Machine link gestures submit normal
+revision-fenced document commands. Automatic placement belongs to the
+presentation session. Sidecar-backed layout and authored subtree gestures are
+separate increments of the graph surface.
+
 The workspace usage review submits one bounded Project-owned read of the exact
 durable schema bytes and registered Decision sources. The application holds the
 project mutation lease through source verification, uses the same typed source
