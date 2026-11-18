@@ -237,10 +237,12 @@ namespace Horo::AI {
 
     /** @copydoc BuiltinPointDistanceQuery::Evaluate */
     Result<QueryTestSample> BuiltinPointDistanceQuery::Evaluate(Math::WorldCoordinate64 center, Math::WorldCoordinate64 point) const {
-        auto sample = EvaluateQueryDistance(stage_, QueryDistanceMetric::Euclidean, center, point);
-        if (sample.HasValue())
-            sample.Value().filter = *sample.Value().metric <= settings_.radiusMillimeters / 1000.0;
-        return sample;
+        auto evaluated = EvaluateQueryDistance(stage_, QueryDistanceMetric::Euclidean, center, point);
+        if (evaluated.HasError())
+            return evaluated;
+        auto sample = std::move(evaluated).Value();
+        sample.filter = *sample.metric <= settings_.radiusMillimeters / 1000.0;
+        return Result<QueryTestSample>::Success(std::move(sample));
     }
 
     /** @copydoc GenerateBuiltinQueryCandidates */
