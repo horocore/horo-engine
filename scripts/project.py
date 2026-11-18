@@ -215,9 +215,9 @@ def android_run(command: list[str], directory: Path, log: Path, timeout: int = 1
         raise AndroidCommandFailed(f"Android command failed ({return_code}); inspect {log.name}.")
 
 
-def resolve_java_dependencies(gradle: Path, stage: Path, log: Path) -> None:
-    """Retry observed repository throttling while preserving each attempt's log."""
-    command = [str(gradle.resolve()), "--no-daemon", "--console=plain", "writeDependencyProvenance"]
+def run_gradle_task(gradle: Path, task: str, stage: Path, log: Path) -> None:
+    """Retry Gradle repository throttling while preserving each attempt's log."""
+    command = [str(gradle.resolve()), "--no-daemon", "--console=plain", task]
     delays = (20, 60)
     for attempt, delay in enumerate(delays, start=1):
         try:
@@ -230,7 +230,7 @@ def resolve_java_dependencies(gradle: Path, stage: Path, log: Path) -> None:
             if not throttled:
                 raise
             log.replace(log.with_name(f"{log.stem}-attempt-{attempt}{log.suffix}"))
-            print(f"Android Java dependency repository rate limited the request. Retrying in {delay} seconds.", file=sys.stderr)
+            print(f"Android dependency repository rate limited the request. Retrying in {delay} seconds.", file=sys.stderr)
             time.sleep(delay)
     android_run(command, stage, log)
 
@@ -686,13 +686,13 @@ def assemble(arguments: argparse.Namespace) -> None:
     apk_write_project(stage, tools, profile, arguments.abi, arguments.game_activity)
     os.environ["ANDROID_HOME"] = str(arguments.sdk.resolve())
     os.environ["SOURCE_DATE_EPOCH"] = "315532800"
-    resolve_java_dependencies(arguments.gradle, stage, workspace / "java-dependencies.log")
+    run_gradle_task(arguments.gradle, "writeDependencyProvenance", stage, workspace / "java-dependencies.log")
     dependencies = stage / "assets/horo-java-dependencies.json"
     assets.append({"name": dependencies.name, "sha256": digest(dependencies), "size": dependencies.stat().st_size})
     evidence = provenance(tools, profile, native, assets)
     (stage / PROVENANCE_ASSET).write_bytes(canonical_json(evidence))
     task = "assemble" + profile["configuration"]
-    android_run([str(arguments.gradle.resolve()), "--no-daemon", "--console=plain", task], stage, workspace / "gradle.log")
+    run_gradle_task(arguments.gradle, task, stage, workspace / "gradle.log")
     complete_package(stage, workspace, profile, tools, capability, evidence, arguments.unsigned)
 
 

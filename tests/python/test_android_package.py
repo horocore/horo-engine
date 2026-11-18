@@ -109,12 +109,37 @@ class AndroidPackageTests(unittest.TestCase):
 
         with patch.object(android_package, "android_run", side_effect=gradle) as run, patch.object(
                 android_package.time, "sleep") as sleep:
-            android_package.resolve_java_dependencies(self.root / "gradle", self.root, log)
+            android_package.run_gradle_task(self.root / "gradle", "writeDependencyProvenance", self.root, log)
         self.assertEqual(run.call_count, 2)
         sleep.assert_called_once_with(20)
         self.assertEqual(log.read_text(encoding="utf-8"), "BUILD SUCCESSFUL")
         self.assertIn("429", (self.root / "java-dependencies-attempt-1.log").read_text(encoding="utf-8"))
 
+    def test_release_assembly_retries_lint_artifact_throttling(self):
+        log = self.root / "gradle.log"
+        throttled = (
+            "> Task :lintVitalAnalyzeRelease FAILED\n"
+            "> Could not resolve org.codehaus.groovy:groovy:3.0.22.\n"
+            "> Received status code 429 from server: Too Many Requests\n"
+        )
+        responses = iter((throttled, throttled, "BUILD SUCCESSFUL"))
+
+        def gradle(command, directory, output):
+            self.assertEqual(command[-1], "assembleRelease")
+            self.assertEqual(directory, self.root)
+            response = next(responses)
+            output.write_text(response, encoding="utf-8")
+            if response == throttled:
+                raise android_package.AndroidCommandFailed("release dependency throttled")
+
+        with patch.object(android_package, "android_run", side_effect=gradle) as run, patch.object(
+                android_package.time, "sleep") as sleep:
+            android_package.run_gradle_task(self.root / "gradle", "assembleRelease", self.root, log)
+        self.assertEqual(run.call_count, 3)
+        self.assertEqual([invocation.args for invocation in sleep.call_args_list], [(20,), (60,)])
+        self.assertEqual(log.read_text(encoding="utf-8"), "BUILD SUCCESSFUL")
+        for attempt in (1, 2):
+            self.assertEqual((self.root / f"gradle-attempt-{attempt}.log").read_text(encoding="utf-8"), throttled)
     def test_dependency_resolution_fails_immediately_for_lock_error(self):
         log = self.root / "java-dependencies.log"
 
@@ -124,7 +149,7 @@ class AndroidPackageTests(unittest.TestCase):
 
         with patch.object(android_package, "android_run", side_effect=gradle) as run, patch.object(
                 android_package.time, "sleep") as sleep, self.assertRaisesRegex(AndroidError, "dependency lock error"):
-            android_package.resolve_java_dependencies(self.root / "gradle", self.root, log)
+            android_package.run_gradle_task(self.root / "gradle", "writeDependencyProvenance", self.root, log)
         run.assert_called_once()
         sleep.assert_not_called()
         self.assertEqual(log.read_text(encoding="utf-8"), "Dependency lock state does not match")
