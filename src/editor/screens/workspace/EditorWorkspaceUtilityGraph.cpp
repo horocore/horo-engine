@@ -324,7 +324,7 @@ namespace Horo::Editor {
                                 text("workspace.decision_graph.edit_utility_step").c_str()};
         auto curve = static_cast<int>(draft.score.curve);
         Ui::FieldLabel(text("workspace.decision_graph.edit_utility_curve").c_str(), fonts);
-        if (Ui::ComboControl("##UtilityAuthoringCurve", &curve, static_cast<int>(curves.size()), curves.data(), fonts))
+        if (Ui::ComboControl("##UtilityAuthoringCurve", &curve, curves.data(), static_cast<int>(curves.size()), fonts))
             draft.score.curve = static_cast<AI::UtilityResponseCurve>(curve);
         static_cast<void>(Ui::CheckboxControl(text("workspace.decision_graph.edit_utility_invert").c_str(), &draft.score.invert, fonts));
         std::optional<UtilityScoreEdit> score;
