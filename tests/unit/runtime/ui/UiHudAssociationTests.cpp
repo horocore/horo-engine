@@ -179,6 +179,54 @@ namespace Horo::Runtime::Ui::ReloadTests {
             }
         }
 
+        TEST_CASE("Nested HUD suppressions cancel only their context and require a fresh presentation", "[runtime_ui][hud][suppression]") {
+            Rig rig;
+            auto old = rig.Frame();
+            REQUIRE(rig.hud.ApplyPresentation(rig.publisher, old, rig.Receipt(old)).HasValue());
+            auto capture = rig.Capture();
+            auto outer = Take(rig.hud.BeginSuppression(rig.publisher));
+            auto inner = Take(rig.hud.BeginSuppression(rig.publisher));
+            CHECK_FALSE(capture.IsActive());
+            CHECK_FALSE(rig.hud.InputEligible(rig.publisher));
+            CHECK(rig.hud.PrepareFrame(rig.publisher, old.Snapshot()).HasError());
+            CHECK(rig.hud.ApplyPresentation(rig.publisher, old, rig.Receipt(old)).HasError());
+            REQUIRE(rig.hud.EndSuppression(rig.publisher, outer).HasValue());
+            CHECK(rig.hud.EndSuppression(rig.publisher, outer).HasError());
+            CHECK(rig.hud.PrepareFrame(rig.publisher, old.Snapshot()).HasError());
+            REQUIRE(rig.hud.EndSuppression(rig.publisher, inner).HasValue());
+            CHECK_FALSE(rig.hud.InputEligible(rig.publisher));
+            CHECK(rig.hud.ApplyPresentation(rig.publisher, old, rig.Receipt(old)).HasError());
+            auto current = rig.Frame(2);
+            REQUIRE(rig.hud.ApplyPresentation(rig.publisher, current, rig.Receipt(current)).HasValue());
+            CHECK(rig.hud.InputEligible(rig.publisher));
+        }
+
+        TEST_CASE("HUD suppression receipts are bounded and survive only the owning association", "[runtime_ui][hud][suppression]") {
+            Rig rig;
+            Rig foreign;
+            const auto other = Take(foreign.hud.BeginSuppression(foreign.publisher));
+            std::vector<UiHudSuppressionToken> scopes;
+            for (std::size_t index = 0; index < MaximumUiHudSuppressions; ++index)
+                scopes.push_back(Take(rig.hud.BeginSuppression(rig.publisher)));
+            CHECK(rig.hud.BeginSuppression(rig.publisher).HasError());
+            CHECK(rig.hud.EndSuppression(rig.publisher, other).HasError());
+            rig.Reload(2);
+            CHECK(rig.hud.EndSuppression(rig.publisher, scopes.front()).HasError());
+            REQUIRE(rig.hud.Refresh(rig.publisher).HasValue());
+            REQUIRE(rig.hud.SetPolicy(rig.publisher, true, false).HasValue());
+            for (const auto &scope : scopes)
+                REQUIRE(rig.hud.EndSuppression(rig.publisher, scope).HasValue());
+            const auto snapshot = Revision<UiRenderSnapshotRevision>(2);
+            CHECK(rig.hud.PrepareFrame(rig.publisher, snapshot).HasError());
+            REQUIRE(rig.hud.SetPolicy(rig.publisher, true, true).HasValue());
+            CHECK(rig.hud.PrepareFrame(rig.publisher, snapshot).HasValue());
+            const auto outgoing = Take(rig.hud.BeginSuppression(rig.publisher));
+            REQUIRE(rig.hud.Shutdown(rig.publisher).HasValue());
+            auto replacement = Take(UiHudAssociation::Create(Binding(), rig.publisher));
+            CHECK(replacement.EndSuppression(rig.publisher, outgoing).HasError());
+            CHECK(replacement.PrepareFrame(rig.publisher, snapshot).HasValue());
+        }
+
         TEST_CASE("HUD policy attachment and shutdown cancel only the actual admitted context captures", "[runtime_ui][hud][capture]") {
             Rig rig;
             auto frame = rig.Frame();
