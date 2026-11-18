@@ -266,6 +266,13 @@ TEST_CASE("Recent AI assets resolve current registered identity after an ordinar
         CHECK(controller.ViewModel().blackboardDocuments.empty());
     }
     SECTION("missing identity leaves the visible untyped source unchanged") {
+        controller.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::NavigateContentBrowser, .stringPayload = WorkspacePathText(project.root / "assets")});
+        const auto sourcePathText = WorkspacePathText(project.root / project.Path);
+        const auto &registeredEntries = controller.ViewModel().contentBrowser.entries;
+        const auto registered = std::ranges::find(registeredEntries, sourcePathText, &ContentBrowserEntry::absolutePath);
+        REQUIRE(registered != registeredEntries.end());
+        REQUIRE(registered->registered);
         const auto sourcePath = project.root / project.Path;
         const auto original = Assets::CaptureAssetSource(project.root, sourcePath, AI::BlackboardSchemaSourceCodec::MaximumBytes);
         REQUIRE(original.HasValue());
@@ -280,7 +287,7 @@ TEST_CASE("Recent AI assets resolve current registered identity after an ordinar
         controller.RefreshAssets(project.registry.Snapshot());
         CHECK_FALSE(history.front().available);
         const auto &entries = controller.ViewModel().contentBrowser.entries;
-        const auto visible = std::ranges::find(entries, WorkspacePathText(sourcePath), &ContentBrowserEntry::absolutePath);
+        const auto visible = std::ranges::find(entries, sourcePathText, &ContentBrowserEntry::absolutePath);
         REQUIRE(visible != entries.end());
         CHECK_FALSE(visible->registered);
         CHECK_FALSE(visible->registeredType.has_value());
