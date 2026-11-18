@@ -8,6 +8,7 @@
 #include "editor/renderer/vulkan/EditorViewportRendererVulkan.h"
 #include "support/OpenXRApplicationNativeTestSupport.h"
 #include "support/OpenXRInstalledProductTestFixture.h"
+#include "support/OpenXRPlaneCaptureTestSupport.h"
 #include "unit/editor/SceneDocumentHierarchyFixture.h"
 
 #include <algorithm>
@@ -855,6 +856,66 @@ namespace Horo::Tests::OpenXRApplication {
         }
         CHECK(fixture.script.native.liveSessions == 0);
         REQUIRE(RequireValue(fixture.ClosePlay()));
+    }
+
+    TEST_CASE("Signed XR Play captures bounded room planes only under its one-session grant", "[xr][application][play][planes]") {
+        using enum XR::XRProjectFeaturePolicy;
+        using enum Editor::EditorXrPlaneCaptureState;
+        ApplicationFixture fixture{true, 6, Unrequested, Unrequested, Unrequested, false, std::nullopt, Unrequested, true};
+        OpenXR::SpatialCaptureScript native;
+        OpenXR::PlaneSnapshotFixture geometry;
+        constexpr std::array<std::string_view, 3> extensions{XR_EXT_FUTURE_EXTENSION_NAME, XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME,
+                                                             XR_EXT_SPATIAL_PLANE_TRACKING_EXTENSION_NAME};
+        fixture.script.native.extraExtensions = extensions;
+        fixture.script.native.extensionCount += static_cast<std::uint32_t>(extensions.size());
+        fixture.script.census.extraProc = &OpenXR::SpatialCaptureScript::GetProc;
+        fixture.CreatePlay();
+        auto &preview = *fixture.play->PlaneCapturePreview();
+        REQUIRE(preview.ReadPlaneCaptureState() == Ready);
+        const bool grant = GENERATE(false, true);
+        if (grant)
+            RequireValue(preview.ArmPlaneCapture());
+        auto scene = ActivatePlay(fixture, std::nullopt);
+        auto cutoff = std::make_unique<AppInputSample>(*fixture.play);
+        auto *observed = cutoff.get();
+        RequireValue(fixture.scheduler->AddParticipant(std::move(cutoff)));
+        RequireValue(fixture.scheduler->Startup());
+        const auto sample = [&](const std::int64_t now) {
+            fixture.script.clock.sample = now;
+            RequireValue(fixture.scheduler->RunFrame());
+            REQUIRE(observed->result.has_value());
+            RequireValue(*observed->result);
+            return fixture.play->ReadPlaneObservations();
+        };
+        CHECK(sample(100'000'000).HasError());
+        native.ready = true;
+        CHECK(sample(110'000'000).HasError());
+        CHECK(native.hasContext == grant);
+        CHECK(sample(360'000'000).HasError());
+        const auto batch = sample(370'000'000);
+        REQUIRE(batch.HasValue() == grant);
+        if (grant) {
+            REQUIRE(batch.Value().Planes().size() == 2);
+            CHECK(batch.Value().Scope().space.kind == XR::XRSpaceKind::World);
+            CHECK(batch.Value().Planes()[0].classification == XR::XRPlaneClassification::Platform);
+            CHECK(preview.ReadPlaneCaptureState() == Tracking);
+            CHECK(native.scans == 1);
+            CHECK(sample(620'000'000).HasValue());
+            CHECK(native.scans == 2);
+            preview.RevokePlaneCapture();
+            CHECK(fixture.play->ReadPlaneObservations().HasError());
+            RequireValue(fixture.play->PollEvents());
+            CHECK(native.cancels == 1);
+            CHECK_FALSE(native.hasContext);
+            CHECK(preview.ArmPlaneCapture().HasError());
+        } else {
+            CHECK(native.scans == 0);
+            CHECK(geometry.calls == 0);
+        }
+        fixture.scheduler->Shutdown();
+        scene->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+        CHECK(fixture.play->ReadPlaneObservations().HasError());
     }
 
     TEST_CASE("Signed XR Play admits only current consenting eye pointing", "[xr][application][play][gaze]") {
