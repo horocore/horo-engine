@@ -2,6 +2,8 @@
 #include "VulkanGraphTestSupport.h"
 #include "runtime/renderer/modules/vulkan/VulkanGraphRuntimeInternal.h"
 
+#include <catch2/generators/catch_generators.hpp>
+
 namespace {
     using namespace Horo::Render;
     using namespace Horo::Render::VulkanResourceTest;
