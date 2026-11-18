@@ -1,5 +1,6 @@
 #include "editor/UiCanvasDocumentSerialization.h"
 
+#include "Horo/Editor/UiCanvasDocument.h"
 #include "Horo/Runtime/Ui/UiDocumentSerialization.h"
 #include "JsonUtils.h"
 

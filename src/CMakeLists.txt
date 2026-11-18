@@ -4670,7 +4670,16 @@ add_library(HoroBuiltinAssetCookerHostInternal INTERFACE)
 target_include_directories(HoroBuiltinAssetCookerHostInternal INTERFACE "${HORO_BUILTIN_COOKER_HOST_HEADERS}")
 target_link_libraries(HoroBuiltinAssetCookerHostInternal INTERFACE HoroEngine::Assets)
 
+# Deliberate build-only seam to the existing v1/v2 UI Canvas authoring codec.
+set(HORO_UI_CANVAS_SOURCE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/internal/ui-canvas-source")
+file(MAKE_DIRECTORY "${HORO_UI_CANVAS_SOURCE_HEADERS}")
+configure_file(editor/UiCanvasDocumentSerialization.h "${HORO_UI_CANVAS_SOURCE_HEADERS}/UiCanvasDocumentSerialization.h" COPYONLY)
+add_library(HoroUiCanvasSourceHostInternal INTERFACE)
+target_include_directories(HoroUiCanvasSourceHostInternal INTERFACE "${HORO_UI_CANVAS_SOURCE_HEADERS}")
+target_link_libraries(HoroUiCanvasSourceHostInternal INTERFACE HoroEngine::EditorServices HoroEngine::RuntimeUi)
+
 add_library(HoroPrefabCookHost STATIC
+        application/assets/UiDocumentCooker.cpp
         application/assets/PrefabCookSchemaContext.cpp
         application/assets/PrefabCookSemanticInputs.cpp
         application/assets/PrefabSceneCookHost.cpp
@@ -4682,7 +4691,7 @@ add_library(HoroPrefabCookHost STATIC
 add_library(HoroEngine::PrefabCookHost ALIAS HoroPrefabCookHost)
 target_compile_features(HoroPrefabCookHost PUBLIC cxx_std_20)
 target_link_libraries(HoroPrefabCookHost PRIVATE HoroEngine::PrefabProjectSettings)
-target_link_libraries(HoroPrefabCookHost PRIVATE HoroEngine::AnimationAssetCook)
+target_link_libraries(HoroPrefabCookHost PRIVATE HoroEngine::AnimationAssetCook HoroUiCanvasSourceHostInternal)
 target_link_libraries(HoroPrefabCookHost
         PUBLIC HoroEngine::Application HoroEngine::Assets HoroEngine::EditorServices
                HoroPackageSecurity HoroEngine::PrefabAuthoring HoroEngine::SceneCook

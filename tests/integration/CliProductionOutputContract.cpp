@@ -5,6 +5,7 @@
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Platform/ExternalProcess.h"
 #include "Horo/Prefab/PrefabDocument.h"
+#include "Horo/Runtime/Ui/UiDocumentSerialization.h"
 #include "Horo/Scene/SceneSource.h"
 
 #include <algorithm>
@@ -508,6 +509,7 @@ namespace {
     void PrefabCookCases(ProcessFixture &process) {
         using namespace Horo;
         using namespace Horo::Application;
+        namespace Ui = Horo::Runtime::Ui;
         TemporaryDirectory directory;
         const auto root = std::filesystem::canonical(directory.Path());
         const auto write = [&](const std::string_view path, const std::string_view bytes) {
@@ -527,7 +529,29 @@ namespace {
         const auto encoded = document.Value().SerializeCanonical();
         Require(encoded.HasValue(), "prefab fixture encode failed");
         write("Assets/hierarchy.prefab", encoded.Value());
-        const std::vector<SceneSource::SceneObjectSnapshot> objects{{.id = {900}, .name = "Scene root"}};
+        const auto uiAsset = Assets::AssetId::Parse("00000000-0000-0000-0000-0000000000d1").Value();
+        Ui::SerializedUiId uiId{};
+        uiId.back() = 1;
+        const auto documentId = Ui::UiDocumentId::Create(uiId).Value();
+        uiId.back() = 2;
+        const auto canvasId = Ui::UiCanvasId::Create(uiId).Value();
+        uiId.back() = 3;
+        const auto elementId = Ui::UiElementId::Create(uiId).Value();
+        const auto revision = Ui::UiDocumentRevision::Create(1).Value();
+        Ui::UiDocumentBuilder ui{documentId, revision};
+        Require(ui.AddCanvas({.id = canvasId, .rootElement = elementId, .renderMode = Ui::UiRenderMode::WorldSpace}).HasValue(),
+                "world canvas fixture is invalid");
+        const auto uiDocument = std::move(ui).Build();
+        Require(uiDocument.HasValue(), "runtime UI fixture is invalid");
+        const auto uiSource = Ui::SerializeUiDocument(uiDocument.Value());
+        Require(uiSource.HasValue(), "runtime UI fixture could not be encoded");
+        write("Assets/room.uicanvas",
+              Json{{"format", "horo.ui_canvas"}, {"formatVersion", 2}, {"document", Json::parse(uiSource.Value())}}.dump());
+        write("Assets/room.uicanvas.horo",
+              Json{{"schemaVersion", 1}, {"assetId", uiAsset.ToString()}, {"assetType", Ui::UiDocumentAssetTypeName}}.dump());
+
+        std::vector<SceneSource::SceneObjectSnapshot> objects{{.id = {900}, .name = "Scene root"}};
+        objects.front().components.uiCanvas = Runtime::UiCanvasComponent{{uiAsset, documentId, canvasId, revision}};
         const std::vector<SceneSource::ScenePrefabInstance> instances{
             {.instanceId = Prefab::PrefabInstanceId::Create(7).Value(),
              .sourcePrefab = Prefab::PrefabAssetReference::Create(prefabId).Value(),
@@ -551,12 +575,26 @@ namespace {
         Envelope(first);
         Require(first.at("outputSchema").at("id") == "horo.prefab.cook", "prefab CLI used the wrong schema");
         Require(first.at("metadata").at("operationId").get<std::uint64_t>() != 0, "prefab cook lost its canonical operation ID");
-        Require(first.at("result").at("committed") == true && first.at("result").at("artifacts") == 2, "prefab cook lost runtime roots");
+        Require(first.at("result").at("committed") == true && first.at("result").at("artifacts") == 3,
+                "prefab cook lost a runtime prefab, Scene or UI document");
         NativeDurableFileSystem files;
         const auto generation = Assets::ResolveCurrentCookGeneration(files, cookedRoot);
         Require(generation.HasValue(), "prefab CLI produced no canonical generation");
         Require(first.at("result").at("manifestDigest") == FormatSha256(generation.Value().manifestDigest),
                 "prefab command result does not match the published manifest");
+
+        const auto contents = Assets::ReadCookGenerationContents(files, generation.Value(), 1024U * 1024U);
+        Require(contents.HasValue(), "prefab CLI published an unreadable generation");
+        const auto &entries = contents.Value().entries;
+        const auto uiEntry = std::ranges::find(entries, uiAsset, &Assets::AssetCookManifestEntry::assetId);
+        Require(uiEntry != entries.end() && uiEntry->assetType.Value() == Ui::UiDocumentAssetTypeName,
+                "prefab CLI omitted the registered UI resource");
+        const auto artifact = Assets::DecodeCookedArtifact(contents.Value().artifacts[static_cast<std::size_t>(uiEntry - entries.begin())]);
+        Require(artifact.HasValue(), "prefab CLI emitted an invalid UI artifact envelope");
+        const auto cookedUi = Ui::CookedUiDocument::Decode(artifact.Value().payload);
+        Require(cookedUi.HasValue() && cookedUi.Value().Id() == documentId && cookedUi.Value().SourceRevision() == revision &&
+                    cookedUi.Value().Canvases().size() == 1 && cookedUi.Value().Canvases().front().id == canvasId,
+                "prefab CLI lost the exact authored world canvas identity");
 
         const auto repeat = Json::parse(process.Run(command, 0));
         Require(repeat.at("result").at("cacheHits").get<std::size_t>() > 0, "prefab CLI discarded ordinary cache reuse");

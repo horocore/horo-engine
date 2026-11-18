@@ -396,6 +396,14 @@ presentation state. The entity's authored transform remains Scene-owned.
 Prefab creation and expansion preserve the same reference and require its
 registry asset as part of the portable dependency closure.
 
+The project cook resolves registered `runtime.ui.document` sources in its pinned
+inventory and uses the same bounded versioned UI Canvas codec as authoring. It
+emits source-free UI document bytes through the standard asset cache and
+publication pipeline. Required dependencies must exist, and any present
+dependency must match its declared type. An unavailable optional dependency
+remains optional in the cooked document. Present dependencies participate in
+the transitive cook key for the document and its consuming Scenes.
+
 ## Responsive Presentation Profiles
 
 [Responsive Presentation Profiles](responsive-presentation-profiles.md) is the

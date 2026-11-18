@@ -1,10 +1,12 @@
 #include "Horo/Prefab/PrefabAssetDependencyClosure.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Prefab/PrefabSourceResolver.h"
+#include "Horo/Runtime/Ui/UiDocument.h"
 #include "Horo/Scene/SceneRuntimeConversion.h"
 #include "PrefabCookBuiltinProjection.h"
 #include "PrefabCookSemanticInputs.h"
 #include "PrefabSceneCookState.h"
+#include "UiDocumentCooker.h"
 
 #include <algorithm>
 #include <format>
@@ -425,6 +427,10 @@ namespace Horo::Application::PrefabCookDetail {
                     continue;
                 if (std::ranges::find(contributions, input.record.type, &Assets::CookerContribution::assetType) != contributions.end())
                     continue;
+                if (input.record.type.Value() == Runtime::Ui::UiDocumentAssetTypeName) {
+                    contributions.push_back(MakeUiDocumentCooker(inputs.Registry(), target));
+                    continue;
+                }
                 const auto *original = catalog.FindContribution(input.record.type, target);
                 if (!original || !original->strategy)
                     return Return::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable,

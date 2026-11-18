@@ -1,11 +1,13 @@
 #include "../packages/PackageArchiveTestSupport.h"
 #include "Horo/Application/PrefabSceneCookHost.h"
 #include "Horo/Assets/AssetArchive.h"
+#include "Horo/Editor/UiCanvasDocument.h"
 #include "Horo/Packages/PackageRequest.h"
 #include "Horo/Prefab/CookedPrefab.h"
 #include "Horo/Prefab/PrefabDocument.h"
 #include "Horo/Release/ReleaseCandidatePublisher.h"
 #include "Horo/Release/ReleaseCandidateVerification.h"
+#include "Horo/Runtime/Ui/UiErrors.h"
 #include "Horo/Scene/CookedSceneDefinition.h"
 #include "Horo/Scene/SceneSource.h"
 #include "PrefabSceneCookHostFixture.h"
@@ -273,6 +275,100 @@ TEST_CASE("Host prefab cook preserves typed failure when its cancellation races 
     REQUIRE(records->records.size() == 1);
     CHECK(records->records.front().result == BuildOutputResult::Failed);
     CHECK(records->records.front().message == "Prefab cook preparation failed");
+}
+
+TEST_CASE("Host cook publishes registered authored UI documents and tracks their available typed dependencies",
+          "[native][prefab-cook][host][runtime_ui]") {
+    namespace Ui = Horo::Runtime::Ui;
+    HostFixture fixture;
+    const auto asset = Id("00000000-0000-0000-0000-0000000000d1");
+    const auto missing = Id("00000000-0000-0000-0000-0000000000d2");
+    const auto source = ProjectPath::Parse("assets/room.uicanvas").Value();
+    const auto metadata = ProjectPath::Parse("assets/room.uicanvas.horo").Value();
+    const auto type = Type(Ui::UiDocumentAssetTypeName);
+    const auto mesh = TestMeshRecord();
+    fixture.WriteText(metadata.String(), SidecarJson(asset.ToString(), type.Value()));
+    const auto snapshot = fixture.registry.Snapshot();
+    std::vector records(snapshot.Records().begin(), snapshot.Records().end());
+    records.push_back({.id = asset, .type = type, .sourcePath = source, .metadataPath = metadata});
+    REQUIRE(fixture.registry.Publish(std::move(records)).status == AssetRegistryBuildStatus::Complete);
+
+    Ui::SerializedUiId identity{};
+    identity.back() = 1;
+    const auto documentId = Ui::UiDocumentId::Create(identity).Value();
+    identity.back() = 2;
+    const auto canvasId = Ui::UiCanvasId::Create(identity).Value();
+    identity.back() = 3;
+    const auto root = Ui::UiElementId::Create(identity).Value();
+    const auto save = [&](const Ui::UiDocumentRevision revision, const Ui::UiAssetDependency &required) {
+        Ui::UiDocumentBuilder builder{documentId, revision};
+        REQUIRE(builder.AddCanvas({.id = canvasId, .rootElement = root, .renderMode = Ui::UiRenderMode::WorldSpace}).HasValue());
+        REQUIRE(builder.RequireAsset(required).HasValue());
+        REQUIRE(builder.RequireAsset({missing, mesh.type, false}).HasValue());
+        auto document = std::move(builder).Build();
+        REQUIRE(document.HasValue());
+        const auto saved = Editor::SaveUiCanvasDocument(fixture.project.dir.path, fixture.project.dir.path / source.String(),
+                                                        {.document = std::move(document).Value(), .state = {1}}, {}, true,
+                                                        fixture.mutations, fixture.files);
+        REQUIRE(saved.HasValue());
+        REQUIRE(saved.Value().status == Editor::UiCanvasDocumentSaveStatus::Saved);
+    };
+    const auto revision = Ui::UiDocumentRevision::Create(4).Value();
+    save(revision, {mesh.id, mesh.type, true});
+    const Ui::UiCanvasAssetReference reference{asset, documentId, canvasId, revision};
+    SceneSource::SceneObjectSnapshot object{.id = {900}, .name = "Room UI"};
+    object.components.uiCanvas = Runtime::UiCanvasComponent{reference};
+    fixture.WriteText("assets/level.scene", SceneSource::EncodeSceneSource({std::span{&object, 1}, {}}));
+
+    const auto first = fixture.Cook();
+    REQUIRE(first.HasValue());
+    CHECK(first.Value().generation.artifactCount == 3);
+    auto published = ReadCookGenerationContents(fixture.files, first.Value().generation, 1024U * 1024U);
+    REQUIRE(published.HasValue());
+    const auto &contents = published.Value();
+    const auto emitted = [&](const AssetId id) {
+        const auto found = std::ranges::find(contents.entries, id, &AssetCookManifestEntry::assetId);
+        REQUIRE(found != contents.entries.end());
+        auto decoded = DecodeCookedArtifact(contents.artifacts[static_cast<std::size_t>(found - contents.entries.begin())]);
+        REQUIRE(decoded.HasValue());
+        return std::move(decoded).Value();
+    };
+    const auto uiArtifact = emitted(asset);
+    CHECK(uiArtifact.type == type);
+    CHECK(uiArtifact.target == fixture.request.assets.target);
+    const auto cooked = Ui::CookedUiDocument::Decode(uiArtifact.payload);
+    REQUIRE(cooked.HasValue());
+    CHECK(cooked.Value().Id() == documentId);
+    CHECK(cooked.Value().SourceRevision() == revision);
+    REQUIRE(cooked.Value().Canvases().size() == 1);
+    CHECK(cooked.Value().Canvases().front().id == canvasId);
+    CHECK(cooked.Value().Canvases().front().renderMode == Ui::UiRenderMode::WorldSpace);
+    REQUIRE(cooked.Value().Dependencies().size() == 2);
+    CHECK(cooked.Value().Dependencies().front() == Ui::UiAssetDependency{mesh.id, mesh.type, true});
+    CHECK(cooked.Value().Dependencies().back() == Ui::UiAssetDependency{missing, mesh.type, false});
+
+    const auto scene = emitted(fixture.sceneId);
+    const auto definition = SceneCook::DecodeCookedSceneDefinition(scene.payload);
+    REQUIRE(definition.HasValue());
+    REQUIRE(definition.Value().Entities().size() == 1);
+    REQUIRE(definition.Value().Entities().front().uiCanvas);
+    CHECK(definition.Value().Entities().front().uiCanvas->canvas == reference);
+
+    const auto cached = fixture.Cook();
+    REQUIRE(cached.HasValue());
+    CHECK(cached.Value().cacheHits == 3);
+    CHECK(cached.Value().generation.manifestDigest == first.Value().generation.manifestDigest);
+    fixture.WriteText(mesh.sourcePath.String(), "changed mesh bytes");
+    const auto changedDependency = fixture.Cook();
+    REQUIRE(changedDependency.HasValue());
+    CHECK(changedDependency.Value().cacheHits == 0);
+    CHECK(changedDependency.Value().generation.manifestDigest != first.Value().generation.manifestDigest);
+
+    save(Ui::UiDocumentRevision::Create(5).Value(), {mesh.id, Type("core.texture"), true});
+    const auto invalidDependency = fixture.Cook();
+    REQUIRE(invalidDependency.HasError());
+    CHECK(invalidDependency.ErrorValue().code.Value() == Ui::UiErrors::AssetTypeMismatch.code.Value());
+    fixture.AssertRetained(changedDependency.Value().generation);
 }
 
 TEST_CASE("Host prefab scene cook publishes expanded source-free scenes and validates cache reuse", "[native][prefab-cook][host]") {
