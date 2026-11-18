@@ -25,6 +25,8 @@ namespace Horo::Tests::OpenXR {
         std::uint32_t ends{};
         std::uint32_t layers{};
         std::uint32_t views{};
+        XrPassthroughLayerFB passthroughLayer{XR_NULL_HANDLE};
+        XrCompositionLayerFlags projectionFlags{};
         std::array<XrCompositionLayerProjectionView, 2> encoded{};
         std::array<XrCompositionLayerDepthInfoKHR, 2> depths{};
         std::array<XrFrameSynthesisInfoEXT, 2> ext{};
@@ -56,8 +58,18 @@ namespace Horo::Tests::OpenXR {
             CHECK(info->displayTime == active->prediction);
             CHECK(info->environmentBlendMode == XR_ENVIRONMENT_BLEND_MODE_OPAQUE);
             active->layers = info->layerCount;
-            if (info->layerCount == 1) {
-                const auto *layer = reinterpret_cast<const XrCompositionLayerProjection *>(info->layers[0]);
+            active->passthroughLayer = XR_NULL_HANDLE;
+            active->projectionFlags = 0;
+            if (info->layerCount == 2) {
+                const auto *underlay = reinterpret_cast<const XrCompositionLayerPassthroughFB *>(info->layers[0]);
+                REQUIRE(underlay->type == XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB);
+                CHECK(underlay->space == XR_NULL_HANDLE);
+                CHECK(underlay->flags == XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT);
+                active->passthroughLayer = underlay->layerHandle;
+            }
+            if (info->layerCount != 0) {
+                const auto *layer = reinterpret_cast<const XrCompositionLayerProjection *>(info->layers[info->layerCount - 1]);
+                active->projectionFlags = layer->layerFlags;
                 CHECK(layer->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION);
                 active->views = layer->viewCount;
                 REQUIRE(layer->viewCount == 2);

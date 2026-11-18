@@ -437,9 +437,53 @@ namespace Horo::XR::OpenXRInternal {
         return ended.HasError() ? Result<void>::Failure(ended.ErrorValue()) : Result<void>::Success();
     }
 
+    namespace {
+        /** @brief Admits only formats with an actual alpha channel on the selected projection target. */
+        bool HasProjectionAlpha(const XRExternalRenderTargetDescriptor &target) noexcept {
+            if (target.role != XRExternalRenderTargetRole::ProjectionColor)
+                return true;
+            using enum Render::RenderTextureFormat;
+            switch (target.format) {
+                case Rgba8Unorm:
+                case Rgba8UnormSrgb:
+                case Bgra8Unorm:
+                case Bgra8UnormSrgb:
+                case Rgba16Float:
+                case Rgba32Float:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+    }  // namespace
+
+    /** @copydoc OpenXRFrameCompositor::EndPassthroughProjection */
+    Result<void> OpenXRFrameCompositor::EndPassthroughProjection(const XRFrameId &frame, const XRViewRenderPlan &plan,
+                                                                 std::span<const NativeProjectionTarget> targets,
+                                                                 const NativePassthroughProjection &passthrough,
+                                                                 const NativeProjectionDepth *depth) {
+        const ProjectionEncoding encoding{plan, targets, depth};
+        if (const auto valid = ValidateProjection(frame, encoding); valid.HasError())
+            return valid;
+        if (passthrough.frame != frame || passthrough.scope.session != frame.session ||
+            std::ranges::any_of(plan.Views(), [&](const auto &view) {
+            return view.pose.target != passthrough.scope.world;
+        }))
+            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        if (!std::ranges::all_of(plan.Targets(), HasProjectionAlpha))
+            return Result<void>::Failure(MakeError(XRErrors::ExternalTargetInvalid, "Passthrough needs projection alpha"));
+        const auto capacity = frames_->ValidateEnd(frame, 2);
+        if (capacity != XRFrameStatus::Ok)
+            return Result<void>::Failure(
+                MakeError(capacity == XRFrameStatus::CapacityExceeded ? XRErrors::CapacityExceeded : XRErrors::OperationIncompatible));
+        const auto ended = EndEncodedProjection(frame, encoding, nullptr, &passthrough.scope);
+        return ended.HasError() ? Result<void>::Failure(ended.ErrorValue()) : Result<void>::Success();
+    }
+
     /** @copydoc OpenXRFrameCompositor::EndEncodedProjection */
     Result<bool> OpenXRFrameCompositor::EndEncodedProjection(const XRFrameId &frame, const ProjectionEncoding &encoding,
-                                                             const NativeReprojectionSubmission *synthesis) {
+                                                             const NativeReprojectionSubmission *synthesis,
+                                                             const XRPassthroughScope *passthrough) {
         const auto &plan = encoding.plan;
         // PERF: fixed bounded native encoding storage; no frame allocation or native discovery.
         std::array<XrCompositionLayerProjectionView, XRHardLimits::MaximumViews> views{};
@@ -470,26 +514,33 @@ namespace Horo::XR::OpenXRInternal {
                                       : static_cast<const void *>(&optional->fb[eye]);
         const XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION,
                                                  nullptr,
-                                                 0,
+                                                 passthrough ? XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT : 0,
                                                  reference,
                                                  static_cast<std::uint32_t>(plan.Views().size()),
                                                  views.data()};
         // OpenXR defines this native base-header view for projection layer dispatch.
         static_assert(sizeof(const XrCompositionLayerBaseHeader *) == sizeof(&layer));
-        const auto ended = EndNative(frame, session, XR_ENVIRONMENT_BLEND_MODE_OPAQUE,
-                                     std::bit_cast<const XrCompositionLayerBaseHeader *>(&layer), &plan, optional ? optional->end : end_);
+        const auto ended =
+            EndNative(frame, session, XR_ENVIRONMENT_BLEND_MODE_OPAQUE, std::bit_cast<const XrCompositionLayerBaseHeader *>(&layer), &plan,
+                      optional ? optional->end : end_, passthrough);
         return ended.HasError() ? Result<bool>::Failure(ended.ErrorValue()) : Result<bool>::Success(optional.has_value());
     }
 
     /** @copydoc OpenXRFrameCompositor::EndNative */
     Result<void> OpenXRFrameCompositor::EndNative(const XRFrameId &frame, XrSession session, XrEnvironmentBlendMode blend,
                                                   const XrCompositionLayerBaseHeader *layer, const XRViewRenderPlan *projection,
-                                                  PFN_xrEndFrame dispatch) {
+                                                  PFN_xrEndFrame dispatch, const XRPassthroughScope *passthrough) {
         // SYNC: cleanup must echo the completed native wait even when its prediction could not enter Horo's time contract.
         const XrFrameEndInfo info{XR_TYPE_FRAME_END_INFO, nullptr, nativeDisplayTime_, blend, layer ? 1U : 0U, layer ? &layer : nullptr};
-        const XrResult result = dispatch(session, &info);
+        const auto dispatched = passthrough ? session_->EndPassthroughFrame(*passthrough, session, info, dispatch)
+                                            : Result<XrResult>::Success(dispatch(session, &info));
+        if (dispatched.HasError())
+            return Result<void>::Failure(dispatched.ErrorValue());
+        const auto result = dispatched.Value();
         if (XR_FAILED(result)) {
-            fault_ = NativeError("end frame", result);
+            fault_ = passthrough && (result == XR_ERROR_NOT_PERMITTED_PASSTHROUGH_FB || result == XR_ERROR_PERMISSION_INSUFFICIENT)
+                         ? MakeError(XRErrors::PermissionDenied, "end frame")
+                         : NativeError("end frame", result);
             return Result<void>::Failure(*fault_);
         }
         const auto ended = projection ? frames_->EndProjection(frame, *projection) : frames_->End(frame, 0);

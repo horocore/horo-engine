@@ -27,6 +27,7 @@ namespace Horo::Tests::OpenXR {
         bool loseInstance{};
         bool interactionProfileChanged{};
         std::optional<XrEventDataReferenceSpaceChangePending> referenceChange;
+        std::optional<XrPassthroughStateChangedFlagsFB> passthroughState;
         XrResult pollResult{XR_SUCCESS};
         XrResult beginResult{XR_SUCCESS};
         XrResult exitResult{XR_SUCCESS};
@@ -64,6 +65,10 @@ namespace Horo::Tests::OpenXR {
                 auto *owner = active->reenter;
                 active->reenter = nullptr;
                 active->reentryRejected = owner->Poll(true).HasError();
+            }
+            if (const auto flags = std::exchange(active->passthroughState, std::nullopt)) {
+                CopyEvent(*buffer, XrEventDataPassthroughStateChangedFB{XR_TYPE_EVENT_DATA_PASSTHROUGH_STATE_CHANGED_FB, nullptr, *flags});
+                return XR_SUCCESS;
             }
             if (active->referenceChange) {
                 CopyEvent(*buffer, *std::exchange(active->referenceChange, std::nullopt));

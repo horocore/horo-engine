@@ -115,6 +115,9 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Success();
         if (event.state <= XR_SESSION_STATE_UNKNOWN || event.state > XR_SESSION_STATE_EXITING)
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
+        if ((sessions_->Snapshot().state == XRSessionState::Focused && event.state != XR_SESSION_STATE_FOCUSED) ||
+            event.state == XR_SESSION_STATE_STOPPING || event.state == XR_SESSION_STATE_EXITING)
+            native_->RevokePassthrough();
         observed_ = event.state;
         switch (event.state) {
             using enum Horo::XR::XRSessionEvent;
@@ -141,6 +144,7 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRSessionEvents::RecordLoss */
     Result<void> OpenXRSessionEvents::RecordLoss(const NativeSessionEventLoss reason) {
+        native_->RevokePassthrough();
         const auto event = reason == NativeSessionEventLoss::Instance ? XRSessionEvent::InstanceLost : XRSessionEvent::SessionLost;
         if (auto applied = sessions_->ApplyEvent(session_, event); applied.HasError())
             return applied;
@@ -251,6 +255,12 @@ namespace Horo::XR::OpenXRInternal {
             // Missing state transitions cannot authorize continued frames or a later Ready restart.
             // Logical loss retains native frame/image debt; it does not manufacture end/release success.
             return RecordLoss(NativeSessionEventLoss::EventHistory);
+        } else if (buffer.type == XR_TYPE_EVENT_DATA_PASSTHROUGH_STATE_CHANGED_FB) {
+            XrEventDataPassthroughStateChangedFB event;
+            std::memcpy(&event, &buffer, sizeof(event));
+            // Recovery requires a new grant. Unknown or adverse flags cannot preserve an existing one.
+            if (event.next || event.flags != XR_PASSTHROUGH_STATE_CHANGED_RESTORED_ERROR_BIT_FB)
+                native_->RevokePassthrough();
         } else if (buffer.type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED) {
             XrEventDataInteractionProfileChanged event;
             std::memcpy(&event, &buffer, sizeof(event));
@@ -259,6 +269,7 @@ namespace Horo::XR::OpenXRInternal {
             XrEventDataReferenceSpaceChangePending event;
             std::memcpy(&event, &buffer, sizeof(event));
             if (event.session == session) {
+                native_->RevokePassthrough();
                 auto evidence = ReadReferenceChange(event);
                 if (evidence.HasError())
                     return Result<void>::Failure(evidence.ErrorValue());
@@ -277,6 +288,8 @@ namespace Horo::XR::OpenXRInternal {
         if (loss_ != NativeSessionEventLoss::None)
             return Outcome::Success({.loss = loss_});
         DispatchScope scope{dispatching_};
+        if (!wantsPlay)
+            native_->RevokePassthrough();
         auto current = Current();
         if (current.HasError())
             return Outcome::Failure(current.ErrorValue());

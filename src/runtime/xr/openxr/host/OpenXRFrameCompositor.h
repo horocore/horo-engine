@@ -5,6 +5,7 @@
  */
 
 #include "Horo/XR/XRFrameLifecycle.h"
+#include "Horo/XR/XRPassthrough.h"
 #include "OpenXRSwapchain.h"
 
 #include <array>
@@ -67,6 +68,14 @@ namespace Horo::XR::OpenXRInternal {
         const XRReprojectionInputs &inputs;
     };
 
+    /** @brief Same-frame receipt produced only after the selected renderer has rendered premultiplied alpha.
+     * @details The host verifies its complete projection target receipt before constructing this private submission.
+     */
+    struct NativePassthroughProjection final {
+        XRFrameId frame;
+        XRPassthroughScope scope;
+    };
+
     /** @brief Explicit normalized depth range and matching metric clip planes used to render every submitted view. */
     struct NativeProjectionDepth final {
         float minimumDepth{0};
@@ -127,6 +136,17 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<XRReprojectionStatus> EndReprojectedProjection(const XRFrameId &frame, const XRViewRenderPlan &plan,
                                                                             std::span<const NativeProjectionTarget> targets,
                                                                             const NativeReprojectionSubmission &synthesis);
+        /** @brief Submits exact consented runtime underlay before a completed premultiplied-alpha projection.
+         * @param frame Exact begun frame. @param plan Immutable rendered view/target intent.
+         * @param targets Exact released allocation owners, one per unique image.
+         * @param passthrough Exact frame/World receipt from the selected renderer and current grant.
+         * @param depth Complete optional depth convention, required when the plan has depth targets.
+         * @return Native result or typed failure before end, retaining the caller's explicit abort obligation.
+         */
+        [[nodiscard]] Result<void> EndPassthroughProjection(const XRFrameId &frame, const XRViewRenderPlan &plan,
+                                                            std::span<const NativeProjectionTarget> targets,
+                                                            const NativePassthroughProjection &passthrough,
+                                                            const NativeProjectionDepth *depth = nullptr);
         /** @brief Ends runtime-disabled or explicitly aborted work with no layers after all image releases.
          * @param frame Exact begun frame. @return Native end result; failure retains debt for quiescent recovery. */
         [[nodiscard]] Result<void> EndEmpty(const XRFrameId &frame);
@@ -160,7 +180,8 @@ namespace Horo::XR::OpenXRInternal {
         };
 
         [[nodiscard]] Result<bool> EndEncodedProjection(const XRFrameId &frame, const ProjectionEncoding &encoding,
-                                                        const NativeReprojectionSubmission *synthesis);
+                                                        const NativeReprojectionSubmission *synthesis,
+                                                        const XRPassthroughScope *passthrough = nullptr);
         [[nodiscard]] std::optional<ReprojectionEncoding> EncodeReprojection(const NativeReprojectionSubmission &synthesis) const;
         /** @brief Preflights the exact complete frame, profile and owner set without native work. */
         [[nodiscard]] Result<void> ValidateProjection(const XRFrameId &frame, const ProjectionEncoding &encoding) const;
@@ -176,7 +197,7 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> ValidateFrame(const XRFrameId &frame) const;
         [[nodiscard]] Result<void> EndNative(const XRFrameId &frame, XrSession session, XrEnvironmentBlendMode blend,
                                              const XrCompositionLayerBaseHeader *layer, const XRViewRenderPlan *projection,
-                                             PFN_xrEndFrame dispatch);
+                                             PFN_xrEndFrame dispatch, const XRPassthroughScope *passthrough = nullptr);
         [[nodiscard]] Result<XrSwapchainSubImage> SubImage(const XRExternalRenderTargetDescriptor &target,
                                                            std::span<const NativeProjectionTarget> owners) const;
 

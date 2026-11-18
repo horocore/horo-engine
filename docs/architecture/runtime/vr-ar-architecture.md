@@ -861,6 +861,14 @@ Native intensity channels are provider-relative. Renderer admission requires
 an explicit conversion and lighting policy before these observations may
 influence scene lighting.
 
+The FB reconstruction passthrough route requires an explicitly enabled
+version-3-or-newer extension, a separate operator grant, two admitted layer
+slots and platform permission. It submits the runtime reconstruction underlay
+before the same frame's virtual premultiplied projection. The Renderer must
+produce the exact alpha-bearing projection receipt. The native session owner
+withdraws the layer on focus, origin, runtime or consent loss and retires its
+native objects before retiring the session.
+
 ## Android And Standalone XR
 
 Standalone Android-class headsets require the Android runtime host in addition

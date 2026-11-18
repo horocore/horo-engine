@@ -1,7 +1,143 @@
 #include "OpenXRFrameCompositorTestFixture.h"
+#include "support/OpenXREventScriptTestSupport.h"
 
 namespace Horo::Tests::OpenXR {
     namespace {
+        TEST_CASE("Native reconstruction underlay requires elected runtime support and explicit consent",
+                  "[unit][xr][compositor][passthrough]") {
+            const bool selected = GENERATE(false, true);
+            CompositorFixture f{false, false, false, NativeReprojectionRoute::None, selected, 2};
+            auto world = f.local;
+            world.kind = XRSpaceKind::World;
+            XRPassthroughScope scope{f.session, world, IdentityValue<XRPassthroughGrant>(1)};
+            if (!selected) {
+                RequireFailureIdentity(f.native.owner.StartPassthrough(scope), XRErrors::OperationUnsupported);
+                CHECK(f.passthrough.featuresCreated == 0);
+                return;
+            }
+
+            SECTION("invalid grant is rejected before provider creation") {
+                scope.grant = {};
+                RequireFailureIdentity(f.native.owner.StartPassthrough(scope), XRErrors::OperationInvalid);
+            }
+            SECTION("native properties reject advertised capability without reconstruction") {
+                f.census.passthroughCapabilities = 0;
+                RequireFailureIdentity(f.native.owner.StartPassthrough(scope), XRErrors::OperationUnsupported);
+            }
+            SECTION("native layer capacity rejects the extra layer before acquisition") {
+                f.census.maximumLayers = 1;
+                RequireFailureIdentity(f.native.owner.StartPassthrough(scope), XRErrors::CapacityExceeded);
+            }
+            SECTION("platform denial does not create any native object") {
+                f.passthrough.createResult = XR_ERROR_NOT_PERMITTED_PASSTHROUGH_FB;
+                RequireFailureIdentity(f.native.owner.StartPassthrough(scope), XRErrors::PermissionDenied);
+            }
+            CHECK_FALSE(f.passthrough.liveFeature);
+            CHECK(f.passthrough.featuresCreated == 0);
+            CHECK(f.script.ends == 0);
+        }
+
+        TEST_CASE("Current native passthrough precedes the premultiplied projection on the exact released frame",
+                  "[unit][xr][compositor][passthrough]") {
+            const std::uint32_t maximumLayers = GENERATE(1U, 2U);
+            CompositorFixture f{false, false, false, NativeReprojectionRoute::None, true, maximumLayers};
+            f.Bind();
+            const XRPassthroughScope scope{f.session, f.local, IdentityValue<XRPassthroughGrant>(1)};
+            REQUIRE(f.native.owner.StartPassthrough(scope).HasValue());
+            CHECK(f.passthrough.running);
+            auto differentGrant = scope;
+            differentGrant.grant = IdentityValue<XRPassthroughGrant>(2);
+            RequireFailureIdentity(f.native.owner.StartPassthrough(differentGrant), XRErrors::CapacityExceeded);
+
+            const auto frame = f.Begin();
+            const auto color = f.Acquire(frame);
+            const std::array completed{color};
+            const auto plan = f.Plan(frame, color);
+            const std::array targets{NativeProjectionTarget{&f.color, color}};
+            REQUIRE(f.frames.Submit(frame, completed) == XRFrameStatus::Ok);
+            f.images.complete = true;
+            REQUIRE(f.color.PollRelease().Value());
+            REQUIRE(f.frames.Release(frame, color) == XRFrameStatus::Ok);
+            const NativePassthroughProjection receipt{frame, scope};
+            if (maximumLayers == 1) {
+                RequireFailureIdentity(f.compositor.EndPassthroughProjection(frame, plan, targets, receipt), XRErrors::CapacityExceeded);
+                CHECK(f.script.ends == 0);
+                f.Empty(frame);
+                return;
+            }
+
+            SECTION("correct receipt submits runtime underlay first and virtual alpha second") {
+                REQUIRE(f.compositor.EndPassthroughProjection(frame, plan, targets, receipt).HasValue());
+                CHECK(f.script.layers == 2);
+                CHECK(f.script.passthroughLayer == NativeHandle<XrPassthroughLayerFB>(30));
+                CHECK(f.script.projectionFlags == XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT);
+                CHECK(f.frames.Snapshot().phase == XRFramePhase::Idle);
+            }
+            SECTION("foreign frame and World origin leave the transaction available for abort") {
+                auto wrong = receipt;
+                wrong.frame = {};
+                RequireFailureIdentity(f.compositor.EndPassthroughProjection(frame, plan, targets, wrong), XRErrors::IdentityStale);
+                wrong = receipt;
+                wrong.scope.world.worldOriginRevision = IdentityValue<XRWorldOriginRevision>(2);
+                RequireFailureIdentity(f.compositor.EndPassthroughProjection(frame, plan, targets, wrong), XRErrors::IdentityStale);
+                CHECK(f.script.ends == 0);
+                f.Empty(frame);
+                CHECK(f.script.layers == 0);
+            }
+            SECTION("focus or provider loss withdraws the layer before another frame end") {
+                EventScript events;
+
+                struct ActiveEvents final {
+                    explicit ActiveEvents(EventScript &script) {
+                        EventScript::active = &script;
+                    }
+
+                    ~ActiveEvents() {
+                        EventScript::active = nullptr;
+                    }
+                } active{events};
+
+                events.session = f.native.script.lastSession;
+                OpenXRSessionEvents owner{f.native.owner, f.sessions, f.frames};
+                REQUIRE(owner.Bind({&EventScript::GetProc}, {}).HasValue());
+                SECTION("native focus leaves even when session is still visible") {
+                    events.Push(XR_SESSION_STATE_VISIBLE);
+                }
+                SECTION("native provider failure removes even a still-focused layer") {
+                    events.passthroughState = XR_PASSTHROUGH_STATE_CHANGED_RECOVERABLE_ERROR_BIT_FB;
+                }
+                REQUIRE(owner.Poll(true).HasValue());
+                CHECK_FALSE(f.passthrough.running);
+                CHECK(f.passthrough.pauses == 1);
+                RequireFailureIdentity(f.compositor.EndPassthroughProjection(frame, plan, targets, receipt),
+                                       XRErrors::OperationUnavailable);
+                CHECK(f.script.ends == 0);
+                f.Empty(frame);
+            }
+        }
+
+        TEST_CASE("Passthrough rollback redacts immediately and retains exact teardown debt", "[unit][xr][compositor][passthrough]") {
+            CompositorFixture f{false, false, false, NativeReprojectionRoute::None, true, 2};
+            const XRPassthroughScope scope{f.session, f.local, IdentityValue<XRPassthroughGrant>(1)};
+            f.passthrough.resumeResult = XR_ERROR_NOT_PERMITTED_PASSTHROUGH_FB;
+            const bool cleanupFails = GENERATE(false, true);
+            f.passthrough.failLayerDestroy = cleanupFails;
+            const auto denied = f.native.owner.StartPassthrough(scope);
+            f.passthrough.failLayerDestroy = false;
+            RequireFailureIdentity(denied, cleanupFails ? XRErrors::OperationUnavailable : XRErrors::PermissionDenied);
+            CHECK(f.passthrough.pauses == 1);
+            CHECK_FALSE(f.passthrough.running);
+            CHECK(f.passthrough.liveLayer == cleanupFails);
+            CHECK(f.passthrough.liveFeature == cleanupFails);
+            if (cleanupFails) {
+                REQUIRE(f.native.owner.StopPassthrough(scope).HasValue());
+                CHECK_FALSE(f.passthrough.liveLayer);
+                CHECK_FALSE(f.passthrough.liveFeature);
+            }
+            CHECK(f.passthrough.layersDestroyed == 1);
+            RequireFailureIdentity(f.native.owner.StartPassthrough(scope), XRErrors::IdentityStale);
+        }
+
         TEST_CASE("Lost XR frame retains image and native destruction debt before explicit quiescence reset",
                   "[unit][xr][compositor][retirement]") {
             CompositorFixture f;

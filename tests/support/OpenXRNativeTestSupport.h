@@ -36,6 +36,7 @@ namespace Horo::Tests::OpenXR {
         bool synthesisExtension{};
         bool spaceWarpExtension{};
         std::span<const std::string_view> extraExtensions;
+        std::uint32_t extraExtensionVersion{1};
         bool gazeExtension{};
         bool legacyVulkan{};   /**< Selects the existing Vulkan-enable1 application bridge in real-loader fixtures. */
         bool clockExtension{}; /**< Optional official native clock extension for same-production-clock tests. */
@@ -121,8 +122,10 @@ namespace Horo::Tests::OpenXR {
                         REQUIRE(name.size() < std::size(destination));
                         std::ranges::copy(name, std::begin(destination));
                         destination[name.size()] = '\0';
+                        properties[index].extensionVersion = active->extraExtensionVersion;
+                    } else {
+                        properties[index].extensionVersion = 1;
                     }
-                    properties[index].extensionVersion = 1;
                     if (active->malformedExtension)
                         properties[index].type = XR_TYPE_UNKNOWN;
                 }

@@ -16,6 +16,8 @@ namespace Horo::Tests::OpenXR {
         bool invalidView{};
         bool handsSupported{};
         XrBool32 gazeSupport{XR_FALSE};
+        XrPassthroughCapabilityFlagsFB passthroughCapabilities{};
+        std::uint32_t maximumLayers{16};
         XrResult gazeResult{XR_SUCCESS};
         XrBool32 lightEstimationSupport{XR_FALSE};
         bool spatialPlanes{true};
@@ -51,7 +53,7 @@ namespace Horo::Tests::OpenXR {
         static XRAPI_ATTR XrResult XRAPI_CALL System(XrInstance, XrSystemId system, XrSystemProperties *value) {
             value->systemId = system;
             CopyNativeLiteral(value->systemName, "Observed native system");
-            value->graphicsProperties = {2048, 2048, 16};
+            value->graphicsProperties = {2048, 2048, active->maximumLayers};
             value->trackingProperties = {XR_TRUE, XR_TRUE};
             if (value->next) {
                 const auto *header = static_cast<const XrBaseOutStructure *>(value->next);
@@ -65,6 +67,11 @@ namespace Horo::Tests::OpenXR {
                     auto &light = *static_cast<XrSystemLightEstimationPropertiesANDROID *>(value->next);
                     light.supportsLightEstimation = active->lightEstimationSupport;
                     return Record("light-estimation-properties");
+                }
+                if (header->type == XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES2_FB) {
+                    auto &passthrough = *static_cast<XrSystemPassthroughProperties2FB *>(value->next);
+                    passthrough.capabilities = active->passthroughCapabilities;
+                    return Record("passthrough-properties");
                 }
                 if (header->type == XR_TYPE_SYSTEM_SPACE_WARP_PROPERTIES_FB) {
                     auto &warp = *static_cast<XrSystemSpaceWarpPropertiesFB *>(value->next);

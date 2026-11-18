@@ -118,7 +118,7 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRNativeSession::StartLightEstimation */
     Result<void> OpenXRNativeSession::StartLightEstimation(const XRLightEstimateScope &scope, const XRLightEstimateLimits &limits) {
-        if (controlThread_ != std::this_thread::get_id() || lightCall_ || retirementCall_)
+        if (controlThread_ != std::this_thread::get_id() || lightCall_ || passthroughCall_ || retirementCall_)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
         if (light_.handle != XR_NULL_HANDLE)
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded, "Retire the previous light estimator first"));
@@ -182,7 +182,7 @@ namespace Horo::XR::OpenXRInternal {
     /** @copydoc OpenXRNativeSession::AdvanceLightEstimation */
     Result<bool> OpenXRNativeSession::AdvanceLightEstimation(const XRLightEstimateScope &scope, XrSpace world, XRRuntimeTime now) {
         using Outcome = Result<bool>;
-        if (controlThread_ != std::this_thread::get_id() || lightCall_ || retirementCall_)
+        if (controlThread_ != std::this_thread::get_id() || lightCall_ || passthroughCall_ || retirementCall_)
             return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
         if (scope != light_.scope)
             return Outcome::Failure(MakeError(XRErrors::IdentityStale));
@@ -256,7 +256,7 @@ namespace Horo::XR::OpenXRInternal {
     /** @copydoc OpenXRNativeSession::ReadLightEstimation */
     Result<XRLightEstimate> OpenXRNativeSession::ReadLightEstimation(const XRLightEstimateScope &scope, XRRuntimeTime now) const {
         using Outcome = Result<XRLightEstimate>;
-        if (controlThread_ != std::this_thread::get_id() || lightCall_ || retirementCall_)
+        if (controlThread_ != std::this_thread::get_id() || lightCall_ || passthroughCall_ || retirementCall_)
             return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
         if (scope != light_.scope)
             return Outcome::Failure(MakeError(XRErrors::IdentityStale));
@@ -274,7 +274,7 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRNativeSession::StopLightEstimation */
     Result<void> OpenXRNativeSession::StopLightEstimation(const XRLightEstimateScope &scope) {
-        if (controlThread_ != std::this_thread::get_id() || lightCall_ || retirementCall_)
+        if (controlThread_ != std::this_thread::get_id() || lightCall_ || passthroughCall_ || retirementCall_)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
         if (scope != light_.scope)
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));

@@ -6,6 +6,7 @@
 
 #include "Horo/XR/XRLightEstimate.h"
 #include "Horo/XR/XRLoaderPreflight.h"
+#include "Horo/XR/XRPassthrough.h"
 #include "OpenXRHostBindings.h"
 #include "OpenXRNativeCensus.h"
 
@@ -355,7 +356,20 @@ namespace Horo::XR::OpenXRInternal {
          */
         [[nodiscard]] Result<void> StopLightEstimation(const XRLightEstimateScope &scope);
 
+        /** @brief Creates and starts one selected FB reconstruction underlay after app and runtime permission.
+         * @param scope Fresh, explicitly approved visual composition grant for a focused session and exact World.
+         * @return Success or typed unsupported, denied, invalid, capacity or native failure.
+         * @pre The app has independently verified focus, runtime permission and current operator consent.
+         */
+        [[nodiscard]] Result<void> StartPassthrough(const XRPassthroughScope &scope);
+        /** @brief Immediately stops publishing the exact grant and releases its native layer and feature.
+         * @param scope Exact current grant. @return Success or retryable native cleanup debt.
+         */
+        [[nodiscard]] Result<void> StopPassthrough(const XRPassthroughScope &scope);
+
     private:
+        friend class OpenXRFrameCompositor;
+        friend class OpenXRSessionEvents;
         friend class OpenXRHandTracking;
         friend class OpenXRPlaneCapture;
 
@@ -415,6 +429,14 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> DestroySession();
         /** @brief Revokes evidence and retires the light child, retaining failed native retirement for retry. */
         [[nodiscard]] Result<void> RetireLightEstimation();
+
+        /** @brief Cleans up the current passthrough child before native session retirement. */
+        [[nodiscard]] Result<void> RetirePassthrough();
+        /** @brief Redacts the layer and attempts native pause on consent/focus/origin/runtime loss. */
+        void RevokePassthrough() noexcept;
+        /** @brief Calls native frame end with the exact live reconstruction underlay and prevalidated projection. */
+        [[nodiscard]] Result<XrResult> EndPassthroughFrame(const XRPassthroughScope &scope, XrSession session,
+                                                           const XrFrameEndInfo &projection, PFN_xrEndFrame dispatch);
         /** @brief Preserves the existing native phase/result-to-Horo mapping across split retirement implementation. */
         [[nodiscard]] static Error NativeFailure(const char *operation, XrResult result);
 
@@ -517,6 +539,21 @@ namespace Horo::XR::OpenXRInternal {
         LightEstimator light_;
         XRLightEstimateGrant lastLightGrant_;
         mutable bool lightCall_{}; /**< Rejects teardown or reentrant use while a native light operation borrows the owner. */
+
+        struct Passthrough final {
+            XRPassthroughScope scope;
+            XrPassthroughFB feature{XR_NULL_HANDLE};
+            XrPassthroughLayerFB layer{XR_NULL_HANDLE};
+            PFN_xrPassthroughPauseFB pause{};
+            PFN_xrDestroyPassthroughLayerFB destroyLayer{};
+            PFN_xrDestroyPassthroughFB destroy{};
+            bool started{}; /**< Native start obligation remains even after logical revocation. */
+            bool admitted{};
+        };
+
+        Passthrough passthrough_;
+        XRPassthroughGrant lastPassthroughGrant_;
+        bool passthroughCall_{};
         bool graphicsPrepared_{};
         bool retirementCall_{}; /**< Rejects reentrant native destruction while preserving explicit retry after return. */
     };
