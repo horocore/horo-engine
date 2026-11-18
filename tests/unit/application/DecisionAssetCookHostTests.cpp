@@ -147,11 +147,13 @@ namespace {
         const BlackboardUsageSelection selection{schemaAsset, fixture.ai.schema->Identity(), fixture.ai.schema->Version(),
                                                  fixture.ai.schema->Keys().front().key,
                                                  ComputeSha256(std::as_bytes(std::span{schemaBytes.Value()}))};
+        const auto metadata = DecisionBlackboardProviderMetadata::Capture(*fixture.ai.providers);
+        REQUIRE(metadata.HasValue());
         const auto review =
-            CaptureBlackboardUsageReview(fixture.source.path, fixture.registry, original, mutations, selection, fixture.ai.providers);
+            CaptureBlackboardUsageReview(fixture.source.path, fixture.registry, original, mutations, selection, metadata.Value());
         REQUIRE(review.HasValue());
         CHECK(review.Value().registry == original);
-        CHECK(review.Value().providers.lock() == fixture.ai.providers);
+        CHECK(review.Value().providers.lock() == metadata.Value());
         CHECK(review.Value().sources.size() == 3);
         REQUIRE(review.Value().uses.size() == 1);
         CHECK(review.Value().uses.front().asset == fixture.child);
@@ -180,8 +182,13 @@ namespace {
             auto captured = DecisionNodeGeneration::Capture({&contribution, 1}, fixture.ai.admission);
             REQUIRE(captured.HasValue());
             auto generation = std::move(captured).Value();
-            const auto supplied =
-                CaptureBlackboardUsageReview(fixture.source.path, fixture.registry, original, mutations, selection, generation);
+            std::weak_ptr<const DecisionNodeGeneration> native{generation};
+            const auto copiedContracts = DecisionBlackboardProviderMetadata::Capture(*generation);
+            REQUIRE(copiedContracts.HasValue());
+            generation.reset();
+            CHECK(native.expired());
+            const auto supplied = CaptureBlackboardUsageReview(fixture.source.path, fixture.registry, original, mutations, selection,
+                                                               copiedContracts.Value());
             REQUIRE(supplied.HasValue());
             REQUIRE(supplied.Value().uses.size() == 2);
             const auto usage = std::ranges::find_if(supplied.Value().uses, [](const BlackboardDecisionUsage &use) {
@@ -189,8 +196,7 @@ namespace {
             });
             REQUIRE(usage != supplied.Value().uses.end());
             CHECK(usage->use.provider == origin);
-            generation.reset();
-            CHECK(supplied.Value().providers.expired());
+            CHECK(supplied.Value().providers.lock() == copiedContracts.Value());
         }
         SECTION("a changed selected source cannot review an older document opening") {
             std::vector<BlackboardSchemaAuthoringRow> labels;

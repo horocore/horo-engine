@@ -6,6 +6,14 @@
 #include <algorithm>
 
 namespace Horo::Editor {
+    namespace {
+        /** @brief Compares generation owners even after the previously observed catalog has retired. */
+        bool HasSameProviderMetadata(const Application::BlackboardUsageReview &report,
+                                     const std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> &current) noexcept {
+            return !report.providers.owner_before(current) && !current.owner_before(report.providers);
+        }
+    }  // namespace
+
     /** @copydoc EditorWorkspaceController::FindBlackboardDocument */
     BlackboardSchemaDocument *EditorWorkspaceController::FindBlackboardDocument(DocumentInstanceId instance) noexcept {
         const auto found = std::ranges::find_if(m_blackboardDocuments, [instance](const auto &document) {
@@ -151,12 +159,14 @@ namespace Horo::Editor {
         std::optional<Assets::AssetRegistryRevision> complete;
         if (m_collisionInventory && m_collisionInventory->status == Assets::AssetRegistryBuildStatus::Complete)
             complete = m_collisionInventory->revision;
+        const auto providerMetadata = m_gameplayRegistry ? m_gameplayRegistry->DecisionUsageMetadata() : nullptr;
         auto result = std::make_shared<std::shared_ptr<const Application::BlackboardUsageReview>>();
         auto job = m_sourceRecoveryJobs->SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Io},
                                                       [root = m_sourceOpenService.ProjectRoot(), assets = m_mutableAssetRegistry,
-                                                       mutations = m_mutations, complete, selection,
+                                                       mutations = m_mutations, complete, selection, providerMetadata,
                                                        result](const CancellationToken &cancellation) {
-            auto capture = Application::CaptureBlackboardUsageReview(root, *assets, complete, *mutations, selection, {}, cancellation);
+            auto capture =
+                Application::CaptureBlackboardUsageReview(root, *assets, complete, *mutations, selection, providerMetadata, cancellation);
             if (capture.HasError())
                 return Result<void>::Failure(capture.ErrorValue());
             *result = std::make_shared<const Application::BlackboardUsageReview>(std::move(capture).Value());
@@ -177,6 +187,11 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::UpdateBlackboardUsageReview */
     void EditorWorkspaceController::UpdateBlackboardUsageReview() {
+        const auto providerMetadata = m_gameplayRegistry ? m_gameplayRegistry->DecisionUsageMetadata() : nullptr;
+        for (auto &view : m_viewModel.blackboardDocuments) {
+            if (view.usageReview && !HasSameProviderMetadata(*view.usageReview, providerMetadata))
+                view.usageReview.reset();
+        }
         if (!m_blackboardUsageWork)
             return;
         const auto job = m_blackboardUsageWork->job.Snapshot();
@@ -197,7 +212,8 @@ namespace Horo::Editor {
             return;
         }
         auto result = std::move(*work.result);
-        if (result && result->registry == m_mutableAssetRegistry->Snapshot().Revision())
+        if (result && result->registry == m_mutableAssetRegistry->Snapshot().Revision() &&
+            HasSameProviderMetadata(*result, providerMetadata))
             view->usageReview = std::move(result);
         else
             view->diagnostic = MakeError(Application::DecisionCookErrors::Stale);

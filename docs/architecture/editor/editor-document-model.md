@@ -694,9 +694,12 @@ The workspace usage review submits one bounded Project-owned read of the exact
 durable schema bytes and registered Decision sources. The application holds the
 project mutation lease through source verification, uses the same typed source
 decode and lowering as cooking, and records registry, canonical source and
-observed provider evidence. It never cooks or activates a provider. A closed
-opening, newer document revision or replaced registry cannot publish an older
-worker result. Unavailable provider, Scene, Prefab, Query and Perception owners
+observed provider evidence. The owner thread detaches the loaded native
+gameplay image's declared Decision requirements through its existing metadata
+admission. The review job retains only copied declarations. It never starts a
+provider or extends executable module lifetime. A closed opening, newer document
+revision, replaced registry or different native declaration owner cannot publish
+an older worker result. Unavailable provider, Scene, Prefab, Query and Perception owners
 appear as incomplete coverage. The review grants no authority to change a
 durable key. An exact multi-document reference-resolution transaction remains
 required for that gesture.

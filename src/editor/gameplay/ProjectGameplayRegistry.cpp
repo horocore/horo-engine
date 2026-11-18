@@ -1,5 +1,6 @@
 #include "editor/gameplay/ProjectGameplayRegistry.h"
 
+#include "Horo/AI/BlackboardUsageInspection.h"
 #include "Horo/Foundation/Paths.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 
@@ -265,6 +266,12 @@ namespace Horo::Editor {
             diagnostics_.emplace_back(artifactPath, contributed.ErrorValue());
             return;
         }
+        const auto generation = nativeModule_->AcquireDecisionNodes();
+        if (generation.HasValue()) {
+            auto metadata = AI::DecisionBlackboardProviderMetadata::Capture(*generation.Value());
+            if (metadata.HasValue())
+                decisionUsageMetadata_ = std::move(metadata).Value();
+        }
     }
 
     void ProjectGameplayRegistry::DiscoverLuaPrograms(const std::filesystem::path &projectRoot) {
@@ -441,11 +448,19 @@ namespace Horo::Editor {
         return Result<ProjectLuaGenerationSnapshot>::Success(std::move(snapshot));
     }
 
+    /** @copydoc ProjectGameplayRegistry::DecisionUsageMetadata */
+    const std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> &ProjectGameplayRegistry::DecisionUsageMetadata() const noexcept {
+        return decisionUsageMetadata_;
+    }
+
     /** @copydoc ProjectGameplayRegistry::PrepareNativeReload */
     Result<Gameplay::GameModuleReloadSnapshot> ProjectGameplayRegistry::PrepareNativeReload() {
         if (!nativeModule_)
             return Result<Gameplay::GameModuleReloadSnapshot>::Failure(ManifestError("no active native generation is loaded."));
-        return nativeModule_->PrepareReload();
+        auto prepared = nativeModule_->PrepareReload();
+        if (prepared.HasValue())
+            decisionUsageMetadata_.reset();
+        return prepared;
     }
 
     /** @copydoc ProjectGameplayRegistry::RestoreNativeReload */

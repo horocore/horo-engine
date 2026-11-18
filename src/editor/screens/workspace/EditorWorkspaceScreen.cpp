@@ -130,7 +130,6 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                           : Packages::PackageActivationBoundary::Running;
                 static_cast<void>(packages_.pump(controller_->ProjectRoot(), boundary));
             }
-            controller_->UpdateBlackboardUsageReview();
             controller_->UpdateNavigationSettingsProjection();
             controller_->UpdateUiCanvasResources();
             const auto preferences = settings_.Snapshot();
@@ -141,6 +140,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             if (projectServices_.assetRegistry != nullptr) {
                 controller_->RefreshAssets(projectServices_.assetRegistry->Snapshot());
             }
+            controller_->UpdateBlackboardUsageReview();
             controller_->UpdateWorldBake();
             controller_->UpdateTerrainCook();
             controller_->UpdateContentBrowser();

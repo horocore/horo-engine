@@ -22,6 +22,10 @@
 #include <string_view>
 #include <vector>
 
+namespace Horo::AI {
+    class DecisionBlackboardProviderMetadata;
+}
+
 namespace Horo::Editor {
     /** @brief One gameplay source diagnostic that blocks starting a play session. */
     struct ProjectGameplayDiagnostic {
@@ -109,6 +113,11 @@ namespace Horo::Editor {
         [[nodiscard]] const Gameplay::GameAssetTypeRegistry &AssetTypes() const noexcept;
         /** @brief Returns current game-owned component metadata or an empty frozen missing-code registry. */
         [[nodiscard]] const Gameplay::ComponentRegistry &Components() const noexcept;
+        /** @brief Borrows the current native image's detached Decision descriptors for source authoring review.
+         * @return Exact immutable metadata, or null when no native authoring catalog was admitted. No executable lease escapes.
+         */
+        [[nodiscard]] const std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> &DecisionUsageMetadata() const noexcept;
+
         /** @brief Returns source-addressed compile and registration failures. */
         [[nodiscard]] const std::vector<ProjectGameplayDiagnostic> &Diagnostics() const noexcept;
         /** @brief Reports whether source failures prevent a coherent registry snapshot. */
@@ -185,6 +194,7 @@ namespace Horo::Editor {
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> moduleRetirements_;
         std::optional<Gameplay::GameModuleRetirementQueue::Reservation> retirementAdmission_;
         std::unique_ptr<Gameplay::LoadedGameModule> nativeModule_;
+        std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> decisionUsageMetadata_;
         Gameplay::GameAssetTypeRegistry missingAssetTypes_{"game.missing"};
         Gameplay::ComponentRegistry missingComponents_;
         std::vector<std::unique_ptr<Gameplay::LuaBehaviorProgram>> luaPrograms_;

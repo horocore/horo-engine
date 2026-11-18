@@ -60,14 +60,14 @@ namespace Horo::Application {
     };
 
     /** @brief Read-only observations scoped to a captured Project publication.
-     * @details The weak provider stamp identifies the exact observed generation without retaining module lifetime.
+     * @details The weak provider stamp identifies the host-owned detached declaration snapshot. The publishing host must recheck it.
      * Gaps represent unknown coverage. This value grants no document mutation authority.
      */
     struct BlackboardUsageReview final {
         BlackboardUsageSelection selection;
         Assets::AssetRegistryRevision registry;
         Sha256Digest closure;
-        std::weak_ptr<const AI::DecisionNodeGeneration> providers;
+        std::weak_ptr<const AI::DecisionBlackboardProviderMetadata> providers;
         std::vector<BlackboardUsageSourceStamp> sources;
         std::vector<BlackboardDecisionUsage> uses;
         std::vector<BlackboardUsageGap> gaps;
@@ -77,13 +77,14 @@ namespace Horo::Application {
      * @param root Canonical current Project root. @param registry Live registry publisher owned by the same Project.
      * @param completeInventory Native complete rebuild revision, when supplied by the host. Stale or absent coverage is reported.
      * @param mutations Project's normal source transaction coordinator. @param selection Exact durable key and schema selection.
-     * @param providers Observed provider generation, if the Project has made one available. @param cancellation Cooperative read fence.
+     * @param providers Detached observed provider declarations, when the Project owns a snapshot. @param cancellation Cooperative read
+     * fence.
      * @return Owned typed occurrences, stamps and gaps, or a typed capture/staleness error. No authored sources or runtime state are
      * changed.
      */
     [[nodiscard]] Result<BlackboardUsageReview> CaptureBlackboardUsageReview(
         const std::filesystem::path &root, const Assets::AssetRegistry &registry,
         std::optional<Assets::AssetRegistryRevision> completeInventory, const Editor::ProjectMutationCoordinator &mutations,
-        BlackboardUsageSelection selection, std::shared_ptr<const AI::DecisionNodeGeneration> providers = {},
+        BlackboardUsageSelection selection, std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> providers = {},
         const CancellationToken &cancellation = {});
 }  // namespace Horo::Application

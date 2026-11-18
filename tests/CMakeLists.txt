@@ -3882,7 +3882,11 @@ if (HORO_BUILD_EDITOR_GUI)
     target_link_libraries(HoroEditorWorkspaceControllerTests PRIVATE HoroEngine::Gui nlohmann_json::nlohmann_json
         HoroAudioFrontendComposition HoroEngine::AudioImport HoroAudioNull HoroEngine::PlatformProjectReadFiles)
     target_link_libraries(HoroEditorWorkspaceControllerTests PRIVATE HoroEditorPlaySaveHostInternal HoroEngine::Platform)
-    add_dependencies(HoroEditorWorkspaceControllerTests HoroTestGameModule)
+    target_link_libraries(HoroEditorWorkspaceControllerTests PRIVATE HoroEngine::DecisionCookHost)
+    set_property(SOURCE unit/editor/EditorWorkspaceControllerBlackboardTests.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+        HORO_TEST_AI_MODULE_PATH="$<TARGET_FILE:HoroTestAiGameModule>"
+        HORO_TEST_AI_MODULE_REVISION_PATH="${HORO_TEST_AI_MODULE_REVISION_FILE}")
+    add_dependencies(HoroEditorWorkspaceControllerTests HoroTestGameModule HoroTestAiGameModule)
     add_executable(HoroCameraCutEditorIntegrationTests unit/runtime/cinematic/CameraCutEditorIntegrationTests.cpp)
     target_compile_features(HoroCameraCutEditorIntegrationTests PRIVATE cxx_std_20)
     target_include_directories(HoroCameraCutEditorIntegrationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

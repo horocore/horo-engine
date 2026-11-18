@@ -1,9 +1,16 @@
+#include "DecisionGraphCompilerTestSupport.h"
+#include "GameplayModuleTestSupport.h"
 #include "Horo/AI/DecisionPlanCodec.h"
+#include "Horo/Application/BlackboardUsageReview.h"
+#include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Assets/AssetRegistry.h"
 #include "Horo/Editor/ProjectMutation.h"
+#include "Horo/Gameplay/GameModule.h"
+#include "ProjectReplicationTestSupport.h"
 #include "editor/screens/workspace/BlackboardScalarInput.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
@@ -21,6 +28,7 @@ namespace {
         static constexpr auto Path = "assets/guard.horo_bb";
         const Assets::AssetId asset = Assets::AssetId::FromBytes({7});
         const AI::BlackboardKeyId key = AI::BlackboardKeyId::Create(4).Value();
+        const AI::BlackboardSchemaId schema = AI::BlackboardSchemaId::Create(3).Value();
         std::filesystem::path root =
             std::filesystem::temp_directory_path() /
             ("horo-blackboard-editor-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -33,15 +41,8 @@ namespace {
             std::filesystem::create_directories(root / "assets");
             root = std::filesystem::canonical(root);
             Write("Initial");
-            {
-                std::ofstream sidecar(root / (std::string{Path} + ".horo"), std::ios::binary);
-                sidecar << std::format(R"({{"schemaVersion":1,"assetId":"{}","assetType":"{}"}})", asset.ToString(),
-                                       AI::BlackboardSchemaAssetType);
-                REQUIRE(static_cast<bool>(sidecar));
-            }
-            const auto rebuilt = Assets::RebuildAssetRegistry(registry, root, Assets::AssetRegistryOpenMode::ReadOnly);
-            REQUIRE(rebuilt.HasValue());
-            REQUIRE(rebuilt.Value().status == Assets::AssetRegistryBuildStatus::Complete);
+            WriteSidecar(Path, asset, AI::BlackboardSchemaAssetType);
+            RebuildRegistry();
             REQUIRE(registry.Snapshot().Find(asset));
         }
 
@@ -50,12 +51,24 @@ namespace {
             std::filesystem::remove_all(root, error);
         }
 
+        void WriteSidecar(const std::string &path, const Assets::AssetId identity, std::string_view type) const {
+            std::ofstream sidecar(root / (path + ".horo"), std::ios::binary);
+            sidecar << std::format(R"({{"schemaVersion":1,"assetId":"{}","assetType":"{}"}})", identity.ToString(), type);
+            REQUIRE(static_cast<bool>(sidecar));
+        }
+
+        void RebuildRegistry() {
+            const auto rebuilt = Assets::RebuildAssetRegistry(registry, root, Assets::AssetRegistryOpenMode::ReadOnly);
+            REQUIRE(rebuilt.HasValue());
+            REQUIRE(rebuilt.Value().status == Assets::AssetRegistryBuildStatus::Complete);
+        }
+
         void Write(const char *label) const {
             const std::array keys{AI::BlackboardKeyDescriptor{.key = key}};
-            const auto schema = AI::BlackboardSchema::Capture({.identity = AI::BlackboardSchemaId::Create(3).Value(), .keys = keys});
-            REQUIRE(schema.HasValue());
+            const auto captured = AI::BlackboardSchema::Capture({.identity = schema, .keys = keys});
+            REQUIRE(captured.HasValue());
             const std::array rows{AI::BlackboardSchemaAuthoringRow{key, label}};
-            const auto encoded = AI::BlackboardSchemaSourceCodec::Encode(schema.Value(), rows);
+            const auto encoded = AI::BlackboardSchemaSourceCodec::Encode(captured.Value(), rows);
             REQUIRE(encoded.HasValue());
             std::ofstream output(root / Path, std::ios::binary | std::ios::trunc);
             output.write(reinterpret_cast<const char *>(encoded.Value().data()), static_cast<std::streamsize>(encoded.Value().size()));
@@ -232,4 +245,68 @@ TEST_CASE("Blackboard workspace publishes a Project usage review only for an unc
     INFO(diagnostic);
     CHECK(static_cast<bool>(view.usageReview) == !changed);
     CHECK_FALSE(view.diagnostic);
+}
+
+TEST_CASE("Blackboard workspace reviews the loaded native Decision catalog and rejects its retired stamp",
+          "[unit][editor][blackboard][workspace]") {
+    BlackboardWorkspaceFixture project;
+    Tests::WriteReplicationProject(project.root);
+    const auto manifest = Tests::WriteGameplayModuleManifest(project.root, HORO_TEST_AI_MODULE_PATH, "game.ai.tests",
+                                                             Gameplay::CurrentGameplayBuildFingerprint(),
+                                                             Tests::ReadDescriptorRevision(HORO_TEST_AI_MODULE_REVISION_PATH));
+    auto graph = AI::DecisionGraphTestSupport::TaskTree(2, 101);
+    graph.blackboard = project.schema;
+    const auto encoded = AI::DecisionPlanCodec::EncodeSource(std::span{&graph, 1}, graph.asset);
+    REQUIRE(encoded.HasValue());
+    const auto *bytes = reinterpret_cast<const char *>(encoded.Value().data());
+    constexpr auto graphPath = "assets/provider_review.horo_bt";
+    {
+        std::ofstream file(project.root / graphPath, std::ios::binary);
+        file.write(bytes, static_cast<std::streamsize>(encoded.Value().size()));
+        REQUIRE(static_cast<bool>(file));
+    }
+    project.WriteSidecar(graphPath, Assets::AssetId::FromBytes({17}), AI::DecisionAssetType(AI::DecisionPlanKind::BehaviorTree));
+    project.RebuildRegistry();
+
+    JobSystem jobs{JobSystemConfig{.ioWorkerCount = 1}};
+    const auto registry = project.registry.Snapshot();
+    CollisionInventoryEvidence inventory{registry.Revision(), Assets::AssetRegistryBuildStatus::Complete};
+    EditorWorkspaceController controller(project.root, project.runtime, registry,
+                                         {.assets = {.mutableAssetRegistry = &project.registry},
+                                          .collision = {.inventory = &inventory},
+                                          .mutations = &project.mutations,
+                                          .durableFiles = &project.files,
+                                          .jobs = &jobs});
+    controller.ProcessCommand(project.Open());
+    controller.ProcessCommand({.command = EditorWorkspaceViewCommand::BlackboardDocument,
+                               .blackboard = BlackboardWorkspaceRequest{.fence = project.Current(controller),
+                                                                        .operation = BlackboardDocumentOperation::ReviewUsages,
+                                                                        .reviewKey = project.key}});
+    REQUIRE(controller.ViewModel().blackboardDocuments.front().reviewingUsages);
+
+    bool replaced = false;
+    SECTION("the declared node resolves through the real manifest-selected catalog") {}
+    SECTION("replacement of the same manifest image still revokes older review output") {
+        Tests::AdvanceLastWriteTime(manifest);
+        controller.UpdateGameplaySources(1.0F);
+        replaced = true;
+    }
+    jobs.Shutdown(ShutdownPolicy::Drain);
+    controller.UpdateBlackboardUsageReview();
+    const auto &view = controller.ViewModel().blackboardDocuments.front();
+    CHECK_FALSE(view.reviewingUsages);
+    if (replaced) {
+        CHECK_FALSE(view.usageReview);
+        REQUIRE(view.diagnostic);
+        CHECK(view.diagnostic->code.Value() == Application::DecisionCookErrors::Stale.code.Value());
+    } else {
+        REQUIRE(view.usageReview);
+        const auto providers = view.usageReview->providers.lock();
+        REQUIRE(providers);
+        REQUIRE(providers->Descriptors().size() == 1);
+        CHECK(providers->Descriptors().front().type == AI::DecisionNodeTypeId::Create(101).Value());
+        CHECK(std::ranges::none_of(view.usageReview->gaps, [](const Application::BlackboardUsageGap &gap) {
+            return gap.kind == Application::BlackboardUsageGapKind::DecisionProvider;
+        }));
+    }
 }

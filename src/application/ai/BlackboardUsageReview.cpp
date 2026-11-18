@@ -68,7 +68,7 @@ namespace Horo::Application {
 
         /** @brief Projects one admitted source while preserving exact unresolved or malformed source identities. */
         Result<void> InspectFile(BlackboardUsageReview &review, const Assets::AssetCookPinnedSource &file,
-                                 const AI::DecisionNodeGeneration *providers) {
+                                 const AI::DecisionBlackboardProviderMetadata *providers) {
             const auto unresolved = [&](const Error &error) {
                 if (review.gaps.size() == MaximumFindings)
                     return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetLimitExceeded));
@@ -99,7 +99,7 @@ namespace Horo::Application {
                                                                const std::optional<Assets::AssetRegistryRevision> completeInventory,
                                                                const Editor::ProjectMutationCoordinator &mutations,
                                                                const BlackboardUsageSelection selection,
-                                                               std::shared_ptr<const AI::DecisionNodeGeneration> providers,
+                                                               std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> providers,
                                                                const CancellationToken &cancellation) {
         using Review = Result<BlackboardUsageReview>;
         if (!selection.schemaAsset.IsValid() || !selection.schema.IsValid() || !selection.key.IsValid() || selection.version == 0)
@@ -112,8 +112,6 @@ namespace Horo::Application {
 
         const auto pinned = registry.Snapshot();
         if (pinned.Revision().value == 0)
-            return Review::Failure(MakeError(DecisionCookErrors::Stale));
-        if (providers && !providers->CanUse())
             return Review::Failure(MakeError(DecisionCookErrors::Stale));
         BlackboardUsageReview review{.selection = selection, .registry = pinned.Revision(), .providers = providers};
         if (completeInventory != pinned.Revision())
@@ -143,7 +141,7 @@ namespace Horo::Application {
         }
         if (const auto verified = capture.Value().VerifyUnchanged(cancellation); verified.HasError())
             return Review::Failure(verified.ErrorValue());
-        if (registry.Snapshot().Revision() != review.registry || (providers && !providers->CanUse()))
+        if (registry.Snapshot().Revision() != review.registry)
             return Review::Failure(MakeError(DecisionCookErrors::Stale));
         return Review::Success(std::move(review));
     }
