@@ -1411,7 +1411,7 @@
     "workspace.paired_recovery.restore": { "text": "Restore both files" },
     "workspace.paired_recovery.cancel": { "text": "Cancel" },
     "workspace.paired_recovery.blocked": { "text": "Close the affected Prefab, stop Play, and resolve unsaved Scene or project settings before restoring." },
-    "workspace.paired_recovery.failed": { "text": "Recovery could not finish. The recovery record is kept. Review the current files and the editor log." },
+    "workspace.paired_recovery.failed": { "text": "Recovery could not finish. Review the current files and the editor log." },
     "workspace.recovery.available": { "text": "Unsaved scene recovery data is available." },
     "workspace.recovery.restore": { "text": "Restore" },
     "workspace.recovery.discard": { "text": "Discard" },

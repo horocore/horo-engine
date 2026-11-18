@@ -776,7 +776,7 @@ namespace Horo::Editor {
             ImGui::SetCursorScreenPos(ImVec2(minX, pos.y + (size.y - ImGui::GetTextLineHeight()) * 0.5F));
             ImGui::TextUnformatted(message.c_str());
             if (ImGui::IsItemHovered() && ImGui::CalcTextSize(message.c_str()).x > messageMaxX - minX)
-                ImGui::SetTooltip("%s", message.c_str());
+                Ui::ShowTooltip(message.c_str(), &m_context.theme.fonts);
             ImGui::PopClipRect();
         }
 
