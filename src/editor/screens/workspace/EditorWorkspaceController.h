@@ -1038,9 +1038,13 @@ namespace Horo::Editor {
         /** @brief Reads and validates detached external values before any canonical document mutation. */
         [[nodiscard]] Result<LoadedProjectScene> ReadExternalSceneForReplacement() const;
         /** @brief Commits already validated values through existing collision/document owners. */
-        [[nodiscard]] bool InstallExternalScene(LoadedProjectScene scene);
+        [[nodiscard]] bool InstallExternalScene(LoadedProjectScene scene, bool preserveRecovery = false);
         /** @brief Restores validated recovery content into a new dirty document session. */
         void RestoreSceneRecovery();
+        /** @brief Explicitly reconciles the exact startup pair presented to the confirming user. */
+        void RestorePrefabApplyRecovery(const std::shared_ptr<const PrefabApplyRecoveryCandidate> &accepted);
+        /** @brief Resets live Scene projections after canonical replacement and optionally preserves draft recovery. */
+        void FinishExternalSceneReplacement(bool preserveRecovery);
         /** @brief Explicitly discards recovery state and suppresses leave-checkpoint autosave. */
         void DiscardSceneRecovery();
         /** @brief Attempts one recovery write when the active document has unsaved content. */

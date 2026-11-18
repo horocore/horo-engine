@@ -29,6 +29,19 @@ namespace Horo::Editor {
         std::optional<Error> recoveryPersistenceError;
     };
 
+    /** @brief Exact original identity of one reviewed canonical destination. */
+    struct PrefabApplyRecoveryFile final {
+        std::filesystem::path path;
+        Assets::AssetSourceIdentity original;
+    };
+
+    /** @brief Immutable recovery evidence for a review of the two guarded canonical files. */
+    struct PrefabApplyRecoveryCandidate final {
+        Assets::AssetSourceIdentity capsule;
+        PrefabApplyRecoveryFile prefab;
+        PrefabApplyRecoveryFile scene;
+    };
+
     /** @brief Exact matching owner and disk evidence for one paired undo or redo. */
     struct PrefabApplyReplayRequest final {
         SceneTransactionContext scene;
@@ -63,7 +76,7 @@ namespace Horo::Editor {
                                                         const Prefab::PrefabLimitProfile &limits,
                                                         const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
         /** @brief Inspects the exact durable compensation capsule without changing either source. */
-        [[nodiscard]] static Result<std::optional<Assets::AssetSourceIdentity>> InspectPendingRecovery(const std::filesystem::path &root);
+        [[nodiscard]] static Result<std::optional<PrefabApplyRecoveryCandidate>> InspectPendingRecovery(const std::filesystem::path &root);
         /** @brief Explicitly retries pending compensation against the inspected capsule in a fresh project session.
          * @param root Canonical project root. @param expected Exact inspected capsule identity.
          * @param mutations Shared writer authority. @param files Durable native source owner.

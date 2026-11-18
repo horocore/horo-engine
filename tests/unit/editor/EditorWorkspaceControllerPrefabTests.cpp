@@ -1,4 +1,6 @@
+#include "NativePublicationFiles.h"
 #include "PrefabWorkspaceTestSupport.h"
+#include "editor/document/SceneDocumentPersistence.h"
 
 #include <algorithm>
 #include <array>
@@ -70,6 +72,138 @@ namespace Horo::Editor {
             CHECK(model.documentRevision == revision);
             CHECK_FALSE(model.isDirty);
             CHECK(model.prefabHierarchy->entries.front().hasOverrides);
+        }
+    }
+
+    namespace {
+        /** @brief Leaves both exact installed bytes in place through the real tracked publication receipts. */
+        class PairedWorkspaceFiles final : public TestSupport::NativePublicationFiles {
+        public:
+            std::filesystem::path prefab;
+            std::filesystem::path scene;
+            std::size_t replacements{};
+            bool armed{};
+
+            Result<void> WritePrivateDurable(const std::filesystem::path &path, const std::span<const std::byte> bytes, bool &created,
+                                             const std::filesystem::perms mode) override {
+                return native.WritePrivateDurable(path, bytes, created, mode);
+            }
+
+            Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
+                                              AtomicFileReplacementReceipt &receipt) override {
+                if (!armed || (destination != prefab && destination != scene))
+                    return native.AtomicReplaceTracked(prepared, destination, receipt);
+                if (++replacements > 2)
+                    return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed));
+                auto replaced = native.AtomicReplaceTracked(prepared, destination, receipt);
+                if (replacements == 2 && replaced.HasValue())
+                    return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed));
+                return replaced;
+            }
+        };
+    }  // namespace
+
+    TEST_CASE("Workspace startup paired recovery reviews the exact candidate before restoring either file",
+              "[editor][prefab][native][recovery]") {
+        PairedWorkspaceFiles faultFiles;
+        ProjectMutationCoordinator faultMutations{faultFiles};
+        Workspace workspace;
+        const auto &root = workspace.project.directory.path;
+        faultFiles.prefab = workspace.project.source;
+        faultFiles.scene = root / "assets/scenes/main.horo";
+        workspace.project.WriteScene(RootValueIntent(workspace.project));
+        const auto read = [&](const std::filesystem::path &path) {
+            const auto source = Assets::CaptureAssetSource(root, path, Prefab::PrefabHardLimits::SourceDocumentBytes);
+            REQUIRE(source.HasValue());
+            return source.Value().identity;
+        };
+        const auto initialPrefab = read(faultFiles.prefab);
+        const auto initialScene = read(faultFiles.scene);
+
+        workspace.Open(PrefabAsset(10).Asset(), &faultMutations, &faultFiles);
+        workspace.OpenPrefab();
+        auto &first = *workspace.controller;
+        first.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::ChangeActivePanel, .targetIndex = 3, .stringPayload = "horo.viewport"});
+        const auto projection = first.ViewModel().prefabHierarchy;
+        REQUIRE(projection);
+        const auto &placement = projection->entries.front();
+        const auto row = std::ranges::find_if(placement.valueDiff, [](const auto &entry) {
+            return entry.revertValue.has_value();
+        });
+        REQUIRE(row != placement.valueDiff.end());
+        auto apply = Intent(first.ViewModel(), placement.target, PrefabHierarchyAction::ApplyOverrides);
+        apply.prefabHierarchy->revert =
+            PrefabHierarchyRevert{PrefabHierarchyRevertScope::Value, static_cast<std::uint32_t>(row - placement.valueDiff.begin())};
+        faultFiles.armed = true;
+        first.ProcessCommand(apply);
+        REQUIRE(first.ViewModel().prefabApplyRecoveryNotice == PrefabApplyRecoveryNotice::Reopen);
+        const auto installedPrefab = read(faultFiles.prefab);
+        const auto installedScene = read(faultFiles.scene);
+        REQUIRE(installedPrefab != initialPrefab);
+        REQUIRE(installedScene != initialScene);
+        workspace.controller.reset();
+
+        const auto partialScene = LoadProjectScene(root, faultFiles.scene);
+        REQUIRE(partialScene.HasValue());
+        auto draft = partialScene.Value().objects;
+        draft.front().name = "Unsaved draft";
+        const SceneDocumentSnapshot checkpoint{{2}, {2}, std::move(draft), partialScene.Value().prefabInstances};
+        REQUIRE(
+            WriteProjectSceneRecovery(root, faultFiles.scene, checkpoint, {1}, {1}, workspace.project.mutations, workspace.project.files)
+                .HasValue());
+        workspace.Open(PrefabAsset(11).Asset());
+        auto &reopened = *workspace.controller;
+        const auto &model = reopened.ViewModel();
+        const auto evidence = model.prefabApplyRecovery;
+        REQUIRE(evidence);
+        REQUIRE(model.recoveryAvailable);
+        CHECK_FALSE(model.prefabApplyAvailable);
+        CHECK(evidence->prefab.path == faultFiles.prefab);
+        CHECK(evidence->scene.path == faultFiles.scene);
+        CHECK(evidence->prefab.original == initialPrefab);
+        CHECK(evidence->scene.original == initialScene);
+
+        using enum EditorWorkspaceViewCommand;
+        reopened.ProcessCommand({.command = ReviewPrefabApplyRecovery, .prefabApplyRecovery = evidence});
+        reopened.ProcessCommand({.command = RestorePrefabApplyRecovery});
+        auto unreviewed = std::make_shared<const PrefabApplyRecoveryCandidate>(*evidence);
+        reopened.ProcessCommand({.command = RestorePrefabApplyRecovery, .prefabApplyRecovery = unreviewed});
+        REQUIRE(read(faultFiles.prefab) == installedPrefab);
+        REQUIRE(read(faultFiles.scene) == installedScene);
+        const EditorWorkspaceViewCommandData confirmed{.command = RestorePrefabApplyRecovery, .prefabApplyRecovery = evidence};
+
+        SECTION("confirmation restores both canonical files and retains the independent unsaved Scene draft") {
+            reopened.ProcessCommand(confirmed);
+            CHECK_FALSE(model.prefabApplyRecovery);
+            CHECK(model.prefabApplyRecoveryNotice == PrefabApplyRecoveryNotice::None);
+            CHECK(read(faultFiles.prefab) == initialPrefab);
+            CHECK(read(faultFiles.scene) == initialScene);
+            REQUIRE(model.prefabHierarchy);
+            CHECK(model.prefabHierarchy->entries.front().hasOverrides);
+            CHECK_FALSE(model.isDirty);
+            CHECK(model.recoveryAvailable);
+            const auto draftAfter = InspectProjectSceneRecovery(root, faultFiles.scene);
+            REQUIRE(draftAfter.HasValue());
+            REQUIRE(draftAfter.Value());
+            CHECK(draftAfter.Value()->objects.front().name == "Unsaved draft");
+        }
+        SECTION("confirmation preserves the record and an externally changed source") {
+            workspace.project.WriteSource("Foreign source");
+            const auto foreign = read(faultFiles.prefab);
+            reopened.ProcessCommand(confirmed);
+            CHECK(model.prefabApplyRecovery == evidence);
+            CHECK(model.prefabApplyRecoveryNotice == PrefabApplyRecoveryNotice::Failed);
+            CHECK(read(faultFiles.prefab) == foreign);
+            CHECK(read(faultFiles.scene) == installedScene);
+        }
+        SECTION("an open affected Prefab owner must close before confirmation can write") {
+            workspace.OpenPrefab();
+            reopened.ProcessCommand(confirmed);
+            CHECK(model.prefabApplyRecovery == evidence);
+            CHECK(model.prefabApplyRecoveryNotice == PrefabApplyRecoveryNotice::Blocked);
+            CHECK(read(faultFiles.prefab) == installedPrefab);
+            CHECK(read(faultFiles.scene) == installedScene);
         }
     }
 

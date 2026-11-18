@@ -112,7 +112,9 @@ namespace Horo::Editor {
         void DrawMenuBar(const ImVec2 &display, const EditorWorkspaceViewModel &viewModel,
                          EditorWorkspaceViewCommandData &outCommand) const;
 
-        void DrawRecoveryBar(const ImVec2 &pos, const ImVec2 &size, EditorWorkspaceViewCommandData &outCommand) const;
+        /** @brief Draws one startup recovery indication and emits its read-only review or authoring action. */
+        void DrawRecoveryBar(const ImVec2 &pos, const ImVec2 &size, const EditorWorkspaceViewModel &viewModel, bool paired,
+                             EditorWorkspaceViewCommandData &outCommand) const;
 
         void DrawExternalConflictBar(const ImVec2 &pos, const ImVec2 &size, EditorWorkspaceViewCommandData &outCommand) const;
 

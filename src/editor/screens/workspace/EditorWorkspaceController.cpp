@@ -148,10 +148,13 @@ namespace Horo::Editor {
         if (m_durableFiles != nullptr && !absoluteProjectRoot.empty()) {
             const auto recovery = PrefabApplyTransaction::InspectPendingRecovery(absoluteProjectRoot);
             m_prefabApplyRecoveryPendingOnDisk = recovery.HasError() || recovery.Value().has_value();
-            if (recovery.HasError())
+            if (recovery.HasError()) {
+                m_viewModel.prefabApplyRecoveryNotice = PrefabApplyRecoveryNotice::Invalid;
                 LOG_ERROR("editor.prefab", "Paired Prefab recovery could not be inspected: %s", recovery.ErrorValue().message.c_str());
-            else if (m_prefabApplyRecoveryPendingOnDisk)
+            } else if (m_prefabApplyRecoveryPendingOnDisk) {
+                m_viewModel.prefabApplyRecovery = std::make_shared<const PrefabApplyRecoveryCandidate>(*recovery.Value());
                 LOG_WARN("editor.prefab", "A previous paired Prefab publication requires source and Scene reconciliation.");
+            }
         }
         if (const auto metadata = Application::LoadProjectMetadata(absoluteProjectRoot); metadata.HasValue())
             m_viewModel.projectName = metadata.Value().name;

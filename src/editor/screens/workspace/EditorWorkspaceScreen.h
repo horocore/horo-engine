@@ -234,6 +234,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         void OpenSceneComparison();
         /** @brief Shows the exact current prefab conflict as a read-only comparison. */
         void OpenPrefabExternalComparison(const PrefabDocumentFence &fence);
+        /** @brief Presents the exact restart recovery candidate and accepts only explicit confirmation from the modal. */
+        void OpenPrefabApplyRecovery(const std::shared_ptr<const PrefabApplyRecoveryCandidate> &candidate);
         /** @brief Captures an explicit native path for an exclusive registered prefab Save As fork. */
         void SavePrefabAs(const PrefabDocumentFence &fence);
         /** @brief Opens layer creation over the canonical world document owner. */

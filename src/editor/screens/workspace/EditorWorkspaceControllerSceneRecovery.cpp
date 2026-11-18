@@ -3,6 +3,7 @@
 #include "editor/document/SceneDocumentPersistence.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace Horo::Editor {
@@ -43,6 +44,11 @@ namespace Horo::Editor {
         }
         if (!InstallExternalScene(std::move(loaded).Value()))
             return;
+        FinishExternalSceneReplacement(false);
+    }
+
+    /** @copydoc EditorWorkspaceController::FinishExternalSceneReplacement */
+    void EditorWorkspaceController::FinishExternalSceneReplacement(const bool preserveRecovery) {
         if (m_sceneFileWatch != nullptr)
             m_sceneFileWatch->Reset();
         m_history.Clear();
@@ -53,7 +59,8 @@ namespace Horo::Editor {
         m_viewModel.sceneExternalConflict = false;
         m_sceneFileWatchErrorPresented = false;
         m_sceneFileWatchElapsedSeconds = 0.0F;
-        m_viewModel.recoveryAvailable = false;
+        if (!preserveRecovery)
+            m_viewModel.recoveryAvailable = false;
         m_lastAutosavedState = {};
         m_autosaveElapsedSeconds = 0.0F;
         m_autosaveRetryDelaySeconds = 0.0F;
@@ -76,12 +83,12 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorWorkspaceController::InstallExternalScene */
-    bool EditorWorkspaceController::InstallExternalScene(LoadedProjectScene scene) {
+    bool EditorWorkspaceController::InstallExternalScene(LoadedProjectScene scene, const bool preserveRecovery) {
         if (HasDirtyCollisionSettings()) {
             LOG_ERROR("editor.collision", "Save or discard collision settings before reloading the Scene owner.");
             return false;
         }
-        if (!DiscardSupersededRecovery(ProjectRoot(), *m_mutations, *m_durableFiles))
+        if (!preserveRecovery && !DiscardSupersededRecovery(ProjectRoot(), *m_mutations, *m_durableFiles))
             return false;
         if (auto closed = ShutdownCollisionSettings(); closed.HasError())
             return false;
@@ -91,6 +98,50 @@ namespace Horo::Editor {
         }
         m_sceneFingerprint = std::move(scene.fingerprint);
         return true;
+    }
+
+    /** @copydoc EditorWorkspaceController::RestorePrefabApplyRecovery */
+    void EditorWorkspaceController::RestorePrefabApplyRecovery(const std::shared_ptr<const PrefabApplyRecoveryCandidate> &accepted) {
+        if (!accepted || accepted != m_viewModel.prefabApplyRecovery || m_mutations == nullptr || m_durableFiles == nullptr)
+            return;
+        const auto &prefabPath = accepted->prefab.path;
+        const auto &scenePath = accepted->scene.path;
+        const bool activeScene = m_defaultScenePath == scenePath;
+        const auto sourceKey = WorkspacePortablePathText(prefabPath.lexically_relative(ProjectRoot()));
+        const bool openPrefab = std::ranges::any_of(m_prefabDocuments, [&sourceKey](const auto &entry) {
+            return entry->Snapshot().identity.key.source.Value() == sourceKey;
+        });
+        if (openPrefab || m_playSession.State() != EditorPlaySessionState::Idle ||
+            (activeScene &&
+             (m_document.IsDirty() || HasDirtyCollisionSettings() || !PrepareNavigationSceneReplacement("Paired Prefab recovery")))) {
+            m_viewModel.prefabApplyRecoveryNotice = PrefabApplyRecoveryNotice::Blocked;
+            return;
+        }
+        if (const auto restored =
+                PrefabApplyTransaction::RestorePendingRecovery(ProjectRoot(), accepted->capsule, *m_mutations, *m_durableFiles);
+            restored.HasError()) {
+            m_viewModel.prefabApplyRecoveryNotice = PrefabApplyRecoveryNotice::Failed;
+            LOG_WARN("editor.prefab", "Paired Prefab reconciliation failed: %s", restored.ErrorValue().message.c_str());
+            return;
+        }
+
+        m_viewModel.prefabApplyRecoveryNotice = PrefabApplyRecoveryNotice::None;
+        m_viewModel.prefabApplyRecovery.reset();
+        m_prefabApplyRecoveryPendingOnDisk = false;
+        RetirePrefabHierarchy();
+        if (activeScene) {
+            const auto &original = accepted->scene.original;
+            const SceneFileFingerprint wanted{true, original.bytes, FormatSha256(original.digest)};
+            if (m_sceneFingerprint != wanted) {
+                auto scene = ReadExternalSceneForReplacement();
+                if (scene.HasValue() && scene.Value().fingerprint == wanted && InstallExternalScene(std::move(scene).Value(), true)) {
+                    FinishExternalSceneReplacement(true);
+                    return;
+                }
+                m_viewModel.sceneExternalConflict = true;
+            }
+        }
+        RefreshSceneProjections();
     }
 
     /** @copydoc EditorWorkspaceController::RestoreSceneRecovery */

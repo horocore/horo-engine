@@ -47,6 +47,16 @@ namespace Horo::Application {
 
 namespace Horo::Editor {
     class TerrainDocumentHost;
+    struct PrefabApplyRecoveryCandidate;
+
+    /** @brief Workspace presentation of the paired authoring recovery route. */
+    enum class PrefabApplyRecoveryNotice : std::uint8_t {
+        None,
+        Reopen,
+        Invalid,
+        Blocked,
+        Failed,
+    };
     struct TerrainToolCommand;
     struct TerrainToolSelection;
     /** @brief Typed presentation kind projected from authored scene components. */
@@ -160,6 +170,8 @@ namespace Horo::Editor {
         ReloadExternalScene,
         OverwriteExternalScene,
         RestoreSceneRecovery,
+        ReviewPrefabApplyRecovery,
+        RestorePrefabApplyRecovery,
         DiscardSceneRecovery,
         UndoScene,
         RedoScene,
@@ -402,6 +414,7 @@ namespace Horo::Editor {
         std::optional<DocumentInstanceId> documentMoveBefore;
         std::optional<PrefabDocumentFence> prefabFence;
         std::shared_ptr<const DocumentRecoveryRecord> prefabRecovery;
+        std::shared_ptr<const PrefabApplyRecoveryCandidate> prefabApplyRecovery;
         std::optional<PrefabSourceEdit> prefabEdit;
         std::shared_ptr<const PrefabExternalComparison> prefabExternalComparison;
         std::optional<std::filesystem::path> prefabSaveDestination;
@@ -577,6 +590,8 @@ namespace Horo::Editor {
         bool isDirty = false;
         bool sceneExternalConflict = false;
         bool recoveryAvailable = false;
+        std::shared_ptr<const PrefabApplyRecoveryCandidate> prefabApplyRecovery;
+        PrefabApplyRecoveryNotice prefabApplyRecoveryNotice{};
         bool canUndo = false;
         bool canRedo = false;
         EditorPlayState playState{EditorPlayState::Idle};

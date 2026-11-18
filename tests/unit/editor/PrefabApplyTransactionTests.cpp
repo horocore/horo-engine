@@ -544,7 +544,7 @@ namespace Horo::Editor {
             const auto restore = [&](const Assets::AssetSourceIdentity &identity) {
                 return PrefabApplyTransaction::RestorePendingRecovery(root, identity, restartedMutations, restartedFiles);
             };
-            const auto expected = *inspected.Value();
+            const auto expected = inspected.Value()->capsule;
             SECTION("unresolved paired apply is fenced and a confirmed restore removes the record") {
                 const auto attempt = fixture.Execute();
                 REQUIRE(attempt.error);
@@ -566,7 +566,8 @@ namespace Horo::Editor {
                 CHECK(fixture.Read(sourcePath).identity == installed.identity);
                 const auto pending = PrefabApplyTransaction::InspectPendingRecovery(root);
                 REQUIRE(pending.HasValue());
-                CHECK(pending.Value() == expected);
+                REQUIRE(pending.Value());
+                CHECK(pending.Value()->capsule == expected);
             }
             SECTION("old or corrupted capsule identity cannot authorize a retry") {
                 auto stale = expected;
@@ -606,7 +607,7 @@ namespace Horo::Editor {
             auto inspected = PrefabApplyTransaction::InspectPendingRecovery(root);
             REQUIRE(inspected.HasValue());
             REQUIRE(inspected.Value());
-            const auto expected = *inspected.Value();
+            const auto expected = inspected.Value()->capsule;
 
             ApplyFiles firstRetry;
             firstRetry.failReplacement = 2;
@@ -617,7 +618,8 @@ namespace Horo::Editor {
             CHECK(fixture.Read(fixture.source.project.source).identity == outcome.recovery[0]->installed);
             inspected = PrefabApplyTransaction::InspectPendingRecovery(root);
             REQUIRE(inspected.HasValue());
-            REQUIRE(inspected.Value() == expected);
+            REQUIRE(inspected.Value());
+            CHECK(inspected.Value()->capsule == expected);
 
             NativeDurableFileSystem restartedFiles;
             const ProjectMutationCoordinator restartedMutations{restartedFiles};

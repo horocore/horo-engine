@@ -23,6 +23,82 @@
 
 namespace Horo::Editor::WorkspaceScreenDetail {
     namespace {
+        /** @brief Confirms the exact two paths without granting access during read-only review. */
+        class PrefabApplyRecoveryModal final : public EditorModal {
+        public:
+            PrefabApplyRecoveryModal(const EditorGuiContext &context, std::array<std::string, 2> paths,
+                                     std::function<PrefabApplyRecoveryNotice()> confirm)
+                : EditorModal(GuiLocalizationScope{"workspace.paired_recovery"}), context_(context), paths_(std::move(paths)),
+                  confirm_(std::move(confirm)) {}
+
+            ModalId Id() const override {
+                return ModalId{0x5046424150524356ULL};
+            }
+
+            ModalPresentation Presentation() const override {
+                return {.size = ModalSizePolicy::Medium, .dimWorkspace = true};
+            }
+
+            ModalClosePolicy ClosePolicy() const override {
+                return {};
+            }
+
+            Result<void> OnOpen(EditorModalContext &) override {
+                return Result<void>::Success();
+            }
+
+            CloseDecision CanClose(ModalCloseReason) override {
+                return CloseDecision::Allow;
+            }
+
+            ModalFrameResult Draw() override {
+                const auto &fonts = context_.theme.fonts;
+                const auto &tokens = Theme::GetActiveTokens();
+                const auto metrics = DesignSystem::MetricsFor(tokens, Ui::ComponentSize::Medium);
+                const float footerHeight = (metrics.minimumHeight * 2.0F + tokens.spacing.propertyRowGap) / tokens.sizes.uiScale + 24.0F;
+                Ui::ScopedModalShell modal({.id = "PrefabApplyRecovery",
+                                            .title = Text("title").c_str(),
+                                            .requestedSize = {600.0F, 380.0F},
+                                            .minimumWidth = 240.0F,
+                                            .minimumHeight = 280.0F,
+                                            .footerHeight = footerHeight},
+                                           fonts);
+                ImGui::BeginChild("##PrefabApplyRecoveryReview", {0, modal.BodyHeight()});
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, Text("description"), Theme::Text(), fonts);
+                for (const auto &path : paths_)
+                    Ui::WrappedText(ImGui::GetContentRegionAvail().x, path, Theme::Muted(), fonts);
+                if (notice_ != PrefabApplyRecoveryNotice::None)
+                    Ui::WrappedText(ImGui::GetContentRegionAvail().x,
+                                    Text(notice_ == PrefabApplyRecoveryNotice::Blocked ? "blocked" : "failed"), Theme::Warn(), fonts);
+                ImGui::EndChild();
+                modal.BeginFooter({16, 12});
+                bool restored = false;
+                if (Ui::Button({.label = Text("restore").c_str(), .font = fonts.sans, .style = {.width = Ui::StyleWidth::FillAvailable}})) {
+                    notice_ = confirm_();
+                    restored = notice_ == PrefabApplyRecoveryNotice::None;
+                }
+                const bool cancelled = Ui::Button({.label = Text("cancel").c_str(),
+                                                   .variant = Ui::ButtonVariant::Secondary,
+                                                   .font = fonts.sans,
+                                                   .style = {.width = Ui::StyleWidth::FillAvailable}});
+                modal.EndFooter();
+                if (restored)
+                    return ModalFrameResult::RequestClose(ModalCloseReason::Completed);
+                return cancelled || modal.CloseRequested() ? ModalFrameResult::RequestClose(ModalCloseReason::Cancelled)
+                                                           : ModalFrameResult::None();
+            }
+
+        private:
+            [[nodiscard]] const std::string &Text(const char *key) const {
+                return LocalizedText(context_.localization, key);
+            }
+
+            const EditorGuiContext &context_;
+            std::array<std::string, 2> paths_;
+            std::function<PrefabApplyRecoveryNotice()> confirm_;
+            PrefabApplyRecoveryNotice notice_{};
+        };
+
         /** @brief Read-only view of one stable source comparison. Keep sends only a fenced owner intent. */
         class PrefabExternalComparisonModal final : public EditorModal {
         public:
@@ -426,6 +502,25 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (opened.HasError()) {
             LOG_WARN("editor.scene_document", "External scene comparison modal could not open: %s", opened.ErrorValue().message.c_str());
         }
+    }
+
+    /** @copydoc EditorWorkspaceScreen::OpenPrefabApplyRecovery */
+    void EditorWorkspaceScreen::OpenPrefabApplyRecovery(const std::shared_ptr<const PrefabApplyRecoveryCandidate> &candidate) {
+        if (!candidate || !controller_ || candidate != controller_->ViewModel().prefabApplyRecovery)
+            return;
+        const auto &root = controller_->ProjectRoot();
+        std::array paths{WorkspacePortablePathText(candidate->prefab.path.lexically_relative(root)),
+                         WorkspacePortablePathText(candidate->scene.path.lexically_relative(root))};
+        auto confirm = [this, candidate, lifetime = std::weak_ptr<const void>{workspaceControllerLifetime_}] {
+            if (lifetime.expired() || candidate != controller_->ViewModel().prefabApplyRecovery)
+                return PrefabApplyRecoveryNotice::Failed;
+            controller_->ProcessCommand(
+                {.command = EditorWorkspaceViewCommand::RestorePrefabApplyRecovery, .prefabApplyRecovery = candidate});
+            return controller_->ViewModel().prefabApplyRecoveryNotice;
+        };
+        const auto opened = modalHost_.OpenRoot(std::make_unique<PrefabApplyRecoveryModal>(context_, std::move(paths), std::move(confirm)));
+        if (opened.HasError())
+            LOG_WARN("editor.prefab", "Paired Prefab recovery review could not open: %s", opened.ErrorValue().message.c_str());
     }
 
     /** @copydoc EditorWorkspaceScreen::OpenPrefabExternalComparison */

@@ -65,14 +65,18 @@ namespace Horo::Editor::PrefabWorkspaceTestSupport {
                                         .prefabAction = action});
         }
 
-        void Open(const Assets::AssetId session) {
+        void Open(const Assets::AssetId session, ProjectMutationCoordinator *mutations = nullptr, DurableFileSystem *files = nullptr) {
             controller = std::make_unique<
                 EditorWorkspaceController>(project.directory.path, runtime, project.registry.Snapshot(),
                                            EditorWorkspaceDependencies{.assets = {.mutableAssetRegistry =
                                                                                       mutableAssets ? &project.registry : nullptr},
                                                                        .world = {.documentSessionOwner = session},
-                                                                       .mutations = persistenceAvailable ? &project.mutations : nullptr,
-                                                                       .durableFiles = persistenceAvailable ? &project.files : nullptr,
+                                                                       .mutations = mutations ? mutations
+                                                                                              : (persistenceAvailable ? &project.mutations
+                                                                                                                      : nullptr),
+                                                                       .durableFiles =
+                                                                           files ? files
+                                                                                 : (persistenceAvailable ? &project.files : nullptr),
                                                                        .jobs = recoveryJobs,
                                                                        .sourceNavigation =
                                                                            {.sourceOpenNavigator =

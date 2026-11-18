@@ -290,17 +290,20 @@ namespace Horo::Editor {
     }  // namespace
 
     /** @copydoc PrefabApplyTransaction::InspectPendingRecovery */
-    Result<std::optional<Assets::AssetSourceIdentity>> PrefabApplyTransaction::InspectPendingRecovery(const std::filesystem::path &root) {
-        using Return = Result<std::optional<Assets::AssetSourceIdentity>>;
+    Result<std::optional<PrefabApplyRecoveryCandidate>> PrefabApplyTransaction::InspectPendingRecovery(const std::filesystem::path &root) {
+        using Return = Result<std::optional<PrefabApplyRecoveryCandidate>>;
         const auto capsule = Assets::CaptureAssetSource(root, RecoveryPath(root), MaximumCapsuleBytes);
         if (capsule.HasError())
             return Return::Failure(capsule.ErrorValue());
         const auto &identity = capsule.Value().identity;
         if (!identity.exists)
             return Return::Success(std::nullopt);
-        if (const auto decoded = DecodeRecovery(root, capsule.Value().bytes); decoded.HasError())
+        const auto decoded = DecodeRecovery(root, capsule.Value().bytes);
+        if (decoded.HasError())
             return Return::Failure(decoded.ErrorValue());
-        return Return::Success(identity);
+        const auto &targets = decoded.Value();
+        return Return::Success(
+            PrefabApplyRecoveryCandidate{identity, {targets[0].path, targets[0].original}, {targets[1].path, targets[1].original}});
     }
 
     /** @copydoc PrefabApplyTransaction::RestorePendingRecovery */

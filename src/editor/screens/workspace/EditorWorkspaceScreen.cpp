@@ -284,6 +284,10 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             SavePrefabAs(*command.prefabFence);
             return true;
         }
+        if (command.command == ReviewPrefabApplyRecovery) {
+            OpenPrefabApplyRecovery(command.prefabApplyRecovery);
+            return true;
+        }
         if (command.command == CompareExternalScene) {
             OpenSceneComparison();
             return true;

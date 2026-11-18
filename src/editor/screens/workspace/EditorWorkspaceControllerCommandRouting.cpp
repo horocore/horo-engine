@@ -53,6 +53,10 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::DispatchWorkspaceCommand */
     void EditorWorkspaceController::DispatchWorkspaceCommand(const EditorWorkspaceViewCommandData &cmd) {
+        if (cmd.command == EditorWorkspaceViewCommand::RestorePrefabApplyRecovery) {
+            RestorePrefabApplyRecovery(cmd.prefabApplyRecovery);
+            return;
+        }
         if (cmd.command == EditorWorkspaceViewCommand::WorldLayerAuthoring) {
             const auto result = cmd.worldLayerIntent
                                     ? ApplyWorldLayerIntent(*cmd.worldLayerIntent)

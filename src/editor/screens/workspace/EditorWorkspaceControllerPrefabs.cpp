@@ -512,8 +512,10 @@ namespace Horo::Editor {
                 if (outcome.recoveryPersistenceError)
                     LOG_ERROR("editor.prefab", "Paired Prefab recovery could not be persisted: %s",
                               outcome.recoveryPersistenceError->message.c_str());
-                else
+                else {
                     m_prefabApplyRecoveryPendingOnDisk = true;
+                    m_viewModel.prefabApplyRecoveryNotice = PrefabApplyRecoveryNotice::Reopen;
+                }
                 m_viewModel.prefabApplyAvailable = false;
                 m_viewModel.sceneExternalConflict = true;
                 return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed));
