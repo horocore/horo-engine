@@ -2353,7 +2353,8 @@ add_executable(HoroDecisionGraphCompilerTests
 )
 target_compile_features(HoroDecisionGraphCompilerTests PRIVATE cxx_std_20)
 target_include_directories(HoroDecisionGraphCompilerTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
-target_link_libraries(HoroDecisionGraphCompilerTests PRIVATE HoroEngine::AI HoroEngine::GameplayLua HoroEngine::GameplayModuleHost HoroEngine::Platform)
+target_link_libraries(HoroDecisionGraphCompilerTests PRIVATE HoroEngine::AI HoroEngine::GameplayLua HoroEngine::GameplayModuleHost
+    HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::Platform)
 horo_register_catch_test(HoroDecisionGraphCompilerTests LABELS "unit;ai;headless"
     PROPERTIES TIMEOUT 90)
 
@@ -2872,7 +2873,8 @@ target_compile_definitions(HoroGameModuleHostTests PRIVATE
         HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
         HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}"
 )
-target_link_libraries(HoroGameModuleHostTests PRIVATE HoroEngine::GameplayModuleHost HoroEngine::Platform)
+target_link_libraries(HoroGameModuleHostTests PRIVATE HoroEngine::GameplayModuleHost HoroEngine::GameplayPhysicsIntegration
+    HoroEngine::GameplayCharacterIntegration HoroEngine::Platform)
 add_dependencies(HoroGameModuleHostTests HoroTestGameModule)
 horo_add_gameplay_module(HoroTestAiGameModule
     MODULE_ID game.ai.tests

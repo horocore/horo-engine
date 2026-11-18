@@ -102,11 +102,14 @@ namespace Horo::Gameplay {
         std::shared_ptr<GameplayNavigationContext> navigation;
         std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi;
         IGameModule *gameplayModule{};
+        CreateGameModuleFunction create{}; /**< Copied generated lifecycle entry point pinned by codeImage. */
         DestroyGameModuleFunction destroy{};
         std::string moduleId;
         std::string buildFingerprint;
         std::uint64_t descriptorRevision{};
         std::vector<AI::DecisionNodeRegistration> decisionNodes;
+        mutable std::weak_ptr<const AI::DecisionNodeGeneration> decisionGeneration; /**< Owner-thread exact capture cache. */
+        std::atomic_bool decisionFactoryAdmission{};                                /**< Opens only after successful module activation. */
         std::vector<AI::PerceptionSenseRegistration> perceptionSenses;
         std::filesystem::path loadedArtifactPath;
         std::atomic_bool runtimeLeaseAdmission{true};

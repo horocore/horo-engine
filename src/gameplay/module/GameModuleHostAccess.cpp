@@ -18,11 +18,26 @@ namespace Horo::Gameplay {
         return AI::PerceptionSenseGeneration::Capture(impl_->perceptionSenses, std::move(admission));
     }
 
+    /** @copydoc LoadedGameModule::AcquireDecisionNodes */
     Result<std::shared_ptr<const AI::DecisionNodeGeneration>> LoadedGameModule::AcquireDecisionNodes() const {
+        using Generation = Result<std::shared_ptr<const AI::DecisionNodeGeneration>>;
         if (std::this_thread::get_id() != impl_->ownerThread || !impl_->runtimeLeaseAdmission.load(std::memory_order_acquire))
-            return Result<std::shared_ptr<const AI::DecisionNodeGeneration>>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+            return Generation::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+        if (auto retained = impl_->decisionGeneration.lock())
+            return Generation::Success(std::move(retained));
         std::shared_ptr<const std::atomic_bool> admission{impl_, &impl_->runtimeLeaseAdmission};
-        return AI::DecisionNodeGeneration::Capture(impl_->decisionNodes, std::move(admission));
+        std::shared_ptr<const std::atomic_bool> factories{impl_, &impl_->decisionFactoryAdmission};
+        auto captured = AI::DecisionNodeGeneration::CaptureNative(impl_->decisionNodes, std::move(admission), std::move(factories));
+        if (captured.HasValue())
+            impl_->decisionGeneration = captured.Value();
+        return captured;
+    }
+
+    /** @copydoc PreparedGameModuleImage::AcquireDecisionNodes */
+    Result<std::shared_ptr<const AI::DecisionNodeGeneration>> PreparedGameModuleImage::AcquireDecisionNodes() const {
+        if (!owner_)
+            return Result<std::shared_ptr<const AI::DecisionNodeGeneration>>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+        return owner_->AcquireDecisionNodes();
     }
 
     LoadedGameModule::LoadedGameModule(const ConstructionKey &, std::shared_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}

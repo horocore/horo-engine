@@ -195,6 +195,23 @@ namespace Horo::Gameplay {
         std::shared_ptr<Impl> impl_;
     };
 
+    /** @brief Unique pre-activation image and generated metadata with no running module or platform scopes. */
+    class PreparedGameModuleImage final {
+    public:
+        PreparedGameModuleImage(const PreparedGameModuleImage &) = delete;
+        PreparedGameModuleImage &operator=(const PreparedGameModuleImage &) = delete;
+
+        /** @brief Returns the exact compiler metadata lease. Factories remain gated until this image activates successfully. */
+        [[nodiscard]] Result<std::shared_ptr<const AI::DecisionNodeGeneration>> AcquireDecisionNodes() const;
+
+    private:
+        friend class GameModuleHost;
+
+        explicit PreparedGameModuleImage(std::unique_ptr<LoadedGameModule> owner) noexcept : owner_(std::move(owner)) {}
+
+        std::unique_ptr<LoadedGameModule> owner_;
+    };
+
     /** @brief Actual candidate resource owner, including rejected partial Register/Start work that still needs retirement. */
     struct GameModuleLoadCandidate final {
         std::unique_ptr<LoadedGameModule> owner;
@@ -229,6 +246,21 @@ namespace Horo::Gameplay {
          */
         [[nodiscard]] Result<void> ValidateArtifact(const std::filesystem::path &libraryPath,
                                                     const GameModuleLoadExpectation &expectation) const;
+        /** @brief Opens and validates one native image without binding services, creating the module or invoking factories.
+         * @param libraryPath Exact absolute host-selected image. @param expectation Approved SDK/module identity.
+         * @param cancellation Optional host cancellation ancestry. @return Unique inert owner or original typed failure.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<PreparedGameModuleImage>> PrepareImage(const std::filesystem::path &libraryPath,
+                                                                                           const GameModuleLoadExpectation &expectation,
+                                                                                           const CancellationToken &cancellation = {});
+        /** @brief Binds this host's real service scopes and activates the exact prepared image once.
+         * @param prepared Owner to consume on the preparing thread. Off-thread refusal leaves it intact.
+         * @param cancellation Host cancellation ancestry. @return Activated owner, owned diagnostic, or pre-factory failure.
+         * @details Requires the real paired Physics and Character Scene scopes. Missing scopes leave the image prepared.
+         * Callable decision admission opens only after successful module startup. No filename or export is reopened.
+         */
+        [[nodiscard]] Result<GameModuleLoadCandidate> ActivatePrepared(PreparedGameModuleImage &prepared,
+                                                                       const CancellationToken &cancellation = {}) const;
         /** @brief Loads through the SDK boundary while retaining partial-initialization resources on failure.
          * @param libraryPath Exact host-owned immutable artifact. @param expectation Exact approved SDK/module identity.
          * @return Early validation error, or an owned attempt whose diagnostic must be checked before publication.
@@ -259,6 +291,14 @@ namespace Horo::Gameplay {
          */
         [[nodiscard]] Result<GameModuleLoadCandidate> LoadArtifact(const std::filesystem::path &libraryPath,
                                                                    const GameModuleLoadExpectation &expectation, bool ownedShadow) const;
+        /** @brief Shares native and shadow image preparation before any service-scoped work. */
+        [[nodiscard]] static Result<std::unique_ptr<LoadedGameModule>> PrepareArtifactImage(const std::filesystem::path &libraryPath,
+                                                                                            const GameModuleLoadExpectation &expectation,
+                                                                                            bool ownedShadow,
+                                                                                            const CancellationToken &cancellation);
+        /** @brief Shared startup path; legacy portable Load can intentionally omit Scene scopes. */
+        [[nodiscard]] Result<GameModuleLoadCandidate> ActivatePreparedImage(std::unique_ptr<LoadedGameModule> &prepared,
+                                                                            const CancellationToken &cancellation) const;
         /** @brief Admit the selected explicit service anchors before invoking a module factory.
          * @param impl Validated image owner receiving authoritative scoped holders.
          * @return Typed principal/dependency failure or success with the image pin bound by this host authority.

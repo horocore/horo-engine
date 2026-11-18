@@ -1,5 +1,7 @@
 #include "DecisionGraphCompilerTestSupport.h"
 #include "Horo/Gameplay/GameModuleHost.h"
+#include "Horo/Gameplay/GameplayCharacterContext.h"
+#include "Horo/Gameplay/GameplayPhysicsContext.h"
 #include "Horo/Gameplay/LuaDecisionNode.h"
 #include "Horo/Platform/DynamicLibrary.h"
 #include "OwnedTestDirectory.h"
@@ -40,6 +42,62 @@ namespace Horo::AI {
             std::memcpy(&observe, &symbol, sizeof(observe));
             observe(counters.data());
         }  // The extra loader reference is released before any shutdown/quiescence assertion.
+
+        TEST_CASE("Prepared native image qualifies the same provider generation before a single scoped activation",
+                  "[ai][decision-compiler-provider][prepared-image]") {
+            using namespace Gameplay;
+            Fixture fixture;
+            const auto expectation = NativeExpectation();
+            auto prepared = GameModuleHost::PrepareImage(HORO_TEST_AI_MODULE_PATH, expectation);
+            REQUIRE(prepared.HasValue());
+            auto acquired = prepared.Value()->AcquireDecisionNodes();
+            REQUIRE(acquired.HasValue());
+            const auto generation = std::move(acquired).Value();
+            REQUIRE(generation->CanUse());
+            CHECK_FALSE(generation->CanAdmit());
+            CHECK(generation->HasImplementation(Type(101)));
+
+            auto environment = fixture.Environment();
+            environment.nodes = generation;
+            const std::array sources{TaskTree(1, 101)};
+            auto compiled = DecisionGraphCompiler::Compile(Graph(1), sources, environment);
+            REQUIRE(compiled.HasValue());
+            auto plan = std::move(compiled).Value().plan;
+            REQUIRE(plan);
+            TestSupport::ExpectError(DecisionGraphInstance::Create(plan, generation, fixture.RuntimeBinding()),
+                                     AIErrors::RuntimeUnavailable);
+            TestSupport::ExpectError(GameModuleHost{}.ActivatePrepared(*prepared.Value()), GameplayErrors::PhysicsUnavailable);
+            CHECK(prepared.Value()->AcquireDecisionNodes().Value() == generation);
+            CHECK_FALSE(generation->CanAdmit());
+
+            GameModuleHost host{
+                GameModuleHostOptions{{},
+                                      {.physics = GameplayPhysicsContext::Withheld({.moduleId = std::string{expectation.moduleId},
+                                                                                    .scene = 7,
+                                                                                    .sceneGeneration = 1,
+                                                                                    .moduleEnabled = true},
+                                                                                   GameplayPhysicsDenial::Unavailable),
+                                       .character = GameplayCharacterContext::Withheld({.moduleId = std::string{expectation.moduleId},
+                                                                                        .scene = 7,
+                                                                                        .sceneGeneration = 1,
+                                                                                        .moduleEnabled = true},
+                                                                                       GameplayCharacterDenial::Unavailable)}}};
+            auto activated = host.ActivatePrepared(*prepared.Value());
+            REQUIRE(activated.HasValue());
+            REQUIRE_FALSE(activated.Value().diagnostic);
+            auto module = std::move(activated).Value().owner;
+            REQUIRE(module);
+            CHECK(generation->CanAdmit());
+            CHECK(module->AcquireDecisionNodes().Value() == generation);
+            CHECK(prepared.Value()->AcquireDecisionNodes().HasError());
+            CHECK(host.ActivatePrepared(*prepared.Value()).HasError());
+            auto created = DecisionGraphInstance::Create(plan, generation, fixture.RuntimeBinding());
+            REQUIRE(created.HasValue());
+            CHECK(fixture.Step(*created.Value(), 1) == AiTaskState::Running);
+            module->RequestRetirement();
+            CHECK_FALSE(generation->CanUse());
+            CHECK(fixture.Step(*created.Value(), 2) == AiTaskState::Cancelled);
+        }
 
         TEST_CASE("A compiled authored call closure executes actual generated native nodes and pins their code image",
                   "[ai][decision-compiler-provider]") {

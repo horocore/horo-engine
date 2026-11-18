@@ -184,6 +184,13 @@ namespace Horo::AI {
         return CaptureAdmitted(registrations, std::move(admission), std::move(provider), false);
     }
 
+    /** @copydoc DecisionNodeGeneration::CaptureNative */
+    Result<std::shared_ptr<const DecisionNodeGeneration>> DecisionNodeGeneration::CaptureNative(
+        const std::span<const DecisionNodeRegistration> registrations, std::shared_ptr<const std::atomic_bool> admission,
+        std::shared_ptr<const std::atomic_bool> factoryAdmission) {
+        return CaptureAdmitted(registrations, std::move(admission), {}, false, std::move(factoryAdmission));
+    }
+
     Result<std::shared_ptr<const DecisionNodeGeneration>> DecisionNodeGeneration::CaptureVm(
         std::span<const DecisionNodeRegistration> registrations, std::shared_ptr<const std::atomic_bool> admission,
         std::shared_ptr<const DecisionNodeGeneration> provider) {
@@ -192,7 +199,8 @@ namespace Horo::AI {
 
     Result<std::shared_ptr<const DecisionNodeGeneration>> DecisionNodeGeneration::CaptureAdmitted(
         const std::span<const DecisionNodeRegistration> registrations, std::shared_ptr<const std::atomic_bool> admission,
-        std::shared_ptr<const DecisionNodeGeneration> provider, const bool vmAuthority) {
+        std::shared_ptr<const DecisionNodeGeneration> provider, const bool vmAuthority,
+        std::shared_ptr<const std::atomic_bool> factoryAdmission) {
         using Output = Result<std::shared_ptr<const DecisionNodeGeneration>>;
         if (!admission || registrations.size() > MaximumNodes)
             return Invalid<std::shared_ptr<const DecisionNodeGeneration>>();
@@ -203,6 +211,7 @@ namespace Horo::AI {
                 return Output::Failure(declarations.ErrorValue());
             auto result = std::make_shared<DecisionNodeGeneration>();
             result->admission_ = std::move(admission);
+            result->factoryAdmission_ = std::move(factoryAdmission);
             result->provider_ = std::move(provider);
             result->owner_ = std::this_thread::get_id();
             if (auto stored = result->StoreDeclarations({registrations.begin(), registrations.end()}); stored.HasError())
@@ -214,7 +223,18 @@ namespace Horo::AI {
     }
 
     bool DecisionNodeGeneration::CanAdmit() const noexcept {
-        return std::this_thread::get_id() == owner_ && CanUse();
+        return std::this_thread::get_id() == owner_ && CanUse() && FactoriesActive();
+    }
+
+    /** @copydoc DecisionNodeGeneration::FactoriesActive */
+    bool DecisionNodeGeneration::FactoriesActive() const noexcept {
+        if (factoryAdmission_ && !factoryAdmission_->load(std::memory_order_acquire))
+            return false;
+        if (provider_ && !provider_->FactoriesActive())
+            return false;
+        return std::ranges::all_of(parents_, [](const auto &parent) {
+            return parent->FactoriesActive();
+        });
     }
 
     bool DecisionNodeGeneration::CanUse() const noexcept {

@@ -10,8 +10,9 @@
 #include <thread>
 
 namespace Horo::Gameplay {
+    class LoadedGameModule;
     class LuaDecisionNodeProgram;
-}
+}  // namespace Horo::Gameplay
 
 namespace Horo::AI {
     enum class DecisionNodeRole : std::uint8_t {
@@ -114,13 +115,21 @@ namespace Horo::AI {
 
     private:
         friend class RegisteredDecisionNodeExecutor;
+        friend class ::Horo::Gameplay::LoadedGameModule;
         friend class ::Horo::Gameplay::LuaDecisionNodeProgram;
+        /** @brief Retains one exact native owner while deferring callable admission until module activation succeeds. */
+        [[nodiscard]] static Result<std::shared_ptr<const DecisionNodeGeneration>> CaptureNative(
+            std::span<const DecisionNodeRegistration> registrations, std::shared_ptr<const std::atomic_bool> admission,
+            std::shared_ptr<const std::atomic_bool> factoryAdmission);
         [[nodiscard]] static Result<std::shared_ptr<const DecisionNodeGeneration>> CaptureVm(
             std::span<const DecisionNodeRegistration> registrations, std::shared_ptr<const std::atomic_bool> admission,
             std::shared_ptr<const DecisionNodeGeneration> provider);
         [[nodiscard]] static Result<std::shared_ptr<const DecisionNodeGeneration>> CaptureAdmitted(
             std::span<const DecisionNodeRegistration> registrations, std::shared_ptr<const std::atomic_bool> admission,
-            std::shared_ptr<const DecisionNodeGeneration> provider, bool vmAuthority);
+            std::shared_ptr<const DecisionNodeGeneration> provider, bool vmAuthority,
+            std::shared_ptr<const std::atomic_bool> factoryAdmission = {});
+        /** @brief Checks factory activation for each retained provider without invoking user code. */
+        [[nodiscard]] bool FactoriesActive() const noexcept;
         [[nodiscard]] static bool ValidProvider(const std::shared_ptr<const DecisionNodeGeneration> &provider) noexcept;
         [[nodiscard]] Result<void> StoreDeclarations(std::vector<DecisionNodeRegistration> declarations);
         [[nodiscard]] Result<void> AppendGeneration(const std::shared_ptr<const DecisionNodeGeneration> &generation,
@@ -128,6 +137,7 @@ namespace Horo::AI {
         std::vector<DecisionNodeContract> contracts_;
         std::vector<DecisionNodeFactoryBinding> factories_;
         std::shared_ptr<const std::atomic_bool> admission_;
+        std::shared_ptr<const std::atomic_bool> factoryAdmission_;
         std::shared_ptr<const DecisionNodeGeneration> provider_;
         std::vector<std::shared_ptr<const DecisionNodeGeneration>> parents_;
         std::thread::id owner_;
