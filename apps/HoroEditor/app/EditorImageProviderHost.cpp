@@ -19,14 +19,14 @@ namespace Horo::Editor {
         using Entry = NativeReconstructionEntry;
         const ErrorDomainId Domain{"editor.image_provider"};
         const ErrorCodeDescriptor InvalidRequest{Domain, ErrorCode{"editor.image_provider.invalid_request"}, ErrorSeverity::Error,
-                                                 "Image provider inspection inputs are incomplete or invalid.",
+                                                 "Image provider invocation inputs are incomplete or invalid.",
                                                  "Supply one explicit mode, product root and independent publisher file."};
         const ErrorCodeDescriptor InvalidInventory{Domain, ErrorCode{"editor.image_provider.invalid_inventory"}, ErrorSeverity::Error,
                                                    "The signed inventory does not describe this editor's complete requested files.",
                                                    "Use the signed release inventory for the active editor platform and version."};
         const ErrorCodeDescriptor ArtifactMismatch{Domain, ErrorCode{"editor.image_provider.artifact_mismatch"}, ErrorSeverity::Error,
                                                    "A provider file differs from its signed inventory record.",
-                                                   "Restore authentic product files before inspection."};
+                                                   "Restore authentic product files before provider admission."};
         constexpr std::size_t MaximumManifestBytes = 16U * 1024U * 1024U;
 
         /** @brief Accepts a normalized absolute host path, never a path provided by the signed document. */
@@ -119,7 +119,8 @@ namespace Horo::Editor {
         /** @brief Retains in-memory stage bytes through existing registry admission and the selected frontend query. */
         Result<EditorImageProviderAvailability> QueryInstalledRoute(RenderFrontend &frontend, ReconstructionKind mode,
                                                                     const Release::ReleaseArtifactManifest &manifest,
-                                                                    const DurableFileSystem &files, const std::filesystem::path &root) {
+                                                                    const DurableFileSystem &files, const std::filesystem::path &root,
+                                                                    CookedNativeReconstructionKernel *activation = nullptr) {
             using Outcome = Result<EditorImageProviderAvailability>;
             const bool temporal = mode == ReconstructionKind::Temporal;
             const std::array entries{temporal ? Entry::TemporalSeed : Entry::Spatial, Entry::TemporalHistory};
@@ -148,14 +149,46 @@ namespace Horo::Editor {
                                                {.hostApi = {1, 0}, .admittedCookedArtifacts = std::span{digests}.first(count)});
             if (supported.HasError())
                 return Outcome::Failure(supported.ErrorValue());
+            if (activation) {
+                if (mode != ReconstructionKind::Spatial || count != 1 || supported.Value().readiness != ImageProviderReadiness::Ready)
+                    return Outcome::Failure(MakeError(NativeReconstructionErrors::Unsupported));
+                *activation = std::move(cooked.front());
+            }
             return Outcome::Success({std::move(route), supported.Value(), manifest.Digest()});
+        }
+
+        /** @brief Performs the shared root, signature and product-identity fence before reading artifact bytes. */
+        Result<Release::ReleaseArtifactManifest> ReadCheckedManifest(const EditorImageProviderInspection &request,
+                                                                     const EditorProviderProductIdentity &expected,
+                                                                     const DurableFileSystem &files,
+                                                                     const Security::ArtifactVerifier &verifier) {
+            using Outcome = Result<Release::ReleaseArtifactManifest>;
+            if (!ValidHostPath(request.productRoot))
+                return Outcome::Failure(MakeError(InvalidRequest));
+            const auto root = files.InspectEntry(request.productRoot);
+            if (root.HasError())
+                return Outcome::Failure(root.ErrorValue());
+            if (!root.Value() || root.Value()->kind != FileEntryKind::Directory)
+                return Outcome::Failure(MakeError(InvalidRequest));
+            return ReadManifest(request, expected, files, verifier);
+        }
+
+        /** @brief Reads the exact scene-linear editor artifact from the already verified provider inventory. */
+        Result<Bytes> ReadSignedScene(const DurableFileSystem &files, const std::filesystem::path &root,
+                                      const Release::ReleaseArtifactManifest &manifest, std::string_view path, std::size_t maximum) {
+            const auto records = manifest.Artifacts();
+            const auto found = std::ranges::find(records, path, &Release::ReleaseArtifactRecord::path);
+            if (found == records.end())
+                return Result<Bytes>::Failure(MakeError(InvalidInventory));
+            return ReadArtifact(files, root, *found, maximum);
         }
     }  // namespace
 
     /** @copydoc ParseEditorImageProviderInspection */
     Result<std::optional<EditorImageProviderInspection>> ParseEditorImageProviderInspection(std::span<char *const> args) {
         using Outcome = Result<std::optional<EditorImageProviderInspection>>;
-        constexpr std::array<std::string_view, 3> flags{"--inspect-image-provider", "--image-provider-root", "--image-provider-trust"};
+        constexpr std::array<std::string_view, 4> flags{"--inspect-image-provider", "--image-provider-root", "--image-provider-trust",
+                                                        "--activate-image-provider"};
         std::array<std::optional<std::string_view>, flags.size()> values;
         std::size_t supplied{};
         for (const auto *raw : args.subspan(std::min<std::size_t>(1, args.size()))) {
@@ -174,11 +207,14 @@ namespace Horo::Editor {
         }
         if (supplied == 0)
             return Outcome::Success(std::nullopt);
-        if (supplied != flags.size() || (*values[0] != "spatial" && *values[0] != "taau"))
+        const bool activate = values[3].has_value();
+        const auto &mode = activate ? values[3] : values[0];
+        if (supplied != 3 || !values[1] || !values[2] || !mode || (activate && values[0]) ||
+            (*mode != "spatial" && (activate || *mode != "taau")))
             return Outcome::Failure(MakeError(InvalidRequest));
         try {
-            EditorImageProviderInspection request{*values[0] == "spatial" ? ReconstructionKind::Spatial : ReconstructionKind::Temporal,
-                                                  std::filesystem::path{*values[1]}, std::filesystem::path{*values[2]}};
+            EditorImageProviderInspection request{*mode == "spatial" ? ReconstructionKind::Spatial : ReconstructionKind::Temporal,
+                                                  std::filesystem::path{*values[1]}, std::filesystem::path{*values[2]}, activate};
             if (!ValidHostPath(request.productRoot) || !ValidHostPath(request.trustedPublishers))
                 return Outcome::Failure(MakeError(InvalidRequest));
             return Outcome::Success(std::move(request));
@@ -194,19 +230,48 @@ namespace Horo::Editor {
                                                                        const DurableFileSystem &files,
                                                                        const Security::ArtifactVerifier &verifier) {
         using Outcome = Result<EditorImageProviderAvailability>;
-        if (!ValidHostPath(request.productRoot) ||
-            (request.mode != ReconstructionKind::Spatial && request.mode != ReconstructionKind::Temporal))
+        if (request.activateSpatial || (request.mode != ReconstructionKind::Spatial && request.mode != ReconstructionKind::Temporal))
             return Outcome::Failure(MakeError(InvalidRequest));
         try {
-            const auto root = files.InspectEntry(request.productRoot);
-            if (root.HasError())
-                return Outcome::Failure(root.ErrorValue());
-            if (!root.Value() || root.Value()->kind != FileEntryKind::Directory)
-                return Outcome::Failure(MakeError(InvalidRequest));
-            const auto manifest = ReadManifest(request, expected, files, verifier);
+            const auto manifest = ReadCheckedManifest(request, expected, files, verifier);
             if (manifest.HasError())
                 return Outcome::Failure(manifest.ErrorValue());
             return QueryInstalledRoute(frontend, request.mode, manifest.Value(), files, request.productRoot);
+        } catch (const std::bad_alloc &) {
+            return Outcome::Failure(MakeError(ImageProviderRegistryErrors::AllocationFailed));
+        }
+    }
+
+    /** @copydoc LoadEditorSignedSpatialProvider */
+    Result<EditorSignedSpatialProvider> LoadEditorSignedSpatialProvider(RenderFrontend &frontend,
+                                                                        const EditorImageProviderInspection &request,
+                                                                        const EditorProviderProductIdentity &expected,
+                                                                        const DurableFileSystem &files,
+                                                                        const Security::ArtifactVerifier &verifier) {
+        using Outcome = Result<EditorSignedSpatialProvider>;
+        if (!request.activateSpatial || request.mode != ReconstructionKind::Spatial)
+            return Outcome::Failure(MakeError(InvalidRequest));
+        try {
+            const auto manifest = ReadCheckedManifest(request, expected, files, verifier);
+            if (manifest.HasError())
+                return Outcome::Failure(manifest.ErrorValue());
+            auto payload =
+                ReadSignedScene(files, request.productRoot, manifest.Value(), "assets/shaders/editor/viewport-scene-linear-vulkan.horoshdr",
+                                NativeReconstructionRelease::MaximumPayloadBytes);
+            if (payload.HasError())
+                return Outcome::Failure(payload.ErrorValue());
+            auto reflection = ReadSignedScene(files, request.productRoot, manifest.Value(),
+                                              "assets/shaders/editor/viewport-scene-linear-vulkan.reflection.json",
+                                              NativeReconstructionRelease::MaximumReflectionBytes);
+            if (reflection.HasError())
+                return Outcome::Failure(reflection.ErrorValue());
+            EditorSignedSpatialProvider admitted{};
+            const auto route = QueryInstalledRoute(frontend, request.mode, manifest.Value(), files, request.productRoot, &admitted.kernel);
+            if (route.HasError())
+                return Outcome::Failure(route.ErrorValue());
+            admitted.scenePayload = std::move(payload).Value();
+            admitted.sceneReflection = std::move(reflection).Value();
+            return Outcome::Success(std::move(admitted));
         } catch (const std::bad_alloc &) {
             return Outcome::Failure(MakeError(ImageProviderRegistryErrors::AllocationFailed));
         }

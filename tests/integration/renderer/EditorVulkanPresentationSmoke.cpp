@@ -2,7 +2,9 @@
  * @brief Real SDL/Vulkan GUI and cooked viewport composition; no simulated native admission. */
 #include "CameraCutNativeTestSupport.h"
 #include "ColorOutputPackage.h"
+#include "EditorImageProviderHost.h"
 #include "EditorVulkanShaderAssets.h"
+#include "Horo/Foundation/Platform.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "VulkanBackendModule.h"
 #include "VulkanEditorGraphicsBridge.h"
@@ -11,6 +13,7 @@
 #include "editor/renderer/vulkan/SdlVulkanPresentationPort.h"
 
 #include <SDL3/SDL.h>
+#include <algorithm>
 #include <bit>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -65,7 +68,7 @@ namespace Horo::Tests::VulkanEditor {
         RenderTargetHandle target;
         const FramebufferExtent extent{640, 480};
 
-        Host() {
+        explicit Host(bool compute = false) {
             window.reset(
                 SDL_CreateWindow("Horo Vulkan qualification", extent.width, extent.height, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE));
             REQUIRE(window);
@@ -74,9 +77,13 @@ namespace Horo::Tests::VulkanEditor {
             registry = std::make_unique<RenderBackendRegistry>();
             Check(RegisterVulkanRenderBackend(*registry, *port, bridge.get()));
             Check(registry->Seal());
-            auto created = RenderFrontend::Create(*registry, RenderBackendId{"vulkan"},
-                                                  {.requirePresentation = true, .enableValidation = true, .maxFramesInFlight = 2}, {},
-                                                  {.budget = {.maximumBlocks = 4096}});
+            RenderBackendConfig config{.requirePresentation = true, .enableValidation = true, .maxFramesInFlight = 2};
+            if (compute) {
+                const auto graphics = std::ranges::find(config.queueAssignments, RenderQueueRole::Graphics, &RenderQueueAssignment::role);
+                REQUIRE(graphics != config.queueAssignments.end());
+                config.queueAssignments.push_back({RenderQueueRole::Compute, graphics->queue});
+            }
+            auto created = RenderFrontend::Create(*registry, RenderBackendId{"vulkan"}, config, {}, {.budget = {.maximumBlocks = 4096}});
             Check(created);
             frontend = std::move(created).Value();
             Check(frontend->Resize(extent));
@@ -149,7 +156,8 @@ namespace Horo::Tests::VulkanEditor {
                       << ",\"format\":" << static_cast<unsigned>(device.outputFormat) << "}\n";
         }
 
-        void CreateViewport(const RenderSceneView &scene = {}, const EditorViewportColorInputs *color = nullptr) {
+        void CreateViewport(const RenderSceneView &scene = {}, const EditorViewportColorInputs *color = nullptr,
+                            const EditorSignedSpatialProvider *spatial = nullptr) {
             const char *root = std::getenv("HORO_EDITOR_VULKAN_ASSET_ROOT");
             REQUIRE(root);
             auto cooked = LoadPackagedVulkanViewportShader(std::filesystem::path{root});
@@ -157,9 +165,11 @@ namespace Horo::Tests::VulkanEditor {
             viewport = std::make_unique<EditorViewportRendererVulkan>(*frontend, *bridge, std::move(cooked).Value());
             Check(viewport->Initialize());
             if (color) {
-                auto linear = LoadPackagedVulkanSceneLinearShader(std::filesystem::path{root});
+                auto linear = spatial ? LoadEditorVulkanSceneLinearCook(spatial->scenePayload, spatial->sceneReflection)
+                                      : LoadPackagedVulkanSceneLinearShader(std::filesystem::path{root});
                 Check(linear, "load exact scene-linear material");
-                Check(viewport->PrepareManualColor(std::move(linear).Value(), *color, {}), "activate manual Vulkan viewport color");
+                Check(viewport->PrepareManualColor(std::move(linear).Value(), *color, {}, spatial ? &spatial->kernel : nullptr),
+                      "activate the selected Vulkan viewport color recipe");
             }
             const auto view = frontend->CreateRenderViewIdentity();
             Check(view);
@@ -378,6 +388,73 @@ namespace Horo::Tests::VulkanEditor {
             host.viewport->FinishColorFrame(true);
             CHECK(host.viewport->ColorDiagnostics().acceptedSubmission == 2);
         }
+        REQUIRE(host.Drain());
+    }
+
+    TEST_CASE("Native Vulkan viewport composes signed spatial and ColorOutput in its ordinary GUI frame",
+              "[native-smoke][vulkan][gui][signed-spatial]") {
+        const auto *productRoot = std::getenv("HORO_TEST_VULKAN_SPATIAL_PRODUCT_ROOT");
+        const auto *trustedPublishers = std::getenv("HORO_TEST_VULKAN_SPATIAL_PUBLISHER_TRUST");
+        const auto *colorRoot = std::getenv("HORO_TEST_VULKAN_COLOR_OUTPUT_PACKAGE");
+        if (!productRoot || !trustedPublishers || !colorRoot)
+            SKIP("Supply the explicit signed spatial product, independent trust document, and cooked Vulkan ColorOutput package.");
+        Host host{true};
+        if (!host.frontend->Capabilities().support.features.Supports(RenderCapability::NativeReconstruction))
+            SKIP("Selected Vulkan device cannot realize a native reconstruction graph.");
+        const auto output = host.frontend->PresentationOutput();
+        if (output.HasError() && output.ErrorValue().code.Value() == RenderPresentationErrors::OutputUnsupported.code.Value())
+            SKIP("Selected surface lacks the qualified BGRA8 unmanaged SDR attachment.");
+        Check(output);
+
+        using enum Release::DistributionPlatform;
+#ifdef _WIN32
+        constexpr auto platform = Windows;
+#else
+        constexpr auto platform = Linux;
+#endif
+#if defined(_M_ARM64) || defined(__aarch64__)
+        constexpr auto architecture = Release::DistributionArchitecture::Arm64;
+#else
+        constexpr auto architecture = Release::DistributionArchitecture::X64;
+#endif
+        auto version = Release::ParseReleaseVersion(HORO_ENGINE_VERSION_STRING);
+        Check(version);
+        const EditorProviderProductIdentity product{Release::EngineProductVersion{std::move(version).Value()}, platform, architecture};
+        const EditorImageProviderInspection request{ReconstructionKind::Spatial, productRoot, trustedPublishers, true};
+        const NativeDurableFileSystem files;
+        const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(SystemWallClock{}.UtcNow().time_since_epoch()).count();
+        REQUIRE(now >= 0);
+        const auto trust = ReadEditorImageProviderTrust(files, request.trustedPublishers, static_cast<std::uint64_t>(now));
+        Check(trust);
+        const auto installed = LoadEditorSignedSpatialProvider(*host.frontend, request, product, files, trust.Value());
+        Check(installed, "verify signed spatial kernel and scene-linear material");
+        auto package = Render::Internal::LoadColorOutputCookPackage(colorRoot, ShaderTargetBackend::Vulkan);
+        Check(package, "load exact Vulkan manual ColorOutput package");
+        const EditorViewportColorInputs inputs{
+            .package = std::make_shared<const Render::Internal::ColorOutputCookPackage>(std::move(package).Value())};
+
+        host.CreateViewport({}, &inputs, &installed.Value());
+        host.viewport->RequestGrid({.visible = true});
+        host.PrepareScene();
+        auto frame = host.Frame(1);
+        host.ExecuteSceneAndGui(frame);
+        Check(frame.Present(), "submit signed spatial, analytic, overlay, encode and GUI");
+        host.viewport->FinishColorFrame(false);
+        CHECK(host.viewport->ColorDiagnostics().acceptedSubmission == 1);
+        const auto original = host.viewport->TextureView();
+        REQUIRE(original.IsValid());
+
+        constexpr EditorViewportExtent resized{360, 256};
+        host.viewport->RequestExtent(resized);
+        host.SynchronizeViewport({}, resized);
+        CHECK_FALSE(host.viewport->TextureView().IsValid());
+        host.PrepareScene();
+        auto replacement = host.Frame(2);
+        host.ExecuteSceneAndGui(replacement);
+        Check(replacement.Present(), "submit the resized spatial and display generation");
+        host.viewport->FinishColorFrame(true);
+        CHECK(host.viewport->ColorDiagnostics().acceptedSubmission == 2);
+        CHECK(host.viewport->TextureView().sampledView != original.sampledView);
         REQUIRE(host.Drain());
     }
 

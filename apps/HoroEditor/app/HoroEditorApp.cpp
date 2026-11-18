@@ -1364,6 +1364,9 @@ namespace Horo::Editor {
 
         /** @brief Admits explicit color/lighting asset options only on the currently implemented native product route. */
         Result<void> ValidateColorBackendSelection(const EditorGuiOptions &options) {
+            if (options.imageProviderInspection && options.imageProviderInspection->activateSpatial &&
+                (options.rendererBackend != "vulkan" || !options.color.root))
+                return Result<void>::Failure(MakeError(Render::NativeReconstructionErrors::Unsupported));
             if (options.rendererBackend == "vulkan" && options.color.root && !options.color.lookRoot && !options.lightingRoot &&
                 options.color.exposure.mode == Render::ExposureMode::Manual)
                 return Result<void>::Success();
@@ -1374,8 +1377,12 @@ namespace Horo::Editor {
         }
 
 #if defined(HORO_HAS_RENDER_VULKAN)
+        [[nodiscard]] Result<EditorSignedSpatialProvider> LoadSelectedEditorSpatialProvider(Render::RenderFrontend &frontend,
+                                                                                            const EditorImageProviderInspection &request);
+
         /** @brief Prepares the explicit Vulkan manual color recipe on the normal selected viewport. */
         Result<Render::RenderLightPreparationReadiness> PrepareVulkanEditorColor(EditorViewportRendererVulkan &viewport,
+                                                                                 Render::RenderFrontend &frontend,
                                                                                  const EditorGuiOptions &options) {
             using Outcome = Result<Render::RenderLightPreparationReadiness>;
             if (!options.color.root)
@@ -1388,6 +1395,17 @@ namespace Horo::Editor {
             const auto inputs = LoadEditorVulkanManualColorInputs(*root.Value());
             if (inputs.HasError())
                 return Outcome::Failure(inputs.ErrorValue());
+            if (options.imageProviderInspection && options.imageProviderInspection->activateSpatial) {
+                auto selected = LoadSelectedEditorSpatialProvider(frontend, *options.imageProviderInspection);
+                if (selected.HasError())
+                    return Outcome::Failure(selected.ErrorValue());
+                auto scene = LoadEditorVulkanSceneLinearCook(selected.Value().scenePayload, selected.Value().sceneReflection);
+                if (scene.HasError())
+                    return Outcome::Failure(scene.ErrorValue());
+                const auto applied =
+                    viewport.PrepareManualColor(std::move(scene).Value(), inputs.Value(), options.color.exposure, &selected.Value().kernel);
+                return applied.HasError() ? Outcome::Failure(applied.ErrorValue()) : Outcome::Success({});
+            }
             auto scene = LoadPackagedVulkanSceneLinearShader(EditorAssetRoot());
             if (scene.HasError())
                 return Outcome::Failure(scene.ErrorValue());
@@ -1423,9 +1441,9 @@ namespace Horo::Editor {
                 if (cooked.HasError())
                     return Result<void>::Failure(cooked.ErrorValue());
                 auto &bridge = *composition.vulkanGraphicsBridge;
-                const auto prepare = [&options](EditorViewportRendererVulkan &viewport, Render::RenderFrontend &,
+                const auto prepare = [&options](EditorViewportRendererVulkan &viewport, Render::RenderFrontend &frontend,
                                                 const EditorViewportLightingProfile &) {
-                    return PrepareVulkanEditorColor(viewport, options);
+                    return PrepareVulkanEditorColor(viewport, frontend, options);
                 };
                 return InstallEditorRenderers(composition, std::make_unique<EditorGuiRendererVulkan>(window, *composition.frontend, bridge),
                                               std::make_unique<EditorViewportRendererVulkan>(*composition.frontend, bridge,
@@ -1441,7 +1459,8 @@ namespace Horo::Editor {
                                                                       EditorRenderComposition &composition) {
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
             if (composition.xrSession) {
-                if (options.color.root || options.color.lookRoot || options.color.settingsRequested || options.lightingRoot)
+                if ((options.imageProviderInspection && options.imageProviderInspection->activateSpatial) || options.color.root ||
+                    options.color.lookRoot || options.color.settingsRequested || options.lightingRoot)
                     return Result<void>::Failure(MakeError(Render::ExposureGpuErrors::Unsupported));
                 if (options.rendererBackend != "vulkan" || !composition.vulkanGraphicsBridge)
                     return Result<void>::Failure(
@@ -1490,15 +1509,16 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
-        /** @brief Resolves detached installed-package evidence only when explicitly inspecting one selected renderer. */
-        Result<void> ReportEditorImageProvider(Render::RenderFrontend &frontend, const EditorImageProviderInspection &request) {
+        /** @brief Resolves the executing editor's actual release tuple for installed artifact admission. */
+        Result<EditorProviderProductIdentity> EditorImageProviderProduct() {
+            using Outcome = Result<EditorProviderProductIdentity>;
             using enum Release::DistributionPlatform;
             const auto platform = Application::Internal::NativePackagePlatform();
             if (platform.HasError())
-                return Result<void>::Failure(platform.ErrorValue());
+                return Outcome::Failure(platform.ErrorValue());
             auto version = Release::ParseReleaseVersion(HORO_ENGINE_VERSION_STRING);
             if (version.HasError())
-                return Result<void>::Failure(version.ErrorValue());
+                return Outcome::Failure(version.ErrorValue());
             using PlatformName = std::pair<std::string_view, Release::DistributionPlatform>;
             constexpr std::array systems{PlatformName{"windows", Windows}, PlatformName{"macos", MacOS}, PlatformName{"linux", Linux}};
             using Architecture = Release::DistributionArchitecture;
@@ -1507,20 +1527,47 @@ namespace Horo::Editor {
             const auto system = std::ranges::find(systems, platform.Value().operatingSystem, &PlatformName::first);
             const auto architecture = std::ranges::find(architectures, platform.Value().architecture, &ArchitectureName::first);
             if (system == systems.end() || architecture == architectures.end())
-                return Result<void>::Failure(MakeEditorRendererError("editor.image_provider.platform_unavailable",
-                                                                     "The host platform has no supported release identity."));
+                return Outcome::Failure(MakeEditorRendererError("editor.image_provider.platform_unavailable",
+                                                                "The host platform has no supported release identity."));
+            return Outcome::Success({Release::EngineProductVersion{std::move(version).Value()}, system->second, architecture->second});
+        }
+
+        /** @brief Binds independent publisher trust to the host wall clock for installation inspection or activation. */
+        Result<Security::ArtifactVerifier> EditorImageProviderTrust(const NativeDurableFileSystem &files,
+                                                                    const EditorImageProviderInspection &request) {
             const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(SystemWallClock{}.UtcNow().time_since_epoch()).count();
             if (now < 0)
-                return Result<void>::Failure(
+                return Result<Security::ArtifactVerifier>::Failure(
                     MakeEditorRendererError("editor.image_provider.clock_unavailable", "Publisher trust requires valid wall time."));
+            return ReadEditorImageProviderTrust(files, request.trustedPublishers, static_cast<std::uint64_t>(now));
+        }
+
+#if defined(HORO_HAS_RENDER_VULKAN)
+        /** @brief Reads the exact independently signed provider and scene stage on the selected Vulkan owner. */
+        Result<EditorSignedSpatialProvider> LoadSelectedEditorSpatialProvider(Render::RenderFrontend &frontend,
+                                                                              const EditorImageProviderInspection &request) {
+            using Outcome = Result<EditorSignedSpatialProvider>;
+            const auto product = EditorImageProviderProduct();
+            if (product.HasError())
+                return Outcome::Failure(product.ErrorValue());
             const NativeDurableFileSystem files;
-            const auto trust = ReadEditorImageProviderTrust(files, request.trustedPublishers, static_cast<std::uint64_t>(now));
+            const auto trust = EditorImageProviderTrust(files, request);
+            if (trust.HasError())
+                return Outcome::Failure(trust.ErrorValue());
+            return LoadEditorSignedSpatialProvider(frontend, request, product.Value(), files, trust.Value());
+        }
+#endif
+
+        /** @brief Reports installed readiness without realizing a native provider. */
+        Result<void> ReportEditorImageProvider(Render::RenderFrontend &frontend, const EditorImageProviderInspection &request) {
+            const auto product = EditorImageProviderProduct();
+            if (product.HasError())
+                return Result<void>::Failure(product.ErrorValue());
+            const NativeDurableFileSystem files;
+            const auto trust = EditorImageProviderTrust(files, request);
             if (trust.HasError())
                 return Result<void>::Failure(trust.ErrorValue());
-            const auto selected = InspectEditorImageProvider(frontend, request,
-                                                             {Release::EngineProductVersion{std::move(version).Value()}, system->second,
-                                                              architecture->second},
-                                                             files, trust.Value());
+            const auto selected = InspectEditorImageProvider(frontend, request, product.Value(), files, trust.Value());
             if (selected.HasError())
                 return Result<void>::Failure(selected.ErrorValue());
             const auto &report = selected.Value();
@@ -1556,7 +1603,7 @@ namespace Horo::Editor {
                     std::ranges::find(backendConfig.queueAssignments, RenderQueueRole::Graphics, &Render::RenderQueueAssignment::role);
                 if (graphics == backendConfig.queueAssignments.end())
                     return Result<void>::Failure(MakeEditorRendererError("editor.image_provider.graphics_queue_unavailable",
-                                                                         "Provider inspection requires a selected graphics queue."));
+                                                                         "Provider admission requires a selected graphics queue."));
                 backendConfig.queueAssignments.push_back({RenderQueueRole::Compute, graphics->queue});
             }
             // Two frames of dedicated Vulkan draw/shadow buffers exceed 1024 blocks; match the finite allocation table.
@@ -1573,7 +1620,7 @@ namespace Horo::Editor {
                 return Result<void>::Failure(frontendResult.ErrorValue());
             }
             composition.frontend = std::move(frontendResult).Value();
-            if (options.imageProviderInspection) {
+            if (options.imageProviderInspection && !options.imageProviderInspection->activateSpatial) {
                 if (auto report = ReportEditorImageProvider(*composition.frontend, *options.imageProviderInspection); report.HasError())
                     return report;
             }

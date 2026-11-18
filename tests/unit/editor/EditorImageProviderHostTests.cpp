@@ -108,6 +108,27 @@ TEST_CASE("Editor image provider inspection accepts one explicit route and indep
     CHECK(ParseEditorImageProviderInspection(args).HasError());
 }
 
+TEST_CASE("Editor image provider activation is explicit and admits only the spatial route", "[renderer][image-provider][editor]") {
+    const auto root = std::filesystem::temp_directory_path().lexically_normal();
+    std::array options{std::string{"HoroEditor"}, std::string{"--activate-image-provider=spatial"},
+                       "--image-provider-root=" + root.string(), "--image-provider-trust=" + (root / "trust.json").string(),
+                       std::string{"--inspect-image-provider=spatial"}};
+    std::array<char *, 5> args{};
+    const auto update = [&] {
+        for (std::size_t i = 0; i < args.size(); ++i)
+            args[i] = options[i].data();
+    };
+    update();
+    const auto selected = RequireValue(ParseEditorImageProviderInspection(std::span{args}.first(4)));
+    REQUIRE(selected);
+    CHECK(selected->activateSpatial);
+    CHECK(selected->mode == ReconstructionKind::Spatial);
+    CHECK(ParseEditorImageProviderInspection(args).HasError());
+    options[1] = "--activate-image-provider=taau";
+    update();
+    CHECK(ParseEditorImageProviderInspection(std::span{args}.first(4)).HasError());
+}
+
 TEST_CASE("Editor image provider inspection admits only signed matching product inventory", "[renderer][image-provider][editor]") {
     InstalledDirectory installed;
     auto data = Inventory();
@@ -143,6 +164,29 @@ TEST_CASE("Editor image provider inspection admits only signed matching product 
         const auto rejected = InspectEditorImageProvider(*renderer.frontend, request, expected, files, verifier);
         REQUIRE(rejected.HasError());
         CHECK(rejected.ErrorValue().code.Value() == "editor.image_provider.invalid_inventory");
+    }
+    SECTION("Activation refuses a scene material missing from the signed inventory") {
+        WriteSigned(installed, data, signer);
+        auto activate = request;
+        activate.activateSpatial = true;
+        const auto rejected = LoadEditorSignedSpatialProvider(*renderer.frontend, activate, expected, files, verifier);
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == "editor.image_provider.invalid_inventory");
+        CHECK(InspectEditorImageProvider(*renderer.frontend, activate, expected, files, verifier).HasError());
+    }
+    SECTION("Activation refuses a substitution of the signed scene-linear payload") {
+        const auto payload = "assets/shaders/editor/viewport-scene-linear-vulkan.horoshdr";
+        const auto reflection = "assets/shaders/editor/viewport-scene-linear-vulkan.reflection.json";
+        data.artifacts = {{payload, ReleaseArtifactRole::AssetArchive, 3, ComputeSha256(Bytes("abc"))},
+                          {reflection, ReleaseArtifactRole::AssetArchive, 2, ComputeSha256(Bytes("{}"))}};
+        WriteSigned(installed, data, signer);
+        installed.Write(payload, "xyz");
+        installed.Write(reflection, "{}");
+        auto activate = request;
+        activate.activateSpatial = true;
+        const auto rejected = LoadEditorSignedSpatialProvider(*renderer.frontend, activate, expected, files, verifier);
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == "editor.image_provider.artifact_mismatch");
     }
     SECTION("A partial signed pair fails closed") {
         const auto path = "assets/shaders/runtime/native-reconstruction-vulkan/ReconstructSpatial.horoshdr";

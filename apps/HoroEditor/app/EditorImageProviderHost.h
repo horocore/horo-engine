@@ -3,10 +3,13 @@
 /** @file EditorImageProviderHost.h @brief Explicit installed image-provider inspection for the editor composition. */
 #include "Horo/Release/ReleaseArtifactManifest.h"
 #include "Horo/Runtime/Render/ImageProviderRegistry.h"
+#include "Horo/Runtime/Render/NativeReconstructionKernel.h"
 #include "Horo/Security/ArtifactSignature.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <vector>
 
 namespace Horo {
     class DurableFileSystem;
@@ -17,11 +20,12 @@ namespace Horo::Render {
 }
 
 namespace Horo::Editor {
-    /** @brief Independent invocation paths and requested mode for read-only selected-renderer inspection. */
+    /** @brief Independent invocation paths for explicit inspection or supported spatial activation. */
     struct EditorImageProviderInspection final {
         Render::ReconstructionKind mode;
         std::filesystem::path productRoot;
         std::filesystem::path trustedPublishers;
+        bool activateSpatial{};
     };
 
     /** @brief Current executable release identity compared to the signed installed inventory. */
@@ -38,7 +42,15 @@ namespace Horo::Editor {
         Sha256Digest inventory;
     };
 
-    /** @brief Parses only explicit image-provider inspection arguments. @param args Process arguments including argv[0].
+    /** @brief Storage from the exact detached-signed product inventory, retained through selected Vulkan admission. */
+    struct EditorSignedSpatialProvider final {
+        Render::CookedNativeReconstructionKernel kernel;
+        std::vector<std::uint8_t> scenePayload;
+        std::vector<std::uint8_t> sceneReflection;
+    };
+
+    /** @brief Parses explicit and mutually exclusive inspection or spatial activation arguments. @param args Process arguments including
+     * argv[0].
      * @return A complete request, no request, or a typed invalid-input failure. */
     [[nodiscard]] Result<std::optional<EditorImageProviderInspection>> ParseEditorImageProviderInspection(std::span<char *const> args);
 
@@ -57,6 +69,18 @@ namespace Horo::Editor {
                                                                                      const EditorProviderProductIdentity &expected,
                                                                                      const DurableFileSystem &files,
                                                                                      const Security::ArtifactVerifier &verifier);
+
+    /** @brief Verifies an explicit installed native spatial provider and matching scene-linear shader from the same signed inventory.
+     * @param frontend Selected renderer on its cold owner. @param request Explicit spatial activation with independent trust.
+     * @param expected Current executable product identity. @param files Bounded host file authority.
+     * @param verifier Verifier supplied by the independent publisher policy.
+     * @return Exact owned verified payloads or typed signature, compatibility, or artifact error.
+     */
+    [[nodiscard]] Result<EditorSignedSpatialProvider> LoadEditorSignedSpatialProvider(Render::RenderFrontend &frontend,
+                                                                                      const EditorImageProviderInspection &request,
+                                                                                      const EditorProviderProductIdentity &expected,
+                                                                                      const DurableFileSystem &files,
+                                                                                      const Security::ArtifactVerifier &verifier);
 
     /** @brief Creates the standalone editor's verifier from an explicitly supplied independent publisher document.
      * @param files Host-authorized bounded file reader. @param trust Explicit host publisher document.

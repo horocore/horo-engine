@@ -6829,9 +6829,10 @@ if (HORO_ENABLE_GPU_SMOKE_TESTS AND (WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux"
         ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorVulkanShaderAssets.cpp)
     target_include_directories(HoroEditorVulkanPresentationSmoke PRIVATE
         ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app ${PROJECT_SOURCE_DIR}/tests/support)
+    target_compile_definitions(HoroEditorVulkanPresentationSmoke PRIVATE HORO_ENGINE_VERSION_STRING="${PROJECT_VERSION}")
     target_link_libraries(HoroEditorVulkanPresentationSmoke PRIVATE
         HoroEditorVulkanGuiInternal HoroEngine::RenderVulkan HoroThirdParty::ImGuiVulkan ${HORO_SDL3_TARGET}
-        HoroEngine::CinematicCameraRuntime HoroColorOutputPackageInternal)
+        HoroEngine::CinematicCameraRuntime HoroColorOutputPackageInternal HoroEditorImageProviderHostInternal HoroEngine::Platform)
     horo_register_catch_test(HoroEditorVulkanPresentationSmoke LABELS "native;renderer;vulkan;gui;qualification")
 endif ()
 
