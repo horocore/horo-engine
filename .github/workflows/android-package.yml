@@ -30,7 +30,7 @@ jobs:
           distribution: temurin
           java-version: '17'
       - name: Cache Gradle dependencies by qualification profile
-        # The release shrinker resolves extra modules and needs its own cache entry.
+        # Release lint resolves extra modules, so debug and release need separate cache entries.
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
         with:
           path: |
