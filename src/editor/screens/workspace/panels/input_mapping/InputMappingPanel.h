@@ -5,6 +5,7 @@
 #include <array>
 #include <optional>
 #include <span>
+#include <string_view>
 
 namespace Horo::Editor {
     /** @brief Editable exact millisecond fields for one binding; invalid intermediate text is retained until explicitly applied. */
@@ -63,12 +64,14 @@ namespace Horo::Editor {
     public:
         /** @brief Catalog scope shared by this surface and its view helpers. */
         static constexpr GuiLocalizationScope kTextScope{"workspace.input_mapping"};
+        /** @brief Stable workspace registration identity for navigation to the shared input authoring surface. */
+        static constexpr std::string_view kPanelId{"horo.input_mapping"};
 
         /** @brief Creates a surface with its required localization scope. */
         InputMappingPanel() : IWorkspacePanel(kTextScope) {}
 
         [[nodiscard]] std::string GetId() const override {
-            return "horo.input_mapping";
+            return std::string{kPanelId};
         }
 
         [[nodiscard]] std::string GetDisplayName() const override {

@@ -4,8 +4,11 @@
 #include "../../helpers/editor_ui/HeadlessEditorGuiFixture.h"
 #include "editor/renderer/EditorRendererErrors.h"
 #include "editor/screens/workspace/panels/game/GamePanel.h"
+#include "editor/screens/workspace/panels/input_mapping/InputMappingPanel.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
+#include <imgui_internal.h>
 #include <limits>
 
 namespace Horo::Editor::Tests {
@@ -141,5 +144,50 @@ namespace Horo::Editor::Tests {
         model.simulatorPreviewAvailable = true;
         CHECK(DrawImages(gui, panel, model, viewport.identity) != 0);
         panel.OnDetach();
+    }
+
+    TEST_CASE("Paused Game routes to the existing localized Input Mapping panel at its current dock", "[unit][editor][gui][input]") {
+        EditorGuiContextFixture gui;
+        const auto *locale = GENERATE("en-US", "tr-TR");
+        REQUIRE(gui.localization.LoadCatalogFile(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor" /
+                                                 (std::string{locale} + ".json")));
+        REQUIRE(gui.localization.Prepare(LocaleTag{locale}));
+        REQUIRE(gui.localization.ActivatePrepared());
+        const auto &label = InputMappingPanel::kTextScope.Text(gui.localization, "title");
+        REQUIRE(label == (std::string_view{locale} == "en-US" ? "Input Mapping" : "Girdi Eşleme"));
+
+        GamePanel panel;
+        EditorWorkspaceViewModel model;
+        constexpr auto placement = WorkspaceDockArea::Left;
+        const std::string panelId{InputMappingPanel::kPanelId};
+        model.panelDockAreas.emplace(panelId, placement);
+        const auto draw = [&](const EditorPlayState state) {
+            model.playState = state;
+            EditorWorkspaceViewCommandData command;
+            gui.imgui.BeginFrame();
+            ImGui::SetNextWindowSize({160, 180});
+            ImGui::Begin("Game pause", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings);
+            panel.DrawPanel({}, ImGui::GetContentRegionAvail(), model, command, gui.context);
+            ImGui::End();
+            gui.imgui.EndFrame();
+            return command;
+        };
+
+        static_cast<void>(draw(EditorPlayState::Paused));
+        ImGuiWindow *content = nullptr;
+        for (ImGuiWindow *window : ImGui::GetCurrentContext()->Windows)
+            if (window->Active && window->ParentWindow && std::string_view{window->Name}.find("##GameContent") != std::string_view::npos)
+                content = window;
+        REQUIRE(content != nullptr);
+        ImGui::FocusWindow(content);
+
+        ImGui::ActivateItemByID(content->GetID(label.c_str()));
+        const auto playing = draw(EditorPlayState::Playing);
+        CHECK(playing.command == EditorWorkspaceViewCommand::None);
+        ImGui::ActivateItemByID(content->GetID(label.c_str()));
+        const auto paused = draw(EditorPlayState::Paused);
+        CHECK(paused.command == EditorWorkspaceViewCommand::ChangeActivePanel);
+        CHECK(paused.targetIndex == static_cast<int>(placement));
+        CHECK(paused.stringPayload == panelId);
     }
 }  // namespace Horo::Editor::Tests

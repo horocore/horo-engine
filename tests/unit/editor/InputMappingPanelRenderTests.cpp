@@ -1,4 +1,6 @@
+#include "Horo/Application/ProjectCompatibility.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
+#include "editor/screens/workspace/WorkspacePathText.h"
 #include "editor/screens/workspace/panels/input_mapping/InputMappingPanel.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 #include "support/OwnedTestDirectory.h"
@@ -7,6 +9,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <cstdlib>
+#include <fstream>
 #include <imgui_internal.h>
 
 namespace {
@@ -331,6 +334,68 @@ namespace {
         const auto paths = Input::ResolveBindingProfilePaths({}, fixture.home.directory.Path());
         REQUIRE(paths.HasValue());
         CHECK_FALSE(std::filesystem::exists(paths.Value().editorUser));
+    }
+
+    TEST_CASE("Input Mapping persists keyboard gamepad and pointer captures for the open project only", "[editor][input][gui]") {
+        MappingFixture fixture;
+        const auto project = fixture.home.directory.Path() / "Input project";
+        const auto root = project / ".horo";
+        std::filesystem::create_directories(root);
+        const auto release = Application::CurrentEngineReleaseVersion();
+        const auto *decision = Application::BuiltInReleaseCompatibilityRegistry().Find(release);
+        REQUIRE(decision != nullptr);
+        std::ofstream(root / "project.json")
+            << "{\"horoVersion\":\"" << Application::FormatHoroVersion(release.value) << "\",\"persistentContract\":\""
+            << Application::FormatPersistentContractHash(decision->persistentContract)
+            << R"(","projectId":"input-test","name":"Input Project","projectVersion":"0.1.0","createdAt":"2026-07-19T00:00:00Z","settings":{"renderBackend":"opengl"}})";
+        fixture.model.projectRoot = WorkspacePathText(project);
+        const Input::ActionId action{"interact"};
+        const Input::InputContextId context{"workspace"};
+        const std::vector<Input::ActionDescriptor> actions{
+            {action, Input::ActionValueType::Digital, context, true, {{.kind = Input::BindingControlKind::Key, .key = Input::Key::Space}}}};
+        REQUIRE(fixture.gui.input.SetActionMap(actions).HasValue());
+        const auto paths = Input::ResolveBindingProfilePaths(project, fixture.home.directory.Path(), "input-test");
+        REQUIRE(paths.HasValue());
+        Input::InputBindingProfile global;
+        global.overrides.push_back({action, {{.kind = Input::BindingControlKind::Key, .key = Input::Key::B}}});
+        REQUIRE(Input::SaveBindingProfileAtomically(paths.Value().editorUser, global).HasValue());
+        REQUIRE(fixture.gui.input.ReloadProfile(paths.Value()).HasValue());
+
+        fixture.Draw(900);
+        fixture.ActivateRebind(0);
+        fixture.Draw(900);
+        REQUIRE_FALSE(fixture.gui.input.IsContextActive(fixture.workspace));
+        fixture.collector.BeginFrame(2);
+        Input::InputBinding captured;
+        SECTION("Keyboard") {
+            fixture.collector.SetKey(Input::Key::D, true);
+            captured = {.kind = Input::BindingControlKind::Key, .key = Input::Key::D};
+        }
+        SECTION("Gamepad button") {
+            REQUIRE(fixture.collector.SetGamepadButton(fixture.pad, Input::GamepadButton::South, true));
+            captured = {.kind = Input::BindingControlKind::GamepadButton, .gamepadButton = Input::GamepadButton::South};
+        }
+        SECTION("Pointer button") {
+            const auto center = fixture.ContentWindow()->InnerRect.GetCenter();
+            ImGui::GetIO().AddMousePosEvent(center.x, center.y);
+            ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+            fixture.collector.SetPointerButton(Input::PointerButton::Secondary, true);
+            captured = {.kind = Input::BindingControlKind::PointerButton, .pointerButton = Input::PointerButton::Secondary};
+        }
+        fixture.gui.input.BeginFrame(fixture.collector.Commit());
+        fixture.Draw(900);
+        const auto saved = Input::LoadBindingProfile(paths.Value().projectUser);
+        REQUIRE(saved.HasValue());
+        REQUIRE(saved.Value().overrides.size() == 1);
+        CHECK(saved.Value().overrides.front().bindings == std::vector{captured});
+        const auto savedGlobal = Input::LoadBindingProfile(paths.Value().editorUser);
+        REQUIRE(savedGlobal.HasValue());
+        CHECK(savedGlobal.Value() == global);
+
+        Input::InputRouter reopened;
+        REQUIRE(reopened.SetActionMap(actions).HasValue());
+        REQUIRE(reopened.ReloadProfile(paths.Value()).HasValue());
+        CHECK(reopened.Profile().overrides == saved.Value().overrides);
     }
 
     TEST_CASE("Hidden Input Mapping releases its capture without retiring another modal owner", "[editor][input][gui]") {

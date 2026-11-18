@@ -1,11 +1,35 @@
 #include "editor/screens/workspace/panels/game/GamePanel.h"
 
+#include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "editor/screens/workspace/panels/input_mapping/InputMappingPanel.h"
 
 #include <algorithm>
 #include <cstdint>
 
 namespace Horo::Editor {
+    namespace {
+        /** @brief Opens the existing project Input Mapping surface from paused Play. */
+        void DrawPausedInputMapping(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
+                                    const EditorGuiContext &context) {
+            if (viewModel.playState != EditorPlayState::Paused)
+                return;
+            constexpr auto panelId = InputMappingPanel::kPanelId;
+            const auto placement = viewModel.panelDockAreas.find(panelId);
+            if (placement == viewModel.panelDockAreas.end())
+                return;
+            const auto &label = InputMappingPanel::kTextScope.Text(context.localization, "title");
+            if (Ui::Button({.label = label.c_str(),
+                            .variant = Ui::ButtonVariant::Secondary,
+                            .font = context.theme.fonts.sans,
+                            .componentSize = Ui::ComponentSize::Small})) {
+                command.command = EditorWorkspaceViewCommand::ChangeActivePanel;
+                command.targetIndex = static_cast<int>(placement->second);
+                command.stringPayload = std::string{panelId};
+            }
+        }
+    }  // namespace
+
     /** @copydoc GamePanel::OnAttach */
     void GamePanel::OnAttach(PanelContext &context) {
         viewportRenderer_ = context.viewportRenderer;
@@ -57,13 +81,14 @@ namespace Horo::Editor {
 
     /** @copydoc GamePanel::DrawPanel */
     void GamePanel::DrawPanel(const ImVec2 &, const ImVec2 &size, const EditorWorkspaceViewModel &viewModel,
-                              EditorWorkspaceViewCommandData &, const EditorGuiContext &context) {
+                              EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
         ImGui::BeginChild("##GameContent", size, false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
         if (viewModel.playViewSource != EditorPlayViewSource::AuthoredCamera) {
             const auto key = viewModel.playViewSource == EditorPlayViewSource::Simulator ? "simulator_preview" : "xr_mirror";
             ImGui::TextWrapped("%s", kTextScope.Text(context.localization, key).c_str());
         }
+        DrawPausedInputMapping(viewModel, command, context);
         const auto origin = ImGui::GetCursorScreenPos();
         const float height = std::max(0.0F, ImGui::GetContentRegionAvail().y);
         RequestViewport(size.x, height);

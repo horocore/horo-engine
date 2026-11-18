@@ -671,6 +671,9 @@ overrides. Both use Input's typed profile representation, validation and atomic
 serializer. The active router supplies effective bindings to workspace/source
 interaction and module commands. Settings drafts represent the global layer;
 they are composed with the active project's layers before routing activation.
+Paused Play in the Game panel opens the same Input Mapping surface at its
+current dock. It preserves the paused scene and authors the same project-user
+overrides as opening Input Mapping directly.
 
 `ResolveBindingProfilePaths` resolves project and user paths beneath their
 admitted roots. Project IDs are single portable UTF-8 filename components;
