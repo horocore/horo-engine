@@ -184,8 +184,11 @@ namespace Horo::Editor {
     }
 
     void XrSetupModal::OnClose(ModalCloseReason) {
-        if (setup_)
+        if (setup_) {
             setup_->CancelSetupTest(request_);
+            if (auto *preview = setup_->HapticPreview())
+                preview->CancelHapticPreview(previewRequest_);
+        }
     }
 
     const std::string &XrSetupModal::Text(const char *key) const {
@@ -276,6 +279,31 @@ namespace Horo::Editor {
         ImGui::EndTable();
     }
 
+    /** @copydoc XrSetupModal::DrawHapticPreview */
+    void XrSetupModal::DrawHapticPreview(IEditorXrHapticPreview &preview) {
+        using enum EditorXrHapticHand;
+        using enum EditorXrHapticPreviewState;
+        const auto &fonts = context_.theme.fonts;
+        for (const auto hand : {Left, Right}) {
+            if (!Ui::Button({.label = Text(hand == Left ? "haptic_left" : "haptic_right").c_str(),
+                             .variant = Ui::ButtonVariant::Secondary,
+                             .enabled = preview.CanPreviewHaptic(hand),
+                             .font = fonts.sans,
+                             .style = {.width = Ui::StyleWidth::FillAvailable}}))
+                continue;
+            const auto result = preview.QueueHapticPreview(hand);
+            previewRejected_ = result.HasError();
+            if (result.HasValue())
+                previewRequest_ = result.Value();
+        }
+
+        constexpr std::array keys{"", "haptic_queued", "haptic_submitted", "haptic_unsupported", "haptic_rejected", "haptic_cancelled"};
+        const auto state = previewRejected_ ? Rejected : preview.ReadHapticPreview(previewRequest_);
+        const auto index = static_cast<std::size_t>(state);
+        if (state != Unknown && index < keys.size())
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, Text(keys[index]), Theme::Muted(), fonts);
+    }
+
     ModalFrameResult XrSetupModal::Draw() {
         const auto &fonts = context_.theme.fonts;
         Ui::ScopedModalShell shell({.id = "XrSetup",
@@ -302,6 +330,8 @@ namespace Horo::Editor {
         const auto issue = rejected_ ? EditorXrSetupIssue::Unavailable : report.issue;
         Ui::WrappedText(width, Text(IssueKey(issue)), Theme::Muted(), fonts);
         DrawInspection(setup_ ? setup_->ReadInspection() : EditorXrInspectionSnapshot{});
+        if (auto *preview = setup_ ? setup_->HapticPreview() : nullptr)
+            DrawHapticPreview(*preview);
         ImGui::EndChild();
 
         shell.BeginFooter({16, 12});

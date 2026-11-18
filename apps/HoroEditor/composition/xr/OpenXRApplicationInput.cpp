@@ -193,6 +193,15 @@ namespace Horo::Application::Internal {
         return input_.native ? input_.native->ProgressHapticCancellation(session) : Result<void>::Success();
     }
 
+    /** @copydoc OpenXRApplicationSession::SubmitHapticPreview */
+    Result<void> OpenXRApplicationSession::SubmitHapticPreview(const XRSessionId &session, XRTrackedDeviceRole role, Duration duration) {
+        if (std::this_thread::get_id() != lane_)
+            return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
+        if (!input_.native)
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
+        return input_.native->ApplyHaptic(session, role, {.amplitude = 0.3F, .duration = duration});
+    }
+
     /** @copydoc OpenXRApplicationSession::AppendInput */
     Result<void> OpenXRApplicationSession::AppendInput(const XRSessionLifecycle &sessions, const XRActionBindingCoordinator &coordinator,
                                                        RuntimeInternal::XRTrackingPublication &publication, const OpenXRInputClock &clock,

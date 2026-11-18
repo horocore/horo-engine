@@ -1010,6 +1010,100 @@ namespace Horo::Tests::OpenXRApplication {
         replacementScene->Shutdown();
     }
 
+    TEST_CASE("Installed Play previews vibration through the assigned controller and exact app receipt", "[xr][application][haptics]") {
+        using enum XR::XRProjectFeaturePolicy;
+        using enum Editor::EditorXrHapticHand;
+        using enum Editor::EditorXrHapticPreviewState;
+        const std::string profilePath = "/interaction_profiles/oculus/touch_controller";
+        auto document = OpenXRProduct::Json::parse(OpenXRProduct::InstalledProductFixture::BindingDocument());
+        document["profiles"][0]["path"] = profilePath;
+        document["controls"][0]["path"] = "/user/hand/left/input/thumbstick/touch";
+        document["poses"].push_back({{"profile", 1},
+                                     {"set", 1},
+                                     {"role", static_cast<unsigned>(XR::XRTrackedDeviceRole::LeftController)},
+                                     {"kind", static_cast<unsigned>(XR::XRTrackedPoseKind::Grip)},
+                                     {"path", "/user/hand/left/input/grip/pose"},
+                                     {"label", "Grip"}});
+        document["haptics"].push_back({{"profile", 1},
+                                       {"set", 1},
+                                       {"role", static_cast<unsigned>(XR::XRTrackedDeviceRole::LeftController)},
+                                       {"path", "/user/hand/left/output/haptic"},
+                                       {"label", "Vibration"}});
+        ApplicationFixture fixture{true, 6, Unrequested, Unrequested, Unrequested, false, document.dump()};
+        fixture.script.actions.tracking.enabled = true;
+        constexpr Input::PlayerId player = 7;
+        auto scene = PublishPlay(fixture, player);
+        fixture.script.actions.currentProfiles[0] = fixture.script.actions.Find(profilePath);
+        REQUIRE(fixture.script.actions.currentProfiles[0] != XR_NULL_PATH);
+        fixture.script.events.interactionProfileChanged = true;
+        RequireValue(fixture.play->PollEvents());
+        auto cutoff = std::make_unique<AppInputSample>(*fixture.play);
+        auto *observed = cutoff.get();
+        RequireValue(fixture.scheduler->AddParticipant(std::move(cutoff)));
+        RequireValue(fixture.scheduler->Startup());
+        RequireValue(fixture.scheduler->RunFrame());
+        REQUIRE(observed->result.has_value());
+        RequireValue(*observed->result);
+
+        auto &preview = *fixture.play->HapticPreview();
+        auto &native = fixture.script.actions.haptic;
+        native.boundCount = 1;
+        REQUIRE(preview.CanPreviewHaptic(Left));
+        CHECK_FALSE(preview.CanPreviewHaptic(Right));
+        CHECK(preview.QueueHapticPreview(Right).HasError());
+        const auto request = RequireValue(preview.QueueHapticPreview(Left));
+        CHECK(preview.ReadHapticPreview(request) == Queued);
+        CHECK(preview.QueueHapticPreview(Left).HasError());
+        CHECK(native.applies == 0);
+
+        SECTION("submission and cancellation retain the exact receipt") {
+            fixture.play->PumpHapticPreview();
+            REQUIRE(preview.ReadHapticPreview(request) == Submitted);
+            CHECK(native.applies == 1);
+            CHECK(native.vibration.duration == 150'000'000);
+            CHECK(native.vibration.frequency == XR_FREQUENCY_UNSPECIFIED);
+            preview.CancelHapticPreview({request.value + 1});
+            fixture.play->PumpHapticPreview();
+            CHECK(preview.ReadHapticPreview(request) == Submitted);
+            preview.CancelHapticPreview(request);
+            fixture.play->PumpHapticPreview();
+            RequireValue(fixture.play->PollEvents());
+            CHECK(preview.ReadHapticPreview(request) == Cancelled);
+            CHECK(native.stops == 1);
+        }
+        SECTION("cancelled queue never reaches native output") {
+            preview.CancelHapticPreview(request);
+            fixture.play->PumpHapticPreview();
+            CHECK(preview.ReadHapticPreview(request) == Cancelled);
+            CHECK(native.applies == 0);
+        }
+        SECTION("replaced canonical Input map invalidates a queued output") {
+            const auto registered = fixture.router.Actions();
+            std::vector<Input::ActionDescriptor> replacement(registered.begin(), registered.end());
+            replacement.front().required = !replacement.front().required;
+            RequireValue(fixture.router.SetActionMap(replacement));
+            fixture.play->PumpHapticPreview();
+            CHECK(preview.ReadHapticPreview(request) == Cancelled);
+            CHECK(native.applies == 0);
+        }
+        SECTION("runtime refusal reports unsupported without emulation") {
+            native.boundCount = 0;
+            fixture.play->PumpHapticPreview();
+            CHECK(preview.ReadHapticPreview(request) == Unsupported);
+            CHECK(native.applies == 0);
+        }
+        SECTION("focus loss before owner pump cancels the old target") {
+            fixture.script.events.Push(XR_SESSION_STATE_VISIBLE);
+            RequireValue(fixture.play->PollEvents());
+            fixture.play->PumpHapticPreview();
+            CHECK(preview.ReadHapticPreview(request) == Cancelled);
+            CHECK(native.applies == 0);
+        }
+        fixture.scheduler->Shutdown();
+        scene->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+    }
+
     TEST_CASE("Real installed Play samples bounded hands before Input and revokes candidates on focus or invalid evidence",
               "[xr][application][play][hands]") {
         using enum XR::XRProjectFeaturePolicy;

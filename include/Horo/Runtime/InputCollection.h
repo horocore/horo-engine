@@ -90,6 +90,11 @@ namespace Horo::Input {
          * @return Move-only transaction or typed stale/owner-thread/sequence denial. */
         [[nodiscard]] Result<InputCollectionFrame> Begin(const RawInputSnapshot &raw) const;
 
+        /** @brief Copies the port's assigned player. @return Empty for unscoped ports. Callers still validate currentness. */
+        [[nodiscard]] std::optional<PlayerId> AssignedPlayer() const noexcept {
+            return player_;
+        }
+
     private:
         friend class InputRouter;
         std::weak_ptr<InputCollectionLifetime> owner_;

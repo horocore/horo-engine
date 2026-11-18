@@ -6,6 +6,8 @@
 
 namespace Horo::Application::Internal {
     namespace {
+        constexpr std::chrono::milliseconds PreviewPulseDuration{150};
+
         /** @brief Projects stable XR error identities without exposing native diagnostic text to a presentation caller. */
         Editor::EditorXrSetupIssue SetupIssue(const Error &error) noexcept {
             using enum Editor::EditorXrSetupIssue;
@@ -155,6 +157,123 @@ namespace Horo::Application::Internal {
         } else
             report.status = WaitingForSample;
         return report;
+    }
+
+    /** @copydoc OpenXRPlayHost::CaptureHapticTarget */
+    std::optional<OpenXRPlayHost::HapticTarget> OpenXRPlayHost::CaptureHapticTarget(Editor::EditorXrHapticHand hand) const noexcept {
+        using XR::XRTrackedDeviceRole;
+        using enum Editor::EditorXrHapticHand;
+        if (std::this_thread::get_id() != lane_ || closing_ || busy_ || eventsPending_ || !input_.admitted ||
+            input_.play != Editor::EditorPlayState::Playing || !input_.port || (hand != Left && hand != Right))
+            return std::nullopt;
+        const auto player = input_.port->AssignedPlayer();
+        const auto *snapshot = tracking_.Current();
+        const auto session = sessions_.Snapshot();
+        if (!player || !snapshot || !session.admitsActions || !scene_ || !scene_->published || scene_->retiring ||
+            snapshot->Session() != session.session || snapshot->BindingRevision() == 0)
+            return std::nullopt;
+        const auto role = hand == Left ? XRTrackedDeviceRole::LeftController : XRTrackedDeviceRole::RightController;
+        if (std::ranges::find(composition_.bindings->haptics, role, &OpenXRApplicationHaptic::role) == composition_.bindings->haptics.end())
+            return std::nullopt;
+        const auto devices = snapshot->Devices();
+        const auto found = std::ranges::find(devices, role, &XR::XRTrackedDeviceRecord::role);
+        if (found == devices.end() || found->state != XR::XRTrackedDeviceState::Tracked)
+            return std::nullopt;
+        return HapticTarget{session.session, found->id, snapshot->BindingRevision(), *player, role};
+    }
+
+    /** @copydoc OpenXRPlayHost::HasCurrentHapticInput */
+    bool OpenXRPlayHost::HasCurrentHapticInput() const {
+        if (!input_.router || !input_.port || !input_.port->AssignedPlayer())
+            return false;
+        auto copy = *input_.port;
+        const auto refresh = input_.router->RefreshPlayerActionCollection(copy);
+        return refresh.HasValue() && !refresh.Value();
+    }
+
+    /** @copydoc Editor::IEditorXrHapticPreview::CanPreviewHaptic */
+    bool OpenXRPlayHost::CanPreviewHaptic(Editor::EditorXrHapticHand hand) const noexcept {
+        using enum Editor::EditorXrHapticPreviewState;
+        return CaptureHapticTarget(hand).has_value() &&
+               (!hapticPreview_ || (hapticPreview_->state != Queued && !hapticPreview_->mayNeedStop));
+    }
+
+    /** @copydoc Editor::IEditorXrHapticPreview::QueueHapticPreview */
+    Result<Editor::EditorXrHapticPreviewId> OpenXRPlayHost::QueueHapticPreview(Editor::EditorXrHapticHand hand) {
+        using Reply = Result<Editor::EditorXrHapticPreviewId>;
+        using namespace XR;
+        if (const auto lane = Lane(); lane.HasError())
+            return Reply::Failure(lane.ErrorValue());
+        using enum Editor::EditorXrHapticPreviewState;
+        const auto target = CaptureHapticTarget(hand);
+        if (!target || !HasCurrentHapticInput())
+            return Reply::Failure(MakeError(XRErrors::OperationUnsupported));
+        if ((hapticPreview_ && (hapticPreview_->state == Queued || hapticPreview_->mayNeedStop)) ||
+            nextHapticPreview_ == std::numeric_limits<std::uint64_t>::max())
+            return Reply::Failure(MakeError(XRErrors::CapacityExceeded));
+        const Editor::EditorXrHapticPreviewId receipt{++nextHapticPreview_};
+        hapticPreview_ = HapticPreviewRecord{receipt, *target, std::chrono::steady_clock::now() + std::chrono::milliseconds{500}};
+        return Reply::Success(receipt);
+    }
+
+    /** @copydoc Editor::IEditorXrHapticPreview::ReadHapticPreview */
+    Editor::EditorXrHapticPreviewState OpenXRPlayHost::ReadHapticPreview(Editor::EditorXrHapticPreviewId receipt) const noexcept {
+        if (std::this_thread::get_id() == lane_ && hapticPreview_ && receipt == hapticPreview_->receipt)
+            return hapticPreview_->state;
+        return Editor::EditorXrHapticPreviewState::Unknown;
+    }
+
+    /** @copydoc Editor::IEditorXrHapticPreview::CancelHapticPreview */
+    void OpenXRPlayHost::CancelHapticPreview(Editor::EditorXrHapticPreviewId receipt) noexcept {
+        if (std::this_thread::get_id() == lane_ && hapticPreview_ && receipt == hapticPreview_->receipt)
+            hapticPreview_->cancelRequested = true;
+    }
+
+    /** @copydoc OpenXRPlayHost::PumpHapticPreview */
+    void OpenXRPlayHost::PumpHapticPreview() {
+        using enum Editor::EditorXrHapticPreviewState;
+        if (std::this_thread::get_id() != lane_ || busy_ || !hapticPreview_)
+            return;
+        auto &preview = *hapticPreview_;
+        if (preview.state != Queued && !preview.mayNeedStop)
+            return;
+        const auto now = std::chrono::steady_clock::now();
+        const bool expired = now >= preview.until;
+        const auto hand = preview.target.role == XR::XRTrackedDeviceRole::LeftController ? Editor::EditorXrHapticHand::Left
+                                                                                         : Editor::EditorXrHapticHand::Right;
+        const auto target = CaptureHapticTarget(hand);
+        const bool revoked = preview.cancelRequested || target != preview.target || !HasCurrentHapticInput();
+        if (expired || revoked) {
+            if (preview.mayNeedStop && sessions_.Snapshot().session == preview.target.session)
+                composition_.session.RequestHapticCancellation(preview.target.role);
+            preview.mayNeedStop = false;
+            if (revoked || preview.state == Queued)
+                preview.state = Cancelled;
+            return;
+        }
+        if (preview.state != Queued)
+            return;
+
+        const Operation operation{*this};
+        const auto submitted = composition_.session.SubmitHapticPreview(preview.target.session, preview.target.role,
+                                                                        Duration::FromMilliseconds(PreviewPulseDuration.count()));
+        if (submitted.HasError()) {
+            const auto &error = submitted.ErrorValue();
+            const auto &unsupported = XR::XRErrors::OperationUnsupported;
+            preview.state = error.domain.Value() == unsupported.domain.Value() && error.code.Value() == unsupported.code.Value()
+                                ? Unsupported
+                                : Rejected;
+            composition_.session.RequestHapticCancellation(preview.target.role);
+            return;
+        }
+        preview.mayNeedStop = true;
+        preview.until = std::chrono::steady_clock::now() + PreviewPulseDuration;
+        preview.state = Submitted;
+        if (preview.cancelRequested || pendingRevoke_) {
+            composition_.session.RequestHapticCancellation(preview.target.role);
+            preview.mayNeedStop = false;
+            preview.state = Cancelled;
+        }
     }
 
     /** @copydoc Editor::IEditorXrSetup::RequestSetupTest */

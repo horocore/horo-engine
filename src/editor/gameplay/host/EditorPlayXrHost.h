@@ -150,9 +150,51 @@ namespace Horo::Editor {
     };
 
     /** @brief Owner-lane setup commands, independent of the Play adapter and of GUI or native API types. */
+    enum class EditorXrHapticHand : std::uint8_t {
+        Left,
+        Right
+    };
+
+    /** @brief Generation-safe receipt for a single operator-requested finite vibration preview. */
+    struct EditorXrHapticPreviewId final {
+        std::uint64_t value{};
+        constexpr bool operator==(const EditorXrHapticPreviewId &) const noexcept = default;
+    };
+
+    /** @brief Submission evidence from the app owner. Submitted confirms runtime acceptance only. */
+    enum class EditorXrHapticPreviewState : std::uint8_t {
+        Unknown,
+        Queued,
+        Submitted,
+        Unsupported,
+        Rejected,
+        Cancelled
+    };
+
+    /** @brief Borrowed control-lane preview port. UI submits or cancels intent and never invokes native output. */
+    class IEditorXrHapticPreview {
+    public:
+        virtual ~IEditorXrHapticPreview() = default;
+        /** @return Whether the current player and hand have a target for the cold preview request. */
+        [[nodiscard]] virtual bool CanPreviewHaptic(EditorXrHapticHand hand) const noexcept = 0;
+        /** @return The exact queued receipt or typed target, availability or capacity failure. */
+        [[nodiscard]] virtual Result<EditorXrHapticPreviewId> QueueHapticPreview(EditorXrHapticHand hand) = 0;
+        /** @return Latest copied evidence for that exact receipt. */
+        [[nodiscard]] virtual EditorXrHapticPreviewState ReadHapticPreview(EditorXrHapticPreviewId receipt) const noexcept = 0;
+        /** @brief Revokes only the requested receipt. Native stop remains deferred to the app owner. */
+        virtual void CancelHapticPreview(EditorXrHapticPreviewId receipt) noexcept = 0;
+    };
+
+    /** @brief Borrowed editor setup and optional haptic preview composition. */
     class IEditorXrSetup {
     public:
         virtual ~IEditorXrSetup() = default;
+
+        /** @return Optional scoped vibration preview available from the selected host composition. */
+        [[nodiscard]] virtual IEditorXrHapticPreview *HapticPreview() noexcept {
+            return nullptr;
+        }
+
         /** @return Existing fixed-size evidence without provider calls, file access or allocation. */
         [[nodiscard]] virtual EditorXrSetupReport ReadSetup() const noexcept = 0;
         /** @return Owned, bounded, redacted evidence for the current owner, or an explicit unavailable/stale status. */

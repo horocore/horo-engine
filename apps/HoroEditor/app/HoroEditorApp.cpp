@@ -1903,8 +1903,10 @@ namespace Horo::Editor {
             /** @brief Runs one explicit setup test between full RuntimeHost frames. */
             void PumpXrSetupTest() {
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
-                if (auto *xr = p_->presentation.composition.xrPlay.get())
+                if (auto *xr = p_->presentation.composition.xrPlay.get()) {
                     xr->PumpSetupTest();
+                    xr->PumpHapticPreview();
+                }
 #endif
             }
 

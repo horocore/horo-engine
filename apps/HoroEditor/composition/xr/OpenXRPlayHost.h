@@ -12,6 +12,8 @@
 #include "XRSessionHostControl.h"
 #include "XRTrackingPublication.h"
 
+#include <chrono>
+
 namespace Horo::Editor {
     class EditorViewportRendererVulkan;
     struct EditorViewportTextureView;
@@ -62,6 +64,7 @@ namespace Horo::Application::Internal {
      */
     class OpenXRPlayHost final : public Editor::IEditorPlayXrHost,
                                  public Editor::IEditorXrSetup,
+                                 public Editor::IEditorXrHapticPreview,
                                  private XR::RuntimeInternal::IXRSessionRetirementResources,
                                  private XR::IXRBindingNeutralizer {
     public:
@@ -94,6 +97,17 @@ namespace Horo::Application::Internal {
         void CancelSetupTest(Editor::EditorXrSetupTestId request) noexcept override;
         /** @brief Performs one queued cold setup test outside RuntimeHost frames. */
         void PumpSetupTest();
+
+        [[nodiscard]] Editor::IEditorXrHapticPreview *HapticPreview() noexcept override {
+            return this;
+        }
+
+        [[nodiscard]] bool CanPreviewHaptic(Editor::EditorXrHapticHand hand) const noexcept override;
+        [[nodiscard]] Result<Editor::EditorXrHapticPreviewId> QueueHapticPreview(Editor::EditorXrHapticHand hand) override;
+        [[nodiscard]] Editor::EditorXrHapticPreviewState ReadHapticPreview(Editor::EditorXrHapticPreviewId receipt) const noexcept override;
+        void CancelHapticPreview(Editor::EditorXrHapticPreviewId receipt) noexcept override;
+        /** @brief Runs one admitted preview between RuntimeHost frames and progresses its scoped cancellation. */
+        void PumpHapticPreview();
         /** @brief Supplies bounded, current runtime prerequisites to the separate device qualification runner. */
         [[nodiscard]] Result<OpenXRPackagedPreflight> ReadDeviceQualificationPreflight() const;
         [[nodiscard]] Result<void> AttachInput(const Input::InputActionCollection &input,
@@ -283,6 +297,33 @@ namespace Horo::Application::Internal {
                 host.FinishOperation();
             }
         };
+
+        /** @brief Complete app-scoped target. No native handles or raw tracking samples are retained. */
+        struct HapticTarget final {
+            XR::XRSessionId session;
+            XR::XRDeviceId device;
+            std::uint64_t bindings;
+            Input::PlayerId player;
+            XR::XRTrackedDeviceRole role;
+            bool operator==(const HapticTarget &) const = default;
+        };
+
+        /** @brief One pending or submitted operator preview with finite local admission duration. */
+        struct HapticPreviewRecord final {
+            Editor::EditorXrHapticPreviewId receipt;
+            HapticTarget target;
+            std::chrono::steady_clock::time_point until;
+            Editor::EditorXrHapticPreviewState state{Editor::EditorXrHapticPreviewState::Queued};
+            bool cancelRequested{};
+            bool mayNeedStop{};
+        };
+
+        /** @brief Copies current player, controller and binding identity when the preview scope is available. */
+        [[nodiscard]] std::optional<HapticTarget> CaptureHapticTarget(Editor::EditorXrHapticHand hand) const noexcept;
+        /** @brief Validates that no canonical Input rebind or context retirement is pending before cold submission. */
+        [[nodiscard]] bool HasCurrentHapticInput() const;
+        std::optional<HapticPreviewRecord> hapticPreview_;
+        std::uint64_t nextHapticPreview_{};
 
         struct InputState final {
             Input::InputRouter *router{};

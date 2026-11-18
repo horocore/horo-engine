@@ -766,6 +766,15 @@ Refresh rate, view extent and frame budget come from runtime/device capability
 snapshots; architecture does not prescribe a universal 90 Hz minimum. Each qualified
 tuple records its supported modes and measured comfort/performance evidence.
 
+The XR Setup inspection panel can request one finite controller vibration
+preview from a focused native Play session with an explicit Input player.
+The existing app owner captures the controller generation, session and
+signed binding revision, then validates them at its next control-lane pump.
+The receipt records runtime submission, rejection or cancellation. Closing
+the panel revokes only that receipt. Native cancellation remains owned by
+the selected action/session host through focus loss, replacement and
+shutdown. Simulator and desktop-only compositions omit the preview port.
+
 ## Mixed Reality And Privacy
 
 Passthrough, anchors, plane/mesh understanding, hit testing, and light estimation

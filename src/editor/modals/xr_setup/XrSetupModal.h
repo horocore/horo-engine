@@ -22,10 +22,14 @@ namespace Horo::Editor {
     private:
         /** @brief Draws the owned redacted inspection report. */
         void DrawInspection(const EditorXrInspectionSnapshot &report) const;
+        /** @brief Projects and submits one explicit preview request without invoking native output. */
+        void DrawHapticPreview(IEditorXrHapticPreview &preview);
         [[nodiscard]] const std::string &Text(const char *key) const;
         const EditorGuiContext &context_;
         IEditorXrSetup *setup_;
         EditorXrSetupTestId request_;
+        EditorXrHapticPreviewId previewRequest_;
+        bool previewRejected_{};
         bool rejected_{};
     };
 }  // namespace Horo::Editor
