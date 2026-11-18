@@ -410,7 +410,8 @@ namespace Horo::Editor {
             }
         }
         if (m_activePrefabDocument == instance) {
-            m_prefabStagePending = false;
+            m_prefabStagePending = !snapshot.externalConflict && (*owner)->HasStage();
+            m_prefabStageExtractedRevision = 0;
             m_prefabViewportScene = {};
             ++m_viewportSceneRevision;
             if (!snapshot.externalConflict)
