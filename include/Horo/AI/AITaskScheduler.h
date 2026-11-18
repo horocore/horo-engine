@@ -261,7 +261,8 @@ namespace Horo::AI {
          * @param additions Exact new generation bindings; resources are retained by the candidate.
          * @param removals Exact Scene agent generations; valid agents without a scheduler registration require no work.
          * @return Detached change or typed validation, capacity or storage failure.
-         * @pre Before the first decision phase or after intent dispatch.
+         * @pre Additions require the first decision phase to be pending or the current intent dispatch to be complete.
+         * Retirements alone can also fence already evaluated intents before dispatch. No changes run during callbacks.
          */
         [[nodiscard]] Result<std::unique_ptr<PopulationChange>> PreparePopulationChange(
             std::span<const AiScheduledDecisionRegistration> additions, std::span<const AgentHandle> removals);
@@ -313,7 +314,7 @@ namespace Horo::AI {
          * @return Success or typed phase/backlog failure. */
         [[nodiscard]] Result<void> ValidateDecisionTick(std::uint64_t tick) const;
         /** @brief Allows new population admission only at the scheduler owner boundary. */
-        [[nodiscard]] bool CanChangePopulation() const noexcept;
+        [[nodiscard]] bool CanChangePopulation(bool hasAdditions) const noexcept;
         /** @brief Validates one exact live registration and its lowerable agent limits. */
         [[nodiscard]] bool ValidRegistration(const AiScheduledDecisionRegistration &registration) const noexcept;
         /** @brief Installs one admission into previously reserved scheduler storage. */

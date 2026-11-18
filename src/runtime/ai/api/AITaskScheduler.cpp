@@ -183,7 +183,7 @@ namespace Horo::AI {
 
     /** @copydoc AiTaskScheduler::PopulationChange::ValidatePublication */
     Result<void> AiTaskScheduler::PopulationChange::ValidatePublication() const {
-        if (!scheduler_ || !scheduler_->CanChangePopulation() || scheduler_->populationRevision_ != revision_ ||
+        if (!scheduler_ || !scheduler_->CanChangePopulation(!storage_->additions.empty()) || scheduler_->populationRevision_ != revision_ ||
             scheduler_->report_.tick != tick_)
             return Result<void>::Failure(MakeError(AIErrors::SchedulerPhaseInvalid));
         if (std::ranges::any_of(storage_->additions, [](const auto &addition) {
@@ -277,8 +277,8 @@ namespace Horo::AI {
     }
 
     /** @copydoc AiTaskScheduler::CanChangePopulation */
-    bool AiTaskScheduler::CanChangePopulation() const noexcept {
-        return !closed_ && !inPhase_ && (report_.tick == 0 || committed_) &&
+    bool AiTaskScheduler::CanChangePopulation(const bool hasAdditions) const noexcept {
+        return !closed_ && !inPhase_ && (!hasAdditions || report_.tick == 0 || committed_) &&
                populationRevision_ != std::numeric_limits<std::uint64_t>::max();
     }
 
@@ -318,7 +318,7 @@ namespace Horo::AI {
                                            std::shared_ptr<const void> image, std::shared_ptr<IAiScheduledDecision> executor,
                                            CancellationToken cancellation) {
         AiScheduledDecisionRegistration captured{agent, identity, policy, std::move(image), std::move(executor), std::move(cancellation)};
-        if (!CanChangePopulation() || !ValidRegistration(captured))
+        if (!CanChangePopulation(true) || !ValidRegistration(captured))
             return Result<void>::Failure(MakeError(AIErrors::SchedulerPolicyInvalid));
         Entry *free = nullptr;
         for (auto &entry : entries_) {
@@ -345,7 +345,7 @@ namespace Horo::AI {
     Result<std::unique_ptr<AiTaskScheduler::PopulationChange>> AiTaskScheduler::PreparePopulationChange(
         const std::span<const AiScheduledDecisionRegistration> additions, const std::span<const AgentHandle> removals) {
         using Prepared = Result<std::unique_ptr<PopulationChange>>;
-        if (!CanChangePopulation())
+        if (!CanChangePopulation(!additions.empty()))
             return Prepared::Failure(MakeError(AIErrors::SchedulerPhaseInvalid));
         if (additions.size() > settings_.maximumAgents || removals.size() > AiTaskSchedulerSettings::HardAgents)
             return Prepared::Failure(MakeError(AIErrors::AgentCapacityExceeded));

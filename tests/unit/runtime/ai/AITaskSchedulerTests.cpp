@@ -95,6 +95,26 @@ namespace Horo::AI {
             CHECK(replacement->evaluations == 1);
         }
 
+        TEST_CASE("AI staged retirement fences evaluated intents before dispatch", "[unit][ai][scheduler][lifetime]") {
+            Harness h;
+            auto resident = h.Register(0);
+            REQUIRE(h.scheduler->EvaluateAtDecision(1).HasValue());
+            REQUIRE(resident->intents == 1);
+            const std::array retire{h.Handle(0)};
+            const std::array add{
+                AiScheduledDecisionRegistration{h.Handle(1), MakeIdentity<AgentId>(2), {}, h.image, std::make_shared<Probe>()}};
+            ExpectError(h.scheduler->PreparePopulationChange(add, retire), AIErrors::SchedulerPhaseInvalid);
+            auto staged = h.scheduler->PreparePopulationChange({}, retire);
+            REQUIRE(staged.HasValue());
+            REQUIRE(staged.Value()->ValidatePublication().HasValue());
+            staged.Value()->Publish();
+            REQUIRE(h.scheduler->CommitAtIntentDispatch(1).HasValue());
+            CHECK(resident->committed == 0);
+            CHECK(resident->cancelled == 0);
+            staged.Value()->FinishRetirements();
+            CHECK(resident->cancelled == 1);
+        }
+
         TEST_CASE("AI staged scheduler population preserves residents on rejection and rejects stale publication",
                   "[unit][ai][scheduler][lifetime]") {
             Harness h({.maximumAgents = 3, .evaluationsPerTick = 3, .workUnitsPerTick = 2, .commandsPerTick = 2});
