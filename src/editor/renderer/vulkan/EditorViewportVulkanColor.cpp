@@ -3,9 +3,60 @@
 #include "EditorViewportRendererVulkan.h"
 #include "RenderFrontendResourceAccess.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace Horo::Editor {
+    /** @copydoc EditorViewportRendererVulkan::PrepareSpatialKernel */
+    Result<std::shared_ptr<Render::IResidentNativeReconstructionKernel>> EditorViewportRendererVulkan::PrepareSpatialKernel(
+        const Render::CookedNativeReconstructionKernel *kernel) {
+        using namespace Render;
+        using Outcome = Result<std::shared_ptr<IResidentNativeReconstructionKernel>>;
+        if (!kernel)
+            return Outcome::Success({});
+        if (kernel->entry != NativeReconstructionEntry::Spatial ||
+            !frontend_.Capabilities().support.features.Supports(RenderCapability::NativeReconstruction))
+            return Outcome::Failure(MakeError(NativeReconstructionErrors::Unsupported));
+        const auto assigned = Detail::RenderFrontendResourceAccess::QueueAssignments(frontend_);
+        if (assigned.HasError())
+            return Outcome::Failure(assigned.ErrorValue());
+        const auto compute = std::ranges::find(assigned.Value(), RenderQueueRole::Compute, &RenderQueueAssignment::role);
+        if (compute == assigned.Value().end() || compute->queue != device_.graphicsIdentity)
+            return Outcome::Failure(MakeError(NativeReconstructionErrors::Unsupported));
+        return frontend_.RealizeNativeReconstructionKernel(*kernel);
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareSpatialDispatch */
+    Result<Render::NativeReconstructionDispatchPlan> EditorViewportRendererVulkan::PrepareSpatialDispatch(
+        Render::FrameToken frame, const Render::StaticMeshPassDescriptor &pass) const {
+        using namespace Render;
+        using Outcome = Result<NativeReconstructionDispatchPlan>;
+        const auto scene = resources_.SceneColorDescriptor();
+        const auto output = resources_.SpatialColorDescriptor();
+        // Display overlays currently load the exact scene depth at the display extent.
+        if (scene.extent != pass.extent || output.extent != scene.extent)
+            return Outcome::Failure(MakeError(ReconstructionErrors::IncompatibleOutput));
+        const auto &capabilities = frontend_.Capabilities().support;
+        const auto view = LightingViewIdentity();
+        const auto color = resources_.ColorTexture();
+        const ReconstructionFrameRequest
+            request{.kind = ReconstructionKind::Spatial,
+                    .colorStage = ReconstructionColorStage::PreExposed,  // The scene is rendered at unity scale; manual exposure follows.
+                    .compatibility = {.view = view,
+                                      .renderExtent = scene.extent,
+                                      .targetExtent = output.extent,
+                                      .deviceGeneration = capabilities.deviceIncarnation},
+                    .resourceOwner = color.owner,
+                    .timing = {.frameId = frame.value},
+                    .projection = pass.scene.camera.projection,
+                    .color = {color, scene, view, frame.value},
+                    .output = {.descriptor = output,
+                               .lifetime = RenderGraphResourceClass::Persistent,
+                               .writeUsage = RenderGraphUsageKind::Storage,
+                               .resident = resources_.SpatialTexture()}};
+        return PrepareNativeReconstructionDispatch(request, capabilities, {});
+    }
+
     /** @copydoc EditorViewportRendererVulkan::MakeViewportColor */
     Result<std::unique_ptr<EditorViewportColorPipeline>> EditorViewportRendererVulkan::MakeViewportColor(
         const EditorViewportColorInputs &inputs, const Render::ExposureSettings &settings) {
@@ -57,7 +108,8 @@ namespace Horo::Editor {
     Result<void> EditorViewportRendererVulkan::PrepareViewportColor(Render::RenderViewId view, Render::FramebufferExtent extent) {
         if (const auto ready = color_->Prepare(view, extent, colorFrameDelta_); ready.HasError())
             return ready;
-        const auto bound = color_->PrepareBindings(resources_.ColorTextureView(), resources_.DisplayTextureView());
+        const auto bound = color_->PrepareBindings(spatial_ ? resources_.SpatialTextureView() : resources_.ColorTextureView(),
+                                                   resources_.DisplayTextureView());
         if (bound.HasError())
             color_->Finish(false);
         return bound;

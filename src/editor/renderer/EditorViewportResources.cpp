@@ -432,18 +432,14 @@ namespace Horo::Editor {
     }
 
     Result<bool> EditorViewportResources::AdvanceViewportTextures(ViewportTargetResources &resources) {
-        using enum Render::RenderTextureUsage;
         const Render::FramebufferExtent extent{resources.extent.width, resources.extent.height};
-        const auto color =
-            AdvanceTexture(*frontend_, config_.memoryScope,
-                           {.extent = extent,
-                            .format = colorPipeline_ ? Render::RenderTextureFormat::Rgba16Float : Render::RenderTextureFormat::Rgba8Unorm,
-                            .usage = colorPipeline_ ? Sampled | RenderAttachment | CopySource : Sampled | RenderAttachment},
-                           resources.colorTexture, resources.colorTextureOperation);
+        const auto color = AdvanceTexture(*frontend_, config_.memoryScope, SceneColorDescriptor(extent), resources.colorTexture,
+                                          resources.colorTextureOperation);
         if (color.HasError())
             return Result<bool>::Failure(color.ErrorValue());
         const auto depth =
-            AdvanceTexture(*frontend_, config_.memoryScope, {.extent = extent, .format = config_.depthFormat, .usage = RenderAttachment},
+            AdvanceTexture(*frontend_, config_.memoryScope,
+                           {.extent = extent, .format = config_.depthFormat, .usage = Render::RenderTextureUsage::RenderAttachment},
                            resources.depthTexture, resources.depthTextureOperation);
         if (depth.HasError())
             return Result<bool>::Failure(depth.ErrorValue());
@@ -469,11 +465,47 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorViewportResources::EnableColorPipeline */
-    Result<void> EditorViewportResources::EnableColorPipeline() {
+    Result<void> EditorViewportResources::EnableColorPipeline(bool spatial) {
         if (viewportTarget_.colorTexture.IsValid() || pendingViewportTarget_.colorTexture.IsValid())
             return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
         colorPipeline_ = true;
+        spatialColor_ = spatial;
         return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportResources::SceneColorDescriptor */
+    Render::RenderTextureDescriptor EditorViewportResources::SceneColorDescriptor() const noexcept {
+        return SceneColorDescriptor({allocatedExtent_.width, allocatedExtent_.height});
+    }
+
+    /** @brief Describes the actual resident scene texture creation policy. */
+    Render::RenderTextureDescriptor EditorViewportResources::SceneColorDescriptor(Render::FramebufferExtent extent) const noexcept {
+        using enum Render::RenderTextureUsage;
+        return {.extent = extent,
+                .format = colorPipeline_ ? Render::RenderTextureFormat::Rgba16Float : Render::RenderTextureFormat::Rgba8Unorm,
+                .usage = colorPipeline_ ? Sampled | RenderAttachment | CopySource : Sampled | RenderAttachment};
+    }
+
+    /** @copydoc EditorViewportResources::SpatialColorDescriptor */
+    Render::RenderTextureDescriptor EditorViewportResources::SpatialColorDescriptor() const noexcept {
+        return SpatialColorDescriptor({allocatedExtent_.width, allocatedExtent_.height});
+    }
+
+    /** @brief The native spatial shader writes a whole distinct RGBA32F storage and sampled texture. */
+    Render::RenderTextureDescriptor EditorViewportResources::SpatialColorDescriptor(Render::FramebufferExtent extent) noexcept {
+        return {.extent = extent,
+                .format = Render::RenderTextureFormat::Rgba32Float,
+                .usage = Render::RenderTextureUsage::Storage | Render::RenderTextureUsage::Sampled};
+    }
+
+    /** @copydoc EditorViewportResources::SpatialTexture */
+    Render::RenderTextureHandle EditorViewportResources::SpatialTexture() const noexcept {
+        return viewportTarget_.spatialTexture;
+    }
+
+    /** @copydoc EditorViewportResources::SpatialTextureView */
+    Render::RenderTextureViewHandle EditorViewportResources::SpatialTextureView() const noexcept {
+        return viewportTarget_.spatialView;
     }
 
     /** @copydoc EditorViewportResources::DisplayTexture */
@@ -500,6 +532,18 @@ namespace Horo::Editor {
     Result<bool> EditorViewportResources::AdvanceColorPipelineTargets(ViewportTargetResources &resources) {
         using enum Horo::Render::RenderTextureUsage;
         using namespace Render;
+
+        if (spatialColor_) {
+            const auto descriptor = SpatialColorDescriptor({resources.extent.width, resources.extent.height});
+            const auto created =
+                AdvanceTexture(*frontend_, config_.memoryScope, descriptor, resources.spatialTexture, resources.spatialOperation);
+            if (created.HasError() || !created.Value())
+                return created;
+            const auto viewed = AdvanceTextureView(*frontend_, {.texture = resources.spatialTexture, .format = descriptor.format},
+                                                   resources.spatialView, resources.spatialViewOperation);
+            if (viewed.HasError() || !viewed.Value())
+                return viewed;
+        }
 
         struct Attachment {
             RenderTextureHandle *texture;
@@ -641,10 +685,10 @@ namespace Horo::Editor {
             static_cast<void>(frontend_->ReleaseTexture(resources.depthTexture));
         if (resources.colorTexture.IsValid())
             static_cast<void>(frontend_->ReleaseTexture(resources.colorTexture));
-        for (const auto view : {resources.displayView, resources.presentationView})
+        for (const auto view : {resources.displayView, resources.presentationView, resources.spatialView})
             if (view.IsValid())
                 static_cast<void>(frontend_->ReleaseTextureView(view));
-        for (const auto texture : {resources.displayTexture, resources.presentationTexture})
+        for (const auto texture : {resources.displayTexture, resources.presentationTexture, resources.spatialTexture})
             if (texture.IsValid())
                 static_cast<void>(frontend_->ReleaseTexture(texture));
         resources = {};

@@ -14,6 +14,7 @@ namespace Horo::Editor {
         using namespace Render;
         constexpr auto MaximumDraws = RenderMaterialPass::MaximumDraws;
         constexpr auto MaximumScenePasses = MaximumDirectionalShadowCascades + 1;
+        constexpr auto MaximumSpatialPasses = 1;
         constexpr auto MaximumColorPasses = 5;    // Two uploads, analytic output, overlay, SDR encode.
         constexpr auto MaximumColorImports = 10;  // Two outputs, four analytic table/staging resources and four fullscreen buffers.
         constexpr auto MaximumColorUses = 32;     // Fixed transfer and fullscreen shader reads, including the optional overlay.
@@ -55,7 +56,8 @@ namespace Horo::Editor {
             std::array<RasterInputs, MaximumScenePasses> inputs;
             RasterInputs displayOverlay;
             EditorViewportColorGraph color;
-            std::array<RenderGraphPassWorkload, MaximumScenePasses + MaximumColorPasses> workloads;
+            std::array<RenderGraphPassWorkload, MaximumScenePasses + MaximumColorPasses + MaximumSpatialPasses> workloads;
+            std::optional<std::size_t> spatialWork;
             std::size_t count{};
         };
 
@@ -78,13 +80,13 @@ namespace Horo::Editor {
         /** @brief Authors exact scene resources and pass inputs into the canonical graph compiler. */
         class RasterGraphAuthor final {
         public:
-            RasterGraphAuthor(std::size_t draws, std::size_t passes, RenderQueueId graphics, bool color)
-                : builder(
-                      Take(RenderGraphBuilder::Create({.maxPasses = passes + (color ? MaximumColorPasses : 0),
-                                                       .maxResources = 3 + 2 * draws + draws * passes + (color ? MaximumColorImports : 0),
-                                                       .maxUsages = 3 * passes + 3 * draws * passes + (color ? MaximumColorUses : 0),
-                                                       .maxDependencies = passes + (color ? MaximumColorPasses : 0)}))),
-                  queue(graphics) {}
+            RasterGraphAuthor(std::size_t draws, std::size_t passes, RenderQueueId graphics, bool color, bool spatial)
+                : builder(Take(RenderGraphBuilder::Create(
+                      {.maxPasses = passes + (color ? MaximumColorPasses : 0) + (spatial ? 1 : 0),
+                       .maxResources = 3 + 2 * draws + draws * passes + (color ? MaximumColorImports : 0) + (spatial ? 1 : 0),
+                       .maxUsages = 3 * passes + 3 * draws * passes + (color ? MaximumColorUses : 0) + (spatial ? 2 : 0),
+                       .maxDependencies = passes + (color ? MaximumColorPasses : 0) + (spatial ? 1 : 0)}))),
+                  queue(graphics), spatial_(spatial) {}
 
             RenderGraphResourceId Attach(RenderTextureHandle texture) {
                 const auto resource = Take(builder.ImportTexture(texture, RenderGraphResourceClass::Persistent));
@@ -92,8 +94,8 @@ namespace Horo::Editor {
                 return resource;
             }
 
-            RenderGraphPassRef Pass() {
-                const auto pass = Take(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
+            RenderGraphPassRef Pass(RenderPassKind kind = RenderPassKind::Graphics, RenderQueueRole role = RenderQueueRole::Graphics) {
+                const auto pass = Take(builder.AddPass(kind, role));
                 if (last.IsValid())
                     Take(builder.AddDependency({last, pass, RenderGraphDependencyKind::ExecutionOrder}));
                 last = pass;
@@ -121,6 +123,19 @@ namespace Horo::Editor {
                 input.reads.push_back({atlas, {}, view});
             }
 
+            RenderGraphPassWorkload Reconstruct(RenderGraphResourceId scene, RenderTextureViewHandle sceneView,
+                                                RenderGraphResourceId resolved, RenderTextureViewHandle resolvedView,
+                                                const std::shared_ptr<IResidentNativeReconstructionKernel> &kernel) {
+                const auto pass = Pass(RenderPassKind::Compute, RenderQueueRole::Compute);
+                Output(pass, scene, RenderGraphUsageKind::Sampled, RenderGraphAccess::Read);
+                Output(pass, resolved, RenderGraphUsageKind::Storage, RenderGraphAccess::Write);
+                RenderGraphNativeReconstruction work{.kernel = kernel};
+                using enum NativeReconstructionImage;
+                work.images[static_cast<std::size_t>(CurrentColor)] = {scene, sceneView};
+                work.images[static_cast<std::size_t>(OutputColor)] = {resolved, resolvedView};
+                return {pass, std::move(work)};
+            }
+
             void ColorScene(EditorViewportColorGraph &graph, const EditorViewportColorPipeline &color, RenderGraphResourceId scene,
                             RenderGraphResourceId display, RenderTextureViewHandle displayView, FramebufferExtent extent) {
                 last = Take(graph.AppendScene(builder, color, queue, initial, scene, display, displayView, last, extent));
@@ -134,7 +149,9 @@ namespace Horo::Editor {
             CompiledRenderGraphExecution Compile() {
                 const auto graph = Take(builder.Finalize());
                 const auto schedule = Take(CompileRenderGraph(graph));
-                const std::array queues{RenderQueueAssignment{RenderQueueRole::Graphics, queue}};
+                const std::array assignments{RenderQueueAssignment{RenderQueueRole::Graphics, queue},
+                                             RenderQueueAssignment{RenderQueueRole::Compute, queue}};
+                const auto queues = std::span{assignments}.first(spatial_ ? 2 : 1);
                 const auto synchronized = Take(SynthesizeRenderGraphSynchronization(graph, schedule, queues, initial));
                 return Take(CompileRenderGraphExecution(graph, schedule, synchronized, queues));
             }
@@ -162,6 +179,7 @@ namespace Horo::Editor {
 
             RenderGraphBuilder builder;
             RenderQueueId queue;
+            bool spatial_{};
             RenderGraphPassRef last;
             std::vector<std::pair<RenderBufferHandle, RenderGraphResourceId>> buffers;
             std::vector<RenderGraphImportedState> initial;
@@ -179,15 +197,15 @@ namespace Horo::Editor {
         std::vector<EditorViewportResources::MeshBinding> meshes;
         std::array<std::array<RasterVariant, 2>, 8> slots;
         std::array<std::unique_ptr<std::array<std::array<RasterVariant, 2>, 8>>, EditorViewportColorPipeline::SlotCount> colorSlots;
-        RenderTextureHandle display, presentation;
-        RenderTextureViewHandle displayView, presentationView;
+        RenderTextureHandle display, presentation, spatial;
+        RenderTextureViewHandle displayView, presentationView, spatialView;
         std::uint32_t atlasPasses{};
         bool shadowDraws{};
 
         bool Matches(const EditorViewportResources &resources, const RenderSceneView &scene, const DirectionalShadowFrame *shadow) const {
             if (attachments != Attachments(resources) || display != resources.DisplayTexture() ||
-                presentation != resources.PresentationTexture() || meshes.size() != scene.instances.size() ||
-                shadowDraws != (shadow != nullptr) || atlasPasses != AtlasPassCount(shadow))
+                presentation != resources.PresentationTexture() || spatial != resources.SpatialTexture() ||
+                meshes.size() != scene.instances.size() || shadowDraws != (shadow != nullptr) || atlasPasses != AtlasPassCount(shadow))
                 return false;
             for (std::size_t index = 0; index < meshes.size(); ++index) {
                 const auto source = scene.instances[index].mesh;
@@ -273,10 +291,11 @@ namespace Horo::Editor {
         }
 
         void Build(RasterVariant &variant, const FrameSlot &slot, RenderQueueId queue, bool overlay,
-                   const EditorViewportColorPipeline *pipeline = nullptr) {
+                   const EditorViewportColorPipeline *pipeline = nullptr,
+                   const std::shared_ptr<IResidentNativeReconstructionKernel> &kernel = {}) {
             variant.count = atlasPasses + 1;
             const auto draws = std::max<std::size_t>(1, meshes.size() + (overlay ? 1 : 0));
-            RasterGraphAuthor author{draws, variant.count, queue, pipeline != nullptr};
+            RasterGraphAuthor author{draws, variant.count, queue, pipeline != nullptr, kernel != nullptr};
             const auto atlas = author.Attach(attachments.atlas);
             const auto scene = author.Attach(attachments.color);
             const auto depth = author.Attach(attachments.depth);
@@ -285,7 +304,14 @@ namespace Horo::Editor {
             if (pipeline) {
                 const auto displayResource = author.Attach(display);
                 const auto output = author.Attach(presentation);
-                author.ColorScene(variant.color, *pipeline, scene, displayResource, displayView, attachments.extent);
+                auto toneMapInput = scene;
+                if (kernel) {
+                    toneMapInput = author.Attach(spatial);
+                    variant.spatialWork = variant.count;
+                    variant.workloads[variant.count++] =
+                        author.Reconstruct(scene, attachments.colorView, toneMapInput, spatialView, kernel);
+                }
+                author.ColorScene(variant.color, *pipeline, toneMapInput, displayResource, displayView, attachments.extent);
                 RenderGraphPassWorkload displayOverlay;
                 if (overlay)
                     displayOverlay = AuthorDisplayOverlay(author, variant, slot.overlay, displayResource, depth, atlas);
@@ -301,15 +327,16 @@ namespace Horo::Editor {
         }
 
         /** @brief Warms each bounded native-slot pairing only for the current material pair and its actual table state. */
-        void PrepareColorSlot(std::span<const FrameSlot> nativeSlots, RenderQueueId queue, const EditorViewportColorPipeline &pipeline) {
+        void PrepareColorSlot(std::span<const FrameSlot> nativeSlots, RenderQueueId queue, const EditorViewportColorPipeline &pipeline,
+                              const std::shared_ptr<IResidentNativeReconstructionKernel> &kernel) {
             auto &slot = colorSlots[pipeline.CandidateSlot()];
             if (slot && (*slot)[0][0].color.MatchesInitialStates(pipeline))
                 return;
             auto candidate = std::make_unique<std::array<std::array<RasterVariant, 2>, 8>>();
             for (std::size_t index = 0; index < nativeSlots.size(); ++index) {
-                Build((*candidate)[index][0], nativeSlots[index], queue, false, &pipeline);
+                Build((*candidate)[index][0], nativeSlots[index], queue, false, &pipeline, kernel);
                 if (meshes.size() < MaximumDraws)
-                    Build((*candidate)[index][1], nativeSlots[index], queue, true, &pipeline);
+                    Build((*candidate)[index][1], nativeSlots[index], queue, true, &pipeline, kernel);
             }
             slot = std::move(candidate);
         }
@@ -342,7 +369,8 @@ namespace Horo::Editor {
         try {
             if (viewportRasterGraphs_ && viewportRasterGraphs_->Matches(resources_, pass.scene, cast)) {
                 if (color_)
-                    viewportRasterGraphs_->PrepareColorSlot(std::span{slots_}.first(device_.frames), device_.graphicsIdentity, *color_);
+                    viewportRasterGraphs_->PrepareColorSlot(std::span{slots_}.first(device_.frames), device_.graphicsIdentity, *color_,
+                                                            spatial_);
                 return Result<void>::Success();
             }
             auto candidate = std::make_shared<ViewportRasterGraphs>();
@@ -351,6 +379,8 @@ namespace Horo::Editor {
             candidate->displayView = resources_.DisplayTextureView();
             candidate->presentation = resources_.PresentationTexture();
             candidate->presentationView = resources_.PresentationTextureView();
+            candidate->spatial = resources_.SpatialTexture();
+            candidate->spatialView = resources_.SpatialTextureView();
             candidate->atlasPasses = AtlasPassCount(cast);
             candidate->shadowDraws = cast != nullptr;
             candidate->meshes.reserve(pass.scene.instances.size());
@@ -361,7 +391,7 @@ namespace Horo::Editor {
                 candidate->meshes.push_back(*mesh);
             }
             if (color_)
-                candidate->PrepareColorSlot(std::span{slots_}.first(device_.frames), device_.graphicsIdentity, *color_);
+                candidate->PrepareColorSlot(std::span{slots_}.first(device_.frames), device_.graphicsIdentity, *color_, spatial_);
             else
                 for (std::uint32_t index = 0; index < device_.frames; ++index) {
                     candidate->Build(candidate->slots[index][0], slots_[index], device_.graphicsIdentity, false);
@@ -397,6 +427,12 @@ namespace Horo::Editor {
         std::get<RenderGraphMaterialRaster>(variant.workloads[viewportRasterGraphs_->atlasPasses].workload).colorOperations.clearColor =
             pass.clearColor;
 
+        if (variant.spatialWork) {
+            const auto spatial = PrepareSpatialDispatch(frame.Token(), pass);
+            if (spatial.HasError())
+                return Result<void>::Failure(spatial.ErrorValue());
+            std::get<RenderGraphNativeReconstruction>(variant.workloads[*variant.spatialWork].workload).dispatch = spatial.Value();
+        }
         if (color_)
             variant.color.Refresh(*color_);
         const auto reserved = frame.ReserveSubmission(RenderQueueRole::Graphics);

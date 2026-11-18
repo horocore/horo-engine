@@ -5,6 +5,7 @@
 #include "EditorVulkanViewportShader.h"
 #include "Horo/Runtime/Render/MaterialBinding.h"
 #include "Horo/Runtime/Render/MultiviewMotionHistory.h"
+#include "Horo/Runtime/Render/NativeReconstructionKernel.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Render/ShaderHotReloadTarget.h"
 #include "VulkanEditorGraphicsBridge.h"
@@ -27,9 +28,11 @@ namespace Horo::Editor {
         /** @brief Installs the explicit validated scene-linear shader and Vulkan manual color package before resources or frames.
          * @param scene Exact scene-linear cook. @param inputs Selected decoded color package.
          * @param settings Authored manual exposure settings.
+         * @param spatial Optional exact cook already verified by the explicit installed host inventory.
          * @return Success only after complete native material/color admission, or typed failure. */
         [[nodiscard]] Result<void> PrepareManualColor(EditorVulkanSceneLinearCook scene, const EditorViewportColorInputs &inputs,
-                                                      const Render::ExposureSettings &settings);
+                                                      const Render::ExposureSettings &settings,
+                                                      const Render::CookedNativeReconstructionKernel *spatial = nullptr);
         ~EditorViewportRendererVulkan() override;
         /** @copydoc IEditorViewportRenderer::RequestColorSettings */
         [[nodiscard]] Result<void> RequestColorSettings(const Render::ExposureSettings &settings) override;
@@ -283,6 +286,12 @@ namespace Horo::Editor {
                                                                                              const Render::ExposureSettings &settings);
         /** @brief Prepares actual sampled attachment bindings and a free native-backed uniform pair before BeginFrame. */
         [[nodiscard]] Result<void> PrepareViewportColor(Render::RenderViewId view, Render::FramebufferExtent extent);
+        /** @brief Realizes an admitted explicit spatial kernel on the viewport's direct aliased graphics/compute queue. */
+        [[nodiscard]] Result<std::shared_ptr<Render::IResidentNativeReconstructionKernel>> PrepareSpatialKernel(
+            const Render::CookedNativeReconstructionKernel *kernel);
+        /** @brief Validates exact selected viewport resources and projection for the active same-extent graph. */
+        [[nodiscard]] Result<Render::NativeReconstructionDispatchPlan> PrepareSpatialDispatch(
+            Render::FrameToken frame, const Render::StaticMeshPassDescriptor &pass) const;
         /** @brief Publishes only the exact last recorded color graph ticket and records its acceptance owner. */
         void RecordViewportColor(Render::RenderTimelinePoint signal) noexcept;
         /** @brief Returns the selected scene program alongside the independently owned display overlay. */
@@ -338,6 +347,7 @@ namespace Horo::Editor {
         Render::RenderFrontend &frontend_;
         Render::Detail::VulkanEditorGraphicsBridge &bridge_;
         std::unique_ptr<EditorViewportColorPipeline> color_;
+        std::shared_ptr<Render::IResidentNativeReconstructionKernel> spatial_;
 
         struct ColorSubmission final {
             Render::RenderTimelinePoint signal;

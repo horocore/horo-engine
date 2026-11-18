@@ -89,10 +89,14 @@ namespace Horo::Editor {
     /** @copydoc EditorViewportRendererVulkan::PrepareManualColor */
     Result<void> EditorViewportRendererVulkan::PrepareManualColor(EditorVulkanSceneLinearCook scene,
                                                                   const EditorViewportColorInputs &inputs,
-                                                                  const Render::ExposureSettings &settings) {
+                                                                  const Render::ExposureSettings &settings,
+                                                                  const Render::CookedNativeReconstructionKernel *spatial) {
         if (!initialized_ || recordedEver_ || color_ || resources_.ColorTexture().IsValid() ||
             !frontend_.Capabilities().supportsMaterialRasterGraph || scene.payload.empty() || settings.mode != Render::ExposureMode::Manual)
             return Result<void>::Failure(MakeError(Render::ExposureGpuErrors::Unsupported));
+        auto nativeSpatial = PrepareSpatialKernel(spatial);
+        if (nativeSpatial.HasError())
+            return Result<void>::Failure(nativeSpatial.ErrorValue());
         auto color = MakeViewportColor(inputs, settings);
         if (color.HasError())
             return Result<void>::Failure(color.ErrorValue());
@@ -105,10 +109,11 @@ namespace Horo::Editor {
         candidate->sceneLinearProgram.metadata = std::move(scene.metadata);
         if (const auto prepared = PrepareProgram(*candidate); prepared.HasError())
             return prepared;
-        if (const auto enabled = resources_.EnableColorPipeline(); enabled.HasError())
+        if (const auto enabled = resources_.EnableColorPipeline(spatial != nullptr); enabled.HasError())
             return enabled;
         AdoptProgram(*candidate);
         color_ = std::move(color).Value();
+        spatial_ = std::move(nativeSpatial).Value();
         return Result<void>::Success();
     }
 
@@ -294,6 +299,7 @@ namespace Horo::Editor {
                 draw = {};
         FinishColorFrame(false);
         color_.reset();
+        spatial_.reset();
         acceptedColorView_ = {};
         ProgramResources::ReleaseMaterials(slots_);
         if (sceneLinearShader_.materials)

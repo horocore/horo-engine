@@ -68,8 +68,16 @@ namespace Horo::Editor {
         /** @brief Exact existing color storage, borrowed to compile a clear recipe at its resource boundary. */
         [[nodiscard]] Render::RenderTextureHandle ColorTexture() const noexcept;
         /** @brief Enables canonical scene/display/presentation separation before allocating the first viewport target.
+         * @param spatial Whether to include the exact same-extent native spatial output in that generation.
          * @return Typed invalid lifecycle failure if resources already exist. */
-        [[nodiscard]] Result<void> EnableColorPipeline();
+        [[nodiscard]] Result<void> EnableColorPipeline(bool spatial = false);
+        /** @brief Returns the exact descriptor used to allocate the resident scene color for this generation. */
+        [[nodiscard]] Render::RenderTextureDescriptor SceneColorDescriptor() const noexcept;
+        /** @brief Borrows the separate same-extent spatial output owned by the viewport generation. */
+        [[nodiscard]] Render::RenderTextureHandle SpatialTexture() const noexcept;
+        [[nodiscard]] Render::RenderTextureViewHandle SpatialTextureView() const noexcept;
+        /** @brief Returns the exact descriptor used to allocate the spatial output generation. */
+        [[nodiscard]] Render::RenderTextureDescriptor SpatialColorDescriptor() const noexcept;
         /** @brief Returns the display-linear post-ACES target. @return Exact owned FP16 storage/view. */
         [[nodiscard]] Render::RenderTextureHandle DisplayTexture() const noexcept;
         [[nodiscard]] Render::RenderTextureViewHandle DisplayTextureView() const noexcept;
@@ -99,6 +107,10 @@ namespace Horo::Editor {
         struct ViewportTargetResources {
             Render::RenderTextureHandle colorTexture;
             Render::RenderTextureHandle depthTexture;
+            Render::RenderTextureHandle spatialTexture;
+            Render::RenderTextureViewHandle spatialView;
+            Render::ResourceOperationId spatialOperation;
+            Render::ResourceOperationId spatialViewOperation;
             Render::RenderTextureHandle displayTexture;
             Render::RenderTextureHandle presentationTexture;
             Render::RenderTextureViewHandle displayView;
@@ -131,6 +143,8 @@ namespace Horo::Editor {
         void RetireMissingMeshes(std::span<const EditorViewportMeshResourceView> resources) noexcept;
         [[nodiscard]] Result<void> SynchronizeTarget(EditorViewportExtent extent);
         [[nodiscard]] Result<bool> AdvanceViewportTarget(ViewportTargetResources &resources);
+        [[nodiscard]] Render::RenderTextureDescriptor SceneColorDescriptor(Render::FramebufferExtent extent) const noexcept;
+        [[nodiscard]] static Render::RenderTextureDescriptor SpatialColorDescriptor(Render::FramebufferExtent extent) noexcept;
         [[nodiscard]] Result<bool> AdvanceViewportTextures(ViewportTargetResources &resources);
         [[nodiscard]] Result<bool> AdvanceViewportViews(ViewportTargetResources &resources);
         [[nodiscard]] Result<bool> AdvanceColorPipelineTargets(ViewportTargetResources &resources);
@@ -166,5 +180,6 @@ namespace Horo::Editor {
         EditorViewportExtent allocatedExtent_;
         bool meshesReady_{false};
         bool colorPipeline_{};
+        bool spatialColor_{};
     };
 }  // namespace Horo::Editor
