@@ -499,10 +499,10 @@ namespace Horo::WorldStreaming {
                                                                        .revision = IdentityFrom<StreamingSourceRevision>(1)},
                                                             .cell = fence.cell}};
             };
-            const auto reserve = [&](const StreamingCellOperationHandle &handle) {
+            const auto reserve = [&](const StreamingCellOperationHandle &handle, const StreamingFeatureBudgetPlan &plan) {
                 const auto operation = StreamingCellOperation::Create(handle, StreamingCellOperationKind::Load);
                 REQUIRE(operation.HasValue());
-                return ledger.TryAdmit(ledger.Context(), operation.Value(), pendingPlan, 1, handle.fence);
+                return ledger.TryAdmit(ledger.Context(), operation.Value(), plan, 1, handle.fence);
             };
             const auto older = queueEntry(2, 0.0F);
             const auto urgent = queueEntry(3, 1'000.0F);
@@ -513,7 +513,7 @@ namespace Horo::WorldStreaming {
             const auto fullQueue = queue.Revision();
             const auto fullLedger = ledger.Context().revision;
             RequireError(queue.Enqueue(context(), arrival), FairQueueCapacityExceeded);
-            RequireError(reserve(urgent.operation), SchedulerCapacityExceeded);
+            RequireError(reserve(urgent.operation, pendingPlan), SchedulerCapacityExceeded);
             CHECK(queue.Revision() == fullQueue);
             CHECK(ledger.Context().revision == fullLedger);
             CHECK(ledger.Used(Axis::CpuResidentBytes).Value() == 20);
@@ -533,7 +533,7 @@ namespace Horo::WorldStreaming {
             REQUIRE(firstChoice);
             CHECK(firstChoice->operation == urgent.operation);
             CHECK(firstChoice->reason == StreamingFairQueueDispatchReason::Priority);
-            const auto admitted = reserve(firstChoice->operation);
+            const auto admitted = reserve(firstChoice->operation, pendingPlan);
             REQUIRE(admitted.HasValue());
             REQUIRE(queue.CommitDispatch(context(), *firstChoice).HasValue());
             const auto urgentReservation = admitted.Value();
@@ -567,7 +567,7 @@ namespace Horo::WorldStreaming {
             REQUIRE(secondChoice);
             CHECK(secondChoice->operation == older.operation);
             CHECK(secondChoice->reason == StreamingFairQueueDispatchReason::OldestAdmissible);
-            const auto retained = reserve(secondChoice->operation);
+            const auto retained = reserve(secondChoice->operation, pendingPlan);
             REQUIRE(retained.HasValue());
             REQUIRE(queue.CommitDispatch(context(), *secondChoice).HasValue());
             CHECK(queue.Size() == 1);
@@ -579,7 +579,8 @@ namespace Horo::WorldStreaming {
             REQUIRE(ledger.BeginShutdown(ledger.Context()).HasValue());
             CHECK(ledger.Context().revision == shutdown);
             CHECK(queue.Size() == 0);
-            RequireError(reserve(arrival.operation), SchedulerLifecycleUnavailable);
+            RequireError(reserve(arrival.operation, pendingPlan), FeatureBudgetCapacityExceeded);
+            RequireError(reserve(arrival.operation, Plan()), SchedulerLifecycleUnavailable);
             CHECK(ledger.Runtime().Scheduler().ReservedCount() == 1);
             REQUIRE(ledger.Advance(ledger.Context(), retained.Value(), Transition::Shutdown).HasValue());
             RequireError(ledger.Advance(ledger.Context(), retained.Value(), Transition::Complete), CellOperationTransitionInvalid);
