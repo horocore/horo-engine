@@ -1396,6 +1396,27 @@ add_library(HoroAudioWatchdog STATIC
 target_compile_features(HoroAudioWatchdog PUBLIC cxx_std_20)
 target_link_libraries(HoroAudioWatchdog PUBLIC HoroAudioBackendContract HoroAudioSafetyHooks)
 
+if(HORO_BUILD_AUDIO_PIPEWIRE)
+    add_library(HoroAudioNativeRuntime STATIC
+            audio/backend/native/NativeAudioBackend.cpp
+            audio/backend/native/NativeAudioNegotiation.cpp)
+    target_compile_features(HoroAudioNativeRuntime PUBLIC cxx_std_20)
+    target_include_directories(HoroAudioNativeRuntime PUBLIC
+            "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/native/include>")
+    target_link_libraries(HoroAudioNativeRuntime PUBLIC HoroAudioBackendContract PRIVATE HoroAudioWatchdog)
+
+    find_package(Threads REQUIRED)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(HORO_PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3>=1.0)
+    add_library(HoroAudioPipeWire STATIC audio/backend/pipewire/PipeWireAudioBackend.cpp)
+    target_compile_features(HoroAudioPipeWire PUBLIC cxx_std_20)
+    target_compile_definitions(HoroAudioPipeWire PRIVATE _GNU_SOURCE)
+    target_include_directories(HoroAudioPipeWire PUBLIC
+            "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/pipewire/include>")
+    target_link_libraries(HoroAudioPipeWire PUBLIC HoroAudioNativeRuntime PRIVATE
+            PkgConfig::HORO_PIPEWIRE nlohmann_json::nlohmann_json Threads::Threads)
+endif()
+
 add_library(HoroAudioNull STATIC
         audio/backend/null/NullAudioBackend.cpp
 )

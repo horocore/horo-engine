@@ -802,6 +802,26 @@ target_compile_features(HoroAudioCookTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioCookTests PRIVATE HoroEngine::AudioCook HoroEngine::Platform)
 target_include_directories(HoroAudioCookTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 horo_register_catch_test(HoroAudioCookTests LABELS "unit;audio;headless")
+if(HORO_ENABLE_PIPEWIRE_DAEMON_TESTS)
+    if(NOT TARGET HoroAudioPipeWire)
+        message(FATAL_ERROR "HORO_ENABLE_PIPEWIRE_DAEMON_TESTS requires HORO_BUILD_AUDIO_PIPEWIRE")
+    endif()
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    find_program(HORO_PIPEWIRE_DAEMON pipewire REQUIRED)
+    find_program(HORO_PIPEWIRE_SESSION_MANAGER wireplumber REQUIRED)
+    find_program(HORO_PIPEWIRE_CLIENT pw-cli REQUIRED)
+    find_program(HORO_PIPEWIRE_DUMP pw-dump REQUIRED)
+    find_program(HORO_PIPEWIRE_DBUS_SESSION dbus-run-session REQUIRED)
+    add_executable(HoroPipeWireAudioBackendTests unit/runtime/audio/PipeWireAudioBackendTests.cpp)
+    target_compile_features(HoroPipeWireAudioBackendTests PRIVATE cxx_std_20)
+    target_link_libraries(HoroPipeWireAudioBackendTests PRIVATE HoroAudioPipeWire Catch2::Catch2WithMain)
+    add_test(NAME HoroPipeWireAudioBackendTests COMMAND "${HORO_PIPEWIRE_DBUS_SESSION}" --
+        "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/integration/pipewire_native_contract.py"
+        "$<TARGET_FILE:HoroPipeWireAudioBackendTests>" "${HORO_PIPEWIRE_DAEMON}" "${HORO_PIPEWIRE_SESSION_MANAGER}"
+        "${HORO_PIPEWIRE_CLIENT}" "${HORO_PIPEWIRE_DUMP}")
+    set_tests_properties(HoroPipeWireAudioBackendTests PROPERTIES LABELS "audio;native;pipewire" TIMEOUT 45)
+endif()
+
 add_executable(HoroAudioBackendContractTests
         unit/runtime/audio/AudioBackendContractTests.cpp
 )

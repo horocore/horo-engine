@@ -2176,6 +2176,22 @@ stream destruction prove callback detachment before `Close`. The adapter reports
 native hotplug as unsupported until the explicit switching/recovery transaction owns
 loss, default-role migration, and retained delivery end to end.
 
+`HORO_BUILD_AUDIO_PIPEWIRE` builds the Linux-only `HoroAudioPipeWire`
+peer against PipeWire 1.0 or later. The host explicitly owns shared library
+initialization and the backend lifecycle. Native node and default metadata
+become bounded, generation-scoped discovery facts. An open stream negotiates
+with silence, then pauses before reporting the observed sample rate and
+channel order. `Start` installs the retained Horo callback only for that
+epoch. Missing endpoint class or hardware period stays unknown. The private
+PipeWire loop publishes loss and completes detachment through a retained
+retirement worker before a replacement can open.
+
+`HORO_ENABLE_PIPEWIRE_DAEMON_TESTS` runs the native lifecycle against a
+private PipeWire daemon, WirePlumber and a virtual sink. The test retires and
+restarts the daemon, checks old callback detachment and verifies a new
+negotiated format. Physical endpoint, latency and operating-system real-time
+scheduling qualification remain separate.
+
 The application composition root links and registers only admitted backend
 targets, then resolves one stable backend ID before device construction. Backend
 identity remains fixed for the AudioRuntime lifetime; selecting another peer
