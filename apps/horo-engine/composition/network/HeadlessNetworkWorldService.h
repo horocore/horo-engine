@@ -322,7 +322,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             std::optional<AI::AiScenePerceptionGroupInput> structural;
             if (OwnsPerception()) {
                 activation.emplace(AI::AiScenePerceptionActivationInput{record_->perception, input.perceptionFiltering,
-                                                                          input.perceptionPositions, input.perceptionExecution});
+                                                                        input.perceptionPositions, input.perceptionExecution});
                 structural.emplace(
                     AI::AiScenePerceptionGroupInput{record_->perception, input.perceptionFiltering, input.perceptionGroupPositions});
             }

@@ -37,13 +37,14 @@ namespace Horo::AI {
                     return entry.sense.identity;
                 });
                 if (contract == contracts.end() || contract->sense.identity != sense)
-                    return Result<void>::Failure(MakeError(AIErrors::PerceptionDependencyMissing, "No admitted native producer owns this listener."));
+                    return Result<void>::Failure(
+                        MakeError(AIErrors::PerceptionDependencyMissing, "No admitted native producer owns this listener."));
                 const auto units = contract->workUnits + PerceptionSenseGeneration::ValidationWorkUnits + 1;
                 if (units > remaining)
                     return Result<void>::Failure(MakeError(AIErrors::SchedulerBudgetExhausted));
                 auto instance = policy.generation->Create(policy.generation, sense, *endpoints.registry, policy.capabilities,
-                                                          {agent.record.handle, ProjectPerceptionSource(agent.record.owner),
-                                                           identity, agent.cancellation.Token()});
+                                                          {agent.record.handle, ProjectPerceptionSource(agent.record.owner), identity,
+                                                           agent.cancellation.Token()});
                 if (instance.HasError())
                     return Result<void>::Failure(instance.ErrorValue());
                 recipient->senses.push_back({std::move(instance).Value(),
@@ -274,9 +275,9 @@ namespace Horo::AI {
 
     /** @copydoc Detail::PreparePerceptionSenses */
     Result<void> Detail::PreparePerceptionSenses(const AiScenePerceptionExecution &policy,
-                                                  const std::span<const AgentRuntimeState> residents,
-                                                  const std::span<AgentRuntimeState> additions,
-                                                  const std::span<const std::size_t> removals) {
+                                                 const std::span<const AgentRuntimeState> residents,
+                                                 const std::span<AgentRuntimeState> additions,
+                                                 const std::span<const std::size_t> removals) {
         constexpr auto allCapabilityBits = (std::uint32_t{1} << static_cast<unsigned>(PerceptionCapability::Count)) - 1;
         if (!policy.generation || !policy.generation->CanAdmit())
             return Result<void>::Failure(MakeError(AIErrors::RuntimeUnavailable));
@@ -364,8 +365,8 @@ namespace Horo::AI {
             auto &sensing = *agent.sensing;
             AiWorkBudget budget{sensing.workUnits};
             for (auto &sense : sensing.senses) {
-                if (const auto polled = RunPerceptionSenseAtSensePoll(scene, spatial, *sense.instance, sense.query, tick,
-                                                                      sensing.memory, budget, global);
+                if (const auto polled =
+                        RunPerceptionSenseAtSensePoll(scene, spatial, *sense.instance, sense.query, tick, sensing.memory, budget, global);
                     polled.HasError()) {
                     active_->perceptionPollFailure = polled.ErrorValue();
                     return Result<void>::Failure(*active_->perceptionPollFailure);
@@ -377,7 +378,7 @@ namespace Horo::AI {
 
     /** @copydoc AiSceneRuntime::ReadPerceptionAtSafePoint */
     Result<PerceptionMemorySnapshot> AiSceneRuntime::ReadPerceptionAtSafePoint(const Runtime::RuntimeSceneView &scene,
-                                                                                const Runtime::EntityRef recipient) {
+                                                                               const Runtime::EntityRef recipient) {
         using Snapshot = Result<PerceptionMemorySnapshot>;
         if (auto owner = CapabilityAtSafePoint().ValidateAtSafePoint(); owner.HasError())
             return Snapshot::Failure(owner.ErrorValue());

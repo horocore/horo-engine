@@ -3,8 +3,8 @@
 #include "HeadlessNetworkServices.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/AIScenePerceptionSource.h"
-#include "Horo/AI/PerceptionSpatialBroadphase.h"
 #include "Horo/AI/PerceptionSenseProvider.h"
+#include "Horo/AI/PerceptionSpatialBroadphase.h"
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Platform/DynamicLibrary.h"
@@ -486,9 +486,8 @@ namespace Horo::Application::PrefabAtomicTest {
         class NativePerceptionFixture final {
         public:
             NativePerceptionFixture() {
-                const Gameplay::GameModuleLoadExpectation expected{
-                    "game.ai.tests", Gameplay::CurrentGameplayBuildFingerprint(),
-                    Tests::ReadDescriptorRevision(HORO_TEST_AI_MODULE_REVISION_PATH)};
+                const Gameplay::GameModuleLoadExpectation expected{"game.ai.tests", Gameplay::CurrentGameplayBuildFingerprint(),
+                                                                   Tests::ReadDescriptorRevision(HORO_TEST_AI_MODULE_REVISION_PATH)};
                 auto candidate = Gameplay::GameModuleHost{}.Load(HORO_TEST_AI_MODULE_PATH, expected);
                 REQUIRE(candidate.HasValue());
                 REQUIRE_FALSE(candidate.Value().diagnostic);
@@ -509,13 +508,17 @@ namespace Horo::Application::PrefabAtomicTest {
                                                                             .sense = contract.sense.identity,
                                                                             .stimuli = {{contract.stimulus.identity}},
                                                                             .stimulusCount = 1}};
-                auto registry = AI::PerceptionDescriptorRegistry::Capture(
-                    {std::span<const AI::SenseTypeDescriptor>{&contract.sense, 1},
-                     std::span<const AI::StimulusTypeDescriptor>{&contract.stimulus, 1}, listeners}, execution.capabilities);
+                auto registry =
+                    AI::PerceptionDescriptorRegistry::Capture({std::span<const AI::SenseTypeDescriptor>{&contract.sense, 1},
+                                                               std::span<const AI::StimulusTypeDescriptor>{&contract.stimulus, 1},
+                                                               listeners},
+                                                              execution.capabilities);
                 REQUIRE(registry.HasValue());
-                endpoints = std::make_shared<const AI::AiControllerPerceptionEndpoints>(AI::AiControllerPerceptionEndpoints{
-                    .registry = std::make_shared<const AI::PerceptionDescriptorRegistry>(std::move(registry).Value()),
-                    .listeners = {listener}, .sources = {contract.sense.identity}});
+                endpoints = std::make_shared<const AI::AiControllerPerceptionEndpoints>(
+                    AI::AiControllerPerceptionEndpoints{.registry = std::make_shared<const AI::PerceptionDescriptorRegistry>(
+                                                            std::move(registry).Value()),
+                                                        .listeners = {listener},
+                                                        .sources = {contract.sense.identity}});
             }
 
             [[nodiscard]] std::size_t RequiredUnits() const {
@@ -523,8 +526,10 @@ namespace Horo::Application::PrefabAtomicTest {
             }
 
             NativeCookedDecisionProbe probe;
+
         private:
             std::unique_ptr<Gameplay::LoadedGameModule> module_;
+
         public:
             AI::AiScenePerceptionExecution execution;
             std::shared_ptr<const AI::AiControllerPerceptionEndpoints> endpoints;
@@ -552,7 +557,11 @@ namespace Horo::Application::PrefabAtomicTest {
                                                            std::chrono::steady_clock::now() + std::chrono::seconds{3}};
             const std::array catalog{controller.descriptor};
             Internal::HeadlessSceneActivationInput input{Physics::PhysicsRuntimeMode::Canonical,
-                                                         Physics::Settings(), registry, loader, load, catalog};
+                                                         Physics::Settings(),
+                                                         registry,
+                                                         loader,
+                                                         load,
+                                                         catalog};
             input.perceptionPositions = PerceptionPositions;
             input.perceptionExecution = native.execution;
             auto role = NetworkProjectRole::Standalone;
@@ -567,8 +576,9 @@ namespace Horo::Application::PrefabAtomicTest {
                 role = NetworkProjectRole::ListenServer;
                 world = NetworkModeWorldKind::Client;
             }
-            auto composed = Internal::ComposeHeadlessSceneNetworkServices(
-                std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(definition).Value()), std::move(input));
+            auto composed = Internal::ComposeHeadlessSceneNetworkServices(std::make_shared<const Runtime::RuntimeSceneDefinition>(
+                                                                              std::move(definition).Value()),
+                                                                          std::move(input));
             REQUIRE(composed.HasValue());
             const auto service = [&](const NetworkModeServiceKind kind) {
                 return composed.Value().factories.services[static_cast<std::size_t>(kind)]({kind, role, {}, world, {7}});
@@ -1314,15 +1324,23 @@ namespace Horo::Application::PrefabAtomicTest {
             SECTION("a later Gameplay owner rejects the aggregate and destroys only detached candidate providers") {
                 reject = true;
             }
-            const AI::AiScenePerceptionGroupInput group{
-                spatial, {}, [](const Runtime::RuntimeSceneView &, const std::span<const Runtime::RuntimeEntityView> prospective) {
-                    std::vector<AI::AiScenePerceptionPosition> positions;
-                    for (const auto &entity : prospective)
-                        positions.push_back({entity.entity, Math::WorldCoordinate64::FromMillimeters(entity.entity.entity.index * 1000, 0, 0)});
-                    return Result<std::vector<AI::AiScenePerceptionPosition>>::Success(std::move(positions));
-                }};
-            Fixture fixture{true, reject ? Fault::GameplayDescriptor : Fault::None, {.requirePerceptionEndpoints = true},
-                            native.endpoints, group, nullptr, {}, initial};
+            const AI::AiScenePerceptionGroupInput group{spatial,
+                                                        {},
+                                                        [](const Runtime::RuntimeSceneView &,
+                                                           const std::span<const Runtime::RuntimeEntityView> prospective) {
+                std::vector<AI::AiScenePerceptionPosition> positions;
+                for (const auto &entity : prospective)
+                    positions.push_back({entity.entity, Math::WorldCoordinate64::FromMillimeters(entity.entity.entity.index * 1000, 0, 0)});
+                return Result<std::vector<AI::AiScenePerceptionPosition>>::Success(std::move(positions));
+            }};
+            Fixture fixture{true,
+                            reject ? Fault::GameplayDescriptor : Fault::None,
+                            {.requirePerceptionEndpoints = true},
+                            native.endpoints,
+                            group,
+                            nullptr,
+                            {},
+                            initial};
             const auto baseline = *fixture.scenes.ActiveScene();
             const auto resident = *baseline.Find({1});
             const auto quantum = Duration::FromNanoseconds(native.execution.memory.fixedStep.count());

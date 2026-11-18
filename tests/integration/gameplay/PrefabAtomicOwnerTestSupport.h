@@ -405,8 +405,9 @@ namespace Horo::Application::PrefabAtomicTest {
             auto initial = native.MakeParticipant(*physics, authority, Physics::Settings());
             REQUIRE(initial.HasValue());
             REQUIRE(scenes.AddActivationParticipant(std::move(initial).Value()).HasValue());
-            REQUIRE(scenes.AddActivationParticipant(
-                               std::make_unique<AI::AiSceneActivationParticipant>(ai, catalog, std::move(perceptionActivation)))
+            REQUIRE(scenes
+                        .AddActivationParticipant(
+                            std::make_unique<AI::AiSceneActivationParticipant>(ai, catalog, std::move(perceptionActivation)))
                         .HasValue());
             if (aiFirst)
                 REQUIRE(scenes.AddStructuralParticipant(AiOwner(catalog, fault, perception)).HasValue());

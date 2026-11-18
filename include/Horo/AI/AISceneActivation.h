@@ -56,7 +56,7 @@ namespace Horo::AI {
     struct AiScenePerceptionActivationInput final {
         PerceptionSpatialBroadphase &spatial; /**< Outlives the Scene participant and all its candidates. */
         PerceptionFilteringPolicy filtering;
-        AiScenePerceptionPositionSource positions; /**< Captures the actual candidate Scene's global positions. */
+        AiScenePerceptionPositionSource positions;           /**< Captures the actual candidate Scene's global positions. */
         std::optional<AiScenePerceptionExecution> execution; /**< Explicit producer grant over the same published endpoints. */
     };
 
@@ -345,7 +345,7 @@ namespace Horo::AI {
          * @return Bounded snapshot or a typed unavailable/stale error.
          */
         [[nodiscard]] Result<PerceptionMemorySnapshot> ReadPerceptionAtSafePoint(const Runtime::RuntimeSceneView &scene,
-                                                                                Runtime::EntityRef recipient);
+                                                                                 Runtime::EntityRef recipient);
 
         /** @brief Activates cooked decisions once on an exact already-staged Scene before host publication.
          * @param execution Deterministic owner policy with live process jobs and callable provider generation.

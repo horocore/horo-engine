@@ -107,9 +107,8 @@ namespace Horo::AI::Detail {
 
     /** @brief Stages native factories and aggregate maximum work for exactly the next resident population. */
     [[nodiscard]] Result<void> PreparePerceptionSenses(const AiScenePerceptionExecution &policy,
-                                                        std::span<const AgentRuntimeState> residents,
-                                                        std::span<AgentRuntimeState> additions,
-                                                        std::span<const std::size_t> removals = {});
+                                                       std::span<const AgentRuntimeState> residents, std::span<AgentRuntimeState> additions,
+                                                       std::span<const std::size_t> removals = {});
 
     /** @brief Rejects a staged registration set that would exceed the canonical spatial owner's bounds. */
     [[nodiscard]] Result<void> ValidatePerceptionCapacity(std::span<const AgentRuntimeState> residents,
