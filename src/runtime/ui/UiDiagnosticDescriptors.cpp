@@ -13,6 +13,7 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiScreenTransitionErrors::Timeout,
             &UiErrors::LayoutCandidateBusy,
             &UiErrors::StyleCandidateBusy,
+            &UiErrors::StyleReferenceInvalid,
             &UiErrors::ClockInputInvalid,
             &UiErrors::ClockSourceStale,
             &UiErrors::ClockOverflow,
