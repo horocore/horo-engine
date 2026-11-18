@@ -342,6 +342,16 @@ namespace Horo::Application::Internal {
                                                .animationTarget = animationTarget,
                                                .animationIdentities = animationTarget.IsValid() ? std::move(animationIdentities) : nullptr,
                                                .navigation = resources->navigation};
+            if (!launch.cookedDecisionBindings.empty()) {
+                if (!resources->committed)
+                    return Result<NetworkProductComposition>::Failure(
+                        MakeError(Net::NetworkErrors::NetworkModeInvalid, "AI decisions require the selected committed Scene generation."));
+                input.cookedDecisions = std::make_shared<const HeadlessCookedDecisionInput>(
+                    HeadlessCookedDecisionInput{.committed = *resources->committed,
+                                                .bindings = launch.cookedDecisionBindings,
+                                                .execution = AI::AiSceneCookedDecisionExecution{resources->jobs, {}, {}},
+                                                .provider = HeadlessDecisionProvider::SelectedNativeGameplay});
+            }
             if (input.navigation && launch.role == Net::NetworkProjectRole::Client)
                 return Result<NetworkProductComposition>::Failure(
                     MakeError(Net::NetworkErrors::NetworkModeInvalid, "Navigation requires an authoritative world."));

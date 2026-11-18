@@ -2931,10 +2931,13 @@ target_compile_definitions(HoroGameplayPhysicsTests PRIVATE
     HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>
     HORO_TEST_SOURCE_ROOT="${PROJECT_SOURCE_DIR}"
     HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
-    HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}")
+    HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}"
+    HORO_TEST_AI_MODULE_PATH="$<TARGET_FILE:HoroTestAiGameModule>"
+    HORO_TEST_AI_MODULE_REVISION_PATH="${HORO_TEST_AI_MODULE_REVISION_FILE}")
+target_compile_definitions(HoroGameplayPhysicsTests PRIVATE HORO_TEST_HEADLESS_ENGINE_PATH="$<TARGET_FILE:horo-engine>")
 target_link_libraries(HoroGameplayPhysicsTests PRIVATE HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::GameplayModuleHost HoroEngine::Platform
     HoroNetworkProductHost nlohmann_json::nlohmann_json)
-add_dependencies(HoroGameplayPhysicsTests HoroTestGameModule)
+add_dependencies(HoroGameplayPhysicsTests HoroTestGameModule HoroTestAiGameModule horo-engine)
 horo_register_catch_test(HoroGameplayPhysicsTests LABELS "unit;gameplay;physics;headless")
 add_test(NAME HoroGameplayProductLaunchContract
     COMMAND "${CMAKE_COMMAND}" "-DENGINE=$<TARGET_FILE:horo-engine>" "-DMODULE=$<TARGET_FILE:HoroTestGameModule>"

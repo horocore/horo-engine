@@ -13,6 +13,11 @@
 #include "Horo/Gameplay/LuaBehavior.h"
 #include "Horo/Prefab/PrefabSpawnService.h"
 
+namespace Horo::AI {
+    class AiSceneRuntime;
+    struct AiSceneCookedDecisionExecution;
+}  // namespace Horo::AI
+
 namespace Horo::Gameplay {
     class GameplayVfxContext;
     class GameplayVfxScene;
@@ -67,6 +72,14 @@ namespace Horo::Application::Internal {
         Prefab::PrefabLimitProfile profile;
         Prefab::PrefabTemplateProviderLimits limits{};
         CancellationToken cancellation;
+    };
+
+    /** @brief Borrows an exact private Scene and its prepared native provider until startup completes. */
+    struct GameplayPreparedDecisions final {
+        Gameplay::PreparedGameModuleImage &image;
+        const CancellationToken &cancellation;
+        AI::AiSceneRuntime &scene;
+        const AI::AiSceneCookedDecisionExecution &execution;
     };
 
     /** @brief Owner-thread gameplay lifetime borrowing an explicit world and Scene.
@@ -133,6 +146,17 @@ namespace Horo::Application::Internal {
                                                                                       std::uint64_t sceneGeneration,
                                                                                       const GameplayWorldSelection &selection,
                                                                                       Character::CharacterWorld *character = nullptr);
+        /** @brief Activates one prepared image and its cooked decisions before Scene behavior callbacks.
+         * @param scenes Private activated Scene service. @param templates Exact optional cooked prefab owner.
+         * @param world Active Physics owner. @param sceneGeneration Exact non-zero activation epoch.
+         * @param selection Same trusted gameplay selection used to prepare the image.
+         * @param character Paired Character owner. @param prepared Borrowed exact image and private Scene decisions.
+         * @return Active private composition or original startup error.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<GameplayWorldComposition>> CreatePrepared(
+            Runtime::RuntimeSceneService &scenes, Prefab::PrefabTemplateProvider *templates, Physics::PhysicsWorld &world,
+            std::uint64_t sceneGeneration, const GameplayWorldSelection &selection, Character::CharacterWorld &character,
+            const GameplayPreparedDecisions &prepared);
         ~GameplayWorldComposition();
         GameplayWorldComposition() = default;
         GameplayWorldComposition(const GameplayWorldComposition &) = delete;
@@ -200,16 +224,18 @@ namespace Horo::Application::Internal {
         [[nodiscard]] static Result<std::unique_ptr<GameplayWorldComposition>> CreateServiceBacked(
             Runtime::RuntimeSceneService &scenes, Prefab::PrefabTemplateProvider *templates, Physics::PhysicsWorld *world,
             std::uint64_t sceneGeneration, const GameplayWorldSelection &selection, const Gameplay::ComponentRegistry *components,
-            Character::CharacterWorld *character);
+            Character::CharacterWorld *character, const GameplayPreparedDecisions *prepared = nullptr);
         /** @brief Validates artifacts and activates callbacks only after Physics admission is resolved. */
         [[nodiscard]] Result<void> Activate(Runtime::RuntimeScene &scene, const GameplayWorldSelection &selection);
         /** @brief Loads the explicitly selected module/script and freezes its registry before any callback. */
-        [[nodiscard]] Result<void> RegisterModule(const GameplayWorldSelection &selection);
+        [[nodiscard]] Result<void> RegisterModule(const GameplayWorldSelection &selection,
+                                                  const GameplayPreparedDecisions *prepared = nullptr);
         /** @brief Loads and contributes one native generation with pre-Start replication admission and retained rollback ownership.
          * @param selection Exact artifact, host policy and explicit retirement owner.
+         * @param prepared Optional scoped activation of the already validated native image.
          * @return Original load/admission/contribution failure, or a contributed native generation.
          */
-        [[nodiscard]] Result<void> RegisterNativeModule(const GameplayWorldSelection &selection);
+        [[nodiscard]] Result<void> RegisterNativeModule(const GameplayWorldSelection &selection, const GameplayPreparedDecisions *prepared);
         /** @brief Pins and admits the loaded generation before any behavior callback. @param selection Complete host policy.
          * @return Original acquisition or declaration failure; native pre-Start admission already ran in its loader. */
         [[nodiscard]] Result<void> AdmitReplication(const GameplayWorldSelection &selection);

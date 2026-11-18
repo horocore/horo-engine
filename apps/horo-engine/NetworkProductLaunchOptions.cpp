@@ -227,6 +227,36 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Decodes one exact controller and stable project asset without loading either. */
+        Result<void> ReadCookedDecision(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch) {
+            if (arguments.size() - index < 3)
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "Use --ai-decision <controller id> <Decision AssetId>."));
+            const std::string_view identity{arguments[index + 1]};
+            std::uint64_t value{};
+            const auto parsed = std::from_chars(identity.data(), identity.data() + identity.size(), value);
+            auto controller = AI::ControllerTypeId::Create(value);
+            if (parsed.ec != std::errc{} || parsed.ptr != identity.data() + identity.size() || controller.HasError())
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, "Invalid AI controller identity."));
+            auto asset = Assets::AssetId::Parse(arguments[index + 2]);
+            if (asset.HasError())
+                return Result<void>::Failure(asset.ErrorValue());
+            launch.cookedDecisionBindings.push_back({controller.Value(), std::move(asset).Value()});
+            index += 3;
+            return Result<void>::Success();
+        }
+
+        /** @brief Requires the authoritative terminal path and the matching native/cooked authority. */
+        Result<void> ValidateCookedDecisions(const ProductLaunch &launch) {
+            if (!launch.cookedDecisionBindings.empty() &&
+                (launch.role != Net::NetworkProjectRole::Standalone || !launch.gameplay || launch.gameplay->nativeArtifact.empty() ||
+                 !launch.sceneInput.scene.starts_with("cooked:") || launch.sceneInput.cookedRoot.empty()))
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                                       "AI decisions require standalone mode, a native gameplay module, a "
+                                                       "cooked Scene and its committed generation."));
+            return Result<void>::Success();
+        }
+
         /** @brief Keeps legacy gameplay suffix parsing separate from paired explicit Scene options. */
         Result<void> ParseSceneOptions(const std::span<char *> arguments, ProductLaunch &launch) {
             SeenSceneOptions seen{};
@@ -250,6 +280,11 @@ namespace Horo::Application::Internal {
                         return selected;
                     continue;
                 }
+                if (key == "--ai-decision") {
+                    if (auto selected = ReadCookedDecision(arguments, index, launch); selected.HasError())
+                        return selected;
+                    continue;
+                }
                 if (auto applied = ReadSceneOption(arguments, index, seen, launch.sceneInput); applied.HasError())
                     return applied;
             }
@@ -258,7 +293,9 @@ namespace Horo::Application::Internal {
                     MakeError(Net::NetworkErrors::NetworkModeInvalid, "Transport qualification cannot request a gameplay module."));
             if (auto permission = ApplyPrefabPermission(launch, prefabGrant); permission.HasError())
                 return permission;
-            return ValidateSceneOptions(seen, launch.sceneInput);
+            if (auto valid = ValidateSceneOptions(seen, launch.sceneInput); valid.HasError())
+                return valid;
+            return ValidateCookedDecisions(launch);
         }
 
     }  // namespace

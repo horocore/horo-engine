@@ -3,6 +3,7 @@
 /** @file NetworkProductLaunchOptions.h
  * @brief Sole typed parser boundary for network mode, endpoints, gameplay selection and optional real Scene input.
  */
+#include "HeadlessCookedDecisionAdmission.h"
 #include "HeadlessProjectScene.h"
 #include "Horo/Network/NetworkAddress.h"
 #include "Horo/Network/NetworkModeComposition.h"
@@ -20,6 +21,7 @@ namespace Horo::Application::Internal {
         Network::NetworkAddress connect;
         std::optional<GameplayWorldSelection> gameplay;
         HeadlessProjectSceneOptions sceneInput;
+        std::vector<HeadlessCookedDecisionBinding> cookedDecisionBindings;
     };
 
     /** @brief Parses existing positional network modes plus explicit optional Scene input without native activation.

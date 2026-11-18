@@ -1,5 +1,6 @@
 #include "GameplayWorldComposition.h"
 
+#include "Horo/AI/AISceneActivation.h"
 #include "Horo/Gameplay/GameplayVfxScene.h"
 #include "Horo/Physics/CharacterWorld.h"
 #include "Horo/Physics/PhysicsWorld.h"
@@ -153,14 +154,15 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc GameplayWorldComposition::RegisterModule */
-    Result<void> GameplayWorldComposition::RegisterModule(const GameplayWorldSelection &selection) {
+    Result<void> GameplayWorldComposition::RegisterModule(const GameplayWorldSelection &selection,
+                                                          const GameplayPreparedDecisions *prepared) {
         using namespace Gameplay;
         if (auto admitted = ResolveVfx(selection); admitted.HasError())
             return admitted;
         if (auto admitted = ResolveRuntimeUi(selection); admitted.HasError())
             return admitted;
         if (!selection.nativeArtifact.empty()) {
-            if (auto registered = RegisterNativeModule(selection); registered.HasError())
+            if (auto registered = RegisterNativeModule(selection, prepared); registered.HasError())
                 return registered;
         } else {
             auto loaded = LuaBehaviorProgram::LoadFiles(selection.scriptSource, selection.scriptSidecar);
@@ -178,7 +180,8 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc GameplayWorldComposition::RegisterNativeModule */
-    Result<void> GameplayWorldComposition::RegisterNativeModule(const GameplayWorldSelection &selection) {
+    Result<void> GameplayWorldComposition::RegisterNativeModule(const GameplayWorldSelection &selection,
+                                                                const GameplayPreparedDecisions *prepared) {
         using namespace Gameplay;
         if (!selection.moduleRetirements)
             return Result<void>::Failure(MakeError(GameplayErrors::GameplayReloadRestartRequired,
@@ -191,8 +194,9 @@ namespace Horo::Application::Internal {
         GameModuleHostOptions options{{}, {.physics = physics_, .character = character_, .runtimeUi = runtimeUi_}};
         options.replicationAdmission = selection.replicationAdmission;
         GameModuleHost loader{std::move(options)};
-        auto loaded =
-            loader.Load(selection.nativeArtifact, {selection.moduleId, CurrentGameplayBuildFingerprint(), selection.descriptorRevision});
+        auto loaded = prepared ? loader.ActivatePrepared(prepared->image, prepared->cancellation)
+                               : loader.Load(selection.nativeArtifact,
+                                             {selection.moduleId, CurrentGameplayBuildFingerprint(), selection.descriptorRevision});
         if (loaded.HasError())
             return Result<void>::Failure(loaded.ErrorValue());
         auto candidate = std::move(loaded).Value();
@@ -246,11 +250,22 @@ namespace Horo::Application::Internal {
         return CreateServiceBacked(scenes, nullptr, world, sceneGeneration, selection, nullptr, character);
     }
 
+    /** @copydoc GameplayWorldComposition::CreatePrepared */
+    Result<std::unique_ptr<GameplayWorldComposition>> GameplayWorldComposition::CreatePrepared(
+        Runtime::RuntimeSceneService &scenes, Prefab::PrefabTemplateProvider *templates, Physics::PhysicsWorld &world,
+        const std::uint64_t sceneGeneration, const GameplayWorldSelection &selection, Character::CharacterWorld &character,
+        const GameplayPreparedDecisions &prepared) {
+        if (selection.nativeArtifact.empty())
+            return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(
+                MakeError(Gameplay::GameplayErrors::InvalidGameModuleDescriptor));
+        return CreateServiceBacked(scenes, templates, &world, sceneGeneration, selection, nullptr, &character, &prepared);
+    }
+
     /** @copydoc GameplayWorldComposition::CreateServiceBacked */
     Result<std::unique_ptr<GameplayWorldComposition>> GameplayWorldComposition::CreateServiceBacked(
         Runtime::RuntimeSceneService &scenes, Prefab::PrefabTemplateProvider *templates, Physics::PhysicsWorld *world,
         const std::uint64_t sceneGeneration, const GameplayWorldSelection &selection, const Gameplay::ComponentRegistry *components,
-        Character::CharacterWorld *character) {
+        Character::CharacterWorld *character, const GameplayPreparedDecisions *prepared) {
         if (selection.prefabPermission == GameplayPrefabPermission::Granted && templates == nullptr)
             return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(
                 MakeError(Prefab::PrefabErrors::AdmissionRejected,
@@ -285,8 +300,12 @@ namespace Horo::Application::Internal {
                 return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(admitted.ErrorValue());
             composition->prefabContext_ = std::move(admitted).Value();
         }
-        if (auto registered = composition->RegisterModule(selection); registered.HasError())
+        if (auto registered = composition->RegisterModule(selection, prepared); registered.HasError())
             return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(registered.ErrorValue());
+        if (prepared) {
+            if (auto activated = prepared->scene.ActivateCookedDecisionsAtSafePoint(prepared->execution); activated.HasError())
+                return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(activated.ErrorValue());
+        }
         if (auto activated = composition->ActivateServiceRunner(scenes, components); activated.HasError())
             return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(activated.ErrorValue());
         return Result<std::unique_ptr<GameplayWorldComposition>>::Success(std::move(composition));

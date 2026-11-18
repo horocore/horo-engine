@@ -87,3 +87,25 @@ expect_prefab_launch(${expected} --game-module "${MODULE}" game.tests "${revisio
 expect_prefab_launch(3 --project "${SOURCE_ROOT}" --scene source:Assets/absent.horo --physics null
     --game-module "${MODULE}" game.tests "${revision}" deny --prefab grant)
 message(STATUS "18 gameplay and 7 independent prefab policy launch cases passed")
+
+# A recognized selection must reach actual project admission. Incomplete or ambiguous inputs fail at the CLI boundary.
+function(expect_ai_launch expected diagnostic)
+    execute_process(COMMAND "${ENGINE}" --run-network-product standalone 2 ${ARGN}
+        RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT "${PROCESS_TIMEOUT}")
+    if(NOT "${result}" STREQUAL "${expected}" OR NOT error MATCHES "${diagnostic}")
+        message(FATAL_ERROR "AI launch returned ${result}, expected ${expected} with ${diagnostic}: ${output}${error}")
+    endif()
+endfunction()
+set(scene_id 137a4cd0-c9fe-43c4-b45e-9c8185472561)
+set(decision_id ac2f250c-1ce7-4e87-bdc2-abd86bd607ee)
+expect_ai_launch(2 "Use --ai-decision" --ai-decision)
+expect_ai_launch(2 "Invalid AI controller identity" --ai-decision 0 "${decision_id}")
+expect_ai_launch(2 "horo-engine:" --ai-decision 1 malformed)
+expect_ai_launch(2 "AI decisions require standalone mode" --ai-decision 1 "${decision_id}")
+expect_ai_launch(2 "AI decisions require standalone mode"
+    --project "${SOURCE_ROOT}" --scene "cooked:${scene_id}" --cooked-root "${SOURCE_ROOT}" --cook-target headless-null
+    --game-script "${script}" "${script}.meta" game.tests deny --ai-decision 1 "${decision_id}")
+expect_ai_launch(3 "horo-engine:"
+    --project "${SOURCE_ROOT}" --scene "cooked:${scene_id}" --cooked-root "${SOURCE_ROOT}" --cook-target headless-null
+    --game-module "${MODULE}" game.tests "${revision}" deny --ai-decision 1 "${decision_id}")
+message(STATUS "6 explicit cooked AI launch cases passed")

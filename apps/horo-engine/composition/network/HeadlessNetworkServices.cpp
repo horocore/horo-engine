@@ -141,6 +141,12 @@ namespace Horo::Application::Internal {
             if (!definition || input.load.deadline == std::chrono::steady_clock::time_point{} ||
                 input.load.deadline == std::chrono::steady_clock::time_point::max())
                 return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
+            const auto &decisions = input.cookedDecisions;
+            if (decisions && decisions->provider == HeadlessDecisionProvider::SelectedNativeGameplay &&
+                (!decisions->execution || decisions->environment.nodes || !gameplay || !gameplay->enabled ||
+                 gameplay->nativeArtifact.empty() || !gameplay->moduleRetirements))
+                return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid,
+                                                       "Selected native AI requires scoped native gameplay and execution."));
             if (gameplay && gameplay->prefabPermission == GameplayPrefabPermission::Granted && !input.prefabLoads)
                 return Result<void>::Failure(
                     MakeError(Network::NetworkErrors::NetworkModeInvalid, "Prefab grant requires an explicit committed artifact loader."));

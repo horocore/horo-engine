@@ -19,6 +19,12 @@ namespace Horo::Application::Internal {
         Assets::AssetId artifact;
     };
 
+    /** @brief Provider ownership chosen by the composing host before opening any candidate. */
+    enum class HeadlessDecisionProvider {
+        Captured,
+        SelectedNativeGameplay
+    };
+
     /** @brief Authoritative scene opt-in, captured from the actual project asset and provider registries. */
     struct HeadlessCookedDecisionInput final {
         const CommittedSceneAssets &committed;          /**< Exact immutable generation; outlives this input and all worlds using it. */
@@ -26,6 +32,7 @@ namespace Horo::Application::Internal {
         std::vector<HeadlessCookedDecisionBinding> bindings;
         AI::DecisionCodecLimits limits; /**< Per-plan codec limits; compiled bytes also bound total retained unique plans. */
         std::optional<AI::AiSceneCookedDecisionExecution> execution; /**< Explicit authority scheduler; empty only admits assets. */
+        HeadlessDecisionProvider provider{HeadlessDecisionProvider::Captured};
     };
 
     /** @brief Builds an immutable staged descriptor catalog from authenticated plans and the exact compiler environment.

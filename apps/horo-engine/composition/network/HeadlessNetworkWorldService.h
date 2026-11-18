@@ -285,15 +285,15 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             }
             std::span<const AI::AiControllerDescriptor> catalog = input.aiControllers;
             if (IsAuthoritativeWorld() && input.cookedDecisions) {
-                auto prepared =
-                    AdmitHeadlessCookedControllers(catalog, *owners_->definition, *input.cookedDecisions, record_->sceneCancellation);
+                auto prepared = PrepareCookedControllers(catalog, *input.cookedDecisions);
                 if (prepared.HasError())
                     return Result<void>::Failure(prepared.ErrorValue());
                 record_->cookedControllers = std::move(prepared).Value();
                 catalog = record_->cookedControllers;
             }
-            auto ai = OwnsCookedDecisionExecution() ? AI::AiSceneRuntime::Create(settings, *input.cookedDecisions->execution)
-                                                    : AI::AiSceneRuntime::Create(settings);
+            auto ai = OwnsCookedDecisionExecution() && !record_->preparedGameplay
+                          ? AI::AiSceneRuntime::Create(settings, *input.cookedDecisions->execution)
+                          : AI::AiSceneRuntime::Create(settings);
             if (ai.HasError())
                 return Result<void>::Failure(ai.ErrorValue());
             record_->ai = std::make_unique<AI::AiSceneRuntime>(std::move(ai).Value());
@@ -310,6 +310,27 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 added.HasError())
                 return added;
             return Result<void>::Success();
+        }
+
+        /** @brief Captures exact native provider metadata before any platform scope or game callback is exposed. */
+        Result<std::vector<AI::AiControllerDescriptor>> PrepareCookedControllers(std::span<const AI::AiControllerDescriptor> catalog,
+                                                                                 const HeadlessCookedDecisionInput &selection) const {
+            if (selection.provider == HeadlessDecisionProvider::Captured)
+                return AdmitHeadlessCookedControllers(catalog, *owners_->definition, selection, record_->sceneCancellation);
+            const auto &gameplay = *owners_->gameplay;
+            auto image = Gameplay::GameModuleHost::PrepareImage(gameplay.nativeArtifact,
+                                                                {gameplay.moduleId, Gameplay::CurrentGameplayBuildFingerprint(),
+                                                                 gameplay.descriptorRevision},
+                                                                record_->sceneCancellation);
+            if (image.HasError())
+                return Result<std::vector<AI::AiControllerDescriptor>>::Failure(image.ErrorValue());
+            record_->preparedGameplay = std::move(image).Value();
+            auto nodes = record_->preparedGameplay->AcquireDecisionNodes();
+            if (nodes.HasError())
+                return Result<std::vector<AI::AiControllerDescriptor>>::Failure(nodes.ErrorValue());
+            auto configured = selection;
+            configured.environment.nodes = std::move(nodes).Value();
+            return AdmitHeadlessCookedControllers(catalog, *owners_->definition, configured, record_->sceneCancellation);
         }
 
         /** @brief Installs one authoritative navigation aggregate; paired client worlds stay presentation-only. */
@@ -404,17 +425,29 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return Result<void>::Success();
             auto selected = *selectedGameplay_;
             selected.vfxScene = record_->vfxScene;
-            auto gameplay = record_->templates
-                                ? GameplayWorldComposition::Create(*record_->scenes, *record_->templates, &scope.Value().physics,
-                                                                   request_.scene.value, selected, nullptr, &scope.Value().character)
-                                : GameplayWorldComposition::Create(*record_->scenes, &scope.Value().physics, request_.scene.value, selected,
-                                                                   &scope.Value().character);
+            auto gameplay = ComposeConfiguredGameplay(selected, scope.Value().physics, scope.Value().character);
             if (gameplay.HasError())
                 return Result<void>::Failure(gameplay.ErrorValue());
             gameplay_ = std::move(gameplay).Value();
             record_->activeGameplay = gameplay_.get();
             record_->gameplay = gameplay_->PhysicsContext();
             return Result<void>::Success();
+        }
+
+        /** @brief Activates the same prepared image or the host's ordinary gameplay route. */
+        Result<std::unique_ptr<GameplayWorldComposition>> ComposeConfiguredGameplay(const GameplayWorldSelection &selected,
+                                                                                    Physics::PhysicsWorld &world,
+                                                                                    Character::CharacterWorld &character) const {
+            if (record_->preparedGameplay) {
+                const GameplayPreparedDecisions prepared{*record_->preparedGameplay, record_->sceneCancellation, *record_->ai,
+                                                         *owners_->configured->cookedDecisions->execution};
+                return GameplayWorldComposition::CreatePrepared(*record_->scenes, record_->templates.get(), world, request_.scene.value,
+                                                                selected, character, prepared);
+            }
+            return record_->templates
+                       ? GameplayWorldComposition::Create(*record_->scenes, *record_->templates, &world, request_.scene.value, selected,
+                                                          nullptr, &character)
+                       : GameplayWorldComposition::Create(*record_->scenes, &world, request_.scene.value, selected, &character);
         }
 
         /** @brief Records actual participation before a fallible gameplay source callback can partially stage work. */
