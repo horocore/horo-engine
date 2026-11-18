@@ -117,14 +117,14 @@ namespace Horo::Gameplay {
          * @return Opaque handle or typed permission/unavailable/validation error.
          */
         [[nodiscard]] Result<GameplayNavigationHandle> Submit(GameplayNavigationRequest request) const;
-        /** @brief Cancel outstanding work and permanently suppress delivery before module/scene teardown. */
+        /** @brief Relinquishes owned path results, cancels movement and permanently suppresses delivery before teardown. */
         void Revoke() const noexcept;
         /** @brief Report live owner-thread scope admission without accessing a provider. @return False after retirement or on another
          * thread. */
         [[nodiscard]] bool IsUsable() const noexcept;
-        /** @brief Drain retired canonical records after owner publication.
-         * @return True once service references can be released; false while pending.
-         * @pre Owner thread; borrowed services remain alive until this returns true.
+        /** @brief Collects exact retired query fences and observes movement retirement without publishing results.
+         * @return True once this scope can release its service references; false while its work owns them.
+         * @pre Owner thread; borrowed services remain alive until this returns true. The movement owner still advances its fences.
          */
         [[nodiscard]] Result<bool> DrainRetired() const;
         /** @brief Return immutable host principal and scene routing. @return Owned binding reference. */

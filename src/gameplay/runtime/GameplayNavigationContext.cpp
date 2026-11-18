@@ -116,6 +116,14 @@ namespace Horo::Gameplay {
             return Result<Navigation::NavigationMovementId>::Success(accepted.Value().accepted);
         }
 
+        /** @brief Releases this scope's query record only after its abandoned canonical reservation is gone. */
+        bool IsRetired(GameplayNavigationRecord &record) {
+            if (record.query)
+                return !coordinator->IsRetained(*record.query);
+            Poll(record);
+            return record.completed || record.error;
+        }
+
         /** @brief Transfer canonical owner-published records, preserving terminal errors and replacement identities. */
         void Poll(GameplayNavigationRecord &record) {
             if (record.completed || record.error)
@@ -227,12 +235,12 @@ namespace Horo::Gameplay {
             return Result<bool>::Failure(MakeError(NavigationCapabilityErrors::WrongThread));
         if (!state_->revoked)
             return Result<bool>::Success(false);
-        for (const auto &record : state_->records)
-            state_->Poll(*record);
-        std::erase_if(state_->records, [](const auto &record) {
-            return record->completed || record->error;
+        if (state_->coordinator)
+            state_->coordinator->CollectRetiredAtSafePoint();
+        std::erase_if(state_->records, [this](const auto &record) {
+            return state_->IsRetired(*record);
         });
-        if (!state_->records.empty() || (state_->coordinator && !state_->coordinator->IsDrained()))
+        if (!state_->records.empty() || (state_->movement && !state_->movement->IsDrained()))
             return Result<bool>::Success(false);
         state_->world = nullptr;
         state_->coordinator = nullptr;
@@ -310,7 +318,7 @@ namespace Horo::Gameplay {
         for (const auto &record : state_->records) {
             record->cancellation.RequestCancellation();
             if (record->query)
-                static_cast<void>(state_->coordinator->Cancel(*record->query));
+                static_cast<void>(state_->coordinator->Abandon(*record->query));
             if (record->movement)
                 static_cast<void>(state_->movement->Cancel(*record->movement));
         }

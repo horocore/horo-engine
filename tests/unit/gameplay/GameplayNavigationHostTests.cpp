@@ -197,8 +197,8 @@ TEST_CASE("Busy native retirement closes retained navigation admission before ru
     runtime->Shutdown();
     runtime.reset();
     REQUIRE(module->TryRetire().HasValue());
-    fixture.Publish();
     REQUIRE(fixture.context->DrainRetired().Value());
+    REQUIRE(fixture.coordinator.IsDrained());
 }
 
 TEST_CASE("Lua retained navigation closures and opaque requests survive callbacks with native typed failures") {
