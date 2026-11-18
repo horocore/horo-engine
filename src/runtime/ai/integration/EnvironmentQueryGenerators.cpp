@@ -234,12 +234,15 @@ namespace Horo::AI {
         };
 
         /** @brief Resolves the generator descriptor and its pinned location before owner execution. */
-        Result<PointOwnerGenerator> CapturePointOwnerGenerator(const QueryPlanStage &stage, const QueryContextSnapshot &contexts,
-                                                               const QuerySchemaRegistry &registry) {
+        Result<PointOwnerGenerator> CapturePointOwnerGenerator(const QueryPlanStage &stage, QueryItemTypeId itemType,
+                                                               const QueryContextSnapshot &contexts, const QuerySchemaRegistry &registry) {
             using Generator = Result<PointOwnerGenerator>;
             const auto *descriptor = registry.Find(stage.generator);
+            const auto *item = registry.Find(itemType);
             if (!descriptor || descriptor->origin != BuiltinOrigin() ||
-                descriptor->id != QueryGeneratorId::Create(LatticeGenerator).Value())
+                descriptor->id != QueryGeneratorId::Create(LatticeGenerator).Value() || descriptor->outputItemType != itemType)
+                return Generator::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
+            if (!item || itemType != QueryItemTypeId::Create(PointItem).Value() || item->kind != QueryItemKind::Point)
                 return Generator::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
             const auto lattice = PlanLattice(stage);
             if (!lattice.has_value() || !ValidLattice(*lattice))
@@ -537,7 +540,7 @@ namespace Horo::AI {
         const auto stages = plan.Stages();
         if (stages.empty())
             return Admission::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-        const auto generator = CapturePointOwnerGenerator(stages.front(), *inputs.contexts, registry);
+        const auto generator = CapturePointOwnerGenerator(stages.front(), plan.ResultSchema().itemType, *inputs.contexts, registry);
         if (generator.HasError())
             return Admission::Failure(generator.ErrorValue());
         auto tests = CapturePointOwnerTests(stages.subspan(1), *inputs.contexts, registry);

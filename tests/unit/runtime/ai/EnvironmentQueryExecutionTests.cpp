@@ -403,6 +403,36 @@ namespace Horo::AI {
             CHECK(std::get<Math::WorldCoordinate64>(std::get<BlackboardScalarValue>(*value.Value())).Millimeters()[0] == 2);
         }
 
+        TEST_CASE("EQS native admission refuses a registry that declares actor output for a point lattice", "[unit][ai][eqs][task]") {
+            const auto builtin = CaptureBuiltinQuerySchema();
+            REQUIRE(builtin.HasValue());
+            const auto lattice = CreateBuiltinLatticeQuery(MakeIdentity<QueryId>(20), MakeIdentity<QueryStageId>(21),
+                                                           MakeIdentity<QueryResultSchemaId>(22), "Native points", {1000, 1}, 9);
+            REQUIRE(lattice.HasValue());
+            const auto *item = builtin.Value().Find(lattice.Value().ResultSchema().itemType);
+            const auto *generator = builtin.Value().Find(lattice.Value().Stages().front().generator);
+            REQUIRE(item);
+            REQUIRE(generator);
+            auto actor = *item;
+            actor.kind = QueryItemKind::Actor;
+            const auto registrations = BuiltinQueryContextDescriptors();
+            const auto registry = QuerySchemaRegistry::Capture({std::span{&actor, 1}, registrations, std::span{generator, 1}, {}});
+            REQUIRE(registry.HasValue());
+            const auto plan = EnvironmentQueryPlan::Compile(lattice.Value(), registry.Value());
+            REQUIRE(plan.HasValue());
+            const auto providers = QueryContextProviderRegistry::Capture({}, registry.Value());
+            REQUIRE(providers.HasValue());
+            const auto scene = MakeScene();
+            const auto view = scene->View();
+            QueryContextCapture capture;
+            const auto contexts = capture.Capture(plan.Value(), registry.Value(), providers.Value(), view, Source(view));
+            REQUIRE(contexts.HasValue());
+            ExpectError(AdmitBuiltinPointQuery(plan.Value(), registry.Value(), view,
+                                               {{MakeIdentity<AiRuntimeIncarnation>(7), {1, 1}}, contexts.Value()},
+                                               {.submittedTick = 4, .deadlineTick = 8, .maximumCandidates = 9, .bestCount = 1}),
+                        AIErrors::EnvironmentQueryDescriptorUnavailable);
+        }
+
         TEST_CASE("Behavior tree EQS commits the real native lattice winner to its typed output", "[unit][ai][eqs][task]") {
             QueryTaskFixture fixture;
             auto registry = CaptureBuiltinQuerySchema();
