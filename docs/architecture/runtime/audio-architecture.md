@@ -2300,6 +2300,14 @@ engine processing and decoder buffering and carries no physical measurement clai
 Closing the output withdraws the observation. Audio frontend snapshot consumers
 rebuild for the appended fields. No persisted format or backend ownership changes.
 
+Loss and interruption facts carry the opened device, format revision and
+callback epoch together. Audio frontend applies them only to that exact output.
+A closing frontend can quiesce an attached output during priming and retain its
+render resources until native detachment. A native catalog refresh can report a
+new role default while the selected output renders. Control owns the separate
+decision to retire that output, admit a fresh epoch, and apply voice and clock
+policy.
+
 `AudioCallbackEvent` is a trivially copyable bounded record with epoch, sample
 cursor, monotonic timestamp and a typed Ready, Quiesced, Underrun or Fault payload.
 Ready/Quiesced/first-Fault delivery must be retained under saturation; underrun

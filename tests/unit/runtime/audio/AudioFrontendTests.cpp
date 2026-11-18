@@ -184,6 +184,56 @@ namespace Horo::Tests::VoiceRenderFixture {
             CHECK(results[2].acceptedSequence != results[3].acceptedSequence);
         }
 
+        TEST_CASE("AudioFrontend ignores device transition facts from an older output epoch", "[audio][frontend][device]") {
+            PreviewRig rig{16, AudioLatencyProfile::Balanced, 2};
+            rig.Activate();
+            const auto selected = rig.frontend->Snapshot().device;
+            auto previous = selected;
+            --previous.formatRevision;
+            using namespace Audio::Backend;
+            SECTION("late service-loss reporting") {
+                rig.output->delayedDeviceFact = Event{selected.device.owner, DeviceLost{previous, DeviceLossCause::ServiceRestart}};
+            }
+            SECTION("late interruption reporting") {
+                rig.output->delayedDeviceFact = Event{selected.device.owner, DeviceInterruption{previous, InterruptionState::Began}};
+            }
+            REQUIRE(rig.frontend->Pump({1, 1'000'000'000}).HasValue());
+            CHECK(rig.frontend->Snapshot().phase == AudioFrontendPhase::Active);
+            CHECK_FALSE(rig.frontend->Snapshot().failure.has_value());
+            REQUIRE(rig.output->null->InjectDeviceLoss(DeviceLossCause::Disconnected).HasValue());
+            const auto lost = rig.frontend->Pump({1, 1'000'000'000});
+            REQUIRE(lost.HasError());
+            CHECK(lost.ErrorValue().code.Value() == AudioErrors::DeviceLost.code.Value());
+        }
+
+        TEST_CASE("AudioFrontend retires a lost attached epoch before any ready or rendering callback", "[audio][frontend][device]") {
+            using Audio::Backend::DeviceLossCause;
+            using Audio::Backend::NullAudioBackendState;
+            constexpr AudioMonotonicTimestamp deadline{1, 1'000'000'000};
+            PreviewRig rig;
+            REQUIRE(rig.frontend->Start(deadline).HasValue());
+            REQUIRE(rig.output->null->AdvanceControl().HasValue());
+            REQUIRE(rig.frontend->Pump(deadline).HasValue());
+            REQUIRE(rig.output->null->AdvanceControl().HasValue());
+            REQUIRE(rig.frontend->Pump(deadline).HasValue());
+            REQUIRE(rig.output->null->State() == NullAudioBackendState::Priming);
+            REQUIRE(rig.output->null->InjectDeviceLoss(DeviceLossCause::Disconnected).HasValue());
+            const auto loss = rig.frontend->Pump(deadline);
+            REQUIRE(loss.HasError());
+            CHECK(loss.ErrorValue().code.Value() == AudioErrors::DeviceLost.code.Value());
+            CHECK(rig.frontend->Snapshot().phase == AudioFrontendPhase::Closing);
+            CHECK(rig.output->callbackEntries == 0);
+            REQUIRE(rig.output->null->AdvanceControl().HasValue());
+            REQUIRE(rig.output->null->State() == NullAudioBackendState::Quiescing);
+            REQUIRE(rig.output->null->AdvanceCallback().HasValue());
+            CHECK(rig.output->quiescingSilent);
+            CHECK_FALSE(rig.output->primingSilent);
+            rig.Retire();
+            CHECK(rig.frontend->Snapshot().phase == AudioFrontendPhase::Closed);
+            CHECK(rig.output->null->State() == NullAudioBackendState::Closed);
+            CHECK(rig.output->callbackEntries == 1);
+        }
+
         TEST_CASE("AudioFrontend retains terminal results until consumer acknowledgement", "[audio][frontend][backpressure]") {
             PreviewRig rig;
             rig.Activate();

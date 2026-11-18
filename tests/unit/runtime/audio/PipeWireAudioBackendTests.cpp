@@ -34,7 +34,15 @@ namespace Horo::Audio::Backend {
                 REQUIRE(result.HasValue());
                 if (result.Value()) {
                     auto completed = std::move(*result.Value());
+                    REQUIRE(completed.operation == operation.Value());
+                    const auto retained = backend.Poll(operation.Value());
+                    REQUIRE(retained.HasValue());
+                    REQUIRE(retained.Value().has_value());
+                    CHECK(retained.Value()->operation == completed.operation);
+                    CHECK(retained.Value()->outcome.index() == completed.outcome.index());
+                    CHECK(backend.Begin(request, Deadline(end)).HasError());
                     REQUIRE(backend.AcknowledgeCompletion(operation.Value()).HasValue());
+                    CHECK(backend.Poll(operation.Value()).HasError());
                     if (const auto *failure = std::get_if<Failed>(&completed.outcome))
                         WARN("Audio request " << request.index() << ": " << failure->error.message);
                     REQUIRE(std::holds_alternative<Expected>(completed.outcome));
@@ -85,7 +93,7 @@ namespace Horo::Audio::Backend {
             const auto selected = ResolveAudioDevice(snapshot, AudioDefaultDeviceRole::Multimedia);
             REQUIRE(selected.status == AudioDeviceResolutionStatus::Resolved);
             const AudioDeviceEpoch epoch{selected.device, generation, generation};
-            const AudioDeviceFormatRequest request{.device = selected.device,
+            const AudioDeviceFormatRequest request{.device = AudioDefaultDeviceRole::Multimedia,
                                                    .preferred = {rate, MakeAudioSpeakerLayout(AudioSpeakerPreset::Stereo)},
                                                    .period = {64, 256, 2048}};
             const auto opened = Complete<Opened>(backend, Open{epoch, request});
@@ -135,7 +143,7 @@ namespace Horo::Audio::Backend {
         }
     }  // namespace
 
-    TEST_CASE("PipeWire retires callbacks after actual service loss and reopens with a new format", "[audio][pipewire][native]") {
+    TEST_CASE("PipeWire reports a live default switch and fences explicit new output epochs", "[audio][pipewire][native]") {
         const auto *controlDirectory = std::getenv("HORO_PIPEWIRE_TEST_CONTROL");
         REQUIRE(controlDirectory != nullptr);
         const std::filesystem::path control{controlDirectory};
@@ -162,14 +170,45 @@ namespace Horo::Audio::Backend {
             CHECK(oldEstimate->latency.source == AudioObservationSource::BackendApi);
             CHECK(ValidateAudioDurationObservation(oldEstimate->latency));
         }
-        std::ofstream(control / "started").put('\n');
-        REQUIRE(WaitFor(*backend, [&before](const Event &event) {
-            const auto *lost = std::get_if<DeviceLost>(&event.fact);
-            return lost && lost->device == before.device;
+
+        std::ofstream(control / "switch-ready").put('\n');
+        const auto switchDeadline = Clock::now() + 5s;
+        while (Clock::now() < switchDeadline && !std::filesystem::exists(control / "default-changed"))
+            std::this_thread::sleep_for(2ms);
+        REQUIRE(std::filesystem::exists(control / "default-changed"));
+        const auto refreshed = Complete<AudioDeviceSnapshot>(*backend, Enumerate{});
+        const auto selectedDefault = ResolveAudioDevice(refreshed, AudioDefaultDeviceRole::Multimedia);
+        REQUIRE(selectedDefault.status == AudioDeviceResolutionStatus::Resolved);
+        CHECK(selectedDefault.device != before.device);
+        CHECK(ResolveAudioDevice(refreshed, before.device).device == before.device);
+        CHECK(WaitFor(*backend, [&](const Event &event) {
+            const auto *change = std::get_if<DefaultChanged>(&event.fact);
+            return change && event.owner == before.device.owner && change->role == AudioDefaultDeviceRole::Multimedia &&
+                   change->discoveryRevision == refreshed.revision && change->device == selectedDefault.device;
         }));
-        CHECK_FALSE(backend->ReadPlaybackLatency(before).has_value());
+        const auto renderedBeforeSwitch = oldTrace.rendering.load(std::memory_order_acquire);
+        const auto renderDeadline = Clock::now() + 2s;
+        while (Clock::now() < renderDeadline && oldTrace.rendering.load(std::memory_order_acquire) == renderedBeforeSwitch)
+            std::this_thread::sleep_for(2ms);
+        CHECK(oldTrace.rendering.load(std::memory_order_acquire) > renderedBeforeSwitch);
         CloseOutput(*backend, before);
         const auto stoppedCalls = oldTrace.calls.load(std::memory_order_relaxed);
+
+        RenderTrace switchedTrace;
+        const auto switched = OpenAvailable(*backend, 44100, 2);
+        CHECK(switched.device == selectedDefault.device);
+        CHECK_FALSE(backend->ReadPlaybackLatency(before).has_value());
+        CHECK(backend->Begin(Start{before, {&oldTrace, Render}}, Deadline(Clock::now() + 1s)).HasError());
+        StartRendering(*backend, switched, switchedTrace);
+        CHECK(oldTrace.calls.load(std::memory_order_relaxed) == stoppedCalls);
+        std::ofstream(control / "started").put('\n');
+        REQUIRE(WaitFor(*backend, [&switched](const Event &event) {
+            const auto *lost = std::get_if<DeviceLost>(&event.fact);
+            return lost && lost->epoch == switched;
+        }));
+        CHECK_FALSE(backend->ReadPlaybackLatency(switched).has_value());
+        CloseOutput(*backend, switched);
+        const auto switchedCalls = switchedTrace.calls.load(std::memory_order_relaxed);
         std::ofstream(control / "detached").put('\n');
 
         const auto end = Clock::now() + 5s;
@@ -177,10 +216,10 @@ namespace Horo::Audio::Backend {
             std::this_thread::sleep_for(2ms);
         REQUIRE(std::filesystem::exists(control / "restarted"));
         RenderTrace newTrace;
-        const auto after = OpenAvailable(*backend, 44100, 2);
-        CHECK(after.device != before.device);
+        const auto after = OpenAvailable(*backend, 48000, 3);
+        CHECK(after.device != switched.device);
         CHECK_FALSE(backend->ReadPlaybackLatency(after).has_value());
-        CHECK(backend->Begin(Start{before, {&oldTrace, Render}}, Deadline(Clock::now() + 1s)).HasError());
+        CHECK(backend->Begin(Start{switched, {&switchedTrace, Render}}, Deadline(Clock::now() + 1s)).HasError());
         StartRendering(*backend, after, newTrace);
         const auto estimate = WaitForLatency(*backend, after);
         CHECK(estimate.has_value());
@@ -194,8 +233,10 @@ namespace Horo::Audio::Backend {
         }
         CHECK_FALSE(backend->ReadPlaybackLatency(before).has_value());
         CHECK(oldTrace.calls.load(std::memory_order_relaxed) == stoppedCalls);
+        CHECK(switchedTrace.calls.load(std::memory_order_relaxed) == switchedCalls);
         CloseOutput(*backend, after);
         CHECK_FALSE(backend->ReadPlaybackLatency(after).has_value());
         CHECK(oldTrace.calls.load(std::memory_order_relaxed) == stoppedCalls);
+        CHECK(switchedTrace.calls.load(std::memory_order_relaxed) == switchedCalls);
     }
 }  // namespace Horo::Audio::Backend

@@ -333,7 +333,7 @@ namespace Horo::Audio::Backend {
             /** @brief Capture loop/worker facts before reconnect resets native flags or cleanup releases proxies. */
             bool CaptureNativeFacts() noexcept {
                 if (HasNativeLoss()) {
-                    if (!facts_.CaptureLoss({epoch_.device, loss_.Read().value_or(DeviceLossCause::BackendFailure)}))
+                    if (!facts_.CaptureLoss({epoch_, loss_.Read().value_or(DeviceLossCause::BackendFailure)}))
                         return false;
                     lossDrained_ = true;
                 }

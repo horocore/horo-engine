@@ -91,7 +91,7 @@ namespace Horo::Audio::Backend {
         RenderPort render;
     };
 
-    /** @brief Publishes Quiescing intent; completion requires the matching render-core acknowledgement. */
+    /** @brief Publishes Quiescing for an attached epoch in Priming or Rendering; requires the matching acknowledgement. */
     struct Quiesce final {
         AudioDeviceEpoch epoch;
     };
@@ -188,9 +188,9 @@ namespace Horo::Audio::Backend {
         BackendFailure
     };
 
-    /** @brief Loss fact for the exact device generation, never an instruction to choose a replacement. */
+    /** @brief Loss fact for the exact opened output epoch, never an instruction to choose a replacement. */
     struct DeviceLost final {
-        AudioDeviceId device;
+        AudioDeviceEpoch epoch;
         DeviceLossCause cause{DeviceLossCause::BackendFailure};
     };
     /** @brief Native interruption edge; an end does not authorize automatic resume. */
@@ -201,7 +201,7 @@ namespace Horo::Audio::Backend {
 
     /** @brief Interruption fact reconciled against control-owned suspend/recovery policy. */
     struct DeviceInterruption final {
-        AudioDeviceId device;
+        AudioDeviceEpoch epoch;
         InterruptionState state{InterruptionState::Began};
     };
 

@@ -39,17 +39,22 @@ def has_default(env, dump, expected):
     return False
 
 
+def add_default_sink(env, logs, tools, label, priority):
+    _, _, client, dump = tools
+    properties = ("{ factory.name=support.null-audio-sink media.class=Audio/Sink object.linger=true "
+                  f"node.name={label} node.description={label} priority.session={priority} audio.position=[ FL FR ] }}")
+    subprocess.run([client, "create-node", "adapter", properties], env=env, stdout=logs, stderr=logs, check=True, timeout=3)
+    wait_for(lambda: has_default(env, dump, label), "private session manager did not select the virtual sink")
+
+
 def start_session(runtime, env, logs, tools, label, processes):
-    daemon, session, client, dump = tools
+    daemon, session, _, _ = tools
     server = subprocess.Popen([daemon], env=env, stdout=logs, stderr=logs)
     processes.append(server)
     wait_for(lambda: (runtime / "pipewire-0").is_socket(), "private PipeWire server did not start")
     manager = subprocess.Popen([session], env=env, stdout=logs, stderr=logs)
     processes.append(manager)
-    properties = ("{ factory.name=support.null-audio-sink media.class=Audio/Sink object.linger=true "
-                  f"node.name={label} node.description={label} audio.position=[ FL FR ] }}")
-    subprocess.run([client, "create-node", "adapter", properties], env=env, stdout=logs, stderr=logs, check=True, timeout=3)
-    wait_for(lambda: has_default(env, dump, label), "private session manager did not select the virtual sink")
+    add_default_sink(env, logs, tools, label, 100)
     return server, manager
 
 
@@ -70,12 +75,15 @@ def main():
                 server, manager = start_session(runtime, env, logs, tools, "horo-test-a", processes)
                 backend = subprocess.Popen([executable, "--reporter", "compact"], env=env)
                 processes.append(backend)
+                wait_for(lambda: (root / "switch-ready").exists(), "initial output did not reach native rendering")
+                add_default_sink(env, logs, tools, "horo-test-b", 2000)
+                (root / "default-changed").touch()
                 wait_for(lambda: (root / "started").exists(), "first stream did not reach native rendering")
                 stop(server)
                 stop(manager)
                 wait_for(lambda: (root / "detached").exists(), "lost stream did not prove callback detachment")
                 wait_for(lambda: not (runtime / "pipewire-0").exists(), "old PipeWire socket was not retired")
-                start_session(runtime, env, logs, tools, "horo-test-b", processes)
+                start_session(runtime, env, logs, tools, "horo-test-c", processes)
                 (root / "restarted").touch()
                 if backend.wait(timeout=10):
                     raise RuntimeError("native PipeWire backend contract failed after restart")

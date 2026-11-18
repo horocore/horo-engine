@@ -156,10 +156,12 @@ namespace Horo::Audio {
                 ready = true;  // Ready may arrive before Start's retained terminal is polled.
             else if (std::holds_alternative<AudioCallbackFault>(callback->fact))
                 return Failure(AudioErrors::CallbackFault);
-        } else if (std::holds_alternative<Backend::DeviceLost>(event.fact)) {
+        } else if (const auto *lost = std::get_if<Backend::DeviceLost>(&event.fact);
+                   lost != nullptr && MatchesAudioDeviceEpoch(output->open.plannedEpoch, lost->epoch)) {
             return Failure(AudioErrors::DeviceLost);
         } else if (const auto *interruption = std::get_if<Backend::DeviceInterruption>(&event.fact);
-                   interruption != nullptr && interruption->state == Backend::InterruptionState::Began) {
+                   interruption != nullptr && MatchesAudioDeviceEpoch(output->open.plannedEpoch, interruption->epoch) &&
+                   interruption->state == Backend::InterruptionState::Began) {
             return Failure(AudioErrors::DeviceUnavailable);
         }
         return Result<void>::Success();
@@ -174,11 +176,11 @@ namespace Horo::Audio {
         for (std::size_t index = 0; index < count; ++index)
             if (const auto observed = Observe(events[index]); observed.HasError())
                 return observed;
-        if (ready && started && !rendering) {
+        if (ready && started && !rendering && !closing) {
             if (const auto committed = output->backend->CommitRendering(output->open.plannedEpoch); committed.HasError())
                 return committed;
             rendering = true;
-            phase = closing ? AudioFrontendPhase::Closing : AudioFrontendPhase::Active;
+            phase = AudioFrontendPhase::Active;
         }
         ObservePlaybackLatency();
         return Result<void>::Success();
@@ -254,8 +256,6 @@ namespace Horo::Audio {
         if (pending.has_value() || phase == AudioFrontendPhase::Retained)
             return Result<void>::Success();
         if (started) {
-            if (!rendering)
-                return Result<void>::Success();  // Wait for the exact priming Ready fact before Quiesce.
             if (!quiesced)
                 return Begin(Operation::Quiesce, Backend::Quiesce{output->open.plannedEpoch}, deadline);
             return Begin(Operation::Stop, Backend::Stop{output->open.plannedEpoch}, deadline);

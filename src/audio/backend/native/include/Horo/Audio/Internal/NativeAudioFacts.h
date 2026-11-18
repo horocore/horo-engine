@@ -60,14 +60,14 @@ namespace Horo::Audio::Backend {
 
         /**
          * @brief Retain the first loss for one device; repeated loss of that same admitted epoch coalesces.
-         * @param loss Exact Horo device generation and first native cause.
-         * @return False for an invalid identity or a different undrained device; caller must retain its native source.
+         * @param loss Exact Horo output epoch and first native cause.
+         * @return False for an invalid identity or different undrained epoch; caller must retain its native source.
          */
         [[nodiscard]] bool CaptureLoss(const DeviceLost loss) noexcept {
-            if (!loss.device.IsValid() || loss.device.owner != owner_)
+            if (!MatchesAudioDeviceEpoch(loss.epoch, loss.epoch) || loss.epoch.device.owner != owner_)
                 return false;
             if (loss_)
-                return loss_->device == loss.device;
+                return loss_->epoch == loss.epoch;
             loss_ = loss;
             return true;
         }

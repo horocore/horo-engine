@@ -467,7 +467,7 @@ namespace Horo::Audio::Backend {
                 return 0;
             for (std::size_t index = 0; index < count; ++index)
                 if (const auto *loss = std::get_if<DeviceLost>(&output[index].fact);
-                    loss && output[index].owner == config.owner && loss->device == epoch.device)
+                    loss && output[index].owner == config.owner && MatchesAudioDeviceEpoch(epoch, loss->epoch))
                     lost = true;
             return count;
         }

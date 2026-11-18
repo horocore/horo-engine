@@ -7,6 +7,7 @@
 #include "Horo/Audio/Internal/AudioFrontendComposition.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace Horo::Tests::VoiceRenderFixture {
     namespace {
@@ -19,6 +20,7 @@ namespace Horo::Tests::VoiceRenderFixture {
             Audio::Backend::RenderPort port;
             AudioBackendKind reportedKind{AudioBackendKind::NullAudio}; /**< Permits non-Null estimate protocol tests. */
             std::optional<Audio::Backend::PlaybackLatencyEstimate> playbackLatency;
+            std::optional<Audio::Backend::Event> delayedDeviceFact;
             bool primingSilent{};
             bool quiescingSilent{};
             bool rejectOpenedFormat{};
@@ -81,7 +83,10 @@ namespace Horo::Tests::VoiceRenderFixture {
             }
 
             std::size_t DrainEvents(const std::span<Audio::Backend::Event> events) noexcept override {
-                return null->DrainEvents(events);
+                if (!delayedDeviceFact || events.empty())
+                    return null->DrainEvents(events);
+                events.front() = *std::exchange(delayedDeviceFact, std::nullopt);
+                return 1 + null->DrainEvents(events.subspan(1));
             }
 
             Audio::Backend::AudioCallbackViolationDrain DrainSafetyViolations(
