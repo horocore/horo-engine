@@ -370,8 +370,12 @@ namespace Horo::Editor {
             UiElementHandle failedLayoutElement;
             auto layout = EvaluatePreviewLayout(source, tree, descriptors, result.canvas, failedLayoutElement);
             if (layout.HasError()) {
-                const auto affected = tree.Get(failedLayoutElement);
-                return fail(UiDiagnosticCategory::Layout, layout.ErrorValue(), affected.HasValue() ? affected.Value().id : UiElementId{});
+                UiElementId affected;
+                if (problem && failedLayoutElement.IsValid()) {
+                    if (const auto element = tree.Get(failedLayoutElement); element.HasValue())
+                        affected = element.Value().id;
+                }
+                return fail(UiDiagnosticCategory::Layout, layout.ErrorValue(), affected);
             }
             result.boxes.reserve(tree.Size());
             for (const auto &record : layout.Value().Records()) {
