@@ -137,6 +137,51 @@ namespace Horo::AI {
             ExpectError(GenerateQueryLattice(*contexts.Value(), center, grid, output), AIErrors::EnvironmentQueryContextStale);
         }
 
+        TEST_CASE("EQS distance edits preserve stage identity when source order differs", "[unit][ai][eqs][generator]") {
+            const auto schema = CaptureBuiltinQuerySchema();
+            REQUIRE(schema.HasValue());
+            const auto query = CreateBuiltinLatticeQuery(MakeIdentity<QueryId>(2), MakeIdentity<QueryStageId>(3),
+                                                         MakeIdentity<QueryResultSchemaId>(4), "Points", {50, 1}, 4);
+            REQUIRE(query.HasValue());
+            const auto nearStage = MakeIdentity<QueryStageId>(5);
+            const auto farStage = MakeIdentity<QueryStageId>(6);
+            const auto near = AddBuiltinPointDistanceTest(query.Value(), nearStage, {100, true});
+            const auto far = AddBuiltinPointDistanceTest(query.Value(), farStage, {200, false});
+            REQUIRE(near.HasValue());
+            REQUIRE(far.HasValue());
+            QueryAssetSource authored{.id = query.Value().Id(),
+                                      .result = query.Value().ResultSchema(),
+                                      .stages = {far.Value().Stages().back(), query.Value().Stages().front(),
+                                                 near.Value().Stages().back()}};
+            authored.stages.front().executionOrder = 9;
+            authored.stages.front().displayName = "Far filter";
+            const auto source = EnvironmentQueryAsset::Capture(authored);
+            REQUIRE(source.HasValue());
+            auto decoded = ReadBuiltinPointQuerySettings(source.Value(), schema.Value());
+            REQUIRE(decoded.HasValue());
+            auto settings = std::move(decoded).Value();
+            REQUIRE(settings.distanceTests.size() == 2);
+            REQUIRE(settings.distanceTests[0].stage == nearStage);
+            REQUIRE(settings.distanceTests[1].stage == farStage);
+            settings.distanceTests[0].test.radiusMillimeters = 150;
+            SECTION("edits keep source order, authored stage order and metadata") {
+                const auto edited = EditBuiltinPointQuerySettings(source.Value(), schema.Value(), settings);
+                REQUIRE(edited.HasValue());
+                CHECK(edited.Value().Stages().front().id == farStage);
+                CHECK(edited.Value().Stages().front().executionOrder == 9);
+                CHECK(edited.Value().Stages().front().displayName == "Far filter");
+                const auto saved = ReadBuiltinPointQuerySettings(edited.Value(), schema.Value());
+                REQUIRE(saved.HasValue());
+                CHECK(saved.Value().distanceTests[0].test.radiusMillimeters == 150);
+                CHECK(saved.Value().distanceTests[1].test.radiusMillimeters == 200);
+            }
+            SECTION("reordered inputs cannot rebind edit control values to a different stage") {
+                std::swap(settings.distanceTests[0], settings.distanceTests[1]);
+                ExpectError(EditBuiltinPointQuerySettings(source.Value(), schema.Value(), settings),
+                            AIErrors::EnvironmentQuerySchemaInvalid);
+            }
+        }
+
         TEST_CASE("EQS copies bounded provider points in declared order", "[unit][ai][eqs][generator]") {
             const std::array points{Math::WorldCoordinate64::FromMillimeters(123, 0, 0),
                                     Math::WorldCoordinate64::FromMillimeters(-42, 0, 0)};

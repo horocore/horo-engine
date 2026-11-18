@@ -24,6 +24,12 @@ namespace Horo::AI {
         constexpr std::uint64_t DistanceRadius = LatticeProvider + 7;
         constexpr std::uint64_t DistancePreferNearer = LatticeProvider + 8;
 
+        /** @brief Encodes only the native editable controls for one distance stage. */
+        std::vector<QueryPropertyValue> DistanceProperties(const QueryPointDistanceTest settings) {
+            return {{QueryPropertyId::Create(DistanceRadius).Value(), std::uint64_t{settings.radiusMillimeters}},
+                    {QueryPropertyId::Create(DistancePreferNearer).Value(), settings.preferNearer}};
+        }
+
         /** @brief Native origin shared by the inert registration and its exact kernels. */
         QueryDescriptorOrigin BuiltinOrigin() {
             return {.provider = QueryProviderId::Create(LatticeProvider).Value(), .version = LatticeVersion.minimum};
@@ -203,8 +209,7 @@ namespace Horo::AI {
             .executionOrder = 1,
             .test = QueryTestId::Create(PointDistanceTest).Value(),
             .descriptorVersion = LatticeVersion,
-            .properties = {{QueryPropertyId::Create(DistanceRadius).Value(), static_cast<std::uint64_t>(settings.radiusMillimeters)},
-                           {QueryPropertyId::Create(DistancePreferNearer).Value(), settings.preferNearer}},
+            .properties = DistanceProperties(settings),
         };
         return EnvironmentQueryAsset::Capture({.id = lattice.Id(),
                                                .displayName = lattice.DisplayName(),
@@ -220,21 +225,21 @@ namespace Horo::AI {
         if (plan.HasError())
             return Settings::Failure(plan.ErrorValue());
         const auto stages = plan.Value().Stages();
-        const auto *generator = registry.Find(stages.front().generator);
-        if (stages.size() > 2 || !generator || generator->origin != BuiltinOrigin() ||
-            generator->id != QueryGeneratorId::Create(LatticeGenerator).Value())
+        if (const auto *generator = registry.Find(stages.front().generator);
+            !generator || generator->origin != BuiltinOrigin() || generator->id != QueryGeneratorId::Create(LatticeGenerator).Value())
             return Settings::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
         const auto lattice = PlanLattice(stages.front());
         if (!lattice || !ValidLattice(*lattice))
             return Settings::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
         BuiltinPointQuerySettings settings{*lattice, asset.ResultSchema().maximumResults};
-        if (stages.size() == 2) {
-            const auto distance = BuiltinPointDistanceQuery::Capture(stages.back(), registry);
+        settings.distanceTests.reserve(stages.size() - 1);
+        for (const auto &stage : stages.subspan(1)) {
+            const auto distance = BuiltinPointDistanceQuery::Capture(stage, registry);
             if (distance.HasError())
                 return Settings::Failure(distance.ErrorValue());
-            settings.distance = distance.Value().Settings();
+            settings.distanceTests.push_back({stage.id, distance.Value().Settings()});
         }
-        return Settings::Success(settings);
+        return Settings::Success(std::move(settings));
     }
 
     /** @copydoc EditBuiltinPointQuerySettings */
@@ -244,7 +249,8 @@ namespace Horo::AI {
         const auto previous = ReadBuiltinPointQuerySettings(asset, registry);
         if (previous.HasError())
             return Edited::Failure(previous.ErrorValue());
-        if (previous.Value().distance.has_value() != settings.distance.has_value())
+        constexpr auto stageId = &QueryPointDistanceStageSettings::stage;
+        if (!std::ranges::equal(previous.Value().distanceTests, settings.distanceTests, {}, stageId, stageId))
             return Edited::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
 
         const auto generator = std::ranges::find(asset.Stages(), QueryStageKind::Generator, &QueryAssetStage::kind);
@@ -252,22 +258,18 @@ namespace Horo::AI {
                                                    settings.lattice, settings.maximumResults);
         if (generated.HasError())
             return generated;
-        if (settings.distance) {
-            const auto test = std::ranges::find(asset.Stages(), QueryStageKind::Test, &QueryAssetStage::kind);
-            auto withTest = AddBuiltinPointDistanceTest(generated.Value(), test->id, *settings.distance);
-            if (withTest.HasError())
-                return withTest;
-            generated = std::move(withTest);
-        }
-
         QueryAssetSource edited{.id = asset.Id(),
                                 .displayName = asset.DisplayName(),
                                 .result = asset.ResultSchema(),
                                 .stages = {asset.Stages().begin(), asset.Stages().end()}};
         edited.result.maximumResults = settings.maximumResults;
         for (auto &stage : edited.stages) {
-            const auto values = std::ranges::find(generated.Value().Stages(), stage.id, &QueryAssetStage::id);
-            stage.properties = values->properties;
+            if (stage.kind == QueryStageKind::Generator) {
+                stage.properties = generated.Value().Stages().front().properties;
+                continue;
+            }
+            const auto entry = std::ranges::find(settings.distanceTests, stage.id, stageId);
+            stage.properties = DistanceProperties(entry->test);
         }
         auto captured = EnvironmentQueryAsset::Capture(edited);
         if (captured.HasError())

@@ -381,7 +381,17 @@ TEST_CASE("Registered Query settings use shared history and tracked source publi
         CreateBuiltinLatticeQuery(QueryId::Create(14).Value(), QueryStageId::Create(41).Value(), QueryResultSchemaId::Create(8).Value(),
                                   "Editable points", {.stepMillimeters = 500, .outerSteps = 3}, 9);
     REQUIRE(initial.HasValue());
-    const auto native = AddBuiltinPointDistanceTest(initial.Value(), QueryStageId::Create(52).Value(), {1500, true});
+    const auto first = AddBuiltinPointDistanceTest(initial.Value(), QueryStageId::Create(52).Value(), {1500, true});
+    const auto second = AddBuiltinPointDistanceTest(initial.Value(), QueryStageId::Create(53).Value(), {1200, false});
+    REQUIRE(first.HasValue());
+    REQUIRE(second.HasValue());
+    QueryAssetSource authored{.id = initial.Value().Id(),
+                              .displayName = initial.Value().DisplayName(),
+                              .result = initial.Value().ResultSchema(),
+                              .stages = {first.Value().Stages().begin(), first.Value().Stages().end()}};
+    authored.stages.push_back(second.Value().Stages().back());
+    authored.stages.back().executionOrder = 2;
+    const auto native = EnvironmentQueryAsset::Capture(authored);
     REQUIRE(native.HasValue());
     project.WriteAsset(native.Value());
     EditorWorkspaceController controller(project.root, project.runtime, project.registry.Snapshot(),
@@ -399,7 +409,7 @@ TEST_CASE("Registered Query settings use shared history and tracked source publi
     REQUIRE(documents.size() == 1);
     const auto &document = documents.front();
     REQUIRE(document.settings);
-    REQUIRE(document.settings->distance);
+    REQUIRE(document.settings->distanceTests.size() == 2);
     const auto original = document.query;
     const auto instance = document.identity.instance;
     using enum EnvironmentQueryEditAction;
@@ -415,7 +425,13 @@ TEST_CASE("Registered Query settings use shared history and tracked source publi
     CHECK_FALSE(document.canUndo);
     changed.lattice = {.stepMillimeters = 800, .outerSteps = 4, .innerSteps = 1};
     changed.maximumResults = 7;
-    changed.distance = QueryPointDistanceTest{2400, false};
+    changed.distanceTests[0].test = {2400, false};
+    changed.distanceTests[1].test = {1900, true};
+    auto foreign = changed;
+    foreign.distanceTests[1].stage = QueryStageId::Create(99).Value();
+    issue(Apply, foreign);
+    REQUIRE(document.diagnostic);
+    CHECK(document.query == original);
     const auto oldRequest = MakeEnvironmentQueryEditCommand(document, Apply, changed);
     controller.ProcessCommand(oldRequest);
     REQUIRE_FALSE(document.diagnostic);
@@ -456,7 +472,7 @@ TEST_CASE("Registered Query settings use shared history and tracked source publi
         REQUIRE(documents.size() == 1);
         const auto &reopened = documents.front();
         REQUIRE(reopened.settings);
-        REQUIRE(reopened.settings->distance);
+        REQUIRE(reopened.settings->distanceTests.size() == 2);
         CHECK(reopened.identity.instance != instance);
         CHECK(reopened.asset == project.asset);
         CHECK(reopened.query->Id() == original->Id());
@@ -464,8 +480,12 @@ TEST_CASE("Registered Query settings use shared history and tracked source publi
         CHECK(reopened.settings->lattice.stepMillimeters == 800);
         CHECK(reopened.settings->lattice.innerSteps == 1);
         CHECK(reopened.settings->maximumResults == 7);
-        CHECK(reopened.settings->distance->radiusMillimeters == 2400);
-        CHECK_FALSE(reopened.settings->distance->preferNearer);
+        CHECK(reopened.settings->distanceTests[0].stage == native.Value().Stages()[1].id);
+        CHECK(reopened.settings->distanceTests[0].test.radiusMillimeters == 2400);
+        CHECK_FALSE(reopened.settings->distanceTests[0].test.preferNearer);
+        CHECK(reopened.settings->distanceTests[1].stage == native.Value().Stages()[2].id);
+        CHECK(reopened.settings->distanceTests[1].test.radiusMillimeters == 1900);
+        CHECK(reopened.settings->distanceTests[1].test.preferNearer);
         CHECK_FALSE(reopened.canUndo);
     }
     SECTION("changing the sidecar bytes refuses the source write even when the stable ID still matches") {

@@ -544,10 +544,11 @@ namespace Horo::Editor {
                       .outer = current.lattice.outerSteps,
                       .inner = current.lattice.innerSteps.value_or(0),
                       .maximum = current.maximumResults,
-                      .radius = current.distance ? current.distance->radiusMillimeters : 0,
                       .annulus = current.lattice.innerSteps.has_value(),
-                      .preferNearer = current.distance && current.distance->preferNearer,
                       .widgetId = std::format("##EqsSettings/{}/{}", fence.instance.Value(), fence.revision)};
+            fields.distances.reserve(current.distanceTests.size());
+            for (const auto &entry : current.distanceTests)
+                fields.distances.push_back({entry.stage, entry.test.radiusMillimeters, entry.test.preferNearer});
         }
         ImGui::PushID(fields.widgetId.c_str());
         const auto number = [&](std::string_view label, const char *id, std::uint64_t &value) {
@@ -559,17 +560,23 @@ namespace Horo::Editor {
         if (fields.annulus)
             number("workspace.environment_query.create_inner", "##inner", fields.inner);
         number("workspace.environment_query.create_limit", "##limit", fields.maximum);
-        if (current.distance) {
-            number("workspace.environment_query.create_radius", "##radius", fields.radius);
+        for (auto &distance : fields.distances) {
+            const auto id = std::format("##query-distance-{}", distance.stage.Value());
+            ImGui::PushID(id.c_str());
+            Ui::FieldLabel(std::format("{} {}", text("workspace.environment_query.test"), distance.stage.Value()).c_str(), fonts);
+            number("workspace.environment_query.create_radius", "##radius", distance.radius);
             static_cast<void>(
-                Ui::CheckboxControl(text("workspace.environment_query.create_prefer_nearer").c_str(), &fields.preferNearer, fonts));
+                Ui::CheckboxControl(text("workspace.environment_query.create_prefer_nearer").c_str(), &distance.preferNearer, fonts));
+            ImGui::PopID();
         }
 
         constexpr auto maximum = std::numeric_limits<std::uint32_t>::max();
-        const bool valid = fields.step > 0 && fields.step <= maximum && fields.outer <= AI::MaximumQueryLatticeOuterSteps &&
-                           (!fields.annulus || fields.inner <= fields.outer) && fields.maximum > 0 &&
-                           fields.maximum <= AI::EnvironmentQuerySchemaLimits::MaximumResults &&
-                           (!current.distance || (fields.radius > 0 && fields.radius <= maximum));
+        const bool distancesValid = std::ranges::all_of(fields.distances, [](const auto &distance) {
+            return distance.radius > 0 && distance.radius <= std::numeric_limits<std::uint32_t>::max();
+        });
+        const bool valid = distancesValid && fields.step > 0 && fields.step <= maximum &&
+                           fields.outer <= AI::MaximumQueryLatticeOuterSteps && (!fields.annulus || fields.inner <= fields.outer) &&
+                           fields.maximum > 0 && fields.maximum <= AI::EnvironmentQuerySchemaLimits::MaximumResults;
         const auto button = [&](std::string_view key, bool enabled) {
             return Ui::Button({.label = text(key).c_str(), .enabled = enabled, .font = fonts.sans});
         };
@@ -578,8 +585,9 @@ namespace Horo::Editor {
                                                   static_cast<std::uint32_t>(fields.maximum)};
             if (fields.annulus)
                 changed.lattice.innerSteps = static_cast<std::uint32_t>(fields.inner);
-            if (current.distance)
-                changed.distance = AI::QueryPointDistanceTest{static_cast<std::uint32_t>(fields.radius), fields.preferNearer};
+            changed.distanceTests.reserve(fields.distances.size());
+            for (const auto &distance : fields.distances)
+                changed.distanceTests.push_back({distance.stage, {static_cast<std::uint32_t>(distance.radius), distance.preferNearer}});
             outCommand = MakeEnvironmentQueryEditCommand(document, Apply, changed);
         }
         if (button("workspace.decision_graph.edit_save", document.dirty))

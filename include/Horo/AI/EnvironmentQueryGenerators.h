@@ -109,7 +109,7 @@ namespace Horo::AI {
 
     /** @brief Updates values on the admitted native source while retaining every authored identity and stage order.
      * @param asset Original typed source. @param registry Exact installed descriptor catalog.
-     * @param settings Replacement settings; distance stage presence must remain unchanged.
+     * @param settings Replacement values with exactly the original distance-stage identities in execution order.
      * @return Complete validated source or typed refusal without modifying the original.
      */
     [[nodiscard]] Result<EnvironmentQueryAsset> EditBuiltinPointQuerySettings(const EnvironmentQueryAsset &asset,

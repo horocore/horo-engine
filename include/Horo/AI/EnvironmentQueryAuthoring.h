@@ -6,6 +6,7 @@
 #include "Horo/AI/EnvironmentQuerySchema.h"
 
 #include <optional>
+#include <vector>
 
 namespace Horo::AI {
     /** @brief Maximum bounded radius of the supported native point lattice in steps. */
@@ -24,11 +25,17 @@ namespace Horo::AI {
         bool preferNearer{};
     };
 
-    /** @brief Editable settings of the admitted native lattice and its optional existing distance stage. */
+    /** @brief Existing distance stage and its editable controls, keyed by durable identity. */
+    struct QueryPointDistanceStageSettings final {
+        QueryStageId stage;
+        QueryPointDistanceTest test;
+    };
+
+    /** @brief Editable settings of the admitted native lattice and its existing distance stages. */
     struct BuiltinPointQuerySettings final {
         QueryPointLattice lattice;
         std::uint32_t maximumResults{};
-        std::optional<QueryPointDistanceTest> distance;
+        std::vector<QueryPointDistanceStageSettings> distanceTests; /**< Admitted semantic execution order. */
     };
 
     /** @brief Pure initial-source factory installed by the application with the matching provider registry. */

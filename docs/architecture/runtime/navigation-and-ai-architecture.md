@@ -2314,6 +2314,13 @@ generation share the same typed identifiers and bounds. A source tab may validat
 against that schema without retaining an execution plan, acquiring a Scene
 capability or starting a provider. Unknown authored stages remain inspectable.
 
+Native point-lattice settings expose `BuiltinPointQuerySettings::distanceTests`
+in execution order. A caller that previously read the optional `distance` member
+reads the corresponding `QueryPointDistanceStageSettings` entry by its
+`QueryStageId`. Edits supply the same ordered identities with replacement values
+so undo, redo and source publication preserve each stage and its authored order.
+Existing query files retain the same serialized layout.
+
 1. **Pure Semantic Graph Assets**:
    - Persisted graph identity is established by typed assets: `BehaviorTreeAsset` (`.horo_bt`), `StateMachineAsset` (`.horo_sm`), and `UtilityAiAsset` (`.horo_utility`).
    - Assets contain only semantic topology: stable `GraphId`, `NodeId`, `PinId`, `PropertyId`, schema versions, node type identifiers, property bindings, and blackboard key bindings.

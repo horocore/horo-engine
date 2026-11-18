@@ -150,14 +150,19 @@ namespace Horo::Editor {
 
         /** @brief Transient wide-value controls preserve invalid or as-yet-unapplied input. */
         struct EnvironmentQueryFields final {
+            struct Distance final {
+                AI::QueryStageId stage;
+                std::uint64_t radius{};
+                bool preferNearer{};
+            };
+
             EnvironmentQueryDocumentFence fence;
             std::uint64_t step{};
             std::uint64_t outer{};
             std::uint64_t inner{};
             std::uint64_t maximum{};
-            std::uint64_t radius{};
             bool annulus{};
-            bool preferNearer{};
+            std::vector<Distance> distances;
             std::string widgetId;
         };
 
