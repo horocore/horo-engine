@@ -62,7 +62,7 @@ TEST_CASE("Cooked Scene v6 preserves canonical direct child identity and rejects
                   .HasError());
     };
     const auto wire = nlohmann::json::parse(encoded.Value());
-    CHECK(wire["format"] == ChildSceneCookedSceneFormat);
+    CHECK(wire["format"].get<std::string>() == ChildSceneCookedSceneFormat);
     auto impossible = wire;
     impossible["childScenes"][0]["scene"] = 4;
     reject(impossible);
@@ -120,7 +120,7 @@ TEST_CASE("Scene source and cooked Scene share the exact canvas and its required
     const auto cooked = EncodeCookedSceneDefinition(scene.Value());
     REQUIRE(cooked.HasValue());
     auto document = nlohmann::json::parse(cooked.Value());
-    CHECK(document["format"] == UiCanvasCookedSceneFormat);
+    CHECK(document["format"].get<std::string>() == UiCanvasCookedSceneFormat);
     const auto admitted = DecodeCookedSceneDefinition(cooked.Value(), {1}, {2});
     REQUIRE(admitted.HasValue());
     REQUIRE(admitted.Value().Entities().size() == objects.size());
