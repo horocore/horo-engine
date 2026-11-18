@@ -660,6 +660,106 @@ namespace Horo::Editor {
                                            .source = location}}}});
         }
 
+        /** @brief Accepted file identity and the native lease that protects its destination. */
+        struct DecisionSaveDestination final {
+            std::filesystem::path path;
+            Assets::AssetSourceIdentity accepted;
+            ExclusiveFileLock lease;
+        };
+
+        /** @brief The exact registered source pair remains pinned through prepared publication. */
+        struct DecisionSaveSource final {
+            DecisionSaveDestination destination;
+            Assets::AssetCookInputSnapshot inputs;
+        };
+
+        /** @brief Optional layout publication staged before either destination is replaced. */
+        struct PreparedDecisionLayoutSave final {
+            DecisionSaveDestination destination;
+            std::vector<std::byte> bytes;
+        };
+
+        /** @brief Acquires one resolved destination lock beneath the caller's Project mutation lease. */
+        Result<DecisionSaveDestination> AcquireDecisionSaveDestination(const std::filesystem::path &root, std::filesystem::path path,
+                                                                       const Assets::AssetSourceIdentity &accepted,
+                                                                       DurableFileSystem &files, std::string_view owner) {
+            using Destination = Result<DecisionSaveDestination>;
+            const auto lock = Assets::AssetSourcePublicationLockPath(root, path);
+            if (lock.HasError())
+                return Destination::Failure(lock.ErrorValue());
+            auto lease = files.TryAcquireExclusive(lock.Value(), owner);
+            if (lease.HasError())
+                return Destination::Failure(lease.ErrorValue());
+            return Destination::Success({std::move(path), accepted, std::move(lease).Value()});
+        }
+
+        /** @brief Verifies the registered graph source and sidecar while accepting the first native destination lease. */
+        Result<DecisionSaveSource> CaptureDecisionSaveSource(const std::filesystem::path &root,
+                                                             const Assets::AssetRegistrySnapshot &registry,
+                                                             const DecisionGraphWorkspaceDocument &document, std::size_t acceptedBytes,
+                                                             DurableFileSystem &files) {
+            using Source = Result<DecisionSaveSource>;
+            const auto conflict = [] {
+                return Source::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+            };
+            const auto *record = registry.Find(document.asset);
+            if (!record || record->sourcePath.String() != document.identity.key.source.Value() ||
+                record->type.Value() != AI::DecisionAssetType(document.family))
+                return conflict();
+            const Assets::AssetSourceIdentity accepted{true, acceptedBytes, document.source};
+            auto destination = AcquireDecisionSaveDestination(root, Foundation::Paths::Resolve(root, record->sourcePath), accepted, files,
+                                                              "decision-source-save");
+            if (destination.HasError())
+                return Source::Failure(destination.ErrorValue());
+
+            auto inputs = CaptureGraphInput(root, registry, record->id, AI::DecisionCodecLimits{}.maximumBytes);
+            if (inputs.HasError())
+                return conflict();
+            const auto &captured = inputs.Value().Sources().front();
+            if (captured.sourceDigest != accepted.digest || captured.bytes.size() != accepted.bytes)
+                return conflict();
+            return Source::Success({std::move(destination).Value(), std::move(inputs).Value()});
+        }
+
+        /** @brief Accepts the exact optional layout payload under its independent destination lease. */
+        Result<PreparedDecisionLayoutSave> PrepareDecisionLayoutSave(const std::filesystem::path &root,
+                                                                     const std::filesystem::path &sourcePath,
+                                                                     const DecisionGraphWorkspaceDocument &document,
+                                                                     const Assets::AssetSourceIdentity &accepted,
+                                                                     DurableFileSystem &files) {
+            using Prepared = Result<PreparedDecisionLayoutSave>;
+            if (!document.layoutWritable)
+                return Prepared::Failure(MakeError(Assets::AssetSourceErrors::Authority));
+            auto destination =
+                AcquireDecisionSaveDestination(root, DecisionLayoutPath(sourcePath), accepted, files, "decision-layout-save");
+            if (destination.HasError())
+                return Prepared::Failure(destination.ErrorValue());
+            const auto observed = Assets::CaptureAssetSource(root, destination.Value().path, MaximumDecisionLayoutBytes);
+            if (observed.HasError() || observed.Value().identity != accepted)
+                return Prepared::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+            auto encoded = EncodeDecisionLayout(*document.layout, document.asset, document.graph->asset);
+            if (encoded.HasError())
+                return Prepared::Failure(encoded.ErrorValue());
+            return Prepared::Success({std::move(destination).Value(), std::move(encoded).Value()});
+        }
+
+        /** @brief Converts tracked replacement to an accepted identity only when durability was confirmed. */
+        Result<Assets::AssetSourceIdentity> PublishDecisionDestination(const std::filesystem::path &root,
+                                                                       const DecisionSaveDestination &target,
+                                                                       std::span<const std::byte> bytes, DurableFileSystem &files,
+                                                                       bool &conflict) {
+            using Durable = Result<Assets::AssetSourceIdentity>;
+            auto publication = Assets::PublishAssetSource(root, target.path, target.accepted, bytes, target.lease, files);
+            if (publication.HasError())
+                return Durable::Failure(std::move(publication).ErrorValue());
+            auto receipt = std::move(publication).Value();
+            if (receipt.status == Assets::AssetSourcePublicationStatus::Durable)
+                return Durable::Success(receipt.identity);
+            conflict = true;
+            return Durable::Failure(receipt.durabilityError ? std::move(*receipt.durabilityError)
+                                                            : MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed));
+        }
+
         /** @brief Projects bounded family information without instantiating or preparing the graph. */
         struct DecisionSummary final {
             const char *familyLabel;
@@ -1182,56 +1282,21 @@ namespace Horo::Editor {
             if (project.HasError())
                 return fail(project.ErrorValue());
             const auto registry = m_mutableAssetRegistry ? m_mutableAssetRegistry->Snapshot() : m_assetRegistry;
-            const auto *record = registry.Find(document.asset);
-            const auto sourceType = AI::DecisionAssetType(document.family);
-            if (!record || record->sourcePath.String() != document.identity.key.source.Value() || record->type.Value() != sourceType)
-                return fail(MakeError(Assets::AssetSourceErrors::Conflict));
-            const auto path = Foundation::Paths::Resolve(root, record->sourcePath);
-            const auto lock = Assets::AssetSourcePublicationLockPath(root, path);
-            if (lock.HasError())
-                return fail(lock.ErrorValue());
-            const auto lease = m_durableFiles->TryAcquireExclusive(lock.Value(), "decision-source-save");
-            if (lease.HasError())
-                return fail(lease.ErrorValue());
+            const auto source = CaptureDecisionSaveSource(root, registry, document, draft.acceptedBytes, *m_durableFiles);
+            if (source.HasError())
+                return fail(source.ErrorValue());
 
-            const auto captured = CaptureGraphInput(root, registry, record->id, AI::DecisionCodecLimits{}.maximumBytes);
-            const Assets::AssetSourceIdentity accepted{true, draft.acceptedBytes, document.source};
-            if (captured.HasError() || captured.Value().Sources().front().sourceDigest != accepted.digest ||
-                captured.Value().Sources().front().bytes.size() != accepted.bytes)
-                return fail(MakeError(Assets::AssetSourceErrors::Conflict));
             const bool graphChanged = draft.currentDigest != draft.savedDigest;
-            const bool layoutChanged = *document.layout != *draft.savedLayout;
-            const auto layoutPath = DecisionLayoutPath(path);
-            std::optional<ExclusiveFileLock> layoutLease;
-            std::vector<std::byte> layoutBytes;
-            if (layoutChanged) {
-                if (!document.layoutWritable)
-                    return fail(MakeError(Assets::AssetSourceErrors::Authority));
-                const auto layoutLock = Assets::AssetSourcePublicationLockPath(root, layoutPath);
-                if (layoutLock.HasError())
-                    return fail(layoutLock.ErrorValue());
-                auto acquired = m_durableFiles->TryAcquireExclusive(layoutLock.Value(), "decision-layout-save");
-                if (acquired.HasError())
-                    return fail(acquired.ErrorValue());
-                layoutLease.emplace(std::move(acquired).Value());
-                const auto observed = Assets::CaptureAssetSource(root, layoutPath, MaximumDecisionLayoutBytes);
-                if (observed.HasError() || observed.Value().identity != draft.acceptedLayout)
-                    return fail(MakeError(Assets::AssetSourceErrors::Conflict));
-                auto encoded = EncodeDecisionLayout(*document.layout, document.asset, document.graph->asset);
-                if (encoded.HasError())
-                    return fail(encoded.ErrorValue());
-                layoutBytes = std::move(encoded).Value();
+            std::optional<PreparedDecisionLayoutSave> layout;
+            if (*document.layout != *draft.savedLayout) {
+                auto prepared =
+                    PrepareDecisionLayoutSave(root, source.Value().destination.path, document, draft.acceptedLayout, *m_durableFiles);
+                if (prepared.HasError())
+                    return fail(prepared.ErrorValue());
+                layout.emplace(std::move(prepared).Value());
             }
-            if (!graphChanged && captured.Value().VerifyUnchanged().HasError())
-                return fail(MakeError(Assets::AssetSourceErrors::Conflict));
-
-            const auto requireDurable = [&](const Result<Assets::AssetSourcePublication> &publication) {
-                if (publication.HasError())
-                    return fail(publication.ErrorValue());
-                if (publication.Value().status == Assets::AssetSourcePublicationStatus::Durable)
-                    return Saved::Success();
-                document.conflict = true;
-                return fail(publication.Value().durabilityError.value_or(MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed)));
+            const auto verifySource = [&] {
+                return source.Value().inputs.VerifyUnchanged().HasValue();
             };
             if (graphChanged) {
                 const auto providers = AcquireDecisionDraftProviders(*document.graph);
@@ -1243,23 +1308,25 @@ namespace Horo::Editor {
                 const auto encoded = AI::DecisionPlanCodec::EncodeSource(std::span{document.graph.get(), 1}, document.graph->asset);
                 if (encoded.HasError())
                     return fail(encoded.ErrorValue());
-                if (auto unchanged = captured.Value().VerifyUnchanged(); unchanged.HasError())
+                if (!verifySource())
                     return fail(MakeError(Assets::AssetSourceErrors::Conflict));
-                const auto written = Assets::PublishAssetSource(root, path, accepted, std::as_bytes(std::span{encoded.Value()}),
-                                                                lease.Value(), *m_durableFiles);
-                if (auto durable = requireDurable(written); durable.HasError())
-                    return durable;
-                document.source = written.Value().identity.digest;
-                draft.acceptedBytes = written.Value().identity.bytes;
+                const auto written = PublishDecisionDestination(root, source.Value().destination, std::as_bytes(std::span{encoded.Value()}),
+                                                                *m_durableFiles, document.conflict);
+                if (written.HasError())
+                    return fail(written.ErrorValue());
+                document.source = written.Value().digest;
+                draft.acceptedBytes = written.Value().bytes;
                 draft.savedDigest = draft.currentDigest;
                 ProjectDecisionGraphDraft(document, draft);
+            } else if (!verifySource()) {
+                return fail(MakeError(Assets::AssetSourceErrors::Conflict));
             }
-            if (layoutLease) {
+            if (layout) {
                 const auto written =
-                    Assets::PublishAssetSource(root, layoutPath, draft.acceptedLayout, layoutBytes, *layoutLease, *m_durableFiles);
-                if (auto durable = requireDurable(written); durable.HasError())
-                    return durable;
-                draft.acceptedLayout = written.Value().identity;
+                    PublishDecisionDestination(root, layout->destination, layout->bytes, *m_durableFiles, document.conflict);
+                if (written.HasError())
+                    return fail(written.ErrorValue());
+                draft.acceptedLayout = written.Value();
                 draft.savedLayout = document.layout;
             }
             document.conflict = false;

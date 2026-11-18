@@ -7,6 +7,7 @@
 #include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Gameplay/GameModule.h"
+#include "NativePublicationFiles.h"
 #include "ProjectReplicationTestSupport.h"
 #include "editor/screens/workspace/AiAssetPresentation.h"
 #include "editor/screens/workspace/BlackboardScalarInput.h"
@@ -23,10 +24,54 @@
 #include <format>
 #include <fstream>
 #include <limits>
+#include <vector>
 
 namespace {
     using namespace Horo;
     using namespace Horo::Editor;
+
+    /** @brief Injects one layout failure while keeping Project leases and source publication native. */
+    class DecisionSaveFaultFiles final : public TestSupport::NativePublicationFiles {
+    public:
+        enum class Failure {
+            None,
+            BeforeLayoutReplace,
+            AfterLayoutReplace
+        };
+        static constexpr auto BeforeMessage = "Injected layout replacement refusal";
+        static constexpr auto AfterMessage = "Injected layout durability failure";
+        std::filesystem::path graph;
+        std::filesystem::path layout;
+        Failure failure{};
+        std::vector<std::filesystem::path> leases;
+        std::size_t graphWrites{};
+        std::size_t layoutWrites{};
+
+        Result<ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &path, std::string_view owner) override {
+            leases.push_back(path);
+            return native.TryAcquireExclusive(path, owner);
+        }
+
+        Result<void> WritePrivateDurable(const std::filesystem::path &path, std::span<const std::byte> bytes, bool &created,
+                                         std::filesystem::perms mode) override {
+            return native.WritePrivateDurable(path, bytes, created, mode);
+        }
+
+        Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
+                                          AtomicFileReplacementReceipt &receipt) override {
+            if (destination == graph)
+                ++graphWrites;
+            if (destination != layout)
+                return native.AtomicReplaceTracked(prepared, destination, receipt);
+            ++layoutWrites;
+            if (failure == Failure::BeforeLayoutReplace)
+                return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed, BeforeMessage));
+            auto result = native.AtomicReplaceTracked(prepared, destination, receipt);
+            if (result.HasValue() && receipt.WasCommitted() && failure == Failure::AfterLayoutReplace)
+                return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed, AfterMessage));
+            return result;
+        }
+    };
 
     /** @brief Registered source and native publication for the actual workspace admission path. */
     struct BlackboardWorkspaceFixture final {
@@ -608,6 +653,110 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
         const auto preserved = Assets::CaptureAssetSource(project.root, metadata, MaximumDecisionLayoutBytes);
         REQUIRE(preserved.HasValue());
         CHECK(preserved.Value().identity == external.Value().identity);
+    }
+
+    SECTION("tracked save receipts retain the last durable graph when layout recording fails") {
+        controller.ProcessCommand(*command);
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        REQUIRE(controller.ViewModel().decisionGraphDocuments.size() == 1);
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument,
+                                   .documentInstance = controller.ViewModel().decisionGraphDocuments.front().identity.instance});
+        REQUIRE(controller.ViewModel().decisionGraphDocuments.empty());
+
+        DecisionSaveFaultFiles files;
+        files.graph = project.root / path;
+        files.layout = DecisionLayoutPath(files.graph);
+        ProjectMutationCoordinator mutations{files};
+        EditorWorkspaceController faulted(project.root, project.runtime, project.registry.Snapshot(),
+                                          {.assets = {.mutableAssetRegistry = &project.registry},
+                                           .mutations = &mutations,
+                                           .durableFiles = &files});
+        faulted.ProcessCommand({.command = EditorWorkspaceViewCommand::OpenSourceFile,
+                                .sourceOpenRequest = SourceOpenRequest{.path = path, .origin = SourceOpenOrigin::AssetActivation}});
+        REQUIRE(faulted.ViewModel().decisionGraphDocuments.size() == 1);
+        const auto &view = faulted.ViewModel().decisionGraphDocuments.front();
+        REQUIRE(view.editable);
+        REQUIRE(view.layoutWritable);
+        const auto original = view.source;
+        const auto initial = std::get<AI::StateMachineAssetDescriptor>(view.graph->body).initial;
+        const auto save = [&] {
+            faulted.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Save));
+        };
+        files.leases.clear();
+        save();
+        CHECK(files.leases.empty());
+        CHECK(files.graphWrites == 0);
+        CHECK(files.layoutWrites == 0);
+
+        faulted.ProcessCommand({.command = EditorWorkspaceViewCommand::EditDecisionStateMachine,
+                                .stateMachineEdit = StateMachineEditRequest{view.identity.instance,
+                                                                            view.revision,
+                                                                            StateMachineEditOperation::SetTerminal,
+                                                                            initial,
+                                                                            {},
+                                                                            AI::DecisionStateTerminal::Succeeded}});
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        faulted.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::EditDecisionLayout,
+             .decisionLayoutEdit =
+                 DecisionGraphLayoutRequest{{view.identity.instance, view.revision}, DecisionLayoutOperation::Move, {{initial, 12, 18}}}});
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        REQUIRE(view.dirty);
+        const auto positions = view.layout;
+
+        SECTION("precommit layout refusal is retryable without replacing the accepted graph again") {
+            files.failure = DecisionSaveFaultFiles::Failure::BeforeLayoutReplace;
+        }
+        SECTION("a committed layout with unconfirmed durability keeps its error and requires reconciliation") {
+            files.failure = DecisionSaveFaultFiles::Failure::AfterLayoutReplace;
+        }
+        const bool committed = files.failure == DecisionSaveFaultFiles::Failure::AfterLayoutReplace;
+        files.leases.clear();
+        save();
+        const auto sourceLock = Assets::AssetSourcePublicationLockPath(project.root, files.graph);
+        const auto layoutLock = Assets::AssetSourcePublicationLockPath(project.root, files.layout);
+        REQUIRE(sourceLock.HasValue());
+        REQUIRE(layoutLock.HasValue());
+        REQUIRE(files.leases.size() == 3);
+        CHECK(files.leases[0] == project.root / ".horo/local/project-mutation.lock");
+        CHECK(files.leases[1] == sourceLock.Value());
+        CHECK(files.leases[2] == layoutLock.Value());
+        REQUIRE(view.diagnostic.has_value());
+        const auto &expected = committed ? Assets::AssetSourceErrors::DurabilityUnconfirmed : Assets::AssetSourceErrors::ReadFailed;
+        CHECK(view.diagnostic->code.Value() == expected.code.Value());
+        CHECK(view.diagnostic->message == (committed ? DecisionSaveFaultFiles::AfterMessage : DecisionSaveFaultFiles::BeforeMessage));
+        CHECK(view.conflict == committed);
+        CHECK(view.dirty);
+        CHECK(faulted.HasDirtySourceDocuments());
+        CHECK(view.layout == positions);
+        CHECK(files.graphWrites == 1);
+        CHECK(files.layoutWrites == 1);
+        const auto graph = Assets::CaptureAssetSource(project.root, files.graph, AI::DecisionCodecLimits{}.maximumBytes);
+        REQUIRE(graph.HasValue());
+        CHECK(graph.Value().identity.digest == view.source);
+        CHECK(view.source != original);
+        CHECK(std::filesystem::exists(files.layout) == committed);
+
+        files.failure = DecisionSaveFaultFiles::Failure::None;
+        save();
+        CHECK(files.graphWrites == 1);
+        if (committed) {
+            REQUIRE(view.diagnostic.has_value());
+            CHECK(view.diagnostic->code.Value() == Assets::AssetSourceErrors::Conflict.code.Value());
+            CHECK(view.conflict);
+            CHECK(view.dirty);
+            CHECK(files.layoutWrites == 1);
+        } else {
+            CHECK_FALSE(view.diagnostic.has_value());
+            CHECK_FALSE(view.conflict);
+            CHECK_FALSE(view.dirty);
+            CHECK_FALSE(faulted.HasDirtySourceDocuments());
+            CHECK(files.layoutWrites == 2);
+        }
+        const auto durable = CaptureDecisionLayout(project.root, files.graph, view.asset, view.graph->asset);
+        REQUIRE(durable.HasValue());
+        CHECK(durable.Value().accepted.exists);
+        CHECK(durable.Value().layout == *positions);
     }
 
     SECTION("the durable source and sidecar open the same stable Decision document") {
