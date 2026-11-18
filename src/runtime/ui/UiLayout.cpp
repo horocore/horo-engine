@@ -113,6 +113,7 @@ namespace Horo::Runtime::Ui {
             UiLogicalRect rootContent;
             UiCanvasScaleFactor fontScale;
             UiInteractionRevision interaction;
+            UiLayoutInlineDirection inlineDirection{};
         };
 
         UiLayoutEngineDescriptor descriptor;
@@ -372,13 +373,9 @@ namespace Horo::Runtime::Ui {
                 placementScratch.resize(node.childCount);
                 lineScratch.resize(node.childCount);
                 ++node.work.arrangements;
-                const UiLayoutArrangeRequest arrangeRequest{node.element,
-                                                            node.assignedContent,
-                                                            node.measurement,
-                                                            ChildMeasurements(node),
-                                                            remeasure,
-                                                            std::span{placementScratch},
-                                                            std::span{lineScratch}};
+                const UiLayoutArrangeRequest
+                    arrangeRequest{node.element, node.assignedContent,        node.measurement,       ChildMeasurements(node),
+                                   remeasure,    std::span{placementScratch}, std::span{lineScratch}, request.inlineDirection};
                 const auto arranged = request.evaluator->Arrange(arrangeRequest, rectangleScratch);
                 if (arranged.HasError())
                     return Result<bool>::Failure(arranged.ErrorValue());
@@ -465,7 +462,8 @@ namespace Horo::Runtime::Ui {
         /** @brief Validates the complete actual request before preparing any candidate state. */
         [[nodiscard]] Result<void> ValidateRequest(const UiElementTree &tree, const UiLayoutUpdateRequest &request) const {
             if (!request.sources.IsValid() || !request.rootConstraints.IsValid() || !request.rootContent.IsValid() ||
-                !request.fontScale.IsValid() || request.evaluator == nullptr)
+                !request.fontScale.IsValid() || request.inlineDirection > UiLayoutInlineDirection::RightToLeft ||
+                request.evaluator == nullptr)
                 return Failure<void>(UiErrors::LayoutInvalid);
             if (tree.State() != UiElementTreeState::Active || tree.Instance() != descriptor.instance ||
                 tree.Canvas() != descriptor.canvas || tree.SourceDocument() != descriptor.document ||
@@ -480,6 +478,7 @@ namespace Horo::Runtime::Ui {
                                             const UiInteractionRevision exactInteraction) const noexcept {
             return !current || published.sources != request.sources || published.rootConstraints != request.rootConstraints ||
                    published.rootContent != request.rootContent || published.fontScale != request.fontScale ||
+                   published.inlineDirection != request.inlineDirection ||
                    (exactInteraction.IsValid() && exactInteraction != published.interaction);
         }
 
@@ -501,8 +500,8 @@ namespace Horo::Runtime::Ui {
                 return Failure<std::shared_ptr<UiLayoutSnapshot::Storage>>(UiErrors::LayoutSnapshotStorageExhausted);
             lastIssued = publication;
             reservedInteraction = publication;
-            slot->descriptor = {descriptor.instance, descriptor.canvas, descriptor.document,
-                                request.sources,     publication,       request.fontScale};
+            slot->descriptor = {descriptor.instance, descriptor.canvas, descriptor.document,    request.sources,
+                                publication,         request.fontScale, request.inlineDirection};
             slot->records.resize(candidateTree.nodes.size());
             slot->recordLookup.resize(candidateTree.nodes.size());
             for (std::uint32_t index = 0; index < candidateTree.nodes.size(); ++index) {
@@ -721,8 +720,9 @@ namespace Horo::Runtime::Ui {
             return Failure<PreparedUpdate>(UiErrors::LayoutSourceStale);
         const bool topologyChanged = owner->activeNodes.empty() || owner->published.sources.tree != request.sources.tree;
         const bool rootChanged =
-            owner->current && (owner->published.rootConstraints != request.rootConstraints ||
-                               owner->published.rootContent != request.rootContent || owner->published.fontScale != request.fontScale);
+            owner->current &&
+            (owner->published.rootConstraints != request.rootConstraints || owner->published.rootContent != request.rootContent ||
+             owner->published.fontScale != request.fontScale || owner->published.inlineDirection != request.inlineDirection);
         const bool sourcesChanged = owner->HasSourceChanges(request, exactInteraction);
         if (!sourcesChanged && owner->invalidations.empty()) {
             owner->current->leases.fetch_add(1);
@@ -834,8 +834,8 @@ namespace Horo::Runtime::Ui {
             storage_->activeNodes.swap(storage_->candidateTree.nodes);
             storage_->activeChildren.swap(storage_->candidateTree.children);
             const auto &descriptor = candidate.snapshot_->Descriptor();
-            storage_->published = {descriptor.sources, candidate.rootConstraints_, candidate.rootContent_, candidate.fontScale_,
-                                   descriptor.interaction};
+            storage_->published = {descriptor.sources,   candidate.rootConstraints_, candidate.rootContent_,
+                                   candidate.fontScale_, descriptor.interaction,     descriptor.inlineDirection};
             storage_->invalidations.clear();
         }
         auto published = std::move(*candidate.snapshot_);

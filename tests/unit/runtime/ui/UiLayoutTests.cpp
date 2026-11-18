@@ -766,6 +766,87 @@ namespace Horo::Runtime::Ui {
             REQUIRE(snapshot.Value().Get(root).Value().arrangement.paddingBox == UiLogicalRect{{-8, -8}, {1040, 784}});
         }
 
+        TEST_CASE("Reading direction republishes nested boxes and preserves physical placement", "[runtime_ui][layout][direction]") {
+            auto tree = Tree();
+            const auto root = tree.Root().Value().handle;
+            const auto group = tree.Find(Stable<UiElementId>(2)).Value();
+            const auto leaf = tree.Find(Stable<UiElementId>(3)).Value();
+            const auto physical = tree.Find(Stable<UiElementId>(4)).Value();
+            UiLayoutStyle groupStyle;
+            groupStyle.width = UiLength::Dip(100);
+            groupStyle.height = UiLength::Dip(50);
+            UiLayoutStyle leafStyle;
+            leafStyle.width = UiLength::Dip(20);
+            leafStyle.height = UiLength::Dip(10);
+            leafStyle.padding.left = 3;
+            UiLayoutStyle physicalStyle = leafStyle;
+            physicalStyle.positioning = UiLayoutPositioning::Absolute;
+            physicalStyle.offsets.left = 150;
+            physicalStyle.horizontalPlacement = UiLayoutHorizontalPlacement::Physical;
+            const std::array styles{Descriptor(root, {}), Descriptor(group, groupStyle), Descriptor(leaf, leafStyle),
+                                    Descriptor(physical, physicalStyle)};
+            auto evaluator = UiDeclarativeLayoutEvaluator::Create(styles);
+            REQUIRE(evaluator.HasValue());
+            auto engine = Engine();
+            auto request = Request(evaluator.Value());
+            const auto left = engine.Update(tree, request);
+            REQUIRE(left.HasValue());
+            request.inlineDirection = UiLayoutInlineDirection::RightToLeft;
+            const auto right = engine.Update(tree, request);
+            REQUIRE(right.HasValue());
+            CHECK(right.Value().Descriptor().inlineDirection == UiLayoutInlineDirection::RightToLeft);
+            CHECK(right.Value().Descriptor().interaction > left.Value().Descriptor().interaction);
+            const auto groupBox = right.Value().Get(group).Value().arrangement.contentBox;
+            CHECK(groupBox.origin.x == request.rootContent.extent.width - groupBox.extent.width);
+            const auto leafBoxes = right.Value().Get(leaf).Value().arrangement;
+            CHECK(leafBoxes.contentBox.origin.x == groupBox.origin.x + groupBox.extent.width - leafBoxes.contentBox.extent.width);
+            CHECK(leafBoxes.paddingBox.origin.x == leafBoxes.contentBox.origin.x);
+            CHECK(leafBoxes.paddingBox.extent.width == leafBoxes.contentBox.extent.width + 3);
+            CHECK(right.Value().Get(physical).Value().arrangement == left.Value().Get(physical).Value().arrangement);
+            CHECK(left.Value().Get(group).Value().arrangement.contentBox.origin.x == 0);
+
+            request.inlineDirection = static_cast<UiLayoutInlineDirection>(255);
+            RequireError(engine.Update(tree, request), UiErrors::LayoutInvalid);
+            request.inlineDirection = UiLayoutInlineDirection::RightToLeft;
+            const auto unchanged = engine.Update(tree, request);
+            REQUIRE(unchanged.HasValue());
+            CHECK(unchanged.Value().Descriptor().interaction == right.Value().Descriptor().interaction);
+        }
+
+        TEST_CASE("Reading direction reverses visual inline order while retaining authored layout records",
+                  "[runtime_ui][layout][direction]") {
+            auto tree = FlatTree();
+            const auto root = tree.Root().Value().handle;
+            const auto first = tree.Find(Stable<UiElementId>(2)).Value();
+            const auto second = tree.Find(Stable<UiElementId>(3)).Value();
+            const auto third = tree.Find(Stable<UiElementId>(4)).Value();
+            UiLayoutStyle row;
+            row.container.orientation = UiLayoutOrientation::Horizontal;
+            row.container.gap = 5;
+            UiLayoutStyle narrow;
+            narrow.width = UiLength::Dip(20);
+            narrow.height = UiLength::Dip(10);
+            auto wide = narrow;
+            wide.width = UiLength::Dip(30);
+            const std::array styles{Descriptor(root, row), Descriptor(first, narrow), Descriptor(second, wide), Descriptor(third, narrow)};
+            auto evaluated = UiDeclarativeLayoutEvaluator::Create(styles);
+            REQUIRE(evaluated.HasValue());
+            auto request = Request(evaluated.Value());
+            request.rootContent = {{40, 0}, {100, 100}};
+            request.rootConstraints.maximum = {100, 100};
+            request.inlineDirection = UiLayoutInlineDirection::RightToLeft;
+            const auto result = Engine().Update(tree, request);
+            REQUIRE(result.HasValue());
+            const auto records = result.Value().Records();
+            REQUIRE(records.size() == styles.size());
+            CHECK(records[1].element == first);
+            CHECK(records[2].element == second);
+            CHECK(records[3].element == third);
+            CHECK(records[1].arrangement.contentBox == UiLogicalRect{{120, 0}, {20, 10}});
+            CHECK(records[2].arrangement.contentBox == UiLogicalRect{{85, 0}, {30, 10}});
+            CHECK(records[3].arrangement.contentBox == UiLogicalRect{{60, 0}, {20, 10}});
+        }
+
         TEST_CASE("Declarative layout applies aspect ratio and reports deterministic bound conflicts", "[runtime_ui][layout][semantic]") {
             auto tree = Tree();
             const auto root = tree.Root().Value().handle;

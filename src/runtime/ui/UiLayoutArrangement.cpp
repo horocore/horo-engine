@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <utility>
 
 namespace Horo::Runtime::Ui::LayoutInternal {
     namespace {
@@ -98,17 +99,57 @@ namespace Horo::Runtime::Ui::LayoutInternal {
             UiLogicalRect padding;
         };
 
-        [[nodiscard]] Result<ArrangeBoxes> ResolveArrangeBoxes(const UiLogicalRect assignedContent, const UiLayoutStyle &style) {
-            const auto padding = ExpandRect(assignedContent, style.padding);
+        /** @brief Checks whether logical horizontal edges follow this direction. */
+        [[nodiscard]] bool Mirrors(const UiLayoutStyle &style, const UiLayoutInlineDirection direction) noexcept {
+            return direction == UiLayoutInlineDirection::RightToLeft &&
+                   style.horizontalPlacement == UiLayoutHorizontalPlacement::FollowDirection;
+        }
+
+        /** @brief Converts logical box edges into physical edges in a mirrored arrangement. */
+        [[nodiscard]] UiLayoutEdges PhysicalEdges(UiLayoutEdges edges, const bool mirrors) noexcept {
+            if (mirrors)
+                std::swap(edges.left, edges.right);
+            return edges;
+        }
+
+        [[nodiscard]] Result<ArrangeBoxes> ResolveArrangeBoxes(const UiLogicalRect assignedContent, const UiLayoutStyle &style,
+                                                               const UiLayoutInlineDirection direction) {
+            const bool mirrors = Mirrors(style, direction);
+            const auto padding = ExpandRect(assignedContent, PhysicalEdges(style.padding, mirrors));
             if (padding.HasError())
                 return Failure<ArrangeBoxes>(UiErrors::LayoutInvalid);
-            const auto border = ExpandRect(padding.Value(), style.border);
+            const auto border = ExpandRect(padding.Value(), PhysicalEdges(style.border, mirrors));
             if (border.HasError())
                 return Failure<ArrangeBoxes>(UiErrors::LayoutInvalid);
-            const auto margin = ExpandRect(border.Value(), style.margin);
+            const auto margin = ExpandRect(border.Value(), PhysicalEdges(style.margin, mirrors));
             if (margin.HasError())
                 return Failure<ArrangeBoxes>(UiErrors::LayoutInvalid);
             return Result<ArrangeBoxes>::Success({margin.Value(), border.Value(), padding.Value()});
+        }
+
+        /** @brief Reflects authored placements inside the parent and recomputes overflow including physical opt-outs. */
+        [[nodiscard]] Result<UiLogicalRect> MirrorChildren(const std::span<const UiLayoutElementDescriptor> descriptors,
+                                                           const UiLayoutArrangeRequest &request, const std::span<UiLogicalRect> output) {
+            const auto parent = request.assignedContent;
+            const auto mirrorAxis = static_cast<std::int64_t>(parent.origin.x) * 2 + parent.extent.width;
+            auto overflow = parent;
+            for (std::size_t index = 0; index < output.size(); ++index) {
+                const auto *child = FindDescriptor(descriptors, request.children[index].element);
+                if (child == nullptr)
+                    return Failure<UiLogicalRect>(UiErrors::LayoutSourceStale);
+                auto &content = output[index];
+                if (Mirrors(child->style, request.inlineDirection)) {
+                    const auto x = mirrorAxis - content.origin.x - content.extent.width;
+                    if (!std::in_range<UiScalar>(x))
+                        return Failure<UiLogicalRect>(UiErrors::LayoutInvalid);
+                    content.origin.x = static_cast<UiScalar>(x);
+                }
+                const auto unioned = UnionRect(overflow, content);
+                if (unioned.HasError())
+                    return Result<UiLogicalRect>::Failure(unioned.ErrorValue());
+                overflow = unioned.Value();
+            }
+            return Result<UiLogicalRect>::Success(overflow);
         }
 
         [[nodiscard]] Result<UiLogicalRect> ArrangeChildren(const std::span<const UiLayoutElementDescriptor> descriptors,
@@ -165,13 +206,18 @@ namespace Horo::Runtime::Ui::LayoutInternal {
                                         const std::span<UiLogicalRect> childContent,
                                         const std::span<UiLayoutChildPlacement> placementScratch,
                                         const std::span<UiLayoutLine> lineScratch) {
-        auto boxes = ResolveArrangeBoxes(request.assignedContent, parent.style);
+        auto boxes = ResolveArrangeBoxes(request.assignedContent, parent.style, request.inlineDirection);
         if (boxes.HasError())
             return Result<UiLayoutArrangement>::Failure(boxes.ErrorValue());
         auto overflow = ArrangeChildren(descriptors, request.assignedContent, request.children, parent.style, childContent,
                                         placementScratch, lineScratch);
         if (overflow.HasError())
             return Result<UiLayoutArrangement>::Failure(overflow.ErrorValue());
+        if (request.inlineDirection == UiLayoutInlineDirection::RightToLeft) {
+            overflow = MirrorChildren(descriptors, request, childContent);
+            if (overflow.HasError())
+                return Result<UiLayoutArrangement>::Failure(overflow.ErrorValue());
+        }
         return Result<UiLayoutArrangement>::Success({boxes.Value().margin, boxes.Value().border, boxes.Value().padding,
                                                      request.assignedContent, overflow.Value(), boxes.Value().border,
                                                      request.measurement.baseline});

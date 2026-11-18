@@ -89,7 +89,8 @@ namespace Horo::Runtime::Ui {
 
         [[nodiscard]] bool IsValidPlacement(const UiLayoutStyle &style) noexcept {
             return style.anchors.IsValid() && style.pivot.IsValid() && IsAlignment(style.horizontalAlignment) &&
-                   IsAlignment(style.verticalAlignment) && IsPositioning(style.positioning);
+                   IsAlignment(style.verticalAlignment) && IsPositioning(style.positioning) &&
+                   style.horizontalPlacement <= UiLayoutHorizontalPlacement::Physical;
         }
     }  // namespace
 

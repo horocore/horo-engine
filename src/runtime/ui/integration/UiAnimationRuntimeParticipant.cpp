@@ -14,7 +14,7 @@ namespace Horo::Runtime {
                 return false;
             return config.application <= UiAnimationApplication::Manual && config.clockCommands > 0 && config.clockCommands <= 4'096 &&
                    view.constraints.IsValid() && view.content.IsValid() && view.fontScale.IsValid() && view.intrinsic.IsValid() &&
-                   view.canvas.IsValid() && view.policy.IsValid();
+                   view.canvas.IsValid() && view.policy.IsValid() && view.inlineDirection <= Ui::UiLayoutInlineDirection::RightToLeft;
         }
 
         /** @brief Only the explicit application boundary selects optional domains; no authored descriptor can enable them. */

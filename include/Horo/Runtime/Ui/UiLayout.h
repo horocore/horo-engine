@@ -325,6 +325,18 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] auto operator<=>(const UiLayoutPivot &) const noexcept = default;
     };
 
+    /** @brief Horizontal reading direction of a complete layout publication. */
+    enum class UiLayoutInlineDirection : std::uint8_t {
+        LeftToRight,
+        RightToLeft,
+    };
+
+    /** @brief Controls whether one element's placement follows the reading direction. */
+    enum class UiLayoutHorizontalPlacement : std::uint8_t {
+        FollowDirection,
+        Physical,
+    };
+
     /** @brief Typed sizing and box-model descriptor for one element. */
     struct UiLayoutStyle final {
         UiLength width{UiLength::Auto()};         /**< Preferred content width. */
@@ -346,6 +358,7 @@ namespace Horo::Runtime::Ui {
         UiLayoutContainerStyle container;                                /**< Direct-child layout policy. */
         UiLayoutFlex flex;                                               /**< Flex weights when this element is a flex item. */
         UiLayoutGridPlacement grid;                                      /**< Grid cell when this element is a grid item. */
+        UiLayoutHorizontalPlacement horizontalPlacement{UiLayoutHorizontalPlacement::FollowDirection}; /**< Horizontal mirroring policy. */
 
         /** @brief Checks all typed size, box, anchor, and alignment fields. @return Whether the style can enter layout. */
         [[nodiscard]] bool IsValid() const noexcept;
@@ -500,6 +513,7 @@ namespace Horo::Runtime::Ui {
         bool remeasure{};                                   /**< True only after the bounded retry. */
         std::span<UiLayoutChildPlacement> childScratch{};   /**< Preallocated placement scratch, matching children when supplied. */
         std::span<UiLayoutLine> lineScratch{};              /**< Preallocated line scratch, matching the bounded child capacity. */
+        UiLayoutInlineDirection inlineDirection{UiLayoutInlineDirection::LeftToRight}; /**< Reading direction for this arrangement. */
     };
 
     /**
@@ -584,6 +598,8 @@ namespace Horo::Runtime::Ui {
         UiLayoutSourceRevisions sources;   /**< Complete immutable input lineage. */
         UiInteractionRevision interaction; /**< Published layout/interaction generation. */
         UiCanvasScaleFactor fontScale{};   /**< Accessibility text scale consumed by this generation. */
+        UiLayoutInlineDirection inlineDirection{
+            UiLayoutInlineDirection::LeftToRight}; /**< Reading direction consumed by this generation. */
     };
 
     /**
@@ -622,6 +638,7 @@ namespace Horo::Runtime::Ui {
         UiLogicalRect rootContent;            /**< Definite logical root assignment. */
         const UiLayoutEvaluator *evaluator{}; /**< Borrowed only for this synchronous call. */
         UiCanvasScaleFactor fontScale{};      /**< Accessibility text scale forwarded to intrinsic measurement. */
+        UiLayoutInlineDirection inlineDirection{UiLayoutInlineDirection::LeftToRight}; /**< Reading direction forwarded to arrangement. */
     };
 
     /** @brief Explicit admission lifecycle for one canvas layout cache. */

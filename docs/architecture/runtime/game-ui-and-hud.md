@@ -402,6 +402,14 @@ auto uses intrinsic size, and definite size is aligned within the anchor segment
 Absolute/anchored elements do not contribute to flex/grid flow but do contribute
 to post-arrange overflow.
 
+Each presentation view supplies its horizontal reading direction. Direction changes
+invalidate retained layout and publish new hit-test geometry with a new interaction
+revision. Right-to-left arrangement reflects eligible child placements and logical
+box edges inside each parent. An element with physical horizontal placement keeps
+its authored physical alignment. The source and cooked layouts store that opt-out
+as an optional `horizontalPlacement` field. Older layouts default to following the
+view's direction. Published record order remains authored order.
+
 Layout has two logical phases:
 
 ```text
@@ -423,6 +431,14 @@ hit testing. Required failure publishes nothing and retains the prior last-good
 generation according to ADR-073. Gameplay code does not mutate boxes or render
 quads directly. Physical pixel snapping is downstream derived render data and
 cannot feed back into logical layout, scroll extent or serialized state.
+
+Layout qualification runs the Layout, LayoutClipping, CanvasSpace, Document,
+AnimationIntegration and TextLayout CTest suites together. These cover nested
+constraints, failed updates, overflow, invalidation, DPI, safe area, RTL geometry and
+text, and responsive profile publication. The 2,081-element nested layout case
+requires zero measured allocations after setup, three measures after a single-leaf
+invalidation, and preparation under 250 ms initially and 100 ms after invalidation.
+The elapsed-time ceilings guard against stalls on shared Debug runners.
 
 ### Clipping, Scroll Content And Bring-Into-View
 

@@ -72,6 +72,7 @@ namespace Horo::Runtime::Ui {
         UiLayoutCanvasRevision canvas;
         UiLayoutPolicyRevision policy;
         std::optional<UiAnimationPresentationEvidence> presentation;
+        UiLayoutInlineDirection inlineDirection{UiLayoutInlineDirection::LeftToRight}; /**< Physical placement direction for this view. */
         [[nodiscard]] auto operator<=>(const UiAnimationViewport &) const noexcept = default;
     };
 

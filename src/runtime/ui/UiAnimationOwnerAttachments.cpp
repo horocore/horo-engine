@@ -90,7 +90,8 @@ namespace Horo::Runtime::Ui {
                                             owner.presentation.attachmentGenerations[index] + 1};
         if (const auto evidence = Evidence(canvas->tree, owner.definition.canvas, id, viewport, owner.presentation.revision);
             !viewport.constraints.IsValid() || !viewport.content.IsValid() || !viewport.fontScale.IsValid() ||
-            !viewport.intrinsic.IsValid() || !viewport.canvas.IsValid() || !viewport.policy.IsValid() || !evidence.IsValid())
+            !viewport.intrinsic.IsValid() || !viewport.canvas.IsValid() || !viewport.policy.IsValid() ||
+            viewport.inlineDirection > UiLayoutInlineDirection::RightToLeft || !evidence.IsValid())
             return Result<UiPresentationAttachmentId>::Failure(MakeError(UiErrors::PresentationProfileMalformed));
         return AdoptAttachment(owner, index, id, view, std::move(viewport));
     }
@@ -148,6 +149,7 @@ namespace Horo::Runtime::Ui {
         if (const auto *canvas = owner.publisher.Current()->Canvas(owner.definition.canvas);
             !viewport.constraints.IsValid() || !viewport.content.IsValid() || !viewport.fontScale.IsValid() ||
             !viewport.intrinsic.IsValid() || !viewport.canvas.IsValid() || !viewport.policy.IsValid() ||
+            viewport.inlineDirection > UiLayoutInlineDirection::RightToLeft ||
             !Evidence(canvas->tree, owner.definition.canvas, attachment, viewport, owner.presentation.revision).IsValid())
             return Result<void>::Failure(MakeError(UiErrors::PresentationProfileMalformed));
         if ((*found)->viewport == viewport)
@@ -261,10 +263,11 @@ namespace Horo::Runtime::Ui {
             sources.intrinsic = attachment.viewport.intrinsic;
             sources.canvas = attachment.viewport.canvas;
             sources.policy = attachment.viewport.policy;
-            auto layout = attachment.layout.PrepareDerived(tree,
-                                                           {sources, attachment.viewport.constraints, attachment.viewport.content,
-                                                            &evaluator.Value(), attachment.viewport.fontScale},
-                                                           *storage.candidate.layout);
+            auto layout =
+                attachment.layout.PrepareDerived(tree,
+                                                 {sources, attachment.viewport.constraints, attachment.viewport.content, &evaluator.Value(),
+                                                  attachment.viewport.fontScale, attachment.viewport.inlineDirection},
+                                                 *storage.candidate.layout);
             if (layout.HasError())
                 return Result<void>::Failure(layout.ErrorValue());
             attachment.preparedLayout.emplace(std::move(layout).Value());

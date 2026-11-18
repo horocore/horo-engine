@@ -114,8 +114,8 @@ namespace Horo::Runtime::Ui {
                                               viewport.canvas,
                                               viewport.policy,
                                               storage.candidate.presentation.revision};
-        auto layout =
-            canvas->layoutEngine->Prepare(tree, {sources, viewport.constraints, viewport.content, &evaluator.Value(), viewport.fontScale});
+        auto layout = canvas->layoutEngine->Prepare(tree, {sources, viewport.constraints, viewport.content, &evaluator.Value(),
+                                                           viewport.fontScale, viewport.inlineDirection});
         if (layout.HasError())
             return Result<void>::Failure(layout.ErrorValue());
         storage.candidate.layout.emplace(std::move(layout).Value());

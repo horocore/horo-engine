@@ -97,6 +97,29 @@ TEST_CASE("Extended UI authoring round trips canonical messages arguments state 
     CHECK(*message == Message());
 }
 
+TEST_CASE("Physical horizontal placement round trips through source and cooked documents", "[runtime_ui][authoring][direction]") {
+    UiElementPresentation presentation;
+    const auto legacy = SerializeUiElementPresentation(presentation);
+    REQUIRE(legacy.HasValue());
+    CHECK_FALSE(nlohmann::json::parse(legacy.Value())["layout"].contains("horizontalPlacement"));
+    presentation.layout.horizontalPlacement = UiLayoutHorizontalPlacement::Physical;
+    const auto document = Document(UiElementKind::Panel, presentation);
+    REQUIRE(document.HasValue());
+    const auto encoded = SerializeUiDocument(document.Value());
+    REQUIRE(encoded.HasValue());
+    const auto decoded = DeserializeUiDocument(encoded.Value());
+    REQUIRE(decoded.HasValue());
+    CHECK(decoded.Value().Elements()[1].presentation == presentation);
+    const auto cooked = CookedUiDocument::Cook(document.Value());
+    REQUIRE(cooked.HasValue());
+    const auto uncooked = CookedUiDocument::Decode(cooked.Value().Payload());
+    REQUIRE(uncooked.HasValue());
+    CHECK(uncooked.Value().Elements()[1].presentation == presentation);
+    auto malformed = nlohmann::json::parse(encoded.Value());
+    malformed["elements"][1]["presentation"]["layout"]["horizontalPlacement"] = 2;
+    CHECK(DeserializeUiDocument(malformed.dump()).HasError());
+}
+
 TEST_CASE("Extended UI fields require schema 1.3 while unchanged legacy presentations retain format one",
           "[runtime_ui][authoring][migration]") {
     CHECK(Document(UiElementKind::Text, TextPresentation(), {1, 2}).HasError());
