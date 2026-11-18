@@ -39,6 +39,27 @@ namespace Horo::XR::OpenXRInternal {
             return MakeError(descriptor, std::format("{} failed; native result={}", function, static_cast<std::int32_t>(result)));
         }
 
+        /** @brief Distinguishes optional hand-only failures from loss of shared session or clock evidence. */
+        Error HandSampleError(const XrResult result) {
+            const auto &descriptor = [result]() -> const ErrorCodeDescriptor & {
+                switch (result) {
+                    case XR_ERROR_PERMISSION_INSUFFICIENT:
+                        return XRErrors::PermissionDenied;
+                    case XR_ERROR_FUNCTION_UNSUPPORTED:
+                        return XRErrors::OperationUnsupported;
+                    case XR_ERROR_HANDLE_INVALID:
+                        return XRErrors::IdentityStale;
+                    case XR_ERROR_TIME_INVALID:
+                        return XRErrors::TimeDomainIncompatible;
+                    case XR_ERROR_VALIDATION_FAILURE:
+                        return XRErrors::OperationInvalid;
+                    default:
+                        return XRErrors::RuntimeUnavailable;
+                }
+            }();
+            return MakeError(descriptor, std::format("xrLocateHandJointsEXT failed (XrResult {})", static_cast<std::int32_t>(result)));
+        }
+
         /** @brief Resolves one required tracker lifecycle dispatch from the selected instance. */
         template <typename Function> Result<Function> Resolve(const NativeDiscoveryBorrow &discovery, const char *name) {
             PFN_xrVoidFunction function{};
@@ -187,7 +208,7 @@ namespace Horo::XR::OpenXRInternal {
             if (provider.HasError())
                 return Outcome::Failure(provider.ErrorValue());
             if (result != XR_SUCCESS)
-                return Outcome::Failure(HandError("xrLocateHandJointsEXT", result));
+                return Outcome::Failure(HandSampleError(result));
             if (!ValidLocations(locations, nativeJoints))
                 return Outcome::Failure(MakeError(XRErrors::TrackingSnapshotInvalid));
             if (locations.isActive != XR_TRUE)

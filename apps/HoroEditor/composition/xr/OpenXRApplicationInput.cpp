@@ -26,6 +26,19 @@ namespace Horo::Application::Internal {
         XR::XRTrackedDeviceRole HandRole(std::size_t hand) noexcept {
             return hand == 0 ? XR::XRTrackedDeviceRole::LeftHand : XR::XRTrackedDeviceRole::RightHand;
         }
+
+        /** @brief Allows controller fallback only for failures known to affect the optional hand evidence. */
+        std::optional<XR::XRCapabilityState> HandOutage(const Error &error) noexcept {
+            using namespace XR;
+            const auto &code = error.code.Value();
+            if (code == XRErrors::PermissionDenied.code.Value())
+                return XRCapabilityState::Denied;
+            if (code == XRErrors::OperationUnsupported.code.Value())
+                return XRCapabilityState::Unsupported;
+            if (code == XRErrors::TrackingSnapshotInvalid.code.Value() || code == XRErrors::PoseInvalid.code.Value())
+                return XRCapabilityState::Incompatible;
+            return std::nullopt;
+        }
     }  // namespace
 
     using namespace XR;
@@ -64,6 +77,8 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRApplicationSession::RetireHands */
     Result<void> OpenXRApplicationSession::RetireHands() {
+        input_.handCutoff.reset();
+        input_.handSamplingBlocked.reset();
         if (input_.hands) {
             if (auto closed = input_.hands->Close(); closed.HasError())
                 return closed;
@@ -71,6 +86,37 @@ namespace Horo::Application::Internal {
         }
         input_.handAvailability = XRCapabilityState::Unsupported;
         return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRApplicationSession::SampleHands */
+    Result<OpenXRApplicationSession::HandInputSample> OpenXRApplicationSession::SampleHands(const XRSessionId &session,
+                                                                                            const XRSessionLifecycle &sessions,
+                                                                                            const XRTimeEvidence &time) {
+        using Outcome = Result<HandInputSample>;
+        if (!input_.hands || input_.handSamplingBlocked)
+            return Outcome::Success({{}, input_.handSamplingBlocked.value_or(input_.handAvailability)});
+        const auto space = WorldSpace(session);
+        if (space.HasError())
+            return Outcome::Failure(space.ErrorValue());
+        const auto reference = BorrowWorldSpace(space.Value());
+        if (reference.HasError())
+            return Outcome::Failure(reference.ErrorValue());
+        auto tracked = input_.hands->Sample(reference.Value(), space.Value(), time);
+        if (tracked.HasError()) {
+            const auto outage = HandOutage(tracked.ErrorValue());
+            const auto plan = sessions.AcceptedPlan();
+            if (!outage || !plan || plan->Decision(XRCapability::HandTracking).state != XRFeatureDecisionState::OptionalEnabled)
+                return Outcome::Failure(tracked.ErrorValue());
+            if (*outage != XRCapabilityState::Incompatible)
+                input_.handSamplingBlocked = outage;
+            return Outcome::Success({{}, *outage});
+        }
+        const auto &hands = tracked.Value().hands;
+        if (std::ranges::none_of(hands, [](const auto &hand) {
+            return hand.joints[static_cast<std::size_t>(XRHandJoint::Palm)].pose.has_value();
+        }))
+            return Outcome::Success({{}, XRCapabilityState::TemporarilyUnavailable});
+        return Outcome::Success({std::move(tracked).Value(), XRCapabilityState::Available});
     }
 
     /** @copydoc OpenXRApplicationSession::PrepareInput */
@@ -237,21 +283,12 @@ namespace Horo::Application::Internal {
             return current;
         if (!bindingsCurrent())
             return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
-        std::optional<NativeHandSamples> hands;
-        if (input_.hands) {
-            const auto space = WorldSpace(state.session);
-            if (space.HasError())
-                return Result<void>::Failure(space.ErrorValue());
-            const auto reference = BorrowWorldSpace(space.Value());
-            if (reference.HasError())
-                return Result<void>::Failure(reference.ErrorValue());
-            auto tracked = input_.hands->Sample(reference.Value(), space.Value(), time.Value());
-            if (tracked.HasError())
-                return Result<void>::Failure(tracked.ErrorValue());
-            if (!bindingsCurrent())
-                return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
-            hands.emplace(std::move(tracked).Value());
-        }
+        const auto handSample = SampleHands(state.session, sessions, time.Value());
+        if (handSample.HasError())
+            return Result<void>::Failure(handSample.ErrorValue());
+        if (!bindingsCurrent())
+            return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
+        const auto &hands = handSample.Value().hands;
         std::array<RuntimeInternal::TrackingSourceEvidence, 7> sources{};
         std::size_t sourceCount = 0;
         for (const auto &pose : poses.Value().Poses())
@@ -287,7 +324,7 @@ namespace Horo::Application::Internal {
         if (!bindingsCurrent())
             return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
         const auto appended =
-            AppendPreparedInput({poses.Value(), actions.Value(), state, time.Value(), origin, bindingRevision, hands ? &*hands : nullptr},
+            AppendPreparedInput({poses.Value(), actions.Value(), state, time.Value(), origin, bindingRevision, handSample.Value()},
                                 publication, frame);
         if (appended.HasValue())
             input_.profiles = actions.Value().Profiles();
@@ -298,7 +335,8 @@ namespace Horo::Application::Internal {
     Result<void> OpenXRApplicationSession::AppendPreparedInput(const PreparedInputSample &sample,
                                                                XR::RuntimeInternal::XRTrackingPublication &publication,
                                                                const Input::InputCollectionFrame &frame) {
-        const auto &[poses, actions, state, time, origin, bindingRevision, hands] = sample;
+        const auto &[poses, actions, state, time, origin, bindingRevision, handSample] = sample;
+        const auto &hands = handSample.hands;
         std::array<RuntimeInternal::TrackingPoseEvidence, 7> normalized{};
         std::size_t poseCount = 0;
         bool tracked = false;
@@ -344,28 +382,44 @@ namespace Horo::Application::Internal {
         const auto *snapshot = publication.Current();
         if (!snapshot)
             return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
+        XRHandGestureCandidates gestures;
         if (hands) {
             const auto &policy = authorities_.handGestures ? *authorities_.handGestures : pinchPolicy_;
-            auto gestures = DeriveXRHandGestures(*snapshot, state.session, snapshot->Revision(), origin, policy);
-            if (gestures.HasError()) {
+            auto derived = DeriveXRHandGestures(*snapshot, state.session, snapshot->Revision(), origin, policy);
+            if (derived.HasError()) {
                 publication.Revoke();
-                return Result<void>::Failure(gestures.ErrorValue());
+                return Result<void>::Failure(derived.ErrorValue());
             }
-            input_.gestures = std::move(gestures).Value();
-            input_.gestureRevision = snapshot->Revision();
+            gestures = std::move(derived).Value();
         }
         const auto appended = input_.projection->Append(*snapshot, state.session, snapshot->Revision(), origin, bindingRevision, frame);
         if (appended.HasError())
             publication.Revoke();
+        else
+            input_.handCutoff.emplace(HandCutoffObservation{snapshot->Revision(), handSample.availability, std::move(gestures)});
         return appended;
+    }
+
+    /** @copydoc OpenXRApplicationSession::CurrentHandCutoff */
+    const OpenXRApplicationSession::HandCutoffObservation *OpenXRApplicationSession::CurrentHandCutoff(
+        const XRTrackingSnapshot &snapshot) const noexcept {
+        if (std::this_thread::get_id() != lane_ || !native_ || native_->Session() != snapshot.Session() || !input_.handCutoff ||
+            input_.handCutoff->revision != snapshot.Revision())
+            return nullptr;
+        return &*input_.handCutoff;
     }
 
     /** @copydoc OpenXRApplicationSession::ReadHandGestures */
     XRHandGestureCandidates OpenXRApplicationSession::ReadHandGestures(const XRTrackingSnapshot &snapshot) const noexcept {
-        if (std::this_thread::get_id() != lane_ || !native_ || native_->Session() != snapshot.Session() ||
-            input_.gestureRevision != snapshot.Revision())
-            return {};
-        return input_.gestures;
+        const auto *current = CurrentHandCutoff(snapshot);
+        return current ? current->gestures : XRHandGestureCandidates{};
+    }
+
+    /** @copydoc OpenXRApplicationSession::ReadHandAvailability */
+    std::optional<XRCapabilityState> OpenXRApplicationSession::ReadHandAvailability(const XRTrackingSnapshot &snapshot) const noexcept {
+        if (const auto *current = CurrentHandCutoff(snapshot))
+            return current->availability;
+        return std::nullopt;
     }
 
     /** @copydoc OpenXRApplicationSession::PreparedBindings */
@@ -431,8 +485,7 @@ namespace Horo::Application::Internal {
         HORO_INVARIANT_MSG(std::this_thread::get_id() == lane_, "XR Input retirement requires its owner lane");
         RequestHapticCancellation();
         input_.projection.reset();
-        input_.gestures = {};
-        input_.gestureRevision = {};
+        input_.handCutoff.reset();
     }
 
     /** @copydoc OpenXRApplicationSession::RebuildInputProjection */

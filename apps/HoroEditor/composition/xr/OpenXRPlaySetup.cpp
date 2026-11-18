@@ -160,6 +160,11 @@ namespace Horo::Application::Internal {
                                                              tracking->WorldOriginRevision() == input_.origin && input_.admitted &&
                                                              input_.play == Editor::EditorPlayState::Playing) {
             CopyOpenXRInspectionTracking(report, *tracking);
+            if (const auto availability = composition_.session.ReadHandAvailability(*tracking)) {
+                const auto hand = std::ranges::find(report.capabilities, HandTracking, &Editor::EditorXrInspectionCapability::kind);
+                if (hand != report.capabilities.end())
+                    hand->observed = *availability;
+            }
             report.status = Current;
         } else
             report.status = WaitingForSample;

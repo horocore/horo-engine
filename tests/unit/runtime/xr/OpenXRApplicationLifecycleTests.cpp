@@ -1213,8 +1213,9 @@ namespace Horo::Tests::OpenXRApplication {
             } else if (outcome == Outcome::Malformed) {
                 fixture.script.hands.malformed = true;
                 REQUIRE(fixture.scheduler->RunFrame().HasValue());
-                REQUIRE(observed->result->HasError());
-                CHECK(observed->result->ErrorValue().code.Value() == XR::XRErrors::TrackingSnapshotInvalid.code.Value());
+                REQUIRE(observed->result->HasValue());
+                CHECK(fixture.play->ReadInspection().trackingRevision > inspection.trackingRevision);
+                CHECK(fixture.play->ReadInspection().hands[0].validity.position[2] == 0);
                 CHECK(fixture.play->ReadHandGestures().Candidates().empty());
             } else {
                 fixture.script.events.pollResult = XR_ERROR_SESSION_LOST;
@@ -1254,6 +1255,110 @@ namespace Horo::Tests::OpenXRApplication {
         fixture.scheduler->Shutdown();
         scene->Shutdown();
         REQUIRE(RequireValue(fixture.ClosePlay()));
+    }
+
+    TEST_CASE("Installed XR Play separates optional hand outages from the exact held controller action",
+              "[xr][application][play][hands][fallback]") {
+        using enum XR::XRProjectFeaturePolicy;
+        enum class HandFault {
+            Inactive,
+            Malformed,
+            Denial,
+            UnsupportedDispatch,
+            SessionLoss,
+            RequiredMalformed
+        };
+        using enum HandFault;
+        const auto fault = GENERATE(Inactive, Malformed, Denial, UnsupportedDispatch, SessionLoss, RequiredMalformed);
+        auto document = OpenXRProduct::Json::parse(OpenXRProduct::InstalledProductFixture::BindingDocument());
+        document["poses"].push_back({{"profile", 1},
+                                     {"set", 1},
+                                     {"role", static_cast<unsigned>(XR::XRTrackedDeviceRole::LeftController)},
+                                     {"kind", static_cast<unsigned>(XR::XRTrackedPoseKind::Grip)},
+                                     {"path", "/user/hand/left/input/grip/pose"},
+                                     {"label", "Grip"}});
+        ApplicationFixture fixture{true,        6,     Unrequested,    fault == RequiredMalformed ? Required : OptionalDisable,
+                                   Unrequested, false, document.dump()};
+        fixture.script.actions.tracking.enabled = true;
+        constexpr Input::PlayerId player = 7;
+        auto scene = PublishPlay(fixture, player);
+        auto cutoff = std::make_unique<AppInputSample>(*fixture.play);
+        auto *observed = cutoff.get();
+        REQUIRE(fixture.scheduler->AddParticipant(std::move(cutoff)).HasValue());
+        RequireValue(fixture.scheduler->Startup());
+        const auto readAction = [&] {
+            return fixture.router.ReadAction(fixture.inputContext, Input::ActionId{"select"}, player);
+        };
+        const auto runCutoff = [&] {
+            RequireValue(fixture.scheduler->RunFrame());
+            REQUIRE(observed->result.has_value());
+        };
+        runCutoff();
+        RequireValue(*observed->result);
+        REQUIRE(readAction().down);
+        REQUIRE(fixture.play->ReadHandGestures().Candidates().size() == 1);
+        const auto first = fixture.play->ReadInspection().trackingRevision;
+
+        auto expected = XR::XRCapabilityState::Incompatible;
+        auto &hands = fixture.script.hands;
+        switch (fault) {
+            case Inactive:
+                hands.leftActive = false;
+                expected = XR::XRCapabilityState::TemporarilyUnavailable;
+                break;
+            case Malformed:
+            case RequiredMalformed:
+                hands.malformed = true;
+                break;
+            case Denial:
+                hands.rightLocateResult = XR_ERROR_PERMISSION_INSUFFICIENT;
+                expected = XR::XRCapabilityState::Denied;
+                break;
+            case UnsupportedDispatch:
+                hands.rightLocateResult = XR_ERROR_FUNCTION_UNSUPPORTED;
+                expected = XR::XRCapabilityState::Unsupported;
+                break;
+            case SessionLoss:
+                hands.rightLocateResult = XR_SESSION_LOSS_PENDING;
+                break;
+        }
+        runCutoff();
+        CHECK(fixture.play->ReadHandGestures().Candidates().empty());
+        if (fault == SessionLoss || fault == RequiredMalformed) {
+            REQUIRE(observed->result->HasError());
+            const auto &error = fault == SessionLoss ? XR::XRErrors::RuntimeUnavailable : XR::XRErrors::TrackingSnapshotInvalid;
+            CHECK(observed->result->ErrorValue().code.Value() == error.code.Value());
+            CHECK_FALSE(readAction().down);
+            CHECK(fixture.play->ReadInspection().trackingRevision == 0);
+        } else {
+            RequireValue(*observed->result);
+            CHECK(readAction().down);
+            CHECK_FALSE(readAction().pressed);
+            const auto after = fixture.play->ReadInspection();
+            CHECK(after.trackingRevision > first);
+            CHECK(after.hands[0].validity.position[2] == 0);
+            const auto hand =
+                std::ranges::find(after.capabilities, XR::XRCapability::HandTracking, &Editor::EditorXrInspectionCapability::kind);
+            REQUIRE(hand != after.capabilities.end());
+            CHECK(hand->observed == expected);
+            CHECK(hand->decision == XR::XRFeatureDecisionState::OptionalEnabled);
+
+            const auto priorLocates = hands.locates;
+            hands.malformed = false;
+            hands.leftActive = true;
+            hands.rightLocateResult = XR_SUCCESS;
+            runCutoff();
+            RequireValue(*observed->result);
+            CHECK(readAction().down);
+            const bool blocked = fault == Denial || fault == UnsupportedDispatch;
+            CHECK(hands.locates == priorLocates + (blocked ? 0 : 2));
+            CHECK(fixture.play->ReadHandGestures().Candidates().size() == (blocked ? 0 : 1));
+        }
+        fixture.scheduler->Shutdown();
+        scene->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+        CHECK_FALSE(hands.live[0]);
+        CHECK_FALSE(hands.live[1]);
     }
 
     TEST_CASE("Real installed Play recenter retires reference identities and replacement rereads Stage bounds",

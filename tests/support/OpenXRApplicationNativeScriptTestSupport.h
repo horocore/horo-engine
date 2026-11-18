@@ -21,6 +21,8 @@ namespace Horo::Tests::OpenXRApplication {
         bool failLocateLookup{};
         bool failRight{};
         bool malformed{};
+        bool leftActive{true};
+        XrResult rightLocateResult{XR_SUCCESS};
 
         static XRAPI_ATTR XrResult XRAPI_CALL Create(XrSession session, const XrHandTrackerCreateInfoEXT *info, XrHandTrackerEXT *tracker) {
             REQUIRE(session != XR_NULL_HANDLE);
@@ -47,11 +49,14 @@ namespace Horo::Tests::OpenXRApplication {
             REQUIRE(info->baseSpace != XR_NULL_HANDLE);
             REQUIRE(info->time > 0);
             REQUIRE(locations->jointCount == XR_HAND_JOINT_COUNT_EXT);
-            if (active->malformed) {
+            const bool left = tracker == OpenXR::NativeHandle<XrHandTrackerEXT>(1);
+            if (!left && active->rightLocateResult != XR_SUCCESS)
+                return active->rightLocateResult;
+            if (!left && active->malformed) {
                 ++locations->jointCount;
                 return XR_SUCCESS;
             }
-            if (tracker != OpenXR::NativeHandle<XrHandTrackerEXT>(1))
+            if (!left || !active->leftActive)
                 return XR_SUCCESS;
             locations->isActive = XR_TRUE;
             for (auto &joint : std::span{locations->jointLocations, locations->jointCount}) {

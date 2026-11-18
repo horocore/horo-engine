@@ -288,6 +288,11 @@ namespace Horo::Application::Internal {
          * @return Bounded hand gesture candidates with source ownership.
          */
         [[nodiscard]] XR::XRHandGestureCandidates ReadHandGestures(const XR::XRTrackingSnapshot &snapshot) const noexcept;
+        /** @brief Reads redacted hand availability from the exact committed cutoff.
+         * @param snapshot Current immutable tracking publication, borrowed on the owner lane.
+         * @return Current observed availability or absence after revocation.
+         */
+        [[nodiscard]] std::optional<XR::XRCapabilityState> ReadHandAvailability(const XR::XRTrackingSnapshot &snapshot) const noexcept;
         /** @brief Borrows the exact resolved preparation until input retirement; no native identity or sampling authority. */
         [[nodiscard]] const XR::XRResolvedActionBindings *PreparedBindings() const noexcept;
         /** @brief Returns the exact native-created calibrated World identity for the bound candidate.
@@ -387,6 +392,16 @@ namespace Horo::Application::Internal {
         /** @brief Validates the same selected profile and static capacity required by Play. */
         [[nodiscard]] Result<void> ValidateProjectionPolicy(const OpenXRApplicationBindings &bindings) const;
 
+        /** @brief An optional hand sample and its independently observed state for this cutoff. */
+        struct HandInputSample final {
+            std::optional<XR::OpenXRInternal::NativeHandSamples> hands;
+            XR::XRCapabilityState availability;
+        };
+
+        /** @brief Samples the configured hand provider or withdraws its optional contribution before controller projection. */
+        [[nodiscard]] Result<HandInputSample> SampleHands(const XR::XRSessionId &session, const XR::XRSessionLifecycle &sessions,
+                                                          const XR::XRTimeEvidence &time);
+
         /** @brief Borrowed normalized packet from one already-fenced native Input cutoff. No borrow survives this call. */
         struct PreparedInputSample final {
             const XR::OpenXRInternal::NativePoseObservations &poses;
@@ -395,7 +410,7 @@ namespace Horo::Application::Internal {
             const XR::XRTimeEvidence &time;
             XR::XRWorldOriginRevision origin;
             std::uint64_t bindingRevision;
-            const XR::OpenXRInternal::NativeHandSamples *hands;
+            const HandInputSample &hands;
         };
 
         /** @brief Publishes the same bounded cutoff through the sole tracking owner and appends without committing.
@@ -440,13 +455,23 @@ namespace Horo::Application::Internal {
         std::uint64_t packagedPreflightRevision_{};
         bool packagedPreflightCurrent_{};
 
+        struct HandCutoffObservation final {
+            XR::XRTrackingSnapshotRevision revision;
+            XR::XRCapabilityState availability;
+            XR::XRHandGestureCandidates gestures;
+        };
+
+        /** @brief Reads the last derived hand record only while the caller's exact tracking snapshot is current. */
+        [[nodiscard]] const HandCutoffObservation *CurrentHandCutoff(const XR::XRTrackingSnapshot &snapshot) const noexcept;
+
         struct InputPreparation final {
             std::unique_ptr<XR::OpenXRInternal::OpenXRActionBindings> native;
             std::optional<XR::XRInputProjection> projection;
             std::optional<XR::XRResolvedActionBindings> bindings;
             std::optional<XR::OpenXRInternal::OpenXRHandTracking> hands;
-            XR::XRHandGestureCandidates gestures;
-            XR::XRTrackingSnapshotRevision gestureRevision;
+            std::optional<HandCutoffObservation> handCutoff;
+            std::optional<XR::XRCapabilityState>
+                handSamplingBlocked; /**< A denied or unsupported route stays withdrawn for this session. */
             XR::XRCapabilityState handAvailability{XR::XRCapabilityState::Unsupported};
             XR::XRCapabilityState stageAvailability{XR::XRCapabilityState::Unsupported};
             std::array<XR::XRActiveInteractionProfile, 2> profiles{}; /**< Actual post-attachment preparation census. */

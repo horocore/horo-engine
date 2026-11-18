@@ -732,6 +732,13 @@ alongside its head and controller roles when `xr.limits.devices` is at least fiv
 The selected instance must advertise the extension, the system must report
 support, and both trackers and their dispatch must prepare on the same native
 session. An unavailable optional hand provider leaves controller routing active.
+On a live cutoff, malformed optional hand evidence withdraws the entire hand
+sample while current controller actions continue. An inactive hand remains
+temporarily unavailable until fresh evidence arrives. Permission denial and
+unsupported hand dispatch close further hand sampling for that session. The
+redacted inspector reports the current hand availability against the exact
+cutoff. Required hand failures and shared session or clock failures still
+reject the input cutoff with their typed cause.
 The default pinch policy requires tracked thumb and index tips and uses their
 observed radii to determine contact. Host composition can supply a different
 typed policy. Raw joints and gesture candidates expire with their exact
