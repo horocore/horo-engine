@@ -30,6 +30,7 @@ namespace Horo::Editor {
         SucceededState,
         FailedState,
         UtilityOption,
+        Subtree,
     };
 
     /** @brief Distinguishes authored transitions from projected hierarchy or score edges. */

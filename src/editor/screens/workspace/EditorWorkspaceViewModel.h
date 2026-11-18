@@ -503,6 +503,7 @@ namespace Horo::Editor {
         AI::DecisionPlanKind family{AI::DecisionPlanKind::StateMachine};
         std::shared_ptr<const DecisionGraphLayout> layout;
         bool layoutWritable{};
+        std::optional<BehaviorTreeSubtreeReview> subtreeReview;
         bool dirty{};
         bool canUndo{};
         bool canRedo{};
@@ -816,6 +817,7 @@ namespace Horo::Editor {
         std::vector<BlackboardWorkspaceDocument> blackboardDocuments;
         bool blackboardCreationAvailable{};
         std::vector<DecisionSchemaChoice> decisionSchemaChoices;
+        std::vector<DecisionSchemaChoice> behaviorTreeSubtreeChoices;
         std::vector<DecisionTaskChoice> decisionTaskChoices;
         std::vector<DecisionGraphWorkspaceDocument> decisionGraphDocuments;
         std::vector<PCGWorkspaceDocument> pcgDocuments;

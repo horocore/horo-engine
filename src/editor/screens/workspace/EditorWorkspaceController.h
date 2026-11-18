@@ -561,6 +561,7 @@ namespace Horo::Editor {
 
         /** @brief Accepted disk identity and bounded authoring state for a single Decision session. */
         struct DecisionGraphDraft final {
+            std::weak_ptr<const AI::DecisionBlackboardProviderMetadata> reviewedSubtreeCatalog;
             Sha256Digest savedDigest;
             Sha256Digest currentDigest;
             std::size_t acceptedBytes{};
@@ -575,6 +576,9 @@ namespace Horo::Editor {
         /** @brief Obtains the project metadata generation for the supported authoring family. */
         [[nodiscard]] Result<std::shared_ptr<const AI::DecisionNodeGeneration>> AcquireDecisionDraftProviders(
             const AI::DecisionGraphSource &source) const;
+        /** @brief Reviews one explicitly selected saved Behavior Tree under current project authority. */
+        Result<void> ReviewDecisionSubtree(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
+                                           const BehaviorTreeEditRequest &request);
         /** @brief Executes and commits one fully validated editable candidate. */
         template <typename Request>
         Result<void> ApplyDecisionGraphEdit(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft, const Request &request);

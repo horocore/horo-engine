@@ -178,6 +178,7 @@ namespace Horo::Editor {
         /** @brief Remembers the selected authored node and exact installed Task in one open tree. */
         struct BehaviorTreeSelection final {
             DocumentInstanceId instance;
+            Assets::AssetId subtree;
             AI::DecisionNodeId node;
             AI::DecisionNodeTypeId task;
         };

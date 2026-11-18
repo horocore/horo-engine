@@ -30,7 +30,7 @@ namespace Horo::Editor {
                 case Service:
                     return GraphNodeRole::Service;
                 case Task:
-                    return GraphNodeRole::Task;
+                    return node.control.kind == AI::DecisionControlKind::Subplan ? GraphNodeRole::Subtree : GraphNodeRole::Task;
                 default:
                     return GraphNodeRole::Unknown;
             }

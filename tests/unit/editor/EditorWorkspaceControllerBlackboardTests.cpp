@@ -960,6 +960,174 @@ TEST_CASE("Behavior Tree and Utility New use the current registered native task 
         CHECK(ordered->targetNode == task);
         CHECK_FALSE(documents.front().canUndo);
     }
+    SECTION("subtree authoring reviews saved targets and compiles the actual reachable closure") {
+        using enum BehaviorTreeEditOperation;
+        const auto &documents = controller.ViewModel().decisionGraphDocuments;
+        const auto active = [&]() -> const DecisionGraphWorkspaceDocument & {
+            const auto selected = controller.ViewModel().workspacePanelHost.ActiveDocument();
+            const auto result = std::ranges::find_if(documents, [&](const auto &doc) {
+                return doc.identity.instance == selected;
+            });
+            REQUIRE(result != documents.end());
+            return *result;
+        };
+        const auto create = [&](const char *name) {
+            controller.ProcessCommand(make(AI::DecisionPlanKind::BehaviorTree, name));
+            REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+            return active().asset;
+        };
+        const auto parent = create("Subtree caller");
+        const auto child = create("Subtree target");
+        const auto alternative = create("Subtree alternate");
+        const auto open = [&](std::string_view path) {
+            controller.ProcessCommand(
+                {.command = EditorWorkspaceViewCommand::OpenSourceFile,
+                 .sourceOpenRequest = SourceOpenRequest{.path = std::filesystem::path{path}, .origin = SourceOpenOrigin::AssetActivation}});
+            REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        };
+        const auto edit = [&](BehaviorTreeEditRequest request) {
+            request.instance = active().identity.instance;
+            request.revision = active().revision;
+            controller.ProcessCommand({.command = EditorWorkspaceViewCommand::EditDecisionBehaviorTree, .behaviorTreeEdit = request});
+        };
+        const auto tree = [&]() -> const AI::BehaviorTreeAsset & {
+            return *std::get<std::shared_ptr<const AI::BehaviorTreeAsset>>(active().graph->body);
+        };
+        const auto group = [&] {
+            const auto root = tree().Root();
+            const auto edge = std::ranges::find(tree().Edges(), root, &AI::BehaviorTreeEdge::sourceNode);
+            REQUIRE(edge != tree().Edges().end());
+            edit({.operation = WrapSequence, .node = AI::DecisionNodeId::Create(edge->targetNode.Value()).Value()});
+            REQUIRE_FALSE(active().diagnostic.has_value());
+            const auto first = std::ranges::find(tree().Edges(), root, &AI::BehaviorTreeEdge::sourceNode);
+            REQUIRE(first != tree().Edges().end());
+            return AI::DecisionNodeId::Create(first->targetNode.Value()).Value();
+        };
+        const auto review = [&](Assets::AssetId asset) {
+            const auto revision = active().revision;
+            edit({.operation = ReviewSubtree, .subtreeTarget = asset});
+            REQUIRE_FALSE(active().diagnostic.has_value());
+            REQUIRE(active().subtreeReview.has_value());
+            CHECK(active().revision == revision);
+            return *active().subtreeReview;
+        };
+
+        open("assets/Subtree caller.horo_bt");
+        REQUIRE(active().asset == parent);
+        const auto parentGroup = group();
+        edit({.operation = ReviewSubtree, .subtreeTarget = Assets::AssetId::FromBytes({97})});
+        CHECK(active().diagnostic.has_value());
+        CHECK_FALSE(active().subtreeReview);
+        edit({.operation = ReviewSubtree, .subtreeTarget = parent});
+        CHECK(active().diagnostic.has_value());
+
+        const auto savedTarget = review(child);
+        const auto childFile = project.root / "assets/Subtree target.horo_bt";
+        const auto captured = Assets::CaptureAssetSource(project.root, childFile, AI::DecisionCodecLimits{}.maximumBytes);
+        REQUIRE(captured.HasValue());
+        const auto write = [&](const std::filesystem::path &file, std::span<const std::byte> bytes) {
+            std::ofstream output(file, std::ios::binary | std::ios::trunc);
+            output.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+            REQUIRE(static_cast<bool>(output));
+        };
+        const auto targetDocument = std::ranges::find(documents, child, &DecisionGraphWorkspaceDocument::asset);
+        REQUIRE(targetDocument != documents.end());
+        auto changedSource = *targetDocument->graph;
+        auto changedTree = std::get<std::shared_ptr<const AI::BehaviorTreeAsset>>(changedSource.body)->Data();
+        changedTree.displayName = "Changed after review";
+        auto rebound = AI::BehaviorTreeAsset::Capture(std::move(changedTree));
+        REQUIRE(rebound.HasValue());
+        changedSource.body = std::make_shared<const AI::BehaviorTreeAsset>(std::move(rebound).Value());
+        const auto obsolete = AI::DecisionPlanCodec::EncodeSource(std::span{&changedSource, 1}, changedSource.asset);
+        REQUIRE(obsolete.HasValue());
+        write(childFile, std::as_bytes(std::span{obsolete.Value()}));
+        const auto before = active().graph;
+        const auto beforeRevision = active().revision;
+        edit({.operation = AppendSubtree, .node = parentGroup, .subtree = savedTarget});
+        REQUIRE(active().diagnostic.has_value());
+        CHECK(active().diagnostic->code.Value() == Application::DecisionCookErrors::Stale.code.Value());
+        CHECK(active().graph == before);
+        CHECK(active().revision == beforeRevision);
+        write(childFile, captured.Value().bytes);
+
+        const auto fresh = review(child);
+        const auto schemaFile = project.root / project.Path;
+        const auto savedSchema = Assets::CaptureAssetSource(project.root, schemaFile, AI::BlackboardSchemaSourceCodec::MaximumBytes);
+        REQUIRE(savedSchema.HasValue());
+        project.Write("Changed Blackboard label", AI::BlackboardKeyPresence::Optional, AI::BlackboardValueKind::Scalar);
+        edit({.operation = AppendSubtree, .node = parentGroup, .subtree = fresh});
+        REQUIRE(active().diagnostic.has_value());
+        CHECK(active().diagnostic->code.Value() == Application::DecisionCookErrors::Stale.code.Value());
+        CHECK(active().graph == before);
+        CHECK(active().revision == beforeRevision);
+        write(schemaFile, savedSchema.Value().bytes);
+
+        const auto confirmed = review(child);
+        auto forged = confirmed;
+        ++forged.catalogRevision;
+        edit({.operation = AppendSubtree, .node = parentGroup, .subtree = forged});
+        REQUIRE(active().diagnostic.has_value());
+        CHECK(active().diagnostic->code.Value() == Application::DecisionCookErrors::Stale.code.Value());
+        CHECK(active().graph == before);
+        edit({.operation = AppendSubtree, .node = parentGroup, .subtree = confirmed});
+        REQUIRE_FALSE(active().diagnostic.has_value());
+        const auto added = active().graph;
+        const auto call = std::ranges::find_if(tree().Nodes(), [](const auto &node) {
+            return node.call.has_value();
+        });
+        REQUIRE(call != tree().Nodes().end());
+        CHECK(call->call->asset == confirmed.graph);
+        CHECK(call->call->schema.Contains(confirmed.graphVersion));
+        const auto callId = call->id;
+        const auto projection = ProjectDecisionCanvas(*active().graph, {active().identity.instance, active().revision}, true);
+        const auto visible = std::ranges::find_if(projection.nodes, [&](const auto &node) {
+            return node.id.Value() == callId.Value();
+        });
+        REQUIRE(visible != projection.nodes.end());
+        CHECK(visible->role == GraphNodeRole::Subtree);
+
+        const auto redirect = review(alternative);
+        edit({.operation = RetargetSubtree, .node = AI::DecisionNodeId::Create(callId.Value()).Value(), .subtree = redirect});
+        REQUIRE_FALSE(active().diagnostic.has_value());
+        REQUIRE(tree().FindNode(callId)->call.has_value());
+        CHECK(tree().FindNode(callId)->call->asset == redirect.graph);
+        controller.ProcessCommand(MakeDecisionHistoryCommand(active(), DecisionHistoryAction::Undo));
+        CHECK(active().graph == added);
+        controller.ProcessCommand(MakeDecisionHistoryCommand(active(), DecisionHistoryAction::Undo));
+        CHECK(active().graph == before);
+        controller.ProcessCommand(MakeDecisionHistoryCommand(active(), DecisionHistoryAction::Redo));
+        CHECK(active().graph == added);
+        controller.ProcessCommand(MakeDecisionHistoryCommand(active(), DecisionHistoryAction::Save));
+        REQUIRE_FALSE(active().diagnostic.has_value());
+        CHECK_FALSE(active().dirty);
+
+        open("assets/Subtree target.horo_bt");
+        const auto childGroup = group();
+        const auto reverse = review(parent);
+        const auto noCycle = active().graph;
+        edit({.operation = AppendSubtree, .node = childGroup, .subtree = reverse});
+        REQUIRE(active().diagnostic.has_value());
+        CHECK(active().diagnostic->code.Value() == AI::AIErrors::DecisionAssetDependencyCycle.code.Value());
+        CHECK(active().graph == noCycle);
+
+        open("assets/Subtree caller.horo_bt");
+        const auto callerInstance = active().identity.instance;
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = callerInstance});
+        open("assets/Subtree caller.horo_bt");
+        REQUIRE(active().editable);
+        const auto *reopened = tree().FindNode(callId);
+        REQUIRE(reopened);
+        REQUIRE(reopened->call.has_value());
+        CHECK(reopened->call->asset == confirmed.graph);
+        CHECK_FALSE(active().canUndo);
+        controller.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = active().identity.instance});
+        REQUIRE(std::filesystem::remove(childFile));
+        open("assets/Subtree caller.horo_bt");
+        CHECK_FALSE(active().editable);
+        CHECK(active().diagnostic.has_value());
+        REQUIRE(tree().FindNode(callId));
+    }
     SECTION("Utility authoring edits exact saved scalar scores and preserves canonical option identities") {
         const auto secondKey = AI::BlackboardKeyId::Create(5).Value();
         const auto wrongKind = AI::BlackboardKeyId::Create(6).Value();

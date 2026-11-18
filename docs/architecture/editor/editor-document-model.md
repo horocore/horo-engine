@@ -731,8 +731,17 @@ both the Asset Registry and graph identities. It has its own accepted file
 identity and publication receipt under the Project mutation lease. Saving
 placement alone leaves runtime source bytes untouched. Each durable receipt
 advances its own saved baseline, so a failed second write keeps its changes
-pending. Canvas pan and zoom are session presentation state. Authored subtree
-gestures are a separate increment.
+pending. Canvas pan and zoom are session presentation state.
+
+A supported Behavior Tree subtree is a typed call on an intrinsic Subplan
+leaf. The selected composite can append that leaf, and the selected leaf can
+replace its target. A separately reviewed saved tree binds the exact source,
+document revision, registry publication and native provider catalog. The
+workspace captures the registered reachable tree closure through the canonical
+source decoder. The same Decision compiler checks cycles, dependency bounds,
+Blackboard compatibility and providers before authoring, replay and save
+publication. The source retains the reviewed graph identity and exact graph
+schema version. Cross-family and legacy calls remain inspectable.
 
 The workspace usage review submits one bounded Project-owned read of the exact
 durable schema bytes and registered Decision sources. The application holds the

@@ -2,6 +2,7 @@
 
 #include "Horo/AI/DecisionControl.h"
 #include "Horo/AI/UtilitySelector.h"
+#include "Horo/Assets/AssetId.h"
 #include "Horo/Editor/EditorSurfaceIdentity.h"
 #include "Horo/Foundation/Sha256.h"
 
@@ -33,6 +34,9 @@ namespace Horo::Editor {
         WrapSelector,
         UnwrapComposite,
         AppendTask,
+        ReviewSubtree,
+        AppendSubtree,
+        RetargetSubtree,
         MoveEarlier,
         MoveLater,
         DeleteTask,
@@ -49,13 +53,28 @@ namespace Horo::Editor {
         std::uint64_t catalogRevision{};
     };
 
-    /** @brief Revision-fenced tree edit using an authored node and an optional explicit Task contract. */
+    /** @brief Detached exact saved source evidence from the active tree's explicit target review. */
+    struct BehaviorTreeSubtreeReview final {
+        Assets::AssetId asset;
+        AI::DecisionGraphAssetId graph;
+        std::uint32_t graphVersion{};
+        Sha256Digest digest;
+        Sha256Digest schemaDigest;
+        std::uint64_t registryRevision{};
+        std::uint64_t catalogRevision{};
+        std::uint64_t documentRevision{};
+        auto operator<=>(const BehaviorTreeSubtreeReview &) const = default;
+    };
+
+    /** @brief Revision-fenced tree edit using an authored node and optional explicit source evidence. */
     struct BehaviorTreeEditRequest final {
         DocumentInstanceId instance;
         std::uint64_t revision{};
         BehaviorTreeEditOperation operation{BehaviorTreeEditOperation::WrapSequence};
         AI::DecisionNodeId node;
         std::optional<DecisionTaskSelection> task;
+        std::optional<Assets::AssetId> subtreeTarget;
+        std::optional<BehaviorTreeSubtreeReview> subtree;
     };
 
     /** @brief Typed operations for the authored option and its complete scoring policy. */

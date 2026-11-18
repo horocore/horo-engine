@@ -1,4 +1,5 @@
 #include "Horo/AI/DecisionPlanCodec.h"
+#include "Horo/Assets/AssetCook.h"
 #include "Horo/Assets/AssetReimport.h"
 #include "Horo/Editor/ProjectIntegrityValidatorService.h"
 #include "Horo/Foundation/Logging/Logger.h"
@@ -45,6 +46,18 @@ namespace Horo::Editor {
             schemas.push_back({record.id, std::string{record.sourcePath.String()}});
         }
         std::ranges::sort(schemas, {}, &DecisionSchemaChoice::path);
+        auto &subtrees = m_viewModel.behaviorTreeSubtreeChoices;
+        subtrees.clear();
+        for (const auto &record : m_assetRegistry.Records()) {
+            if (record.type.Value() != AI::DecisionAssetType(AI::DecisionPlanKind::BehaviorTree))
+                continue;
+            if (subtrees.size() == Assets::AssetCookLimits{}.maximumAssets) {
+                subtrees.clear();
+                break;
+            }
+            subtrees.push_back({record.id, std::string{record.sourcePath.String()}});
+        }
+        std::ranges::sort(subtrees, {}, &DecisionSchemaChoice::path);
         ScheduleContentBrowserPreviews();
     }
 

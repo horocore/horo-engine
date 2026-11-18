@@ -1,5 +1,6 @@
 #include "AuthoredAiSourceInventory.h"
 #include "DecisionGraphCanvasModel.h"
+#include "DecisionTreeSubtreeCatalog.h"
 #include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Application/ProjectAssetImportCommitter.h"
@@ -157,8 +158,11 @@ namespace Horo::Editor {
                 return nullptr;
             const auto supported = [](const AI::BehaviorTreeNode &node) {
                 using enum AI::DecisionControlKind;
-                if (node.call || node.nestedSubtree)
+                if (node.nestedSubtree)
                     return false;
+                if (node.call)
+                    return node.kind == AI::BehaviorTreeNodeKind::Task && node.control.kind == Subplan &&
+                           node.call->kind == AI::DecisionPlanKind::BehaviorTree;
                 switch (node.kind) {
                     case AI::BehaviorTreeNodeKind::Root:
                         return node.control.kind == Root;
@@ -188,42 +192,77 @@ namespace Horo::Editor {
             return EditableTree(source) || (utility && CanAuthorUtilityGraph(*utility));
         }
 
-        /** @brief Compiles a supported draft against the unique saved schema and actual provider metadata. */
-        Result<void> ValidateDecisionDraft(const std::filesystem::path &root, const Assets::AssetRegistrySnapshot &registry,
-                                           const AI::DecisionGraphSource &candidate,
-                                           const std::shared_ptr<const AI::DecisionNodeGeneration> &providers,
-                                           std::optional<Sha256Digest> expectedScoreSchema = {}) {
-            using ResultType = Result<void>;
-            if ((!EditableMachine(candidate) && !NeedsDecisionTaskProviders(candidate)) || !providers || !providers->CanUse())
-                return ResultType::Failure(MakeError(Application::DecisionCookErrors::Invalid));
-            const auto schemas =
-                AuthoredAiSources::Capture(root, registry, AI::BlackboardSchemaAssetType, AI::BlackboardSchemaSourceCodec::MaximumBytes);
-            if (schemas.HasError())
-                return ResultType::Failure(schemas.ErrorValue());
+        /** @brief Pins the unique compatible registered Blackboard source before any semantic candidate is admitted. */
+        struct CapturedDecisionSchema final {
             std::shared_ptr<const AI::BlackboardSchema> schema;
-            for (const auto &file : schemas.Value().Sources()) {
+            Sha256Digest digest;
+            Assets::AssetCookInputSnapshot inputs;
+        };
+
+        Result<CapturedDecisionSchema> CaptureDecisionDraftSchema(const std::filesystem::path &root,
+                                                                  const Assets::AssetRegistrySnapshot &registry,
+                                                                  const AI::DecisionGraphSource &candidate) {
+            using Captured = Result<CapturedDecisionSchema>;
+            auto inputs =
+                AuthoredAiSources::Capture(root, registry, AI::BlackboardSchemaAssetType, AI::BlackboardSchemaSourceCodec::MaximumBytes);
+            if (inputs.HasError())
+                return Captured::Failure(inputs.ErrorValue());
+            std::shared_ptr<const AI::BlackboardSchema> schema;
+            Sha256Digest digest;
+            for (const auto &file : inputs.Value().Sources()) {
                 auto decoded = AI::BlackboardSchemaSourceCodec::Decode(file.bytes);
                 if (decoded.HasError())
-                    return ResultType::Failure(decoded.ErrorValue());
+                    return Captured::Failure(decoded.ErrorValue());
                 if (decoded.Value().schema.Identity() != candidate.blackboard ||
                     !candidate.blackboardVersion.Contains(decoded.Value().schema.Version()))
                     continue;
                 if (schema)
-                    return ResultType::Failure(MakeError(AI::AIErrors::DescriptorConflict));
-                if (expectedScoreSchema && *expectedScoreSchema != file.sourceDigest)
-                    return ResultType::Failure(MakeError(Application::DecisionCookErrors::Stale));
+                    return Captured::Failure(MakeError(AI::AIErrors::DescriptorConflict));
+                digest = file.sourceDigest;
                 schema = std::make_shared<const AI::BlackboardSchema>(std::move(decoded).Value().schema);
             }
             if (!schema)
+                return Captured::Failure(MakeError(Application::DecisionCookErrors::Invalid));
+            return Captured::Success({std::move(schema), digest, std::move(inputs).Value()});
+        }
+
+        /** @brief Compiles a supported draft against the unique saved schema and actual provider metadata. */
+        Result<void> ValidateDecisionDraft(const std::filesystem::path &root, const Assets::AssetRegistrySnapshot &registry,
+                                           const AI::DecisionGraphSource &candidate,
+                                           const std::shared_ptr<const AI::DecisionNodeGeneration> &providers,
+                                           std::optional<Sha256Digest> expectedScoreSchema = {},
+                                           const std::optional<BehaviorTreeSubtreeReview> &review = {}) {
+            using ResultType = Result<void>;
+            if ((!EditableMachine(candidate) && !NeedsDecisionTaskProviders(candidate)) || !providers || !providers->CanUse())
                 return ResultType::Failure(MakeError(Application::DecisionCookErrors::Invalid));
-            const auto compiled = AI::DecisionGraphCompiler::Compile(candidate.asset, std::span{&candidate, 1},
-                                                                     {.nodes = providers, .schemas = {std::move(schema)}});
+            const auto schema = CaptureDecisionDraftSchema(root, registry, candidate);
+            if (schema.HasError())
+                return ResultType::Failure(schema.ErrorValue());
+            if ((expectedScoreSchema && *expectedScoreSchema != schema.Value().digest) ||
+                (review && review->schemaDigest != schema.Value().digest))
+                return ResultType::Failure(MakeError(Application::DecisionCookErrors::Stale));
+            auto closure = CaptureDecisionTreeClosure(root, registry, candidate, review);
+            if (closure.HasError())
+                return ResultType::Failure(closure.ErrorValue());
+            const auto compiled = AI::DecisionGraphCompiler::Compile(candidate.asset, closure.Value().graphs,
+                                                                     {.nodes = providers, .schemas = {schema.Value().schema}});
             if (compiled.HasError())
                 return ResultType::Failure(compiled.ErrorValue());
-            if (!compiled.Value().validation.Empty() || !compiled.Value().plan)
-                return ResultType::Failure(MakeError(Application::DecisionCookErrors::Invalid));
-            if (auto verified = schemas.Value().VerifyUnchanged(); verified.HasError())
+            if (!compiled.Value().validation.Empty() || !compiled.Value().plan) {
+                auto error = MakeError(Application::DecisionCookErrors::Invalid);
+                const auto diagnostics = compiled.Value().validation.Diagnostics();
+                if (!diagnostics.empty()) {
+                    error.code = diagnostics.front().code;
+                    error.message = diagnostics.front().message;
+                }
+                return ResultType::Failure(std::move(error));
+            }
+            if (auto verified = schema.Value().inputs.VerifyUnchanged(); verified.HasError())
                 return verified;
+            if (closure.Value().inputs) {
+                if (auto verified = closure.Value().inputs->VerifyUnchanged(); verified.HasError())
+                    return verified;
+            }
             if (!compiled.Value().plan->IsCurrent())
                 return ResultType::Failure(MakeError(Application::DecisionCookErrors::Stale));
             return ResultType::Success();
@@ -386,34 +425,25 @@ namespace Horo::Editor {
             return Edited::Success(true);
         }
 
-        /** @brief Adds a typed installed Task and a connecting edge in one candidate. */
-        Result<bool> AppendTreeTask(AI::BehaviorTreeAssetDescriptor &tree, const AI::BehaviorTreeNode &parent,
-                                    const AI::DecisionGraphSource &graph, const AI::DecisionNodeContract &provider) {
+        /** @brief Attaches one complete new leaf at the selected composite's last child position. */
+        Result<bool> AttachTreeLeaf(AI::BehaviorTreeAssetDescriptor &tree, const AI::BehaviorTreeNode &parent, AI::BehaviorTreeNode leaf) {
             using Edited = Result<bool>;
-            using enum AI::BehaviorTreeNodeKind;
-            if (parent.kind != Composite || tree.nodes.size() >= AI::BehaviorTreeAssetHardLimits::Nodes ||
-                tree.edges.size() >= AI::BehaviorTreeAssetHardLimits::Edges ||
-                provider.descriptor.origin.version > std::numeric_limits<std::uint16_t>::max())
+            if (parent.kind != AI::BehaviorTreeNodeKind::Composite || tree.nodes.size() >= AI::BehaviorTreeAssetHardLimits::Nodes ||
+                tree.edges.size() >= AI::BehaviorTreeAssetHardLimits::Edges)
                 return Edited::Failure(MakeError(Application::DecisionCookErrors::Invalid));
             const auto output = std::ranges::find(parent.pins, AI::BehaviorTreePinDirection::Output, &AI::BehaviorTreePin::direction);
             if (output == parent.pins.end() ||
                 std::ranges::count(parent.pins, AI::BehaviorTreePinDirection::Output, &AI::BehaviorTreePin::direction) != 1)
                 return Edited::Failure(MakeError(Application::DecisionCookErrors::Invalid));
+            const auto siblings = std::ranges::count(tree.edges, parent.id, &AI::BehaviorTreeEdge::sourceNode);
+            if (static_cast<std::size_t>(siblings) >= parent.maximumChildren)
+                return Edited::Failure(MakeError(Assets::AssetSourceErrors::Limit));
 
             const auto node = IssueTreeIdentity<AI::BehaviorTreeNodeId>(tree.nodes, &AI::BehaviorTreeNode::id);
             const auto edge = IssueTreeIdentity<AI::BehaviorTreeEdgeId>(tree.edges, &AI::BehaviorTreeEdge::id);
             const auto input = IssueTreePin(tree);
-            std::set<AI::TaskId> used{graph.executionTask};
-            for (const auto &existing : tree.nodes)
-                used.insert(existing.task);
-            const auto task = AuthoredAiSources::Issue(used);
-            if (node.HasError() || edge.HasError() || input.HasError() || task.HasError())
+            if (node.HasError() || edge.HasError() || input.HasError())
                 return Edited::Failure(MakeError(AI::AIErrors::DescriptorConflict));
-
-            // Captured edges already have canonical execution order. Retain sibling order if authored ordinals are sparse.
-            const auto siblings = std::ranges::count(tree.edges, parent.id, &AI::BehaviorTreeEdge::sourceNode);
-            if (static_cast<std::size_t>(siblings) >= parent.maximumChildren)
-                return Edited::Failure(MakeError(Assets::AssetSourceErrors::Limit));
             std::size_t order{};
             for (auto &existing : tree.edges)
                 if (existing.sourceNode == parent.id)
@@ -424,15 +454,38 @@ namespace Horo::Editor {
                                   .targetNode = node.Value(),
                                   .targetPin = input.Value(),
                                   .order = order});
-            tree.nodes.push_back({.id = node.Value(),
-                                  .kind = Task,
-                                  .type = AI::BehaviorTreeNodeTypeId::Create(provider.descriptor.type.Value()).Value(),
-                                  .typeVersion = {static_cast<std::uint16_t>(provider.descriptor.origin.version), 0},
-                                  .pins = {{input.Value(), AI::BehaviorTreePinDirection::Input}},
-                                  .control = {.kind = AI::DecisionControlKind::Task},
-                                  .task = task.Value(),
-                                  .source = graph.location});
+            leaf.id = node.Value();
+            leaf.pins = {{input.Value(), AI::BehaviorTreePinDirection::Input}};
+            tree.nodes.push_back(std::move(leaf));
             return Edited::Success(true);
+        }
+
+        /** @brief Adds a typed installed Task and a connecting edge in one candidate. */
+        Result<bool> AppendTreeTask(AI::BehaviorTreeAssetDescriptor &tree, const AI::BehaviorTreeNode &parent,
+                                    const AI::DecisionGraphSource &graph, const AI::DecisionNodeContract &provider) {
+            using Edited = Result<bool>;
+            if (provider.descriptor.origin.version > std::numeric_limits<std::uint16_t>::max())
+                return Edited::Failure(MakeError(Application::DecisionCookErrors::Invalid));
+            std::set<AI::TaskId> used{graph.executionTask};
+            for (const auto &existing : tree.nodes)
+                used.insert(existing.task);
+            const auto task = AuthoredAiSources::Issue(used);
+            if (task.HasError())
+                return Edited::Failure(task.ErrorValue());
+            return AttachTreeLeaf(tree, parent,
+                                  {
+                                      .kind = AI::BehaviorTreeNodeKind::Task,
+                                      .type = AI::BehaviorTreeNodeTypeId::Create(provider.descriptor.type.Value()).Value(),
+                                      .typeVersion = {static_cast<std::uint16_t>(provider.descriptor.origin.version), 0},
+                                      .control = {.kind = AI::DecisionControlKind::Task},
+                                      .task = task.Value(),
+                                      .source = graph.location,
+                                  });
+        }
+
+        /** @brief Binds one exact authored BT version using the existing persistent subplan reference. */
+        AI::DecisionSubplanCall ReviewedSubplan(const BehaviorTreeSubtreeReview &review) {
+            return {review.graph, AI::DecisionPlanKind::BehaviorTree, {review.graphVersion, review.graphVersion}};
         }
 
         /** @brief Moves one existing child within the same parent's semantic execution order. */
@@ -495,6 +548,26 @@ namespace Horo::Editor {
                         return invalid();
                     if (auto edited = AppendTreeTask(tree, *node, graph, *provider); edited.HasError())
                         return edited;
+                    break;
+                }
+                case AppendSubtree:
+                    if (!request.subtree)
+                        return invalid();
+                    if (auto edited = AttachTreeLeaf(tree, *node,
+                                                     {.kind = AI::BehaviorTreeNodeKind::Task,
+                                                      .control = {.kind = AI::DecisionControlKind::Subplan},
+                                                      .call = ReviewedSubplan(*request.subtree),
+                                                      .source = graph.location});
+                        edited.HasError())
+                        return edited;
+                    break;
+                case RetargetSubtree: {
+                    if (!request.subtree || node->control.kind != AI::DecisionControlKind::Subplan || !node->call)
+                        return invalid();
+                    const auto call = ReviewedSubplan(*request.subtree);
+                    if (*node->call == call)
+                        return Edit::Success(false);
+                    node->call = call;
                     break;
                 }
                 case MoveEarlier:
@@ -792,11 +865,14 @@ namespace Horo::Editor {
         const bool needsProviders = NeedsDecisionTaskProviders(*candidate.graph);
         if (m_mutations && m_durableFiles && (EditableMachine(*candidate.graph) || (needsProviders && m_gameplayRegistry))) {
             const auto providers = AcquireDecisionDraftProviders(*candidate.graph);
-            const auto canEdit =
-                !needsProviders || (providers.HasValue() &&
-                                    ValidateDecisionDraft(ProjectRoot(), m_assetRegistry, *candidate.graph, providers.Value()).HasValue());
+            const auto admitted = !needsProviders ? Result<void>::Success()
+                                  : providers.HasValue()
+                                      ? ValidateDecisionDraft(ProjectRoot(), m_assetRegistry, *candidate.graph, providers.Value())
+                                      : Result<void>::Failure(providers.ErrorValue());
+            if (admitted.HasError() && HasDecisionTreeCalls(*candidate.graph))
+                candidate.diagnostic = admitted.ErrorValue();
             const auto encoded = AI::DecisionPlanCodec::EncodeSource(std::span{candidate.graph.get(), 1}, candidate.graph->asset);
-            if (canEdit && encoded.HasValue()) {
+            if (admitted.HasValue() && encoded.HasValue()) {
                 const auto digest = ComputeSha256(std::as_bytes(std::span{encoded.Value()}));
                 prepared.try_emplace(candidate.identity.instance,
                                      DecisionGraphDraft{.savedDigest = digest,
@@ -946,6 +1022,56 @@ namespace Horo::Editor {
         return Replay::Success();
     }
 
+    /** @copydoc EditorWorkspaceController::ReviewDecisionSubtree */
+    Result<void> EditorWorkspaceController::ReviewDecisionSubtree(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
+                                                                  const BehaviorTreeEditRequest &request) {
+        using Reviewed = Result<void>;
+        document.subtreeReview.reset();
+        draft.reviewedSubtreeCatalog.reset();
+        if (!request.subtreeTarget || *request.subtreeTarget == document.asset || !m_gameplayRegistry)
+            return Reviewed::Failure(MakeError(Application::DecisionCookErrors::Invalid));
+        const auto root = ProjectRoot();
+        const auto lease = m_mutations->TryAcquire({root, ProjectMutationOwner::Asset, "decision-subtree-review"});
+        if (lease.HasError())
+            return Reviewed::Failure(lease.ErrorValue());
+        const auto registry = m_mutableAssetRegistry ? m_mutableAssetRegistry->Snapshot() : m_assetRegistry;
+        const auto *record = registry.Find(*request.subtreeTarget);
+        if (!record || record->type.Value() != Application::DecisionBehaviorTreeSourceType)
+            return Reviewed::Failure(MakeError(AI::AIErrors::DecisionAssetSubtreeMissing));
+        auto pinned = CaptureGraphInput(root, registry, record->id, AI::DecisionCodecLimits{}.maximumBytes);
+        if (pinned.HasError())
+            return Reviewed::Failure(pinned.ErrorValue());
+        const auto &file = pinned.Value().Sources().front();
+        const auto decoded = Application::DecodeRegisteredDecisionGraphSource(file);
+        if (decoded.HasError())
+            return Reviewed::Failure(decoded.ErrorValue());
+        const auto &target = decoded.Value();
+        if (target.asset == document.graph->asset)
+            return Reviewed::Failure(MakeError(AI::AIErrors::DecisionAssetDependencyCycle));
+        const auto schema = CaptureDecisionDraftSchema(root, registry, *document.graph);
+        if (schema.HasError())
+            return Reviewed::Failure(schema.ErrorValue());
+        const auto &catalog = m_gameplayRegistry->DecisionUsageMetadata();
+        if (!catalog)
+            return Reviewed::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+        if (target.blackboard != schema.Value().schema->Identity() || !target.blackboardVersion.Contains(schema.Value().schema->Version()))
+            return Reviewed::Failure(MakeError(AI::AIErrors::DecisionAssetSchemaIncompatible));
+        if (const auto unchanged = schema.Value().inputs.VerifyUnchanged(); unchanged.HasError())
+            return unchanged;
+        if (const auto unchanged = pinned.Value().VerifyUnchanged(); unchanged.HasError())
+            return unchanged;
+        draft.reviewedSubtreeCatalog = catalog;
+        document.subtreeReview = BehaviorTreeSubtreeReview{record->id,
+                                                           target.asset,
+                                                           target.schemaVersion,
+                                                           file.sourceDigest,
+                                                           schema.Value().digest,
+                                                           registry.Revision().value,
+                                                           m_viewModel.availableBehaviorsRevision,
+                                                           document.revision};
+        return Reviewed::Success();
+    }
+
     /** @copydoc EditorWorkspaceController::ApplyDecisionGraphEdit */
     template <typename Request>
     Result<void> EditorWorkspaceController::ApplyDecisionGraphEdit(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
@@ -958,6 +1084,9 @@ namespace Horo::Editor {
             return SaveDecisionGraphDraft(document, draft);
         if (request.operation == Operation::Undo || request.operation == Operation::Redo)
             return ReplayDecisionGraphDraft(document, draft, request.operation == Operation::Redo);
+        if constexpr (std::is_same_v<Request, BehaviorTreeEditRequest>)
+            if (request.operation == Operation::ReviewSubtree)
+                return ReviewDecisionSubtree(document, draft, request);
 
         const auto root = ProjectRoot();
         const auto project = m_mutations->TryAcquire({root, ProjectMutationOwner::Asset, "decision-source-edit"});
@@ -968,6 +1097,19 @@ namespace Horo::Editor {
         if (providers.HasError())
             return Edit::Failure(providers.ErrorValue());
         std::optional<Sha256Digest> expectedScoreSchema;
+        std::optional<BehaviorTreeSubtreeReview> reviewedSubtree;
+        if constexpr (std::is_same_v<Request, BehaviorTreeEditRequest>) {
+            using enum BehaviorTreeEditOperation;
+            if (request.operation == AppendSubtree || request.operation == RetargetSubtree) {
+                if (!request.subtree || request.subtree != document.subtreeReview ||
+                    request.subtree->documentRevision != document.revision ||
+                    request.subtree->registryRevision != registry.Revision().value ||
+                    request.subtree->catalogRevision != m_viewModel.availableBehaviorsRevision || !m_gameplayRegistry ||
+                    draft.reviewedSubtreeCatalog.lock() != m_gameplayRegistry->DecisionUsageMetadata())
+                    return Edit::Failure(MakeError(Application::DecisionCookErrors::Stale));
+                reviewedSubtree = request.subtree;
+            }
+        }
         if constexpr (std::is_same_v<Request, UtilityGraphEditRequest>) {
             using enum UtilityGraphEditOperation;
             if (request.operation == AddOption || request.operation == AddConsideration || request.operation == SetConsideration) {
@@ -977,7 +1119,7 @@ namespace Horo::Editor {
             }
         }
         const auto validate = [&](const AI::DecisionGraphSource &candidate) {
-            return ValidateDecisionDraft(root, registry, candidate, providers.Value(), expectedScoreSchema);
+            return ValidateDecisionDraft(root, registry, candidate, providers.Value(), expectedScoreSchema, reviewedSubtree);
         };
         auto candidate = std::make_shared<AI::DecisionGraphSource>(*document.graph);
         const auto edited = [&]() {
@@ -1217,10 +1359,11 @@ namespace Horo::Editor {
         const auto button = [&](std::string_view key, bool enabled) {
             return Ui::Button({.label = text(key).c_str(), .enabled = enabled, .font = m_context.theme.fonts.sans});
         };
-        const auto emit = [&](BehaviorTreeEditOperation operation, std::optional<DecisionTaskSelection> task = {}) {
+        const auto emit = [&](BehaviorTreeEditOperation operation, std::optional<DecisionTaskSelection> task = {},
+                              std::optional<Assets::AssetId> target = {}, std::optional<BehaviorTreeSubtreeReview> subtree = {}) {
             outCommand = {.command = EditorWorkspaceViewCommand::EditDecisionBehaviorTree,
-                          .behaviorTreeEdit =
-                              BehaviorTreeEditRequest{document.identity.instance, document.revision, operation, selection.node, task}};
+                          .behaviorTreeEdit = BehaviorTreeEditRequest{document.identity.instance, document.revision, operation,
+                                                                      selection.node, task, target, subtree}};
         };
         using enum DecisionHistoryAction;
         if (button("workspace.decision_graph.edit_save", document.dirty))
@@ -1275,6 +1418,47 @@ namespace Horo::Editor {
             emit(BehaviorTreeEditOperation::MoveEarlier);
         if (button("workspace.decision_graph.edit_tree_move_later", hasLater))
             emit(BehaviorTreeEditOperation::MoveLater);
+        const auto children = static_cast<std::size_t>(std::ranges::count(edges, node.id, &AI::BehaviorTreeEdge::sourceNode));
+        const bool isSubtree = node.control.kind == AI::DecisionControlKind::Subplan && node.call.has_value();
+        if (isSubtree || node.kind == AI::BehaviorTreeNodeKind::Composite) {
+            const auto &choices = viewModel.behaviorTreeSubtreeChoices;
+            const auto chosen = std::ranges::find(choices, selection.subtree, &DecisionSchemaChoice::asset);
+            auto targetIndex = chosen == choices.end() ? 0 : static_cast<int>(chosen - choices.begin()) + 1;
+            const auto &empty = text("workspace.decision_graph.select_subtree");
+            const Ui::ComboItemSource targets{
+                .label = [&](int slot) -> const char * {
+                return slot == 0 ? empty.c_str() : choices[static_cast<std::size_t>(slot - 1)].path.c_str();
+            },
+                .enabled =
+                    [&](int slot) {
+                return slot == 0 || choices[static_cast<std::size_t>(slot - 1)].asset != document.asset;
+            },
+            };
+            const auto &fonts = m_context.theme.fonts;
+            if (isSubtree)
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x,
+                                std::format("{} {}", text("workspace.decision_graph.subtree_bound"), node.call->asset.Value()),
+                                Theme::Text(), fonts);
+            static_cast<void>(
+                Ui::ComboControl("##BehaviorTreeSubtree", &targetIndex, static_cast<int>(choices.size()) + 1, targets, fonts));
+            selection.subtree = targetIndex == 0 ? Assets::AssetId{} : choices[static_cast<std::size_t>(targetIndex - 1)].asset;
+            if (button("workspace.decision_graph.review_subtree", selection.subtree.IsValid() && selection.subtree != document.asset))
+                emit(BehaviorTreeEditOperation::ReviewSubtree, {}, selection.subtree);
+            const auto &review = document.subtreeReview;
+            const bool stale =
+                document.diagnostic && document.diagnostic->code.Value() == Application::DecisionCookErrors::Stale.code.Value();
+            const bool reviewed = review && !stale && review->asset == selection.subtree && review->documentRevision == document.revision &&
+                                  review->catalogRevision == viewModel.availableBehaviorsRevision &&
+                                  review->registryRevision == viewModel.assetRegistryRevision.value;
+            if (reviewed)
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("workspace.decision_graph.subtree_reviewed"), Theme::Text(), fonts);
+            if (isSubtree) {
+                if (button("workspace.decision_graph.retarget_subtree", reviewed))
+                    emit(BehaviorTreeEditOperation::RetargetSubtree, {}, {}, review);
+            } else if (button("workspace.decision_graph.append_subtree", reviewed && room && children < node.maximumChildren)) {
+                emit(BehaviorTreeEditOperation::AppendSubtree, {}, {}, review);
+            }
+        }
         if (node.kind == AI::BehaviorTreeNodeKind::Task) {
             const auto *parent = tree.FindNode(incoming->sourceNode);
             const auto siblings = std::ranges::count(edges, incoming->sourceNode, &AI::BehaviorTreeEdge::sourceNode);
@@ -1282,7 +1466,6 @@ namespace Horo::Editor {
                 emit(BehaviorTreeEditOperation::DeleteTask);
             return;
         }
-        const auto children = static_cast<std::size_t>(std::ranges::count(edges, node.id, &AI::BehaviorTreeEdge::sourceNode));
         if (button("workspace.decision_graph.edit_tree_unwrap", children == 1))
             emit(BehaviorTreeEditOperation::UnwrapComposite);
         const auto &choices = viewModel.decisionTaskChoices;
@@ -1359,15 +1542,24 @@ namespace Horo::Editor {
         label(std::format("{} {}", text("workspace.decision_graph.nodes"), summary.nodes), Theme::Text());
         if (summary.unknown)
             label(std::format("{} {}", text("workspace.decision_graph.unknown"), summary.unknown), Theme::Muted());
+        if (opened->diagnostic) {
+            const auto code = opened->diagnostic->code.Value();
+            std::string_view key = opened->conflict ? "workspace.decision_graph.edit_conflict" : "workspace.decision_graph.edit_refused";
+            if (code == AI::AIErrors::DecisionAssetDependencyCycle.code.Value())
+                key = "workspace.decision_graph.subtree_cycle";
+            else if (code == AI::AIErrors::DecisionAssetSubtreeMissing.code.Value())
+                key = "workspace.decision_graph.subtree_missing";
+            else if (opened->subtreeReview && opened->subtreeReview->documentRevision == opened->revision &&
+                     code == Application::DecisionCookErrors::Stale.code.Value())
+                key = "workspace.decision_graph.subtree_stale";
+            label(text(key), Theme::Warn());
+        }
+
         if (!opened->editable) {
             label(text("workspace.decision_graph.read_only"), Theme::Muted());
             static_cast<void>(m_decisionGraphCanvas.Draw(*opened, m_context));
             return true;
         }
-        if (opened->diagnostic)
-            label(text(opened->conflict ? "workspace.decision_graph.edit_conflict" : "workspace.decision_graph.edit_refused"),
-                  Theme::Warn());
-
         const auto canvas = m_decisionGraphCanvas.Draw(*opened, m_context);
         ApplyDecisionCanvasInteraction(*opened, canvas, outCommand);
         if (canvas.edit || canvas.layout)

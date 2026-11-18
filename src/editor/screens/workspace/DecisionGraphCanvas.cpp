@@ -104,7 +104,8 @@ namespace Horo::Editor {
                                       "workspace.decision_canvas.decorator",   "workspace.decision_canvas.service",
                                       "workspace.decision_canvas.task",        "workspace.decision_canvas.unknown",
                                       "workspace.decision_graph.edit_running", "workspace.decision_graph.succeeded",
-                                      "workspace.decision_graph.failed",       "workspace.decision_graph.edit_utility_option"};
+                                      "workspace.decision_graph.failed",       "workspace.decision_graph.edit_utility_option",
+                                      "workspace.decision_canvas.subtree"};
             return localization.Get("editor", Keys[static_cast<std::size_t>(role)]);
         }
 

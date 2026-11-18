@@ -160,6 +160,15 @@ TEST_CASE("Decision graph workspace and initial state machine labels resolve in 
                               "edit_utility_apply_score",
                               "edit_utility_add_score",
                               "edit_utility_add_option",
+                              "subtree_cycle",
+                              "subtree_missing",
+                              "subtree_stale",
+                              "select_subtree",
+                              "review_subtree",
+                              "subtree_reviewed",
+                              "append_subtree",
+                              "retarget_subtree",
+                              "subtree_bound",
                               "edit_tree_node",
                               "edit_tree_order",
                               "edit_tree_wrap_sequence",
@@ -225,6 +234,7 @@ TEST_CASE("Decision graph workspace and initial state machine labels resolve in 
         CHECK_FALSE(service.Get("editor", "workspace.decision_canvas.unknown").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_canvas.layout_unavailable").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_canvas.auto_layout").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_canvas.subtree").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_canvas.fit").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.content_browser.action.create_behavior_tree").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.content_browser.action.create_utility").starts_with("[missing:"));
