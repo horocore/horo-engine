@@ -78,6 +78,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportRendererVulkan::AdoptProgram */
     void EditorViewportRendererVulkan::AdoptProgram(ProgramGeneration &candidate) noexcept {
+        viewportRasterGraphs_.reset();
         std::swap(shader_, candidate.program);
         std::swap(shadowShader_, candidate.shadowProgram);
         std::swap(slots_, candidate.slots);
@@ -246,6 +247,7 @@ namespace Horo::Editor {
     void EditorViewportRendererVulkan::ReleaseNative() noexcept {
         if (owner_ != std::this_thread::get_id())
             std::terminate();
+        viewportRasterGraphs_.reset();
         for (auto &draw : preparedDraws_)
             draw = {};
         for (auto &cascade : preparedShadowDraws_)

@@ -145,6 +145,14 @@ namespace Horo::Editor {
     private:
         friend class EditorVulkanXrViewportAccess;
         struct XrProjectionGraph;
+        struct ViewportRasterGraphs;
+        /** @brief Compiles owner-slot shadow/scene/overlay graphs only when exact resource topology changes. */
+        [[nodiscard]] Result<void> PrepareViewportRasterGraphs(const Render::StaticMeshPassDescriptor &pass);
+        /** @brief Records the one cold graph matching this actual native slot and frozen viewport resources. */
+        [[nodiscard]] Result<void> ExecuteViewportRasterGraph(Render::RenderFrameScope &frame, const Render::StaticMeshPassDescriptor &pass,
+                                                              std::uint32_t slot, bool hasOverlay,
+                                                              const Render::DirectionalShadowFrame *shadow);
+        std::shared_ptr<ViewportRasterGraphs> viewportRasterGraphs_;
         struct XrGraph;
         /** @copydoc EditorVulkanXrViewportAccess::TakePremultipliedProjection */
         [[nodiscard]] std::optional<EditorXrPremultipliedProjection> TakeXrPremultipliedProjection(

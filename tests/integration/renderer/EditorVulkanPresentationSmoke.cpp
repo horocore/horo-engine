@@ -165,11 +165,15 @@ namespace Horo::Tests::VulkanEditor {
             Check(viewport->RequestLightingProfile(lighting, selected.Value()));
             viewport->RequestExtent({320, 240});
             viewport->RequestGrid({.visible = false});
+            SynchronizeViewport(scene);
+        }
+
+        void SynchronizeViewport(const RenderSceneView &scene, const EditorViewportExtent requested = {320, 240}) {
             for (std::size_t attempt = 0; attempt < 8; ++attempt) {
                 const auto prepared = viewport->PrepareResources(*frontend, scene);
                 Check(prepared);
                 Check(frontend->ProcessResourceRequests());
-                if (prepared.Value().has_value()) {
+                if (prepared.Value().has_value() && viewport->RequestedExtent() == requested) {
                     target = *prepared.Value();
                     return;
                 }
@@ -198,14 +202,19 @@ namespace Horo::Tests::VulkanEditor {
             std::terminate();
         }
 
+        StaticMeshPassDescriptor ViewportPass(const RenderSceneView &scene) const {
+            const auto size = viewport->RequestedExtent();
+            return {.target = target, .extent = {size.width, size.height}, .scene = scene};
+        }
+
+        void PrepareScene(const RenderSceneView &scene = {}) {
+            Check(viewport->PrepareLightingFrame(ViewportPass(scene), viewport->LightingViewIdentity()), "prepare viewport graph");
+        }
+
         void ExecuteSceneAndGui(RenderFrameScope &frame, const RenderSceneView &scene = {}) {
             const auto view = viewport->TextureView();
             REQUIRE(view.IsValid());
-            const auto size = viewport->RequestedExtent();
-            const std::array passes{RenderPassDescriptor{.kind = RenderPassKind::Graphics,
-                                                         .staticMesh = StaticMeshPassDescriptor{.target = target,
-                                                                                                .extent = {size.width, size.height},
-                                                                                                .scene = scene}},
+            const std::array passes{RenderPassDescriptor{.kind = RenderPassKind::Graphics, .staticMesh = ViewportPass(scene)},
                                     RenderPassDescriptor{.kind = RenderPassKind::Graphics, .primaryOutput = PrimaryOutputAttachment{}}};
             Check(viewport->ExecutePreparedFrame(frame, passes));
             Check(gui->BeginFrame());
@@ -300,11 +309,13 @@ namespace Horo::Tests::VulkanEditor {
         host.RecordCapabilities();
         host.CreateViewport();
         {
+            host.PrepareScene();
             auto frame = host.Frame(1);
             host.ExecuteSceneAndGui(frame);
             Check(frame.Present());
         }
         {
+            host.PrepareScene();
             auto frame = host.Frame(2);
             host.ExecuteSceneAndGui(frame);
             frame.Cancel();
@@ -350,12 +361,26 @@ namespace Horo::Tests::VulkanEditor {
         Host host;
         host.RecordCapabilities();
         host.CreateViewport(scene);
-        host.viewport->RequestGrid({.visible = true});
-        host.viewport->RequestLightVisualizer({lights[1]});
+        REQUIRE(host.frontend->Capabilities().supportsMaterialRasterGraph);
+        CHECK(host.viewport->PrepareLightingFrame(host.ViewportPass(scene), {}).HasError());
+        const auto firstTexture = host.viewport->TextureView().sampledView;
         for (std::uint64_t number = 1; number <= 6; ++number) {
             if (number == 2 && cinematic)
                 scene.camera = cinematic->Advance(2);
+            if (number == 3) {
+                const auto previous = host.ViewportPass(scene);
+                constexpr EditorViewportExtent resized{384, 256};
+                host.viewport->RequestExtent(resized);
+                host.SynchronizeViewport(scene, resized);
+                CHECK(host.viewport->TextureView().sampledView != firstTexture);
+                CHECK(host.viewport->PrepareLightingFrame(previous, host.viewport->LightingViewIdentity()).HasError());
+            }
+            const bool overlays = number % 2 != 0;
+            host.viewport->RequestGrid({.visible = overlays});
+            host.viewport->RequestLightVisualizer({overlays ? std::optional{lights[1]} : std::nullopt});
+            host.PrepareScene(scene);
             auto frame = host.Frame(number);
+            CHECK(host.viewport->PrepareLightingFrame(host.ViewportPass(scene), host.viewport->LightingViewIdentity()).HasError());
             host.ExecuteSceneAndGui(frame, scene);
             if (number % 2 == 0)
                 frame.Cancel();

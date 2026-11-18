@@ -348,10 +348,13 @@ light and shadow inputs and outputs unexposed linear ACEScg into an FP16
 scene attachment. The installed pair uses the
 `shaders/editor/viewport-scene-linear-vulkan` prefix and is admitted only
 against the distinct `PSSceneLinear` fragment stage and its bound reflection.
-The normal Vulkan viewport still produces display-encoded color through its
-existing material pass. Scene reconstruction requires a graph that consumes
-the new pre-display raster and comes before exposure/display mapping and
-overlays. Temporal reconstruction also requires same-view positive linear
+The normal Vulkan viewport prepares its exact shadow, scene, and overlay
+material graph for the renderer's bounded frame slots before frame admission.
+A stable attachment, mesh and program generation reuses the compiled graph.
+The GUI samples the existing viewport output after that graph records. The
+current scene program still writes display-encoded color. Reconstruction
+requires selecting the new pre-display raster and appending the provider
+before exposure/display mapping and overlays. Temporal reconstruction also requires same-view positive linear
 depth and jitter-free motion producers.
 
 Vulkan pre-frame preparation observes exact resident buffer use through the

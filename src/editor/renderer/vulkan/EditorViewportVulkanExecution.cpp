@@ -171,6 +171,9 @@ namespace Horo::Editor {
             return ExecuteEmptyViewport(frame, pass.clearColor);
         if (auto draws = PrepareViewportDraws(frame.Token(), slot.Value(), pass); draws.HasError())
             return draws;
-        return ExecuteShadowedViewport(frame, pass, count.Value(), preparedShadow_ ? &*preparedShadow_ : nullptr);
+        const auto *shadow = preparedShadow_ ? &*preparedShadow_ : nullptr;
+        if (frontend_.Capabilities().supportsMaterialRasterGraph)
+            return ExecuteViewportRasterGraph(frame, pass, slot.Value(), count.Value() > pass.scene.instances.size(), shadow);
+        return ExecuteShadowedViewport(frame, pass, count.Value(), shadow);
     }
 }  // namespace Horo::Editor

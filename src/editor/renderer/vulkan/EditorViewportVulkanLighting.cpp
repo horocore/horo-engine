@@ -11,8 +11,13 @@ namespace Horo::Editor {
 
     Result<void> EditorViewportRendererVulkan::PrepareLightingFrame(const Render::StaticMeshPassDescriptor &pass,
                                                                     const Render::RenderViewId view) {
-        static_cast<void>(view);
-        return ValidateEditorViewportMeshReadiness(resources_, pass.scene.instances);
+        if (auto ready = ValidateEditorViewportMeshReadiness(resources_, pass.scene.instances); ready.HasError())
+            return ready;
+        if (!frontend_.Capabilities().supportsMaterialRasterGraph)
+            return Result<void>::Success();
+        if (view != LightingViewIdentity())
+            return Result<void>::Failure(MakeError(Render::LightCullingErrors::InvalidInput));
+        return PrepareViewportRasterGraphs(pass);
     }
 
     Result<void> EditorViewportRendererVulkan::PrepareViewportOutput(Render::RenderFrameScope &frame,
