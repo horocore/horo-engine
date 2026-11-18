@@ -1,7 +1,8 @@
 #include "Horo/Editor/BlackboardSchemaDocument.h"
 
+#include "Horo/AI/DecisionPlanCodec.h"
+#include "Horo/Assets/AssetRegistry.h"
 #include "Horo/Editor/SemanticDocumentHistory.h"
-#include "Horo/Foundation/Utf8.h"
 
 #include <algorithm>
 #include <limits>
@@ -46,7 +47,6 @@ namespace Horo::Editor {
         using namespace BlackboardDocumentErrors;
         using Schema = std::shared_ptr<const BlackboardSchema>;
 
-        constexpr std::size_t MaximumDisplayNameBytes = 128;
         constexpr SemanticHistoryLimits HistoryLimits{64, 512 * 1024};
 
         /** @brief Exact authored row before or after an edit, including the stable table order. */
@@ -62,14 +62,6 @@ namespace Horo::Editor {
             std::size_t bytes{};
         };
 
-        /** @brief Plain authored UTF-8 display text remains separate from ID and type metadata. */
-        bool ValidDisplayName(std::string_view text) {
-            return !text.empty() && text.size() <= MaximumDisplayNameBytes && IsValidUtf8ScalarSequence(text) &&
-                   std::ranges::none_of(text, [](const unsigned char byte) {
-                return byte < 0x20 || byte == 0x7f;
-            });
-        }
-
         /** @brief Captures all descriptors through the existing immutable runtime validator. */
         Result<Schema> CaptureSchema(const BlackboardSchemaSource &source) {
             if (source.rows.size() > MaximumBlackboardKeys)
@@ -77,7 +69,7 @@ namespace Horo::Editor {
             std::vector<BlackboardKeyDescriptor> descriptors;
             descriptors.reserve(source.rows.size());
             for (const auto &row : source.rows) {
-                if (!ValidDisplayName(row.displayName))
+                if (row.displayName && !IsValidBlackboardDisplayName(*row.displayName))
                     return Result<Schema>::Failure(MakeError(InvalidEdit));
                 descriptors.push_back(row.descriptor);
             }
@@ -97,7 +89,7 @@ namespace Horo::Editor {
                     if (issuedKey == std::numeric_limits<std::uint64_t>::max())
                         return Delta::Failure(MakeError(IdentityExhausted));
                     if (command.row.descriptor.key.Value() != issuedKey + 1 || command.index > rows.size() ||
-                        !ValidDisplayName(command.row.displayName))
+                        (command.row.displayName && !IsValidBlackboardDisplayName(*command.row.displayName)))
                         return Delta::Failure(MakeError(InvalidEdit));
                     if (rows.size() == MaximumBlackboardKeys)
                         return Delta::Failure(MakeError(AIErrors::BlackboardLimitExceeded));
@@ -119,7 +111,7 @@ namespace Horo::Editor {
                     } else {
                         auto after = before;
                         if constexpr (std::is_same_v<Command, RenameBlackboardKey>) {
-                            if (!ValidDisplayName(command.displayName))
+                            if (!IsValidBlackboardDisplayName(command.displayName))
                                 return Delta::Failure(MakeError(InvalidEdit));
                             after.row.displayName = command.displayName;
                         }
@@ -212,6 +204,29 @@ namespace Horo::Editor {
         return Document::Success(std::unique_ptr<BlackboardSchemaDocument>{new BlackboardSchemaDocument(std::move(state))});
     }
 
+    /** @copydoc BlackboardSchemaDocument::OpenRegistered */
+    Result<std::unique_ptr<BlackboardSchemaDocument>> BlackboardSchemaDocument::OpenRegistered(
+        DocumentIdentity document, const Assets::AssetRegistrySnapshot &registry, const Assets::AssetId asset,
+        const std::span<const std::uint8_t> bytes) {
+        using Document = Result<std::unique_ptr<BlackboardSchemaDocument>>;
+        const auto *record = registry.Find(asset);
+        if (!record || record->type.Value() != BlackboardSchemaAssetType || record->sourcePath.Value() != document.key.source.Value())
+            return Document::Failure(MakeError(InvalidEdit));
+        auto decoded = BlackboardSchemaSourceCodec::Decode(bytes);
+        if (decoded.HasError())
+            return Document::Failure(decoded.ErrorValue());
+
+        auto data = std::move(decoded).Value();
+        BlackboardSchemaSource source{asset, data.schema.Identity(), data.schema.Version(), data.schema.UnknownValuePolicy()};
+        source.rows.reserve(data.rows.size());
+        const auto keys = data.schema.Keys();
+        for (auto &row : data.rows) {
+            const auto key = std::ranges::lower_bound(keys, row.key, {}, &BlackboardKeyDescriptor::key);
+            source.rows.push_back({*key, std::move(row.displayName)});
+        }
+        return Open(std::move(document), std::move(source));
+    }
+
     /** @brief Retains one validated owner state. */
     BlackboardSchemaDocument::BlackboardSchemaDocument(std::unique_ptr<State> state) noexcept : state_(std::move(state)) {}
 
@@ -223,6 +238,21 @@ namespace Horo::Editor {
         if (state_->lane != std::this_thread::get_id())
             return Snapshot::Failure(MakeError(WrongThread));
         return Snapshot::Success({state_->document, state_->revision, state_->source, state_->runtime});
+    }
+
+    /** @copydoc BlackboardSchemaDocument::EncodeSource */
+    Result<std::vector<std::uint8_t>> BlackboardSchemaDocument::EncodeSource(const std::uint64_t expectedRevision) const {
+        using Encoded = Result<std::vector<std::uint8_t>>;
+        if (state_->lane != std::this_thread::get_id())
+            return Encoded::Failure(MakeError(WrongThread));
+        if (expectedRevision != state_->revision)
+            return Encoded::Failure(MakeError(StaleRevision));
+
+        std::vector<BlackboardSchemaAuthoringRow> rows;
+        rows.reserve(state_->source->rows.size());
+        for (const auto &source : state_->source->rows)
+            rows.push_back({source.descriptor.key, source.displayName});
+        return BlackboardSchemaSourceCodec::Encode(*state_->runtime, rows);
     }
 
     /** @copydoc BlackboardSchemaDocument::NextKeyId */
@@ -247,10 +277,10 @@ namespace Horo::Editor {
             delta.before->row.descriptor == delta.after->row.descriptor && delta.before->row.displayName == delta.after->row.displayName)
             return Result<void>::Success();
         delta.bytes = sizeof(RowDelta);
-        if (delta.before)
-            delta.bytes += delta.before->row.displayName.size();
-        if (delta.after)
-            delta.bytes += delta.after->row.displayName.size();
+        if (delta.before && delta.before->row.displayName)
+            delta.bytes += delta.before->row.displayName->size();
+        if (delta.after && delta.after->row.displayName)
+            delta.bytes += delta.after->row.displayName->size();
 
         auto history = state_->history.Prepare(delta);
         if (!history)

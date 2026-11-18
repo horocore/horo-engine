@@ -20,6 +20,45 @@ namespace Horo::AI {
         [[nodiscard]] static Result<BlackboardSchema> Decode(std::span<const std::uint8_t> bytes);
     };
 
+    /** @brief Source-only presentation of one stable key. Missing labels preserve unadorned semantic sources. */
+    struct BlackboardSchemaAuthoringRow final {
+        static constexpr std::size_t MaximumLabelBytes = 128;
+        BlackboardKeyId key;
+        std::optional<std::string> displayName;
+
+        bool operator==(const BlackboardSchemaAuthoringRow &) const noexcept = default;
+    };
+
+    /** @brief Complete typed source. Cooking projects only the admitted semantic schema. */
+    struct BlackboardAuthoredSchema final {
+        BlackboardSchema schema;
+        std::vector<BlackboardSchemaAuthoringRow> rows;
+    };
+
+    /** @brief Checks nonempty bounded UTF-8 authoring text. @param displayName Explicit source label. @return Valid text. */
+    [[nodiscard]] bool IsValidBlackboardDisplayName(std::string_view displayName) noexcept;
+
+    /** @brief Source-only transport wrapping the existing immutable semantic codec. */
+    class BlackboardSchemaSourceCodec final {
+    public:
+        static constexpr std::uint32_t Version = 1;
+        static constexpr std::size_t MaximumBytes =
+            BlackboardSchemaCodec::MaximumBytes + MaximumBlackboardKeys * (BlackboardSchemaAuthoringRow::MaximumLabelBytes + 16U) + 32U;
+
+        /** @brief Encodes complete source rows with the exact admitted schema.
+         * @param schema Current immutable semantic schema.
+         * @param rows Every stable key exactly once, in authored order.
+         * @return Canonical source bytes or typed invalid/capacity error.
+         */
+        [[nodiscard]] static Result<std::vector<std::uint8_t>> Encode(const BlackboardSchema &schema,
+                                                                      std::span<const BlackboardSchemaAuthoringRow> rows);
+        /** @brief Reads current authored source or the earlier semantic-only .horo_bb.
+         * @param bytes Complete bounded registered source.
+         * @return Validated schema and ordered rows. Legacy assets produce one unlabeled row per sorted key.
+         */
+        [[nodiscard]] static Result<BlackboardAuthoredSchema> Decode(std::span<const std::uint8_t> bytes);
+    };
+
     struct DecisionCodecLimits final {
         std::size_t maximumBytes{16U * 1024U * 1024U};
         DecisionCompilationLimits compilation;

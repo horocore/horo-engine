@@ -684,8 +684,12 @@ immutable schema validated by `BlackboardSchema::Capture`. Display edits retain
 the same runtime projection and stable key IDs. A command creates an exact
 semantic history entry only after the candidate validates. Changing or deleting
 a key from the opened durable source requires a reference-resolution transaction.
-The model owns typed edits and immutable captures. Durable source publication and
-the project-wide reference review belong to the application document host.
+The model opens the registered `core.blackboard_schema` source and encodes its
+validated revision for the shared source writer. The authoring envelope retains
+labels and row order. Legacy semantic-only assets open with unlabeled rows in
+stable key order. Cooking publishes the same semantic schema bytes. Durable
+source publication and project-wide reference review belong to the application
+document host.
 
 ## Cinematic Sequence Asset Documents
 

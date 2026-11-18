@@ -1774,6 +1774,7 @@ add_library(HoroAI STATIC
         runtime/ai/compile/DecisionSourceReachability.cpp
         runtime/ai/compile/DecisionSourceTree.cpp
         runtime/ai/compile/DecisionSourceValues.cpp
+        runtime/ai/compile/BlackboardSchemaSourceCodec.cpp
         runtime/ai/api/DecisionNodeRegistration.cpp
         runtime/ai/api/DecisionNodeExecutor.cpp
         runtime/ai/api/AICapabilityDescriptors.cpp

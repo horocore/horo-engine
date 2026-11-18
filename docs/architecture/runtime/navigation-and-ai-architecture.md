@@ -2872,8 +2872,11 @@ keeps existing handles, budgets and callbacks intact.
 
 Blackboard schema assets use the versioned semantic .horo_bb payload and
 project asset type core.blackboard_schema. Their immutable cooked schema
-retains stable key IDs, types, defaults, access, and version policy. Decision
-cooking captures authored schemas from the pinned registry and records the
+retains stable key IDs, types, defaults, access, and version policy. The source
+codec also accepts an authoring envelope with an ordered list of stable key IDs
+and optional labels. Existing semantic-only assets remain readable. Cooking
+validates both representations and emits the existing semantic-only payload.
+Decision cooking captures authored schemas from the pinned registry and records the
 selected schema asset dependencies. Duplicate semantic schema versions reject
 the capture. The cooker and runtime fingerprint the same canonical schema
 fields. Configured headless admission can therefore resolve schemas from the

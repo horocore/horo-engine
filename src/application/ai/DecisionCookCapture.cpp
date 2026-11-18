@@ -106,10 +106,10 @@ namespace Horo::Application::DecisionCookDetail {
             const auto *file = state.files->Find(record.id);
             if (!file || !SameRecord(record, file->record))
                 return Result<void>::Failure(MakeError(DecisionCookErrors::Stale));
-            auto decoded = AI::BlackboardSchemaCodec::Decode(file->bytes);
+            auto decoded = AI::BlackboardSchemaSourceCodec::Decode(file->bytes);
             if (decoded.HasError())
                 return Result<void>::Failure(decoded.ErrorValue());
-            auto schema = std::make_shared<const AI::BlackboardSchema>(std::move(decoded).Value());
+            auto schema = std::make_shared<const AI::BlackboardSchema>(std::move(decoded).Value().schema);
             if (std::ranges::any_of(state.environment.schemas, [&schema](const auto &existing) {
                 return existing && existing->Identity() == schema->Identity() && existing->Version() == schema->Version();
             }))

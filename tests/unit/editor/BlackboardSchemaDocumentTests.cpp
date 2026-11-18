@@ -1,3 +1,5 @@
+#include "Horo/AI/DecisionPlanCodec.h"
+#include "Horo/Assets/AssetRegistry.h"
 #include "Horo/Editor/BlackboardSchemaDocument.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -114,7 +116,7 @@ namespace {
             source.version = 0;
         }
         SECTION("invalid authored display bytes") {
-            source.rows[0].displayName.assign(1, static_cast<char>(0xff));
+            source.rows[0].displayName = std::string(1, static_cast<char>(0xff));
         }
         CHECK(BlackboardSchemaDocument::Open(Document(), std::move(source)).HasError());
     }
@@ -139,6 +141,68 @@ namespace {
         CHECK(document->Execute(undone.revision, add).HasError());
         REQUIRE(document->Redo(undone.revision).HasValue());
         CHECK(document->Snapshot().Value().source->rows[0].descriptor.key == key);
+    }
+
+    TEST_CASE("Registered Blackboard authoring round-trips legacy schema and exact authored order", "[editor][blackboard][source]") {
+        const auto source = Source();
+        const auto identity = Document();
+        auto document = Open();
+        const auto semantic = BlackboardSchemaCodec::Encode(*document->Snapshot().Value().schema);
+        REQUIRE(semantic.HasValue());
+
+        Assets::AssetRegistry registry;
+        const auto path = ProjectPath::Parse(identity.key.source.Value()).Value();
+        const auto metadata = ProjectPath::Parse(identity.key.source.Value() + ".horo").Value();
+        const auto type = Assets::AssetTypeId::Parse(BlackboardSchemaAssetType).Value();
+        REQUIRE(registry.Publish(std::vector<Assets::AssetRecord>{{source.asset, type, path, metadata}}).status ==
+                Assets::AssetRegistryBuildStatus::Complete);
+        const auto registered = registry.Snapshot();
+        auto legacy = BlackboardSchemaDocument::OpenRegistered(identity, registered, source.asset, semantic.Value());
+        REQUIRE(legacy.HasValue());
+        const auto initial = legacy.Value()->Snapshot().Value();
+        REQUIRE(initial.source->rows.size() == 2);
+        CHECK(initial.source->rows.front().descriptor.key == Key(3));
+        CHECK_FALSE(initial.source->rows.front().displayName);
+        REQUIRE(legacy.Value()->Execute(initial.revision, RenameBlackboardKey{Key(8), "Target Exists"}).HasValue());
+        const auto named = legacy.Value()->Snapshot().Value();
+        REQUIRE(legacy.Value()->Execute(named.revision, MoveBlackboardKey{Key(8), 0}).HasValue());
+        const auto final = legacy.Value()->Snapshot().Value();
+        const auto encoded = legacy.Value()->EncodeSource(final.revision);
+        REQUIRE(encoded.HasValue());
+        CHECK(legacy.Value()->EncodeSource(initial.revision).HasError());
+        CHECK(BlackboardSchemaCodec::Decode(encoded.Value()).HasError());
+
+        auto reopened = BlackboardSchemaDocument::OpenRegistered(identity, registered, source.asset, encoded.Value());
+        REQUIRE(reopened.HasValue());
+        const auto roundTrip = reopened.Value()->Snapshot().Value();
+        CHECK(roundTrip.source->rows.front().descriptor.key == Key(8));
+        CHECK(roundTrip.source->rows.front().displayName == "Target Exists");
+        CHECK_FALSE(roundTrip.source->rows.back().displayName);
+        CHECK(BlackboardSchemaCodec::Encode(*roundTrip.schema).Value() == semantic.Value());
+        CHECK(BlackboardSchemaDocument::OpenRegistered(identity, registered, {}, encoded.Value()).HasError());
+
+        auto different = identity;
+        different.key.source = SourceDocumentId::Parse("assets/other.horo_bb").Value();
+        CHECK(BlackboardSchemaDocument::OpenRegistered(different, registered, source.asset, encoded.Value()).HasError());
+        auto changed = encoded.Value();
+        changed.push_back(0);
+        CHECK(BlackboardSchemaDocument::OpenRegistered(identity, registered, source.asset, changed).HasError());
+    }
+
+    TEST_CASE("Blackboard source metadata rejects duplicate unknown or malformed key presentation", "[editor][blackboard][source]") {
+        const auto document = Open();
+        const auto schema = document->Snapshot().Value().schema;
+        std::array rows{BlackboardSchemaAuthoringRow{Key(8), "Target"}, BlackboardSchemaAuthoringRow{Key(3), "Move"}};
+        SECTION("duplicate row identity") {
+            rows[1].key = rows[0].key;
+        }
+        SECTION("foreign row identity") {
+            rows[0].key = Key(25);
+        }
+        SECTION("malformed label") {
+            rows[0].displayName = std::string(129, 'x');
+        }
+        CHECK(BlackboardSchemaSourceCodec::Encode(*schema, rows).HasError());
     }
 
     TEST_CASE("Blackboard owner rejects foreign threads and leaves exhausted identities unchanged", "[editor][blackboard]") {

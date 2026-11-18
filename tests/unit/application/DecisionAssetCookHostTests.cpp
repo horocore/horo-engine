@@ -2,6 +2,9 @@
 #include "Horo/Application/DecisionAssetCookHost.h"
 #include "assets/AssetCookServiceFixture.h"
 
+#include <catch2/generators/catch_generators.hpp>
+#include <ranges>
+
 namespace {
     using namespace Horo;
     using namespace Horo::AI;
@@ -120,7 +123,13 @@ namespace {
               "[native][decision-cook][blackboard]") {
         Fixture fixture;
         const auto schemaId = Files::Id("00000000-0000-0000-0000-0000000000ca");
-        const auto encoded = BlackboardSchemaCodec::Encode(*fixture.ai.schema);
+        const auto semantic = BlackboardSchemaCodec::Encode(*fixture.ai.schema);
+        REQUIRE(semantic.HasValue());
+        std::vector<BlackboardSchemaAuthoringRow> rows;
+        for (const auto &key : fixture.ai.schema->Keys() | std::views::reverse)
+            rows.push_back({key.key, "Authored Label"});
+        const bool authoring = GENERATE(false, true);
+        const auto encoded = authoring ? BlackboardSchemaSourceCodec::Encode(*fixture.ai.schema, rows) : semantic;
         REQUIRE(encoded.HasValue());
         const auto file = fixture.source.path / "assets/guard.horo_bb";
         Files::WriteFile(file, encoded.Value());
@@ -145,6 +154,7 @@ namespace {
             REQUIRE(schema != artifacts.end());
             REQUIRE(root != artifacts.end());
             CHECK(schema->type.Value() == BlackboardSchemaAssetType);
+            CHECK(schema->payload == semantic.Value());
             auto recovered = BlackboardSchemaCodec::Decode(schema->payload);
             REQUIRE(recovered.HasValue());
             auto runtime = fixture.request.environment;

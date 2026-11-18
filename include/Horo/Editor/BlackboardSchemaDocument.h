@@ -9,6 +9,10 @@
 #include "Horo/Editor/EditorSurfaceIdentity.h"
 #include "Horo/Foundation/CancellationToken.h"
 
+namespace Horo::Assets {
+    class AssetRegistrySnapshot;
+}
+
 namespace Horo::Editor {
     namespace BlackboardDocumentErrors {
         extern const ErrorCodeDescriptor InvalidEdit;
@@ -24,7 +28,7 @@ namespace Horo::Editor {
     /** @brief One authored key. Display text and presentation order are independent of the stable key ID. */
     struct BlackboardSchemaRow final {
         AI::BlackboardKeyDescriptor descriptor;
-        std::string displayName;
+        std::optional<std::string> displayName; /**< Absent on semantic-only legacy sources. */
     };
 
     /** @brief Complete detached authoring source for an Asset Registry identity and a stable AI schema identity. */
@@ -90,6 +94,17 @@ namespace Horo::Editor {
          */
         [[nodiscard]] static Result<std::unique_ptr<BlackboardSchemaDocument>> Open(DocumentIdentity document,
                                                                                     BlackboardSchemaSource source);
+        /** @brief Opens admitted source bytes through the exact current Asset Registry record and source codec.
+         * @param document Exact Asset document session and canonical project-relative path.
+         * @param registry Pinned registry captured by the host that read these source bytes.
+         * @param asset Stable identity of the selected asset.
+         * @param bytes Complete independently owned source capture for that registry record.
+         * @return Typed document or identity, transport, or schema failure. Legacy rows contain no fabricated labels.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<BlackboardSchemaDocument>> OpenRegistered(DocumentIdentity document,
+                                                                                              const Assets::AssetRegistrySnapshot &registry,
+                                                                                              Assets::AssetId asset,
+                                                                                              std::span<const std::uint8_t> bytes);
         ~BlackboardSchemaDocument();
 
         BlackboardSchemaDocument(const BlackboardSchemaDocument &) = delete;
@@ -97,6 +112,11 @@ namespace Horo::Editor {
 
         /** @brief Captures the current source and sorted runtime schema. @return Owned value or wrong-thread failure. */
         [[nodiscard]] Result<BlackboardSchemaDocumentSnapshot> Snapshot() const;
+        /** @brief Encodes a current revision for the host's existing durable source publication.
+         * @param expectedRevision Exact snapshot revision. @return Source bytes or typed stale/lane/codec failure.
+         * @post Neither disk state nor the semantic history changes.
+         */
+        [[nodiscard]] Result<std::vector<std::uint8_t>> EncodeSource(std::uint64_t expectedRevision) const;
         /** @brief Proposes the next unused stable key ID for an Add command.
          * @return Next ID above this opening's high-water mark, or an owner/exhaustion failure.
          * @post No identity advances until an Add command successfully publishes.
