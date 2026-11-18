@@ -595,6 +595,7 @@ namespace Horo::Editor {
         struct PrefabRecoveryWork final {
             JobHandle job;
             std::shared_ptr<const PrefabRecoveryCheckpoint> checkpoint;
+            std::shared_ptr<std::shared_ptr<const DocumentRecoveryRecord>> persisted;
         };
 
         /** @brief Worker writes its detached result once, before the job publishes terminal state. The UI reads after that state. */
