@@ -1508,6 +1508,20 @@ add_library(HoroEngine::AudioVoiceRender ALIAS HoroAudioVoiceRender)
 target_compile_features(HoroAudioVoiceRender PUBLIC cxx_std_20)
 target_link_libraries(HoroAudioVoiceRender PUBLIC HoroEngine::AudioPlayback HoroEngine::AudioMixer)
 
+add_library(HoroAudioOffline STATIC
+        audio/backend/offline/OfflineAudioRender.cpp
+        audio/backend/offline/OfflineMixerSession.cpp)
+target_compile_features(HoroAudioOffline PUBLIC cxx_std_20)
+target_include_directories(HoroAudioOffline PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/offline/include>")
+target_link_libraries(HoroAudioOffline PUBLIC HoroAudioBackendContract HoroEngine::AudioVoiceRender)
+
+add_library(HoroApplicationAudioExport STATIC application/audio_export/OfflineAudioExport.cpp)
+target_compile_features(HoroApplicationAudioExport PUBLIC cxx_std_20)
+target_include_directories(HoroApplicationAudioExport PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/application/audio_export/include>")
+target_link_libraries(HoroApplicationAudioExport PUBLIC HoroAudioOffline HoroEngine::Foundation)
+
 add_library(HoroAudioFrontend STATIC
         audio/frontend/AudioFrontend.cpp
         audio/frontend/AudioFrontendLifecycle.cpp)

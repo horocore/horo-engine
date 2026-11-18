@@ -155,6 +155,30 @@ own clocks; callback observations are evidence returned through control, not
 authority to rewrite a gameplay, sequence or animation playhead. Wall time is for
 deadlines/diagnostics and never schedules audible work directly.
 
+
+### Offline PCM and WAVE export
+
+`HoroAudioOffline` is the synchronous headless processing adapter. The host
+prepares a separate Audio epoch with resident or otherwise synchronously
+available voices, one mixer publication and optional sealed sample automation.
+The adapter advances that epoch by sample count and converts the mixer's
+planar output to an owned interleaved float buffer. The source cutoff splits
+the export block exactly. The mixer then receives silent input for the host's
+declared bounded tail. The adapter holds no native device and leaves Null's
+lifecycle simulation independent.
+
+`HoroApplicationAudioExport` uses the same processing path to write float32
+speaker WAVE through the caller's scoped publication authority. It retains
+finite headroom, encodes speaker semantics in WAVE channel-mask order and
+publishes complete output atomically. Cancellation and pre-commit failure
+preserve previous destination bytes. The operation receipt records irreversible
+publication independently of later durability errors.
+
+Cinematic callers supply a prepared Audio plan at this application boundary.
+Sequencer retains authored timing intent under ADR-120. Audio owns the clock
+correlation, media readiness, sample automation and retirement.
+
+
 ## Runtime Ownership
 
 ```text

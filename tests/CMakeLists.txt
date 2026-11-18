@@ -958,6 +958,16 @@ target_compile_definitions(HoroAudioMixerTests PRIVATE
         HORO_MIXER_ALLOCATION_WORKER="$<TARGET_FILE:HoroMixerAllocationFailureWorker>")
 add_dependencies(HoroAudioMixerTests HoroMixerAllocationFailureWorker)
 horo_register_catch_test(HoroAudioMixerTests LABELS "unit;audio;headless;realtime-safety")
+add_executable(HoroAudioOfflineTests
+    support/AllocationProbe.cpp
+    unit/runtime/audio/OfflineAudioRenderTests.cpp
+    unit/runtime/audio/OfflineMixerRenderTests.cpp
+    unit/application/audio_export/OfflineAudioExportTests.cpp)
+target_include_directories(HoroAudioOfflineTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+target_compile_features(HoroAudioOfflineTests PRIVATE cxx_std_20)
+target_link_libraries(HoroAudioOfflineTests PRIVATE HoroApplicationAudioExport HoroEngine::Platform)
+horo_register_catch_test(HoroAudioOfflineTests LABELS "unit;audio;headless")
+
 add_executable(HoroAudioResamplerBenchmark EXCLUDE_FROM_ALL benchmarks/audio/ResamplerBenchmark.cpp)
 target_compile_features(HoroAudioResamplerBenchmark PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioResamplerBenchmark PRIVATE HoroEngine::AudioDsp)
