@@ -260,6 +260,16 @@ namespace Horo::Editor {
         auto host = std::move(hostResult).Value();
         const auto extent = CancelFrameAndResize(host, *frontend, *window, port, context);
         PresentFrame(*frontend, extent);
+        const auto beforeDisplayChange = host.Snapshot().Value().surface;
+        const auto refreshed = host.Observe(extent, Mode, EditorSurfaceAdmission::Idle, EditorSurfaceRecovery::Retry, 2);
+        REQUIRE(refreshed.HasValue());
+        REQUIRE_FALSE(refreshed.Value().nativeFailure);
+        REQUIRE(refreshed.Value().snapshot.active);
+        CHECK(refreshed.Value().snapshot.active->displayRevision == 2);
+        CHECK(refreshed.Value().snapshot.active->extent == extent);
+        CHECK(refreshed.Value().snapshot.surface.generation > beforeDisplayChange.generation);
+        CHECK(port.Context() == context);
+        PresentFrame(*frontend, extent);
         CHECK(host.Update(extent, Mode, EditorSurfaceAdmission::Cancelled).HasError());
         REQUIRE(host.Close(EditorSurfaceAdmission::Cancelled).HasValue());
         CHECK(host.Snapshot().Value().state == Render::RenderSurfaceState::Unattached);
