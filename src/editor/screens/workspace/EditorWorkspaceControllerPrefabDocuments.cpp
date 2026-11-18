@@ -189,7 +189,8 @@ namespace Horo::Editor {
         m_prefabStagePending = false;
         if (found != m_prefabDocuments.end()) {
             auto &document = **found;
-            if (!document.HasStage() && m_prefabStageAttemptRevision != document.Snapshot().fence.revision)
+            const auto snapshot = document.Snapshot();
+            if (!snapshot.externalConflict && !document.HasStage() && m_prefabStageAttemptRevision != snapshot.fence.revision)
                 PreparePrefabStage(document);
             ExtractPrefabStage(document);
         }
@@ -278,8 +279,9 @@ namespace Horo::Editor {
     Result<void> EditorWorkspaceController::ApplyPrefabDocumentAction(PrefabDocumentSession &document,
                                                                       const EditorWorkspaceViewCommandData &command) {
         const auto fence = *command.prefabFence;
-        if (auto drained = DrainPrefabRecovery(); drained.HasError())
-            return drained;
+        if (command.prefabAction != PrefabDocumentAction::KeepExternalDraft)
+            if (auto drained = DrainPrefabRecovery(); drained.HasError())
+                return drained;
         switch (command.prefabAction) {
             using enum PrefabDocumentAction;
             case Undo:
@@ -290,6 +292,16 @@ namespace Horo::Editor {
                     return Result<void>::Failure(std::move(paired).ErrorValue());
                 return paired.Value() ? Result<void>::Success() : document.Replay(fence, redo);
             }
+            case CompareExternal:
+                return Result<void>::Failure(MakeError(SourceDocumentErrors::Invalid));
+            case KeepExternalDraft:
+                if (!command.prefabExternalComparison)
+                    return Result<void>::Failure(MakeError(SourceDocumentErrors::Stale));
+                return document.KeepExternalDraft(fence, *command.prefabExternalComparison);
+            case SaveAs:
+                if (!command.prefabSaveDestination)
+                    return Result<void>::Failure(MakeError(SourceDocumentErrors::Invalid));
+                return SavePrefabAs(document.Snapshot(), *command.prefabSaveDestination);
             case Reload:
                 return document.Reload(fence, false);
             case DiscardAndReload:
@@ -355,6 +367,76 @@ namespace Horo::Editor {
             ScheduleContentBrowserPreviews();
         RefreshPrefabDocuments();
         return outcome;
+    }
+
+    /** @copydoc EditorWorkspaceController::ObservePrefabExternalWatch */
+    bool EditorWorkspaceController::ObservePrefabExternalWatch() {
+        if (!m_prefabExternalWatch)
+            return true;
+        const auto status = m_prefabExternalWatch->job.Snapshot();
+        if (!status || !status->terminalResult)
+            return false;
+        auto finished = std::move(*m_prefabExternalWatch);
+        m_prefabExternalWatch.reset();
+        if (status->state != JobState::Succeeded)
+            return true;
+        const auto instance = finished.request->fence.instance;
+        const auto owner = std::ranges::find_if(m_prefabDocuments, [instance](const auto &entry) {
+            return entry->HasPresentation() && entry->Instance() == instance;
+        });
+        if (owner == m_prefabDocuments.end() || !(*owner)->ObserveExternal(*finished.request, *finished.comparison))
+            return true;
+        const auto snapshot = (*owner)->Snapshot();
+        const auto published = std::ranges::find_if(m_viewModel.prefabDocuments, [instance](const auto &entry) {
+            return entry.identity.instance == instance;
+        });
+        if (published != m_viewModel.prefabDocuments.end())
+            *published = snapshot;
+        if (m_activePrefabDocument == instance) {
+            m_prefabViewportScene = {};
+            ++m_viewportSceneRevision;
+            if (!snapshot.externalConflict)
+                m_prefabStageAttemptRevision = 0;
+        }
+        return true;
+    }
+
+    /** @copydoc EditorWorkspaceController::UpdatePrefabExternalWatch */
+    void EditorWorkspaceController::UpdatePrefabExternalWatch(const float seconds) {
+        if (!ObservePrefabExternalWatch())
+            return;
+        if (!m_sourceRecoveryJobs || !m_activePrefabDocument || !std::isfinite(seconds) || seconds <= 0.0F)
+            return;
+        m_prefabExternalWatchSeconds += seconds;
+        if (m_prefabExternalWatchSeconds < 1.0F)
+            return;
+        m_prefabExternalWatchSeconds = 0;
+        const auto owner = std::ranges::find_if(m_prefabDocuments, [this](const auto &entry) {
+            return entry->HasPresentation() && entry->Instance() == m_activePrefabDocument;
+        });
+        if (owner == m_prefabDocuments.end() || !(*owner)->Snapshot().dirty)
+            return;
+        auto request = std::make_shared<const PrefabExternalInspection>((*owner)->CaptureExternalInspection());
+        auto comparison = std::make_shared<std::shared_ptr<const PrefabExternalComparison>>();
+        auto job = m_sourceRecoveryJobs->SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Io},
+                                                      [request, comparison](const CancellationToken &cancellation) {
+            auto result = ComparePrefabExternal(*request, cancellation);
+            if (result.HasError())
+                return Result<void>::Failure(result.ErrorValue());
+            *comparison = std::move(result).Value();
+            return Result<void>::Success();
+        });
+        if (job.HasValue())
+            m_prefabExternalWatch.emplace(PrefabExternalWatchWork{std::move(job).Value(), std::move(request), std::move(comparison)});
+    }
+
+    /** @copydoc EditorWorkspaceController::StopPrefabExternalWatch */
+    void EditorWorkspaceController::StopPrefabExternalWatch() {
+        if (!m_prefabExternalWatch)
+            return;
+        static_cast<void>(m_prefabExternalWatch->job.RequestCancel());
+        static_cast<void>(m_prefabExternalWatch->job.Wait());
+        m_prefabExternalWatch.reset();
     }
 
     /** @copydoc EditorWorkspaceController::ObservePrefabRecovery */
@@ -464,6 +546,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::ShutdownPrefabDocuments */
     Result<void> EditorWorkspaceController::ShutdownPrefabDocuments(const bool discard) {
+        StopPrefabExternalWatch();
         if (auto drained = DrainPrefabRecovery(); drained.HasError())
             return drained;
         m_prefabRecoveryQueue.clear();

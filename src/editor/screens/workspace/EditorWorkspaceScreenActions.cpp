@@ -1,4 +1,5 @@
 #include "EditorWorkspaceScreen.h"
+#include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Foundation/Logging/Logger.h"
@@ -22,6 +23,93 @@
 
 namespace Horo::Editor::WorkspaceScreenDetail {
     namespace {
+        /** @brief Read-only view of one stable source comparison. Keep sends only a fenced owner intent. */
+        class PrefabExternalComparisonModal final : public EditorModal {
+        public:
+            PrefabExternalComparisonModal(const EditorGuiContext &context, std::shared_ptr<const PrefabExternalComparison> comparison,
+                                          std::function<void()> keep)
+                : EditorModal(GuiLocalizationScope{"workspace.prefab_document"}), context_(context), comparison_(std::move(comparison)),
+                  keep_(std::move(keep)) {}
+
+            ModalId Id() const override {
+                return ModalId{0x504642434F4D5041ULL};
+            }
+
+            ModalPresentation Presentation() const override {
+                return {.size = ModalSizePolicy::Medium, .dimWorkspace = true};
+            }
+
+            ModalClosePolicy ClosePolicy() const override {
+                return {};
+            }
+
+            Result<void> OnOpen(EditorModalContext &) override {
+                return Result<void>::Success();
+            }
+
+            CloseDecision CanClose(ModalCloseReason) override {
+                return CloseDecision::Allow;
+            }
+
+            ModalFrameResult Draw() override {
+                const auto &title = Text("compare");
+                Ui::ScopedModalShell modal({.id = "PrefabExternalComparison",
+                                            .title = title.c_str(),
+                                            .requestedSize = {740.0F, 510.0F},
+                                            .footerHeight = 0.0F,
+                                            .showClose = true},
+                                           context_.theme.fonts);
+                if (Ui::Button({.label = Text("keep").c_str(), .font = context_.theme.fonts.sans})) {
+                    keep_();
+                    return ModalFrameResult::RequestClose(ModalCloseReason::Completed);
+                }
+                ImGui::BeginChild("##PrefabCompareBody");
+                DrawDifferences();
+                ImGui::EndChild();
+                return modal.CloseRequested() ? ModalFrameResult::RequestClose(ModalCloseReason::Cancelled) : ModalFrameResult::None();
+            }
+
+        private:
+            [[nodiscard]] const std::string &Text(const char *key) const {
+                return LocalizedText(context_.localization, key);
+            }
+
+            void DrawDifferences() const {
+                if (comparison_->diskError) {
+                    Ui::ErrorText(Text("compare_unavailable").c_str(), context_.theme.fonts);
+                    const auto code = comparison_->diskError->code.Value();
+                    ImGui::TextUnformatted(code.data(), code.data() + code.size());
+                    return;
+                }
+                if (comparison_->compositionChanged)
+                    ImGui::TextUnformatted(Text("composition_changed").c_str());
+                if (comparison_->members.empty() && !comparison_->compositionChanged)
+                    ImGui::TextUnformatted(Text("no_member_changes").c_str());
+                ImGuiListClipper clipper;
+                clipper.Begin(static_cast<int>(comparison_->members.size()));
+                while (clipper.Step()) {
+                    for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
+                        const auto &member = comparison_->members[static_cast<std::size_t>(row)];
+                        const auto *key = member.change == PrefabExternalChange::DraftOnly  ? "draft_only"
+                                          : member.change == PrefabExternalChange::DiskOnly ? "disk_only"
+                                                                                            : "member_changed";
+                        auto label = std::format("{}  {}  {}  /  {}", member.object.value, Text(key), member.draftName, member.diskName);
+                        if (member.parentChanged)
+                            label += std::format("  [{}]", Text("parent_changed"));
+                        if (member.transformChanged)
+                            label += std::format("  [{}]", Text("transform_changed"));
+                        if (member.payloadChanged)
+                            label += std::format("  [{}]", Text("payload_changed"));
+                        ImGui::TextUnformatted(label.c_str());
+                    }
+                }
+            }
+
+            const EditorGuiContext &context_;
+            std::shared_ptr<const PrefabExternalComparison> comparison_;
+            std::function<void()> keep_;
+        };
+
         /** @brief Formats bounded creation diagnostics after the workspace lifetime fence passes. */
         std::string PrefabCreationFailureMessage(const PrefabCreationOutcome *outcome, const ILocalizationService &localization) {
             std::string message = EditorWorkspaceScreen::kTextScope.Text(localization, "prefab.create.failed");
@@ -338,6 +426,52 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (opened.HasError()) {
             LOG_WARN("editor.scene_document", "External scene comparison modal could not open: %s", opened.ErrorValue().message.c_str());
         }
+    }
+
+    /** @copydoc EditorWorkspaceScreen::OpenPrefabExternalComparison */
+    void EditorWorkspaceScreen::OpenPrefabExternalComparison(const PrefabDocumentFence &fence) {
+        const auto &model = controller_->ViewModel();
+        const auto found = std::ranges::find_if(model.prefabDocuments, [&](const auto &source) {
+            return source.fence.owner == fence.owner && source.fence.instance == fence.instance && source.fence.revision == fence.revision;
+        });
+        if (found == model.prefabDocuments.end() || !found->externalConflict || !found->externalComparison)
+            return;
+        const auto comparison = found->externalComparison;
+        auto keep = [this, fence, comparison, lifetime = std::weak_ptr<const void>{workspaceControllerLifetime_}] {
+            if (lifetime.expired())
+                return;
+            controller_->ProcessCommand({.command = EditorWorkspaceViewCommand::PrefabDocument,
+                                         .prefabFence = fence,
+                                         .prefabExternalComparison = comparison,
+                                         .prefabAction = PrefabDocumentAction::KeepExternalDraft});
+        };
+        const auto opened = modalHost_.OpenRoot(std::make_unique<PrefabExternalComparisonModal>(context_, comparison, std::move(keep)));
+        if (opened.HasError())
+            LOG_WARN("editor.prefab", "External prefab comparison could not open: %s", opened.ErrorValue().message.c_str());
+    }
+
+    /** @copydoc EditorWorkspaceScreen::SavePrefabAs */
+    void EditorWorkspaceScreen::SavePrefabAs(const PrefabDocumentFence &fence) {
+        auto context =
+            input_.router.PushContext(Input::InputContextId{"editor.native_dialog.prefab_save"}, Input::InputContextKind::NativeDialog);
+        const auto filename = context_.localization.Get("editor", "workspace.prefab_document.save_as_filename");
+#if defined(__APPLE__)
+        const std::string suggestion = filename;
+#else
+        const auto suggestion = WorkspacePathText(ProjectLayout::AssetRoot(controller_->ProjectRoot()) / WorkspaceNativePath(filename));
+#endif
+        const auto selected = pfd::save_file(context_.localization.Get("editor", "workspace.prefab_document.save_as"), suggestion,
+                                             {context_.localization.Get("editor", "workspace.prefab_document.file_type"), "*.prefab"})
+                                  .result();
+        if (selected.empty())
+            return;
+        auto destination = WorkspaceNativePath(selected);
+        if (destination.extension().empty())
+            destination += ".prefab";
+        controller_->ProcessCommand({.command = EditorWorkspaceViewCommand::PrefabDocument,
+                                     .prefabFence = fence,
+                                     .prefabSaveDestination = destination.lexically_normal(),
+                                     .prefabAction = PrefabDocumentAction::SaveAs});
     }
 
     /** @copydoc EditorWorkspaceScreen::OpenWorldLayerCreation */

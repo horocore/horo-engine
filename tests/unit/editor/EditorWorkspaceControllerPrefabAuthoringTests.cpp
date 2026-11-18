@@ -125,6 +125,70 @@ namespace Horo::Editor {
         CHECK(canonical.Value().identity == initial.acceptedSource);
     }
 
+    TEST_CASE("Prefab external watch publishes a fenced comparison and Keep preserves the current draft",
+              "[editor][prefab][native][conflict]") {
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
+        Workspace workspace{"hierarchy", false, &jobs};
+        workspace.OpenPrefab();
+        workspace.Rename("Draft in workspace");
+        auto &owner = *workspace.controller;
+        const auto draft = owner.ViewModel().prefabDocuments.front();
+        workspace.project.WriteSource("Other editor");
+        owner.UpdateExternalSceneWatch(1.0F);
+        CHECK_FALSE(owner.ViewModel().prefabDocuments.front().externalConflict);
+        jobs.Shutdown(ShutdownPolicy::Drain);
+        owner.UpdateExternalSceneWatch(0.0F);
+        const auto conflict = owner.ViewModel().prefabDocuments.front();
+        REQUIRE(conflict.externalConflict);
+        REQUIRE(conflict.externalComparison);
+        REQUIRE(conflict.externalComparison->members.size() == 1);
+        CHECK(conflict.externalComparison->members.front().diskName == "Other editor");
+        owner.ProcessCommand({.command = EditorWorkspaceViewCommand::PrefabDocument,
+                              .prefabFence = conflict.fence,
+                              .prefabExternalComparison = conflict.externalComparison,
+                              .prefabAction = PrefabDocumentAction::KeepExternalDraft});
+        const auto kept = owner.ViewModel().prefabDocuments.front();
+        CHECK(kept.keepExternalDraft);
+        CHECK(kept.source == draft.source);
+        CHECK(kept.acceptedSource == draft.acceptedSource);
+        CHECK(kept.dirty);
+        const auto disk = Assets::CaptureAssetSource(workspace.project.directory.path, workspace.project.source,
+                                                     Prefab::PrefabHardLimits::SourceDocumentBytes);
+        REQUIRE(disk.HasValue());
+        CHECK(disk.Value().identity == conflict.externalComparison->observed);
+    }
+
+    TEST_CASE("Prefab Save As opens a new registered copy and retains the original conflicted draft",
+              "[editor][prefab][native][conflict]") {
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
+        Workspace workspace{"hierarchy", false, &jobs, true};
+        workspace.OpenPrefab();
+        workspace.Rename("To save as a new prefab");
+        workspace.project.WriteSource("External source to preserve");
+        auto &owner = *workspace.controller;
+        owner.UpdateExternalSceneWatch(1.0F);
+        jobs.Shutdown(ShutdownPolicy::Drain);
+        owner.UpdateExternalSceneWatch(0.0F);
+        const auto conflict = owner.ViewModel().prefabDocuments.front();
+        REQUIRE(conflict.externalComparison);
+        const auto destination = workspace.project.source.parent_path() / "copy.prefab";
+        owner.ProcessCommand({.command = EditorWorkspaceViewCommand::PrefabDocument,
+                              .prefabFence = conflict.fence,
+                              .prefabSaveDestination = destination,
+                              .prefabAction = PrefabDocumentAction::SaveAs});
+        REQUIRE(owner.ViewModel().prefabCreationOutcome);
+        REQUIRE(owner.ViewModel().prefabCreationOutcome->committed);
+        REQUIRE(owner.ViewModel().prefabDocuments.size() == 2);
+        CHECK(owner.ViewModel().prefabDocuments.front().externalConflict);
+        CHECK(owner.ViewModel().prefabDocuments.front().dirty);
+        CHECK(owner.ViewModel().prefabDocuments.back().source->Data().objects.front().name == "To save as a new prefab");
+        CHECK(owner.ViewModel().prefabDocuments.back().source->Data().assetId != conflict.source->Data().assetId);
+        const auto original = Assets::CaptureAssetSource(workspace.project.directory.path, workspace.project.source,
+                                                         Prefab::PrefabHardLimits::SourceDocumentBytes);
+        REQUIRE(original.HasValue());
+        CHECK(original.Value().identity == conflict.externalComparison->observed);
+    }
+
     TEST_CASE("Typed prefab asset activation focuses its persistent document and preserves dirty history",
               "[editor][prefab][assets][native]") {
         Workspace workspace("prefab asset ü");

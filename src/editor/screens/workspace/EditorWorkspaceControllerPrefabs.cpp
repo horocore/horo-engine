@@ -174,15 +174,8 @@ namespace Horo::Editor {
             return false;
         if (!command.prefabCreation)
             return true;
-        if (m_viewModel.prefabCreationOutcome && m_durableFiles) {
-            for (const auto &receipt : m_viewModel.prefabCreationOutcome->files) {
-                if (!receipt.recoveryError)
-                    continue;
-                const auto current = m_durableFiles->InspectEntry(receipt.path);
-                if (current.HasError() || current.Value())
-                    return true;  // Only verified manual removal permits a new attempt to replace retained recovery evidence.
-            }
-        }
+        if (!CanPublishPrefabPair())
+            return true;
         const auto &intent = *command.prefabCreation;
         // Prepare presentation ownership before creating files; the immutable outcome keeps every failed-cleanup receipt.
         auto outcome = std::make_shared<PrefabCreationOutcome>();
@@ -199,6 +192,57 @@ namespace Horo::Editor {
         m_viewModel.prefabSelection = PrefabHierarchyTarget{outcome->instance, std::nullopt};
         NotifyPrefabCreation(selectionChanged, observerFailure);
         return true;
+    }
+
+    /** @copydoc EditorWorkspaceController::CanPublishPrefabPair */
+    bool EditorWorkspaceController::CanPublishPrefabPair() const {
+        if (!m_viewModel.prefabCreationOutcome || !m_durableFiles)
+            return true;
+        for (const auto &receipt : m_viewModel.prefabCreationOutcome->files) {
+            if (!receipt.recoveryError)
+                continue;
+            const auto current = m_durableFiles->InspectEntry(receipt.path);
+            if (current.HasError() || current.Value())
+                return false;
+        }
+        return true;
+    }
+
+    /** @copydoc EditorWorkspaceController::SavePrefabAs */
+    Result<void> EditorWorkspaceController::SavePrefabAs(const PrefabDocumentSnapshot &draft, const std::filesystem::path &destination) {
+        if (!draft.dirty || !m_mutations || !m_durableFiles || !m_mutableAssetRegistry || m_playSession.IsActive())
+            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Authority));
+        if (!CanPublishPrefabPair())
+            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+
+        auto receipt = std::make_shared<PrefabCreationOutcome>();
+        std::optional<Error> presentationFailure{MakeError(Prefab::PrefabErrors::DependencyUnavailable)};
+        m_viewModel.prefabPostCommitError.reset();
+        *receipt = CreatePrefabFork(*draft.source, ProjectRoot(), destination, GenerateRandomAssetId(m_assetRegistry), m_assetRegistry,
+                                    *m_mutations, *m_durableFiles);
+        m_viewModel.prefabCreationOutcome = receipt;
+        if (!receipt->committed)
+            return Result<void>::Failure(receipt->error.value_or(MakeError(Prefab::PrefabErrors::DocumentInvalid)));
+        try {
+            const auto rebuilt = RebuildProjectAssetRegistry(ProjectRoot());
+            if (rebuilt.HasError())
+                m_viewModel.prefabPostCommitError = rebuilt.ErrorValue();
+            else {
+                RefreshAssets(m_mutableAssetRegistry->Snapshot());
+                if (!m_assetRegistry.Find(receipt->asset))
+                    m_viewModel.prefabPostCommitError = std::move(presentationFailure);
+                else {
+                    OpenSourceFile({.path = destination, .origin = SourceOpenOrigin::Command, .mode = SourceOpenMode::EmbeddedOnly});
+                    if (std::ranges::none_of(m_prefabDocuments, [&](const auto &entry) {
+                        return entry->HasPresentation() && entry->Snapshot().source->Data().assetId == receipt->asset;
+                    }))
+                        m_viewModel.prefabPostCommitError = std::move(presentationFailure);
+                }
+            }
+        } catch (...) {
+            m_viewModel.prefabPostCommitError = std::move(presentationFailure);
+        }
+        return Result<void>::Success();
     }
 
     /** @copydoc EditorWorkspaceController::NotifyPrefabCreation */

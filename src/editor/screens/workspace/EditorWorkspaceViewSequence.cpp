@@ -186,9 +186,13 @@ namespace Horo::Editor {
             }
         };
         action("workspace.documents.save", PrefabDocumentAction::Save, source.dirty && !source.externalConflict);
+        action("workspace.prefab_document.save_as", PrefabDocumentAction::SaveAs, source.dirty);
         action("workspace.prefab_document.undo", PrefabDocumentAction::Undo, source.canUndo && !source.externalConflict);
         action("workspace.prefab_document.redo", PrefabDocumentAction::Redo, source.canRedo && !source.externalConflict);
         action("workspace.prefab_document.reload", PrefabDocumentAction::Reload, !source.dirty);
+        if (source.externalConflict)
+            action("workspace.prefab_document.compare", PrefabDocumentAction::CompareExternal,
+                   static_cast<bool>(source.externalComparison));
         action("workspace.prefab_document.recover", PrefabDocumentAction::Recover,
                viewModel.prefabRecovery && !source.dirty && viewModel.prefabRecovery->acceptedSource == source.acceptedSource);
         action("workspace.prefab_document.discard_recovery", PrefabDocumentAction::DiscardRecovery, viewModel.prefabRecoveryAvailable);
@@ -196,8 +200,12 @@ namespace Horo::Editor {
         action("workspace.prefab_document.discard_close", PrefabDocumentAction::DiscardAndClose, source.dirty);
         if (viewModel.prefabDocumentError)
             Ui::ErrorText(viewModel.prefabDocumentError->message.c_str(), m_context.theme.fonts);
+        if (viewModel.prefabPostCommitError)
+            Ui::ErrorText(m_context.localization.Get("editor", "workspace.prefab_document.save_as_refresh").c_str(), m_context.theme.fonts);
         if (source.externalConflict)
-            Ui::WrappedText(ImGui::GetContentRegionAvail().x, m_context.localization.Get("editor", "workspace.prefab_document.conflict"),
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x,
+                            m_context.localization.Get("editor", source.keepExternalDraft ? "workspace.prefab_document.kept"
+                                                                                          : "workspace.prefab_document.conflict"),
                             Theme::ConsoleWarning(), m_context.theme.fonts);
         DrawPrefabSourceFields(source, outCommand);
         const auto &panels = m_panelRegistry.GetAllPanels();

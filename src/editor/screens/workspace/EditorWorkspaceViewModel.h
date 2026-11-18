@@ -105,7 +105,10 @@ namespace Horo::Editor {
         DiscardAndReload,
         Recover,
         DiscardRecovery,
-        DiscardAndClose
+        DiscardAndClose,
+        CompareExternal,
+        KeepExternalDraft,
+        SaveAs
     };
 
     enum class EditorWorkspaceViewCommand {
@@ -399,6 +402,8 @@ namespace Horo::Editor {
         std::optional<PrefabDocumentFence> prefabFence;
         std::shared_ptr<const DocumentRecoveryRecord> prefabRecovery;
         std::optional<PrefabSourceEdit> prefabEdit;
+        std::shared_ptr<const PrefabExternalComparison> prefabExternalComparison;
+        std::optional<std::filesystem::path> prefabSaveDestination;
         PrefabDocumentAction prefabAction{PrefabDocumentAction::Save};
         std::optional<SourceEditingCommand> sourceInteraction;
         bool sourceTextInputOwned{}; /**< Current-frame ownership, independent of whether text changed. */

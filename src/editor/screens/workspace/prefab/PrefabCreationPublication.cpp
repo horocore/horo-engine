@@ -224,6 +224,27 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
+        /** @brief Prepares and locks the one canonical prefab source/sidecar pair for either creation route. */
+        Result<std::array<std::string, 2>> PreparePair(const Prefab::PrefabDocument &source, const std::filesystem::path &root,
+                                                       const std::filesystem::path &destination, PrefabCreationOutcome &outcome,
+                                                       DurableFileSystem &files, std::array<std::optional<ExclusiveFileLock>, 3> &locks) {
+            using Return = Result<std::array<std::string, 2>>;
+            auto encoded = source.SerializeCanonical();
+            if (encoded.HasError())
+                return Return::Failure(encoded.ErrorValue());
+            std::array<std::string, 2> bytes{std::move(encoded).Value(),
+                                             std::format(R"({{"schemaVersion":1,"assetId":"{}","assetType":"core.prefab"}})"
+                                                         "\n",
+                                                         source.Data().assetId.ToString())};
+            outcome.files[0] = {.path = destination, .content = Content(bytes[0])};
+            auto metadata = destination;
+            metadata += ".horo";
+            outcome.files[1] = {.path = std::move(metadata), .content = Content(bytes[1])};
+            if (const auto locked = LockDestinations(root, outcome, files, locks); locked.HasError())
+                return Return::Failure(locked.ErrorValue());
+            return Return::Success(std::move(bytes));
+        }
+
         /** @brief Completes schema/reference/path/state validation and reserves canonical publication before file writes. */
         Result<PreparedCreation> PrepareCreation(const SceneDocumentTransactions &scene, const PrefabCreationRequest &request,
                                                  PrefabCreationOutcome &outcome, DurableFileSystem &files,
@@ -250,36 +271,25 @@ namespace Horo::Editor {
                                              request.behaviors, outcome.boundaries, &settings.Value().settings->Limits());
             if (source.HasError())
                 return Return::Failure(source.ErrorValue());
-            auto encoded = source.Value().SerializeCanonical();
-            if (encoded.HasError())
-                return Return::Failure(encoded.ErrorValue());
             auto replacement =
                 scene.PreparePrefabReplacement(context, request.root, Prefab::PrefabAssetReference::Create(request.asset).Value());
             if (replacement.HasError())
                 return Return::Failure(replacement.ErrorValue());
-            PreparedCreation prepared{std::move(replacement).Value(),
-                                      {std::move(encoded).Value(),
-                                       std::format(R"({{"schemaVersion":1,"assetId":"{}","assetType":"core.prefab"}})"
-                                                   "\n",
-                                                   request.asset.ToString())}};
-            outcome.instance = prepared.replacement.Instance();
-            outcome.files[0] = {.path = request.destination, .content = Content(prepared.bytes[0])};
-            auto metadata = request.destination;
-            metadata += ".horo";
-            outcome.files[1] = {.path = std::move(metadata), .content = Content(prepared.bytes[1])};
-            if (const auto locked = LockDestinations(request.projectRoot, outcome, files, locks); locked.HasError())
-                return Return::Failure(locked.ErrorValue());
-            return Return::Success(std::move(prepared));
+            auto bytes = PreparePair(source.Value(), request.projectRoot, request.destination, outcome, files, locks);
+            if (bytes.HasError())
+                return Return::Failure(bytes.ErrorValue());
+            outcome.instance = replacement.Value().Instance();
+            return Return::Success({std::move(replacement).Value(), std::move(bytes).Value()});
         }
 
         /** @brief Performs only exclusive creations and retains ownership receipts even on native/provider failure. */
-        Result<void> WritePreparedFiles(const PreparedCreation &prepared, const CancellationToken &cancellation,
+        Result<void> WritePreparedFiles(const std::array<std::string, 2> &prepared, const CancellationToken &cancellation,
                                         PrefabCreationOutcome &outcome, DurableFileSystem &files) {
             for (std::size_t index = 0; index != outcome.files.size(); ++index) {
                 if (cancellation.IsCancellationRequested())
                     return Result<void>::Failure(MakeError(SceneTransactionError(SceneTransactionFailure::Cancelled)));
                 auto &receipt = outcome.files[index];
-                const auto bytes = std::as_bytes(std::span{prepared.bytes[index].data(), prepared.bytes[index].size()});
+                const auto bytes = std::as_bytes(std::span{prepared[index].data(), prepared[index].size()});
                 if (const auto written = files.WritePrivateDurable(receipt.path, bytes, receipt.created); written.HasError())
                     return Result<void>::Failure(written.ErrorValue());
                 if (const auto captured = CaptureCreated(receipt, files); captured.HasError())
@@ -288,65 +298,86 @@ namespace Horo::Editor {
             return ValidateCreatedFiles(outcome, files);
         }
 
-        /** @brief Attempts the guarded publication while borrowing leases retained by the caller through rollback.
-         * @details Both exception fallbacks are allocated by the caller before any source writes; this helper neither
-         * acquires project authority nor releases source leases when the guarded attempt returns or catches a failure.
-         */
-        void AttemptCreation(SceneDocumentTransactions &scene, const PrefabCreationRequest &request, PrefabCreationOutcome &outcome,
-                             DurableFileSystem &files, std::array<std::optional<ExclusiveFileLock>, 3> &locks,
-                             std::optional<Error> &exceptionError, std::optional<Error> &providerError) noexcept {
-            static_assert(std::is_nothrow_move_constructible_v<std::optional<Error>>);
-            static_assert(std::is_nothrow_move_assignable_v<std::optional<Error>>);
+        /** @brief Retains project and file leases across both exclusive creation and ownership-checked rollback. */
+        template <typename Attempt>
+        PrefabCreationOutcome PublishCreation(const std::filesystem::path &root, const Assets::AssetId asset,
+                                              const ProjectMutationCoordinator &mutations, DurableFileSystem &files, Attempt attempt) {
+            PrefabCreationOutcome outcome;
+            outcome.asset = asset;
+            std::optional<Error> exceptionError{MakeError(Prefab::PrefabErrors::ExpansionCacheAllocationFailed)};
+            std::optional<Error> providerError{
+                MakeError(Assets::AssetSourceErrors::ReadFailed,
+                          "Filesystem provider failed during prefab creation. Retained file receipts identify publication.")};
+            std::array<Error, 2> recoveryFailures;
+            for (auto &failure : recoveryFailures)
+                failure = MakeError(Assets::AssetSourceErrors::Conflict,
+                                    "Created prefab file needs explicit reconciliation. Current ownership or content cannot be proven.");
+
+            auto acquired = mutations.TryAcquire({root, ProjectMutationOwner::Asset, "editor.prefab.create"});
+            if (acquired.HasError()) {
+                outcome.error = acquired.ErrorValue();
+                return outcome;
+            }
+            [[maybe_unused]] auto projectLease = std::move(acquired).Value();
+            std::array<std::optional<ExclusiveFileLock>, 3> locks;
             try {
-                auto prepared = PrepareCreation(scene, request, outcome, files, locks);
-                if (prepared.HasError()) {
-                    outcome.error = prepared.ErrorValue();
-                    return;
-                }
-                auto candidate = std::move(prepared).Value();
-                if (const auto written = WritePreparedFiles(candidate, request.context.cancellation, outcome, files); written.HasError()) {
-                    outcome.error = written.ErrorValue();
-                } else if (const auto source = ValidateSceneSource(request, files); source.HasError()) {
-                    outcome.error = source.ErrorValue();
-                } else if (const auto committed = scene.CommitPrefabReplacement(candidate.replacement); committed.HasError()) {
-                    outcome.error = committed.ErrorValue();
-                } else {
-                    outcome.committed = committed.Value().committed;
-                }
+                auto committed = attempt(outcome, locks);
+                if (committed.HasError())
+                    outcome.error = std::move(committed).ErrorValue();
+                else
+                    outcome.committed = committed.Value();
             } catch (const std::bad_alloc &) {
                 outcome.error = std::move(exceptionError);
             } catch (...) {
                 outcome.error = std::move(providerError);
             }
+            if (!outcome.committed)
+                Rollback(outcome, files, recoveryFailures);
+            return outcome;
         }
     }  // namespace
 
     /** @copydoc CreatePrefabFromSelection */
     PrefabCreationOutcome CreatePrefabFromSelection(SceneDocumentTransactions &scene, const PrefabCreationRequest &request,
                                                     const ProjectMutationCoordinator &mutations, DurableFileSystem &files) {
-        PrefabCreationOutcome outcome;
-        outcome.asset = request.asset;
-        std::optional<Error> exceptionError{MakeError(Prefab::PrefabErrors::ExpansionCacheAllocationFailed)};
-        std::optional<Error> providerError{
-            MakeError(Assets::AssetSourceErrors::ReadFailed,
-                      "Filesystem provider failed during prefab creation; retained file receipts identify any unresolved publication.")};
-        std::array<Error, 2> recoveryFailures;
-        for (auto &failure : recoveryFailures)
-            failure = MakeError(Assets::AssetSourceErrors::Conflict,
-                                "Created prefab file needs explicit reconciliation; current ownership/content cannot be proven.");
-        // The lease and all source locks remain resident across cleanup and final in-memory commit.
-        auto acquired = mutations.TryAcquire({request.projectRoot, ProjectMutationOwner::Asset, "editor.prefab.create_selection"});
-        if (acquired.HasError()) {
-            outcome.error = acquired.ErrorValue();
-            return outcome;
-        }
-        [[maybe_unused]] auto projectLease = std::move(acquired).Value();
-        // Caller-owned leases span the guarded attempt and the subsequent rollback, keeping cleanup
-        // serialized with cooperating project/source writers even after an attempt exception.
-        std::array<std::optional<ExclusiveFileLock>, 3> locks;
-        AttemptCreation(scene, request, outcome, files, locks, exceptionError, providerError);
-        if (!outcome.committed)
-            Rollback(outcome, files, recoveryFailures);
-        return outcome;
+        return PublishCreation(request.projectRoot, request.asset, mutations, files, [&](auto &outcome, auto &locks) -> Result<bool> {
+            auto prepared = PrepareCreation(scene, request, outcome, files, locks);
+            if (prepared.HasError())
+                return Result<bool>::Failure(prepared.ErrorValue());
+            auto candidate = std::move(prepared).Value();
+            if (const auto written = WritePreparedFiles(candidate.bytes, request.context.cancellation, outcome, files); written.HasError())
+                return Result<bool>::Failure(written.ErrorValue());
+            if (const auto source = ValidateSceneSource(request, files); source.HasError())
+                return Result<bool>::Failure(source.ErrorValue());
+            auto committed = scene.CommitPrefabReplacement(candidate.replacement);
+            return committed.HasError() ? Result<bool>::Failure(committed.ErrorValue())
+                                        : Result<bool>::Success(committed.Value().committed);
+        });
+    }
+
+    /** @copydoc CreatePrefabFork */
+    PrefabCreationOutcome CreatePrefabFork(const Prefab::PrefabDocument &draft, const std::filesystem::path &projectRoot,
+                                           const std::filesystem::path &destination, const Assets::AssetId asset,
+                                           const Assets::AssetRegistrySnapshot &registry, const ProjectMutationCoordinator &mutations,
+                                           DurableFileSystem &files) {
+        return PublishCreation(projectRoot, asset, mutations, files, [&](auto &outcome, auto &locks) -> Result<bool> {
+            if (!asset.IsValid() || asset == draft.Data().assetId || registry.Find(asset))
+                return Result<bool>::Failure(MakeError(Prefab::PrefabErrors::IdentityCollision));
+            if (const auto path = ValidateDestination(projectRoot, destination, files); path.HasError())
+                return Result<bool>::Failure(path.ErrorValue());
+            const auto settings = Application::LoadPrefabProjectSettings(projectRoot);
+            if (settings.HasError())
+                return Result<bool>::Failure(settings.ErrorValue());
+            auto content = draft.Data();
+            content.assetId = asset;
+            const auto source = Prefab::PrefabDocument::Create(std::move(content), settings.Value().settings->Limits());
+            if (source.HasError())
+                return Result<bool>::Failure(source.ErrorValue());
+            const auto prepared = PreparePair(source.Value(), projectRoot, destination, outcome, files, locks);
+            if (prepared.HasError())
+                return Result<bool>::Failure(prepared.ErrorValue());
+            const auto written = WritePreparedFiles(prepared.Value(), {}, outcome, files);
+            return written.HasError() ? Result<bool>::Failure(written.ErrorValue()) : Result<bool>::Success(true);
+        });
     }
 }  // namespace Horo::Editor

@@ -232,6 +232,10 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         [[nodiscard]] bool HandleDocumentHistoryMenu(EditorMenuAction action);
         /** @brief Captures the external scene before opening its comparison modal. */
         void OpenSceneComparison();
+        /** @brief Shows the exact current prefab conflict as a read-only comparison. */
+        void OpenPrefabExternalComparison(const PrefabDocumentFence &fence);
+        /** @brief Captures an explicit native path for an exclusive registered prefab Save As fork. */
+        void SavePrefabAs(const PrefabDocumentFence &fence);
         /** @brief Opens layer creation over the canonical world document owner. */
         void OpenWorldLayerCreation(const WorldDocumentFence &expected);
         /** @brief Opens the transient captured-subtree workflow under the workspace lifetime fence. */

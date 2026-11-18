@@ -35,10 +35,12 @@ namespace Horo::Editor::PrefabWorkspaceTestSupport {
         bool diagnosticRoute{};
         bool persistenceAvailable{true};
         JobSystem *recoveryJobs{};
+        bool mutableAssets{};
         std::unique_ptr<EditorWorkspaceController> controller;
 
-        explicit Workspace(const std::string &sourceName = "hierarchy", const bool useDiagnosticRoute = false, JobSystem *jobs = nullptr)
-            : project(sourceName), diagnosticRoute(useDiagnosticRoute), recoveryJobs(jobs) {
+        explicit Workspace(const std::string &sourceName = "hierarchy", const bool useDiagnosticRoute = false, JobSystem *jobs = nullptr,
+                           bool writableAssets = false)
+            : project(sourceName), diagnosticRoute(useDiagnosticRoute), recoveryJobs(jobs), mutableAssets(writableAssets) {
             project.WriteScene();
             Open(PrefabAsset(9).Asset());
         }
@@ -66,7 +68,9 @@ namespace Horo::Editor::PrefabWorkspaceTestSupport {
         void Open(const Assets::AssetId session) {
             controller = std::make_unique<
                 EditorWorkspaceController>(project.directory.path, runtime, project.registry.Snapshot(),
-                                           EditorWorkspaceDependencies{.world = {.documentSessionOwner = session},
+                                           EditorWorkspaceDependencies{.assets = {.mutableAssetRegistry =
+                                                                                      mutableAssets ? &project.registry : nullptr},
+                                                                       .world = {.documentSessionOwner = session},
                                                                        .mutations = persistenceAvailable ? &project.mutations : nullptr,
                                                                        .durableFiles = persistenceAvailable ? &project.files : nullptr,
                                                                        .jobs = recoveryJobs,

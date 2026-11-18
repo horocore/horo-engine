@@ -422,6 +422,8 @@ namespace {
         REQUIRE((service.Get("editor", "workspace.content_browser.project_asset_dock") == "Project asset dock"));
         REQUIRE((service.Get("editor", "workspace.content_browser.empty") == "This folder is empty."));
         REQUIRE((service.Get("editor", "workspace.global_dock.tab.assets") == "Assets"));
+        CHECK(service.Get("editor", "workspace.prefab_document.compare") == "Compare with disk");
+        CHECK(service.Get("editor", "workspace.prefab_document.keep") == "Keep local draft");
         CHECK(service.Get("editor", "workspace.prefab_document.undo") == "Undo source edit");
         CHECK(service.Get("editor", "workspace.prefab_document.discard_recovery").find("keep source edits") != std::string::npos);
         CHECK(service.Get("editor", "workspace.prefab_document.source_controls").find("Scene viewport") != std::string::npos);
@@ -439,6 +441,8 @@ namespace {
         REQUIRE((service.Prepare(Horo::Editor::LocaleTag{"tr-TR"}, &error)));
         REQUIRE((service.ActivatePrepared(&error)));
         REQUIRE((service.Get("editor", "settings.input.shortcut.click_to_record") == "Kaydetmek için tıkla"));
+        CHECK(service.Get("editor", "workspace.prefab_document.compare") == "Diskteki sürümle karşılaştır");
+        CHECK(service.Get("editor", "workspace.prefab_document.keep") == "Yerel taslağı koru");
         REQUIRE((service.Get("editor", "settings.input.shortcut.press_keys") == "Tuşlara basın..."));
         REQUIRE((service.Get("editor", "workspace.content_browser.embedded") == "YERLEŞİK"));
         REQUIRE((service.Get("editor", "workspace.content_browser.project_asset_dock") == "Proje varlık paneli"));

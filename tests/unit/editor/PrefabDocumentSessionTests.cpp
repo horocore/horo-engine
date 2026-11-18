@@ -396,8 +396,70 @@ namespace Horo::Editor {
                   .identity != Assets::AssetSourceIdentity{});
     }
 
-    TEST_CASE("Detached prefab recovery checkpoints retain the captured state while the owner continues editing",
-              "[editor][prefab][session]") {
+    TEST_CASE("Prefab comparison keeps the exact local draft without accepting an external save base", "[editor][prefab][session]") {
+        Fixture fixture;
+        fixture.Rename("Draft");
+        const auto before = fixture.document->Snapshot();
+        const auto firstWatch = fixture.document->CaptureExternalInspection();
+        REQUIRE(ComparePrefabExternal(firstWatch).HasValue());
+        CHECK_FALSE(ComparePrefabExternal(firstWatch).Value());
+        fixture.project.WriteSource("Disk version");
+        const auto observed = ComparePrefabExternal(firstWatch);
+        REQUIRE(observed.HasValue());
+        REQUIRE(observed.Value());
+        REQUIRE(observed.Value()->members.size() == 1);
+        CHECK(observed.Value()->members.front().draftName == "Draft");
+        CHECK(observed.Value()->members.front().diskName == "Disk version");
+
+        fixture.Rename("Current draft");
+        CHECK_FALSE(fixture.document->ObserveExternal(firstWatch, observed.Value()));
+        const auto current = fixture.document->Snapshot();
+        const auto currentWatch = fixture.document->CaptureExternalInspection();
+        const auto comparison = ComparePrefabExternal(currentWatch);
+        REQUIRE(comparison.HasValue());
+        REQUIRE(comparison.Value());
+        REQUIRE(fixture.document->ObserveExternal(currentWatch, comparison.Value()));
+        CHECK(fixture.document->KeepExternalDraft(current.fence, *observed.Value()).HasError());
+        REQUIRE(fixture.document->KeepExternalDraft(current.fence, *comparison.Value()).HasValue());
+        const auto kept = fixture.document->Snapshot();
+        CHECK(kept.source == current.source);
+        CHECK(kept.savedState == before.savedState);
+        CHECK(kept.acceptedSource == before.acceptedSource);
+        CHECK(kept.keepExternalDraft);
+        CHECK(kept.externalConflict);
+        CHECK(kept.dirty);
+        CHECK(kept.canUndo);
+        CHECK(fixture.document->Save(kept.fence, fixture.project.mutations, fixture.project.files).HasError());
+        const auto persisted = Assets::CaptureAssetSource(fixture.project.directory.path, fixture.project.source,
+                                                          Prefab::PrefabHardLimits::SourceDocumentBytes);
+        REQUIRE(persisted.HasValue());
+        CHECK(persisted.Value().identity == comparison.Value()->observed);
+        REQUIRE(fixture.document->Reload(kept.fence, true).HasValue());
+        const auto reloaded = fixture.document->Snapshot();
+        CHECK_FALSE(reloaded.externalConflict);
+        CHECK_FALSE(reloaded.keepExternalDraft);
+        CHECK_FALSE(reloaded.externalComparison);
+        CHECK(reloaded.source->Data().objects.front().name == "Disk version");
+    }
+
+    TEST_CASE("Malformed external prefab comparison retains the local draft and reports disk rejection", "[editor][prefab][session]") {
+        Fixture fixture;
+        fixture.Rename("Retained draft");
+        const auto snapshot = fixture.document->Snapshot();
+        std::ofstream(fixture.project.source, std::ios::trunc) << "{malformed";
+        const auto inspection = fixture.document->CaptureExternalInspection();
+        const auto compared = ComparePrefabExternal(inspection);
+        REQUIRE(compared.HasValue());
+        REQUIRE(compared.Value());
+        CHECK(compared.Value()->diskError.has_value());
+        REQUIRE(fixture.document->ObserveExternal(inspection, compared.Value()));
+        CHECK(fixture.document->Snapshot().source == snapshot.source);
+        CHECK(fixture.document->Snapshot().dirty);
+        CHECK(fixture.document->Reload(snapshot.fence, true).HasError());
+        CHECK(fixture.document->Snapshot().externalConflict);
+    }
+
+    TEST_CASE("Detached prefab recovery checkpoints retain the captured state while the owner continues editing", "[editor][prefab][session]") {
         Fixture fixture;
         fixture.Rename("Scheduled intent");
         const auto original = fixture.document->Snapshot();

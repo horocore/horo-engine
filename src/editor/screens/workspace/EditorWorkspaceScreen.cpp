@@ -275,6 +275,15 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             OpenPlayTopologyProfilesModal();
             return true;
         }
+        if (command.command == PrefabDocument && command.prefabAction == PrefabDocumentAction::CompareExternal && command.prefabFence) {
+            OpenPrefabExternalComparison(*command.prefabFence);
+            return true;
+        }
+        if (command.command == PrefabDocument && command.prefabAction == PrefabDocumentAction::SaveAs && command.prefabFence &&
+            !command.prefabSaveDestination) {
+            SavePrefabAs(*command.prefabFence);
+            return true;
+        }
         if (command.command == CompareExternalScene) {
             OpenSceneComparison();
             return true;

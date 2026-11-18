@@ -5,6 +5,7 @@
 #include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
 
 #include <chrono>
+#include <map>
 
 namespace Horo::Editor {
     namespace {
@@ -24,6 +25,66 @@ namespace Horo::Editor {
             }
         };
     }  // namespace
+
+    /** @copydoc ComparePrefabExternal */
+    Result<std::shared_ptr<const PrefabExternalComparison>> ComparePrefabExternal(const PrefabExternalInspection &request,
+                                                                                  const CancellationToken &cancellation) {
+        using Return = Result<std::shared_ptr<const PrefabExternalComparison>>;
+        if (cancellation.IsCancellationRequested())
+            return Return::Failure(JobCancelled().ErrorValue());
+        const auto captured = Assets::CaptureAssetSource(request.root, request.path, Prefab::PrefabHardLimits::SourceDocumentBytes);
+        if (captured.HasError()) {
+            if (request.previous && request.previous->diskError &&
+                request.previous->diskError->code.Value() == captured.ErrorValue().code.Value())
+                return Return::Success(request.previous);
+            return Return::Success(
+                std::make_shared<const PrefabExternalComparison>(PrefabExternalComparison{.diskError = captured.ErrorValue()}));
+        }
+        if (captured.Value().identity == request.accepted)
+            return Return::Success({});
+        if (request.previous && request.previous->observed == captured.Value().identity)
+            return Return::Success(request.previous);
+        PrefabExternalComparison result{.observed = captured.Value().identity};
+        if (!result.observed.exists) {
+            result.diskError = MakeError(Assets::AssetSourceErrors::ReadFailed);
+            return Return::Success(std::make_shared<const PrefabExternalComparison>(std::move(result)));
+        }
+        const auto &draft = request.draft->Data();
+        const auto &bytes = captured.Value().bytes;
+        const auto disk = Prefab::PrefabDocument::Parse({reinterpret_cast<const char *>(bytes.data()), bytes.size()}, request.limits,
+                                                        {.expectedProjectVersion = draft.projectVersion});
+        if (disk.HasError())
+            result.diskError = disk.ErrorValue();
+        else if (disk.Value().Data().assetId != draft.assetId)
+            result.diskError = MakeError(Prefab::PrefabErrors::IdentityInvalid);
+        if (result.diskError)
+            return Return::Success(std::make_shared<const PrefabExternalComparison>(std::move(result)));
+        const auto &external = disk.Value().Data();
+        result.compositionChanged = draft.composition != external.composition || draft.referencedAssets != external.referencedAssets;
+        std::map<Prefab::LocalObjectId, std::pair<const Prefab::PrefabObjectNode *, const Prefab::PrefabObjectNode *>> objects;
+        for (const auto &object : draft.objects)
+            objects[object.localId].first = &object;
+        for (const auto &object : external.objects)
+            objects[object.localId].second = &object;
+        for (const auto &[id, sides] : objects) {
+            if (cancellation.IsCancellationRequested())
+                return Return::Failure(JobCancelled().ErrorValue());
+            const auto &[local, stored] = sides;
+            if (local && stored && *local == *stored)
+                continue;
+            const auto change =
+                local ? (stored ? PrefabExternalChange::Modified : PrefabExternalChange::DraftOnly) : PrefabExternalChange::DiskOnly;
+            PrefabExternalMemberDifference difference{id, change, local ? local->name : std::string{},
+                                                      stored ? stored->name : std::string{}};
+            if (local && stored) {
+                difference.parentChanged = local->parentLocalId != stored->parentLocalId;
+                difference.transformChanged = local->localTransform != stored->localTransform;
+                difference.payloadChanged = local->components != stored->components || local->behaviors != stored->behaviors;
+            }
+            result.members.push_back(std::move(difference));
+        }
+        return Return::Success(std::make_shared<const PrefabExternalComparison>(std::move(result)));
+    }
 
     /** @copydoc PrefabDocumentSession::Save */
     Result<Assets::AssetSourcePublication> PrefabDocumentSession::Save(const PrefabDocumentFence &fence,
@@ -211,6 +272,8 @@ namespace Horo::Editor {
         acceptedRecovery_.swap(acceptedRecord);
         state_ = record.state;
         conflict_ = false;
+        externalComparison_.reset();
+        keepExternalDraft_ = false;
         history_.Clear();
         ++revision_;
         recoveryRevision_ = revision_;

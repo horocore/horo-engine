@@ -14,6 +14,10 @@ namespace Horo::Editor {
     Result<void> PrefabDocumentSession::UpdateLimitProfile(const Prefab::PrefabLimitProfile &limits) {
         if (auto admitted = Admit({owner_, identity_.instance, revision_}); admitted.HasError())
             return admitted;
+        if (limits_.Policy() != limits.Policy()) {
+            externalComparison_.reset();
+            keepExternalDraft_ = false;
+        }
         limits_ = limits;
         if (const auto checked = source_->ValidateLimits(limits_); checked.HasError())
             return Result<void>::Failure(checked.ErrorValue());
@@ -95,7 +99,9 @@ namespace Horo::Editor {
                 conflict_,
                 history_.UndoCount() != 0,
                 history_.RedoCount() != 0,
-                StageView().has_value()};
+                StageView().has_value(),
+                externalComparison_,
+                keepExternalDraft_};
     }
 
     /** @copydoc PrefabDocumentSession::Admit */
@@ -299,6 +305,39 @@ namespace Horo::Editor {
         ++revision_;
     }
 
+    /** @copydoc PrefabDocumentSession::CaptureExternalInspection */
+    PrefabExternalInspection PrefabDocumentSession::CaptureExternalInspection() const {
+        return {root_, path_, {owner_, identity_.instance, revision_}, accepted_, source_, limits_, externalComparison_};
+    }
+
+    /** @copydoc PrefabDocumentSession::ObserveExternal */
+    bool PrefabDocumentSession::ObserveExternal(const PrefabExternalInspection &request,
+                                                std::shared_ptr<const PrefabExternalComparison> comparison) {
+        if (Admit(request.fence).HasError() || request.accepted != accepted_ || request.draft != source_ ||
+            request.limits.Policy() != limits_.Policy())
+            return false;
+        if (externalComparison_ && externalComparison_ == comparison)
+            return false;
+        if (!conflict_ && !comparison)
+            return false;
+        conflict_ = comparison != nullptr;
+        externalComparison_ = std::move(comparison);
+        keepExternalDraft_ = false;
+        if (conflict_)
+            ReleaseStage();
+        return true;
+    }
+
+    /** @copydoc PrefabDocumentSession::KeepExternalDraft */
+    Result<void> PrefabDocumentSession::KeepExternalDraft(const PrefabDocumentFence &fence, const PrefabExternalComparison &expected) {
+        if (auto admitted = Admit(fence); admitted.HasError())
+            return admitted;
+        if (!conflict_ || externalComparison_.get() != std::addressof(expected))
+            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+        keepExternalDraft_ = true;
+        return Result<void>::Success();
+    }
+
     /** @copydoc PrefabDocumentSession::InspectExternal */
     Result<void> PrefabDocumentSession::InspectExternal() {
         if (auto admitted = Admit({owner_, identity_.instance, revision_}); admitted.HasError())
@@ -306,9 +345,15 @@ namespace Horo::Editor {
         auto capture = Assets::CaptureAssetSource(root_, path_, Prefab::PrefabHardLimits::SourceDocumentBytes);
         if (capture.HasError()) {
             conflict_ = true;
+            externalComparison_.reset();
+            keepExternalDraft_ = false;
             return Result<void>::Failure(capture.ErrorValue());
         }
         conflict_ = capture.Value().identity != accepted_;
+        if (externalComparison_ && externalComparison_->observed != capture.Value().identity) {
+            externalComparison_.reset();
+            keepExternalDraft_ = false;
+        }
         return Result<void>::Success();
     }
 
@@ -331,6 +376,8 @@ namespace Horo::Editor {
         saved_ = digest.Value();
         accepted_ = capture.identity;
         conflict_ = false;
+        externalComparison_.reset();
+        keepExternalDraft_ = false;
         history_.Clear();
         ++revision_;
         recoveryRevision_ = 0;

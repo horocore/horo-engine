@@ -244,6 +244,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::UpdateExternalSceneWatch */
     void EditorWorkspaceController::UpdateExternalSceneWatch(const float elapsedSeconds) {
+        UpdatePrefabExternalWatch(elapsedSeconds);
         if (m_sceneFileWatch == nullptr || !m_defaultScenePath.has_value() || !m_sceneFingerprint.has_value())
             return;
 

@@ -597,6 +597,15 @@ namespace Horo::Editor {
             std::shared_ptr<const PrefabRecoveryCheckpoint> checkpoint;
         };
 
+        /** @brief Worker writes its detached result once, before the job publishes terminal state. The UI reads after that state. */
+        struct PrefabExternalWatchWork final {
+            JobHandle job;
+            std::shared_ptr<const PrefabExternalInspection> request;
+            std::shared_ptr<std::shared_ptr<const PrefabExternalComparison>> comparison;
+        };
+
+        std::optional<PrefabExternalWatchWork> m_prefabExternalWatch;
+        float m_prefabExternalWatchSeconds{};
         std::optional<PrefabRecoveryWork> m_prefabRecoveryWork;
         std::vector<DocumentInstanceId> m_prefabRecoveryQueue;
         std::uint64_t m_prefabStageAttemptRevision{};
@@ -915,6 +924,10 @@ namespace Horo::Editor {
         void PrepareAndPublishPrefabHierarchy(const SceneDocumentSnapshot &document, std::uint64_t publication);
         /** @brief Admit and publish the canonical creation result before presentation callbacks. */
         [[nodiscard]] PrefabCreationOutcome ExecutePrefabCreation(const PrefabCreationIntent &intent);
+        /** @brief Admits another prefab pair only when earlier failed cleanup evidence no longer needs recovery. */
+        [[nodiscard]] bool CanPublishPrefabPair() const;
+        /** @brief Forks the exact retained draft through the existing prefab pair authority. */
+        [[nodiscard]] Result<void> SavePrefabAs(const PrefabDocumentSnapshot &draft, const std::filesystem::path &destination);
         /** @brief Executes a confirmed create-from-selection through canonical document/source owners. */
         [[nodiscard]] bool ProcessCreatePrefabCommand(const EditorWorkspaceViewCommandData &command);
         /** @brief Routes exact source/member gestures after owner/session/revision and protected-boundary checks. */
@@ -1139,6 +1152,12 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> DrainPrefabRecovery(std::optional<DocumentInstanceId> instance = {});
         /** @brief Hands the exact detached checkpoint to the existing shared recovery I/O lane. */
         void SchedulePrefabRecovery(PrefabDocumentSession &document);
+        /** @brief Observes the active dirty Prefab source using a bounded background inspection and owner-lane publication. */
+        void UpdatePrefabExternalWatch(float seconds);
+        /** @brief Projects one completed inspection without waiting for background work. */
+        bool ObservePrefabExternalWatch();
+        /** @brief Cancels/joins detached disk inspection before workspace retirement. */
+        void StopPrefabExternalWatch();
         /** @brief Advances bounded preparation and extracts only a newly ready generation. */
         void ExtractPrefabStage(PrefabDocumentSession &document);
         /** @brief Executes an admitted durable or history action on its sole source owner. */

@@ -44,6 +44,47 @@ namespace Horo::Editor {
         auto operator<=>(const PrefabApplyHistoryGroup &) const noexcept = default;
     };
 
+    /** @brief Stable source-local member difference between a retained draft and one exact disk revision. */
+    enum class PrefabExternalChange : std::uint8_t {
+        DraftOnly,
+        DiskOnly,
+        Modified
+    };
+
+    /** @brief One local member's compared labels and modified field categories. */
+    struct PrefabExternalMemberDifference final {
+        Prefab::LocalObjectId object;
+        PrefabExternalChange change;
+        std::string draftName;
+        std::string diskName;
+        bool parentChanged{};
+        bool transformChanged{};
+        bool payloadChanged{};
+    };
+
+    /** @brief Immutable comparison captured without publishing either side as authoritative. */
+    struct PrefabExternalComparison final {
+        Assets::AssetSourceIdentity observed;
+        std::vector<PrefabExternalMemberDifference> members;
+        std::optional<Error> diskError; /**< Deleted, malformed or unreadable external source. */
+        bool compositionChanged{};
+    };
+
+    /** @brief One immutable inspection request, independent of the live workspace and document lifetime. */
+    struct PrefabExternalInspection final {
+        std::filesystem::path root;
+        std::filesystem::path path;
+        PrefabDocumentFence fence;
+        Assets::AssetSourceIdentity accepted;
+        std::shared_ptr<const Prefab::PrefabDocument> draft;
+        Prefab::PrefabLimitProfile limits;
+        std::shared_ptr<const PrefabExternalComparison> previous;
+    };
+
+    /** @brief Reads and compares a bounded exact disk source on the existing project I/O lane. */
+    [[nodiscard]] Result<std::shared_ptr<const PrefabExternalComparison>> ComparePrefabExternal(const PrefabExternalInspection &request,
+                                                                                                const CancellationToken &cancellation = {});
+
     /** @brief Immutable source/session projection; dirty/saved/recovery and runtime state are independent. */
     struct PrefabDocumentSnapshot final {
         DocumentIdentity identity;
@@ -59,6 +100,8 @@ namespace Horo::Editor {
         bool canUndo{};
         bool canRedo{};
         bool stageActive{};
+        std::shared_ptr<const PrefabExternalComparison> externalComparison;
+        bool keepExternalDraft{};
     };
 
     /** @brief Detached immutable source and exact recovery metadata owned until its I/O attempt settles. */
@@ -149,6 +192,14 @@ namespace Horo::Editor {
                                                                   const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
         /** @brief Observes external bytes without changing source/history. @return Capture result. */
         [[nodiscard]] Result<void> InspectExternal();
+        /** @brief Captures read-only observation inputs from the current owner without any filesystem work. */
+        [[nodiscard]] PrefabExternalInspection CaptureExternalInspection() const;
+        /** @brief Adopts current external evidence without changing draft, saved state or history. */
+        [[nodiscard]] bool ObserveExternal(const PrefabExternalInspection &request,
+                                           std::shared_ptr<const PrefabExternalComparison> comparison);
+        /** @brief Acknowledges keeping the draft for the exact compared conflict without accepting a new save base. */
+        [[nodiscard]] Result<void> KeepExternalDraft(const PrefabDocumentFence &fence, const PrefabExternalComparison &expected);
+
         /** @brief Replaces accepted source only after explicit dirty-state decision and complete validation.
          * @param fence Exact admission. @param discardDirty Explicit discard decision. @return Success or retained session. */
         [[nodiscard]] Result<void> Reload(const PrefabDocumentFence &fence, bool discardDirty);
@@ -293,6 +344,8 @@ namespace Horo::Editor {
         std::uint64_t recoveryRevision_{};
         bool presented_{true};
         bool conflict_{};
+        std::shared_ptr<const PrefabExternalComparison> externalComparison_;
+        bool keepExternalDraft_{};
         bool closed_{};
         bool busy_{};
     };
