@@ -5,15 +5,28 @@
  */
 #include "Horo/Assets/AssetCookOutput.h"
 #include "Horo/Math/WorldCoordinate64.h"
+#include "Horo/Runtime/Scene/SceneIdentity.h"
 #include "Horo/WorldStreaming/OriginFrame.h"
+#include "Horo/WorldStreaming/WorldStreamingIdentity.h"
 
 #include <memory>
+#include <optional>
 
 namespace Horo::Runtime {
     class RuntimeSceneService;
 }
 
 namespace Horo::Application::Internal {
+    struct HeadlessSceneLoadBoundary;
+
+    /** @brief Exact authored occurrence and independently pinned cooked CoreEcs cell identity. */
+    struct HeadlessWorldInitialCell final {
+        WorldStreaming::StreamingCellId cell;
+        Runtime::SceneInstanceId occurrence;
+        Runtime::SceneDefinitionId definition;
+        Runtime::SceneDefinitionRevision revision;
+    };
+
     /** @brief Exact project launch selection for one separate generated World cook generation. */
     struct HeadlessWorldSelection final {
         std::filesystem::path targetRoot;
@@ -22,6 +35,7 @@ namespace Horo::Application::Internal {
         Assets::AssetId index;
         Assets::AssetId dependencies;
         Math::WorldCoordinate64 origin; /**< Explicit authoritative fixed-point startup origin in Horo axes. */
+        std::optional<HeadlessWorldInitialCell> initialCell;
     };
 
     /** @brief Private candidate and active World owners retained by the actual standalone Scene record. */
@@ -40,6 +54,14 @@ namespace Horo::Application::Internal {
                                                                                  std::uint64_t generation,
                                                                                  Runtime::RuntimeSceneService &scene,
                                                                                  const CancellationToken &cancellation = {});
+
+        /** @brief Activate one independent, pinned CoreEcs cell through the private live parent Scene.
+         * @param selected Exact authored occurrence and cooked cell identity from host policy.
+         * @param boundary Existing cold startup/travel absolute deadline and parent cancellation.
+         * @return Success only after the Scene attachment receipt and Active residency agree.
+         * @pre The parent is privately prepared. On a post-queue failure, it is shut down before retiring scheduler work.
+         */
+        [[nodiscard]] Result<void> ActivateInitialCell(const HeadlessWorldInitialCell &selected, const HeadlessSceneLoadBoundary &boundary);
 
         /** @brief Observe the exact mounted World frame; the caller keeps this complete mount alive. */
         [[nodiscard]] const WorldStreaming::OriginFrameOwner &Origin() const noexcept;

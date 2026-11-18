@@ -322,6 +322,33 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Captures the single independently pinned startup occurrence and exact typed source identity. */
+        Result<HeadlessWorldInitialCell> ReadWorldInitialCell(const std::span<char *> arguments, std::size_t &index) {
+            using Output = Result<HeadlessWorldInitialCell>;
+            constexpr std::size_t ArgumentCount = 9;
+            if (arguments.size() - index < ArgumentCount)
+                return Output::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                                 "Use --world-start-cell <x> <y> <z> <lod> <layer> <occurrence> <definition> <revision>."));
+            const auto parse = [](const std::string_view text, auto &value) {
+                const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+                return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size();
+            };
+            HeadlessWorldInitialCell cell;
+            std::uint16_t layer{};
+            if (!parse(arguments[index + 1], cell.cell.x) || !parse(arguments[index + 2], cell.cell.y) ||
+                !parse(arguments[index + 3], cell.cell.z) || !parse(arguments[index + 4], cell.cell.lod) ||
+                !parse(arguments[index + 5], layer) || !parse(arguments[index + 6], cell.occurrence.value) ||
+                !parse(arguments[index + 7], cell.definition.value) || !parse(arguments[index + 8], cell.revision.value) ||
+                !cell.occurrence.IsValid() || !cell.definition.IsValid() || cell.revision.value == 0)
+                return Output::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, "Invalid World startup cell or Scene identity."));
+            const auto typedLayer = WorldStreaming::StreamingLayerId::Create(layer);
+            if (typedLayer.HasError())
+                return Output::Failure(typedLayer.ErrorValue());
+            cell.cell.layer = typedLayer.Value();
+            index += ArgumentCount;
+            return Output::Success(cell);
+        }
+
         /** @brief Reads the one project-relative policy path without resolving an executable or source file. */
         Result<void> ReadPerceptionPolicy(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch) {
             if (!launch.sceneInput.perceptionPolicyPath.empty() || arguments.size() - index < 2)
@@ -379,6 +406,7 @@ namespace Horo::Application::Internal {
         Result<void> ParseSceneOptions(const std::span<char *> arguments, ProductLaunch &launch) {
             SeenSceneOptions seen{};
             std::optional<bool> prefabGrant;
+            std::optional<HeadlessWorldInitialCell> initialCell;
             for (std::size_t index = 0; index < arguments.size();) {
                 const std::string_view key{arguments[index]};
                 if (key == "--transport-qualification") {
@@ -401,6 +429,16 @@ namespace Horo::Application::Internal {
                 if (key == "--game-navigation-path") {
                     if (auto policy = ReadNavigationPathPolicy(arguments, index, launch); policy.HasError())
                         return policy;
+                    continue;
+                }
+                if (key == "--world-start-cell") {
+                    if (initialCell)
+                        return Result<void>::Failure(
+                            MakeError(Net::NetworkErrors::NetworkModeInvalid, "The startup World cell may be selected once."));
+                    auto selected = ReadWorldInitialCell(arguments, index);
+                    if (selected.HasError())
+                        return Result<void>::Failure(selected.ErrorValue());
+                    initialCell = selected.Value();
                     continue;
                 }
                 if (key == "--world-mount") {
@@ -437,6 +475,12 @@ namespace Horo::Application::Internal {
                                             launch.purpose != Net::NetworkWorldCompositionPurpose::Gameplay))
                 return Result<void>::Failure(
                     MakeError(Net::NetworkErrors::NetworkModeInvalid, "Committed World mounting requires a standalone project Scene."));
+            if (initialCell) {
+                if (!launch.sceneInput.world)
+                    return Result<void>::Failure(
+                        MakeError(Net::NetworkErrors::NetworkModeInvalid, "The startup World cell requires a committed World mount."));
+                launch.sceneInput.world->initialCell = initialCell;
+            }
             if (auto ai = ValidateCookedDecisions(launch); ai.HasError())
                 return ai;
             return ValidateNavigationPathPolicy(launch);

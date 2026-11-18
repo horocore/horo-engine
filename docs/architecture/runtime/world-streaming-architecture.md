@@ -2219,5 +2219,16 @@ the three explicitly selected signed millimeter coordinates. Those coordinates
 grant no camera, entity or geometry authority to the ordinary Scene. A read-only
 origin observation requires a live Scene service and expires when the mount
 retires. This route uses the committed cook store during cold startup and travel.
-Archive installation, runtime cell scheduling and activation, gameplay focal
-positions and XR view projection require separate host composition.
+
+A standalone launch can also pin one startup cell with
+`--world-start-cell <x> <y> <z> <lod> <layer> <occurrence> <definition> <revision>`.
+The planner must publish the exact pin for that mounted cell. Its load verifies and
+decodes the sole CoreEcs provider using the independently pinned Scene definition
+and revision. Activation publishes the Streamed occurrence through the private
+parent Scene's structural commit and advances residency only after the receipt.
+Retirement observes actual parent shutdown before acknowledging the cell. Missing
+content, external asset dependencies, hard co-load requirements, compressed cells,
+and unsupported providers reject startup before mode publication.
+
+Archive installation, ongoing gameplay-driven scheduling, multi-cell activation,
+gameplay focal positions and XR view projection require separate host composition.

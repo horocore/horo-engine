@@ -1,5 +1,6 @@
 #include "../runtime/world_streaming/WorldArtifactCodecTestSupport.h"
 #include "AllocationProbe.h"
+#include "HeadlessSceneLoadBoundary.h"
 #include "HeadlessWorldMount.h"
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Foundation/JobSystem.h"
@@ -8,6 +9,8 @@
 #include "Horo/WorldStreaming/WorldArtifactErrors.h"
 #include "assets/AssetCookOutputFixture.h"
 
+#include <catch2/generators/catch_generators.hpp>
+#include <chrono>
 #include <fstream>
 
 namespace Horo::WorldCook {
@@ -54,9 +57,9 @@ namespace Horo::WorldCook {
             std::vector<std::vector<std::uint8_t>> baseArtifacts;
             std::uint64_t attempt{};
 
-            explicit Fixture(const bool nonspatial = false)
+            explicit Fixture(const bool nonspatial = false, const bool hardDependency = true)
                 : assignments(Assignments(world.manifest.Descriptor(), nonspatial)), placements(Placements(assignments)),
-                  dependencies(Dependencies(assignments)), packages(Packages(nonspatial)) {
+                  dependencies(Dependencies(assignments, hardDependency)), packages(Packages(nonspatial)) {
                 files.root = directory.path;
                 if (nonspatial) {
                     baseArtifacts.push_back(T::MakePayload(Asset(8), 16));
@@ -89,10 +92,13 @@ namespace Horo::WorldCook {
                 return std::move(result).Value();
             }
 
-            static W::WorldDependencyPlan Dependencies(const W::WorldSpatialAssignment &assignments) {
+            static W::WorldDependencyPlan Dependencies(const W::WorldSpatialAssignment &assignments, const bool hardDependency = true) {
                 const std::array edges{W::WorldDependencyCandidate{Endpoint(1), Endpoint(2), W::WorldDependencyKind::Hard},
                                        W::WorldDependencyCandidate{Endpoint(2), Endpoint(9), W::WorldDependencyKind::Soft}};
-                auto result = W::WorldDependencyPlan::Create(assignments, edges, {8, 8, 8, 8});
+                auto selected = std::span<const W::WorldDependencyCandidate>{edges};
+                if (!hardDependency)
+                    selected = selected.last(1);
+                auto result = W::WorldDependencyPlan::Create(assignments, selected, {8, 8, 8, 8});
                 REQUIRE(result.HasValue());
                 return std::move(result).Value();
             }
@@ -236,6 +242,70 @@ namespace Horo::WorldCook {
         mount.reset();
         CHECK(lease.Get().HasError());
         CHECK(replacementLease.Get().Value().Binding().identity == IdentityFrom<W::OriginFrameId>(6));
+    }
+
+    TEST_CASE("Standalone startup attaches only the verified pinned Scene occurrence and retires it with the parent",
+              "[world_cook][native][mounted_world][initial_cell]") {
+        using namespace Application::Internal;
+        const bool hasHardDependency = GENERATE(false, true);
+        Fixture fixture{false, hasHardDependency};
+        const auto published = fixture.Publish();
+        REQUIRE(published.HasValue());
+        REQUIRE(published.Value().publication);
+        const auto release = fixture.Release();
+        const auto selected = fixture.inputs.front().expected;
+        HeadlessWorldInitialCell request{selected.cell, {900}, selected.scene, selected.revision};
+        const HeadlessWorldSelection selection{release.targetRoot,
+                                               release.target,
+                                               published.Value().publication->manifestDigest,
+                                               release.indexArtifact,
+                                               release.dependencyArtifact,
+                                               {},
+                                               request};
+
+        S::RuntimeSceneService parent{S::SceneRuntimeId{101}};
+        auto definition = std::move(S::SceneDefinitionBuilder{{99}, {1}}).Build();
+        REQUIRE(definition.HasValue());
+        HeadlessSceneLoadBoundary boundary{{}, std::chrono::steady_clock::now() + std::chrono::seconds(5)};
+        REQUIRE(PrepareHeadlessSceneAtLoadBoundary(parent, std::move(definition).Value(), boundary).HasValue());
+        const NativeDurableFileSystem files;
+        auto admitted = HeadlessWorldMount::Prepare(files, selection, 5, parent);
+        REQUIRE(admitted.HasValue());
+        auto mount = std::move(admitted).Value();
+        const auto lease = mount->Origin().Lease().Value();
+        const auto address = S::SceneInstanceAddress{{101}, request.occurrence, request.definition, S::SceneInstanceMode::Streamed};
+        const auto epoch = IdentityFrom<W::PartitionEpoch>(5);
+        REQUIRE_FALSE(S::FindStreamedSceneInstance(*parent.ActiveScene(), address, selected, epoch));
+
+        if (hasHardDependency) {
+            W::TestSupport::RequireError(mount->ActivateInitialCell(request, boundary), W::WorldArtifactErrors::Unsupported);
+            CHECK_FALSE(S::FindStreamedSceneInstance(*parent.ActiveScene(), address, selected, epoch));
+            return;
+        }
+        SECTION("Startup cancellation leaves no structural publication") {
+            CancellationSource cancellation;
+            cancellation.RequestCancellation();
+            boundary.cancellation = cancellation.Token();
+            W::TestSupport::RequireError(mount->ActivateInitialCell(request, boundary), HeadlessSceneLoadErrors::Cancelled);
+            CHECK_FALSE(S::FindStreamedSceneInstance(*parent.ActiveScene(), address, selected, epoch));
+        }
+        SECTION("Foreign revision cannot activate a committed baseline") {
+            ++request.revision.value;
+            CHECK(mount->ActivateInitialCell(request, boundary).HasError());
+            CHECK_FALSE(S::FindStreamedSceneInstance(*parent.ActiveScene(), address, selected, epoch));
+        }
+        SECTION("Success exposes the exact authored occurrence until actual parent shutdown") {
+            REQUIRE(mount->ActivateInitialCell(request, boundary).HasValue());
+            const auto live = parent.ActiveScene();
+            REQUIRE(live);
+            REQUIRE(S::FindStreamedSceneInstance(*live, address, selected, epoch));
+            CHECK_FALSE(S::FindStreamedSceneInstance(*live, address, selected, IdentityFrom<W::PartitionEpoch>(6)));
+            CHECK(mount->ActivateInitialCell(request, boundary).HasError());
+            mount.reset();
+            CHECK_FALSE(parent.ActiveScene());
+            CHECK_FALSE(live->IsCurrent());
+            CHECK(lease.Get().HasError());
+        }
     }
 
     TEST_CASE("Cook test directory collisions preserve existing roots and bound exclusive admission", "[world_cook][native]") {

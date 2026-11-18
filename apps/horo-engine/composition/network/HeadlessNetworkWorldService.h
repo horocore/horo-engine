@@ -310,6 +310,11 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return Result<void>::Failure(world.ErrorValue());
             if (std::chrono::steady_clock::now() >= input.load.deadline)
                 return Result<void>::Failure(MakeError(HeadlessSceneLoadErrors::Deadline));
+            if (input.mountedWorld->initialCell) {
+                const auto activated = world.Value()->ActivateInitialCell(*input.mountedWorld->initialCell, input.load);
+                if (activated.HasError())
+                    return activated;
+            }
             record_->mountedWorld = std::move(world).Value();
             return Result<void>::Success();
         }
