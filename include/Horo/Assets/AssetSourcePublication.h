@@ -3,6 +3,7 @@
  * @brief Bounded canonical source reads and exclusive tracked durable
  * publication.
  */
+#include "Horo/Assets/AssetId.h"
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Foundation/Sha256.h"
@@ -90,6 +91,47 @@ namespace Horo::Assets {
                                                                     const AssetSourceIdentity &expected, std::span<const std::byte> bytes,
                                                                     const ExclusiveFileLock &lease, DurableFileSystem &files,
                                                                     CancellationToken cancellation = {});
+
+    /** @brief Allowed filesystem placement for the private attempt directory. */
+    enum class AssetSourceAttemptPlacement : std::uint8_t {
+        DestinationLocal, /**< Same filesystem as the canonical destination's parent. */
+        ProjectLocal,     /**< Project-local authoring storage for destinations already on this filesystem. */
+    };
+
+    /** @brief Durable caller evidence identifying one private publication candidate.
+     * @details The host supplies a fresh UUID per attempt. The full payload identity also binds retirement authority.
+     */
+    struct AssetSourcePublicationAttempt final {
+        AssetId id;
+        AssetSourceIdentity payload;
+        AssetSourceAttemptPlacement placement{AssetSourceAttemptPlacement::DestinationLocal};
+    };
+
+    /** @brief Publishes through a fresh private attempt directory on the canonical destination's filesystem.
+     * @param root Canonical project root. @param path Canonical destination.
+     * @param expected Exact current canonical identity. @param bytes Complete replacement.
+     * @param attempt Fresh host UUID and exact replacement identity. @param lease Exact live destination lease.
+     * @param files Durable owner. @param cancellation Cooperative observer.
+     * @return Tracked canonical publication receipt or a typed failure before canonical replacement.
+     * @details The attempt is sealed before creating its payload. Ordinary scope exit retires owned staging.
+     * A new attempt never reuses or overwrites an old stage. The caller may separately retire a known interrupted attempt.
+     */
+    [[nodiscard]] Result<AssetSourcePublication> PublishAssetSourceAttempt(
+        const std::filesystem::path &root, const std::filesystem::path &path, const AssetSourceIdentity &expected,
+        std::span<const std::byte> bytes, const AssetSourcePublicationAttempt &attempt, const ExclusiveFileLock &lease,
+        DurableFileSystem &files, CancellationToken cancellation = {});
+
+    /** @brief Retires an exact known attempt, preserving unknown namespace occupants and partial or changed payloads.
+     * @param root Canonical project root. @param path Canonical destination.
+     * @param attempt Exact recorded UUID and planned payload identity. @param lease Exact live destination lease.
+     * @param files Durable owner.
+     * @return Success for an absent or safely retired attempt, or a typed failure preserving foreign evidence.
+     * @details Validates the immutable seal and a bounded single-link no-follow inventory before removal.
+     * Never mutates the canonical source. One failed retirement does not authorize deletion of another attempt.
+     */
+    [[nodiscard]] Result<void> RetireAssetSourcePublicationAttempt(const std::filesystem::path &root, const std::filesystem::path &path,
+                                                                   const AssetSourcePublicationAttempt &attempt,
+                                                                   const ExclusiveFileLock &lease, DurableFileSystem &files);
 
     /** @brief Captures legacy reimport payloads with the existing import ceiling of
      * 1 GiB.

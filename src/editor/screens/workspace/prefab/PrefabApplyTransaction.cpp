@@ -1,6 +1,7 @@
 #include "editor/screens/workspace/prefab/PrefabApplyTransaction.h"
 
 #include "Horo/Editor/DocumentRecoveryService.h"
+#include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Paths.h"
 #include "Horo/Foundation/Utf8.h"
 #include "Horo/Prefab/PrefabErrors.h"
@@ -8,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <random>
 
 namespace Horo::Editor {
     namespace {
@@ -42,7 +44,8 @@ namespace Horo::Editor {
 
         constexpr std::size_t MaximumCapsuleBytes = 64U * 1024U * 1024U;
         constexpr std::string_view LegacyCapsuleMagic = "HoroPrefabApplyRecoveryV1";
-        constexpr std::string_view CapsuleMagic = "HoroPrefabApplyRecoveryV2";
+        constexpr std::string_view DispositionCapsuleMagic = "HoroPrefabApplyRecoveryV2";
+        constexpr std::string_view CapsuleMagic = "HoroPrefabApplyRecoveryV3";
 
         /** @brief Durable publication state, relative to the two identities in the operation. */
         enum class JournalDisposition : std::uint8_t {
@@ -55,10 +58,23 @@ namespace Horo::Editor {
         struct ApplyJournal final {
             std::vector<std::byte> bytes;
             Assets::AssetSourceIdentity identity;
+            Assets::AssetId attempt;
             JournalDisposition disposition{JournalDisposition::Prepared};
         };
 
         constexpr std::size_t MaximumRecoveryPathBytes = 4096;
+
+        /** @brief Generates a fresh opaque staging nonce at an explicit authoring boundary. */
+        Assets::AssetId NewPublicationAttempt() {
+            std::random_device random;
+            std::array<std::uint8_t, 16> bytes;
+            for (auto &value : bytes)
+                value = static_cast<std::uint8_t>(random());
+            // Canonical random UUID layout also guarantees a nonzero identifier.
+            bytes[6] = static_cast<std::uint8_t>((bytes[6] & 0x0fU) | 0x40U);
+            bytes[8] = static_cast<std::uint8_t>((bytes[8] & 0x3fU) | 0x80U);
+            return Assets::AssetId::FromBytes(bytes);
+        }
 
         /** @brief Stable private recovery namespace for one unresolved paired operation per project. */
         std::filesystem::path RecoveryPath(const std::filesystem::path &root) {
@@ -131,11 +147,13 @@ namespace Horo::Editor {
         };
 
         /** @brief Saves exact original bytes and identities of the already prepared canonical pair. */
-        Result<std::vector<std::byte>> EncodeRecovery(const std::filesystem::path &root, const std::array<ApplyFile, 2> &files) {
+        Result<std::vector<std::byte>> EncodeRecovery(const std::filesystem::path &root, const std::array<ApplyFile, 2> &files,
+                                                      const Assets::AssetId attempt) {
             using Return = Result<std::vector<std::byte>>;
             std::vector<std::byte> encoded;
             Append(encoded, CapsuleMagic);
             encoded.push_back(static_cast<std::byte>(JournalDisposition::Prepared));
+            Append(encoded, attempt.Bytes());
             for (std::size_t index = 0; index < files.size(); ++index) {
                 const auto &file = files[index];
                 const auto &original = file.original;
@@ -174,6 +192,7 @@ namespace Horo::Editor {
         /** @brief Validated journal header and targets, borrowing original bytes from the bounded capture. */
         struct RecoveryRecord final {
             JournalDisposition disposition{JournalDisposition::RollbackRequired};
+            std::optional<Assets::AssetId> attempt;
             std::array<RecoveryTarget, 2> targets;
         };
 
@@ -192,7 +211,8 @@ namespace Horo::Editor {
             RecoveryReader reader{content};
             const auto version = reader.Take(CapsuleMagic.size());
             RecoveryRecord record;
-            if (std::ranges::equal(version, std::as_bytes(std::span{CapsuleMagic}))) {
+            const bool hasAttempt = std::ranges::equal(version, std::as_bytes(std::span{CapsuleMagic}));
+            if (hasAttempt || std::ranges::equal(version, std::as_bytes(std::span{DispositionCapsuleMagic}))) {
                 const auto disposition = reader.Take(1);
                 if (disposition.empty())
                     return invalid();
@@ -202,6 +222,17 @@ namespace Horo::Editor {
                     return invalid();
             } else if (!std::ranges::equal(version, std::as_bytes(std::span{LegacyCapsuleMagic})))
                 return invalid();
+            if (hasAttempt) {
+                std::array<std::uint8_t, 16> id{};
+                const auto raw = reader.Take(id.size());
+                std::ranges::transform(raw, id.begin(), [](const auto value) {
+                    return std::to_integer<std::uint8_t>(value);
+                });
+                auto attempt = Assets::AssetId::FromBytes(id);
+                if (!reader.valid || !attempt.IsValid())
+                    return invalid();
+                record.attempt = attempt;
+            }
             auto &targets = record.targets;
             for (std::size_t index = 0; index < targets.size(); ++index) {
                 const auto nameSize = reader.Size();
@@ -238,8 +269,12 @@ namespace Horo::Editor {
                 const auto digest = ComputeSha256(std::span{bytes}.first(bytes.size() - Sha256Digest{}.bytes.size()));
                 std::ranges::copy(std::as_bytes(std::span{digest.bytes}), bytes.end() - digest.bytes.size());
             }
-            auto publication = PublishDocumentRecovery(root, RecoveryPath(root), bytes, journal.identity, storage,
-                                                       {.maximumRecordBytes = MaximumCapsuleBytes});
+            // The initial journal cannot own its own bootstrap stage. A fresh nonce keeps partial bootstrap bytes isolated.
+            const Assets::AssetSourcePublicationAttempt attempt{NewPublicationAttempt(),
+                                                                {true, bytes.size(), ComputeSha256(bytes)},
+                                                                Assets::AssetSourceAttemptPlacement::ProjectLocal};
+            auto publication = PublishDocumentRecoveryAttempt(root, RecoveryPath(root), bytes, journal.identity, attempt, storage,
+                                                              {.maximumRecordBytes = MaximumCapsuleBytes});
             if (publication.HasError())
                 return Result<void>::Failure(std::move(publication).ErrorValue());
             journal.identity = publication.Value().identity;
@@ -348,11 +383,34 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
+        /** @brief Leaves a mismatched or partial private attempt in its own directory without blocking a fresh write. */
+        void RetireAttempt(const std::filesystem::path &root, const std::filesystem::path &path,
+                           const Assets::AssetSourcePublicationAttempt &attempt, const ExclusiveFileLock &lock,
+                           DurableFileSystem &storage) noexcept {
+            try {
+                if (auto retired = Assets::RetireAssetSourcePublicationAttempt(root, path, attempt, lock, storage); retired.HasError())
+                    LOG_WARN("editor.prefab", "Private Prefab publication attempt retained: %s", retired.ErrorValue().message.c_str());
+            } catch (...) {
+                LOG_WARN("editor.prefab", "Private Prefab publication attempt retirement failed.");
+            }
+        }
+
+        /** @brief Publishes restoration through an independent attempt so a torn old stage cannot obstruct it. */
+        Result<Assets::AssetSourcePublication> PublishOriginal(const std::filesystem::path &root, const std::filesystem::path &path,
+                                                               const Assets::AssetSourceIdentity &expected,
+                                                               const Assets::AssetSourceIdentity &original,
+                                                               const std::span<const std::byte> bytes, const ExclusiveFileLock &lock,
+                                                               DurableFileSystem &storage) {
+            const Assets::AssetSourcePublicationAttempt attempt{NewPublicationAttempt(), original};
+            return Assets::PublishAssetSourceAttempt(root, path, expected, bytes, attempt, lock, storage);
+        }
+
         /** @brief Publishes the tracked replacement while retaining post-rename failure evidence. */
-        Result<void> PublishFile(ApplyFile &file, const std::filesystem::path &root, DurableFileSystem &storage,
-                                 const CancellationToken &cancellation) {
-            auto receipt = Assets::PublishAssetSource(root, file.path, file.expected, std::as_bytes(std::span{file.replacement}),
-                                                      *file.lock, storage, cancellation);
+        Result<void> PublishFile(ApplyFile &file, const std::filesystem::path &root, const Assets::AssetId attempt,
+                                 DurableFileSystem &storage, const CancellationToken &cancellation) {
+            const Assets::AssetSourcePublicationAttempt chosen{attempt, file.planned};
+            auto receipt = Assets::PublishAssetSourceAttempt(root, file.path, file.expected, std::as_bytes(std::span{file.replacement}),
+                                                             chosen, *file.lock, storage, cancellation);
             if (receipt.HasError())
                 return Result<void>::Failure(std::move(receipt).ErrorValue());
             file.installed = receipt.Value().identity;
@@ -386,7 +444,8 @@ namespace Horo::Editor {
                 auto failure = std::move(fallback[index - 1]);
                 std::optional<Assets::AssetSourceIdentity> restoredUnconfirmed;
                 try {
-                    auto restored = Assets::PublishAssetSource(root, file.path, *file.installed, file.original.bytes, *file.lock, storage);
+                    auto restored =
+                        PublishOriginal(root, file.path, *file.installed, file.original.identity, file.original.bytes, *file.lock, storage);
                     if (restored.HasValue() && restored.Value().status == Assets::AssetSourcePublicationStatus::Durable)
                         continue;
                     if (restored.HasError())
@@ -466,6 +525,10 @@ namespace Horo::Editor {
             if (target.observed != selected(target) && (keep || target.observed != target.planned))
                 return conflict();
         }
+        if (record.attempt) {
+            for (const auto &target : targets)
+                RetireAttempt(root, target.path, {*record.attempt, target.planned}, *target.lock, storage);
+        }
         // Compensate owned replacements in reverse order. Keeping a pair never writes either source.
         for (auto target = targets.rbegin(); target != targets.rend(); ++target) {
             if (target->observed == selected(*target)) {
@@ -473,7 +536,8 @@ namespace Horo::Editor {
                     return synced;
                 continue;
             }
-            auto restored = Assets::PublishAssetSource(root, target->path, target->planned, target->originalBytes, *target->lock, storage);
+            auto restored =
+                PublishOriginal(root, target->path, target->planned, target->original, target->originalBytes, *target->lock, storage);
             if (restored.HasError())
                 return Return::Failure(restored.ErrorValue());
             if (restored.Value().durabilityError)
@@ -660,7 +724,8 @@ namespace Horo::Editor {
                     if (auto captured = CaptureFiles(files, prefab.root_, storage, request.scene.cancellation); captured.HasError())
                         return captured;
                     outcome.sceneChecksum = FormatSha256(files[1].planned.digest);
-                    auto encoded = EncodeRecovery(prefab.root_, files);
+                    journal.attempt = NewPublicationAttempt();
+                    auto encoded = EncodeRecovery(prefab.root_, files, journal.attempt);
                     if (encoded.HasError())
                         return Result<void>::Failure(std::move(encoded).ErrorValue());
                     journal.bytes = std::move(encoded).Value();
@@ -669,7 +734,8 @@ namespace Horo::Editor {
                     if (auto anchored = SyncJournalAncestors(prefab.root_, storage); anchored.HasError())
                         return anchored;
                     for (auto &file : files)
-                        if (auto published = PublishFile(file, prefab.root_, storage, request.scene.cancellation); published.HasError())
+                        if (auto published = PublishFile(file, prefab.root_, journal.attempt, storage, request.scene.cancellation);
+                            published.HasError())
                             return published;
                     if (auto current = VerifyInstalledFiles(files, prefab.root_, request.scene.cancellation); current.HasError())
                         return current;

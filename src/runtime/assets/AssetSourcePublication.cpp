@@ -1,5 +1,6 @@
 #include "Horo/Assets/AssetSourcePublication.h"
 
+#include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/PathUtils.h"
 
 #include <algorithm>
@@ -276,10 +277,113 @@ namespace Horo::Assets {
             return Return::Success(std::move(prepared));
         }
 
+        constexpr std::string_view AttemptSealName = "ownership.seal";
+        constexpr std::string_view AttemptPayloadName = "payload.tmp";
+        constexpr std::size_t MaximumPrivateAttempts = 64;
+
+        /** @brief Destination-local single-owner stage with a stable, bounded seal. */
+        struct PrivateAttempt final {
+            std::filesystem::path directory;
+            std::filesystem::path anchor;
+            std::string seal;
+        };
+
+        /** @brief Derives stage authority from the exact destination lock key and never accepts a caller path. */
+        Result<PrivateAttempt> DescribePrivateAttempt(const std::filesystem::path &root, const std::filesystem::path &path,
+                                                      const AssetSourcePublicationAttempt &attempt) {
+            using Return = Result<PrivateAttempt>;
+            if (!attempt.id.IsValid() || !attempt.payload.exists || attempt.payload.bytes > MaximumBytes ||
+                (attempt.placement != AssetSourceAttemptPlacement::DestinationLocal &&
+                 attempt.placement != AssetSourceAttemptPlacement::ProjectLocal))
+                return Return::Failure(MakeError(AssetSourceErrors::Authority));
+            auto lock = AssetSourcePublicationLockPath(root, path);
+            if (lock.HasError())
+                return Return::Failure(lock.ErrorValue());
+            const auto key = lock.Value().stem().string();
+            const auto name = attempt.id.ToString();
+            const auto anchor = attempt.placement == AssetSourceAttemptPlacement::ProjectLocal ? root : path.parent_path();
+            const auto base = attempt.placement == AssetSourceAttemptPlacement::ProjectLocal ? root / ".horo/local/source-attempts"
+                                                                                             : anchor / ".horo-source-attempts";
+            const auto directory = base / key / name;
+            if (!SafePath(root, directory))
+                return Return::Failure(MakeError(AssetSourceErrors::InvalidPath));
+            return Return::Success({directory, anchor,
+                                    "horo.asset-source-attempt.v1\n" + key + "\n" + name + "\n" + std::to_string(attempt.payload.bytes) +
+                                        "\n" + FormatSha256(attempt.payload.digest)});
+        }
+
+        /** @brief Claims a fresh attempt and anchors its sealed directory before any candidate payload can be written. */
+        Result<std::filesystem::path> PreparePrivateAttempt(const std::filesystem::path &root, const std::filesystem::path &path,
+                                                            const AssetSourcePublicationAttempt &attempt, DurableFileSystem &files) {
+            using Return = Result<std::filesystem::path>;
+            const auto described = DescribePrivateAttempt(root, path, attempt);
+            if (described.HasError())
+                return Return::Failure(described.ErrorValue());
+            const auto &description = described.Value();
+            const auto bucket = description.directory.parent_path();
+            if (auto created = files.CreateDirectoryPath(bucket, DirectoryCreationMode::Parents); created.HasError())
+                return Return::Failure(created.ErrorValue());
+            const auto entries = files.ListDirectory(bucket, MaximumPrivateAttempts);
+            if (entries.HasError())
+                return Return::Failure(entries.ErrorValue());
+            if (entries.Value().size() >= MaximumPrivateAttempts)
+                return Return::Failure(MakeError(AssetSourceErrors::Limit));
+            const auto reserved = files.CreateDirectoryPath(description.directory, DirectoryCreationMode::Single);
+            if (reserved.HasError())
+                return Return::Failure(reserved.ErrorValue());
+            if (!reserved.Value())
+                return Return::Failure(MakeError(AssetSourceErrors::Conflict));
+            bool created{};
+            if (auto sealed =
+                    files.WritePrivateDurable(description.directory / AttemptSealName, std::as_bytes(std::span{description.seal}), created);
+                sealed.HasError())
+                return Return::Failure(sealed.ErrorValue());
+            for (auto parent = description.directory.parent_path();; parent = parent.parent_path()) {
+                if (auto synced = files.SyncDirectory(parent); synced.HasError())
+                    return Return::Failure(synced.ErrorValue());
+                if (parent == description.anchor)
+                    break;
+            }
+            return Return::Success(description.directory / AttemptPayloadName);
+        }
+
+        /** @brief Retires only the exact live no-follow object reviewed under the destination's writer lease. */
+        Result<void> RemovePrivateAttemptEntry(const std::filesystem::path &directory, const FileDirectoryEntry &entry,
+                                               DurableFileSystem &files) {
+            const auto path = directory / entry.name;
+            const auto observed = files.InspectEntry(path);
+            if (observed.HasError())
+                return Result<void>::Failure(observed.ErrorValue());
+            if (!observed.Value() || observed.Value()->kind != FileEntryKind::RegularFile || observed.Value()->hardLinks != 1 ||
+                observed.Value()->identity != entry.info.identity)
+                return Result<void>::Failure(MakeError(AssetSourceErrors::Conflict));
+            return files.RemoveDurable(path);
+        }
+
+        /** @brief Settles an exclusively claimed attempt after the private payload guard unwinds. */
+        struct AttemptCleanup final {
+            const std::filesystem::path &root;
+            const std::filesystem::path &path;
+            const AssetSourcePublicationAttempt *attempt;
+            const ExclusiveFileLock &lease;
+            DurableFileSystem &files;
+
+            ~AttemptCleanup() noexcept {
+                if (attempt == nullptr)
+                    return;
+                try {
+                    if (auto retired = RetireAssetSourcePublicationAttempt(root, path, *attempt, lease, files); retired.HasError())
+                        LOG_WARN("assets.source", "Private source publication attempt retained: %s", retired.ErrorValue().message.c_str());
+                } catch (...) {
+                    LOG_WARN("assets.source", "Private source publication attempt retirement failed.");
+                }
+            }
+        };
+
         Result<AssetSourcePublication> PublishChecked(const std::filesystem::path &root, const std::filesystem::path &path,
                                                       const AssetSourceIdentity &expected, std::span<const std::byte> bytes,
                                                       const ExclusiveFileLock &lease, DurableFileSystem &files, std::size_t maximumBytes,
-                                                      CancellationToken cancellation) {
+                                                      CancellationToken cancellation, const AssetSourcePublicationAttempt *attempt) {
             using Return = Result<AssetSourcePublication>;
             if (auto admitted = AdmitPublication(root, path, lease, bytes.size(), maximumBytes); admitted.HasError())
                 return Return::Failure(std::move(admitted).ErrorValue());
@@ -288,9 +392,12 @@ namespace Horo::Assets {
             auto identity = HashPublication(bytes, cancellation);
             if (identity.HasError())
                 return Return::Failure(std::move(identity).ErrorValue());
-            auto prepared = PrepareSourcePath(root, path);
+            if (attempt && identity.Value() != attempt->payload)
+                return Return::Failure(MakeError(AssetSourceErrors::Conflict));
+            auto prepared = attempt ? PreparePrivateAttempt(root, path, *attempt, files) : PrepareSourcePath(root, path);
             if (prepared.HasError())
                 return Return::Failure(std::move(prepared).ErrorValue());
+            const AttemptCleanup attemptCleanup{root, path, attempt, lease, files};
             PreparedSource cleanup(files, prepared.Value());
             if (auto written = files.WritePrivateDurable(prepared.Value(), bytes, cleanup.created); written.HasError())
                 return Return::Failure(std::move(written).ErrorValue());
@@ -306,9 +413,10 @@ namespace Horo::Assets {
         Result<AssetSourcePublication> PublishWithLimit(const std::filesystem::path &root, const std::filesystem::path &path,
                                                         const AssetSourceIdentity &expected, std::span<const std::byte> bytes,
                                                         const ExclusiveFileLock &lease, DurableFileSystem &files, std::size_t maximumBytes,
-                                                        CancellationToken cancellation) {
+                                                        CancellationToken cancellation,
+                                                        const AssetSourcePublicationAttempt *attempt = nullptr) {
             try {
-                return PublishChecked(root, path, expected, bytes, lease, files, maximumBytes, cancellation);
+                return PublishChecked(root, path, expected, bytes, lease, files, maximumBytes, cancellation, attempt);
             } catch (const std::bad_alloc &) {
                 return Result<AssetSourcePublication>::Failure(MakeError(AssetSourceErrors::Limit));
             } catch (...) {  // ADR-008: map precommit provider failures;
@@ -324,6 +432,70 @@ namespace Horo::Assets {
                                                       const ExclusiveFileLock &lease, DurableFileSystem &files,
                                                       CancellationToken cancellation) {
         return PublishWithLimit(root, path, expected, bytes, lease, files, MaximumBytes, cancellation);
+    }
+
+    /** @copydoc PublishAssetSourceAttempt */
+    Result<AssetSourcePublication> PublishAssetSourceAttempt(const std::filesystem::path &root, const std::filesystem::path &path,
+                                                             const AssetSourceIdentity &expected, const std::span<const std::byte> bytes,
+                                                             const AssetSourcePublicationAttempt &attempt, const ExclusiveFileLock &lease,
+                                                             DurableFileSystem &files, CancellationToken cancellation) {
+        return PublishWithLimit(root, path, expected, bytes, lease, files, MaximumBytes, cancellation, &attempt);
+    }
+
+    /** @copydoc RetireAssetSourcePublicationAttempt */
+    Result<void> RetireAssetSourcePublicationAttempt(const std::filesystem::path &root, const std::filesystem::path &path,
+                                                     const AssetSourcePublicationAttempt &attempt, const ExclusiveFileLock &lease,
+                                                     DurableFileSystem &files) {
+        using Return = Result<void>;
+        if (auto admitted = AdmitPublication(root, path, lease, 0, MaximumBytes); admitted.HasError())
+            return admitted;
+        const auto described = DescribePrivateAttempt(root, path, attempt);
+        if (described.HasError())
+            return Return::Failure(described.ErrorValue());
+        const auto &stage = described.Value();
+        const auto metadata = files.InspectEntry(stage.directory);
+        if (metadata.HasError())
+            return Return::Failure(metadata.ErrorValue());
+        if (!metadata.Value())
+            return Return::Success();
+        const auto conflict = [] {
+            return Return::Failure(MakeError(AssetSourceErrors::Conflict));
+        };
+        if (metadata.Value()->kind != FileEntryKind::Directory)
+            return conflict();
+        const auto entries = files.ListDirectory(stage.directory, 2);
+        if (entries.HasError())
+            return Return::Failure(entries.ErrorValue());
+        const FileDirectoryEntry *sealEntry{};
+        const FileDirectoryEntry *payloadEntry{};
+        for (const auto &entry : entries.Value()) {
+            if (entry.info.kind != FileEntryKind::RegularFile || entry.info.hardLinks != 1 || !entry.info.identity)
+                return conflict();
+            if (entry.name == AttemptPayloadName)
+                payloadEntry = &entry;
+            else if (entry.name == AttemptSealName)
+                sealEntry = &entry;
+            else
+                return conflict();
+        }
+        if (sealEntry == nullptr)
+            return conflict();
+        const auto seal = files.ReadFileBounded(stage.directory / AttemptSealName, stage.seal.size());
+        if (seal.HasError())
+            return Return::Failure(seal.ErrorValue());
+        if (!std::ranges::equal(std::as_bytes(std::span{seal.Value()}), std::as_bytes(std::span{stage.seal})))
+            return conflict();
+
+        if (payloadEntry != nullptr) {
+            const auto payload = stage.directory / AttemptPayloadName;
+            if (auto verified = CheckSourceIdentity(root, payload, attempt.payload, MaximumBytes, {}); verified.HasError())
+                return verified;
+            if (auto retired = RemovePrivateAttemptEntry(stage.directory, *payloadEntry, files); retired.HasError())
+                return retired;
+        }
+        if (auto retired = RemovePrivateAttemptEntry(stage.directory, *sealEntry, files); retired.HasError())
+            return retired;
+        return files.RemoveDurable(stage.directory);
     }
 
     /** @copydoc PublishReimportAssetSource */

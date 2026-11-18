@@ -266,47 +266,71 @@ namespace Horo::Editor {
         return files_.RemoveDurable(path.Value());
     }
 
+    namespace {
+        /** @brief Applies the common record quota and exact recovery-slot authority to both staging policies. */
+        Result<Assets::AssetSourcePublication> PublishRecovery(const std::filesystem::path &root, const std::filesystem::path &destination,
+                                                               std::span<const std::byte> bytes,
+                                                               const Assets::AssetSourceIdentity &expected, DurableFileSystem &files,
+                                                               DocumentRecoveryLimits limits, CancellationToken cancellation,
+                                                               const Assets::AssetSourcePublicationAttempt *attempt) {
+            const auto recoveryRoot = root / ".horo/local/recovery";
+            if (!Foundation::Paths::HasPathPrefix(recoveryRoot, destination) || recoveryRoot == destination ||
+                limits.maximumRecordBytes == 0 || limits.maximumRecordBytes > 64 * 1024 * 1024 || limits.maximumRecords == 0 ||
+                limits.maximumRecords > 64 || limits.maximumTotalBytes > 128 * 1024 * 1024 || bytes.size() > limits.maximumRecordBytes)
+                return Result<Assets::AssetSourcePublication>::Failure(MakeError(Assets::AssetSourceErrors::Limit));
+            auto lockPath = Assets::AssetSourcePublicationLockPath(root, destination);
+            if (lockPath.HasError())
+                return Result<Assets::AssetSourcePublication>::Failure(lockPath.ErrorValue());
+            std::error_code error;
+            std::size_t total{};
+            if (std::filesystem::exists(recoveryRoot, error)) {
+                std::size_t records{};
+                for (std::filesystem::directory_iterator iterator(recoveryRoot, error), end; !error && iterator != end;
+                     iterator.increment(error)) {
+                    if (const auto status = iterator->symlink_status(error); error || !std::filesystem::is_regular_file(status))
+                        return Result<Assets::AssetSourcePublication>::Failure(MakeError(Assets::AssetSourceErrors::InvalidPath));
+                    if (iterator->path() == destination)
+                        continue;
+                    const auto size = iterator->file_size(error);
+                    ++records;
+                    if (error || records >= limits.maximumRecords || size > limits.maximumTotalBytes - total)
+                        return Result<Assets::AssetSourcePublication>::Failure(MakeError(Assets::AssetSourceErrors::Limit));
+                    total += static_cast<std::size_t>(size);
+                }
+            }
+            if (error)
+                return Result<Assets::AssetSourcePublication>::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed));
+            if (bytes.size() > limits.maximumTotalBytes - total)
+                return Result<Assets::AssetSourcePublication>::Failure(MakeError(Assets::AssetSourceErrors::Limit));
+            std::filesystem::create_directories(recoveryRoot, error);
+            if (error)
+                return Result<Assets::AssetSourcePublication>::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed));
+            auto lock = files.TryAcquireExclusive(lockPath.Value(), "editor-document-recovery");
+            if (lock.HasError())
+                return Result<Assets::AssetSourcePublication>::Failure(lock.ErrorValue());
+            if (attempt == nullptr)
+                return Assets::PublishAssetSource(root, destination, expected, bytes, lock.Value(), files, cancellation);
+            return Assets::PublishAssetSourceAttempt(root, destination, expected, bytes, *attempt, lock.Value(), files, cancellation);
+        }
+    }  // namespace
+
     /** @copydoc PublishDocumentRecovery */
     Result<Assets::AssetSourcePublication> PublishDocumentRecovery(const std::filesystem::path &root,
                                                                    const std::filesystem::path &destination,
-                                                                   std::span<const std::byte> bytes,
+                                                                   const std::span<const std::byte> bytes,
                                                                    const Assets::AssetSourceIdentity &expected, DurableFileSystem &files,
-                                                                   DocumentRecoveryLimits limits, CancellationToken cancellation) {
-        const auto recoveryRoot = root / ".horo/local/recovery";
-        if (!Foundation::Paths::HasPathPrefix(recoveryRoot, destination) || recoveryRoot == destination || limits.maximumRecordBytes == 0 ||
-            limits.maximumRecordBytes > 64 * 1024 * 1024 || limits.maximumRecords == 0 || limits.maximumRecords > 64 ||
-            limits.maximumTotalBytes > 128 * 1024 * 1024 || bytes.size() > limits.maximumRecordBytes)
-            return Result<Assets::AssetSourcePublication>::Failure(MakeError(Assets::AssetSourceErrors::Limit));
-        auto lockPath = Assets::AssetSourcePublicationLockPath(root, destination);
-        if (lockPath.HasError())
-            return Result<Assets::AssetSourcePublication>::Failure(lockPath.ErrorValue());
-        std::error_code error;
-        std::size_t total{};
-        if (std::filesystem::exists(recoveryRoot, error)) {
-            std::size_t records{};
-            for (std::filesystem::directory_iterator iterator(recoveryRoot, error), end; !error && iterator != end;
-                 iterator.increment(error)) {
-                if (const auto status = iterator->symlink_status(error); error || !std::filesystem::is_regular_file(status))
-                    return Result<Assets::AssetSourcePublication>::Failure(MakeError(Assets::AssetSourceErrors::InvalidPath));
-                if (iterator->path() == destination)
-                    continue;
-                const auto size = iterator->file_size(error);
-                ++records;
-                if (error || records >= limits.maximumRecords || size > limits.maximumTotalBytes - total)
-                    return Result<Assets::AssetSourcePublication>::Failure(MakeError(Assets::AssetSourceErrors::Limit));
-                total += static_cast<std::size_t>(size);
-            }
-        }
-        if (error)
-            return Result<Assets::AssetSourcePublication>::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed));
-        if (bytes.size() > limits.maximumTotalBytes - total)
-            return Result<Assets::AssetSourcePublication>::Failure(MakeError(Assets::AssetSourceErrors::Limit));
-        std::filesystem::create_directories(recoveryRoot, error);
-        if (error)
-            return Result<Assets::AssetSourcePublication>::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed));
-        auto lock = files.TryAcquireExclusive(lockPath.Value(), "editor-document-recovery");
-        if (lock.HasError())
-            return Result<Assets::AssetSourcePublication>::Failure(lock.ErrorValue());
-        return Assets::PublishAssetSource(root, destination, expected, bytes, lock.Value(), files, cancellation);
+                                                                   const DocumentRecoveryLimits limits,
+                                                                   const CancellationToken cancellation) {
+        return PublishRecovery(root, destination, bytes, expected, files, limits, cancellation, nullptr);
+    }
+
+    /** @copydoc PublishDocumentRecoveryAttempt */
+    Result<Assets::AssetSourcePublication> PublishDocumentRecoveryAttempt(
+        const std::filesystem::path &root, const std::filesystem::path &destination, const std::span<const std::byte> bytes,
+        const Assets::AssetSourceIdentity &expected, const Assets::AssetSourcePublicationAttempt &attempt, DurableFileSystem &files,
+        const DocumentRecoveryLimits limits, const CancellationToken cancellation) {
+        if (attempt.placement != Assets::AssetSourceAttemptPlacement::ProjectLocal)
+            return Result<Assets::AssetSourcePublication>::Failure(MakeError(Assets::AssetSourceErrors::Authority));
+        return PublishRecovery(root, destination, bytes, expected, files, limits, cancellation, &attempt);
     }
 }  // namespace Horo::Editor

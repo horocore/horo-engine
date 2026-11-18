@@ -23,10 +23,14 @@ namespace Horo::Editor {
             std::size_t failJournalReplacement{};
             std::size_t failAfterJournalRename{};
             std::function<void(const std::filesystem::path &)> afterPublication;
+            std::function<void(const std::filesystem::path &, std::span<const std::byte>)> afterPrivateWrite;
 
             Result<void> WritePrivateDurable(const std::filesystem::path &path, const std::span<const std::byte> bytes, bool &created,
                                              const std::filesystem::perms mode) override {
-                return native.WritePrivateDurable(path, bytes, created, mode);
+                auto written = native.WritePrivateDurable(path, bytes, created, mode);
+                if (written.HasValue() && afterPrivateWrite && path.filename() == "payload.tmp")
+                    afterPrivateWrite(path, bytes);
+                return written;
             }
 
             Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
@@ -761,6 +765,69 @@ namespace Horo::Editor {
                 CHECK_FALSE(std::filesystem::exists(root / journalName));
             }
             CHECK_FALSE(std::filesystem::exists(live / journalName));
+        }
+
+        TEST_CASE("Prefab apply restarts through incomplete private staging without deleting the recorded bytes",
+                  "[editor][prefab][apply][native]") {
+            ApplyFixture live;
+            std::array<std::unique_ptr<ApplyFixture>, 4> restarts;
+            for (auto &restart : restarts)
+                restart = std::make_unique<ApplyFixture>();
+            std::array<std::filesystem::path, 4> preservedStages;
+            constexpr auto journalPath = ".horo/local/recovery/prefab-apply-pending.bin";
+            const auto &liveRoot = live.source.project.directory.path;
+            std::size_t cut{};
+            live.files.afterPrivateWrite = [&](const std::filesystem::path &stage, const std::span<const std::byte> bytes) {
+                REQUIRE(cut < restarts.size());
+                auto &restart = *restarts[cut];
+                const auto &root = restart.source.project.directory.path;
+                const auto candidate = root / stage.lexically_relative(liveRoot);
+                preservedStages[cut++] = candidate;
+                REQUIRE(bytes.size() > 1);
+                std::filesystem::create_directories(candidate.parent_path());
+                for (const auto &entry : std::filesystem::directory_iterator(stage.parent_path())) {
+                    if (entry.path() != stage)
+                        std::filesystem::copy_file(entry.path(), candidate.parent_path() / entry.path().filename());
+                }
+                REQUIRE(restart.files.native.WriteDurable(candidate, bytes.first(1)).HasValue());
+                std::filesystem::copy_file(live.source.project.source, restart.source.project.source,
+                                           std::filesystem::copy_options::overwrite_existing);
+                std::filesystem::copy_file(live.scenePath, restart.scenePath, std::filesystem::copy_options::overwrite_existing);
+                if (std::filesystem::exists(liveRoot / journalPath)) {
+                    std::filesystem::create_directories((root / journalPath).parent_path());
+                    std::filesystem::copy_file(liveRoot / journalPath, root / journalPath);
+                }
+            };
+            REQUIRE(live.Execute().committed);
+            REQUIRE(cut == restarts.size());
+
+            for (std::size_t index = 0; index < restarts.size(); ++index) {
+                CAPTURE(index);
+                auto &restart = *restarts[index];
+                const auto &root = restart.source.project.directory.path;
+                auto inspected = PrefabApplyTransaction::InspectPendingRecovery(root);
+                REQUIRE(inspected.HasValue());
+                if (index == 0) {
+                    // The interrupted journal bootstrap never occupied the canonical recovery slot.
+                    REQUIRE_FALSE(inspected.Value());
+                } else {
+                    REQUIRE(inspected.Value());
+                    const auto expected =
+                        index == 3 ? PrefabApplyRecoveryAction::KeepPublished : PrefabApplyRecoveryAction::RestoreOriginals;
+                    REQUIRE(inspected.Value()->action == expected);
+                    REQUIRE(PrefabApplyTransaction::ResolvePendingRecovery(root, *inspected.Value(), restart.mutations, restart.files)
+                                .HasValue());
+                    CHECK_FALSE(std::filesystem::exists(root / journalPath));
+                }
+                if (index != 3) {
+                    CHECK(restart.Read(restart.source.project.source).identity == restart.sourceBefore.identity);
+                    CHECK(restart.Read(restart.scenePath).identity == restart.sceneBefore.identity);
+                    REQUIRE(restart.Execute().committed);
+                }
+                CHECK(restart.Read(restart.source.project.source).identity == live.Read(live.source.project.source).identity);
+                CHECK(restart.Read(restart.scenePath).identity == live.Read(live.scenePath).identity);
+                CHECK(std::filesystem::file_size(preservedStages[index]) == 1);
+            }
         }
     }  // namespace
 }  // namespace Horo::Editor
