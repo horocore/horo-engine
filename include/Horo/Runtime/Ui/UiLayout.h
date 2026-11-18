@@ -499,6 +499,8 @@ namespace Horo::Runtime::Ui {
         UiLogicalRect overflow;              /**< Finite descendant overflow extent. */
         UiLogicalRect hitTest;               /**< Backend-neutral interaction geometry. */
         std::int32_t baseline{NoUiBaseline}; /**< Content-relative baseline or sentinel. */
+        UiLayoutHorizontalPlacement horizontalPlacement{
+            UiLayoutHorizontalPlacement::FollowDirection}; /**< Placement used by this record. */
         /** @brief Checks every rectangle and baseline representation. @return Whether the arrangement may be published. */
         [[nodiscard]] bool IsValid() const noexcept;
         [[nodiscard]] auto operator<=>(const UiLayoutArrangement &) const noexcept = default;

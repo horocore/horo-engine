@@ -408,7 +408,10 @@ revision. Right-to-left arrangement reflects eligible child placements and logic
 box edges inside each parent. An element with physical horizontal placement keeps
 its authored physical alignment. The source and cooked layouts store that opt-out
 as an optional `horizontalPlacement` field. Older layouts default to following the
-view's direction. Published record order remains authored order.
+view's direction. Published record order remains authored order. The focus graph
+reads the same published direction and placement policy. It mirrors authored
+horizontal links for eligible nodes and uses the resulting physical boxes for
+spatial fallback. Tab order and physical links retain authored behavior.
 
 Layout has two logical phases:
 

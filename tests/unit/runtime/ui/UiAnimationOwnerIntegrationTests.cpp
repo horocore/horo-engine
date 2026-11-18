@@ -118,6 +118,38 @@ TEST_CASE("Real host animation publishes matching style layout and clipping whil
     CHECK(participant->Acquire().HasError());
 }
 
+TEST_CASE("Runtime host direction change publishes new geometry before renewed input admission",
+          "[runtime_ui][animation][integration][direction]") {
+    HostFixture fixture;
+    auto *participant = fixture.participant;
+    auto viewport = Config().viewport;
+    viewport.constraints.maximum.width = 200;
+    viewport.content.extent.width = 200;
+    REQUIRE(participant->SetViewport(viewport).HasValue());
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    const auto left = Frame(*participant);
+    const auto before = Receipt(left, 1);
+    REQUIRE(participant->ApplyPresentation(before).HasValue());
+    REQUIRE(participant->InputEligible(before.view));
+    const auto leaf = left.Layout().Records().back().element;
+    const auto original = left.Layout().Get(leaf).Value().arrangement.contentBox;
+    REQUIRE(original.origin.x == 0);
+
+    viewport.inlineDirection = UiLayoutInlineDirection::RightToLeft;
+    REQUIRE(participant->SetViewport(viewport).HasValue());
+    fixture.clock.Advance(Duration::FromMilliseconds(16));
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    const auto right = Frame(*participant);
+    CHECK(right.Layout().Descriptor().inlineDirection == UiLayoutInlineDirection::RightToLeft);
+    CHECK(right.Layout().Get(leaf).Value().arrangement.contentBox.origin.x == 200 - original.extent.width);
+    CHECK(left.Layout().Get(leaf).Value().arrangement.contentBox == original);
+    CHECK_FALSE(participant->InputEligible(before.view));
+    CHECK(participant->ApplyPresentation(before).HasError());
+    const auto presented = Receipt(right, 2);
+    REQUIRE(participant->ApplyPresentation(presented).HasValue());
+    CHECK(participant->InputEligible(presented.view));
+}
+
 TEST_CASE("Actual presented control replacement preserves draft Cancel baseline and rejects previous frame sources",
           "[runtime_ui][animation][integration][controls]") {
     HostFixture fixture;

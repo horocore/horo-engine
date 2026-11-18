@@ -354,7 +354,7 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiLayoutArrangement::IsValid */
     bool UiLayoutArrangement::IsValid() const noexcept {
         return marginBox.IsValid() && borderBox.IsValid() && paddingBox.IsValid() && contentBox.IsValid() && overflow.IsValid() &&
-               hitTest.IsValid() && baseline >= NoUiBaseline;
+               hitTest.IsValid() && baseline >= NoUiBaseline && horizontalPlacement <= UiLayoutHorizontalPlacement::Physical;
     }
 
     /** @copydoc UiLayoutEngineDescriptor::IsValid */

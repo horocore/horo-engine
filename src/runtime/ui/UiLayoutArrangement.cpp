@@ -220,6 +220,6 @@ namespace Horo::Runtime::Ui::LayoutInternal {
         }
         return Result<UiLayoutArrangement>::Success({boxes.Value().margin, boxes.Value().border, boxes.Value().padding,
                                                      request.assignedContent, overflow.Value(), boxes.Value().border,
-                                                     request.measurement.baseline});
+                                                     request.measurement.baseline, parent.style.horizontalPlacement});
     }
 }  // namespace Horo::Runtime::Ui::LayoutInternal

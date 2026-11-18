@@ -68,6 +68,13 @@ namespace Horo::Runtime::Ui {
             std::size_t parentIndex{InvalidIndex};
             std::optional<UiLogicalRect> bounds;
             bool presentationEligible{true};
+            bool mirrorHorizontalLinks{};
+        };
+
+        struct LayoutNodeEvidence final {
+            std::optional<UiLogicalRect> bounds;
+            bool eligible{};
+            bool mirrorHorizontalLinks{};
         };
 
         struct RestorationEntry final {
@@ -89,7 +96,6 @@ namespace Horo::Runtime::Ui {
             modalSlots.resize(value.modalCapacity);
             restorations.resize(value.restorationCapacity);
             layoutScratch.resize(value.nodeCapacity);
-            eligibilityScratch.resize(value.nodeCapacity, true);
             handleOrder.reserve(value.nodeCapacity);
         }
 
@@ -168,7 +174,15 @@ namespace Horo::Runtime::Ui {
                 recovery.focused = {};
                 return {ResolveRestoration(recovery), UiFocusChangeReason::InvalidTarget, true};
             }
-            const auto id = nodes[current].descriptor.links.Target(direction);
+            auto linkDirection = direction;
+            if (nodes[current].mirrorHorizontalLinks) {
+                using enum UiNavigationDirection;
+                if (direction == Left)
+                    linkDirection = Right;
+                else if (direction == Right)
+                    linkDirection = Left;
+            }
+            const auto id = nodes[current].descriptor.links.Target(linkDirection);
             if (!id.IsValid()) {
                 const auto spatial = SpatialTarget(current, direction);
                 return {spatial, spatial.has_value() ? UiFocusChangeReason::Spatial : UiFocusChangeReason::InvalidTarget,
@@ -397,11 +411,10 @@ namespace Horo::Runtime::Ui {
 
         UiFocusGraphDescriptor descriptor;
         std::vector<Node> nodes;
-        std::vector<std::optional<UiLogicalRect>> layoutScratch;
+        std::vector<LayoutNodeEvidence> layoutScratch;
         std::vector<std::size_t> handleOrder;
         std::vector<ModalSlot> modalSlots;
         std::vector<RestorationEntry> restorations;
-        std::vector<std::uint8_t> eligibilityScratch;
         std::optional<std::size_t> focusedIndex;
         std::uint32_t lastModalIncarnation{};
         std::uint32_t modalDepth{};
