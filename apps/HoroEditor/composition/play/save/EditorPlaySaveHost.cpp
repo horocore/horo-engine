@@ -237,7 +237,7 @@ namespace Horo::Application::Internal {
             if (submitted.HasValue())
                 return;
             error = submitted.ErrorValue();
-            LOG_WARN("editor.play.save", "Sandbox cleanup deferred after request admission closed: %s", error->message.c_str());
+            LOG_WARN("editor.play.save", "Sandbox cleanup deferred after request admission closed.");
             storage->CloseAdmission();
         }
         dirty = true;

@@ -154,6 +154,7 @@ namespace Horo::Runtime {
             DiagnosticPolicy{&SaveErrors::CommandTargetUnavailable, Validation},
             DiagnosticPolicy{&SaveErrors::CommandIncompatible, Validation},
             DiagnosticPolicy{&SaveErrors::CommandCooldown, Lifecycle},
+            DiagnosticPolicy{&SaveErrors::LifecycleUnavailable, Lifecycle},
             DiagnosticPolicy{&SaveErrors::DiagnosticInvalid, Validation},
             DiagnosticPolicy{&SaveErrors::DiagnosticUnsupported, Validation},
             DiagnosticPolicy{&SaveErrors::DiagnosticCorrelationStale, Lifecycle},
@@ -431,6 +432,21 @@ namespace Horo::Runtime {
         return {causes_.data(), causeCount_};
     }
 
+    /** @copydoc RedactSaveDiagnosticError */
+    Error RedactSaveDiagnosticError(const Error &error) {
+        std::array<const ErrorCodeDescriptor *, MaximumSaveDiagnosticCauseDepth + 1> descriptors{};
+        std::size_t count{};
+        for (const Error *node = &error; node && count < descriptors.size(); node = node->cause.Get()) {
+            const auto policy = PolicyFor(*node);
+            descriptors[count++] = policy ? policy->descriptor : &SaveErrors::DiagnosticUnsupported;
+        }
+        auto projected = MakeError(*descriptors[--count]);
+        while (count != 0)
+            projected = WithCause(MakeError(*descriptors[--count]), std::move(projected));
+        return projected;
+    }
+
+    /** @copydoc SaveDiagnosticErrorDescriptors */
     std::span<const ErrorCodeDescriptor *const> SaveDiagnosticErrorDescriptors() noexcept {
         static const auto descriptors = [] {
             std::array<const ErrorCodeDescriptor *, std::tuple_size_v<std::remove_reference_t<decltype(Policies())>>> values{};

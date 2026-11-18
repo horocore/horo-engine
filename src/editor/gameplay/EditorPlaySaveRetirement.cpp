@@ -36,8 +36,7 @@ namespace Horo::Editor {
                 return pumped.HasError() ? Result<bool>::Failure(pumped.ErrorValue()) : Result<bool>::Success(false);
         }
         if (committed.HasError())
-            LOG_WARN("editor.play.save", "Settled Play Scene retired after cancellation diagnostic: %s",
-                     committed.ErrorValue().message.c_str());
+            LOG_WARN("editor.play.save", "Settled Play Scene retired after a cancellation diagnostic.");
         if (binding)
             binding->runtime = nullptr;
         scene->Shutdown();
@@ -202,8 +201,7 @@ namespace Horo::Editor {
                 if (result.HasValue())
                     return;
                 if (phase == Runtime::MaximumSaveParticipantCount + 7)
-                    std::fprintf(stderr, "Play save retirement failed after scheduler join [%s]: %s\n",
-                                 result.ErrorValue().code.Value().c_str(), result.ErrorValue().message.c_str());
+                    std::fputs("Play save retirement failed after scheduler join.\n", stderr);
             } catch (...) {
                 std::fputs("Play save retirement raised after scheduler join; refusing "
                            "premature module teardown.\n",

@@ -221,6 +221,15 @@ namespace Horo::Runtime {
         SavePrivateEvidenceSummary privateEvidence_{};
     };
 
+    /**
+     * @brief Projects a Save failure into an error safe for shared diagnostics and product presentation.
+     * @param error Internal failure that may contain private or untrusted provider data.
+     * @return A fresh error containing canonical Save descriptors and at most MaximumSaveDiagnosticCauseDepth causes.
+     * Unknown descriptors become DiagnosticUnsupported. Source text, attached diagnostics and context never transfer.
+     * @throws std::bad_alloc If storage for the projected error cannot be allocated.
+     */
+    [[nodiscard]] Error RedactSaveDiagnosticError(const Error &error);
+
     /** @brief Returns every canonical Runtime Save descriptor admitted by diagnostics. */
     [[nodiscard]] std::span<const ErrorCodeDescriptor *const> SaveDiagnosticErrorDescriptors() noexcept;
 

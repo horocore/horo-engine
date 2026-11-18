@@ -1,6 +1,7 @@
 #include "EditorPlaySaveHostInternal.h"
 #include "EditorPlaySaveIdentityIssuing.h"
 #include "EditorPlaySavePrefabCapture.h"
+#include "Horo/Runtime/Save/SaveDiagnostics.h"
 
 #include <algorithm>
 #include <array>
@@ -223,7 +224,8 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(SaveErrors::OperationInProgress));
         const auto loaded = TryAdmitRuntime(command, *operationId);
         if (loaded.HasError())
-            (void)environment.operations.Update(*operationId, {.state = OperationState::Failed, .error = loaded.ErrorValue()});
+            (void)environment.operations.Update(*operationId,
+                                                {.state = OperationState::Failed, .error = RedactSaveDiagnosticError(loaded.ErrorValue())});
         dirty = true;
         return loaded;
     }
@@ -285,9 +287,12 @@ namespace Horo::Application::Internal {
         operation = current;
         operationRevision = current.revision;
         dirty = true;
-        if (current.terminalError)
+        if (current.terminalError) {
             error = current.terminalError;
-        (void)environment.operations.Update(current.operation, {.state = PresentationState(current.state), .error = current.terminalError});
+            operation->terminalError = RedactSaveDiagnosticError(*current.terminalError);
+        }
+        (void)environment.operations.Update(current.operation,
+                                            {.state = PresentationState(current.state), .error = operation->terminalError});
     }
 
     /** @copydoc EditorPlaySaveHost::State::PumpRuntime */
