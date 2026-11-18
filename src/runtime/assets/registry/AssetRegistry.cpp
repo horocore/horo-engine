@@ -39,6 +39,7 @@ namespace Horo::Assets {
         constexpr std::uintmax_t kMaximumIndexBytes = 16U * 1024U * 1024U;
         constexpr std::uintmax_t kMaximumSidecarBytes = 1U * 1024U * 1024U;
         constexpr std::size_t kMaximumDiagnostics = 256;
+        constexpr std::string_view kUiCanvasSourceExtension = ".uicanvas";
 
         using TransparentStringSet = std::set<std::string, std::less<>>;
 
@@ -82,12 +83,15 @@ namespace Horo::Assets {
                 return static_cast<char>(std::tolower(value));
             });
             using namespace std::string_view_literals;
-            constexpr std::array extensions{".fbx"sv,         ".obj"sv,     ".gltf"sv,      ".glb"sv,     ".png"sv,
-                                            ".jpg"sv,         ".tga"sv,     ".exr"sv,       ".hdr"sv,     ".horomat"sv,
-                                            ".vert"sv,        ".frag"sv,    ".comp"sv,      ".hlsl"sv,    ".horoshadergraph"sv,
-                                            ".horo"sv,        ".prefab"sv,  ".horoasset"sv, ".uistyle"sv, ".terrainlayers"sv,
-                                            ".foliagetype"sv, ".horo_bb"sv, ".horo_bt"sv,   ".horo_sm"sv, ".horo_utility"sv,
-                                            ".horo_eqs"sv,    ".uicanvas"sv};
+            constexpr std::array extensions{".fbx"sv,          ".obj"sv,           ".gltf"sv,
+                                            ".glb"sv,          ".png"sv,           ".jpg"sv,
+                                            ".tga"sv,          ".exr"sv,           ".hdr"sv,
+                                            ".horomat"sv,      ".vert"sv,          ".frag"sv,
+                                            ".comp"sv,         ".hlsl"sv,          ".horoshadergraph"sv,
+                                            ".horo"sv,         ".prefab"sv,        ".horoasset"sv,
+                                            ".uistyle"sv,      ".terrainlayers"sv, ".foliagetype"sv,
+                                            ".horo_bb"sv,      ".horo_bt"sv,       ".horo_sm"sv,
+                                            ".horo_utility"sv, ".horo_eqs"sv,      kUiCanvasSourceExtension};
             return std::ranges::find(extensions, extension) != extensions.end() || extension == ".wav" || extension == ".ogg";
         }
 
@@ -282,10 +286,11 @@ namespace Horo::Assets {
             for (const auto &[sourcePath, nativeSource] : scanned.sources) {
                 if (source && std::chrono::steady_clock::now() >= deadline)
                     return records;
-                static_cast<void>(nativeSource);
                 const auto sidecar = scanned.sidecars.find(sourcePath);
                 if (sidecar == scanned.sidecars.end()) {
-                    AddDiagnostic(diagnostics, AssetErrors::SidecarMissing, sourcePath);
+                    // Standalone Editor canvases enter the runtime registry only when explicitly paired.
+                    if (PortableFold(Utf8PathText(nativeSource.extension())) != kUiCanvasSourceExtension)
+                        AddDiagnostic(diagnostics, AssetErrors::SidecarMissing, sourcePath);
                     continue;
                 }
                 if (auto record = ParseAndValidateSidecar(sourcePath, sidecar->second, diagnostics, source, deadline))

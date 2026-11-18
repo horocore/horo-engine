@@ -547,6 +547,8 @@ namespace {
         Require(uiSource.HasValue(), "runtime UI fixture could not be encoded");
         write("Assets/room.uicanvas",
               Json{{"format", "horo.ui_canvas"}, {"formatVersion", 2}, {"document", Json::parse(uiSource.Value())}}.dump());
+        write("Assets/unregistered.uicanvas",
+              Json{{"format", "horo.ui_canvas"}, {"formatVersion", 2}, {"document", Json::parse(uiSource.Value())}}.dump());
         write("Assets/room.uicanvas.horo",
               Json{{"schemaVersion", 1}, {"assetId", uiAsset.ToString()}, {"assetType", Ui::UiDocumentAssetTypeName}}.dump());
 
