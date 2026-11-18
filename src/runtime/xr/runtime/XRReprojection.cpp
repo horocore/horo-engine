@@ -53,6 +53,28 @@ namespace Horo::XR {
             });
         }
 
+        /** @brief Requires complete zero-unresolved coverage of both actual released outputs for every view. */
+        XRReprojectionStatus ValidateCoverage(const XRFrameId &frame, const XRViewRenderPlan &plan,
+                                              const XRReprojectionInputs &inputs) noexcept {
+            using enum XRReprojectionStatus;
+            if (!inputs.coverage)
+                return CoverageUnavailable;
+            const auto &coverage = *inputs.coverage;
+            if (coverage.session != frame.session || coverage.frameSequence != frame.sequence ||
+                coverage.prediction != plan.PredictedDisplayTime() || coverage.previousFrameSequence != inputs.previousFrameSequence ||
+                coverage.previousPrediction != inputs.previousPrediction || coverage.views.size() != inputs.views.size())
+                return CoverageRejected;
+            for (std::size_t eye = 0; eye < inputs.views.size(); ++eye) {
+                const auto &input = inputs.views[eye];
+                const auto &sample = coverage.views[eye];
+                const auto expected = std::uint64_t{input.motion.rectangle.width} * input.motion.rectangle.height;
+                if (sample.view != input.view || sample.motion != input.motion || sample.depth != input.depth ||
+                    sample.classifiedSamples != expected || sample.unresolvedSamples != 0)
+                    return CoverageRejected;
+            }
+            return Ready;
+        }
+
         /** @brief The same physical subresource must never provide two distinct eye observations. */
         bool Aliases(const XRReprojectionSubImage &a, const XRReprojectionSubImage &b) noexcept {
             return a.image == b.image && a.arrayLayer == b.arrayLayer;
@@ -229,6 +251,6 @@ namespace Horo::XR {
             }))
                 return InputsInvalid;
         }
-        return Ready;
+        return ValidateCoverage(frame, plan, inputs);
     }
 }  // namespace Horo::XR

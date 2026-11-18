@@ -164,9 +164,19 @@ the resident pipeline using the intersection of advertised OpenXR formats and
 the selected Vulkan device's sampled attachment support. Missing or failed
 motion packages leave the ordinary projection available.
 
-Play still renders color and internal depth. Provider activation requires
-the same-frame external motion/depth graph and a disocclusion policy for the
-provider's format. EXT ignores the engine validity alpha.
+Before optional submission, XRRuntime now requires completed renderer
+classification covering the full motion and depth rectangle of both eyes
+with zero unresolved samples. The report must name the exact current and
+predecessor projections, image generations, and eye layers. Missing, stale,
+or incomplete evidence leaves the projection in color-only mode.
+
+Play still renders color and internal depth. The current motion shader
+detects previous clip boundaries, but cannot compare against a previous
+visible surface. EXT ignores the engine validity alpha and FB consumes the
+RGB vector. Activation requires previous per-eye visibility, a selected
+renderer classification or resolution pass, and a bounded observation path
+before the native submission cutoff. Neither a finished draw nor a
+successful image release establishes that coverage.
 [OpenXR frame synthesis contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrFrameSynthesisInfoEXT.html)
 
 ## Public contract migration and evidence

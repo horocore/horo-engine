@@ -171,10 +171,12 @@ namespace Horo::Tests::OpenXR {
                 Revoked,
                 LateRevoke,
                 ForeignOwner,
+                UnavailableCoverage,
+                UnresolvedSample,
                 NativeFailure
             };
-            const auto handoff =
-                GENERATE(Handoff::Exact, Handoff::Revoked, Handoff::LateRevoke, Handoff::ForeignOwner, Handoff::NativeFailure);
+            const auto handoff = GENERATE(Handoff::Exact, Handoff::Revoked, Handoff::LateRevoke, Handoff::ForeignOwner,
+                                          Handoff::UnavailableCoverage, Handoff::UnresolvedSample, Handoff::NativeFailure);
             const auto route = GENERATE(NativeReprojectionRoute::FrameSynthesisExt, NativeReprojectionRoute::SpaceWarpFb);
             CompositorFixture f{false, true, true, route};
             f.CreateSynthesisPair();
@@ -222,9 +224,28 @@ namespace Horo::Tests::OpenXR {
                              0.2F,
                              300.0F};
             }
-            const XRReprojectionInputs input{priorPlan.PredictedDisplayTime(), prior.sequence,
-                                             XRReprojectionSpaceDelta{f.local, {0.125F, 0.0F, 0.0F}, Math::Quaternion::Identity()}, eyes};
-            REQUIRE(f.frames.ValidateReprojection(frame, plan, input) == XRReprojectionStatus::Ready);
+            XRReprojectionInputs input{priorPlan.PredictedDisplayTime(), prior.sequence,
+                                       XRReprojectionSpaceDelta{f.local, {0.125F, 0.0F, 0.0F}, Math::Quaternion::Identity()}, eyes};
+            // These completed classification values are scripted with the other native fixture inputs.
+            std::array<XRReprojectionViewCoverage, 2> reported{};
+            for (std::size_t eye = 0; eye < eyes.size(); ++eye)
+                reported[eye] = {eyes[eye].view, eyes[eye].motion, eyes[eye].depth, 640 * 512, 0};
+            if (handoff != Handoff::UnavailableCoverage)
+                input.coverage.emplace(XRReprojectionCoverage{.session = f.session,
+                                                              .frameSequence = frame.sequence,
+                                                              .prediction = plan.PredictedDisplayTime(),
+                                                              .previousFrameSequence = prior.sequence,
+                                                              .previousPrediction = priorPlan.PredictedDisplayTime(),
+                                                              .views = reported});
+            if (handoff == Handoff::UnresolvedSample)
+                reported.back().unresolvedSamples = 1;
+            auto expected = f.frames.ValidateReprojection(frame, plan, input);
+            if (handoff == Handoff::UnavailableCoverage)
+                CHECK(expected == XRReprojectionStatus::CoverageUnavailable);
+            else if (handoff == Handoff::UnresolvedSample)
+                CHECK(expected == XRReprojectionStatus::CoverageRejected);
+            else
+                REQUIRE(expected == XRReprojectionStatus::Ready);
             if (handoff == Handoff::Revoked)
                 f.native.owner.RevokeReprojectionProvider(provider.Value());
             if (handoff == Handoff::LateRevoke) {
@@ -245,7 +266,9 @@ namespace Horo::Tests::OpenXR {
                 f.Recover();
             } else {
                 REQUIRE(actual.HasValue());
-                CHECK(actual.Value() == (handoff == Handoff::Exact ? XRReprojectionStatus::Ready : XRReprojectionStatus::InputsInvalid));
+                if (expected == XRReprojectionStatus::Ready && handoff != Handoff::Exact)
+                    expected = XRReprojectionStatus::InputsInvalid;
+                CHECK(actual.Value() == expected);
             }
             for (std::size_t eye = 0; eye < eyes.size(); ++eye) {
                 const auto &ext = f.script.ext[eye];

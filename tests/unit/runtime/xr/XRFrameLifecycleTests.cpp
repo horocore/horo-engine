@@ -222,6 +222,37 @@ namespace Horo::XR {
                                         views};
             CHECK(frames.ValidateReprojection(second, current, inputs) == XRReprojectionStatus::ProjectionInvalid);
             REQUIRE(frames.Release(second, depth.image) == XRFrameStatus::Ok);
+            CHECK(frames.ValidateReprojection(second, current, inputs) == XRReprojectionStatus::CoverageUnavailable);
+            std::array<XRReprojectionViewCoverage, 2> observed{};
+            for (std::size_t eye = 0; eye < views.size(); ++eye) {
+                const auto &view = views[eye];
+                observed[eye] = {view.view, view.motion, view.depth, 64 * 64, 0};
+            }
+            inputs.coverage.emplace(XRReprojectionCoverage{.session = session,
+                                                           .frameSequence = second.sequence,
+                                                           .prediction = current.PredictedDisplayTime(),
+                                                           .previousFrameSequence = first.sequence,
+                                                           .previousPrediction = prior.PredictedDisplayTime(),
+                                                           .views = observed});
+            CHECK(frames.ValidateReprojection(second, current, inputs) == XRReprojectionStatus::Ready);
+            observed.back().unresolvedSamples = 1;
+            CHECK(frames.ValidateReprojection(second, current, inputs) == XRReprojectionStatus::CoverageRejected);
+            observed.back().unresolvedSamples = 0;
+            --observed.back().classifiedSamples;
+            CHECK(frames.ValidateReprojection(second, current, inputs) == XRReprojectionStatus::CoverageRejected);
+            ++observed.back().classifiedSamples;
+            std::swap(observed[0].depth, observed[1].depth);
+            CHECK(frames.ValidateReprojection(second, current, inputs) == XRReprojectionStatus::CoverageRejected);
+            std::swap(observed[0].depth, observed[1].depth);
+            inputs.coverage->frameSequence = first.sequence;
+            CHECK(frames.ValidateReprojection(second, current, inputs) == XRReprojectionStatus::CoverageRejected);
+            inputs.coverage->frameSequence = second.sequence;
+            inputs.coverage->previousPrediction = current.PredictedDisplayTime();
+            CHECK(frames.ValidateReprojection(second, current, inputs) == XRReprojectionStatus::CoverageRejected);
+            inputs.coverage->previousPrediction = prior.PredictedDisplayTime();
+            inputs.coverage->views = std::span{observed}.first(1);
+            CHECK(frames.ValidateReprojection(second, current, inputs) == XRReprojectionStatus::CoverageRejected);
+            inputs.coverage->views = observed;
             CHECK(frames.ValidateReprojection(second, current, inputs) == XRReprojectionStatus::Ready);
             CHECK(frames.ValidateReprojection(second, movedOrigin, inputs) == XRReprojectionStatus::HistoryUnavailable);
             inputs.applicationDelta.reset();
