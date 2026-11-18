@@ -40,6 +40,56 @@ TEST_CASE("Cooked scene payload is canonical source-free and round trips typed r
     REQUIRE(again.Value() == encoded.Value());
 }
 
+TEST_CASE("Scene source and cooked Scene share the exact canvas and its required document asset", "[scene][ui-canvas][cook]") {
+    using namespace Horo::SceneSource;
+    namespace Ui = Runtime::Ui;
+    const auto asset = Assets::AssetId::Parse("00112233-4455-6677-8899-aabbccddeeff").Value();
+    const Runtime::UiCanvasComponent component{
+        {asset, Ui::UiDocumentId::Create({7}).Value(), Ui::UiCanvasId::Create({4}).Value(), Ui::UiDocumentRevision::Create(2).Value()}};
+    const std::array objects{SceneObjectSnapshot{.id = {1},
+                                                 .name = "Parent",
+                                                 .localTransform = {.translation = {1, 2, 3}},
+                                                 .components = {.uiCanvas = component}},
+                             SceneObjectSnapshot{.id = {2},
+                                                 .parent = SceneObjectId{1},
+                                                 .name = "Canvas",
+                                                 .localTransform = {.translation = {4, 5, 6}},
+                                                 .components = {.uiCanvas = component}}};
+    const auto source = DecodeSceneSource(EncodeSceneSource({objects, {}}));
+    REQUIRE(source.HasValue());
+    const auto scene = ConvertSceneSourceToRuntime({source.Value().objects, {}}, {1}, {2});
+    REQUIRE(scene.HasValue());
+    const auto dependencies = scene.Value().AssetDependencies();
+    REQUIRE(dependencies.size() == 1);
+    CHECK(dependencies.front().id == asset);
+    CHECK(dependencies.front().expectedType.Value() == Ui::UiDocumentAssetTypeName);
+    const auto cooked = EncodeCookedSceneDefinition(scene.Value());
+    REQUIRE(cooked.HasValue());
+    auto document = nlohmann::json::parse(cooked.Value());
+    CHECK(document["format"] == UiCanvasCookedSceneFormat);
+    const auto admitted = DecodeCookedSceneDefinition(cooked.Value(), {1}, {2});
+    REQUIRE(admitted.HasValue());
+    REQUIRE(admitted.Value().Entities().size() == objects.size());
+    for (std::size_t index = 0; index < objects.size(); ++index) {
+        CHECK(admitted.Value().Entities()[index].components.uiCanvas == component);
+        CHECK(admitted.Value().Entities()[index].localTransform == objects[index].localTransform);
+    }
+    CHECK(admitted.Value().Entities()[1].parent == Runtime::SceneObjectId{1});
+
+    SECTION("legacy format cannot silently decode a canvas") {
+        document["format"] = AnimationCookedSceneFormat;
+    }
+    SECTION("registry dependency cannot be dropped") {
+        document["dependencies"] = nlohmann::json::array();
+    }
+    SECTION("same asset identity cannot bind an unrelated type") {
+        document["dependencies"][0]["type"] = "core.mesh";
+    }
+    const auto text = document.dump() + '\n';
+    const std::vector<std::uint8_t> tampered{text.begin(), text.end()};
+    CHECK(DecodeCookedSceneDefinition(tampered, {1}, {2}).HasError());
+}
+
 TEST_CASE("Cooked scene payload rejects foreign malformed and noncanonical input", "[native][prefab-cook]") {
     const auto encoded = EncodeCookedSceneDefinition(Scene());
     REQUIRE(encoded.HasValue());

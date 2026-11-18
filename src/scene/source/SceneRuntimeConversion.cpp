@@ -209,6 +209,7 @@ namespace Horo::SceneSource {
                     .light = ActiveComponent(object.components.light),
                     .audioSource = ActiveComponent(object.components.audioSource),
                     .audioListener = ActiveComponent(object.components.audioListener),
+                    .uiCanvas = object.components.uiCanvas,
                     .navigationSurface = ActiveComponent(object.components.navigationSurface),
                     .navigationRegion = ActiveComponent(object.components.navigationRegion),
                     .navigationModifier = ActiveComponent(object.components.navigationModifier),

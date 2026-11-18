@@ -19,10 +19,14 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
 namespace Horo::Runtime::Ui {
+    /** @brief Registry type of a cooked Runtime UI document referenced by an authored Scene. */
+    inline constexpr std::string_view UiDocumentAssetTypeName = "runtime.ui.document";
+
     /** @brief Maximum canvas descriptors admitted by one authored document. */
     inline constexpr std::size_t MaximumUiDocumentCanvases = 64;
     /** @brief Maximum canonical asset dependencies admitted by one authored document. */

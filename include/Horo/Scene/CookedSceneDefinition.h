@@ -15,6 +15,9 @@ namespace Horo::SceneCook {
     /** @brief Required wire version for Scenes containing typed animation; legacy Scenes preserve exact v3 bytes. */
     inline constexpr std::string_view AnimationCookedSceneFormat = "horo.scene.runtime.v4";
 
+    /** @brief Required wire version for Scenes containing typed Runtime UI canvas references. */
+    inline constexpr std::string_view UiCanvasCookedSceneFormat = "horo.scene.runtime.v5";
+
     /** @brief Derives the canonical stable Scene definition identity from its owning asset.
      * @param asset Stable nonzero Scene asset identity verified by the host's asset authority.
      * @return Low eight SHA-256 digest bytes in little-endian order, with zero mapped to one.

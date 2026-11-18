@@ -306,6 +306,18 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
+        /** @brief Requires each referenced Runtime UI document before the Scene activation transaction starts. */
+        Result<void> RequireCanvasAssets(SceneDefinitionBuilder &builder, std::span<const RuntimeEntityDefinition> entities) {
+            const auto type = Assets::AssetTypeId::Parse(Ui::UiDocumentAssetTypeName);
+            for (const auto &entity : entities) {
+                if (const auto &canvas = entity.components.uiCanvas; canvas) {
+                    if (auto required = builder.RequireAsset({canvas->canvas.asset, type.Value()}); required.HasError())
+                        return required;
+                }
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Requires exact immutable source and optional retarget identities, never a live instance or pose. */
         Result<void> RequireAnimationAssets(SceneDefinitionBuilder &builder, const Animation::AnimationAuthoringComponent &component) {
             const auto require = [&builder](Assets::AssetId asset, std::string_view type) {
@@ -529,6 +541,8 @@ namespace Horo::Runtime {
         if (auto assets = RequireNavigationAssets(*this, data.entities); assets.HasError())
             return Result<RuntimeSceneDefinition>::Failure(assets.ErrorValue());
         if (auto assets = RequireCharacterAssets(*this, data.entities); assets.HasError())
+            return Result<RuntimeSceneDefinition>::Failure(assets.ErrorValue());
+        if (auto assets = RequireCanvasAssets(*this, data.entities); assets.HasError())
             return Result<RuntimeSceneDefinition>::Failure(assets.ErrorValue());
         if (auto assets = RequireAnimationAssets(*this, data.entities); assets.HasError())
             return Result<RuntimeSceneDefinition>::Failure(assets.ErrorValue());

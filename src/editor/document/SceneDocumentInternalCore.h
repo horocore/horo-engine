@@ -334,7 +334,7 @@ namespace Horo::Editor::SceneDocumentDetail {
              Audio::ValidateAudioSoundPlaybackDefaults(components.audioSource->playback).HasError() ||
              Audio::ValidateAudioSceneLifecyclePolicy(components.audioSource->sceneLifecycle).HasError()))
             return Result<void>::Failure(MakeDocumentError(SceneDocumentErrors::InvalidAudioSource, "Audio source values are invalid."));
-        return Result<void>::Success();
+        return components.uiCanvas ? Runtime::Ui::ValidateUiCanvasAssetReference(components.uiCanvas->canvas) : Result<void>::Success();
     }
 
     /** @brief Validates behavior attachment identities and payloads for one authored scene object. */

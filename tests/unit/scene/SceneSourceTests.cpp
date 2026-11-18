@@ -1,5 +1,6 @@
 #include "Horo/Scene/SceneSource.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <string>
 
@@ -71,9 +72,43 @@ namespace Horo::SceneSource {
 
     TEST_CASE("Scene source rejects malformed future and structurally incomplete input", "[unit][scene][serialization]") {
         CHECK(DecodeSceneSource("{").HasError());
-        CHECK(DecodeSceneSource(R"({"schemaVersion":5,"objects":[]})").HasError());
+        CHECK(DecodeSceneSource(R"({"schemaVersion":6,"objects":[]})").HasError());
         CHECK(DecodeSceneSource(R"({"schemaVersion":1,"objects":[{"id":1}]})").HasError());
         CHECK(DecodeSceneSource(R"({"schemaVersion":1,"objects":[],"prefabInstances":{}})").HasError());
+    }
+
+    TEST_CASE("Scene source admits exact canvas references in schema five", "[unit][scene][serialization][ui-canvas]") {
+        namespace Ui = Runtime::Ui;
+        const auto asset = Assets::AssetId::Parse("00112233-4455-6677-8899-aabbccddeeff").Value();
+        const auto component = Runtime::UiCanvasComponent{
+            {asset, Ui::UiDocumentId::Create({4}).Value(), Ui::UiCanvasId::Create({8}).Value(), Ui::UiDocumentRevision::Create(3).Value()}};
+        const std::array objects{SceneObjectSnapshot{.id = {1}, .name = "Canvas", .components = {.uiCanvas = component}}};
+        const auto encoded = EncodeSceneSource({objects, {}});
+        CHECK(encoded.find("\"schemaVersion\": 5") != std::string::npos);
+        const auto decoded = DecodeSceneSource(encoded);
+        REQUIRE(decoded.HasValue());
+        REQUIRE(decoded.Value().objects.size() == 1);
+        CHECK(decoded.Value().objects.front().components.uiCanvas == component);
+        CHECK(EncodeSceneSource({decoded.Value().objects, {}}) == encoded);
+        auto malformed = encoded;
+        std::string_view field;
+        std::string_view replacement;
+        SECTION("downgraded version") {
+            field = "\"schemaVersion\": 5";
+            replacement = "\"schemaVersion\": 4";
+        }
+        SECTION("missing identity") {
+            field = "\"minimumRevision\": 3";
+            replacement = "\"unused\": 3";
+        }
+        SECTION("zero canvas") {
+            field = "\"canvas\": \"08000000000000000000000000000000\"";
+            replacement = "\"canvas\": \"00000000000000000000000000000000\"";
+        }
+        const auto position = malformed.find(field);
+        REQUIRE(position != std::string::npos);
+        malformed.replace(position, field.size(), replacement);
+        CHECK(DecodeSceneSource(malformed).HasError());
     }
 
     TEST_CASE("Scene source retains legacy absent prefab instances without inventing objects", "[unit][scene][serialization]") {

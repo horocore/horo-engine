@@ -36,7 +36,7 @@ namespace Horo::SceneSource {
     };
 
     /**
-     * @brief Decodes Scene schema 1, Character-capable schema 2 and navigation-source-capable schema 3 without runtime activation.
+     * @brief Decodes supported Scene source schemas without runtime activation, including schema 5 canvas references.
      * @param contents Canonical Scene JSON, at most 16 MiB, with unique object keys and parser depths below 64.
      * @details Completed DOM cleanup avoids child-flattening scratch growth in supported production-STL compositions.
      * Checked-iterator MSVC Debug may allocate proxies inside noexcept standard-container constructors;

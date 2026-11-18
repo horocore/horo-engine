@@ -48,6 +48,7 @@ namespace Horo::SceneCook {
                     .light = source.light,
                     .audioSource = source.audioSource,
                     .audioListener = source.audioListener,
+                    .uiCanvas = source.uiCanvas,
                     .navigationSurface = source.navigationSurface,
                     .navigationRegion = source.navigationRegion,
                     .navigationModifier = source.navigationModifier,
@@ -71,8 +72,6 @@ namespace Horo::SceneCook {
 
         /** @brief Encodes one supported source-free runtime entity using existing typed scalar/component codecs. */
         Result<Json> EncodeEntity(const Runtime::RuntimeEntityDefinition &entity) {
-            if (entity.components.uiCanvas)
-                return Result<Json>::Failure(MakeError(SceneCookErrors::Unsupported));
             return Result<Json>::Success(
                 {{"id", entity.object.value},
                  {"parent", entity.parent ? Json(entity.parent->value) : Json(nullptr)},
@@ -138,6 +137,10 @@ namespace Horo::SceneCook {
 
         /** @brief Selects only the schema required by the complete typed component inventory. */
         std::string_view FormatFor(const Runtime::RuntimeSceneDefinition &definition) {
+            if (std::ranges::any_of(definition.Entities(), [](const auto &entity) {
+                return entity.components.uiCanvas.has_value();
+            }))
+                return UiCanvasCookedSceneFormat;
             const bool animation = std::ranges::any_of(definition.Entities(), [](const auto &entity) {
                 return entity.components.animation.has_value();
             });
@@ -150,7 +153,7 @@ namespace Horo::SceneCook {
                 !root["format"].is_string())
                 return false;
             const auto &format = root["format"].get_ref<const Json::string_t &>();
-            return format == CookedSceneFormat || format == AnimationCookedSceneFormat;
+            return format == CookedSceneFormat || format == AnimationCookedSceneFormat || format == UiCanvasCookedSceneFormat;
         }
 
         /** @brief Preserves exact selected Scene/revision identity and typed collection admission. */

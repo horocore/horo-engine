@@ -36,6 +36,10 @@ namespace Horo::SceneSource::Detail {
         /** @brief Selects the minimum envelope required by typed authored features for both writer and reader. */
         std::uint32_t RequiredSceneSchema(const std::span<const SceneObjectSnapshot> objects) {
             if (std::ranges::any_of(objects, [](const auto &object) {
+                return object.components.uiCanvas.has_value();
+            }))
+                return kUiCanvasSceneSchemaVersion;
+            if (std::ranges::any_of(objects, [](const auto &object) {
                 return object.components.animation.has_value();
             }))
                 return kAnimationSceneSchemaVersion;
@@ -223,7 +227,8 @@ namespace Horo::SceneSource::Detail {
                 return false;
             const auto &schema = document["schemaVersion"];
             return schema == kSceneSchemaVersion || schema == kCharacterSceneSchemaVersion ||
-                   schema == kNavigationSourceSceneSchemaVersion || (schema.is_number_unsigned() && schema == kAnimationSceneSchemaVersion);
+                   schema == kNavigationSourceSceneSchemaVersion ||
+                   (schema.is_number_unsigned() && (schema == kAnimationSceneSchemaVersion || schema == kUiCanvasSceneSchemaVersion));
         }
 
         /** @brief Checks bounded object/prefab inventory independently from feature-version admission. */

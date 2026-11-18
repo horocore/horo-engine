@@ -11,7 +11,7 @@ namespace Horo::SceneSource {
     /** @brief Raw builtin envelope schema; distinct from nested typed component schemas. */
     inline constexpr std::uint32_t PrefabBuiltinComponentPayloadSchemaVersion = 1;
     /** @brief Owning codec semantic revision; increment when accepted field grammar/meaning changes. */
-    inline constexpr std::uint32_t PrefabBuiltinComponentCodecContractVersion = 1;
+    inline constexpr std::uint32_t PrefabBuiltinComponentCodecContractVersion = 2;
     /** @brief Commits actual closed builtin identities/field mappings and owning Scene codec versions.
      * @return Canonical semantic fingerprint; no source, runtime generation or caller digest is involved.
      * @details Cold metadata work only; performs no I/O or publication. @throws std::bad_alloc On bounded metadata allocation failure.

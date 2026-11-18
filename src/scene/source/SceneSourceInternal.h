@@ -30,6 +30,7 @@ namespace Horo::SceneSource::Detail {
     inline constexpr std::uint32_t kCharacterSceneSchemaVersion = 2;
     inline constexpr std::uint32_t kNavigationSourceSceneSchemaVersion = 3;
     inline constexpr std::uint32_t kAnimationSceneSchemaVersion = 4;
+    inline constexpr std::uint32_t kUiCanvasSceneSchemaVersion = 5;
     inline constexpr std::uintmax_t kMaximumProjectMetadataBytes = 64U * 1024U;
     inline constexpr std::uintmax_t kMaximumSceneBytes = 16U * 1024U * 1024U;
     inline constexpr std::uintmax_t kMaximumRecoveryBytes = 20U * 1024U * 1024U;

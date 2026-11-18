@@ -386,6 +386,16 @@ World ray callers now pass only a view, canvas and ray in `UiWorldRayQuery`.
 Hosts must supply the actual rendered plane in `UiPresentationReceipt`.
 The input debugger follows the same targeting path.
 
+A Scene entity can reference one canvas through its `uiCanvas` component. The
+reference names the registry asset, document, canvas and minimum document
+revision. Scene source schema 5 preserves it. The cooker emits
+`horo.scene.runtime.v5` for Scenes with canvas references and records each
+Runtime UI document as a required asset. Older Scenes without this component
+retain their previous encoding. Runtime UI still owns all instance, layout and
+presentation state. The entity's authored transform remains Scene-owned.
+Prefab creation and expansion preserve the same reference and require its
+registry asset as part of the portable dependency closure.
+
 ## Responsive Presentation Profiles
 
 [Responsive Presentation Profiles](responsive-presentation-profiles.md) is the

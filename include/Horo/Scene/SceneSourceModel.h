@@ -57,6 +57,7 @@ namespace Horo::SceneSource {
         std::optional<Runtime::TriggerVolumeComponent> triggerVolume;
         std::optional<Runtime::AudioSourceComponent> audioSource;
         std::optional<Runtime::AudioListenerComponent> audioListener; /**< Explicit authored listener; absent in legacy documents. */
+        std::optional<Runtime::UiCanvasComponent> uiCanvas; /**< Durable exact canvas reference; Runtime UI owns its live instance. */
         std::optional<Runtime::NavigationSurfaceComponent> navigationSurface;
         std::optional<Runtime::NavigationRegionComponent> navigationRegion;
         std::optional<Runtime::NavigationModifierComponent> navigationModifier;
