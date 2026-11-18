@@ -133,6 +133,48 @@ namespace Horo::Editor {
             CHECK(std::ranges::equal(decoded.Value().prefabInstances, fixture.document.PrefabInstances()));
         }
 
+        TEST_CASE("Prefab apply replays both durable owner histories together", "[editor][prefab][apply][native]") {
+            ApplyFixture fixture;
+            const auto applied = fixture.Execute();
+            REQUIRE(applied.committed);
+            REQUIRE(applied.group);
+            const auto initialSource = fixture.Read(fixture.source.project.source);
+            const auto replay = [&](const bool redo, const PrefabApplyHistoryGroup group, const Assets::AssetSourceIdentity identity) {
+                const auto snapshot = fixture.scene.Snapshot().Value();
+                const SceneTransactionContext context{snapshot.session, snapshot.revision, snapshot.state, true};
+                REQUIRE(PrefabApplyTransaction::NextSceneGroup(fixture.scene, context, redo).Value() == applied.group);
+                REQUIRE(fixture.source.document->NextApplyGroup(redo) == applied.group);
+                return PrefabApplyTransaction::Replay(fixture.scene, *fixture.source.document,
+                                                      {context, fixture.source.document->Snapshot().fence, fixture.scenePath, identity,
+                                                       group, redo},
+                                                      fixture.mutations, fixture.files);
+            };
+            auto otherGroup = *applied.group;
+            ++otherGroup.sceneOpening;
+            const auto rejected = replay(false, otherGroup, applied.sceneIdentity);
+            REQUIRE(rejected.error);
+            CHECK_FALSE(rejected.committed);
+            CHECK(fixture.files.replacements == 2);
+
+            const auto undone = replay(false, *applied.group, applied.sceneIdentity);
+            INFO((undone.error ? undone.error->message : std::string{}));
+            REQUIRE(undone.committed);
+            CHECK_FALSE(undone.error);
+            CHECK_FALSE(fixture.document.IsDirty());
+            CHECK_FALSE(fixture.source.document->Snapshot().dirty);
+            CHECK(fixture.Read(fixture.scenePath).bytes == fixture.sceneBefore.bytes);
+            CHECK(fixture.Read(fixture.source.project.source).bytes == fixture.sourceBefore.bytes);
+
+            const auto redone = replay(true, *applied.group, undone.sceneIdentity);
+            INFO((redone.error ? redone.error->message : std::string{}));
+            REQUIRE(redone.committed);
+            CHECK_FALSE(redone.error);
+            CHECK_FALSE(fixture.document.IsDirty());
+            CHECK_FALSE(fixture.source.document->Snapshot().dirty);
+            CHECK(fixture.Read(fixture.scenePath).identity == applied.sceneIdentity);
+            CHECK(fixture.Read(fixture.source.project.source).bytes == initialSource.bytes);
+        }
+
         TEST_CASE("Prefab apply compensates each owned write before reporting failure or recovery", "[editor][prefab][apply][native]") {
             ApplyFixture fixture;
             const auto source = fixture.source.document->Snapshot();

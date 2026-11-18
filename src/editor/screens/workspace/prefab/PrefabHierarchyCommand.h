@@ -14,10 +14,11 @@ namespace Horo::Editor {
         DuplicateInstance,
         DeleteInstance,
         ReparentInstance,
-        RevertOverrides
+        RevertOverrides,
+        ApplyOverrides
     };
 
-    /** @brief Presentation selection level for one instance override revert. */
+    /** @brief Presentation selection level for an instance override operation. */
     enum class PrefabHierarchyRevertScope : std::uint8_t {
         Value,
         Component,

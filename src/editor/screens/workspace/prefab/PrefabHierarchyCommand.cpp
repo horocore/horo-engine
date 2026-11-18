@@ -5,7 +5,7 @@
 namespace Horo::Editor {
     namespace {
         /** @brief Validates the closed gesture scope before interpreting a presentation row ordinal. */
-        bool CanRevert(const PrefabHierarchyEntry &entry, const PrefabHierarchyRevert &selection) noexcept {
+        bool HasOverrideSelection(const PrefabHierarchyEntry &entry, const PrefabHierarchyRevert &selection) noexcept {
             switch (selection.scope) {
                 using enum PrefabHierarchyRevertScope;
                 case Instance:
@@ -43,7 +43,8 @@ namespace Horo::Editor {
                     return Result<const PrefabHierarchyEntry *>::Failure(MakeError(Prefab::PrefabErrors::OverrideInvalid));
                 break;
             case RevertOverrides:
-                if (!command.revert || !CanRevert(*entry, *command.revert))
+            case ApplyOverrides:
+                if (!command.revert || !HasOverrideSelection(*entry, *command.revert))
                     return Result<const PrefabHierarchyEntry *>::Failure(MakeError(Prefab::PrefabErrors::AddressInvalid));
                 break;
             default:

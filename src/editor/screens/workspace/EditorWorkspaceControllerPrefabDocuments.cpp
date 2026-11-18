@@ -242,9 +242,13 @@ namespace Horo::Editor {
         switch (command.prefabAction) {
             using enum PrefabDocumentAction;
             case Undo:
-                return document.Replay(fence, false);
-            case Redo:
-                return document.Replay(fence, true);
+            case Redo: {
+                const bool redo = command.prefabAction == Redo;
+                auto paired = ReplayPrefabApply(redo, &document);
+                if (paired.HasError())
+                    return Result<void>::Failure(std::move(paired).ErrorValue());
+                return paired.Value() ? Result<void>::Success() : document.Replay(fence, redo);
+            }
             case Reload:
                 return document.Reload(fence, false);
             case DiscardAndReload:

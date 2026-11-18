@@ -403,6 +403,25 @@ namespace Horo::Editor {
         return Return::Success(std::move(prepared));
     }
 
+    /** @copydoc SceneDocumentTransactions::NextPrefabValueState */
+    Result<std::optional<std::uint64_t>> SceneDocumentTransactions::NextPrefabValueState(const SceneTransactionContext &context,
+                                                                                         const bool redo) const {
+        using Return = Result<std::optional<std::uint64_t>>;
+        if (auto admitted = Admit(context); admitted.HasError())
+            return Return::Failure(admitted.ErrorValue());
+        const auto &history = redo ? state_->history->m_impl->redo : state_->history->m_impl->undo;
+        if (history.empty() || !history.back().coordinated)
+            return Return::Success(std::nullopt);
+        const auto &entry = history.back();
+        const auto *delta = std::get_if<SceneObjectsReplacedDelta>(&entry.delta);
+        return Return::Success(delta && !delta->prefabValues.empty() ? std::optional{entry.afterState.value} : std::nullopt);
+    }
+
+    /** @copydoc SceneDocumentTransactions::EncodePreparedScene */
+    std::string SceneDocumentTransactions::EncodePreparedScene(const Prepared &prepared) const {
+        return SceneSource::EncodeSceneSource({prepared.objects, *prepared.instances});
+    }
+
     /** @copydoc SceneDocumentTransactions::CommitPrefabReplacement */
     Result<SceneTransactionResult> SceneDocumentTransactions::CommitPrefabReplacement(const PrefabReplacement &replacement) {
         if (!replacement.prepared_)

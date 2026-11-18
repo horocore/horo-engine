@@ -1,11 +1,9 @@
 #include "editor/screens/workspace/prefab/PrefabApplyTransaction.h"
 
 #include "Horo/Prefab/PrefabErrors.h"
-#include "Horo/Scene/SceneSource.h"
 
 #include <algorithm>
 #include <array>
-#include <new>
 
 namespace Horo::Editor {
     namespace {
@@ -122,56 +120,107 @@ namespace Horo::Editor {
                                                        std::shared_ptr<const Prefab::PrefabValueSchemaSnapshot> schemas,
                                                        const Prefab::PrefabLimitProfile &limits,
                                                        const ProjectMutationCoordinator &mutations, DurableFileSystem &storage) {
-        PrefabApplyOutcome outcome;
-        if (auto admitted = prefab.Admit(request.source); admitted.HasError()) {
-            outcome.error = std::move(admitted).ErrorValue();
-            return outcome;
+        auto admitted = prefab.Admit(request.source);
+        if (admitted.HasError())
+            return {.error = std::move(admitted).ErrorValue()};
+        auto project = mutations.TryAcquire({prefab.root_, ProjectMutationOwner::Save, "prefab.apply"});
+        if (project.HasError())
+            return {.error = std::move(project).ErrorValue()};
+        try {
+            if (auto current = sources.inputs.VerifyUnchanged(request.scene.cancellation); current.HasError())
+                return {.error = std::move(current).ErrorValue()};
+            const auto commitments = sources.resolver.CanonicalSourceCommitments();
+            const auto base =
+                std::ranges::find(commitments, prefab.source_->Data().assetId, &Prefab::PrefabCanonicalSourceCommitment::asset);
+            if (base == commitments.end() || base->digest != prefab.state_)
+                return {.error = MakeError(Prefab::PrefabErrors::OverrideSourceStale)};
+            const auto snapshot = scene.Snapshot();
+            if (snapshot.HasError())
+                return {.error = snapshot.ErrorValue()};
+            const auto &current = snapshot.Value();
+            SceneDocumentSnapshot view{{current.revision}, {current.state}, current.objects, current.prefabInstances};
+            auto content = PreparePrefabApply(view, request.selection, registry, sources.resolver, std::move(schemas), limits,
+                                              request.scene.cancellation);
+            if (content.HasError())
+                return {.error = std::move(content).ErrorValue()};
+            auto prepared = std::move(content).Value();
+            auto sceneState = scene.PreparePrefabValues(request.scene, prepared.placements, request.selection.expectedReplacementEpoch);
+            if (sceneState.HasError())
+                return {.error = std::move(sceneState).ErrorValue()};
+            const auto next = scene.PreparedContext(*sceneState.Value());
+            const PrefabApplyHistoryGroup group{next.session.owner, next.session.generation, next.state};
+            auto sourceState = prefab.PrepareApply(request.source, std::move(prepared.source), group);
+            if (sourceState.HasError())
+                return {.error = std::move(sourceState).ErrorValue()};
+            auto preparedSource = std::move(sourceState).Value();
+            return Publish(scene, prefab, *sceneState.Value(), preparedSource,
+                           {request.scene, request.source, request.scenePath, request.sceneIdentity, group}, storage);
+        } catch (...) {
+            return {.error = MakeError(Assets::AssetSourceErrors::ReadFailed, "Prefab apply preparation failed.")};
         }
+    }
+
+    /** @copydoc PrefabApplyTransaction::NextSceneGroup */
+    Result<std::optional<PrefabApplyHistoryGroup>> PrefabApplyTransaction::NextSceneGroup(const SceneDocumentTransactions &scene,
+                                                                                          const SceneTransactionContext &context,
+                                                                                          const bool redo) {
+        auto state = scene.NextPrefabValueState(context, redo);
+        if (state.HasError())
+            return Result<std::optional<PrefabApplyHistoryGroup>>::Failure(std::move(state).ErrorValue());
+        if (!state.Value())
+            return Result<std::optional<PrefabApplyHistoryGroup>>::Success(std::nullopt);
+        return Result<std::optional<PrefabApplyHistoryGroup>>::Success(
+            PrefabApplyHistoryGroup{context.session.owner, context.session.generation, *state.Value()});
+    }
+
+    /** @copydoc PrefabApplyTransaction::Replay */
+    PrefabApplyOutcome PrefabApplyTransaction::Replay(SceneDocumentTransactions &scene, PrefabDocumentSession &prefab,
+                                                      const PrefabApplyReplayRequest &request, const ProjectMutationCoordinator &mutations,
+                                                      DurableFileSystem &storage) {
+        auto admitted = prefab.Admit(request.source);
+        if (admitted.HasError())
+            return {.error = std::move(admitted).ErrorValue()};
+        auto project = mutations.TryAcquire({prefab.root_, ProjectMutationOwner::Save, "prefab.apply.replay"});
+        if (project.HasError())
+            return {.error = std::move(project).ErrorValue()};
+        try {
+            const auto group = NextSceneGroup(scene, request.scene, request.redo);
+            if (group.HasError())
+                return {.error = group.ErrorValue()};
+            if (group.Value() != request.group)
+                return {.error = MakeError(Prefab::PrefabErrors::OverrideSourceStale)};
+            auto sceneState = scene.PrepareReplay(request.scene, request.redo);
+            if (sceneState.HasError())
+                return {.error = std::move(sceneState).ErrorValue()};
+            auto sourceState = prefab.PrepareApplyReplay(request.source, request.group, request.redo);
+            if (sourceState.HasError())
+                return {.error = std::move(sourceState).ErrorValue()};
+            auto preparedSource = std::move(sourceState).Value();
+            return Publish(scene, prefab, *sceneState.Value(), preparedSource, request, storage);
+        } catch (...) {
+            return {.error = MakeError(Assets::AssetSourceErrors::ReadFailed, "Prefab apply replay preparation failed.")};
+        }
+    }
+
+    /** @copydoc PrefabApplyTransaction::Publish */
+    PrefabApplyOutcome PrefabApplyTransaction::Publish(SceneDocumentTransactions &scene, PrefabDocumentSession &prefab,
+                                                       SceneDocumentTransactions::Prepared &preparedScene,
+                                                       PrefabDocumentSession::PreparedApply &preparedSource,
+                                                       const PrefabApplyReplayRequest &request, DurableFileSystem &storage) {
+        if (request.scenePath == prefab.path_)
+            return {.error = MakeError(Prefab::PrefabErrors::DocumentInvalid)};
+        PrefabApplyOutcome outcome;
         std::array<Error, 2> rollbackFailure{MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed),
                                              MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed)};
         auto exception = MakeError(Assets::AssetSourceErrors::ReadFailed, "Prefab apply publication failed.");
         std::array<ApplyFile, 2> files{{{prefab.path_, prefab.accepted_}, {request.scenePath, request.sceneIdentity}}};
-        auto project = mutations.TryAcquire({prefab.root_, ProjectMutationOwner::Save, "prefab.apply"});
-        if (project.HasError()) {
-            outcome.error = std::move(project).ErrorValue();
-            return outcome;
-        }
-        const auto fail = [&outcome](Error error) {
-            outcome.error = std::move(error);
-        };
         try {
             const auto run = [&]() -> Result<void> {
-                if (request.scenePath == prefab.path_)
-                    return Result<void>::Failure(MakeError(Prefab::PrefabErrors::DocumentInvalid));
-                if (auto current = sources.inputs.VerifyUnchanged(request.scene.cancellation); current.HasError())
-                    return current;
-                const auto commitments = sources.resolver.CanonicalSourceCommitments();
-                const auto base =
-                    std::ranges::find(commitments, prefab.source_->Data().assetId, &Prefab::PrefabCanonicalSourceCommitment::asset);
-                if (base == commitments.end() || base->digest != prefab.state_)
-                    return Result<void>::Failure(MakeError(Prefab::PrefabErrors::OverrideSourceStale));
-                const auto snapshot = scene.Snapshot();
-                if (snapshot.HasError())
-                    return Result<void>::Failure(snapshot.ErrorValue());
-                const auto &current = snapshot.Value();
-                SceneDocumentSnapshot view{{current.revision}, {current.state}, current.objects, current.prefabInstances};
-                auto content = PreparePrefabApply(view, request.selection, registry, sources.resolver, std::move(schemas), limits,
-                                                  request.scene.cancellation);
-                if (content.HasError())
-                    return Result<void>::Failure(std::move(content).ErrorValue());
-                auto prepared = std::move(content).Value();
-                auto sceneState = scene.PreparePrefabValues(request.scene, prepared.placements, request.selection.expectedReplacementEpoch);
-                if (sceneState.HasError())
-                    return Result<void>::Failure(std::move(sceneState).ErrorValue());
-                auto sourceState = prefab.PrepareApply(request.source, std::move(prepared.source));
-                if (sourceState.HasError())
-                    return Result<void>::Failure(std::move(sourceState).ErrorValue());
-                auto preparedSource = std::move(sourceState).Value();
                 auto sourceBytes = preparedSource.source->SerializeCanonical();
                 if (sourceBytes.HasError())
                     return Result<void>::Failure(std::move(sourceBytes).ErrorValue());
                 files[0].replacement = std::move(sourceBytes).Value();
-                files[1].replacement = SceneSource::EncodeSceneSource({view.objects, prepared.placements});
+                files[1].replacement = scene.EncodePreparedScene(preparedScene);
                 {
                     const SourceWriteGuard guard(prefab.busy_);
                     if (auto captured = CaptureFiles(files, prefab.root_, storage, request.scene.cancellation); captured.HasError())
@@ -182,21 +231,23 @@ namespace Horo::Editor {
                     if (auto current = VerifyInstalledFiles(files, prefab.root_, request.scene.cancellation); current.HasError())
                         return current;
                 }
-                if (auto valid = scene.ValidatePrepared(*sceneState.Value()); valid.HasError())
+                if (auto valid = scene.ValidatePrepared(preparedScene); valid.HasError())
                     return valid;
                 if (auto valid = prefab.Admit(request.source); valid.HasError())
                     return valid;
-                auto resultingScene = scene.PreparedContext(*sceneState.Value());
+                outcome.sceneChecksum = FormatSha256(files[1].installed->digest);
+                auto resultingScene = scene.PreparedContext(preparedScene);
                 resultingScene.cancellation = {};
                 prefab.PublishApply(preparedSource, *files[0].installed);
-                outcome.committed = scene.PublishPrepared(*sceneState.Value());
+                outcome.committed = scene.PublishPrepared(preparedScene);
+                outcome.group = request.group;
                 outcome.sceneIdentity = *files[1].installed;
                 return scene.MarkSaved(resultingScene);
             };
             if (auto applied = run(); applied.HasError())
-                fail(std::move(applied).ErrorValue());
+                outcome.error = std::move(applied).ErrorValue();
         } catch (...) {
-            fail(std::move(exception));
+            outcome.error = std::move(exception);
         }
         if (!outcome.committed) {
             const SourceWriteGuard guard(prefab.busy_);

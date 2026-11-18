@@ -66,15 +66,17 @@ namespace Horo::Editor {
                  static_cast<unsigned long long>(snapshot.revision.value), WorkspacePathText(*m_defaultScenePath).c_str());
     }
 
-    bool EditorWorkspaceController::CommitSceneSave(const SceneDocumentSnapshot &snapshot, const SceneFileFingerprint &fingerprint,
-                                                    const std::optional<std::filesystem::path> &newActivePath) {
-        if (const Result<void> marked = m_document.MarkSaved(snapshot.revision, snapshot.state); marked.HasError()) {
+    bool EditorWorkspaceController::CommitSceneSave(const DocumentRevision revision, const DocumentStateId state,
+                                                    SceneFileFingerprint fingerprint,
+                                                    const std::optional<std::filesystem::path> &newActivePath,
+                                                    const DocumentChangeKind kind) {
+        if (const Result<void> marked = m_document.MarkSaved(revision, state); marked.HasError()) {
             LOG_ERROR("editor.scene_document", "Saved scene state could not be acknowledged: %s", marked.ErrorValue().message.c_str());
             return false;
         }
         if (newActivePath.has_value())
             m_defaultScenePath = *newActivePath;
-        m_sceneFingerprint = fingerprint;
+        m_sceneFingerprint = std::move(fingerprint);
         if (m_sceneFileWatch != nullptr)
             m_sceneFileWatch->Reset();
         m_viewModel.sceneExternalConflict = false;
@@ -89,11 +91,7 @@ namespace Horo::Editor {
             m_lastAutosavedState = {};
         }
         m_autosaveSuppressedForDiscard = false;
-        m_dataBus.Publish(SceneDocumentChangedEvent{m_document.Revision(),
-                                                    m_document.State(),
-                                                    DocumentChangeKind::SaveStateChanged,
-                                                    m_document.IsDirty(),
-                                                    {}});
+        m_dataBus.Publish(SceneDocumentChangedEvent{m_document.Revision(), m_document.State(), kind, m_document.IsDirty(), {}});
         RefreshSceneProjections();
         return true;
     }
@@ -130,7 +128,7 @@ namespace Horo::Editor {
             return;
         }
 
-        if (!CommitSceneSave(snapshot, saved.Value().fingerprint))
+        if (!CommitSceneSave(snapshot.revision, snapshot.state, saved.Value().fingerprint))
             return;
         LOG_INFO("editor.scene_document", "Saved scene revision %llu to '%s'.", static_cast<unsigned long long>(snapshot.revision.value),
                  WorkspacePathText(*m_defaultScenePath).c_str());
@@ -225,7 +223,7 @@ namespace Horo::Editor {
 
         if (auto closed = ShutdownCollisionSettings(); closed.HasError())
             return;
-        if (!CommitSceneSave(snapshot, fingerprint, destination))
+        if (!CommitSceneSave(snapshot.revision, snapshot.state, fingerprint, destination))
             return;
         LOG_INFO("editor.scene_document", "Saved scene revision %llu as '%s'; active document identity was updated.",
                  static_cast<unsigned long long>(snapshot.revision.value), WorkspacePathText(destination).c_str());

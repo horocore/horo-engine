@@ -31,6 +31,7 @@
 #include "editor/renderer/xr/EditorXrSceneGeometry.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/PCGPreviewWorkspace.h"
+#include "editor/screens/workspace/prefab/PrefabApplyTransaction.h"
 #include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
 #include "editor/screens/workspace/prefab/PrefabHierarchySources.h"
 #include "terrain/TerrainAssetCreation.h"
@@ -610,6 +611,7 @@ namespace Horo::Editor {
         std::uint64_t m_prefabPublication{};
         std::uint64_t m_prefabObservedDocumentEpoch{};
         std::optional<PrefabHierarchySources> m_prefabSources;
+        std::array<std::optional<PrefabApplyRecovery>, 2> m_prefabApplyRecovery;
         std::optional<Prefab::PrefabValueSchemaSnapshot> m_navigationPrefabSchemas;
         /** @brief Explicitly compose inert built-in navigation topology metadata once for source and edit resolution. */
         [[nodiscard]] Result<void> EnsureNavigationPrefabSchemas(const Prefab::PrefabLimitProfile &limits);
@@ -681,6 +683,7 @@ namespace Horo::Editor {
         std::weak_ptr<const ProjectMutationLease> m_worldBakeSourceReservation;
         SceneDocument m_document;
         EditorHistory m_history;
+        SceneDocumentTransactions m_prefabSceneTransaction;
         std::optional<SceneDocumentTransactions> m_physicsTransactions;
         std::optional<SceneDocumentTransactions> m_collisionScene;
         std::shared_ptr<CollisionProjectSettingsSession> m_collisionSettings;
@@ -895,6 +898,15 @@ namespace Horo::Editor {
                                                                                 const PrefabHierarchyEntry &entry);
         /** @brief Retires cached source and selection evidence after a successful scene opening replacement. */
         void RetirePrefabHierarchy() noexcept;
+        /** @brief Borrows the one Prefab transaction port for the current Scene opening. */
+        [[nodiscard]] Result<SceneTransactionContext> CapturePrefabSceneContext();
+        /** @brief Applies the selected Scene overrides using the already open canonical Prefab source owner. */
+        [[nodiscard]] Result<void> ApplyPrefabHierarchyOverrides(const PrefabHierarchyCommand &request, const PrefabHierarchyEntry &entry);
+        /** @brief Routes a coordinated head from either document, or false when ordinary history owns the command. */
+        [[nodiscard]] Result<bool> ReplayPrefabApply(bool redo, PrefabDocumentSession *source = nullptr);
+        /** @brief Publishes the paired completion and retains any unresolved native rollback evidence. */
+        [[nodiscard]] Result<void> CompletePrefabApply(PrefabApplyOutcome outcome, DocumentChangeKind kind);
+
         /** @brief Contains every postcommit observer failure without reverting authoritative Scene or asset state.
          * @param selectionChanged Whether the canonical selection owner committed a clear requiring notification.
          * @param observerFailure Engaged fallback optional prepared before publication and moved without throwing on observer failure.
@@ -938,8 +950,9 @@ namespace Horo::Editor {
         [[nodiscard]] bool LoadInitialScene(const std::filesystem::path &absoluteProjectRoot);
         void CreateBootstrapScene();
         void InspectInitialSceneRecovery(const std::filesystem::path &absoluteProjectRoot);
-        [[nodiscard]] bool CommitSceneSave(const SceneDocumentSnapshot &snapshot, const SceneFileFingerprint &fingerprint,
-                                           const std::optional<std::filesystem::path> &newActivePath = std::nullopt);
+        [[nodiscard]] bool CommitSceneSave(DocumentRevision revision, DocumentStateId state, SceneFileFingerprint fingerprint,
+                                           const std::optional<std::filesystem::path> &newActivePath = std::nullopt,
+                                           DocumentChangeKind kind = DocumentChangeKind::SaveStateChanged);
         /** @brief Closed owner intents; every deferred replacement retains its original authoring consent. */
         enum class PlaySceneReplacementKind {
             External,

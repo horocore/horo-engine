@@ -217,6 +217,10 @@ namespace Horo::Editor {
                                                                             std::span<const SceneSource::ScenePrefabInstance> placements,
                                                                             std::uint64_t expectedReplacementEpoch,
                                                                             SceneTransactionLimits limits = {}) const;
+        /** @brief Identifies only an exact next coordinated prefab value history entry. */
+        [[nodiscard]] Result<std::optional<std::uint64_t>> NextPrefabValueState(const SceneTransactionContext &context, bool redo) const;
+        /** @brief Encodes the already reserved canonical root without rereading live state. */
+        [[nodiscard]] std::string EncodePreparedScene(const Prepared &prepared) const;
         /** @brief Computes the post-publication fence from prepared owner state without copying a root. */
         [[nodiscard]] SceneTransactionContext PreparedContext(const Prepared &prepared) const noexcept;
         /** @brief Rechecks the exact prepared owner fence without mutation or callbacks. */

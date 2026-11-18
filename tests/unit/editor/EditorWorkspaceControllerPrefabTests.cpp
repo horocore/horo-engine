@@ -73,6 +73,60 @@ namespace Horo::Editor {
         }
     }
 
+    TEST_CASE("Workspace prefab inspector applies the fenced value and replays from both documents", "[editor][prefab][native]") {
+        Workspace workspace;
+        workspace.project.WriteScene(RootValueIntent(workspace.project));
+        workspace.Open(PrefabAsset(10).Asset());
+        auto &owner = *workspace.controller;
+        const auto &model = owner.ViewModel();
+        workspace.OpenPrefab();
+        const auto prefabTab = model.prefabDocuments.front().identity.instance;
+        REQUIRE(model.workspacePanelHost.ActiveDocument() == prefabTab);
+        owner.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::ChangeActivePanel, .targetIndex = 3, .stringPayload = "horo.viewport"});
+        REQUIRE_FALSE(model.workspacePanelHost.ActiveDocument());
+        REQUIRE(model.prefabApplyAvailable);
+        const auto projection = model.prefabHierarchy;
+        REQUIRE(projection);
+        const auto &root = projection->entries.front();
+        const auto row = std::ranges::find_if(root.valueDiff, [](const auto &entry) {
+            return entry.revertValue.has_value();
+        });
+        REQUIRE(row != root.valueDiff.end());
+        auto command = Intent(model, root.target, PrefabHierarchyAction::ApplyOverrides);
+        command.prefabHierarchy->revert =
+            PrefabHierarchyRevert{PrefabHierarchyRevertScope::Value, static_cast<std::uint32_t>(row - root.valueDiff.begin())};
+        const auto sourceTransform = [&] {
+            return model.prefabDocuments.front().source->Data().objects.front().localTransform;
+        };
+        const auto original = sourceTransform();
+        const auto revision = model.documentRevision;
+        owner.ProcessCommand(command);
+        INFO((model.prefabOverrideError ? model.prefabOverrideError->message : std::string{}));
+        REQUIRE_FALSE(model.prefabOverrideError);
+        REQUIRE(model.documentRevision.value == revision.value + 1);
+        REQUIRE_FALSE(model.prefabHierarchy->entries.front().hasOverrides);
+        CHECK(sourceTransform() == Math::Transform{{1, 2, 3}});
+        CHECK_FALSE(model.isDirty);
+        CHECK_FALSE(model.prefabDocuments.front().dirty);
+
+        owner.ProcessCommand({.command = EditorWorkspaceViewCommand::UndoScene});
+        INFO((model.prefabOverrideError ? model.prefabOverrideError->message : std::string{}));
+        REQUIRE_FALSE(model.prefabOverrideError);
+        CHECK(model.prefabHierarchy->entries.front().hasOverrides);
+        CHECK(sourceTransform() == original);
+        CHECK_FALSE(model.isDirty);
+
+        owner.ProcessCommand({.command = EditorWorkspaceViewCommand::FocusWorkspaceDocument, .documentInstance = prefabTab});
+        workspace.Action(PrefabDocumentAction::Redo);
+        INFO((model.prefabDocumentError ? model.prefabDocumentError->message : std::string{}));
+        REQUIRE_FALSE(model.prefabDocumentError);
+        CHECK(sourceTransform() == Math::Transform{{1, 2, 3}});
+        CHECK_FALSE(model.prefabHierarchy->entries.front().hasOverrides);
+        CHECK_FALSE(model.isDirty);
+        CHECK_FALSE(model.prefabDocuments.front().dirty);
+    }
+
     TEST_CASE("Workspace prefab selection and source navigation retain exact ownership without ordinary mutation",
               "[editor][prefab][native]") {
         Workspace workspace;

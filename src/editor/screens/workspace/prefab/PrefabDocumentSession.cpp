@@ -198,7 +198,7 @@ namespace Horo::Editor {
         if (conflict_)
             return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
         const auto *delta = history_.Next(redo);
-        if (!delta || delta->coordinated)
+        if (!delta || delta->applyGroup)
             return Result<void>::Failure(MakeError(SourceDocumentErrors::Stale));
         auto candidate = Apply(redo ? delta->after : delta->before);
         if (candidate.HasError())
@@ -214,9 +214,18 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @copydoc PrefabDocumentSession::NextApplyGroup */
+    std::optional<PrefabApplyHistoryGroup> PrefabDocumentSession::NextApplyGroup(const bool redo) const noexcept {
+        if (thread_ != std::this_thread::get_id() || !source_)
+            return std::nullopt;
+        const auto *delta = history_.Next(redo);
+        return delta ? delta->applyGroup : std::nullopt;
+    }
+
     /** @copydoc PrefabDocumentSession::PrepareApply */
     Result<PrefabDocumentSession::PreparedApply> PrefabDocumentSession::PrepareApply(const PrefabDocumentFence &fence,
-                                                                                     Prefab::PrefabDocument source) const {
+                                                                                     Prefab::PrefabDocument source,
+                                                                                     const PrefabApplyHistoryGroup group) const {
         using Return = Result<PreparedApply>;
         if (auto admitted = Admit(fence); admitted.HasError())
             return Return::Failure(admitted.ErrorValue());
@@ -233,10 +242,31 @@ namespace Horo::Editor {
         const auto bytes = EditBytes(before, after);
         if (bytes.HasError())
             return Return::Failure(bytes.ErrorValue());
-        auto history = history_.Prepare(Delta{before, after, bytes.Value(), true});
+        auto history = history_.Prepare(Delta{before, after, bytes.Value(), group});
         if (!history)
             return Return::Failure(MakeError(Assets::AssetSourceErrors::Limit));
         return Return::Success({std::move(replacement), digest.Value(), std::move(history)});
+    }
+
+    /** @copydoc PrefabDocumentSession::PrepareApplyReplay */
+    Result<PrefabDocumentSession::PreparedApply> PrefabDocumentSession::PrepareApplyReplay(const PrefabDocumentFence &fence,
+                                                                                           const PrefabApplyHistoryGroup group,
+                                                                                           const bool redo) const {
+        using Return = Result<PreparedApply>;
+        if (auto admitted = Admit(fence); admitted.HasError())
+            return Return::Failure(admitted.ErrorValue());
+        if (conflict_ || saved_ != state_)
+            return Return::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+        const auto *delta = history_.Next(redo);
+        if (!delta || delta->applyGroup != group)
+            return Return::Failure(MakeError(SourceDocumentErrors::Stale));
+        const auto &replacement = std::get<SourceReplacement>(redo ? delta->after : delta->before);
+        auto digest = Digest(*replacement);
+        if (digest.HasError())
+            return Return::Failure(std::move(digest).ErrorValue());
+        auto history = std::make_unique<SemanticDocumentHistory<Delta>>(history_);
+        history->DidReplay(redo);
+        return Return::Success({replacement, digest.Value(), std::move(history)});
     }
 
     /** @copydoc PrefabDocumentSession::PublishApply */

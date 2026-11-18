@@ -608,6 +608,8 @@ namespace Horo::Editor {
         std::optional<Error> terrainDocumentError;
         std::vector<PrefabDocumentSnapshot> prefabDocuments;
         std::optional<Error> prefabDocumentError;
+        std::optional<Error> prefabOverrideError;
+        bool prefabApplyAvailable{};
         bool prefabRecoveryAvailable{};
         std::shared_ptr<const DocumentRecoveryRecord> prefabRecovery;
         std::vector<SourceHistoryState> sourceHistory;

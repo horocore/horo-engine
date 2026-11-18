@@ -21,9 +21,21 @@ namespace Horo::Editor {
     /** @brief Application outcome preserving the original failure and each unconfirmed compensation separately. */
     struct PrefabApplyOutcome final {
         std::optional<SceneTransactionResult> committed;
+        std::optional<PrefabApplyHistoryGroup> group;
         Assets::AssetSourceIdentity sceneIdentity;
+        std::string sceneChecksum;
         std::optional<Error> error;
         std::array<std::optional<PrefabApplyRecovery>, 2> recovery;
+    };
+
+    /** @brief Exact matching owner and disk evidence for one paired undo or redo. */
+    struct PrefabApplyReplayRequest final {
+        SceneTransactionContext scene;
+        PrefabDocumentFence source;
+        std::filesystem::path scenePath;
+        Assets::AssetSourceIdentity sceneIdentity;
+        PrefabApplyHistoryGroup group;
+        bool redo{};
     };
 
     /** @brief Exact live Scene and source evidence for a single override promotion. */
@@ -49,5 +61,21 @@ namespace Horo::Editor {
                                                         std::shared_ptr<const Prefab::PrefabValueSchemaSnapshot> schemas,
                                                         const Prefab::PrefabLimitProfile &limits,
                                                         const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
+        /** @brief Returns the next exact coordinated Prefab group from Scene history, if one is at its head. */
+        [[nodiscard]] static Result<std::optional<PrefabApplyHistoryGroup>> NextSceneGroup(const SceneDocumentTransactions &scene,
+                                                                                           const SceneTransactionContext &context,
+                                                                                           bool redo);
+
+        /** @brief Replays the same matched group in both owners and writes both resulting files together. */
+        [[nodiscard]] static PrefabApplyOutcome Replay(SceneDocumentTransactions &scene, PrefabDocumentSession &prefab,
+                                                       const PrefabApplyReplayRequest &request, const ProjectMutationCoordinator &mutations,
+                                                       DurableFileSystem &files);
+
+    private:
+        /** @brief Publishes the pair of reserved owners, compensating owned bytes on any early failure. */
+        [[nodiscard]] static PrefabApplyOutcome Publish(SceneDocumentTransactions &scene, PrefabDocumentSession &prefab,
+                                                        SceneDocumentTransactions::Prepared &preparedScene,
+                                                        PrefabDocumentSession::PreparedApply &preparedSource,
+                                                        const PrefabApplyReplayRequest &request, DurableFileSystem &files);
     };
 }  // namespace Horo::Editor

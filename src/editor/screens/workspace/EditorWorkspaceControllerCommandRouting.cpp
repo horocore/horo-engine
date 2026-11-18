@@ -165,11 +165,17 @@ namespace Horo::Editor {
                 DiscardSceneRecovery();
                 break;
             case EditorWorkspaceViewCommand::UndoScene:
-                HandleDocumentCommandResult(m_documentCommands.Undo(), "Undo");
+            case EditorWorkspaceViewCommand::RedoScene: {
+                const bool redo = cmd.command == EditorWorkspaceViewCommand::RedoScene;
+                auto paired = ReplayPrefabApply(redo);
+                if (paired.HasError()) {
+                    m_viewModel.prefabOverrideError = std::move(paired).ErrorValue();
+                    HandleDocumentCommandResult(Result<SceneCommandResult>::Failure(*m_viewModel.prefabOverrideError),
+                                                redo ? "Redo prefab overrides" : "Undo prefab overrides");
+                } else if (!paired.Value())
+                    HandleDocumentCommandResult(redo ? m_documentCommands.Redo() : m_documentCommands.Undo(), redo ? "Redo" : "Undo");
                 break;
-            case EditorWorkspaceViewCommand::RedoScene:
-                HandleDocumentCommandResult(m_documentCommands.Redo(), "Redo");
-                break;
+            }
             default:
                 return false;
         }

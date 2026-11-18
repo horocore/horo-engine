@@ -105,8 +105,8 @@ namespace Horo::Editor {
         }
 
         /** @brief Translates a previously validated presentation choice to canonical Scene-owned addresses. */
-        std::optional<ScenePrefabRevertTarget> OverrideRevertTarget(const PrefabHierarchyRevert &revert,
-                                                                    const PrefabHierarchyEntry &entry) {
+        std::optional<ScenePrefabRevertTarget> OverrideSelectionTarget(const PrefabHierarchyRevert &revert,
+                                                                       const PrefabHierarchyEntry &entry) {
             switch (revert.scope) {
                 using enum PrefabHierarchyRevertScope;
                 case Value:
@@ -150,28 +150,20 @@ namespace Horo::Editor {
                 admission.HasError() ? admission.ErrorValue() : MakeError(SceneTransactionError(SceneTransactionFailure::Stale));
             return outcome;
         }
-        auto boundPort = SceneDocumentTransactions::Bind(m_document, m_history, {m_collisionSceneOwner, intent.replacementEpoch + 1});
+        const auto context = CapturePrefabSceneContext();
         const auto metadata = Application::LoadProjectMetadata(ProjectRoot());
-        if (boundPort.HasError() || metadata.HasError()) {
-            outcome.error = boundPort.HasError() ? boundPort.ErrorValue() : metadata.ErrorValue();
+        if (context.HasError() || metadata.HasError()) {
+            outcome.error = context.HasError() ? context.ErrorValue() : metadata.ErrorValue();
             return outcome;
         }
-        auto port = std::move(boundPort).Value();
-        const auto captured = port.Snapshot();
-        if (captured.HasError()) {
-            outcome.error = captured.ErrorValue();
-            return outcome;
-        }
-        const auto &snapshot = captured.Value();
-        const SceneTransactionContext context{snapshot.session, snapshot.revision, snapshot.state, true};
         auto sourceFence = CreationSceneSourceFence(m_defaultScenePath, m_sceneFingerprint);
         if (sourceFence.HasError()) {
             outcome.error = sourceFence.ErrorValue();
             return outcome;
         }
-        return CreatePrefabFromSelection(port,
-                                         {context, intent.root, ProjectRoot(), intent.destination, GenerateRandomAssetId(m_assetRegistry),
-                                          metadata.Value().horoVersion.value, m_assetRegistry,
+        return CreatePrefabFromSelection(m_prefabSceneTransaction,
+                                         {context.Value(), intent.root, ProjectRoot(), intent.destination,
+                                          GenerateRandomAssetId(m_assetRegistry), metadata.Value().horoVersion.value, m_assetRegistry,
                                           m_gameplayRegistry ? &m_gameplayRegistry->Registry() : nullptr, std::move(sourceFence).Value()},
                                          *m_mutations, *m_durableFiles);
     }
@@ -246,6 +238,11 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::RefreshPrefabHierarchy */
     void EditorWorkspaceController::RefreshPrefabHierarchy(const SceneDocumentSnapshot &document) {
+        m_viewModel.prefabApplyAvailable = m_defaultScenePath && m_sceneFingerprint && m_sceneFingerprint->exists && m_mutations &&
+                                           m_durableFiles && m_collisionSceneOwner.IsValid() &&
+                                           std::ranges::none_of(m_prefabApplyRecovery, [](const auto &item) {
+            return item.has_value();
+        });
         if (m_viewModel.prefabHierarchy && m_prefabObservedDocumentEpoch != m_document.ReplacementEpoch())
             RetirePrefabHierarchy();
         if (!m_workspaceSession.IsValid() && document.prefabInstances.empty()) {
@@ -303,7 +300,7 @@ namespace Horo::Editor {
     Result<SceneCommandResult> EditorWorkspaceController::RevertPrefabHierarchyOverrides(const PrefabHierarchyCommand &request,
                                                                                          const PrefabHierarchyEntry &entry) {
         using Return = Result<SceneCommandResult>;
-        auto selection = OverrideRevertTarget(*request.revert, entry);
+        auto selection = OverrideSelectionTarget(*request.revert, entry);
         if (!selection)
             return Return::Failure(MakeError(Prefab::PrefabErrors::AddressInvalid));
         if (!m_prefabSources || !m_prefabSourceCapture || !m_navigationPrefabSchemas ||
@@ -334,6 +331,134 @@ namespace Horo::Editor {
                                                                std::move(*selection),
                                                                m_prefabObservedDocumentEpoch},
                              fresh.Value().sources.resolver, &*m_navigationPrefabSchemas, limits.Value(), cancellation);
+    }
+
+    /** @copydoc EditorWorkspaceController::CapturePrefabSceneContext */
+    Result<SceneTransactionContext> EditorWorkspaceController::CapturePrefabSceneContext() {
+        using Return = Result<SceneTransactionContext>;
+        const SceneTransactionSession session{m_collisionSceneOwner, m_document.ReplacementEpoch() + 1};
+        if (m_prefabSceneTransaction.CheckCurrent().HasError()) {
+            auto bound = SceneDocumentTransactions::Bind(m_document, m_history, session);
+            if (bound.HasError())
+                return Return::Failure(std::move(bound).ErrorValue());
+            m_prefabSceneTransaction = std::move(bound).Value();
+        }
+        return Return::Success({session, m_document.Revision().value, m_document.State().value, true, m_prefabCancellation.Token()});
+    }
+
+    /** @copydoc EditorWorkspaceController::ApplyPrefabHierarchyOverrides */
+    Result<void> EditorWorkspaceController::ApplyPrefabHierarchyOverrides(const PrefabHierarchyCommand &request,
+                                                                          const PrefabHierarchyEntry &entry) {
+        if (!m_viewModel.prefabApplyAvailable || m_viewModel.recoveryAvailable || !m_prefabSources || !m_navigationPrefabSchemas)
+            return Result<void>::Failure(MakeError(SceneTransactionError(SceneTransactionFailure::Unauthorized)));
+        const auto selection = OverrideSelectionTarget(*request.revert, entry);
+        const auto *root = m_viewModel.prefabHierarchy->Find({request.target.instance, std::nullopt});
+        if (!selection || !root)
+            return Result<void>::Failure(MakeError(Prefab::PrefabErrors::AddressInvalid));
+        const auto source = std::ranges::find_if(m_prefabDocuments, [asset = root->source](const auto &document) {
+            return document->Snapshot().source->Data().assetId == asset;
+        });
+        if (source == m_prefabDocuments.end())
+            return Result<void>::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
+        const auto limits = PrefabLimits();
+        if (limits.HasError())
+            return Result<void>::Failure(limits.ErrorValue());
+        auto expected = m_prefabSources->resolver.CaptureResolutionRevision(root->source, limits.Value());
+        if (expected.HasError())
+            return Result<void>::Failure(std::move(expected).ErrorValue());
+        auto disk = CreationSceneSourceFence(m_defaultScenePath, m_sceneFingerprint);
+        if (disk.HasError() || !disk.Value())
+            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+        const auto context = CapturePrefabSceneContext();
+        if (context.HasError())
+            return Result<void>::Failure(context.ErrorValue());
+        const auto schema = std::make_shared<const Prefab::PrefabValueSchemaSnapshot>(*m_navigationPrefabSchemas);
+        return CompletePrefabApply(PrefabApplyTransaction::Execute(m_prefabSceneTransaction, **source,
+                                                                   {context.Value(),
+                                                                    {request.target.instance,
+                                                                     {request.documentRevision},
+                                                                     std::move(expected).Value(),
+                                                                     schema->Revision(),
+                                                                     *selection,
+                                                                     m_prefabObservedDocumentEpoch},
+                                                                    (*source)->Snapshot().fence,
+                                                                    disk.Value()->path,
+                                                                    disk.Value()->accepted},
+                                                                   m_assetRegistry, *m_prefabSources, schema, limits.Value(), *m_mutations,
+                                                                   *m_durableFiles),
+                                   DocumentChangeKind::PrefabInstanceValuesChanged);
+    }
+
+    /** @copydoc EditorWorkspaceController::ReplayPrefabApply */
+    Result<bool> EditorWorkspaceController::ReplayPrefabApply(const bool redo, PrefabDocumentSession *source) {
+        using Return = Result<bool>;
+        const auto requested = source ? source->NextApplyGroup(redo) : std::nullopt;
+        if (source && !requested)
+            return Return::Success(false);
+        if (!m_collisionSceneOwner.IsValid())
+            return source ? Return::Failure(MakeError(Prefab::PrefabErrors::OverrideSourceStale)) : Return::Success(false);
+        const auto context = CapturePrefabSceneContext();
+        if (context.HasError())
+            return Return::Failure(context.ErrorValue());
+        const auto group = PrefabApplyTransaction::NextSceneGroup(m_prefabSceneTransaction, context.Value(), redo);
+        if (group.HasError())
+            return Return::Failure(group.ErrorValue());
+        if (!group.Value() && !source)
+            return Return::Success(false);
+        if (!group.Value() || (source && requested != group.Value()))
+            return Return::Failure(MakeError(Prefab::PrefabErrors::OverrideSourceStale));
+        if (!source) {
+            const auto match = std::ranges::find_if(m_prefabDocuments, [&](const auto &candidate) {
+                return candidate->NextApplyGroup(redo) == group.Value();
+            });
+            if (match == m_prefabDocuments.end())
+                return Return::Failure(MakeError(Prefab::PrefabErrors::OverrideSourceStale));
+            source = match->get();
+        }
+        if (!m_viewModel.prefabApplyAvailable || m_viewModel.sceneExternalConflict || m_viewModel.recoveryAvailable ||
+            m_playSession.IsActive())
+            return Return::Failure(MakeError(SceneTransactionError(SceneTransactionFailure::Unauthorized)));
+        const auto disk = CreationSceneSourceFence(m_defaultScenePath, m_sceneFingerprint);
+        if (disk.HasError() || !disk.Value())
+            return Return::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+        auto completion = CompletePrefabApply(PrefabApplyTransaction::Replay(m_prefabSceneTransaction, *source,
+                                                                             {context.Value(), source->Snapshot().fence, disk.Value()->path,
+                                                                              disk.Value()->accepted, *group.Value(), redo},
+                                                                             *m_mutations, *m_durableFiles),
+                                              redo ? DocumentChangeKind::Redone : DocumentChangeKind::Undone);
+        if (completion.HasError())
+            return Return::Failure(std::move(completion).ErrorValue());
+        return Return::Success(true);
+    }
+
+    /** @copydoc EditorWorkspaceController::CompletePrefabApply */
+    Result<void> EditorWorkspaceController::CompletePrefabApply(PrefabApplyOutcome outcome, const DocumentChangeKind kind) {
+        if (!outcome.committed) {
+            if (std::ranges::any_of(outcome.recovery, [](const auto &item) {
+                return item.has_value();
+            })) {
+                m_prefabApplyRecovery = std::move(outcome.recovery);
+                m_viewModel.prefabApplyAvailable = false;
+                m_viewModel.sceneExternalConflict = true;
+                return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed));
+            }
+            return Result<void>::Failure(std::move(*outcome.error));
+        }
+        m_prefabSources.reset();
+        m_viewModel.prefabOverrideError.reset();
+        const auto &identity = outcome.sceneIdentity;
+        const auto &committed = *outcome.committed;
+        try {
+            m_viewport.ClearTransformPreview();
+            m_viewport.ClearLightPreview();
+            static_cast<void>(CommitSceneSave({committed.revision}, {committed.state},
+                                              {identity.exists, identity.bytes, std::move(outcome.sceneChecksum)}, {}, kind));
+            m_selection.Reconcile();
+            ScheduleContentBrowserPreviews();
+        } catch (...) {
+            LOG_ERROR("editor.prefab", "Paired Prefab publication committed, but workspace refresh failed.");
+        }
+        return Result<void>::Success();
     }
 
     /** @copydoc EditorWorkspaceController::ProcessPrefabHierarchyCommand */
@@ -373,6 +498,12 @@ namespace Horo::Editor {
         }
         if (m_viewModel.sceneExternalConflict || m_playSession.IsActive())
             return true;
+        if (request.action == PrefabHierarchyAction::ApplyOverrides) {
+            auto applied = ApplyPrefabHierarchyOverrides(request, *admitted.Value());
+            if (applied.HasError())
+                m_viewModel.prefabOverrideError = std::move(applied).ErrorValue();
+            return true;
+        }
         if (request.action == PrefabHierarchyAction::RevertOverrides) {
             HandleDocumentCommandResult(RevertPrefabHierarchyOverrides(request, *admitted.Value()), "Revert prefab overrides");
             return true;

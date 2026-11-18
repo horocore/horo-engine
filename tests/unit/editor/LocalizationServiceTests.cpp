@@ -132,10 +132,9 @@ namespace {
         "workspace.recovery.discard",
     };
     constexpr std::array prefabOverrideKeys{
-        "workspace.prefab.diff.revert_value",
-        "workspace.prefab.diff.revert_component",
-        "workspace.prefab.diff.revert_object",
-        "workspace.prefab.diff.revert_instance",
+        "workspace.prefab.diff.revert_value",    "workspace.prefab.diff.revert_component", "workspace.prefab.diff.revert_object",
+        "workspace.prefab.diff.revert_instance", "workspace.prefab.diff.apply_value",      "workspace.prefab.diff.apply_component",
+        "workspace.prefab.diff.apply_object",    "workspace.prefab.diff.apply_instance",
     };
     constexpr std::array projectLoadingKeys{
         "project_loading.status.loading_scene",      "project_loading.error.scene",

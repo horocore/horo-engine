@@ -36,6 +36,14 @@ namespace Horo::Editor {
 
     using PrefabSourceEdit = std::variant<RenamePrefabObject, TransformPrefabObject>;
 
+    /** @brief Exact matching Scene history state for one cross-document source edit. */
+    struct PrefabApplyHistoryGroup final {
+        Assets::AssetId sceneOwner;
+        std::uint64_t sceneOpening{};
+        std::uint64_t sceneState{};
+        auto operator<=>(const PrefabApplyHistoryGroup &) const noexcept = default;
+    };
+
     /** @brief Immutable source/session projection; dirty/saved/recovery and runtime state are independent. */
     struct PrefabDocumentSnapshot final {
         DocumentIdentity identity;
@@ -108,6 +116,8 @@ namespace Horo::Editor {
         /** @brief Replays exact semantic values. @param fence Current source admission. @param redo Replay direction.
          * @return Success or zero-mutation rejection. */
         [[nodiscard]] Result<void> Replay(const PrefabDocumentFence &fence, bool redo);
+        /** @brief Returns an exact source-side coordinated replay candidate, if one is next. */
+        [[nodiscard]] std::optional<PrefabApplyHistoryGroup> NextApplyGroup(bool redo) const noexcept;
         /** @brief Saves through the existing project and asset publication authorities.
          * @param fence Current source admission. @param mutations Shared project writer. @param files Native durable service.
          * @return Tracked publication; uncertain durability retains dirty state and raises conflict. */
@@ -199,7 +209,7 @@ namespace Horo::Editor {
             Edit before;
             Edit after;
             std::size_t bytes{};
-            bool coordinated{};
+            std::optional<PrefabApplyHistoryGroup> applyGroup;
         };
 
         /** @brief Detached complete source and its already reserved semantic history. */
@@ -210,7 +220,11 @@ namespace Horo::Editor {
         };
 
         /** @brief Prepares the exact source-side state and history for a coordinated instance promotion. */
-        [[nodiscard]] Result<PreparedApply> PrepareApply(const PrefabDocumentFence &fence, Prefab::PrefabDocument source) const;
+        [[nodiscard]] Result<PreparedApply> PrepareApply(const PrefabDocumentFence &fence, Prefab::PrefabDocument source,
+                                                         PrefabApplyHistoryGroup group) const;
+        /** @brief Reserves exact source replay for the same coordinated Scene history group. */
+        [[nodiscard]] Result<PreparedApply> PrepareApplyReplay(const PrefabDocumentFence &fence, PrefabApplyHistoryGroup group,
+                                                               bool redo) const;
         /** @brief Publishes durable source evidence and its previously reserved owner state without callbacks. */
         void PublishApply(PreparedApply &prepared, Assets::AssetSourceIdentity durable) noexcept;
 
