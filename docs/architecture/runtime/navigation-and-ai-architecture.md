@@ -2320,6 +2320,9 @@ reads the corresponding `QueryPointDistanceStageSettings` entry by its
 `QueryStageId`. Edits supply the same ordered identities with replacement values
 so undo, redo and source publication preserve each stage and its authored order.
 Existing query files retain the same serialized layout.
+The source tab can append a native distance stage and remove a distance stage by
+its exact identity. A structural edit includes the current field values in one
+undoable transaction. Appending preserves the semantic order of existing stages.
 
 Each native distance stage can store a positive integer relative score weight.
 An omitted weight means `1` and keeps existing source payloads valid. The scorer

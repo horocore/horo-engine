@@ -164,10 +164,18 @@ namespace Horo::Editor {
             std::uint64_t maximum{};
             bool annulus{};
             std::vector<Distance> distances;
+            std::uint64_t newDistanceRadius{};
             std::string widgetId;
+
+            /** @brief Checks all editable fields before narrowing user input. */
+            [[nodiscard]] bool IsValid() const;
+            /** @brief Converts the validated controls to an owning authoring request. */
+            [[nodiscard]] AI::BuiltinPointQuerySettings Capture() const;
         };
 
         mutable EnvironmentQueryFields m_environmentQueryFields;
+        /** @brief Draws the existing distance stages and returns the identity selected for removal. */
+        [[nodiscard]] std::optional<AI::QueryStageId> DrawEnvironmentQueryDistanceStages(EnvironmentQueryFields &fields) const;
         /** @brief Draws typed settings and emits a single revision-fenced edit/history action. */
         void DrawEnvironmentQuerySettings(const EnvironmentQueryWorkspaceDocument &document,
                                           EditorWorkspaceViewCommandData &outCommand) const;

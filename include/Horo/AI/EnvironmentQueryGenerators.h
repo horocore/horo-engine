@@ -93,12 +93,19 @@ namespace Horo::AI {
                                                                                const QueryContextSnapshot &contexts,
                                                                                const QueryGeneratorOutput &output);
 
-    /** @brief Adds the registered point-distance stage to an initial lattice source.
-     * @param lattice Admitted initial lattice source. @param stage Fresh stable test stage identity.
+    /** @brief Appends a point-distance stage to a native lattice source in semantic execution order.
+     * @param lattice Native lattice with zero or more native distance stages. @param stage Fresh stable test stage identity.
      * @param settings Explicit radius and optional score. @return Detached complete source or typed refusal.
+     * @post Existing stages retain their identities, source order and execution order.
      */
     [[nodiscard]] Result<EnvironmentQueryAsset> AddBuiltinPointDistanceTest(const EnvironmentQueryAsset &lattice, QueryStageId stage,
                                                                             QueryPointDistanceTest settings);
+
+    /** @brief Removes a native point-distance stage while retaining all other source data.
+     * @param lattice Detached source containing the stage. @param stage Stable identity of the test to remove.
+     * @return Detached source or a typed refusal when the identity is absent or selects a different stage kind.
+     */
+    [[nodiscard]] Result<EnvironmentQueryAsset> RemoveBuiltinPointDistanceTest(const EnvironmentQueryAsset &lattice, QueryStageId stage);
 
     /** @brief Decodes the exact supported native authored shape and settings.
      * @param asset Saved or draft query. @param registry Exact installed descriptor catalog.

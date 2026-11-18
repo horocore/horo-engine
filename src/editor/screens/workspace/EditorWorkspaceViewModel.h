@@ -44,6 +44,8 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
+#include <variant>
 #include <vector>
 
 namespace Horo::AI {
@@ -407,11 +409,15 @@ namespace Horo::Editor {
         Save
     };
 
+    /** @brief An optional structural edit: append a typed test or remove one exact stage. */
+    using EnvironmentQueryDistanceStageChange = std::variant<std::monostate, AI::QueryPointDistanceTest, AI::QueryStageId>;
+
     /** @brief A typed transaction correlated to exactly one authoring revision. */
     struct EnvironmentQueryEditRequest final {
         EnvironmentQueryDocumentFence fence;
         EnvironmentQueryEditAction action{EnvironmentQueryEditAction::Apply};
         std::optional<AI::BuiltinPointQuerySettings> settings;
+        EnvironmentQueryDistanceStageChange stageChange;
     };
 
     /** @brief An immutable, registered Environment Query source in a normal workspace document. */
@@ -747,9 +753,11 @@ namespace Horo::Editor {
     /** @brief Makes an exact Query edit or history command for the active workspace document. */
     inline EditorWorkspaceViewCommandData MakeEnvironmentQueryEditCommand(const EnvironmentQueryWorkspaceDocument &document,
                                                                           EnvironmentQueryEditAction action,
-                                                                          std::optional<AI::BuiltinPointQuerySettings> settings = {}) {
+                                                                          std::optional<AI::BuiltinPointQuerySettings> settings = {},
+                                                                          EnvironmentQueryDistanceStageChange stageChange = {}) {
         return {.command = EditorWorkspaceViewCommand::EditEnvironmentQuery,
-                .environmentQueryEdit = EnvironmentQueryEditRequest{{document.identity.instance, document.revision}, action, settings}};
+                .environmentQueryEdit =
+                    EnvironmentQueryEditRequest{{document.identity.instance, document.revision}, action, std::move(settings), stageChange}};
     }
 
     /** @brief Routes the shared Decision save/undo/redo action to the focused family. */

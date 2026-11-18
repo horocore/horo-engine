@@ -31,8 +31,22 @@ namespace Horo::AI {
                                                         std::uint64_t{settings.radiusMillimeters}},
                                                        {QueryPropertyId::Create(DistancePreferNearer).Value(), settings.preferNearer}};
             if (settings.scoreWeight != QueryPointDistanceTest{}.scoreWeight)
-                properties.push_back({QueryPropertyId::Create(DistanceScoreWeight).Value(), std::uint64_t{settings.scoreWeight}});
+                properties.emplace_back(QueryPropertyId::Create(DistanceScoreWeight).Value(), std::uint64_t{settings.scoreWeight});
             return properties;
+        }
+
+        /** @brief Recognizes the source shape admitted by native point-lattice authoring. */
+        bool HasBuiltinLatticeStages(const EnvironmentQueryAsset &asset) {
+            const auto stages = asset.Stages();
+            const auto first = std::ranges::min_element(stages, {}, &QueryAssetStage::executionOrder);
+            const auto generator = QueryGeneratorId::Create(LatticeGenerator).Value();
+            if (first == stages.end() || first->kind != QueryStageKind::Generator || first->generator != generator ||
+                asset.ResultSchema().itemType != QueryItemTypeId::Create(PointItem).Value())
+                return false;
+            const auto test = QueryTestId::Create(PointDistanceTest).Value();
+            return std::ranges::all_of(stages, [first, test](const QueryAssetStage &stage) {
+                return &stage == &*first || (stage.kind == QueryStageKind::Test && stage.test == test);
+            });
         }
 
         /** @brief Native origin shared by the inert registration and its exact kernels. */
@@ -205,23 +219,40 @@ namespace Horo::AI {
     /** @copydoc AddBuiltinPointDistanceTest */
     Result<EnvironmentQueryAsset> AddBuiltinPointDistanceTest(const EnvironmentQueryAsset &lattice, QueryStageId stage,
                                                               QueryPointDistanceTest settings) {
-        if (!stage.IsValid() || settings.radiusMillimeters == 0 || settings.scoreWeight == 0 || lattice.Stages().size() != 1 ||
-            lattice.Stages().front().generator != QueryGeneratorId::Create(LatticeGenerator).Value() ||
-            lattice.ResultSchema().itemType != QueryItemTypeId::Create(PointItem).Value())
-            return Result<EnvironmentQueryAsset>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-        const auto &generator = lattice.Stages().front();
-        QueryAssetStage test{
+        using Edited = Result<EnvironmentQueryAsset>;
+        if (!stage.IsValid() || settings.radiusMillimeters == 0 || settings.scoreWeight == 0 || !HasBuiltinLatticeStages(lattice))
+            return Edited::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+        const auto stages = lattice.Stages();
+        const auto last = std::ranges::max_element(stages, {}, &QueryAssetStage::executionOrder);
+        if (stages.size() == EnvironmentQuerySchemaLimits::Stages || last->executionOrder == std::numeric_limits<std::uint32_t>::max())
+            return Edited::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
+        QueryAssetSource edited{.id = lattice.Id(),
+                                .displayName = lattice.DisplayName(),
+                                .result = lattice.ResultSchema(),
+                                .stages = {stages.begin(), stages.end()}};
+        edited.stages.push_back({
             .id = stage,
             .kind = QueryStageKind::Test,
-            .executionOrder = 1,
+            .executionOrder = last->executionOrder + 1,
             .test = QueryTestId::Create(PointDistanceTest).Value(),
             .descriptorVersion = LatticeVersion,
             .properties = DistanceProperties(settings),
-        };
-        return EnvironmentQueryAsset::Capture({.id = lattice.Id(),
-                                               .displayName = lattice.DisplayName(),
-                                               .result = lattice.ResultSchema(),
-                                               .stages = {generator, std::move(test)}});
+        });
+        return EnvironmentQueryAsset::Capture(edited);
+    }
+
+    /** @copydoc RemoveBuiltinPointDistanceTest */
+    Result<EnvironmentQueryAsset> RemoveBuiltinPointDistanceTest(const EnvironmentQueryAsset &lattice, QueryStageId stage) {
+        const auto stages = lattice.Stages();
+        const auto test = std::ranges::find(stages, stage, &QueryAssetStage::id);
+        if (test == stages.end() || test->kind != QueryStageKind::Test || test->test != QueryTestId::Create(PointDistanceTest).Value())
+            return Result<EnvironmentQueryAsset>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+        QueryAssetSource edited{.id = lattice.Id(),
+                                .displayName = lattice.DisplayName(),
+                                .result = lattice.ResultSchema(),
+                                .stages = {stages.begin(), stages.end()}};
+        edited.stages.erase(edited.stages.begin() + (test - stages.begin()));
+        return EnvironmentQueryAsset::Capture(edited);
     }
 
     /** @copydoc ReadBuiltinPointQuerySettings */

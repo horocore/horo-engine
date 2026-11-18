@@ -527,6 +527,60 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc EditorWorkspaceView::EnvironmentQueryFields::IsValid */
+    bool EditorWorkspaceView::EnvironmentQueryFields::IsValid() const {
+        const auto positiveUint32 = [](std::uint64_t value) {
+            return value > 0 && value <= std::numeric_limits<std::uint32_t>::max();
+        };
+        return positiveUint32(step) && outer <= AI::MaximumQueryLatticeOuterSteps && (!annulus || inner <= outer) && maximum > 0 &&
+               maximum <= AI::EnvironmentQuerySchemaLimits::MaximumResults &&
+               std::ranges::all_of(distances, [positiveUint32](const Distance &distance) {
+            return positiveUint32(distance.radius) && positiveUint32(distance.weight);
+        });
+    }
+
+    /** @copydoc EditorWorkspaceView::EnvironmentQueryFields::Capture */
+    AI::BuiltinPointQuerySettings EditorWorkspaceView::EnvironmentQueryFields::Capture() const {
+        AI::BuiltinPointQuerySettings settings{{static_cast<std::uint32_t>(step), static_cast<std::uint32_t>(outer), {}},
+                                               static_cast<std::uint32_t>(maximum)};
+        if (annulus)
+            settings.lattice.innerSteps = static_cast<std::uint32_t>(inner);
+        settings.distanceTests.reserve(distances.size());
+        for (const auto &distance : distances)
+            settings.distanceTests.emplace_back(distance.stage, AI::QueryPointDistanceTest{static_cast<std::uint32_t>(distance.radius),
+                                                                                           distance.preferNearer,
+                                                                                           static_cast<std::uint32_t>(distance.weight)});
+        return settings;
+    }
+
+    /** @copydoc EditorWorkspaceView::DrawEnvironmentQueryDistanceStages */
+    std::optional<AI::QueryStageId> EditorWorkspaceView::DrawEnvironmentQueryDistanceStages(EnvironmentQueryFields &fields) const {
+        std::optional<AI::QueryStageId> remove;
+        const auto text = [&](std::string_view key) {
+            return m_context.localization.Get("editor", key);
+        };
+        const auto &fonts = m_context.theme.fonts;
+        for (auto &distance : fields.distances) {
+            const auto id = std::format("##query-distance-{}", distance.stage.Value());
+            ImGui::PushID(id.c_str());
+            Ui::FieldLabel(std::format("{} {}", text("workspace.environment_query.test"), distance.stage.Value()).c_str(), fonts);
+            static_cast<void>(
+                Ui::DrawUnsignedPropRow(text("workspace.environment_query.create_radius").c_str(), "##radius", distance.radius, fonts));
+            static_cast<void>(
+                Ui::CheckboxControl(text("workspace.environment_query.create_prefer_nearer").c_str(), &distance.preferNearer, fonts));
+            static_cast<void>(
+                Ui::DrawUnsignedPropRow(text("workspace.environment_query.score_weight").c_str(), "##weight", distance.weight, fonts));
+            if (Ui::Button({.label = text("workspace.environment_query.remove_distance_test").c_str(),
+                            .variant = Ui::ButtonVariant::Secondary,
+                            .font = fonts.sans}))
+                remove = distance.stage;
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+                Ui::ShowTooltip(text("workspace.environment_query.remove_distance_test_help").c_str(), &fonts);
+            ImGui::PopID();
+        }
+        return remove;
+    }
+
     /** @copydoc EditorWorkspaceView::DrawEnvironmentQuerySettings */
     void EditorWorkspaceView::DrawEnvironmentQuerySettings(const EnvironmentQueryWorkspaceDocument &document,
                                                            EditorWorkspaceViewCommandData &outCommand) const {
@@ -545,10 +599,11 @@ namespace Horo::Editor {
                       .inner = current.lattice.innerSteps.value_or(0),
                       .maximum = current.maximumResults,
                       .annulus = current.lattice.innerSteps.has_value(),
+                      .newDistanceRadius = current.lattice.stepMillimeters,
                       .widgetId = std::format("##EqsSettings/{}/{}", fence.instance.Value(), fence.revision)};
             fields.distances.reserve(current.distanceTests.size());
             for (const auto &entry : current.distanceTests)
-                fields.distances.push_back({entry.stage, entry.test.radiusMillimeters, entry.test.preferNearer, entry.test.scoreWeight});
+                fields.distances.emplace_back(entry.stage, entry.test.radiusMillimeters, entry.test.preferNearer, entry.test.scoreWeight);
         }
         ImGui::PushID(fields.widgetId.c_str());
         const auto number = [&](std::string_view label, const char *id, std::uint64_t &value) {
@@ -560,41 +615,24 @@ namespace Horo::Editor {
         if (fields.annulus)
             number("workspace.environment_query.create_inner", "##inner", fields.inner);
         number("workspace.environment_query.create_limit", "##limit", fields.maximum);
-        for (auto &distance : fields.distances) {
-            const auto id = std::format("##query-distance-{}", distance.stage.Value());
-            ImGui::PushID(id.c_str());
-            Ui::FieldLabel(std::format("{} {}", text("workspace.environment_query.test"), distance.stage.Value()).c_str(), fonts);
-            number("workspace.environment_query.create_radius", "##radius", distance.radius);
-            static_cast<void>(
-                Ui::CheckboxControl(text("workspace.environment_query.create_prefer_nearer").c_str(), &distance.preferNearer, fonts));
-            number("workspace.environment_query.score_weight", "##weight", distance.weight);
-            ImGui::PopID();
-        }
-
-        constexpr auto maximum = std::numeric_limits<std::uint32_t>::max();
-        const auto positiveUint32 = [](std::uint64_t value) {
-            return value > 0 && value <= maximum;
-        };
-        const bool distancesValid = std::ranges::all_of(fields.distances, [positiveUint32](const auto &distance) {
-            return positiveUint32(distance.radius) && positiveUint32(distance.weight);
-        });
-        const bool valid = distancesValid && positiveUint32(fields.step) && fields.outer <= AI::MaximumQueryLatticeOuterSteps &&
-                           (!fields.annulus || fields.inner <= fields.outer) && fields.maximum > 0 &&
-                           fields.maximum <= AI::EnvironmentQuerySchemaLimits::MaximumResults;
+        const auto remove = DrawEnvironmentQueryDistanceStages(fields);
+        const bool roomForStage = document.query->Stages().size() < AI::EnvironmentQuerySchemaLimits::Stages;
+        if (roomForStage)
+            number("workspace.environment_query.new_distance_radius", "##new_distance_radius", fields.newDistanceRadius);
+        const bool valid = fields.IsValid();
         const auto button = [&](std::string_view key, bool enabled) {
             return Ui::Button({.label = text(key).c_str(), .enabled = enabled, .font = fonts.sans});
         };
-        if (button("workspace.environment_query.edit_apply", valid)) {
-            AI::BuiltinPointQuerySettings changed{{static_cast<std::uint32_t>(fields.step), static_cast<std::uint32_t>(fields.outer), {}},
-                                                  static_cast<std::uint32_t>(fields.maximum)};
-            if (fields.annulus)
-                changed.lattice.innerSteps = static_cast<std::uint32_t>(fields.inner);
-            changed.distanceTests.reserve(fields.distances.size());
-            for (const auto &distance : fields.distances)
-                changed.distanceTests.push_back(
-                    {distance.stage,
-                     {static_cast<std::uint32_t>(distance.radius), distance.preferNearer, static_cast<std::uint32_t>(distance.weight)}});
-            outCommand = MakeEnvironmentQueryEditCommand(document, Apply, changed);
+        const bool add = button("workspace.environment_query.add_distance_test",
+                                valid && roomForStage && fields.newDistanceRadius > 0 &&
+                                    fields.newDistanceRadius <= std::numeric_limits<std::uint32_t>::max());
+        if (const bool apply = button("workspace.environment_query.edit_apply", valid); apply || add || remove) {
+            EnvironmentQueryDistanceStageChange change;
+            if (remove)
+                change = *remove;
+            else if (add)
+                change = AI::QueryPointDistanceTest{static_cast<std::uint32_t>(fields.newDistanceRadius)};
+            outCommand = MakeEnvironmentQueryEditCommand(document, Apply, valid ? std::optional{fields.Capture()} : std::nullopt, change);
         }
         if (button("workspace.decision_graph.edit_save", document.dirty))
             outCommand = MakeEnvironmentQueryEditCommand(document, Save);

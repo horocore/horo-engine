@@ -384,16 +384,8 @@ TEST_CASE("Registered Query settings use shared history and tracked source publi
                                   "Editable points", {.stepMillimeters = 500, .outerSteps = 3}, 9);
     REQUIRE(initial.HasValue());
     const auto first = AddBuiltinPointDistanceTest(initial.Value(), QueryStageId::Create(52).Value(), {1500, true});
-    const auto second = AddBuiltinPointDistanceTest(initial.Value(), QueryStageId::Create(53).Value(), {1200, false});
     REQUIRE(first.HasValue());
-    REQUIRE(second.HasValue());
-    QueryAssetSource authored{.id = initial.Value().Id(),
-                              .displayName = initial.Value().DisplayName(),
-                              .result = initial.Value().ResultSchema(),
-                              .stages = {first.Value().Stages().begin(), first.Value().Stages().end()}};
-    authored.stages.push_back(second.Value().Stages().back());
-    authored.stages.back().executionOrder = 2;
-    const auto native = EnvironmentQueryAsset::Capture(authored);
+    const auto native = AddBuiltinPointDistanceTest(first.Value(), QueryStageId::Create(53).Value(), {1200, false});
     REQUIRE(native.HasValue());
     project.WriteAsset(native.Value());
     EditorWorkspaceController controller(project.root, project.runtime, project.registry.Snapshot(),
@@ -419,8 +411,9 @@ TEST_CASE("Registered Query settings use shared history and tracked source publi
     using enum EnvironmentQueryEditAction;
 
     auto changed = *document.settings;
-    const auto issue = [&](EnvironmentQueryEditAction action, std::optional<BuiltinPointQuerySettings> values = {}) {
-        controller.ProcessCommand(MakeEnvironmentQueryEditCommand(document, action, values));
+    const auto issue = [&](EnvironmentQueryEditAction action, const std::optional<BuiltinPointQuerySettings> &values = {},
+                           EnvironmentQueryDistanceStageChange change = {}) {
+        controller.ProcessCommand(MakeEnvironmentQueryEditCommand(document, action, values, change));
     };
     changed.lattice.stepMillimeters = 0;
     issue(Apply, changed);
@@ -498,6 +491,52 @@ TEST_CASE("Registered Query settings use shared history and tracked source publi
         CHECK(reopened.settings->distanceTests[1].test.preferNearer);
         CHECK(reopened.settings->distanceTests[1].test.scoreWeight == 3);
         CHECK_FALSE(reopened.canUndo);
+    }
+    SECTION("insertion and removal replay and save alongside ordinary field changes") {
+        changed.lattice.stepMillimeters = 640;
+        const auto append = MakeEnvironmentQueryEditCommand(document, Apply, changed, QueryPointDistanceTest{3500, true, 4});
+        controller.ProcessCommand(append);
+        REQUIRE_FALSE(document.diagnostic);
+        REQUIRE(document.settings->distanceTests.size() == 3);
+        const auto appended = document.settings->distanceTests.back().stage;
+        CHECK(appended != draft->Stages()[1].id);
+        CHECK(appended != draft->Stages()[2].id);
+        CHECK(document.settings->lattice.stepMillimeters == 640);
+        CHECK(document.settings->distanceTests.back().test.scoreWeight == 4);
+        const auto expanded = document.query;
+
+        controller.ProcessCommand(append);
+        CHECK(document.diagnostic);
+        CHECK(document.query == expanded);
+        issue(Apply, document.settings, draft->Stages().front().id);
+        CHECK(document.diagnostic);
+        CHECK(document.query == expanded);
+        issue(Apply, document.settings, draft->Stages()[1].id);
+        REQUIRE_FALSE(document.diagnostic);
+        REQUIRE(document.settings->distanceTests.size() == 2);
+        CHECK(document.settings->distanceTests.front().stage == draft->Stages()[2].id);
+        const auto reduced = document.query;
+        issue(Undo);
+        CHECK(document.query == expanded);
+        issue(Undo);
+        CHECK(document.query == draft);
+        issue(Redo);
+        CHECK(document.query == expanded);
+        issue(Redo);
+        CHECK(document.query == reduced);
+
+        REQUIRE(controller.SaveSourceDocuments().HasValue());
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = instance});
+        REQUIRE(documents.empty());
+        Project::Open(controller, Project::Path);
+        REQUIRE(documents.size() == 1);
+        const auto &reopened = documents.front();
+        REQUIRE(reopened.settings);
+        REQUIRE(reopened.settings->distanceTests.size() == 2);
+        CHECK(reopened.settings->lattice.stepMillimeters == 640);
+        CHECK(reopened.settings->distanceTests.front().stage == draft->Stages()[2].id);
+        CHECK(reopened.settings->distanceTests.back().stage == appended);
+        CHECK(reopened.settings->distanceTests.back().test.radiusMillimeters == 3500);
     }
     SECTION("changing the sidecar bytes refuses the source write even when the stable ID still matches") {
         const auto sidecar = project.root / (std::string{Project::Path} + ".horo");

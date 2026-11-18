@@ -185,6 +185,52 @@ namespace Horo::AI {
             }
         }
 
+        TEST_CASE("EQS appends by semantic order and refuses exhausted distance stage slots", "[unit][ai][eqs][generator]") {
+            const auto query = CreateBuiltinLatticeQuery(MakeIdentity<QueryId>(2), MakeIdentity<QueryStageId>(3),
+                                                         MakeIdentity<QueryResultSchemaId>(4), "Points", {50, 1}, 4);
+            REQUIRE(query.HasValue());
+            const auto first = AddBuiltinPointDistanceTest(query.Value(), MakeIdentity<QueryStageId>(5), {100, true});
+            REQUIRE(first.HasValue());
+            QueryAssetSource authored{.id = first.Value().Id(),
+                                      .result = first.Value().ResultSchema(),
+                                      .stages = {first.Value().Stages().back(), first.Value().Stages().front()}};
+            authored.stages.front().executionOrder = 9;
+            const auto next = MakeIdentity<QueryStageId>(6);
+            SECTION("appending preserves source order and the existing semantic gap") {
+                const auto source = EnvironmentQueryAsset::Capture(authored);
+                REQUIRE(source.HasValue());
+                const auto appended = AddBuiltinPointDistanceTest(source.Value(), next, {200, false});
+                REQUIRE(appended.HasValue());
+                CHECK(appended.Value().Stages().front().id == authored.stages.front().id);
+                CHECK(appended.Value().Stages().front().executionOrder == 9);
+                CHECK(appended.Value().Stages().back().executionOrder == 10);
+                const auto reduced = RemoveBuiltinPointDistanceTest(appended.Value(), authored.stages.front().id);
+                REQUIRE(reduced.HasValue());
+                CHECK(reduced.Value().Stages().front().id == authored.stages.back().id);
+                CHECK(reduced.Value().Stages().back().id == next);
+                CHECK(reduced.Value().Stages().back().executionOrder == 10);
+            }
+            SECTION("the largest execution order cannot wrap") {
+                authored.stages.front().executionOrder = std::numeric_limits<std::uint32_t>::max();
+                const auto source = EnvironmentQueryAsset::Capture(authored);
+                REQUIRE(source.HasValue());
+                ExpectError(AddBuiltinPointDistanceTest(source.Value(), next, {200, false}), AIErrors::EnvironmentQueryLimitExceeded);
+            }
+            SECTION("stage count stays bounded") {
+                authored.stages.clear();
+                authored.stages.push_back(query.Value().Stages().front());
+                for (std::uint32_t order = 1; order < EnvironmentQuerySchemaLimits::Stages; ++order) {
+                    auto stage = first.Value().Stages().back();
+                    stage.id = MakeIdentity<QueryStageId>(order + 100);
+                    stage.executionOrder = order;
+                    authored.stages.push_back(std::move(stage));
+                }
+                const auto full = EnvironmentQueryAsset::Capture(authored);
+                REQUIRE(full.HasValue());
+                ExpectError(AddBuiltinPointDistanceTest(full.Value(), next, {200, false}), AIErrors::EnvironmentQueryLimitExceeded);
+            }
+        }
+
         TEST_CASE("EQS rejects restored distance weights outside the supported range", "[unit][ai][eqs][generator]") {
             const auto schema = CaptureBuiltinQuerySchema();
             REQUIRE(schema.HasValue());

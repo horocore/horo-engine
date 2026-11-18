@@ -1,3 +1,4 @@
+#include "AuthoredAiSourceInventory.h"
 #include "EnvironmentQueryWorkspaceSource.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
@@ -9,6 +10,7 @@
 #include <algorithm>
 #include <limits>
 #include <new>
+#include <set>
 
 namespace Horo::Editor {
     namespace EnvironmentQueryWorkspaceSource {
@@ -53,6 +55,45 @@ namespace Horo::Editor {
             if (captured.HasError())
                 return Result<Assets::AssetSourceIdentity>::Failure(captured.ErrorValue());
             return Result<Assets::AssetSourceIdentity>::Success(captured.Value().identity);
+        }
+
+        /** @brief Applies one typed structural edit to a detached, already validated query. */
+        Result<AI::EnvironmentQueryAsset> ChangeDistanceStages(const AI::EnvironmentQueryAsset &source,
+                                                               const EnvironmentQueryDistanceStageChange &change) {
+            if (const auto *remove = std::get_if<AI::QueryStageId>(&change))
+                return AI::RemoveBuiltinPointDistanceTest(source, *remove);
+            std::set<AI::QueryStageId> occupied;
+            for (const auto &stage : source.Stages())
+                occupied.insert(stage.id);
+            const auto id = AuthoredAiSources::Issue(occupied);
+            if (id.HasError())
+                return Result<AI::EnvironmentQueryAsset>::Failure(id.ErrorValue());
+            return AI::AddBuiltinPointDistanceTest(source, id.Value(), std::get<AI::QueryPointDistanceTest>(change));
+        }
+
+        /** @brief Source and settings captured together before preparing the document history entry. */
+        struct QueryDraftEdit final {
+            AI::EnvironmentQueryAsset source;
+            AI::BuiltinPointQuerySettings settings;
+        };
+
+        /** @brief Validates value edits and a possible structural change as a single detached transaction. */
+        Result<QueryDraftEdit> PrepareQueryDraftEdit(const AI::EnvironmentQueryAsset &source, const AI::QuerySchemaRegistry &registry,
+                                                     const AI::BuiltinPointQuerySettings &settings,
+                                                     const EnvironmentQueryDistanceStageChange &change) {
+            using Prepared = Result<QueryDraftEdit>;
+            auto edited = AI::EditBuiltinPointQuerySettings(source, registry, settings);
+            if (edited.HasError())
+                return Prepared::Failure(edited.ErrorValue());
+            if (std::holds_alternative<std::monostate>(change))
+                return Prepared::Success({std::move(edited).Value(), settings});
+            auto changed = ChangeDistanceStages(edited.Value(), change);
+            if (changed.HasError())
+                return Prepared::Failure(changed.ErrorValue());
+            auto projected = AI::ReadBuiltinPointQuerySettings(changed.Value(), registry);
+            if (projected.HasError())
+                return Prepared::Failure(projected.ErrorValue());
+            return Prepared::Success({std::move(changed).Value(), std::move(projected).Value()});
         }
     }  // namespace
 
@@ -239,17 +280,18 @@ namespace Horo::Editor {
         } else {
             if (request.action != Apply || !request.settings || !m_querySchema)
                 return Edit::Failure(MakeError(AI::AIErrors::EnvironmentQuerySchemaInvalid));
-            auto candidate = AI::EditBuiltinPointQuerySettings(*draft.current.source, *m_querySchema, *request.settings);
-            if (candidate.HasError())
-                return Edit::Failure(candidate.ErrorValue());
-            const auto bytes = EnvironmentQuerySourceCodec::Encode(candidate.Value());
+            auto prepared = PrepareQueryDraftEdit(*draft.current.source, *m_querySchema, *request.settings, request.stageChange);
+            if (prepared.HasError())
+                return Edit::Failure(prepared.ErrorValue());
+            auto candidate = std::move(prepared).Value();
+            const auto bytes = EnvironmentQuerySourceCodec::Encode(candidate.source);
             if (bytes.HasError())
                 return Edit::Failure(bytes.ErrorValue());
             const auto digest = ComputeSha256(std::as_bytes(std::span{bytes.Value()}));
             if (digest == draft.current.digest)
                 return Edit::Success();
-            EnvironmentQueryState next{std::make_shared<const AI::EnvironmentQueryAsset>(std::move(candidate).Value()), *request.settings,
-                                       digest, bytes.Value().size()};
+            EnvironmentQueryState next{std::make_shared<const AI::EnvironmentQueryAsset>(std::move(candidate.source)),
+                                       std::move(candidate.settings), digest, bytes.Value().size()};
             auto history = draft.history.Prepare({draft.current, next, draft.current.bytes + next.bytes});
             if (!history)
                 return Edit::Failure(MakeError(Assets::AssetSourceErrors::Limit));
