@@ -7,6 +7,7 @@
 #include "PrefabSceneCookState.h"
 
 #include <algorithm>
+#include <format>
 #include <memory>
 #include <new>
 
@@ -423,7 +424,9 @@ namespace Horo::Application::PrefabCookDetail {
                     continue;
                 const auto *original = catalog.FindContribution(input.record.type, target);
                 if (!original || !original->strategy)
-                    return Return::Failure(MakeError(PrefabSceneCookErrors::Invalid));
+                    return Return::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable,
+                                                     std::format("No cooker for resource type '{}' on target '{}'.",
+                                                                 input.record.type.Value(), target.Value())));
                 contributions.push_back(*original);
             }
             return Return::Success(std::move(contributions));
