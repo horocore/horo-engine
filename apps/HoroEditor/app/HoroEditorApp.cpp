@@ -2110,17 +2110,26 @@ namespace Horo::Editor {
                     LOG_ERROR("editor.shader_reload", "%s", result.ErrorValue().message.c_str());
             }
 
-            /** @brief Coalesces display identity changes and recovery at the next owner-thread frame boundary. */
+            /** @brief Requests a fresh surface candidate once for all output notifications in the current event batch. */
+            void QueueWindowDisplayTransition() noexcept {
+                displayChangePending_ = true;
+                surfaceRecovery_ = EditorSurfaceRecovery::Retry;
+            }
+
+            /** @brief Accepts owning-window notifications and mode changes of its currently attached display. */
             void ObserveSurfaceRecoveryEvent(const SDL_Event &event) {
                 switch (event.type) {
+                    case SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED:
+                    case SDL_EVENT_DISPLAY_CONTENT_SCALE_CHANGED:
+                        if (event.display.displayID != 0 && event.display.displayID == SDL_GetDisplayForWindow(p_->presentation.window))
+                            QueueWindowDisplayTransition();
+                        break;
                     case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
                     case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
                     case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
                     case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
-                        if (event.window.windowID == SDL_GetWindowID(p_->presentation.window)) {
-                            displayChangePending_ = true;
-                            surfaceRecovery_ = EditorSurfaceRecovery::Retry;
-                        }
+                        if (event.window.windowID == SDL_GetWindowID(p_->presentation.window))
+                            QueueWindowDisplayTransition();
                         break;
                     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
                     case SDL_EVENT_WINDOW_RESTORED:
