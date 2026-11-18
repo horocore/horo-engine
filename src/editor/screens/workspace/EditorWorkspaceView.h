@@ -178,6 +178,22 @@ namespace Horo::Editor {
         };
 
         mutable BehaviorTreeSelection m_behaviorTreeSelection;
+
+        /** @brief Bounded numeric text drafts and stable selection for a Utility document. */
+        struct UtilityGraphSelection final {
+            DocumentInstanceId instance;
+            std::uint64_t revision{};
+            AI::DecisionNodeId option;
+            AI::DecisionNodeTypeId task;
+            std::optional<std::size_t> row;
+            AI::UtilityConsideration score;
+            std::array<std::string, 6> fields;
+        };
+
+        mutable UtilityGraphSelection m_utilityGraphSelection;
+        /** @brief Projects saved Blackboard score inputs and emits typed Utility authoring commands. */
+        void DrawUtilityGraph(const EditorWorkspaceViewModel &viewModel, const DecisionGraphWorkspaceDocument &document,
+                              EditorWorkspaceViewCommandData &outCommand) const;
         /** @brief Projects supported tree topology and emits stable revision-fenced edits. */
         void DrawBehaviorTreeTopology(const EditorWorkspaceViewModel &viewModel, const DecisionGraphWorkspaceDocument &document,
                                       EditorWorkspaceViewCommandData &outCommand) const;

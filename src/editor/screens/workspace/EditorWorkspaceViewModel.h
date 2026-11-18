@@ -260,6 +260,7 @@ namespace Horo::Editor {
         OpenRecentAiAsset,
         EditDecisionStateMachine,
         EditDecisionBehaviorTree,
+        EditDecisionUtilityGraph,
         OpenDiagnosticSource,
         ChangeActivePanel,
         CloseWorkspacePanel,
@@ -497,7 +498,7 @@ namespace Horo::Editor {
         std::shared_ptr<const AI::DecisionGraphSource> graph;
         std::uint64_t revision{};
         bool editable{};
-        bool editableBehaviorTree{};
+        AI::DecisionPlanKind family{AI::DecisionPlanKind::StateMachine};
         bool dirty{};
         bool canUndo{};
         bool canRedo{};
@@ -626,6 +627,7 @@ namespace Horo::Editor {
         std::optional<Assets::AssetId> recentAiAsset = std::nullopt;
         std::optional<StateMachineEditRequest> stateMachineEdit = std::nullopt;
         std::optional<BehaviorTreeEditRequest> behaviorTreeEdit = std::nullopt;
+        std::optional<UtilityGraphEditRequest> utilityGraphEdit = std::nullopt;
         std::optional<DiagnosticSourceRequest> diagnosticSource = std::nullopt;
         std::optional<CreateGameplayBehaviorRequest> gameplayBehaviorRequest = std::nullopt;
         std::optional<AssetSceneDropRequest> assetSceneDrop = std::nullopt;
@@ -667,7 +669,18 @@ namespace Horo::Editor {
     /** @brief Routes the shared Decision save/undo/redo action to the focused family. */
     inline EditorWorkspaceViewCommandData MakeDecisionHistoryCommand(const DecisionGraphWorkspaceDocument &document,
                                                                      DecisionHistoryAction action) {
-        if (document.editableBehaviorTree) {
+        if (document.family == AI::DecisionPlanKind::Utility) {
+            auto operation = UtilityGraphEditOperation::Save;
+            if (action == DecisionHistoryAction::Undo)
+                operation = UtilityGraphEditOperation::Undo;
+            if (action == DecisionHistoryAction::Redo)
+                operation = UtilityGraphEditOperation::Redo;
+            return {.command = EditorWorkspaceViewCommand::EditDecisionUtilityGraph,
+                    .utilityGraphEdit = UtilityGraphEditRequest{.instance = document.identity.instance,
+                                                                .revision = document.revision,
+                                                                .operation = operation}};
+        }
+        if (document.family == AI::DecisionPlanKind::BehaviorTree) {
             auto operation = BehaviorTreeEditOperation::Save;
             if (action == DecisionHistoryAction::Undo)
                 operation = BehaviorTreeEditOperation::Undo;

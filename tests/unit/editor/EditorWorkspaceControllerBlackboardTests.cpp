@@ -73,9 +73,13 @@ namespace {
         void Write(const char *label, AI::BlackboardKeyPresence presence = AI::BlackboardKeyPresence::Required,
                    AI::BlackboardValueKind kind = AI::BlackboardValueKind::Boolean) const {
             const std::array keys{AI::BlackboardKeyDescriptor{.key = key, .kind = kind, .presence = presence}};
+            const std::array rows{AI::BlackboardSchemaAuthoringRow{key, label}};
+            WriteSchema(keys, rows);
+        }
+
+        void WriteSchema(std::span<const AI::BlackboardKeyDescriptor> keys, std::span<const AI::BlackboardSchemaAuthoringRow> rows) const {
             const auto captured = AI::BlackboardSchema::Capture({.identity = schema, .keys = keys});
             REQUIRE(captured.HasValue());
-            const std::array rows{AI::BlackboardSchemaAuthoringRow{key, label}};
             const auto encoded = AI::BlackboardSchemaSourceCodec::Encode(captured.Value(), rows);
             REQUIRE(encoded.HasValue());
             std::ofstream output(root / Path, std::ios::binary | std::ios::trunc);
@@ -665,7 +669,8 @@ TEST_CASE("Behavior Tree and Utility New use the current registered native task 
         const auto &documents = controller.ViewModel().decisionGraphDocuments;
         REQUIRE(documents.size() == 1);
         const auto &view = documents.front();
-        REQUIRE(view.editableBehaviorTree);
+        REQUIRE(view.editable);
+        CHECK(view.family == AI::DecisionPlanKind::BehaviorTree);
         const auto original = view.graph;
         const auto asset = view.asset;
         const auto instance = view.identity.instance;
@@ -780,7 +785,8 @@ TEST_CASE("Behavior Tree and Utility New use the current registered native task 
              .sourceOpenRequest = SourceOpenRequest{.path = "assets/Working tree.horo_bt", .origin = SourceOpenOrigin::AssetActivation}});
         REQUIRE(documents.size() == 1);
         CHECK(documents.front().asset == asset);
-        REQUIRE(documents.front().editableBehaviorTree);
+        REQUIRE(documents.front().editable);
+        CHECK(documents.front().family == AI::DecisionPlanKind::BehaviorTree);
         const auto &reopened = *std::get<std::shared_ptr<const AI::BehaviorTreeAsset>>(documents.front().graph->body);
         REQUIRE(reopened.FindNode(sequence));
         REQUIRE(reopened.FindNode(task));
@@ -790,6 +796,157 @@ TEST_CASE("Behavior Tree and Utility New use the current registered native task 
         CHECK(ordered->id == extraEdge);
         CHECK(ordered->targetNode == task);
         CHECK_FALSE(documents.front().canUndo);
+    }
+    SECTION("Utility authoring edits exact saved scalar scores and preserves canonical option identities") {
+        const auto secondKey = AI::BlackboardKeyId::Create(5).Value();
+        const auto wrongKind = AI::BlackboardKeyId::Create(6).Value();
+        const std::array keys{
+            AI::BlackboardKeyDescriptor{.key = project.key,
+                                        .kind = AI::BlackboardValueKind::Scalar,
+                                        .presence = AI::BlackboardKeyPresence::Optional},
+            AI::BlackboardKeyDescriptor{.key = secondKey,
+                                        .kind = AI::BlackboardValueKind::Scalar,
+                                        .presence = AI::BlackboardKeyPresence::Optional},
+            AI::BlackboardKeyDescriptor{.key = wrongKind,
+                                        .kind = AI::BlackboardValueKind::Boolean,
+                                        .presence = AI::BlackboardKeyPresence::Optional},
+        };
+        const std::array rows{AI::BlackboardSchemaAuthoringRow{project.key, "Range"}, AI::BlackboardSchemaAuthoringRow{secondKey, "Risk"},
+                              AI::BlackboardSchemaAuthoringRow{wrongKind, "Flag"}};
+        project.WriteSchema(keys, rows);
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::BlackboardDocument,
+                                   .blackboard = BlackboardWorkspaceRequest{.fence = project.Current(controller),
+                                                                            .operation = BlackboardDocumentOperation::Reload}});
+        const auto &schema = project.Snapshot(controller);
+        REQUIRE(schema.sourceDigest.has_value());
+        REQUIRE(schema.source->rows.size() == keys.size());
+        const auto digest = *schema.sourceDigest;
+        controller.ProcessCommand(make(AI::DecisionPlanKind::Utility, "Working utility"));
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        const auto &documents = controller.ViewModel().decisionGraphDocuments;
+        REQUIRE(documents.size() == 1);
+        const auto &view = documents.front();
+        REQUIRE(view.editable);
+        CHECK(view.family == AI::DecisionPlanKind::Utility);
+        const auto original = view.graph;
+        const auto instance = view.identity.instance;
+        const auto asset = view.asset;
+        const auto utility = [&]() -> const AI::UtilityDecisionSource & {
+            return std::get<AI::UtilityDecisionSource>(view.graph->body);
+        };
+        REQUIRE(utility().options.size() == 1);
+        const auto firstId = utility().options.front().option.id;
+        const auto firstTask = utility().options.front().option.action;
+        const DecisionTaskSelection installed{provider->type, provider->provider, provider->version,
+                                              controller.ViewModel().availableBehaviorsRevision};
+        const auto edit = [&](UtilityGraphEditRequest request) {
+            request.instance = instance;
+            request.revision = view.revision;
+            controller.ProcessCommand({.command = EditorWorkspaceViewCommand::EditDecisionUtilityGraph, .utilityGraphEdit = request});
+        };
+        const UtilityScoreEdit risk{{.key = secondKey,
+                                     .minimum = -3,
+                                     .maximum = 7,
+                                     .weight = 0.625,
+                                     .curve = AI::UtilityResponseCurve::Step,
+                                     .parameter = 0.5,
+                                     .invert = true},
+                                    digest};
+        using enum UtilityGraphEditOperation;
+        edit({.operation = DeleteOption, .option = firstId});
+        CHECK(view.diagnostic.has_value());
+        edit({.operation = DeleteConsideration, .option = firstId, .slot = UtilityConsiderationSlot{0, project.key}});
+        CHECK(view.diagnostic.has_value());
+        auto invalid = risk;
+        invalid.score.key = wrongKind;
+        edit({.operation = AddConsideration, .option = firstId, .score = invalid});
+        CHECK(view.diagnostic.has_value());
+        invalid = risk;
+        invalid.schemaSource = {};
+        edit({.operation = AddConsideration, .option = firstId, .score = invalid});
+        CHECK(view.diagnostic.has_value());
+        CHECK(view.graph == original);
+        CHECK_FALSE(view.canUndo);
+
+        edit({.operation = AddConsideration, .option = firstId, .score = risk});
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        REQUIRE(utility().options.front().option.considerations.size() == 2);
+        REQUIRE(utility().requirements.size() == 2);
+        CHECK(std::ranges::any_of(utility().requirements, [&](const auto &binding) {
+            return binding.key == secondKey;
+        }));
+        const auto appended = view.graph;
+        edit({.operation = SetConsideration, .option = firstId, .score = risk, .slot = UtilityConsiderationSlot{0, wrongKind}});
+        CHECK(view.diagnostic.has_value());
+        CHECK(view.graph == appended);
+        edit({.operation = SetConsideration, .option = firstId, .score = risk, .slot = UtilityConsiderationSlot{0, project.key}});
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        REQUIRE(utility().requirements.size() == 1);
+        CHECK(utility().requirements.front().key == secondKey);
+
+        auto staleTask = installed;
+        ++staleTask.catalogRevision;
+        const auto scoresEdited = view.graph;
+        edit({.operation = AddOption, .task = staleTask, .score = risk});
+        CHECK(view.diagnostic.has_value());
+        CHECK(view.graph == scoresEdited);
+        edit({.operation = AddOption, .task = installed, .score = risk, .priority = 0.75, .compensation = 0.25});
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        REQUIRE(utility().options.size() == 2);
+        const auto second = std::ranges::find_if(utility().options, [&](const auto &entry) {
+            return entry.option.id != firstId;
+        });
+        REQUIRE(second != utility().options.end());
+        const auto secondId = second->option.id;
+        const auto secondTask = second->option.action;
+        CHECK(secondTask != firstTask);
+        CHECK(second->provider.id == secondId);
+        CHECK(second->provider.type == installed.type);
+        edit({.operation = SetOptionPolicy, .option = secondId, .priority = 1.25});
+        CHECK(view.diagnostic.has_value());
+        edit({.operation = SetOptionPolicy, .option = secondId, .priority = 0.5, .compensation = 0.125});
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        const auto edited = view.graph;
+        edit({.operation = DeleteOption, .option = secondId});
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        CHECK(utility().options.size() == 1);
+        controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Undo));
+        CHECK(view.graph == edited);
+        controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Redo));
+        CHECK(utility().options.size() == 1);
+        controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Undo));
+        CHECK(view.graph == edited);
+        edit({.operation = DeleteConsideration, .option = firstId, .slot = UtilityConsiderationSlot{1, secondKey}});
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        REQUIRE(controller.HasDirtySourceDocuments());
+        controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Save));
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        CHECK_FALSE(controller.HasDirtySourceDocuments());
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = instance});
+        REQUIRE(documents.empty());
+
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::OpenSourceFile,
+                                   .sourceOpenRequest = SourceOpenRequest{.path = "assets/Working utility.horo_utility",
+                                                                          .origin = SourceOpenOrigin::AssetActivation}});
+        REQUIRE(documents.size() == 1);
+        CHECK(documents.front().asset == asset);
+        CHECK(documents.front().editable);
+        const auto &reopened = std::get<AI::UtilityDecisionSource>(documents.front().graph->body);
+        CHECK(reopened.root == std::get<AI::UtilityDecisionSource>(original->body).root);
+        REQUIRE(reopened.options.size() == 2);
+        const auto finished = std::ranges::find_if(reopened.options, [&](const auto &entry) {
+            return entry.option.id == secondId;
+        });
+        REQUIRE(finished != reopened.options.end());
+        CHECK(finished->option.action == secondTask);
+        CHECK(finished->option.priority == 0.5);
+        CHECK(finished->option.compensation == 0.125);
+        REQUIRE(finished->option.considerations.size() == 1);
+        const auto &score = finished->option.considerations.front();
+        CHECK(score.key == secondKey);
+        CHECK(score.curve == AI::UtilityResponseCurve::Step);
+        CHECK(score.weight == 0.625);
+        CHECK(score.invert);
     }
     SECTION("wrong native generation and provider identity are refused before publishing") {
         auto command = make(AI::DecisionPlanKind::BehaviorTree, "First tree");

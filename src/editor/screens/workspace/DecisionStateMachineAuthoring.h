@@ -1,7 +1,9 @@
 #pragma once
 
 #include "Horo/AI/DecisionControl.h"
+#include "Horo/AI/UtilitySelector.h"
 #include "Horo/Editor/EditorSurfaceIdentity.h"
+#include "Horo/Foundation/Sha256.h"
 
 #include <optional>
 
@@ -54,6 +56,44 @@ namespace Horo::Editor {
         BehaviorTreeEditOperation operation{BehaviorTreeEditOperation::WrapSequence};
         AI::DecisionNodeId node;
         std::optional<DecisionTaskSelection> task;
+    };
+
+    /** @brief Typed operations for the authored option and its complete scoring policy. */
+    enum class UtilityGraphEditOperation : std::uint8_t {
+        AddOption,
+        SetOptionPolicy,
+        DeleteOption,
+        AddConsideration,
+        SetConsideration,
+        DeleteConsideration,
+        Undo,
+        Redo,
+        Save,
+    };
+
+    /** @brief An explicit scalar score selected from the exact saved Blackboard bytes shown in the editor. */
+    struct UtilityScoreEdit final {
+        AI::UtilityConsideration score;
+        Sha256Digest schemaSource;
+    };
+
+    /** @brief Consideration rows follow semantic evaluation order; revision and prior key fence their identity. */
+    struct UtilityConsiderationSlot final {
+        std::size_t index{};
+        AI::BlackboardKeyId priorKey;
+    };
+
+    /** @brief Revision-fenced Utility authoring intent. */
+    struct UtilityGraphEditRequest final {
+        DocumentInstanceId instance;
+        std::uint64_t revision{};
+        UtilityGraphEditOperation operation{UtilityGraphEditOperation::AddOption};
+        AI::DecisionNodeId option;
+        std::optional<DecisionTaskSelection> task;
+        std::optional<UtilityScoreEdit> score;
+        std::optional<UtilityConsiderationSlot> slot;
+        double priority{1};
+        double compensation{};
     };
 
     /** @brief Exact revision held by an outstanding Decision document close prompt. */

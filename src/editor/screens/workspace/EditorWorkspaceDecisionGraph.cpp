@@ -5,6 +5,7 @@
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Foundation/PathUtils.h"
+#include "UtilityGraphAuthoring.h"
 #include "WorkspacePathText.h"
 #include "editor/gameplay/ProjectGameplayRegistry.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
@@ -171,12 +172,28 @@ namespace Horo::Editor {
             return std::ranges::all_of((*body)->Nodes(), supported) ? body->get() : nullptr;
         }
 
+        /** @brief Reads the canonical family from its decoded semantic source. */
+        AI::DecisionPlanKind DecisionFamily(const AI::DecisionGraphSource &source) {
+            if (std::holds_alternative<std::shared_ptr<const AI::BehaviorTreeAsset>>(source.body))
+                return AI::DecisionPlanKind::BehaviorTree;
+            if (std::holds_alternative<AI::UtilityDecisionSource>(source.body))
+                return AI::DecisionPlanKind::Utility;
+            return AI::DecisionPlanKind::StateMachine;
+        }
+
+        /** @brief Whether this draft needs the actual Project-owned task metadata generation. */
+        bool NeedsDecisionTaskProviders(const AI::DecisionGraphSource &source) {
+            const auto *utility = std::get_if<AI::UtilityDecisionSource>(&source.body);
+            return EditableTree(source) || (utility && CanAuthorUtilityGraph(*utility));
+        }
+
         /** @brief Compiles a supported draft against the unique saved schema and actual provider metadata. */
         Result<void> ValidateDecisionDraft(const std::filesystem::path &root, const Assets::AssetRegistrySnapshot &registry,
                                            const AI::DecisionGraphSource &candidate,
-                                           const std::shared_ptr<const AI::DecisionNodeGeneration> &providers) {
+                                           const std::shared_ptr<const AI::DecisionNodeGeneration> &providers,
+                                           std::optional<Sha256Digest> expectedScoreSchema = {}) {
             using ResultType = Result<void>;
-            if ((!EditableMachine(candidate) && !EditableTree(candidate)) || !providers || !providers->CanUse())
+            if ((!EditableMachine(candidate) && !NeedsDecisionTaskProviders(candidate)) || !providers || !providers->CanUse())
                 return ResultType::Failure(MakeError(Application::DecisionCookErrors::Invalid));
             const auto schemas =
                 AuthoredAiSources::Capture(root, registry, AI::BlackboardSchemaAssetType, AI::BlackboardSchemaSourceCodec::MaximumBytes);
@@ -192,6 +209,8 @@ namespace Horo::Editor {
                     continue;
                 if (schema)
                     return ResultType::Failure(MakeError(AI::AIErrors::DescriptorConflict));
+                if (expectedScoreSchema && *expectedScoreSchema != file.sourceDigest)
+                    return ResultType::Failure(MakeError(Application::DecisionCookErrors::Stale));
                 schema = std::make_shared<const AI::BlackboardSchema>(std::move(decoded).Value().schema);
             }
             if (!schema)
@@ -745,7 +764,8 @@ namespace Horo::Editor {
             return;
         }
         if (existing != documents.end() && existing->identity == opened.identity && existing->asset == record->id &&
-            existing->source == source.sourceDigest && (existing->editable || !m_gameplayRegistry || !EditableTree(*existing->graph))) {
+            existing->source == source.sourceDigest &&
+            (existing->editable || !m_gameplayRegistry || !NeedsDecisionTaskProviders(*existing->graph))) {
             static_cast<void>(host.FocusDocument(opened.identity.instance));
             return;
         }
@@ -761,12 +781,13 @@ namespace Horo::Editor {
         DecisionGraphWorkspaceDocument candidate{opened.identity, record->id, source.sourceDigest,
                                                  std::make_shared<const AI::DecisionGraphSource>(std::move(graph).Value())};
         decltype(m_decisionGraphDrafts) prepared;
-        const auto *tree = EditableTree(*candidate.graph);
-        if (m_mutations && m_durableFiles && (EditableMachine(*candidate.graph) || (tree && m_gameplayRegistry))) {
+        candidate.family = DecisionFamily(*candidate.graph);
+        const bool needsProviders = NeedsDecisionTaskProviders(*candidate.graph);
+        if (m_mutations && m_durableFiles && (EditableMachine(*candidate.graph) || (needsProviders && m_gameplayRegistry))) {
             const auto providers = AcquireDecisionDraftProviders(*candidate.graph);
             const auto canEdit =
-                !tree || (providers.HasValue() &&
-                          ValidateDecisionDraft(ProjectRoot(), m_assetRegistry, *candidate.graph, providers.Value()).HasValue());
+                !needsProviders || (providers.HasValue() &&
+                                    ValidateDecisionDraft(ProjectRoot(), m_assetRegistry, *candidate.graph, providers.Value()).HasValue());
             const auto encoded = AI::DecisionPlanCodec::EncodeSource(std::span{candidate.graph.get(), 1}, candidate.graph->asset);
             if (canEdit && encoded.HasValue()) {
                 const auto digest = ComputeSha256(std::as_bytes(std::span{encoded.Value()}));
@@ -776,7 +797,6 @@ namespace Horo::Editor {
             }
         }
         candidate.editable = !prepared.empty();
-        candidate.editableBehaviorTree = candidate.editable && tree != nullptr;
         candidate.revision = existing == documents.end() ? 1 : existing->revision + 1;
         if (host.OpenDocument(opened.identity.key).HasError()) {
             fail("workspace.source_open.unavailable");
@@ -854,7 +874,7 @@ namespace Horo::Editor {
         const AI::DecisionGraphSource &source) const {
         if (EditableMachine(source))
             return AI::DecisionNodeGeneration::Capture({}, std::make_shared<const std::atomic_bool>(true));
-        if (EditableTree(source) && m_gameplayRegistry)
+        if (NeedsDecisionTaskProviders(source) && m_gameplayRegistry)
             return m_gameplayRegistry->AcquireDecisionAuthoringGeneration();
         return Result<std::shared_ptr<const AI::DecisionNodeGeneration>>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
     }
@@ -878,8 +898,17 @@ namespace Horo::Editor {
         const auto providers = AcquireDecisionDraftProviders(*document.graph);
         if (providers.HasError())
             return Edit::Failure(providers.ErrorValue());
+        std::optional<Sha256Digest> expectedScoreSchema;
+        if constexpr (std::is_same_v<Request, UtilityGraphEditRequest>) {
+            using enum UtilityGraphEditOperation;
+            if (request.operation == AddOption || request.operation == AddConsideration || request.operation == SetConsideration) {
+                if (!request.score)
+                    return Edit::Failure(MakeError(Application::DecisionCookErrors::Invalid));
+                expectedScoreSchema = request.score->schemaSource;
+            }
+        }
         const auto validate = [&](const AI::DecisionGraphSource &candidate) {
-            return ValidateDecisionDraft(root, registry, candidate, providers.Value());
+            return ValidateDecisionDraft(root, registry, candidate, providers.Value(), expectedScoreSchema);
         };
         if (request.operation == Operation::Undo || request.operation == Operation::Redo) {
             const bool redo = request.operation == Operation::Redo;
@@ -897,8 +926,14 @@ namespace Horo::Editor {
             const auto edited = [&]() {
                 if constexpr (std::is_same_v<Request, StateMachineEditRequest>)
                     return EditStateMachineCandidate(*candidate, request);
-                else
+                else if constexpr (std::is_same_v<Request, BehaviorTreeEditRequest>)
                     return EditBehaviorTreeCandidate(*candidate, request, *providers.Value(), m_viewModel.availableBehaviorsRevision);
+                else {
+                    const auto *task = request.task && request.task->catalogRevision == m_viewModel.availableBehaviorsRevision
+                                           ? FindStarterTask(*providers.Value(), *request.task)
+                                           : nullptr;
+                    return EditUtilityGraphCandidate(*candidate, request, task);
+                }
             }();
             if (edited.HasError())
                 return Edit::Failure(edited.ErrorValue());
@@ -941,8 +976,7 @@ namespace Horo::Editor {
                 return fail(project.ErrorValue());
             const auto registry = m_mutableAssetRegistry ? m_mutableAssetRegistry->Snapshot() : m_assetRegistry;
             const auto *record = registry.Find(document.asset);
-            const auto sourceType =
-                document.editableBehaviorTree ? Application::DecisionBehaviorTreeSourceType : Application::DecisionStateMachineSourceType;
+            const auto sourceType = AI::DecisionAssetType(document.family);
             if (!record || record->sourcePath.String() != document.identity.key.source.Value() || record->type.Value() != sourceType)
                 return fail(MakeError(Assets::AssetSourceErrors::Conflict));
             const auto path = Foundation::Paths::Resolve(root, record->sourcePath);
@@ -990,7 +1024,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::ProcessDecisionGraphEdit */
     bool EditorWorkspaceController::ProcessDecisionGraphEdit(const EditorWorkspaceViewCommandData &cmd) {
-        const auto route = [this]<typename Request>(const std::optional<Request> &request) {
+        const auto route = [this]<typename Request>(const std::optional<Request> &request, AI::DecisionPlanKind family) {
             if (!request || m_viewModel.workspacePanelHost.ActiveDocument() != request->instance)
                 return;
             const auto draft = m_decisionGraphDrafts.find(request->instance);
@@ -1000,8 +1034,7 @@ namespace Horo::Editor {
             const auto document = std::ranges::find_if(documents, [&](const auto &entry) {
                 return entry.identity.instance == request->instance;
             });
-            constexpr bool isTreeRequest = std::is_same_v<Request, BehaviorTreeEditRequest>;
-            if (document == documents.end() || document->editableBehaviorTree != isTreeRequest)
+            if (document == documents.end() || document->family != family)
                 return;
             try {
                 const auto result = ApplyDecisionGraphEdit(*document, draft->second, *request);
@@ -1012,10 +1045,13 @@ namespace Horo::Editor {
         };
         switch (cmd.command) {
             case EditorWorkspaceViewCommand::EditDecisionStateMachine:
-                route(cmd.stateMachineEdit);
+                route(cmd.stateMachineEdit, AI::DecisionPlanKind::StateMachine);
                 return true;
             case EditorWorkspaceViewCommand::EditDecisionBehaviorTree:
-                route(cmd.behaviorTreeEdit);
+                route(cmd.behaviorTreeEdit, AI::DecisionPlanKind::BehaviorTree);
+                return true;
+            case EditorWorkspaceViewCommand::EditDecisionUtilityGraph:
+                route(cmd.utilityGraphEdit, AI::DecisionPlanKind::Utility);
                 return true;
             default:
                 return false;
@@ -1173,8 +1209,13 @@ namespace Horo::Editor {
             label(text(opened->conflict ? "workspace.decision_graph.edit_conflict" : "workspace.decision_graph.edit_refused"),
                   Theme::Warn());
 
-        if (opened->editableBehaviorTree) {
+        if (opened->family == AI::DecisionPlanKind::BehaviorTree) {
             DrawBehaviorTreeTopology(viewModel, *opened, outCommand);
+            return true;
+        }
+
+        if (opened->family == AI::DecisionPlanKind::Utility) {
+            DrawUtilityGraph(viewModel, *opened, outCommand);
             return true;
         }
 

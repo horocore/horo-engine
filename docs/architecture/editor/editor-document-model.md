@@ -711,6 +711,15 @@ project provider generation and saved Blackboard schema. Provider factories
 remain inactive. Other Behavior Tree shapes keep their inspectable source
 without entering this authoring path.
 
+The Utility document route edits options, option policy, and ordered scalar
+considerations. New options bind one exact installed Task. New and changed
+scores use a typed key from the exact saved Blackboard displayed by the
+editor. The workspace derives the root scoring bindings from those scores
+without modifying option provider bindings or stronger authored root
+contracts. Compiler admission validates the whole candidate before history or
+publication. The source cannot lose its final option or its final score per
+option through these commands.
+
 The workspace usage review submits one bounded Project-owned read of the exact
 durable schema bytes and registered Decision sources. The application holds the
 project mutation lease through source verification, uses the same typed source
