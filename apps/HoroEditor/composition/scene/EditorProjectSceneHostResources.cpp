@@ -44,34 +44,11 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
     Result<void> ProjectPlaySceneHost::QueueInitialScene(const Runtime::RuntimeSceneDefinition &definition,
                                                          const Editor::EditorPlayChildSceneSource *source,
                                                          const CancellationToken &cancellation) {
-        if (worldSelection_) {
-            if (source)
-                return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Unsupported,
-                                                       "Mounted World startup does not admit a separate activated child Scene batch."));
-            if (worldViewport_ && !viewportPrimitives_)
-                return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Unsupported,
-                                                       "Mounted World Play needs the active viewport's primitive-resource owner."));
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
-            auto mounted = MountedWorld::Prepare(NativeDurableFileSystem{}, *worldSelection_, identity_.value, *scenes_, cancellation);
-            if (mounted.HasError())
-                return Result<void>::Failure(mounted.ErrorValue());
-            if (selectedXrHost_) {
-                mountedWorld_ = std::move(mounted).Value();
-                auto queued = QueueMountedXrScene(definition, {cancellation, deadline});
-                if (queued.HasError()) {
-                    worldRenderer_.reset();
-                    mountedWorld_.reset();
-                }
-                return queued;
-            }
-            const auto queued = Editor::EditorPlaySceneHost::QueueInitialScene(definition, nullptr, cancellation);
-            if (queued.HasError())
-                return queued;
-            mountedWorld_ = std::move(mounted).Value();
-            if (worldViewport_)
-                worldStartup_ = MountedWorldStartup{cancellation, deadline};
-            return Result<void>::Success();
-        }
+        if (worldSelection_ && source)
+            return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Unsupported,
+                                                   "Mounted World startup does not admit a separate activated child Scene batch."));
+        if (worldSelection_)
+            return QueueMountedWorldStartup(definition, cancellation);
         if (!source)
             return Editor::EditorPlaySceneHost::QueueInitialScene(definition, nullptr, cancellation);
         if (cancellation.IsCancellationRequested())
@@ -79,22 +56,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         if (!resources_.assets_)
             return Result<void>::Failure(MakeError(InvalidProjectScene, "Child Scenes require a committed cook selection."));
         try {
-            const auto path = source->projectRelativeSource.generic_u8string();
-            const auto relative = ProjectPath::Parse({reinterpret_cast<const char *>(path.data()), path.size()});
-            if (relative.HasError())
-                return Result<void>::Failure(relative.ErrorValue());
-            const auto registry = resources_.registry_.Snapshot();
-            const auto *record = registry.FindByPath(relative.Value().String());
-            if (!record || record->type.Value() != "core.scene")
-                return Result<void>::Failure(MakeError(InvalidProjectScene, "Register the exact saved Play Scene as a Scene asset."));
-            const auto *artifact = resources_.assets_->Find(record->id);
-            if (!artifact || artifact->sourceDigest != source->sourceDigest)
-                return Result<void>::Failure(MakeError(InvalidProjectScene, "Re-cook the exact saved Scene before Play."));
-            auto cooked = resources_.assets_->DecodeScene(record->id);
+            auto cooked = ReadCookedChildSceneSource(*source);
             if (cooked.HasError())
                 return Result<void>::Failure(cooked.ErrorValue());
-            if (cooked.Value().ChildScenes().empty())
-                return Result<void>::Failure(MakeError(InvalidProjectScene, "The committed Scene has no matching child references."));
 
             std::vector<Runtime::RuntimeSceneDefinition> children;
             children.reserve(cooked.Value().ChildScenes().size());
@@ -126,6 +90,53 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(MakeError(InvalidProjectScene, "Child Scene preparation exceeded available storage."));
         }
+    }
+
+    /** @copydoc ProjectPlaySceneHost::ReadCookedChildSceneSource */
+    Result<Runtime::RuntimeSceneDefinition> ProjectPlaySceneHost::ReadCookedChildSceneSource(
+        const Editor::EditorPlayChildSceneSource &source) const {
+        using Output = Result<Runtime::RuntimeSceneDefinition>;
+        const auto path = source.projectRelativeSource.generic_u8string();
+        const auto relative = ProjectPath::Parse(std::string(path.begin(), path.end()));
+        if (relative.HasError())
+            return Output::Failure(relative.ErrorValue());
+        const auto registry = resources_.registry_.Snapshot();
+        const auto *record = registry.FindByPath(relative.Value().String());
+        if (!record || record->type.Value() != "core.scene")
+            return Output::Failure(MakeError(InvalidProjectScene, "Register the exact saved Play Scene as a Scene asset."));
+        if (const auto *artifact = resources_.assets_->Find(record->id); !artifact || artifact->sourceDigest != source.sourceDigest)
+            return Output::Failure(MakeError(InvalidProjectScene, "Re-cook the exact saved Scene before Play."));
+        auto cooked = resources_.assets_->DecodeScene(record->id);
+        if (cooked.HasValue() && cooked.Value().ChildScenes().empty())
+            return Output::Failure(MakeError(InvalidProjectScene, "The committed Scene has no matching child references."));
+        return cooked;
+    }
+
+    /** @copydoc ProjectPlaySceneHost::QueueMountedWorldStartup */
+    Result<void> ProjectPlaySceneHost::QueueMountedWorldStartup(const Runtime::RuntimeSceneDefinition &definition,
+                                                                const CancellationToken &cancellation) {
+        if (worldViewport_ && !viewportPrimitives_)
+            return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Unsupported,
+                                                   "Mounted World Play needs the active viewport's primitive-resource owner."));
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        auto mounted = MountedWorld::Prepare(NativeDurableFileSystem{}, *worldSelection_, identity_.value, *scenes_, cancellation);
+        if (mounted.HasError())
+            return Result<void>::Failure(mounted.ErrorValue());
+        if (selectedXrHost_) {
+            mountedWorld_ = std::move(mounted).Value();
+            auto queued = QueueMountedXrScene(definition, {cancellation, deadline});
+            if (queued.HasError()) {
+                worldRenderer_.reset();
+                mountedWorld_.reset();
+            }
+            return queued;
+        }
+        if (const auto queued = Editor::EditorPlaySceneHost::QueueInitialScene(definition, nullptr, cancellation); queued.HasError())
+            return queued;
+        mountedWorld_ = std::move(mounted).Value();
+        if (worldViewport_)
+            worldStartup_ = MountedWorldStartup{cancellation, deadline};
+        return Result<void>::Success();
     }
 
     /** @copydoc ProjectSceneAssetOwners::CaptureAssets */

@@ -550,6 +550,22 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         }
 
     private:
+        /** @brief Resolves the saved parent Scene and verifies that its cook still matches the selected source.
+         * @param source Exact saved Scene path and content digest.
+         * @return Decoded parent with cooked child references, or a path, identity, or decode error.
+         * @pre The Play host has a committed cook selection.
+         */
+        [[nodiscard]] Result<Runtime::RuntimeSceneDefinition> ReadCookedChildSceneSource(
+            const Editor::EditorPlayChildSceneSource &source) const;
+
+        /** @brief Prepares the selected World mount and transfers it only to the matching Play startup path.
+         * @param definition Initial Scene definition for the mount.
+         * @param cancellation Play startup cancellation token.
+         * @return Queued startup or the preparation error, with temporary ownership released on failure.
+         */
+        [[nodiscard]] Result<void> QueueMountedWorldStartup(const Runtime::RuntimeSceneDefinition &definition,
+                                                            const CancellationToken &cancellation);
+
         /** @brief Stops actual Scene participants before native retirement can be observed. */
         void ShutdownSceneOwners() noexcept {
             if (prefab_.templates)
