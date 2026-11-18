@@ -228,10 +228,14 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Decodes one exact controller and stable project asset without loading either. */
-        Result<void> ReadCookedDecision(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch) {
-            if (arguments.size() - index < 3)
-                return Result<void>::Failure(
-                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "Use --ai-decision <controller id> <Decision AssetId>."));
+        Result<void> ReadCookedDecision(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch,
+                                        const bool fromPrefab) {
+            const std::size_t count = fromPrefab ? 4 : 3;
+            if (arguments.size() - index < count)
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                                       fromPrefab
+                                                           ? "Use --ai-prefab-decision <controller id> <Decision AssetId> <Prefab AssetId>."
+                                                           : "Use --ai-decision <controller id> <Decision AssetId>."));
             const std::string_view identity{arguments[index + 1]};
             std::uint64_t value{};
             const auto parsed = std::from_chars(identity.data(), identity.data() + identity.size(), value);
@@ -241,8 +245,15 @@ namespace Horo::Application::Internal {
             auto asset = Assets::AssetId::Parse(arguments[index + 2]);
             if (asset.HasError())
                 return Result<void>::Failure(asset.ErrorValue());
-            launch.cookedDecisionBindings.push_back({controller.Value(), std::move(asset).Value()});
-            index += 3;
+            HeadlessCookedDecisionBinding binding{controller.Value(), std::move(asset).Value()};
+            if (fromPrefab) {
+                auto prefab = Assets::AssetId::Parse(arguments[index + 3]);
+                if (prefab.HasError())
+                    return Result<void>::Failure(prefab.ErrorValue());
+                binding.prefab.emplace(std::move(prefab).Value());
+            }
+            launch.cookedDecisionBindings.push_back(std::move(binding));
+            index += count;
             return Result<void>::Success();
         }
 
@@ -254,6 +265,12 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
                                                        "AI decisions require standalone mode, a native gameplay module, a "
                                                        "cooked Scene and its committed generation."));
+            if (launch.gameplay && launch.gameplay->prefabPermission != GameplayPrefabPermission::Granted &&
+                std::ranges::any_of(launch.cookedDecisionBindings, [](const auto &binding) {
+                return binding.prefab.has_value();
+            }))
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "AI prefab selection requires explicit --prefab grant."));
             return Result<void>::Success();
         }
 
@@ -280,8 +297,8 @@ namespace Horo::Application::Internal {
                         return selected;
                     continue;
                 }
-                if (key == "--ai-decision") {
-                    if (auto selected = ReadCookedDecision(arguments, index, launch); selected.HasError())
+                if (key == "--ai-decision" || key == "--ai-prefab-decision") {
+                    if (auto selected = ReadCookedDecision(arguments, index, launch, key == "--ai-prefab-decision"); selected.HasError())
                         return selected;
                     continue;
                 }

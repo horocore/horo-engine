@@ -109,3 +109,11 @@ expect_ai_launch(3 "horo-engine:"
     --project "${SOURCE_ROOT}" --scene "cooked:${scene_id}" --cooked-root "${SOURCE_ROOT}" --cook-target headless-null
     --game-module "${MODULE}" game.tests "${revision}" deny --ai-decision 1 "${decision_id}")
 message(STATUS "6 explicit cooked AI launch cases passed")
+
+set(prefab_id f0d42785-5a26-44e1-a37f-e5ecc5045523)
+expect_ai_launch(2 "Use --ai-prefab-decision" --ai-prefab-decision 1 "${decision_id}")
+expect_ai_launch(2 "horo-engine:" --ai-prefab-decision 1 "${decision_id}" malformed)
+expect_ai_launch(2 "AI prefab selection requires explicit --prefab grant"
+    --project "${SOURCE_ROOT}" --scene "cooked:${scene_id}" --cooked-root "${SOURCE_ROOT}" --cook-target headless-null
+    --game-module "${MODULE}" game.tests "${revision}" deny --ai-prefab-decision 1 "${decision_id}" "${prefab_id}")
+message(STATUS "3 prefab-only AI option refusals passed")

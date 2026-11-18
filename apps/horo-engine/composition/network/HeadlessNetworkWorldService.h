@@ -315,8 +315,11 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         /** @brief Captures exact native provider metadata before any platform scope or game callback is exposed. */
         Result<std::vector<AI::AiControllerDescriptor>> PrepareCookedControllers(std::span<const AI::AiControllerDescriptor> catalog,
                                                                                  const HeadlessCookedDecisionInput &selection) const {
+            auto limits = Prefab::PrefabLimitProfile::Create(owners_->configured->prefabPolicy);
+            if (limits.HasError())
+                return Result<std::vector<AI::AiControllerDescriptor>>::Failure(limits.ErrorValue());
             if (selection.provider == HeadlessDecisionProvider::Captured)
-                return AdmitHeadlessCookedControllers(catalog, *owners_->definition, selection, record_->sceneCancellation);
+                return AdmitHeadlessCookedControllers(catalog, *owners_->definition, selection, limits.Value(), record_->sceneCancellation);
             const auto &gameplay = *owners_->gameplay;
             auto image = Gameplay::GameModuleHost::PrepareImage(gameplay.nativeArtifact,
                                                                 {gameplay.moduleId, Gameplay::CurrentGameplayBuildFingerprint(),
@@ -330,7 +333,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return Result<std::vector<AI::AiControllerDescriptor>>::Failure(nodes.ErrorValue());
             auto configured = selection;
             configured.environment.nodes = std::move(nodes).Value();
-            return AdmitHeadlessCookedControllers(catalog, *owners_->definition, configured, record_->sceneCancellation);
+            return AdmitHeadlessCookedControllers(catalog, *owners_->definition, configured, limits.Value(), record_->sceneCancellation);
         }
 
         /** @brief Installs one authoritative navigation aggregate; paired client worlds stay presentation-only. */

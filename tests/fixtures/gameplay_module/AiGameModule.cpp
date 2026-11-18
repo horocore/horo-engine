@@ -1,4 +1,5 @@
 #include "Horo/Gameplay/GameplayAiContext.h"
+#include "Horo/Gameplay/NativeBehavior.h"
 #include "Horo/Gameplay/NativeDecisionNode.h"
 #include "Horo/Gameplay/NativePerceptionSense.h"
 
@@ -42,6 +43,31 @@ namespace {
         std::shared_ptr<const GameplayAiContext> retained_;
     };
 }  // namespace
+
+namespace {
+    std::weak_ptr<const Horo::Gameplay::GameplayPrefabContext> prefabCapabilityProbe;
+
+    /** @brief Holds a weak observation of the exact native prefab grant issued by the startup owner. */
+    class PrefabCapabilityProbeBehavior final : public Horo::Gameplay::IBehaviorInstance {
+    public:
+        static Horo::Gameplay::BehaviorDescriptor DescribeBehavior() {
+            Horo::Gameplay::BehaviorDescriptor descriptor;
+            descriptor.displayName = "AI Prefab Capability Probe";
+            descriptor.phases.push_back({Horo::Gameplay::BehaviorPhase::Gameplay, "game.ai.tests.prefab_capability_probe", {}, {}, {}});
+            return descriptor;
+        }
+
+        void OnFixedUpdate(Horo::Gameplay::BehaviorContext &context, Horo::Gameplay::FixedDeltaTime) override {
+            prefabCapabilityProbe = context.PrefabContext();
+        }
+    };
+}  // namespace
+HORO_BEHAVIOR(PrefabCapabilityProbeBehavior, "game.ai.tests.prefab_capability_probe")
+
+extern "C" HORO_GAME_EXPORT void HoroTestCopyAiPrefabCapability(
+    std::shared_ptr<const Horo::Gameplay::GameplayPrefabContext> *destination) noexcept {
+    *destination = prefabCapabilityProbe.lock();
+}
 
 namespace {
     std::uint32_t *decisionLifecycleCounters{};

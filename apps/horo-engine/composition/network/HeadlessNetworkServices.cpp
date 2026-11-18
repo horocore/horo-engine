@@ -147,6 +147,12 @@ namespace Horo::Application::Internal {
                  gameplay->nativeArtifact.empty() || !gameplay->moduleRetirements))
                 return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid,
                                                        "Selected native AI requires scoped native gameplay and execution."));
+            const bool needsPrefab = decisions && std::ranges::any_of(decisions->bindings, [](const auto &binding) {
+                return binding.prefab.has_value();
+            });
+            if (needsPrefab && (!gameplay || gameplay->prefabPermission != GameplayPrefabPermission::Granted))
+                return Result<void>::Failure(
+                    MakeError(Network::NetworkErrors::NetworkModeInvalid, "AI prefab selection requires the actual host's prefab grant."));
             if (gameplay && gameplay->prefabPermission == GameplayPrefabPermission::Granted && !input.prefabLoads)
                 return Result<void>::Failure(
                     MakeError(Network::NetworkErrors::NetworkModeInvalid, "Prefab grant requires an explicit committed artifact loader."));

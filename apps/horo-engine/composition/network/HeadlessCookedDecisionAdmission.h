@@ -5,6 +5,7 @@
 #include "Horo/AI/AISceneActivation.h"
 #include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/Assets/AssetId.h"
+#include "Horo/Prefab/PrefabLimits.h"
 
 namespace Horo::Runtime {
     class RuntimeSceneDefinition;
@@ -17,6 +18,7 @@ namespace Horo::Application::Internal {
     struct HeadlessCookedDecisionBinding final {
         AI::ControllerTypeId controller;
         Assets::AssetId artifact;
+        std::optional<Assets::AssetId> prefab; /**< Exact optional committed template that declares a spawn-only controller. */
     };
 
     /** @brief Provider ownership chosen by the composing host before opening any candidate. */
@@ -39,10 +41,11 @@ namespace Horo::Application::Internal {
      * @param catalog Optional existing controller declarations and provider metadata, including prefab-only bindings.
      * @param scene Exact initial Scene supplying authored controller bindings for explicitly selected controllers.
      * @param input Owning application capture and typed selections. Unselected descriptors keep their existing bindings.
+     * @param prefabLimits Exact project limits also used by the runtime template provider.
      * @param cancellation Exact startup/Scene owner ancestry sampled before and between decodes.
      * @return Owned descriptors for both initial and structural owners, or original typed admission failure.
      */
     [[nodiscard]] Result<std::vector<AI::AiControllerDescriptor>> AdmitHeadlessCookedControllers(
         std::span<const AI::AiControllerDescriptor> catalog, const Runtime::RuntimeSceneDefinition &scene,
-        const HeadlessCookedDecisionInput &input, const CancellationToken &cancellation);
+        const HeadlessCookedDecisionInput &input, const Prefab::PrefabLimitProfile &prefabLimits, const CancellationToken &cancellation);
 }  // namespace Horo::Application::Internal
