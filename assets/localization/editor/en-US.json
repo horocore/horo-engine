@@ -4737,6 +4737,8 @@
     "workspace.ui_inspector.remove_override": {"text": "Remove selected override"},
     "workspace.ui_inspector.property_id": {"text": "New property ID"},
     "workspace.ui_inspector.add_override": {"text": "Add override for this ID"},
+    "workspace.ui_inspector.layout_measured_dip": {"text": "Measured size (DIP)"},
+    "workspace.ui_inspector.layout_content_dip": {"text": "Arranged content size (DIP)"},
     "workspace.ui_inspector.select_element": {"text": "Select an authored element in the hierarchy to inspect its presentation."},
     "workspace.ui_inspector.title": {"text": "UI property inspector"},
     "workspace.ui_inspector.invalid_draft": {"text": "The draft contains invalid values. Correct them or cancel before applying."},

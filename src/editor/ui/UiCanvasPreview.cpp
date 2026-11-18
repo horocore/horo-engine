@@ -358,7 +358,7 @@ namespace Horo::Editor {
                 const auto element = tree.Get(record.element);
                 if (element.HasError())
                     return Result<UiCanvasPreview>::Failure(element.ErrorValue());
-                result.boxes.emplace_back(element.Value().id, record.arrangement.contentBox);
+                result.boxes.emplace_back(element.Value().id, record.arrangement.contentBox, record.measurement);
             }
             return Result<UiCanvasPreview>::Success(std::move(result));
         } catch (const std::bad_alloc &) {

@@ -325,6 +325,7 @@ namespace Horo::Editor {
     struct UiCanvasPreviewPresentation final {
         UiCanvasPreviewState state;
         std::optional<UiCanvasPreview> layout;
+        std::optional<UiCanvasPreviewBox> selectedLayout;
         std::optional<Error> diagnostic;
         std::optional<Runtime::Ui::UiDiagnosticRecord> problem;
     };

@@ -99,6 +99,7 @@ TEST_CASE("Canvas preview evaluates real Runtime UI layout and device profiles w
     REQUIRE(desktop.HasValue());
     REQUIRE(desktop.Value().boxes.size() == 2);
     CHECK(desktop.Value().boxes.back().bounds.extent.width == 100 * 64);
+    CHECK(desktop.Value().boxes.back().measurement.desired.width == 100 * 64);
     CHECK_FALSE(desktop.Value().profile.has_value());
     state.device = UiCanvasPreviewDevice::Phone;
     auto phone = BuildUiCanvasPreview(source, state, Instance());
@@ -107,6 +108,7 @@ TEST_CASE("Canvas preview evaluates real Runtime UI layout and device profiles w
     CHECK(phone.Value().canvas.safeAreaInsets.top == 141);
     CHECK(phone.Value().profile == Id<UiPresentationProfileId>(5));
     CHECK(phone.Value().boxes.back().bounds.extent.width == 40 * 64);
+    CHECK(phone.Value().boxes.back().measurement.desired.width == 40 * 64);
     state.rotated = true;
     auto rotated = BuildUiCanvasPreview(source, state, Instance());
     REQUIRE(rotated.HasValue());

@@ -43,9 +43,11 @@ namespace Horo::Editor {
         [[nodiscard]] bool operator==(const UiCanvasPreviewState &) const noexcept = default;
     };
 
+    /** @brief Evaluated geometry and measurement for one stable authored element. */
     struct UiCanvasPreviewBox final {
         Runtime::Ui::UiElementId element;
         Runtime::Ui::UiLogicalRect bounds;
+        Runtime::Ui::UiLayoutMeasurement measurement;
     };
 
     /** @brief Copied actual layout output; a failed refresh discards stale interaction geometry. */

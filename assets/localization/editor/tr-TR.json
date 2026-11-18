@@ -4737,6 +4737,8 @@
     "workspace.ui_inspector.remove_override": {"text": "Seçili geçersiz kılmayı kaldır"},
     "workspace.ui_inspector.property_id": {"text": "Yeni özellik kimliği"},
     "workspace.ui_inspector.add_override": {"text": "Bu kimlik için geçersiz kılma ekle"},
+    "workspace.ui_inspector.layout_measured_dip": {"text": "Ölçülen boyut (DIP)"},
+    "workspace.ui_inspector.layout_content_dip": {"text": "Yerleşen içerik boyutu (DIP)"},
     "workspace.ui_inspector.select_element": {"text": "Sunumunu incelemek için hiyerarşiden yazılmış bir öğe seçin."},
     "workspace.ui_inspector.title": {"text": "Arayüz özellik denetçisi"},
     "workspace.ui_inspector.invalid_draft": {"text": "Taslak geçersiz değerler içeriyor. Uygulamadan önce bunları düzeltin veya iptal edin."},

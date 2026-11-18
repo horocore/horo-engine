@@ -766,5 +766,11 @@ TEST_CASE("UI canvas hierarchy and catalog copy resolve in both shipped locales"
             CHECK_FALSE(service.Get("editor", full).empty());
             CHECK(service.Get("editor", full) != full);
         }
+        for (const auto key : {"workspace.ui_inspector.layout_measured_dip", "workspace.ui_inspector.layout_content_dip"}) {
+            INFO(locale);
+            INFO(key);
+            CHECK_FALSE(service.Get("editor", key).empty());
+            CHECK(service.Get("editor", key) != key);
+        }
     }
 }

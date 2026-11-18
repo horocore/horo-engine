@@ -68,12 +68,24 @@ namespace Horo::Editor {
             }
         }
 
+        /** @brief Retain selected evidence outside drawing and discard any selection missing from this layout. */
+        void RefreshSelectedLayout(UiCanvasPreviewPresentation &preview, const Runtime::Ui::UiElementId selection) {
+            preview.selectedLayout.reset();
+            if (!preview.layout || !selection.IsValid())
+                return;
+            const auto &boxes = preview.layout->boxes;
+            const auto box = std::ranges::find(boxes, selection, &UiCanvasPreviewBox::element);
+            if (box != boxes.end())
+                preview.selectedLayout = *box;
+        }
+
         /** @brief Publish geometry and failure evidence from the same evaluation. */
         void RefreshCanvasPreview(const UiCanvasDocument &owner, UiCanvasPreviewPresentation &preview,
                                   const UiInspectorResourceSnapshot &resources) {
             auto evaluated = BuildUiCanvasPreview(owner.Document(), preview.state, owner.Identity().instance, &resources, &preview.problem);
             preview.diagnostic = evaluated.HasError() ? std::optional{evaluated.ErrorValue()} : std::nullopt;
             preview.layout = evaluated.HasValue() ? std::optional{std::move(evaluated).Value()} : std::nullopt;
+            RefreshSelectedLayout(preview, owner.Selection());
         }
 
         /** @brief Refresh cached authored rows and selected values only after their canonical fences change. */
@@ -101,6 +113,8 @@ namespace Horo::Editor {
             if (sourceChanged || projection.inspectorResourcePublication != resources.publication ||
                 projection.inspectorStyles != resources.StyleGeneration() || projection.inspectorTheme != resources.theme)
                 RefreshCanvasPreview(owner, projection.preview, resources);
+            else if (selectionChanged)
+                RefreshSelectedLayout(projection.preview, owner.Selection());
         }
 
         /** @brief Change only session device state, resolving actual source inputs when geometry changes. */

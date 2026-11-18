@@ -378,13 +378,29 @@ namespace {
         REQUIRE(source.canUndo);
         CHECK(source.state != firstState);
 
+        const auto child = std::ranges::find_if(source.rows, [&](const auto &row) {
+            return row.parent == source.root;
+        });
+        REQUIRE(child != source.rows.end());
+        EditorWorkspaceViewCommandData select;
+        select.command = EditorWorkspaceViewCommand::UiCanvasSelect;
+        select.documentInstance = source.identity.instance;
+        select.uiCanvasState = source.state;
+        select.uiCanvasElement = child->element;
+        controller.ProcessCommand(select);
+        const auto &inspection = controller.ViewModel().uiCanvasDocuments.front().preview.selectedLayout;
+        REQUIRE(inspection);
+        CHECK(inspection->element == child->element);
+
         EditorWorkspaceViewCommandData close;
         close.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument;
         close.documentInstance = source.identity.instance;
         WorkspaceScreenDetail::WorkspaceSourceDocumentCommands routes;
         routes.BeginSession();
         REQUIRE(routes.HandleMenuAction(&controller, EditorMenuAction::Undo));
-        CHECK_FALSE(controller.ViewModel().uiCanvasDocuments.front().dirty);
+        const auto &undone = controller.ViewModel().uiCanvasDocuments.front();
+        CHECK_FALSE(undone.dirty);
+        CHECK_FALSE(undone.preview.selectedLayout);
         REQUIRE(routes.HandleMenuAction(&controller, EditorMenuAction::Redo));
         source = controller.ViewModel().uiCanvasDocuments.front();
         REQUIRE(source.dirty);

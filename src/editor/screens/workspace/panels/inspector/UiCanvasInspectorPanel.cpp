@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <limits>
 
 namespace Horo::Editor {
@@ -15,6 +16,15 @@ namespace Horo::Editor {
         /** @brief Resolve presentation text without inventing an authored property schema. */
         const char *Label(const EditorGuiContext &context, const char *key) {
             return UiCanvasInspectorPanel::kTextScope.Text(context.localization, key).c_str();
+        }
+
+        /** @brief Show a logical extent from the last accepted layout evaluation. */
+        void DrawEvaluatedExtent(const EditorGuiContext &context, const char *key, const UiLogicalExtent extent) {
+            std::array<char, 64> text{};
+            constexpr auto units = static_cast<double>(UiScalarUnitsPerDip);
+            std::snprintf(text.data(), text.size(), "%.2f × %.2f", extent.width / units, extent.height / units);
+            Ui::FieldLabel(Label(context, key), context.theme.fonts);
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, text.data(), Theme::Muted(), context.theme.fonts);
         }
 
         /** @brief Capture canonical UUID presentation only on source/input changes. */
@@ -423,6 +433,10 @@ namespace Horo::Editor {
             Capture(source, current);
         const auto &id = current.element.Bytes();
         ImGui::PushID(reinterpret_cast<const char *>(id.data()), reinterpret_cast<const char *>(id.data() + id.size()));
+        if (const auto &layout = source.preview.selectedLayout; layout && layout->element == current.element) {
+            DrawEvaluatedExtent(context, "layout_measured_dip", layout->measurement.desired);
+            DrawEvaluatedExtent(context, "layout_content_dip", layout->bounds.extent);
+        }
         const bool changed = DrawFields(context, source.inspectorStyles.IsValid());
         if (changed) {
             dirty_ = true;
