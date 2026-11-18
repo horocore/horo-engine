@@ -43,6 +43,12 @@ namespace Horo::Application::Internal::Detail {
 
     /** @brief One actual derived source and its renderer preparations; teardown never owns the canonical source service. */
     struct RuntimeUiPaintSource final {
+        /** @brief One read-only view with its own snapshot pool and exact layout admission. */
+        struct SnapshotView final {
+            Runtime::Ui::UiPresentationAttachmentId attachment;
+            std::unique_ptr<RuntimeUiPaintProjection> projection;
+        };
+
         Runtime::Ui::RuntimeUiInstanceId instance;
         std::shared_ptr<Runtime::Ui::UiElementSlotAllocator> allocatorLifetime;
         std::unique_ptr<Runtime::UiAnimationRuntimeParticipant> animation;
@@ -52,6 +58,7 @@ namespace Horo::Application::Internal::Detail {
         Runtime::Ui::UiRenderExtractorDescriptor extraction;
         Runtime::Ui::UiRenderGeometryArena arena;
         Runtime::Ui::UiRenderGeometryArenaDescriptor geometryPolicy;
+        std::array<SnapshotView, Runtime::Ui::MaximumUiAnimationAttachments - 1> snapshotViews;
 
         /** @brief One preparation policy and its active/retiring native generations, destroyed in reverse ownership order. */
         struct NativePrograms final {
@@ -82,6 +89,8 @@ namespace Horo::Application::Internal::Detail {
 
         /** @brief Resolves coalesced native evidence through canonical canvas policy before the next derived update. */
         [[nodiscard]] Result<void> ApplyOutput();
+        /** @brief Resolves an exact admitted render-only attachment without borrowing another view's pool. */
+        [[nodiscard]] SnapshotView *FindSnapshot(Runtime::Ui::UiPresentationAttachmentId attachment) noexcept;
         /** @brief Validates/preserves the complete pre-admitted native texture inventory outside frame work. */
         [[nodiscard]] Result<void> AdmitResources();
         /** @brief Prepares a complete structural replacement only at the explicit application owner safe point. */
@@ -138,5 +147,7 @@ namespace Horo::Application::Internal::Detail {
         /** @brief Copies a bounded borrow inventory; normal work excludes stopped and retired children. */
         [[nodiscard]] std::array<RuntimeUiPaintSource *, 1 + MaximumSceneUiSources + MaximumRetiredSceneUiSources> Sources(
             bool includeRetired = false) noexcept;
+        /** @brief Finds the exact active source without consulting retired generations. */
+        [[nodiscard]] RuntimeUiPaintSource *ActiveSource(Runtime::Ui::RuntimeUiInstanceId instance) noexcept;
     };
 }  // namespace Horo::Application::Internal::Detail

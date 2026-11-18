@@ -95,6 +95,12 @@ namespace Horo::Runtime::Ui {
         std::span<const UiAnimationFocusGeometry> focusGeometry; /**< Copied projected bounds; requires the containing frame lease. */
     };
 
+    /** @brief Borrowed geometry for one view, pinned by the containing animation frame lease. */
+    struct UiAnimationViewGeometry final {
+        const UiLayoutSnapshot &layout;
+        const UiLayoutClipSnapshot *clipping{};
+    };
+
     /** @brief Exact immutable evaluated timeline correlated to one atomic successful UI publication. */
     struct UiAnimationTimelineRecord final {
         UiAnimationTimelineId timeline;
@@ -210,6 +216,12 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] const UiPresentationProfileSelection *PresentationSelection() const noexcept;
         /** @brief Borrows secondary attachment geometry sharing the exact primary interaction issuer. @return Immutable derived frames. */
         [[nodiscard]] std::span<const UiAnimationAttachmentFrame> Attachments() const noexcept;
+        /** @brief Resolves the geometry of the exact view in this immutable frame.
+         * @param view Issued view identity, including its generation.
+         * @return Matching primary or attachment geometry, or absence for an invalid or unpublished view.
+         * @details The returned geometry must not outlive this lease.
+         */
+        [[nodiscard]] std::optional<UiAnimationViewGeometry> FindViewGeometry(UiRenderViewId view) const noexcept;
         /** @brief Borrows actual bounded route-stack state copied at this publication. @return Immutable route instances. */
         [[nodiscard]] std::span<const UiRouteInstance> Routes() const noexcept;
         /** @brief Returns the last admitted route operation's exact copied progress, without completion authority. */

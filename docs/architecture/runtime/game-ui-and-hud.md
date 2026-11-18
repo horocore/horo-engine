@@ -294,6 +294,13 @@ A `UiCanvas` declares:
 The canvas does not choose semantic owner lifetime. Its containing runtime
 instance already names one ADR-073 owner scope, while each viewport attachment
 supplies logical extent, DPI, safe area, view identity and presented revision.
+Paint extraction uses the layout and clipping from the exact view in the held
+animation frame. A detached view remains readable from an earlier frame lease
+until its readers release it. Current extraction rejects that retired identity.
+The application paint owner can reserve an independent extractor for a preview,
+thumbnail, or offscreen view. These snapshot views share authored data without
+sharing snapshot slots. Extracting a snapshot issues no presentation receipt and
+does not admit input. A successful source reload revokes previous attachments.
 
 ```cpp
 struct UiCanvasDescriptor {

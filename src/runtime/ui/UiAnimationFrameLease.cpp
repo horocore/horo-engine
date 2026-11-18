@@ -61,6 +61,18 @@ namespace Horo::Runtime::Ui {
         return storage_->attachments;
     }
 
+    /** @copydoc UiAnimationFrameLease::FindViewGeometry */
+    std::optional<UiAnimationViewGeometry> UiAnimationFrameLease::FindViewGeometry(const UiRenderViewId view) const noexcept {
+        if (!IsValid() || !view.IsValid())
+            return std::nullopt;
+        const auto attachment = std::ranges::find(storage_->attachments, view, &UiAnimationAttachmentFrame::view);
+        if (attachment != storage_->attachments.end() && attachment->layout)
+            return UiAnimationViewGeometry{*attachment->layout, attachment->clipping ? &*attachment->clipping : nullptr};
+        if (view != storage_->primaryView)
+            return std::nullopt;
+        return UiAnimationViewGeometry{Layout(), Clipping()};
+    }
+
     /** @copydoc UiAnimationFrameLease::Routes */
     std::span<const UiRouteInstance> UiAnimationFrameLease::Routes() const noexcept {
         return storage_ ? std::span<const UiRouteInstance>{storage_->routes} : std::span<const UiRouteInstance>{};

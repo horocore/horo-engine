@@ -155,6 +155,7 @@ namespace Horo::Application::Internal::Detail {
         retiring = true;
         animation->Shutdown();
         ReleaseFrame();
+        snapshotViews = {};
         projection.reset();
         if (programs.active) {
             if (const auto closed = programs.active->Shutdown(); closed.HasError())

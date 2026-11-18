@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <new>
 
 namespace Horo::Application::Internal {
     using namespace Runtime::Ui;
@@ -159,6 +160,24 @@ namespace Horo::Application::Internal {
         return *storage_->authored;
     }
 
+    /** @copydoc RuntimeUiPaintProjection::ForkForView */
+    Result<std::unique_ptr<RuntimeUiPaintProjection>> RuntimeUiPaintProjection::ForkForView(const RuntimeUiService &service,
+                                                                                            UiRenderViewId view) const {
+        using Forked = Result<std::unique_ptr<RuntimeUiPaintProjection>>;
+        auto current = service.Acquire(storage_->instance);
+        if (current.HasError())
+            return Forked::Failure(current.ErrorValue());
+        if (&current.Value().Get()->Instance() != storage_->expectedInstance)
+            return Forked::Failure(MakeError(UiErrors::RevisionStale));
+        auto descriptor = storage_->descriptor;
+        descriptor.view = view;
+        try {
+            return Create(service, storage_->instance, storage_->declaration, descriptor);
+        } catch (const std::bad_alloc &) {
+            return Forked::Failure(MakeError(UiErrors::CapacityExceeded));
+        }
+    }
+
     /** @copydoc RuntimeUiPaintProjection::~RuntimeUiPaintProjection */
     RuntimeUiPaintProjection::~RuntimeUiPaintProjection() = default;
 
@@ -201,12 +220,15 @@ namespace Horo::Application::Internal {
             storage_->revision == std::numeric_limits<std::uint64_t>::max())
             return Result<UiRenderSnapshot>::Failure(MakeError(UiErrors::RevisionStale));
         storage_->source = std::move(current).Value();
-        const auto &layout = frame.Layout().Descriptor();
+        const auto geometry = frame.FindViewGeometry(storage_->descriptor.view);
+        if (!geometry)
+            return Result<UiRenderSnapshot>::Failure(MakeError(UiErrors::PresentationProfileForeignIdentity));
+        const auto &layout = geometry->layout.Descriptor();
         const auto &tree = storage_->canvas->tree;
         if (layout.instance != tree.Instance() || layout.canvas != tree.Canvas() || layout.sources.tree != tree.Revision() ||
             layout.sources.document != tree.SourceDocumentRevision())
             return Result<UiRenderSnapshot>::Failure(MakeError(UiErrors::RevisionStale));
-        if (const auto built = storage_->Build({frame.Styles(), frame.Layout(), frame.Clipping()}); built.HasError())
+        if (const auto built = storage_->Build({frame.Styles(), geometry->layout, geometry->clipping}); built.HasError())
             return Result<UiRenderSnapshot>::Failure(built.ErrorValue());
         UiRenderSnapshotDescriptor descriptor{layout.instance,
                                               layout.canvas,

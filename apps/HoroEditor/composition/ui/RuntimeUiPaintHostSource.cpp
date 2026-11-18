@@ -115,6 +115,7 @@ namespace Horo::Application::Internal {
             return result;
         // Nothing below can fail or acquire a source generation. The private projection already reserved/validated its storage.
         source.ReleaseFrame();
+        source.snapshotViews = {};
         source.programs.retired = std::move(source.programs.active);
         source.projection = std::move(projected).Value();
         source.arena = std::move(arena).Value();

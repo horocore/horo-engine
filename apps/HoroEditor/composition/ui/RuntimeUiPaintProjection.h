@@ -85,6 +85,12 @@ namespace Horo::Application::Internal {
          * @return Canonical descriptor, valid until this projection is replaced or destroyed.
          */
         [[nodiscard]] const Runtime::Ui::UiCanvasDescriptor &Canvas() const noexcept;
+        /** @brief Reserves a separate extractor over this exact declaration and admitted source.
+         * @param service Same canonical publisher. @param view View issued by the caller's presentation host.
+         * @return Independent projection or typed source/capacity failure. Call only at a source safe point.
+         */
+        [[nodiscard]] Result<std::unique_ptr<RuntimeUiPaintProjection>> ForkForView(const Runtime::Ui::RuntimeUiService &service,
+                                                                                    Runtime::Ui::UiRenderViewId view) const;
         ~RuntimeUiPaintProjection();
         RuntimeUiPaintProjection(const RuntimeUiPaintProjection &) = delete;
         RuntimeUiPaintProjection &operator=(const RuntimeUiPaintProjection &) = delete;

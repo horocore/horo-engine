@@ -54,6 +54,39 @@ TEST_CASE("Empty application UI startup does not require optional native paint c
     REQUIRE(Take(port.CollectRetired()));
 }
 
+TEST_CASE("Application paint extracts isolated read-only views from one source", "[application][runtime_ui][paint][views]") {
+    Fixture fixture;
+    const auto instance = Source::Instance();
+    const UiRenderViewId preview{Source::Owner(), 21, 1};
+    const UiRenderViewId thumbnail{Source::Owner(), 22, 1};
+    auto viewport = Runtime::Ui::AnimationTests::Config().viewport;
+    const auto previewAttachment = Take(fixture.port.AttachSnapshotView(instance, preview, viewport));
+    viewport.constraints.maximum.width = viewport.content.extent.width = 60;
+    const auto thumbnailAttachment = Take(fixture.port.AttachSnapshotView(instance, thumbnail, viewport));
+    CHECK(fixture.port.AttachSnapshotView(instance, preview, viewport).HasError());
+    viewport.constraints.maximum.width = viewport.content.extent.width = 120;
+    REQUIRE(fixture.port.UpdateSnapshotView(instance, previewAttachment, viewport).HasValue());
+    CHECK(fixture.port.ExtractSnapshotView(instance, previewAttachment).HasError());
+    fixture.Frame();
+    const auto previewSnapshot = Take(fixture.port.ExtractSnapshotView(instance, previewAttachment));
+    const auto thumbnailSnapshot = Take(fixture.port.ExtractSnapshotView(instance, thumbnailAttachment));
+    CHECK(previewSnapshot.Descriptor().view == preview);
+    CHECK(thumbnailSnapshot.Descriptor().view == thumbnail);
+    REQUIRE_FALSE(previewSnapshot.Commands().empty());
+    REQUIRE_FALSE(thumbnailSnapshot.Commands().empty());
+    CHECK(previewSnapshot.Commands().front().rect.extent.width > thumbnailSnapshot.Commands().front().rect.extent.width);
+    CHECK_FALSE(fixture.port.InputEligible(preview));
+    CHECK_FALSE(fixture.port.InputEligible(thumbnail));
+    REQUIRE(fixture.port.DetachSnapshotView(instance, previewAttachment).HasValue());
+    CHECK(fixture.port.ExtractSnapshotView(instance, previewAttachment).HasError());
+    CHECK(fixture.port.UpdateSnapshotView(instance, previewAttachment, viewport).HasError());
+    CHECK(fixture.port.ExtractSnapshotView(instance, thumbnailAttachment).HasValue());
+    fixture.host->Shutdown();
+    CHECK(fixture.port.ExtractSnapshotView(instance, thumbnailAttachment).HasError());
+    CHECK_FALSE(previewSnapshot.Commands().empty());
+    CHECK_FALSE(thumbnailSnapshot.Commands().empty());
+}
+
 TEST_CASE("Unavailable optional native paint rejects real source attachment without blocking ordinary application frames",
           "[application][runtime_ui][paint]") {
     Fixture fixture{false};

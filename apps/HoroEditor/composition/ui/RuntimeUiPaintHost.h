@@ -125,6 +125,34 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> Presented(std::uint64_t frameNumber, bool nativePresentSucceeded) const;
         /** @brief Pins the actual current derived frame for host inspection; its lifetime participates in the existing drain fence. */
         [[nodiscard]] Result<Runtime::Ui::UiAnimationFrameLease> AcquireFrame() const;
+        /** @brief Reserves an independently bounded render-only snapshot view for an active source.
+         * @param instance Exact source owner. @param view Exact view identity. @param viewport Local geometry and policy.
+         * @return Attachment identity or the original admission failure.
+         * @details Call at a source safe point. Successful source reload or removal revokes the attachment.
+         */
+        [[nodiscard]] Result<Runtime::Ui::UiPresentationAttachmentId> AttachSnapshotView(Runtime::Ui::RuntimeUiInstanceId instance,
+                                                                                         Runtime::Ui::UiRenderViewId view,
+                                                                                         Runtime::Ui::UiAnimationViewport viewport) const;
+        /** @brief Replaces the viewport evidence for a render-only attachment at the source safe point.
+         * @param instance Exact source. @param attachment Exact admitted view. @param viewport New local evidence.
+         * @return Success or the original stale, lifecycle or validation error.
+         */
+        [[nodiscard]] Result<void> UpdateSnapshotView(Runtime::Ui::RuntimeUiInstanceId instance,
+                                                      Runtime::Ui::UiPresentationAttachmentId attachment,
+                                                      Runtime::Ui::UiAnimationViewport viewport) const;
+        /** @brief Retires one render-only attachment and its pool. Existing snapshot leases remain valid.
+         * @param instance Exact source. @param attachment Exact admitted view.
+         * @return Success or the original stale or lifecycle error.
+         */
+        [[nodiscard]] Result<void> DetachSnapshotView(Runtime::Ui::RuntimeUiInstanceId instance,
+                                                      Runtime::Ui::UiPresentationAttachmentId attachment) const;
+        /** @brief Extracts published layout into an independent preallocated snapshot slot.
+         * @param instance Exact source. @param attachment Exact admitted view.
+         * @return Immutable render snapshot, or typed stale, unpublished or exhausted storage failure.
+         * @details Does not submit a presentation receipt or admit focus, pointer or control input.
+         */
+        [[nodiscard]] Result<Runtime::Ui::UiRenderSnapshot> ExtractSnapshotView(Runtime::Ui::RuntimeUiInstanceId instance,
+                                                                                Runtime::Ui::UiPresentationAttachmentId attachment) const;
         /** @brief Observes the actual receipt-fenced input admission for the composed view. */
         [[nodiscard]] bool InputEligible(Runtime::Ui::UiRenderViewId view) const noexcept;
         /** @brief Observes finite source admission without borrowing a mutable owner. */
