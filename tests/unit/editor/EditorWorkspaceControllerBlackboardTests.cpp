@@ -72,7 +72,9 @@ namespace {
         }
 
         [[nodiscard]] static const auto &Snapshot(const EditorWorkspaceController &controller) {
-            return controller.ViewModel().blackboardDocuments.front().snapshot;
+            const auto &documents = controller.ViewModel().blackboardDocuments;
+            REQUIRE(documents.size() == 1);
+            return documents.front().snapshot;
         }
     };
 }  // namespace
@@ -89,12 +91,12 @@ TEST_CASE("Blackboard asset activation saves, reloads and reopens its real works
 
     project.Rename(controller, initial, "Saved");
     const auto edited = project.Current(controller);
-    CHECK(controller.HasDirtySourceDocuments());
+    REQUIRE(controller.HasDirtySourceDocuments());
     controller.ProcessCommand(project.Open());
     CHECK(project.Current(controller).instance == initial.instance);
     CHECK(project.Snapshot(controller).source->rows.front().displayName == "Saved");
     controller.ProcessCommand({.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = initial.instance});
-    CHECK(controller.HasDirtySourceDocuments());
+    REQUIRE(controller.HasDirtySourceDocuments());
     CHECK(controller.ResolveBlackboardClose(initial, SourceCloseDecision::Discard).HasError());
     REQUIRE(controller.SaveSourceDocuments().HasValue());
     CHECK_FALSE(controller.HasDirtySourceDocuments());

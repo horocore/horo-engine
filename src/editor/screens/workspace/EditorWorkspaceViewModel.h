@@ -151,7 +151,6 @@ namespace Horo::Editor {
         SaveAllSourceDocuments,
         CloseSourceDocument,
         UiCanvasSelect,
-        BlackboardDocument,
         UiCanvasCreate,
         UiCanvasMove,
         UiCanvasSearch,
@@ -255,6 +254,7 @@ namespace Horo::Editor {
         CreateTerrainLayerSet,
         CreateTerrainFoliageType,
         OpenGyroscopeBinding,
+        BlackboardDocument,
     };
 
     enum class BottomDockMode {
