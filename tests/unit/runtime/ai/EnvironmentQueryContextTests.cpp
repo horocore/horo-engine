@@ -121,8 +121,9 @@ namespace Horo::AI {
             const auto settings = ReadBuiltinPointQuerySettings(restored.Value(), registry.Value());
             REQUIRE(settings.HasValue());
             CHECK(settings.Value().lattice.center == world);
-            REQUIRE(settings.Value().latticeCenters.size() == 2);
+            REQUIRE(settings.Value().latticeCenters.size() == 3);
             CHECK(settings.Value().latticeCenters.front() == querier);
+            CHECK(settings.Value().latticeCenters.back() == BuiltinQueryContextId(BuiltinQueryContext::TargetLocation));
             CHECK(settings.Value().distanceTests.front().test.center == querier);
             const auto foreign =
                 AddBuiltinPointDistanceTest(generator.Value(), stage, {300, false, 1, BuiltinQueryContextId(BuiltinQueryContext::Target)});

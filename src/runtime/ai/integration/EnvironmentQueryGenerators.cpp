@@ -30,7 +30,8 @@ namespace Horo::AI {
         QueryContextChoice PointCenterChoice() {
             return {.property = QueryPropertyId::Create(PointCenter).Value(),
                     .options = {{BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation), LatticeVersion},
-                                {BuiltinQueryContextId(BuiltinQueryContext::WorldOrigin), LatticeVersion}}};
+                                {BuiltinQueryContextId(BuiltinQueryContext::WorldOrigin), LatticeVersion},
+                                {BuiltinQueryContextId(BuiltinQueryContext::TargetLocation), LatticeVersion}}};
         }
 
         /** @brief Retains the original serialized shape for the default native location. */

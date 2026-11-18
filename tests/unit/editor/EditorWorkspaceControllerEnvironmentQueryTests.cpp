@@ -1,3 +1,4 @@
+#include "Horo/AI/AIErrors.h"
 #include "Horo/AI/EnvironmentQueryExecution.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
@@ -208,6 +209,15 @@ TEST_CASE("Environment Query workspace previews the saved native lattice from an
     const auto &model = controller.ViewModel();
     REQUIRE(model.objects.size() == 1);
     const auto object = model.objects.front().id;
+    controller.ProcessCommand(
+        {.command = EditorWorkspaceViewCommand::CreatePrimitive, .primitivePayload = Runtime::PrimitiveId{"primitive.mesh.box"}});
+    REQUIRE(model.objects.size() == 2);
+    const auto target = model.objects.back().id;
+    REQUIRE(target != object);
+    auto targetTransform = model.objects.back().localTransform;
+    targetTransform.translation = {-1, 0, 3};
+    controller.ProcessCommand(
+        {.command = EditorWorkspaceViewCommand::CommitObjectTransform, .objectPayload = target, .transformPayload = targetTransform});
     auto transform = model.objects.front().localTransform;
     transform.translation = {2, 3, -4};
     controller.ProcessCommand({.command = EditorWorkspaceViewCommand::SelectObject, .objectPayload = object});
@@ -242,6 +252,42 @@ TEST_CASE("Environment Query workspace previews the saved native lattice from an
     std::optional<QueryStageId> distanceStage;
     std::optional<QueryStageId> filterStage;
     bool mixedContexts = false;
+    bool usesTarget = false;
+    SECTION("target inputs capture the other selected object and never substitute the querier") {
+        usesTarget = true;
+        const auto center = BuiltinQueryContextId(BuiltinQueryContext::TargetLocation);
+        const auto lattice =
+            CreateBuiltinLatticeQuery(query.Value().Id(), query.Value().Stages().front().id, query.Value().ResultSchema().id,
+                                      "Target points", {.stepMillimeters = 1000, .outerSteps = 1, .center = center}, 9);
+        REQUIRE(lattice.HasValue());
+        const auto staged = AddBuiltinPointDistanceTest(lattice.Value(), QueryStageId::Create(12).Value(), {1000, true, 1, center});
+        REQUIRE(staged.HasValue());
+        project.WriteAsset(staged.Value());
+        Project::Open(controller, Project::Path);
+        auto edited = pinned;
+        edited.source = document.source;
+        submit(edited);
+        REQUIRE(document.preview.status == Failed);
+        REQUIRE(document.preview.diagnostic);
+        CHECK(document.preview.diagnostic->code.Value() == AIErrors::EnvironmentQueryContextMissing.code.Value());
+
+        controller.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::SelectObject, .objectSelection = ObjectSelectionRequest{{target, object}, object}});
+        edited.target = object;
+        submit(edited);
+        REQUIRE(document.preview.status == Stale);
+        edited.target = target;
+        submit(edited);
+        REQUIRE(document.preview.status == Running);
+        SECTION("the selected target stays live through publication") {
+            CHECK(document.preview.scene.target == target);
+        }
+        SECTION("losing the secondary selection revokes an outstanding result") {
+            controller.ProcessCommand({.command = EditorWorkspaceViewCommand::SelectObject, .objectPayload = object});
+            CHECK(model.documentRevision == pinned.scene);
+            expected = Stale;
+        }
+    }
     SECTION("generation and distance tests use the distinct captured locations") {
         mixedContexts = true;
         const auto origin = BuiltinQueryContextId(BuiltinQueryContext::WorldOrigin);
@@ -322,6 +368,19 @@ TEST_CASE("Environment Query workspace previews the saved native lattice from an
     }
     REQUIRE(document.preview.snapshot);
     const auto &preview = *document.preview.snapshot;
+    if (usesTarget) {
+        REQUIRE(preview.candidates.size() == 9);
+        CHECK(preview.candidates[4].point == Math::WorldCoordinate64::FromMillimeters(-1000, 0, 3000));
+        CHECK(preview.winnerCount == 5);
+        REQUIRE_FALSE(preview.winners.empty());
+        CHECK(preview.winners.front().itemIndex == 4);
+        CHECK(active->IsCurrent());
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::SelectObject, .objectPayload = object});
+        controller.UpdateEnvironmentQueryPreview();
+        CHECK(document.preview.status == Stale);
+        CHECK_FALSE(document.preview.snapshot);
+        return;
+    }
     if (mixedContexts) {
         REQUIRE(preview.candidates.size() == 9);
         CHECK(preview.candidates[4].point == Math::WorldCoordinate64{});

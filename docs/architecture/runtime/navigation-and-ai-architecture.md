@@ -2325,8 +2325,11 @@ its exact identity. A structural edit includes the current field values in one
 undoable transaction. Appending preserves the semantic order of existing stages.
 
 The lattice generator and each distance test choose a location independently
-from the installed descriptor options. The native options are querier location
-and world origin. Old sources use querier location. A compiled stage retains
+from the installed descriptor options. The native options are querier location,
+world origin and target location. Old sources use querier location.
+A target preview uses exactly two selected Scene objects. The primary selection
+is the querier and the other object is the target. Changing either selection
+invalidates the retained preview. A compiled stage retains
 only its selected requirement, and preview evaluates each test against its
 own captured location from the pinned Scene.
 

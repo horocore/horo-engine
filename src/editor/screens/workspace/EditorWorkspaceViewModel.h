@@ -376,6 +376,7 @@ namespace Horo::Editor {
         SceneObjectId anchor;
         Runtime::SceneRuntimeId runtime;
         std::uint64_t structure{};
+        std::optional<SceneObjectId> target; /**< The distinct secondary Scene selection when required by the query. */
     };
 
     /** @brief Workspace-only evidence, with no runtime apply or navigation capability. */
@@ -399,6 +400,7 @@ namespace Horo::Editor {
         DocumentRevision scene;
         std::optional<SceneObjectId> anchor;
         EnvironmentQueryPreviewAction action{EnvironmentQueryPreviewAction::Run};
+        std::optional<SceneObjectId> target;
     };
 
     /** @brief Ordinary semantic edit and history actions from the saved Query tab. */

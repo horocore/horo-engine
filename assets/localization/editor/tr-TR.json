@@ -852,6 +852,8 @@
     "workspace.environment_query.center_context": {"text": "Merkez bağlamı"},
     "workspace.environment_query.context_querier": {"text": "Sorgulayanın konumu"},
     "workspace.environment_query.context_world_origin": {"text": "Dünya orijini"},
+    "workspace.environment_query.context_target": {"text": "Hedef konumu"},
+    "workspace.environment_query.preview_select_target": {"text": "Scene’de iki nesne seçin. Etkin nesne sorgulayan, diğer nesne hedeftir."},
     "workspace.environment_query.score_weight": {"text": "Göreli puan ağırlığı"},
     "workspace.environment_query.new_distance_radius": {"text": "Yeni test yarıçapı (mm)"},
     "workspace.environment_query.add_distance_test": {"text": "Mesafe Testi Ekle"},

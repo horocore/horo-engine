@@ -31,13 +31,15 @@ namespace Horo::Editor {
             std::string heading;
             std::string querier;
             std::string origin;
+            std::string target;
         };
 
         /** @brief Resolves point labels once for the generator or distance-test controls. */
         PointContextLabels LocalizePointContexts(const ILocalizationService &localization) {
             return {localization.Get("editor", "workspace.environment_query.center_context"),
                     localization.Get("editor", "workspace.environment_query.context_querier"),
-                    localization.Get("editor", "workspace.environment_query.context_world_origin")};
+                    localization.Get("editor", "workspace.environment_query.context_world_origin"),
+                    localization.Get("editor", "workspace.environment_query.context_target")};
         }
 
         /** @brief Projects installed context identities into the shared editor dropdown. */
@@ -47,6 +49,7 @@ namespace Horo::Editor {
                 return;
             const auto querier = AI::BuiltinQueryContextId(AI::BuiltinQueryContext::QuerierLocation);
             const auto origin = AI::BuiltinQueryContextId(AI::BuiltinQueryContext::WorldOrigin);
+            const auto target = AI::BuiltinQueryContextId(AI::BuiltinQueryContext::TargetLocation);
             std::array<std::array<char, std::numeric_limits<std::uint64_t>::digits10 + 2>,
                        AI::EnvironmentQuerySchemaLimits::DescriptorContexts>
                 unknown;
@@ -56,6 +59,8 @@ namespace Horo::Editor {
                     entries[index] = labels.querier.c_str();
                 else if (contexts[index] == origin)
                     entries[index] = labels.origin.c_str();
+                else if (contexts[index] == target)
+                    entries[index] = labels.target.c_str();
                 else {
                     auto &buffer = unknown[index];
                     const auto rendered = std::to_chars(buffer.data(), buffer.data() + buffer.size() - 1, contexts[index].Value());
@@ -69,31 +74,75 @@ namespace Horo::Editor {
                 selected = contexts[static_cast<std::size_t>(index)];
         }
 
-        /** @brief Pins the selected authored object in the existing editor preview Scene for a native lattice. */
-        Result<std::shared_ptr<const AI::QueryContextSnapshot>> CaptureLatticePreviewContext(const AI::EnvironmentQueryPlan &plan,
-                                                                                             const AI::QuerySchemaRegistry &schema,
-                                                                                             const Runtime::RuntimeSceneView &scene,
-                                                                                             const EnvironmentQueryPreviewScene &pin) {
-            using Captured = Result<std::shared_ptr<const AI::QueryContextSnapshot>>;
-            const auto entity = scene.Find(Runtime::SceneObjectId{pin.anchor.value});
+        /** @brief Uses the secondary selection only when it is unambiguous and distinct from the querier. */
+        std::optional<SceneObjectId> PreviewSelectionTarget(std::span<const SceneObjectId> selected, SceneObjectId querier) {
+            if (selected.size() != 2 || selected.front() == selected.back())
+                return {};
+            if (selected.front() == querier)
+                return selected.back();
+            if (selected.back() == querier)
+                return selected.front();
+            return {};
+        }
+
+        /** @brief Checks whether the installed native stages need a distinct preview target. */
+        bool NeedsPreviewTarget(const AI::BuiltinPointQuerySettings &settings) {
+            const auto target = AI::BuiltinQueryContextId(AI::BuiltinQueryContext::TargetLocation);
+            return settings.lattice.center == target ||
+                   std::ranges::any_of(settings.distanceTests, [target](const AI::QueryPointDistanceStageSettings &stage) {
+                return stage.test.center == target;
+            });
+        }
+
+        /** @brief Captures one live editor Scene object and its canonical global location. */
+        struct PreviewQueryActor final {
+            Runtime::EntityRef entity;
+            Math::WorldCoordinate64 point;
+        };
+
+        /** @brief Resolves one authored identity in the same pinned Scene used for query admission. */
+        Result<PreviewQueryActor> CapturePreviewActor(const Runtime::RuntimeSceneView &scene, SceneObjectId object) {
+            using Captured = Result<PreviewQueryActor>;
+            const auto entity = scene.Find(Runtime::SceneObjectId{object.value});
             if (!entity)
                 return Captured::Failure(MakeError(AI::AIErrors::EnvironmentQueryContextStale));
-            const auto transforms = ResolveSceneObjectWorldTransforms(scene, pin.anchor);
+            const auto transforms = ResolveSceneObjectWorldTransforms(scene, object);
             if (transforms.HasError())
                 return Captured::Failure(transforms.ErrorValue());
             const auto location = Math::TryTransformPoint(transforms.Value().localToWorld, {});
             if (location.HasError())
                 return Captured::Failure(location.ErrorValue());
             // Ordinary Scene coordinates use the canonical origin. Admission excludes Partitioned World sessions.
-            const auto coordinate = WorldSourceViewportGlobal({}, location.Value());
-            if (coordinate.HasError())
-                return Captured::Failure(coordinate.ErrorValue());
+            const auto point = WorldSourceViewportGlobal({}, location.Value());
+            if (point.HasError())
+                return Captured::Failure(point.ErrorValue());
+            return Captured::Success({*entity, point.Value()});
+        }
+
+        /** @brief Captures all requested preview inputs before the worker receives its detached snapshot. */
+        Result<std::shared_ptr<const AI::QueryContextSnapshot>> CaptureLatticePreviewContext(const AI::EnvironmentQueryPlan &plan,
+                                                                                             const AI::QuerySchemaRegistry &schema,
+                                                                                             const Runtime::RuntimeSceneView &scene,
+                                                                                             const EnvironmentQueryPreviewScene &pin) {
+            using Captured = Result<std::shared_ptr<const AI::QueryContextSnapshot>>;
+            const auto querier = CapturePreviewActor(scene, pin.anchor);
+            if (querier.HasError())
+                return Captured::Failure(querier.ErrorValue());
+            AI::QueryContextCaptureSource source{.querier = querier.Value().entity,
+                                                 .querierLocation = querier.Value().point,
+                                                 .executionRevision = pin.document.value};
+            if (pin.target) {
+                const auto target = CapturePreviewActor(scene, *pin.target);
+                if (target.HasError())
+                    return Captured::Failure(target.ErrorValue());
+                source.target = target.Value().entity;
+                source.targetLocation = target.Value().point;
+            }
             const auto providers = AI::QueryContextProviderRegistry::Capture({}, schema);
             if (providers.HasError())
                 return Captured::Failure(providers.ErrorValue());
             AI::QueryContextCapture capture;
-            return capture.Capture(plan, schema, providers.Value(), scene,
-                                   {.querier = *entity, .querierLocation = coordinate.Value(), .executionRevision = pin.document.value});
+            return capture.Capture(plan, schema, providers.Value(), scene, source);
         }
 
         /** @brief Detached native test programs and their canonical query ranking rules. */
@@ -340,11 +389,12 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::IsEnvironmentQueryPreviewCurrent */
     bool EditorWorkspaceController::IsEnvironmentQueryPreviewCurrent(const EnvironmentQueryPreviewScene &pin,
                                                                      const std::optional<Runtime::RuntimeSceneView> &current) const {
+        const auto &selection = m_selection.Current();
         return !m_playSession.IsActive() && !m_viewModel.worldDocument && current && current->IsCurrent() &&
                current->RuntimeId() == pin.runtime && current->StructuralRevision() == pin.structure &&
                current->DefinitionRevision() == m_activeRuntimeRevision &&
                current->DefinitionRevision().value == m_document.State().value && m_document.Revision() == pin.document &&
-               m_selection.Current().primary == pin.anchor;
+               selection.primary == pin.anchor && (!pin.target || PreviewSelectionTarget(selection.objects, pin.anchor) == pin.target);
     }
 
     /** @copydoc EditorWorkspaceController::StartEnvironmentQueryPreview */
@@ -359,7 +409,8 @@ namespace Horo::Editor {
         const auto current = m_runtimeScene.ActiveScene();
         if (!request.anchor || !current)
             return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryContextMissing));
-        const EnvironmentQueryPreviewScene pin{request.scene, *request.anchor, current->RuntimeId(), current->StructuralRevision()};
+        const EnvironmentQueryPreviewScene pin{request.scene, *request.anchor, current->RuntimeId(), current->StructuralRevision(),
+                                               request.target};
         if (!IsEnvironmentQueryPreviewCurrent(pin, current) || !RegisteredQueryDocument(document, m_assetRegistry))
             return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryContextStale));
         const auto captured = CaptureQuerySource(ProjectRoot(), m_assetRegistry, document.asset);
@@ -731,23 +782,35 @@ namespace Horo::Editor {
         const bool running = preview.status == Running;
         const bool sceneAvailable = !viewModel.worldDocument && viewModel.primarySelection && viewModel.documentRevision.value != 0 &&
                                     (viewModel.playState == EditorPlayState::Idle || viewModel.playState == EditorPlayState::Failed);
+        const bool needsTarget = opened->settings && NeedsPreviewTarget(*opened->settings);
+        const auto target = needsTarget && viewModel.primarySelection
+                                ? PreviewSelectionTarget(viewModel.selectedObjects, *viewModel.primarySelection)
+                                : std::nullopt;
+        const bool missingTarget = needsTarget && !target.has_value();
+        if (missingTarget)
+            label(text("workspace.environment_query.preview_select_target"), Theme::Muted());
+        const bool previewAvailable = sceneAvailable && (!needsTarget || target.has_value());
         const auto action = text(running ? "workspace.environment_query.preview_cancel" : "workspace.environment_query.preview_run");
         if (Ui::Button({.label = action.c_str(),
-                        .enabled = running || (sceneAvailable && !opened->dirty && !opened->conflict &&
+                        .enabled = running || (previewAvailable && !opened->dirty && !opened->conflict &&
                                                opened->descriptors == QueryDescriptorAvailability::Validated),
                         .font = m_context.theme.fonts.sans}))
             outCommand = {.command = EditorWorkspaceViewCommand::PreviewEnvironmentQuery,
-                          .environmentQueryPreview = EnvironmentQueryPreviewRequest{opened->identity.instance, opened->source,
-                                                                                    viewModel.documentRevision, viewModel.primarySelection,
-                                                                                    running ? EnvironmentQueryPreviewAction::Cancel
-                                                                                            : EnvironmentQueryPreviewAction::Run}};
+                          .environmentQueryPreview =
+                              EnvironmentQueryPreviewRequest{.instance = opened->identity.instance,
+                                                             .source = opened->source,
+                                                             .scene = viewModel.documentRevision,
+                                                             .anchor = viewModel.primarySelection,
+                                                             .action = running ? EnvironmentQueryPreviewAction::Cancel
+                                                                               : EnvironmentQueryPreviewAction::Run,
+                                                             .target = target}};
         constexpr std::array StatusKeys{"workspace.environment_query.preview_select_scene_object",
                                         "workspace.environment_query.preview_running",
                                         "workspace.environment_query.preview_ready",
                                         "workspace.environment_query.preview_stale",
                                         "workspace.environment_query.preview_cancelled",
                                         "workspace.environment_query.preview_failed"};
-        if (preview.status != Idle || !sceneAvailable)
+        if (preview.status != Idle || (!sceneAvailable && !missingTarget))
             label(text(StatusKeys[static_cast<std::size_t>(preview.status)]), preview.diagnostic ? Theme::Warn() : Theme::Muted());
         if (!preview.snapshot)
             return true;

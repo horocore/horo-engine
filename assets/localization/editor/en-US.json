@@ -852,6 +852,8 @@
     "workspace.environment_query.center_context": {"text": "Center context"},
     "workspace.environment_query.context_querier": {"text": "Querier location"},
     "workspace.environment_query.context_world_origin": {"text": "World origin"},
+    "workspace.environment_query.context_target": {"text": "Target location"},
+    "workspace.environment_query.preview_select_target": {"text": "Select two Scene objects. The active object is the querier and the other object is the target."},
     "workspace.environment_query.score_weight": {"text": "Relative score weight"},
     "workspace.environment_query.new_distance_radius": {"text": "New test radius (mm)"},
     "workspace.environment_query.add_distance_test": {"text": "Add Distance Test"},
