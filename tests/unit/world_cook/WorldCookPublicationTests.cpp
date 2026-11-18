@@ -352,7 +352,9 @@ namespace Horo::WorldCook {
             moved.translation.x += 1.0F;
             changed.SetLocalTransform(*liveEntity, moved);
             REQUIRE(parent.QueueStructuralCommands(std::move(changed)).HasValue());
-            REQUIRE(parent.OnPhase(S::RuntimePhase::CommitDeferredLifecycleChanges, {.frameNumber = 2}).HasValue());
+            const CancellationToken cancellation;
+            REQUIRE(parent.OnPhase(S::RuntimePhase::CommitDeferredLifecycleChanges, {.frameNumber = 2, .cancellation = cancellation})
+                        .HasValue());
             REQUIRE(parent.ActiveScene());
             W::TestSupport::RequireError(mount->CaptureGeometry(*parent.ActiveScene(), cameraEntity.object, drawObjects, primitives,
                                                                 *renderer),
