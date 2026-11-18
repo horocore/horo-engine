@@ -1,5 +1,6 @@
 #include "UiDocumentCooker.h"
 
+#include "Horo/Assets/AssetCookService.h"
 #include "Horo/Runtime/Ui/UiDocument.h"
 #include "Horo/Runtime/Ui/UiErrors.h"
 #include "UiCanvasDocumentSerialization.h"
