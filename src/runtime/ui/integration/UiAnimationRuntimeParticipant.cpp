@@ -35,7 +35,9 @@ namespace Horo::Runtime {
     /** @copydoc UiAnimationRuntimeParticipant::Compose */
     Result<UiAnimationRuntimeComposition> UiAnimationRuntimeParticipant::Compose(Ui::UiAnimationOwner owner, RuntimeDispatchSource source,
                                                                                  UiAnimationRuntimeConfig config) {
-        if (!ValidConfig(config) || source.BindingStatus() != RuntimeDispatchStatus::Valid)
+        CommittedFixedStepEvidence fixedBaseline;
+        Duration presentationBaseline;
+        if (!ValidConfig(config) || source.ReadClockBaseline(fixedBaseline, presentationBaseline) != RuntimeDispatchStatus::Valid)
             return Result<UiAnimationRuntimeComposition>::Failure(MakeError(Ui::UiErrors::ClockInputInvalid));
         auto ledger = Ui::IntegrationInternal::CommittedTickLedger::Create(config.unreadFixedAttempts);
         if (ledger.HasError())
@@ -54,6 +56,8 @@ namespace Horo::Runtime {
             auto storage =
                 std::make_unique<Storage>(std::move(owner), std::move(source), std::move(config), std::move(ledger).Value(), controls);
             storage->binding = storage->owner.SourceBinding();
+            storage->ledger.StartAt(fixedBaseline);
+            storage->consumedPresentation = presentationBaseline;
             auto participant = std::make_unique<UiAnimationRuntimeParticipant>(std::move(storage));
             return Result<UiAnimationRuntimeComposition>::Success(
                 {std::move(participant), UiAnimationClockController{std::move(controls)}});

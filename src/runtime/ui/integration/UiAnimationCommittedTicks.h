@@ -141,6 +141,11 @@ namespace Horo::Runtime::Ui::IntegrationInternal {
     private:
         friend class Horo::Runtime::UiAnimationRuntimeParticipant;
 
+        /** @brief Seeds a freshly created ledger at the scheduler's history cutoff without charging prior ticks. */
+        void StartAt(const CommittedFixedStepEvidence &baseline) noexcept {
+            consumed_ = lastStaged_ = baseline;
+        }
+
         /** @brief Consumes a prevalidated proposal only inside the real participant's callback-free aggregate publication. */
         void ConsumeValidated(const Prepared &prepared) noexcept {
             for (std::uint32_t index = prepared.count_; index < count_; ++index)

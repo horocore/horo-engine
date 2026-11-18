@@ -327,6 +327,38 @@ TEST_CASE("Project missing packaged kernel cannot partially publish authored UI 
     CHECK(fixture.port.InputEligible({Source::Owner(), 1, 1}));
 }
 
+TEST_CASE("Invalid packaged canvas reference leaves the current project Scene and input active",
+          "[application][runtime_ui][project][package][rollback]") {
+    Tests::UiPaintPackageTesting::PackageDirectory package;
+    package.PublishMetadataFixture();
+    ProjectUi fixture{true, false, package.root};
+    REQUIRE_FALSE(fixture.Publish(1, 1));
+    const auto scene = *fixture.scenes.ActiveScene();
+    const auto client = fixture.Client(1);
+    fixture.Frame();
+    fixture.Frame();
+    REQUIRE(fixture.port.InputEligible({Source::Owner(), 1, 1}));
+
+    const auto validReference = fixture.reference;
+    fixture.reference.minimumRevision = Source::Revision<UiDocumentRevision>(2);
+    const auto failure = fixture.Publish(2, 1);
+    REQUIRE(failure);
+    CHECK(failure->domain.Value() == UiErrors::CanvasReferenceInvalid.domain.Value());
+    CHECK(failure->code.Value() == UiErrors::CanvasReferenceInvalid.code.Value());
+    CHECK(scene.IsCurrent());
+    CHECK(client->Validate().HasValue());
+    fixture.Frame();
+    CHECK(fixture.port.InputEligible({Source::Owner(), 1, 1}));
+
+    fixture.reference = validReference;
+    REQUIRE_FALSE(fixture.Publish(3, 1));
+    CHECK_FALSE(scene.IsCurrent());
+    CHECK(client->Validate().HasError());
+    fixture.Frame();
+    fixture.Frame();
+    CHECK(fixture.port.InputEligible({Source::Owner(), 2, 1}));
+}
+
 TEST_CASE("Actual project Play UI preparation stays outside native admission through queued publication",
           "[application][runtime_ui][project][play][safe_point]") {
     ProjectUi fixture;

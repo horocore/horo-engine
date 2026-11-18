@@ -945,6 +945,10 @@ presentation child clock gated by one exact route/screen generation. Preview is
 isolated editor session state; deterministic test and manual time advance only from
 explicit ordered commands.
 
+A source bound after the host has run starts at the scheduler's last committed
+fixed step and cumulative admitted presentation duration. Those values establish
+its history cutoff. Only subsequent admitted time advances the new source.
+
 Clock/cursor/rate accumulation uses checked integer/rational arithmetic with carried
 remainders. Host suspension holds presentation/transition/preview live playback and
 resume starts with zero delta. Multiple viewports, extraction retries or repeated
