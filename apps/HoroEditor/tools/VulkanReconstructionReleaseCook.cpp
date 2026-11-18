@@ -82,7 +82,7 @@ namespace Horo::Editor::Offline {
     /** @copydoc CookVulkanReconstructionRelease */
     Result<Release::ReleasePreSignInventory> CookVulkanReconstructionRelease(
         const std::filesystem::path &destination, const std::filesystem::path &scratch, Release::ReleaseCandidateId candidate,
-        std::vector<std::uint8_t> source, std::span<const Render::ShaderCompilerToolIdentity, 3> tools,
+        const std::vector<std::uint8_t> &source, std::span<const Render::ShaderCompilerToolIdentity, 3> tools,
         const Render::IShaderCompilerAdapter &compiler, const CancellationToken &cancellation) {
         if (candidate.value == 0 || source.empty() || source.size() > MaximumPayloadBytes)
             return Outcome::Failure(MakeError(ShaderCompilerPipelineErrors::InvalidRequest));
@@ -90,14 +90,19 @@ namespace Horo::Editor::Offline {
             return Outcome::Failure(valid.ErrorValue());
 
         std::array<CookedPair, Entries.size()> shaders;
-        std::array<AtomicShaderCookAuxiliaryFile, Entries.size() * 2> files;
         for (std::size_t index = 0; index < Entries.size(); ++index) {
             auto artifact = CookEntry(Entries[index], source, tools, compiler, cancellation);
             if (artifact.HasError())
                 return Outcome::Failure(artifact.ErrorValue());
-            auto &slot = shaders[index] = std::move(artifact).Value();
-            files[2 * index] = {slot.payloadPath, slot.payload};
-            files[2 * index + 1] = {slot.reflectionPath, slot.reflection};
+            shaders[index] = std::move(artifact).Value();
+        }
+
+        // Borrow the file paths and bytes only after the owned shader pairs are finalized.
+        std::array<AtomicShaderCookAuxiliaryFile, Entries.size() * 2> files;
+        for (std::size_t index = 0; index < shaders.size(); ++index) {
+            const auto &shader = shaders[index];
+            files[2 * index] = {shader.payloadPath, shader.payload};
+            files[2 * index + 1] = {shader.reflectionPath, shader.reflection};
         }
         std::vector<ReleaseArtifactRecord> records;
         records.reserve(files.size());

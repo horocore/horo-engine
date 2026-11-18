@@ -185,11 +185,11 @@ namespace {
     }
 
     /** @brief Delivers a canonical inventory for the caller's release job on stdout. */
-    Result<void> CookReconstruction(char **argv, Release::ReleaseCandidateId candidate, std::vector<std::uint8_t> source,
+    Result<void> CookReconstruction(char **argv, Release::ReleaseCandidateId candidate, const std::vector<std::uint8_t> &source,
                                     const std::vector<ShaderCompilerToolInstallation> &tools, const IShaderCompilerAdapter &adapter) {
         const std::array identities{tools[0].identity, tools[1].identity, tools[2].identity};
         const auto inventory = Editor::Offline::CookVulkanReconstructionRelease(argv[2], std::filesystem::absolute(argv[3]), candidate,
-                                                                                std::move(source), identities, adapter);
+                                                                                source, identities, adapter);
         if (inventory.HasError())
             return Result<void>::Failure(inventory.ErrorValue());
         std::cout << inventory.Value().CanonicalJson();
@@ -218,7 +218,7 @@ namespace {
         if (source.HasError())
             return Result<void>::Failure(source.ErrorValue());
         if (candidate)
-            return CookReconstruction(argv, *candidate, std::move(source).Value(), tools, adapter.Value());
+            return CookReconstruction(argv, *candidate, source.Value(), tools, adapter.Value());
         const auto request = Request(mode, std::move(source).Value(), tools);
         const auto compiled = CompileShaderTargets(request, adapter.Value(), {});
         if (compiled.HasError())
