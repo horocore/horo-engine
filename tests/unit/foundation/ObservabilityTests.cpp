@@ -1224,7 +1224,7 @@ TEST_CASE("Diagnostic bundle contains only allowlisted files and a checksum mani
     TemporaryDirectory temporary;
     const std::filesystem::path logPath = temporary.path / "engine.jsonl";
     std::ofstream(logPath) << R"({"level":"error","message":"failure"})";
-    const std::filesystem::path bundlePath = temporary.path / "diagnostics.zip";
+    const std::filesystem::path bundlePath = temporary.path / "new directory" / "diagnostics.zip";
     const auto result = Horo::Diagnostics::GenerateDiagnosticBundle({
         .outputPath = bundlePath,
         .entries = {{.sourcePath = logPath, .archivePath = "logs/engine.jsonl"}},
@@ -1258,20 +1258,22 @@ TEST_CASE("Diagnostic bundle rejects path escapes and oversized allowlists", "[f
     const std::filesystem::path logPath = temporary.path / "engine.jsonl";
     std::ofstream(logPath) << "diagnostic-data";
     const auto escaped = Horo::Diagnostics::GenerateDiagnosticBundle({
-        .outputPath = temporary.path / "escaped.zip",
+        .outputPath = temporary.path / "escaped destination" / "escaped.zip",
         .entries = {{.sourcePath = logPath, .archivePath = "../engine.jsonl"}},
         .maxInputBytes = 1024,
     });
     REQUIRE(escaped.HasError());
     REQUIRE(escaped.ErrorValue().code.Value() == "observability.bundle.invalid_request");
+    CHECK_FALSE(std::filesystem::exists(temporary.path / "escaped destination"));
 
     const auto oversized = Horo::Diagnostics::GenerateDiagnosticBundle({
-        .outputPath = temporary.path / "oversized.zip",
+        .outputPath = temporary.path / "oversized destination" / "oversized.zip",
         .entries = {{.sourcePath = logPath, .archivePath = "logs/engine.jsonl"}},
         .maxInputBytes = 2,
     });
     REQUIRE(oversized.HasError());
     REQUIRE(oversized.ErrorValue().code.Value() == "observability.bundle.size_exceeded");
+    CHECK_FALSE(std::filesystem::exists(temporary.path / "oversized destination"));
 }
 
 TEST_CASE("Diagnostic bundles are deterministic and report missing optional inputs", "[foundation][observability][bundle][determinism]") {
@@ -1315,11 +1317,12 @@ TEST_CASE("Diagnostic bundle privacy rejects symlinks secrets absolute paths and
     REQUIRE(unrelated.HasError());
 
     const auto secret = Horo::Diagnostics::GenerateDiagnosticBundle({
-        .outputPath = temporary.path / "secret.zip",
+        .outputPath = temporary.path / "private metadata destination" / "secret.zip",
         .entries = {{.sourcePath = log, .archivePath = "logs/engine.jsonl"}},
         .metadata = {{"api_token", "do-not-export"}},
     });
     REQUIRE(secret.HasError());
+    CHECK_FALSE(std::filesystem::exists(temporary.path / "private metadata destination"));
 
     const auto absolutePath = Horo::Diagnostics::GenerateDiagnosticBundle({
         .outputPath = temporary.path / "path.zip",

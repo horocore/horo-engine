@@ -465,12 +465,6 @@ namespace Horo::Diagnostics {
         if (const auto destination = ValidateDiagnosticBundleDestination(request.outputPath); destination.HasError())
             return Result<DiagnosticBundleSummary>::Failure(destination.ErrorValue());
 
-        std::error_code error;
-        std::filesystem::create_directories(request.outputPath.parent_path(), error);
-        if (error)
-            return Result<DiagnosticBundleSummary>::Failure(
-                MakeBundleError(ObservabilityErrors::BundleWriteFailed, "Unable to create the diagnostic bundle directory."));
-
         auto entryResult = CollectAndPrepareEntries(request);
         if (entryResult.HasError())
             return Result<DiagnosticBundleSummary>::Failure(entryResult.ErrorValue());
@@ -486,9 +480,14 @@ namespace Horo::Diagnostics {
 
         const std::string manifest = BuildManifestJson(metadata, missingOptional, prepared);
 
+        std::error_code error;
+        std::filesystem::create_directories(request.outputPath.parent_path(), error);
+        if (error)
+            return Result<DiagnosticBundleSummary>::Failure(
+                MakeBundleError(ObservabilityErrors::BundleWriteFailed, "Unable to create the diagnostic bundle directory."));
+
         auto temporaryPath = request.outputPath;
         temporaryPath += ".tmp";
-        error.clear();
         if (std::filesystem::exists(temporaryPath, error) || error)
             return Result<DiagnosticBundleSummary>::Failure(
                 MakeBundleError(ObservabilityErrors::BundleWriteFailed, "Diagnostic bundle temporary output already exists."));
