@@ -746,7 +746,7 @@ namespace Horo::Editor {
                 const auto parsed = std::from_chars(value.data(), value.data() + value.size(), player);
                 opts.xrInputPlayerValid = opts.xrInputPlayerValid && !opts.xrInputPlayer && parsed.ec == std::errc{} &&
                                           parsed.ptr == value.data() + value.size() &&
-                                          player <= std::numeric_limits<Input::PlayerId>::max();
+                                          player <= (std::numeric_limits<Input::PlayerId>::max)();
                 if (opts.xrInputPlayerValid)
                     opts.xrInputPlayer = EditorXrInputPlayerSelection{static_cast<Input::PlayerId>(player)};
                 return true;
