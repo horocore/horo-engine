@@ -1,6 +1,8 @@
+#include "OpenXRPlaneSnapshot.h"
 #include "support/OpenXRCensusTestSupport.h"
 
 #include <bit>
+#include <catch2/catch_approx.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
 namespace Horo::Tests::OpenXR {
@@ -27,6 +29,64 @@ namespace Horo::Tests::OpenXR {
                 return {preflight, preflight.Attempt()};
             }
         };
+
+        struct PlaneSnapshotFixture final {
+            static inline PlaneSnapshotFixture *current{};
+            XrResult result{XR_SUCCESS};
+            bool duplicate{};
+            bool staleLabel{};
+            bool malformed{};
+            bool countMismatch{};
+            bool noTracking{};
+            std::uint32_t calls{};
+            std::uint32_t labelCalls{};
+
+            PlaneSnapshotFixture() {
+                current = this;
+            }
+
+            ~PlaneSnapshotFixture() {
+                current = nullptr;
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL Query(XrSpatialSnapshotEXT snapshot,
+                                                        const XrSpatialComponentDataQueryConditionEXT *condition,
+                                                        XrSpatialComponentDataQueryResultEXT *output) {
+                REQUIRE(snapshot != XR_NULL_HANDLE);
+                REQUIRE(condition->componentTypes[0] == XR_SPATIAL_COMPONENT_TYPE_BOUNDED_2D_EXT);
+                ++current->calls;
+                if (current->result != XR_SUCCESS)
+                    return current->result;
+                if (condition->componentTypeCount == 2) {
+                    ++current->labelCalls;
+                    REQUIRE(condition->componentTypes[1] == XR_SPATIAL_COMPONENT_TYPE_PLANE_SEMANTIC_LABEL_EXT);
+                    auto &labels = *static_cast<XrSpatialComponentPlaneSemanticLabelListEXT *>(output->next);
+                    REQUIRE(labels.semanticLabelCount >= 1);
+                    output->entityIdCountOutput = output->entityStateCountOutput = 1;
+                    output->entityIds[0] = current->staleLabel ? 42 : 5;
+                    output->entityStates[0] = XR_SPATIAL_ENTITY_TRACKING_STATE_TRACKING_EXT;
+                    labels.semanticLabels[0] = XR_SPATIAL_PLANE_SEMANTIC_LABEL_TABLE_EXT;
+                    return XR_SUCCESS;
+                }
+                auto &rectangles = *static_cast<XrSpatialComponentBounded2DListEXT *>(output->next);
+                if (output->entityIdCapacityInput < 3)
+                    return XR_ERROR_SIZE_INSUFFICIENT;
+                REQUIRE(rectangles.boundCount == output->entityIdCapacityInput);
+                output->entityIdCountOutput = 3;
+                output->entityStateCountOutput = current->countMismatch ? 2 : 3;
+                output->entityIds[0] = 20;
+                output->entityIds[1] = current->duplicate ? 20 : 11;
+                output->entityIds[2] = 5;
+                output->entityStates[0] =
+                    current->noTracking ? XR_SPATIAL_ENTITY_TRACKING_STATE_PAUSED_EXT : XR_SPATIAL_ENTITY_TRACKING_STATE_TRACKING_EXT;
+                output->entityStates[1] = XR_SPATIAL_ENTITY_TRACKING_STATE_STOPPED_EXT;
+                output->entityStates[2] = output->entityStates[0];
+                rectangles.bounds[0] = {{.orientation = {0, 0, 0, 1}, .position = {1, 2, 3}}, {4, 5}};
+                rectangles.bounds[2] = {{.orientation = {0, 0, 0, 1}, .position = {7, 8, 9}}, {current->malformed ? 0.0F : 4.0F, 5}};
+                return XR_SUCCESS;
+            }
+        };
+
     }  // namespace
 
     TEST_CASE("OpenXR discovery observes actual pre-session system views and distinct runtime implementation version",
@@ -143,6 +203,71 @@ namespace Horo::Tests::OpenXR {
         CHECK(fixture.native.liveSessions == 0);
         CHECK(std::ranges::count(fixture.census.calls, "spatial-capabilities") == (discovery.extensions.size() == routes.size()));
         REQUIRE(fixture.owner.Close().HasValue());
+    }
+
+    TEST_CASE("OpenXR spatial snapshot joins tracked native geometry with optional semantic labels", "[unit][xr][native][planes]") {
+        PlaneSnapshotFixture fixture;
+        auto census = NativePlaneCensus{XRCapabilityState::Available, true};
+        SECTION("optional labels are queried separately") {}
+        SECTION("unsupported labels remain unknown") {
+            census.semanticLabels = false;
+        }
+        const auto snapshot = NativeHandle<XrSpatialSnapshotEXT>(1);
+        const auto result = ReadNativeSpatialPlanes(snapshot, &PlaneSnapshotFixture::Query, census, 4);
+        REQUIRE(result.HasValue());
+        const auto planes = result.Value().Planes();
+        REQUIRE(planes.size() == 2);
+        CHECK(planes[0].entity == 5);
+        CHECK(planes[1].entity == 20);
+        CHECK(planes[0].classification == (census.semanticLabels ? XRPlaneClassification::Platform : XRPlaneClassification::Unknown));
+        CHECK(planes[1].classification == XRPlaneClassification::Unknown);
+        CHECK(planes[1].confidence == XRTrackingConfidence::High);
+        CHECK(planes[1].centerMeters.z == 3.0F);
+        CHECK(planes[1].extentMeters.y == 5.0F);
+        const auto normal = planes[1].orientation.Rotate({0.0F, 1.0F, 0.0F});
+        CHECK(normal.x == Catch::Approx(0.0F).margin(0.00001F));
+        CHECK(normal.y == Catch::Approx(0.0F).margin(0.00001F));
+        CHECK(normal.z == Catch::Approx(1.0F));
+        CHECK(fixture.labelCalls == static_cast<std::uint32_t>(census.semanticLabels));
+    }
+
+    TEST_CASE("OpenXR spatial snapshots reject invalid native batches and remove untracked geometry", "[unit][xr][native][planes]") {
+        PlaneSnapshotFixture fixture;
+        const auto snapshot = NativeHandle<XrSpatialSnapshotEXT>(1);
+        const auto read = [&](std::uint32_t capacity = 4) {
+            return ReadNativeSpatialPlanes(snapshot, &PlaneSnapshotFixture::Query, {XRCapabilityState::Available, true}, capacity);
+        };
+        SECTION("native oversized batch is actionable") {
+            RequireFailureIdentity(read(2), XRErrors::CapacityExceeded);
+        }
+        SECTION("duplicated native identity") {
+            fixture.duplicate = true;
+            RequireFailureIdentity(read(), XRErrors::TrackingSnapshotInvalid);
+        }
+        SECTION("inconsistent native counts") {
+            fixture.countMismatch = true;
+            RequireFailureIdentity(read(), XRErrors::TrackingSnapshotInvalid);
+        }
+        SECTION("unknown labeled plane in the same snapshot") {
+            fixture.staleLabel = true;
+            RequireFailureIdentity(read(), XRErrors::TrackingSnapshotInvalid);
+        }
+        SECTION("malformed native rectangle") {
+            fixture.malformed = true;
+            RequireFailureIdentity(read(), XRErrors::TrackingSnapshotInvalid);
+        }
+        SECTION("snapshot lost while querying") {
+            fixture.result = XR_SESSION_LOSS_PENDING;
+            RequireFailureIdentity(read(), XRErrors::IdentityStale);
+        }
+        SECTION("paused and stopped evidence disappears without inspecting its geometry") {
+            fixture.noTracking = true;
+            fixture.malformed = true;
+            const auto result = read();
+            REQUIRE(result.HasValue());
+            CHECK(result.Value().Planes().empty());
+            CHECK(fixture.calls == 1);
+        }
     }
 
     TEST_CASE("OpenXR reprojection census observes advertised routes without enabling them or issuing sizing calls",
