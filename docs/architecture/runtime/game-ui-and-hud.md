@@ -1595,6 +1595,9 @@ See [input debugger integration](../../guides/runtime-ui-input-debugger.md).
 
 ## Testing
 
+The [input, focus and event routing qualification matrix](../../guides/runtime-ui-input-qualification.md)
+records the deterministic and native-adapter coverage required for interaction changes.
+
 Required tests cover:
 
 - game/player/scene/viewport scope lifetime and unrelated-scope persistence

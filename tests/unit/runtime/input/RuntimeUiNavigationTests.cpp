@@ -363,6 +363,113 @@ namespace Horo::Runtime::Ui {
             CHECK(fixture.actions.QueuedCount() == 2);
         }
 
+        TEST_CASE("Two virtual players route independently through a shared Input context across device replacement",
+                  "[runtime_ui][navigation][qualification]") {
+            Input::InputService input;
+            const Input::InputContextId contextId{"qualification.ui"};
+            auto map = DefaultUiNavigationActions(contextId);
+            UiNavigationInputDescriptor firstDescriptor{.player = 0};
+            for (std::size_t index = 0; index < UiNavigationActionCount; ++index)
+                firstDescriptor.actions[index] = map[index].id;
+            auto secondDescriptor = firstDescriptor;
+            secondDescriptor.player = 1;
+            REQUIRE(input.Router().SetActionMap(std::move(map)).HasValue());
+            auto context = input.Router().PushContext(contextId, Input::InputContextKind::FocusedGuiWidget);
+
+            const auto firstOwner = Owner();
+            auto secondOwner = firstOwner;
+            secondOwner.instance.slot += 20;
+            secondOwner.canvas.slot += 20;
+            secondOwner.scope.player = UiFocusPlayerId{firstOwner.instance.ownership, 23, 1};
+            secondOwner.scope.presentationLayer.slot += 20;
+            auto firstFocus = Graph(firstOwner);
+            auto secondNodes = Nodes(secondOwner);
+            for (auto &node : secondNodes)
+                node.element.slot += 20;
+            auto secondGraph =
+                UiFocusGraph::Create({secondOwner, Stable<UiElementId>(11), UiFocusRecoveryPolicy::DefaultThenFirst, 8, 4, 4}, secondNodes);
+            REQUIRE(secondGraph.HasValue());
+            auto secondFocus = std::move(secondGraph).Value();
+            auto firstActions = UiActionRouter::Create({ActionOwner(firstOwner), 4}).Value();
+            auto secondActions = UiActionRouter::Create({ActionOwner(secondOwner), 4}).Value();
+            Input::VirtualGamepad first{input.Collector()};
+            Input::VirtualGamepad second{input.Collector()};
+            Input::VirtualGamepad substitute{input.Collector()};
+            input.BeginFrame(1);
+            const auto original = first.Connect("First physical mapping");
+            const auto secondDevice = second.Connect("Second physical mapping");
+            (void)input.CommitFrame();
+            REQUIRE(input.Router().AssignGamepad(0, original));
+            REQUIRE(input.Router().AssignGamepad(1, secondDevice));
+
+            auto firstPrepared = UiNavigationInput::Create(firstDescriptor, input.Router(), context, firstFocus, firstActions);
+            auto secondPrepared = UiNavigationInput::Create(secondDescriptor, input.Router(), context, secondFocus, secondActions);
+            REQUIRE(firstPrepared.HasValue());
+            REQUIRE(secondPrepared.HasValue());
+            auto firstAdapter = std::move(firstPrepared).Value();
+            auto secondAdapter = std::move(secondPrepared).Value();
+            auto pump = [&](const std::uint64_t time) {
+                auto a = firstAdapter.Pump(input.Router(), context, firstFocus, firstActions, time);
+                auto b = secondAdapter.Pump(input.Router(), context, secondFocus, secondActions, time);
+                REQUIRE(a.HasValue());
+                REQUIRE(b.HasValue());
+                return std::array{a.Value(), b.Value()};
+            };
+            (void)pump(0);
+            input.BeginFrame(2);
+            REQUIRE(first.Press(Input::GamepadButton::DPadDown));
+            REQUIRE(second.Press(Input::GamepadButton::South));
+            (void)input.CommitFrame();
+            const auto initial = pump(1);
+            REQUIRE(initial[0].focus);
+            CHECK_FALSE(initial[0].requests[0]);
+            CHECK_FALSE(initial[1].focus);
+            REQUIRE(initial[1].requests[0]);
+            CHECK(firstFocus.CurrentFocus().Value()->id == Stable<UiElementId>(12));
+            CHECK(secondFocus.CurrentFocus().Value()->id == Stable<UiElementId>(11));
+            CHECK(secondActions.QueuedCount() == 1);
+
+            input.BeginFrame(3);
+            first.Disconnect();
+            REQUIRE(second.Release(Input::GamepadButton::South));
+            const auto replacement = substitute.Connect("Replacement physical mapping");
+            REQUIRE(substitute.Press(Input::GamepadButton::South));
+            (void)input.CommitFrame();
+            REQUIRE(replacement != original);
+            REQUIRE(input.Router().AssignGamepad(0, replacement));
+            const auto lost = pump(2);
+            CHECK_FALSE(lost[0].requests[0]);
+            CHECK_FALSE(lost[1].requests[0]);
+            CHECK(firstActions.QueuedCount() == 0);
+            CHECK(secondActions.QueuedCount() == 1);
+
+            input.BeginFrame(4);
+            REQUIRE(substitute.Release(Input::GamepadButton::South));
+            (void)input.CommitFrame();
+            (void)pump(3);
+            input.BeginFrame(5);
+            REQUIRE(substitute.Press(Input::GamepadButton::South));
+            REQUIRE(second.Press(Input::GamepadButton::DPadDown));
+            (void)input.CommitFrame();
+            const auto restored = pump(4);
+            REQUIRE(restored[0].requests[0]);
+            CHECK(restored[0].presentation.device == replacement);
+            REQUIRE(restored[1].focus);
+            CHECK_FALSE(restored[1].requests[0]);
+            CHECK(firstActions.QueuedCount() == 1);
+            CHECK(secondActions.QueuedCount() == 1);
+            CHECK(firstFocus.CurrentFocus().Value()->id == Stable<UiElementId>(12));
+            CHECK(secondFocus.CurrentFocus().Value()->id == Stable<UiElementId>(12));
+
+            secondAdapter.Shutdown();
+            input.BeginFrame(6);
+            REQUIRE(second.Release(Input::GamepadButton::DPadDown));
+            (void)input.CommitFrame();
+            const auto stopped = pump(5);
+            CHECK(stopped[1].status == UiNavigationInputStatus::Stopped);
+            CHECK(secondActions.QueuedCount() == 1);
+        }
+
         TEST_CASE("Published reload and profile changes require explicit rebind without touching old queued actions",
                   "[runtime_ui][navigation][reload]") {
             Fixture fixture;
