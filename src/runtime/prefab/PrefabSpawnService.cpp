@@ -127,6 +127,27 @@ namespace Horo::Prefab {
         return state_ && !state_->entities.empty() ? state_->entities.front() : Runtime::EntityRef{};
     }
 
+    /** @copydoc PrefabInstance::ResolveMember */
+    Result<PrefabSpawnedMember> PrefabInstance::ResolveMember(const PrefabObjectAddress &address,
+                                                              const Runtime::RuntimeSceneView &scene) const {
+        using Return = Result<PrefabSpawnedMember>;
+        const auto root = Root();
+        if (!state_ || !scene.IsCurrent() || scene.RuntimeId() != root.runtime || !scene.SameIncarnation(state_->ownerScene))
+            return Return::Failure(MakeError(PrefabErrors::SceneUnavailable));
+        if (const auto valid = scene.Get(root); valid.HasError())
+            return Return::Failure(valid.ErrorValue());
+        const auto member = std::ranges::lower_bound(state_->members, address, {}, [](const auto &entry) -> const PrefabObjectAddress & {
+            return entry.provenance.sourceObject;
+        });
+        if (member == state_->members.end() || member->provenance.sourceObject != address)
+            return Return::Failure(MakeError(PrefabErrors::AddressInvalid));
+        const auto entity = state_->entities[member->entitySlot];
+        if (entity != root)
+            if (const auto valid = scene.Get(entity); valid.HasError())
+                return Return::Failure(valid.ErrorValue());
+        return Return::Success({entity, member->provenance});
+    }
+
     /** @copydoc PrefabInstance::PersistentId */
     std::optional<Runtime::SavePrefabInstanceId> PrefabInstance::PersistentId() const noexcept {
         if (!state_ || !state_->persistence)

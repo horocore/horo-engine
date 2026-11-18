@@ -48,6 +48,12 @@ namespace Horo::Prefab {
         struct PrefabInstanceState;
     }  // namespace Detail
 
+    /** @brief One generation-checked spawned entity and its portable authored identity. */
+    struct PrefabSpawnedMember final {
+        Runtime::EntityRef entity;
+        CookedPrefabProvenance provenance;
+    };
+
     /** @brief Read-only identity of one complete spawned group; never mutable Scene
      * storage. */
     class PrefabInstance final {
@@ -56,6 +62,13 @@ namespace Horo::Prefab {
         /** @brief Returns the generation-qualified root. @return Invalid for an empty
          * instance. */
         [[nodiscard]] Runtime::EntityRef Root() const noexcept;
+        /** @brief Resolves one exact prefab-local address through the currently committed owning Scene.
+         * @param address Stable cooked source address, including every enclosing nested occurrence.
+         * @param scene Current owner-lane view of this group's Scene incarnation.
+         * @return Owned entity/provenance or typed missing-address, wrong-scene or stale-generation failure.
+         */
+        [[nodiscard]] Result<PrefabSpawnedMember> ResolveMember(const PrefabObjectAddress &address,
+                                                                const Runtime::RuntimeSceneView &scene) const;
         /** @brief Returns the actual durable occurrence for semantic persistence, even after this runtime cookie becomes stale.
          * @return Exact issued Save identity, or absence for an empty/ephemeral instance. Identity alone grants no mutation.
          */

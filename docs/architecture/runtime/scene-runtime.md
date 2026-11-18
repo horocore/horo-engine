@@ -78,6 +78,8 @@ observation lifetime and captured structural revision. Destruction revokes the
 observation before subsystem/storage teardown; reused owner addresses cannot
 make an old view current. `View` and view queries allocate nothing. Copied runtime,
 definition and preparation identities remain inspectable after retirement.
+`SameIncarnation` compares the captured weak owner identity across structural
+revisions. A caller must also have a current view to access storage.
 This C++ value-layout change requires the paired native gameplay boundary22 /
 `gameplay-sdk22` fingerprint. Rebuild hosts, native modules and consumers together;
 the canonical module loader rejects SDK21 before activation.

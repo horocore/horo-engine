@@ -852,6 +852,11 @@ namespace Horo::Runtime {
          * @return False for empty, retired, structurally stale or foreign-thread views, without dereferencing a retired owner.
          */
         [[nodiscard]] bool IsCurrent() const noexcept;
+        /** @brief Compares the captured non-owning Scene incarnation evidence.
+         * @param other Another view, possibly captured at a different structural revision.
+         * @return True only for two views of the same actual owner. Call IsCurrent separately before reading storage.
+         */
+        [[nodiscard]] bool SameIncarnation(const RuntimeSceneView &other) const noexcept;
         /** @brief Returns the exact committed structural revision captured by this current view.
          * @return Non-zero revision when current, or zero for an empty, expired, foreign-thread or structurally stale view.
          */

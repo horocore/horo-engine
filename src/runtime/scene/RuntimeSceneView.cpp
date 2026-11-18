@@ -17,6 +17,11 @@ namespace Horo::Runtime {
                structuralRevision_ == scene_->structuralRevision_;
     }
 
+    /** @copydoc RuntimeSceneView::SameIncarnation */
+    bool RuntimeSceneView::SameIncarnation(const RuntimeSceneView &other) const noexcept {
+        return scene_ && other.scene_ && !lifetime_.owner_before(other.lifetime_) && !other.lifetime_.owner_before(lifetime_);
+    }
+
     /** @copydoc RuntimeSceneView::StructuralRevision */
     std::uint64_t RuntimeSceneView::StructuralRevision() const noexcept {
         return IsCurrent() ? structuralRevision_ : 0;

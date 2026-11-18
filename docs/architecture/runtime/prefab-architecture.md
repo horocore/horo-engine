@@ -820,6 +820,13 @@ fail or roll back the successful structural spawn. Faulted behaviors do not star
 every constructed behavior receives `OnDestroy` exactly once during normal teardown.
 Created-disabled behaviors still run `OnCreate` but defer `OnEnable` / `OnStart` until enabled.
 
+A committed `PrefabInstance` maps each full `PrefabObjectAddress` to its issued
+entity and immutable cooked source provenance. Each nested placement keeps its
+own full address. The spawn owner reserves this map before queueing and binds
+the exact deferred tokens from the Scene receipt. `ResolveMember` requires a
+current view of the same Scene incarnation and validates both the root and the
+requested entity generation.
+
 Commit and cancellation are serialized by the coordinator/owner-thread protocol: cancellation
 accepted before publication leaves no entities; cancellation after publication does not undo
 commit or change the successful spawn into a cancelled operation.

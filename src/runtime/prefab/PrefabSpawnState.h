@@ -20,7 +20,16 @@ namespace Horo::Prefab::Detail {
     struct PrefabInstanceState final {
         std::shared_ptr<const std::byte> identity;
         std::uint64_t scope{};
-        std::vector<Runtime::EntityRef> entities;
+        Runtime::RuntimeSceneView ownerScene;     /**< Weak incarnation evidence; its captured storage revision may age. */
+        std::vector<Runtime::EntityRef> entities; /**< Exact cooked entity order for root, persistence and despawn. */
+
+        /** @brief Stable authored lookup entry sorted by full expanded source address. */
+        struct SourceMember final {
+            CookedPrefabProvenance provenance;
+            std::size_t entitySlot{};
+        };
+
+        std::vector<SourceMember> members;
         std::shared_ptr<IPrefabPersistencePublication> persistence;
     };
 
@@ -42,6 +51,7 @@ namespace Horo::Prefab::Detail {
         std::optional<PreparedPrefabSpawn> preparedTemplate;
         PrefabInstance instance;
         std::shared_ptr<PrefabInstanceState> prepared;
+        std::optional<std::vector<Runtime::DeferredEntity>> creations; /**< Exact issued tokens in the same order as cooked entities. */
         std::shared_ptr<const Runtime::SceneStructuralReceipt> receipt;
         std::optional<Error> error;
         const Error cancelledFailure{MakeError(PrefabErrors::Cancelled)}; /**< Prepared before admission; noexcept
@@ -53,8 +63,13 @@ namespace Horo::Prefab::Detail {
         void PublishCreatedGroup() noexcept {
             if (!prepared)
                 return;
-            for (const auto &entry : receipt->ResultValue()->created)
-                prepared->entities.push_back(entry.entity);
+            const auto &issued = *creations;
+            for (const auto &entry : receipt->ResultValue()->created) {
+                const auto token = std::ranges::lower_bound(issued, entry.deferred);
+                if (token != issued.end() && *token == entry.deferred)
+                    prepared->entities[static_cast<std::size_t>(token - issued.begin())] = entry.entity;
+            }
+            creations.reset();
             if (prepared->persistence)
                 prepared->persistence->PublishSpawn(prepared->entities);
             instance.state_ = std::move(prepared);
@@ -96,6 +111,7 @@ namespace Horo::Prefab::Detail {
             load.reset();
             lease.reset();
             preparedTemplate.reset();
+            creations.reset();
             if (prepared && prepared->persistence)
                 prepared->persistence->Cancel();
             prepared.reset();
@@ -389,10 +405,22 @@ namespace Horo::Prefab::Detail {
                 auto projected = Project(operation);
                 if (projected.HasError())
                     return Result<void>::Failure(projected.ErrorValue());
+                const auto ownerScene = scenes->ActiveScene();
+                if (!ownerScene)
+                    return Result<void>::Failure(MakeError(PrefabErrors::SceneUnavailable));
                 operation.prepared = std::make_shared<PrefabInstanceState>();
                 operation.prepared->identity = identity;
                 operation.prepared->scope = operation.scope;
-                operation.prepared->entities.reserve(projected.Value().components.size());
+                operation.prepared->ownerScene = *ownerScene;
+                const auto &entities = operation.preparedTemplate->Data().entities;
+                operation.prepared->entities.resize(entities.size());
+                auto &sourceMembers = operation.prepared->members;
+                sourceMembers.reserve(entities.size());
+                for (std::size_t slot = 0; slot < entities.size(); ++slot)
+                    sourceMembers.push_back({entities[slot].provenance, slot});
+                std::ranges::sort(sourceMembers, {}, [](const auto &member) -> const PrefabObjectAddress & {
+                    return member.provenance.sourceObject;
+                });
                 if (auto staged = StagePersistence(operation, projected.Value().components); staged.HasError())
                     return staged;
                 auto projection = std::move(projected).Value();
@@ -409,6 +437,7 @@ namespace Horo::Prefab::Detail {
                                                             .primitiveMeshes = std::move(projection.primitiveMeshes)});
                 if (queued.HasError())
                     return Result<void>::Failure(queued.ErrorValue());
+                operation.creations.emplace(std::move(queued).Value());
             }
             hasQueuedStructure = true;
             return Result<void>::Success();

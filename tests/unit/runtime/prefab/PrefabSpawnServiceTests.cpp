@@ -70,6 +70,94 @@ namespace Horo::Prefab {
         CHECK(fixture.scenes.ActiveScene()->Get(instance.Value().Root()).HasError());
     }
 
+    TEST_CASE("Spawned prefab member lookup binds exact authored addresses to Scene-owned generations", "[prefab][spawn][provenance]") {
+        Fixture fixture;
+        auto data = fixture.Data();
+        const auto first = PrefabObjectAddress::Create(std::array{LocalObjectId{9}}, {7}).Value();
+        const auto second = PrefabObjectAddress::Create(std::array{LocalObjectId{4}}, {7}).Value();
+        data.entities[1].provenance.sourceObject = first;
+        data.entities[1].localTransform.translation = {10, 0, 0};
+        auto repeated = data.entities[1];
+        repeated.provenance.sourceObject = second;
+        repeated.localTransform.translation = {20, 0, 0};
+        data.entities.push_back(std::move(repeated));
+        const auto expectedRoot = data.entities.front().provenance;
+        const auto expectedFirst = data.entities[1].provenance;
+        const auto expectedSecond = data.entities[2].provenance;
+
+        const auto spawn = [&](Fixture &host) {
+            host.Put(data);
+            auto pending = host.context->Spawn(host.Request());
+            REQUIRE(pending.HasValue());
+            REQUIRE(pending.Value().Spawned().HasError());
+            host.Drain(pending.Value());
+            auto result = pending.Value().Spawned();
+            REQUIRE(result.HasValue());
+            return std::move(result).Value();
+        };
+        const auto instance = spawn(fixture);
+        const auto scene = *fixture.scenes.ActiveScene();
+        const auto root = instance.ResolveMember(expectedRoot.sourceObject, scene);
+        const auto firstMember = instance.ResolveMember(first, scene);
+        const auto secondMember = instance.ResolveMember(second, scene);
+        REQUIRE(root.HasValue());
+        REQUIRE(firstMember.HasValue());
+        REQUIRE(secondMember.HasValue());
+        CHECK(root.Value().entity == instance.Root());
+        CHECK(root.Value().provenance == expectedRoot);
+        CHECK(firstMember.Value().provenance == expectedFirst);
+        CHECK(secondMember.Value().provenance == expectedSecond);
+        CHECK(firstMember.Value().entity != secondMember.Value().entity);
+        CHECK(scene.Get(firstMember.Value().entity).Value().localTransform->translation == Math::Vec3{10, 0, 0});
+        CHECK(scene.Get(secondMember.Value().entity).Value().localTransform->translation == Math::Vec3{20, 0, 0});
+        const auto absent = instance.ResolveMember(PrefabObjectAddress::Create({}, {7}).Value(), scene);
+        REQUIRE(absent.HasError());
+        CHECK(absent.ErrorValue().code.Value() == PrefabErrors::AddressInvalid.code.Value());
+
+        SECTION("independent Scene owners can have identical numeric entity coordinates") {
+            Fixture other;
+            const auto otherInstance = spawn(other);
+            const auto otherScene = *other.scenes.ActiveScene();
+            REQUIRE(otherInstance.Root() == instance.Root());
+            REQUIRE(otherScene.RuntimeId() == scene.RuntimeId());
+            CHECK_FALSE(otherScene.SameIncarnation(scene));
+            CHECK(instance.ResolveMember(first, otherScene).HasError());
+            CHECK(otherInstance.ResolveMember(first, scene).HasError());
+        }
+
+        SECTION("an individually retired member cannot resolve through an otherwise live root") {
+            Runtime::SceneCommandBuffer retire;
+            retire.Destroy(firstMember.Value().entity);
+            REQUIRE(fixture.scenes.QueueStructuralCommands(std::move(retire)).HasValue());
+            fixture.Commit();
+            const auto current = *fixture.scenes.ActiveScene();
+            CHECK(current.SameIncarnation(scene));
+            CHECK_FALSE(scene.IsCurrent());
+            CHECK(instance.ResolveMember(second, scene).HasError());
+            CHECK(instance.ResolveMember(expectedRoot.sourceObject, current).HasValue());
+            CHECK(instance.ResolveMember(second, current).HasValue());
+            CHECK(instance.ResolveMember(first, current).HasError());
+        }
+
+        SECTION("Scene replacement retires every mapping") {
+            Runtime::SceneDefinitionBuilder builder{{8}, {1}};
+            REQUIRE(fixture.scenes.QueuePreparation(std::move(builder).Build().Value()).HasValue());
+            fixture.Commit();
+            const auto replacement = *fixture.scenes.ActiveScene();
+            REQUIRE(replacement.RuntimeId() != scene.RuntimeId());
+            CHECK(instance.ResolveMember(first, replacement).HasError());
+            CHECK(instance.ResolveMember(first, scene).HasError());
+        }
+
+        SECTION("duplicate full addresses are malformed cooked data") {
+            data.entities[2].provenance.sourceObject = first;
+            const auto malformed = CookedPrefab::Create(std::move(data), PrefabLimitProfile::Create({}).Value());
+            REQUIRE(malformed.HasError());
+            CHECK(malformed.ErrorValue().code.Value() == PrefabErrors::CookArtifactInvalid.code.Value());
+            CHECK(instance.ResolveMember(first, scene).HasValue());
+        }
+    }
+
     TEST_CASE("Despawn rejects retained prefab identities after entity generation reuse", "[prefab][spawn][lifecycle]") {
         Fixture fixture;
         auto first = fixture.context->Spawn(fixture.Request());
@@ -83,6 +171,11 @@ namespace Horo::Prefab {
         auto second = fixture.context->Spawn(fixture.Request());
         REQUIRE(second.HasValue());
         fixture.Drain(second.Value());
+        REQUIRE(second.Value().State() == PrefabSpawnState::Committed);
+        const auto replacement = second.Value().Spawned().Value();
+        const auto scene = *fixture.scenes.ActiveScene();
+        CHECK(original.ResolveMember({}, scene).HasError());
+        CHECK(replacement.ResolveMember({}, scene).HasValue());
         auto repeated = fixture.context->Despawn(original, fixture.tick);
         REQUIRE(repeated.HasValue());
         fixture.Drain(repeated.Value());
