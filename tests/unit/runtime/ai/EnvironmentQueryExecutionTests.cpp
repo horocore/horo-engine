@@ -219,16 +219,38 @@ namespace Horo::AI {
 
         class QueryTaskHost final : public IDecisionQueryTaskHost {
         public:
+            struct NativeQuery final {
+                EnvironmentQueryPlan plan;
+                QuerySchemaRegistry registry;
+            };
+
             Runtime::RuntimeScene &scene;
             ExecutionProbe probe;
             std::size_t admissions{};
             CancellationSource *revokeAdmission{};
+            std::optional<NativeQuery> native;
 
             explicit QueryTaskHost(Runtime::RuntimeScene &value) : scene(value) {}
 
-            Result<std::unique_ptr<QueryExecution>> Admit(const DecisionQueryTaskDescriptor &, const AiTaskOperationContext &,
-                                                          std::uint64_t, std::uint64_t) override {
+            Result<std::unique_ptr<QueryExecution>> Admit(const DecisionQueryTaskDescriptor &, const AiTaskOperationContext &operation,
+                                                          std::uint64_t submittedTick, std::uint64_t deadlineTick) override {
                 ++admissions;
+                if (native.has_value()) {
+                    const auto view = scene.View();
+                    auto source = Source(view);
+                    source.querierLocation = Math::WorldCoordinate64::FromMillimeters(1200, 0, 0);
+                    const auto providers = QueryContextProviderRegistry::Capture({}, native->registry);
+                    REQUIRE(providers.HasValue());
+                    QueryContextCapture capture;
+                    const auto contexts = capture.Capture(native->plan, native->registry, providers.Value(), view, source);
+                    REQUIRE(contexts.HasValue());
+                    return AdmitBuiltinPointQuery(native->plan, native->registry, view,
+                                                  {operation.agent, contexts.Value(), operation.ownerCancellation},
+                                                  {.submittedTick = submittedTick,
+                                                   .deadlineTick = deadlineTick,
+                                                   .maximumCandidates = 9,
+                                                   .bestCount = 1});
+                }
                 if (revokeAdmission)
                     revokeAdmission->RequestCancellation();
                 return Result<std::unique_ptr<QueryExecution>>::Success(MakeExecution(probe, scene));
@@ -278,6 +300,12 @@ namespace Horo::AI {
             }
 
             Result<std::unique_ptr<DecisionQueryTask>> Bind(const BehaviorTreeExecutionPlan &tree) {
+                if (host.native.has_value()) {
+                    const auto &plan = host.native->plan;
+                    return DecisionQueryTask::Bind({node, task, plan.Id(), plan.ResultSchema().id, plan.ResultSchema().version,
+                                                    plan.ResultSchema().itemType, output, 30},
+                                                   plan, host.native->registry, tree, host);
+                }
                 QueryFixture fixture;
                 if (host.probe.actor)
                     fixture.items.front().kind = QueryItemKind::Actor;
@@ -373,6 +401,57 @@ namespace Horo::AI {
             REQUIRE(value.HasValue());
             REQUIRE(value.Value().has_value());
             CHECK(std::get<Math::WorldCoordinate64>(std::get<BlackboardScalarValue>(*value.Value())).Millimeters()[0] == 2);
+        }
+
+        TEST_CASE("Behavior tree EQS commits the real native lattice winner to its typed output", "[unit][ai][eqs][task]") {
+            QueryTaskFixture fixture;
+            auto registry = CaptureBuiltinQuerySchema();
+            REQUIRE(registry.HasValue());
+            const auto lattice = CreateBuiltinLatticeQuery(MakeIdentity<QueryId>(20), MakeIdentity<QueryStageId>(21),
+                                                           MakeIdentity<QueryResultSchemaId>(22), "Native points", {1000, 1}, 9);
+            REQUIRE(lattice.HasValue());
+            const auto origin = BuiltinQueryContextId(BuiltinQueryContext::WorldOrigin);
+            const auto authored = AddBuiltinPointDistanceTest(lattice.Value(), MakeIdentity<QueryStageId>(23), {1000, true, 1, origin});
+            REQUIRE(authored.HasValue());
+            auto compiled = EnvironmentQueryPlan::Compile(authored.Value(), registry.Value());
+            REQUIRE(compiled.HasValue());
+            fixture.host.native.emplace(std::move(compiled).Value(), std::move(registry).Value());
+
+            const auto tree = fixture.Start();
+            REQUIRE(fixture.Evaluate(*tree, 4) == AiTaskState::Running);
+            const auto view = fixture.scene->View();
+            SECTION("a retired Scene revision cannot write output") {
+                Runtime::SceneCommandBuffer commands;
+                REQUIRE(commands.Create({}).IsValid());
+                REQUIRE(fixture.scene->Commit(std::move(commands)).HasValue());
+                fixture.executor->SyncQuery(5);
+                REQUIRE(fixture.Evaluate(*tree, 5) == AiTaskState::Cancelled);
+                const auto value = fixture.blackboard->Snapshot().Value().Read(fixture.output);
+                REQUIRE(value.HasValue());
+                CHECK_FALSE(value.Value().has_value());
+            }
+            SECTION("the first complete winner reaches the declared destination") {
+                bool committed = false;
+                for (std::uint64_t tick = 5; tick < 34; ++tick) {
+                    fixture.executor->SyncQuery(tick);
+                    const auto output = fixture.executor->CommitOutput(tick, view, *fixture.blackboard);
+                    REQUIRE(output.HasValue());
+                    if (output.Value()) {
+                        CHECK(fixture.Evaluate(*tree, tick) == AiTaskState::Succeeded);
+                        committed = true;
+                        break;
+                    }
+                    REQUIRE(fixture.Evaluate(*tree, tick) == AiTaskState::Running);
+                    AiWorkBudget budget{128};
+                    fixture.executor->AdvanceQuery(tick, {budget, budget, budget});
+                }
+                REQUIRE(committed);
+                const auto value = fixture.blackboard->Snapshot().Value().Read(fixture.output);
+                REQUIRE(value.HasValue());
+                REQUIRE(value.Value().has_value());
+                CHECK(std::get<Math::WorldCoordinate64>(std::get<BlackboardScalarValue>(*value.Value())) ==
+                      Math::WorldCoordinate64::FromMillimeters(200, 0, 0));
+            }
         }
 
         TEST_CASE("Behavior tree EQS revalidates the exact winning actor at BlackboardSync", "[unit][ai][eqs][task]") {

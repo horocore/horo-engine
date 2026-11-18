@@ -1,10 +1,13 @@
 #include "Horo/AI/EnvironmentQueryGenerators.h"
 
 #include "Horo/AI/AIErrors.h"
+#include "Horo/AI/EnvironmentQueryExecution.h"
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <limits>
+#include <new>
 #include <tuple>
 #include <utility>
 
@@ -148,6 +151,133 @@ namespace Horo::AI {
             return result;
         }
 
+        /** @brief Generates only after proving the complete batch fits its destination. */
+        Generation GenerateLatticeAtPoint(const Math::WorldCoordinate64 &point, const QueryPointLattice &lattice,
+                                          const QueryGeneratorOutput &output) {
+            if (const auto measured = SampleLattice(point, lattice, output.provenance, {}); measured.itemCount > output.maximumItems)
+                return Generation::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
+            return Generation::Success(SampleLattice(point, lattice, output.provenance, output.items.first(output.maximumItems)));
+        }
+
+        /** @brief Holds one typed native test and the exact location fixed at owner admission. */
+        struct PointOwnerTest final {
+            QueryStageId stage;
+            BuiltinPointDistanceQuery kernel;
+            Math::WorldCoordinate64 center;
+        };
+
+        /** @brief Preserves typed kernel failures even when a diagnostic cannot allocate. */
+        template <typename Value> Result<Value> OwnerFailure(const ErrorCodeDescriptor &error) noexcept {
+            return Result<Value>::Failure({.code = error.code, .domain = error.domain, .severity = error.defaultSeverity});
+        }
+
+        /** @brief Evaluates detached native point kernels on the simulation owner under declared work bounds. */
+        class PointOwnerSource final : public IOwnerQueryExecutionSource {
+        public:
+            PointOwnerSource(const Runtime::RuntimeSceneView &scene, const QueryPointLattice &lattice,
+                             const Math::WorldCoordinate64 &center, std::vector<PointOwnerTest> tests, QueryOwnerWorkLimits limits)
+                : IOwnerQueryExecutionSource(limits), scene_(scene), lattice_(lattice), center_(center), tests_(std::move(tests)) {}
+
+            [[nodiscard]] bool IsCurrent(const QueryExecutionInputs &inputs) const noexcept override {
+                return inputs.contexts->MatchesScene(scene_);
+            }
+
+        private:
+            Result<QueryGenerationResult> GenerateAtOwner(const QueryExecutionInputs &, const QueryGeneratorOutput &output,
+                                                          AiWorkBudget &budget) noexcept override {
+                if (!budget.Consume(WorkLimits().generationUnits))
+                    return OwnerFailure<QueryGenerationResult>(AIErrors::SchedulerBudgetExhausted);
+                try {
+                    return GenerateLatticeAtPoint(center_, lattice_, output);
+                } catch (const std::bad_alloc &) {
+                    return OwnerFailure<QueryGenerationResult>(AIErrors::EnvironmentQueryLimitExceeded);
+                }
+            }
+
+            Result<QueryTestSample> TestAtOwner(const QueryExecutionInputs &, QueryStageId stage, const QueryGeneratedItem &item,
+                                                AiWorkBudget &budget) noexcept override {
+                if (!budget.Consume(WorkLimits().testUnits))
+                    return OwnerFailure<QueryTestSample>(AIErrors::SchedulerBudgetExhausted);
+                const auto test = std::ranges::lower_bound(tests_, stage, {}, &PointOwnerTest::stage);
+                const auto *point = std::get_if<Math::WorldCoordinate64>(&item);
+                if (test == tests_.end() || test->stage != stage || !point)
+                    return OwnerFailure<QueryTestSample>(AIErrors::EnvironmentQuerySchemaInvalid);
+                try {
+                    return test->kernel.Evaluate(test->center, *point);
+                } catch (const std::bad_alloc &) {
+                    return OwnerFailure<QueryTestSample>(AIErrors::EnvironmentQueryProviderFailed);
+                }
+            }
+
+            Runtime::RuntimeSceneView scene_;
+            QueryPointLattice lattice_;
+            Math::WorldCoordinate64 center_;
+            std::vector<PointOwnerTest> tests_;
+        };
+
+        /** @brief Extracts an owned canonical location from the exact native context slot. */
+        Result<Math::WorldCoordinate64> ReadPointContext(const QueryContextSnapshot &contexts, QueryContextId id) {
+            using Point = Result<Math::WorldCoordinate64>;
+            const auto *context = contexts.Find(id);
+            if (!context)
+                return Point::Failure(MakeError(AIErrors::EnvironmentQueryContextMissing));
+            if (const auto *point = std::get_if<Math::WorldCoordinate64>(&context->value))
+                return Point::Success(*point);
+            return Point::Failure(MakeError(AIErrors::EnvironmentQueryContextInvalid));
+        }
+
+        /** @brief Retains the admitted lattice, selected location and exact generator publication identity. */
+        struct PointOwnerGenerator final {
+            QueryPointLattice lattice;
+            Math::WorldCoordinate64 center;
+            QueryGeneratorProvenance provenance;
+        };
+
+        /** @brief Resolves the generator descriptor and its pinned location before owner execution. */
+        Result<PointOwnerGenerator> CapturePointOwnerGenerator(const QueryPlanStage &stage, const QueryContextSnapshot &contexts,
+                                                               const QuerySchemaRegistry &registry) {
+            using Generator = Result<PointOwnerGenerator>;
+            const auto *descriptor = registry.Find(stage.generator);
+            if (!descriptor || descriptor->origin != BuiltinOrigin() ||
+                descriptor->id != QueryGeneratorId::Create(LatticeGenerator).Value())
+                return Generator::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
+            const auto lattice = PlanLattice(stage);
+            if (!lattice.has_value() || !ValidLattice(*lattice))
+                return Generator::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+            const auto center = ReadPointContext(contexts, lattice->center);
+            if (center.HasError())
+                return Generator::Failure(center.ErrorValue());
+            return Generator::Success(
+                {*lattice, center.Value(), {stage.id, descriptor->id, descriptor->origin.provider, contexts.Revision()}});
+        }
+
+        /** @brief Validated native distance kernels and their scoring rules before admission. */
+        struct PointOwnerTests final {
+            std::vector<PointOwnerTest> kernels;
+            std::vector<QueryScoreRule> rules;
+        };
+
+        /** @brief Pins the location for each authored test and keeps its independent ranking rule. */
+        Result<PointOwnerTests> CapturePointOwnerTests(std::span<const QueryPlanStage> stages, const QueryContextSnapshot &contexts,
+                                                       const QuerySchemaRegistry &registry) {
+            using Tests = Result<PointOwnerTests>;
+            PointOwnerTests tests;
+            tests.kernels.reserve(stages.size());
+            tests.rules.reserve(stages.size());
+            for (const auto &stage : stages) {
+                auto kernel = BuiltinPointDistanceQuery::Capture(stage, registry);
+                if (kernel.HasError())
+                    return Tests::Failure(kernel.ErrorValue());
+                const auto center = ReadPointContext(contexts, kernel.Value().Settings().center);
+                if (center.HasError())
+                    return Tests::Failure(center.ErrorValue());
+                tests.rules.push_back(kernel.Value().Rule());
+                tests.kernels.emplace_back(stage.id, std::move(kernel).Value(), center.Value());
+            }
+            std::ranges::sort(tests.kernels, {}, &PointOwnerTest::stage);
+            return Tests::Success(std::move(tests));
+        }
+
         /** @brief Uses an explicit canonical order rather than discovery or sense order. */
         [[nodiscard]] auto SourceOrder(const PerceptionSourceRef &source) noexcept {
             return std::tuple{source.slot, source.generation};
@@ -167,16 +297,10 @@ namespace Horo::AI {
             return Generation::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
         if (contexts.Revision() != output.provenance.revision)
             return Generation::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
-        const auto *context = contexts.Find(center);
-        if (!context)
-            return Generation::Failure(MakeError(AIErrors::EnvironmentQueryContextMissing));
-        const auto *position = std::get_if<Math::WorldCoordinate64>(&context->value);
-        if (!position)
-            return Generation::Failure(MakeError(AIErrors::EnvironmentQueryContextInvalid));
-        const auto measured = SampleLattice(*position, lattice, output.provenance, {});
-        if (measured.itemCount > output.maximumItems)
-            return Generation::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
-        return Generation::Success(SampleLattice(*position, lattice, output.provenance, output.items.first(output.maximumItems)));
+        const auto position = ReadPointContext(contexts, center);
+        if (position.HasError())
+            return Generation::Failure(position.ErrorValue());
+        return GenerateLatticeAtPoint(position.Value(), lattice, output);
     }
 
     /** @copydoc GenerateQueryPoints */
@@ -399,6 +523,39 @@ namespace Horo::AI {
         if (!lattice)
             return Generation::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
         return GenerateQueryLattice(contexts, lattice->center, *lattice, output);
+    }
+
+    /** @copydoc AdmitBuiltinPointQuery */
+    Result<std::unique_ptr<QueryExecution>> AdmitBuiltinPointQuery(const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry,
+                                                                   const Runtime::RuntimeSceneView &scene, QueryExecutionInputs inputs,
+                                                                   QueryExecutionSettings settings) {
+        using Admission = Result<std::unique_ptr<QueryExecution>>;
+        if (!inputs.contexts || inputs.contexts->Query() != plan.Id())
+            return Admission::Failure(MakeError(AIErrors::EnvironmentQueryContextInvalid));
+        if (!inputs.contexts->MatchesScene(scene) || inputs.ownerCancellation.IsCancellationRequested())
+            return Admission::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
+        const auto stages = plan.Stages();
+        if (stages.empty())
+            return Admission::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+        const auto generator = CapturePointOwnerGenerator(stages.front(), *inputs.contexts, registry);
+        if (generator.HasError())
+            return Admission::Failure(generator.ErrorValue());
+        auto tests = CapturePointOwnerTests(stages.subspan(1), *inputs.contexts, registry);
+        if (tests.HasError())
+            return Admission::Failure(tests.ErrorValue());
+        auto scoring = QueryScoringPlan::Capture(plan, registry, tests.Value().rules, QueryScoreTieBreak::StableIndex);
+        if (scoring.HasError())
+            return Admission::Failure(scoring.ErrorValue());
+
+        const auto &captured = generator.Value();
+        const std::size_t width = 2U * captured.lattice.outerSteps + 1U;
+        // Reserve both complete lattice passes and one stage lookup plus distance evaluation.
+        const QueryOwnerWorkLimits limits{2 * width * width, 1U + std::bit_width(tests.Value().kernels.size())};
+        settings.generatorWorkUnits = limits.generationUnits;
+        auto source =
+            std::make_unique<PointOwnerSource>(scene, captured.lattice, captured.center, std::move(tests).Value().kernels, limits);
+        return QueryExecution::AdmitDeterministic(std::move(inputs), captured.provenance, std::move(scoring).Value(), settings,
+                                                  std::move(source));
     }
 
     /** @copydoc GenerateQueryPerceivedEntities */

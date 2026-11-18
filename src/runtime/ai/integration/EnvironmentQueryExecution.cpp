@@ -413,8 +413,7 @@ namespace Horo::AI {
         snapshot.generated = result_.generated;
         snapshot.evaluated = scores_.size();
         snapshot.invalidCoordinates = result_.invalidCoordinates;
-        snapshot.stale = stale_ || !scene.IsCurrent() || scene.RuntimeId() != result_.scene ||
-                         scene.StructuralRevision() != inputs_.contexts->sceneStructure_ || !InputsAreCurrent() ||
+        snapshot.stale = stale_ || !inputs_.contexts->MatchesScene(scene) || !InputsAreCurrent() ||
                          (published_ && result_.status == QueryExecutionStatus::StaleInputs);
         snapshot.stale = snapshot.stale || std::ranges::any_of(snapshot.candidates, [&](const QueryDebugCandidate &candidate) {
             return RetiredActor(items_[candidate.index], scene);

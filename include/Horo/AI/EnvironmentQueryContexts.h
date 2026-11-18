@@ -64,6 +64,11 @@ namespace Horo::AI {
 
         /** @brief Returns the source scene incarnation. @return Exact generation-checked runtime ID. */
         [[nodiscard]] Runtime::SceneRuntimeId Scene() const noexcept;
+        /** @brief Checks the owner and structural revision used to capture these values.
+         * @param scene Candidate Scene view on the simulation owner.
+         * @return True only while the captured Scene and its exact structural revision are current.
+         */
+        [[nodiscard]] bool MatchesScene(const Runtime::RuntimeSceneView &scene) const noexcept;
         /** @brief Returns the submission execution revision. @return Non-zero revision. */
         [[nodiscard]] std::uint64_t Revision() const noexcept;
         /** @brief Returns the complete captured value set. @return Borrowed read-only records. */

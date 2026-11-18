@@ -306,4 +306,16 @@ namespace Horo::AI {
         bool published_{};
         bool scoringReserved_{};
     };
+
+    /** @brief Admits a saved native lattice query to deterministic simulation-owner execution.
+     * @param plan Compiled native lattice and distance stages. @param registry Exact registry used to compile the plan.
+     * @param scene Current owner view that captured the submitted locations. @param inputs Exact owner and frozen locations.
+     * @param settings Candidate capacity, ranking and tick limits. Generator work units are derived from the authored lattice.
+     * @return A detached execution or a typed refusal. No kernels run until the host advances the admitted execution.
+     */
+    [[nodiscard]] Result<std::unique_ptr<QueryExecution>> AdmitBuiltinPointQuery(const EnvironmentQueryPlan &plan,
+                                                                                 const QuerySchemaRegistry &registry,
+                                                                                 const Runtime::RuntimeSceneView &scene,
+                                                                                 QueryExecutionInputs inputs,
+                                                                                 QueryExecutionSettings settings);
 }  // namespace Horo::AI

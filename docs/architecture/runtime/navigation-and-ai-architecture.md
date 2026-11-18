@@ -2333,6 +2333,12 @@ invalidates the retained preview. A compiled stage retains
 only its selected requirement, and preview evaluates each test against its
 own captured location from the pinned Scene.
 
+The deterministic native point-query admission path uses those same authored
+kernels on the simulation owner. It reserves both lattice passes and the
+bounded test lookup and evaluation. It rejects a retired Scene revision before
+publishing a winner. A Decision task can commit the winning point through the
+existing typed Blackboard binding at BlackboardSync.
+
 Each native distance stage can store a positive integer relative score weight.
 An omitted weight means `1` and keeps existing source payloads valid. The scorer
 normalizes enabled scoring stages by their total weight. A filter-only stage

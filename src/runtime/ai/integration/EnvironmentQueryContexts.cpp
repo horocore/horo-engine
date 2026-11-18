@@ -150,6 +150,11 @@ namespace Horo::AI {
         return scene_;
     }
 
+    /** @copydoc QueryContextSnapshot::MatchesScene */
+    bool QueryContextSnapshot::MatchesScene(const Runtime::RuntimeSceneView &scene) const noexcept {
+        return scene.IsCurrent() && scene.RuntimeId() == scene_ && scene.StructuralRevision() == sceneStructure_;
+    }
+
     /** @copydoc QueryContextSnapshot::Revision */
     std::uint64_t QueryContextSnapshot::Revision() const noexcept {
         return revision_;
