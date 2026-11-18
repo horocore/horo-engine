@@ -10,10 +10,11 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                                                           const Runtime::RuntimeSceneDefinition *definition) {
         if (!policy.world)
             return Result<void>::Success();
-        if (!definition || policy.xrHost || policy.playNavigationScene)
+        if (!definition || policy.playNavigationScene ||
+            (policy.xrHost && (policy.xrHost->ViewSource() != Editor::EditorPlayViewSource::SelectedXr || !policy.world->viewport)))
             return Result<void>::Failure(
                 MakeError(WorldStreaming::WorldArtifactErrors::Unsupported,
-                          "Editor mounted World startup requires desktop Play. XR and Navigation need canonical World composition."));
+                          "Mounted World Play requires a supported Scene composition and an explicit cell selection for native XR."));
         const bool startsCell = policy.world->committed.initialCell.has_value();
         const auto &viewport = policy.world->viewport;
         if (startsCell != viewport.has_value() ||
@@ -54,6 +55,15 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             auto mounted = MountedWorld::Prepare(NativeDurableFileSystem{}, *worldSelection_, identity_.value, *scenes_, cancellation);
             if (mounted.HasError())
                 return Result<void>::Failure(mounted.ErrorValue());
+            if (selectedXrHost_) {
+                mountedWorld_ = std::move(mounted).Value();
+                auto queued = QueueMountedXrScene(definition, {cancellation, deadline});
+                if (queued.HasError()) {
+                    worldRenderer_.reset();
+                    mountedWorld_.reset();
+                }
+                return queued;
+            }
             const auto queued = Editor::EditorPlaySceneHost::QueueInitialScene(definition, nullptr, cancellation);
             if (queued.HasError())
                 return queued;

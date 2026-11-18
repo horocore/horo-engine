@@ -6784,7 +6784,8 @@ if (HORO_BUILD_RENDER_VULKAN)
         target_link_libraries(HoroScriptedOpenXRLoader PRIVATE HoroOpenXRHeaders)
         set_target_properties(HoroScriptedOpenXRLoader PROPERTIES PREFIX "" OUTPUT_NAME "horo-scripted-openxr-loader")
         target_sources(HoroRenderVulkanTests PRIVATE unit/runtime/xr/OpenXRApplicationLifecycleTests.cpp)
-        target_link_libraries(HoroRenderVulkanTests PRIVATE HoroOpenXRApplicationHost HoroEngine::RenderNull
+        target_include_directories(HoroRenderVulkanTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+        target_link_libraries(HoroRenderVulkanTests PRIVATE HoroOpenXRApplicationHost HoroEngine::RenderNull HoroEngine::SceneRenderExtraction
             HoroHostSignatureDocuments HoroEditorVulkanShaderInternal nlohmann_json::nlohmann_json MbedTLS::mbedcrypto miniz)
         target_compile_definitions(HoroRenderVulkanTests PRIVATE HORO_TEST_OPENXR_LOADER="$<TARGET_FILE:HoroScriptedOpenXRLoader>")
         set_target_properties(HoroRenderVulkanTests PROPERTIES ENABLE_EXPORTS ON)

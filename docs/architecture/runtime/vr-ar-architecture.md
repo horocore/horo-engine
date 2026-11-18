@@ -568,6 +568,19 @@ continues to derive its tracking calibration from the authored float scene
 root. A canonical world-origin composition must project both the tracking
 anchor and XR geometry from the same world owner and origin generation.
 
+When the Editor selects OpenXR and an explicit mounted World cell, the private
+Scene activation participant captures the selected camera and meshes in the
+origin-relative basis. The mount verifies the private Scene incarnation,
+streaming reservation and source occurrence before exposing any geometry. The
+capture retains the renderer view, primitive resources and exact origin lease.
+OpenXR currently rejects the uncalibrated startup before allocating Play
+tracking resources. The native calibration owner must bind an observed
+reference-space identity and generation to the exact canonical origin before
+publishing Play input or projection. Reference-space changes and origin
+replacements must invalidate the correspondence before another frame.
+The existing desktop World projection continues through its live viewport
+owner.
+
 ## Rendering And Presentation
 
 The OpenXR backend supplies view descriptors and generation-safe runtime-owned

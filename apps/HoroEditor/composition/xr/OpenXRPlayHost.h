@@ -261,7 +261,8 @@ namespace Horo::Application::Internal {
         /** @brief Returns a canonical Scene participant borrowing this exact retained application owner.
          * @return Owned participant for insertion before the existing UI participant, never another Scene publisher.
          */
-        [[nodiscard]] std::unique_ptr<Runtime::SceneActivationParticipant> MakeSceneParticipant() override;
+        [[nodiscard]] std::unique_ptr<Runtime::SceneActivationParticipant> MakeSceneParticipant(
+            Editor::EditorMountedXrGeometryCapture mounted = {}) override;
 
     private:
         [[nodiscard]] Result<void> Prepare(XR::XRSessionPreparation stage, const XR::XRSessionId &candidate,

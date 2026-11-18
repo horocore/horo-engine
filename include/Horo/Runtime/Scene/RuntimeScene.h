@@ -1173,6 +1173,12 @@ namespace Horo::Runtime {
          * @details Pure composition evidence; grants no mutation, retention or publication authority.
          */
         [[nodiscard]] bool IsRestoreCandidate(const RuntimeScene &candidate) const noexcept;
+        /** @brief Observes the exact private Scene undergoing initial Streamed activation on the owner lane.
+         * @param candidate Current view supplied to an activation participant.
+         * @return True for this service's still-private startup aggregate and exact structural revision.
+         * @details Pure identity check for composed data owners; grants no mutation or publication authority.
+         */
+        [[nodiscard]] bool IsInitialStreamedCandidate(const RuntimeSceneView &candidate) const noexcept;
         /** @brief Returns the current immutable active scene view. */
         [[nodiscard]] std::optional<RuntimeSceneView> ActiveScene() const noexcept;
         /** @brief Borrows a ready direct child of the currently published parent, by authored occurrence.

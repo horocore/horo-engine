@@ -157,12 +157,36 @@ namespace Horo::Application::Internal {
             Runtime::PrimitiveMeshCache &primitives, Render::RenderOriginSceneAdapter &renderer,
             Render::RenderOriginCoordinateBasis basis = Render::RenderOriginCoordinateBasis::CameraRelative) const;
 
+        /** @brief Captures origin-relative geometry inside this mount's exact private startup candidate.
+         * @param candidate Scene activation participant's current private candidate.
+         * @param camera Explicit anchored camera object from the admitted cell.
+         * @param meshes Strictly ascending explicit mesh objects from the same cell.
+         * @param primitives Existing CPU mesh cache and resource lease owner.
+         * @param renderer Exact bound World origin and frontend view.
+         * @return Retained geometry with its exact World origin lease, or typed rejection.
+         * @details Requires the same scheduler activation reservation and private Scene incarnation. Grants no session authority.
+         */
+        [[nodiscard]] Result<MountedWorldRenderPacket> CaptureInitialGeometry(const Runtime::RuntimeSceneView &candidate,
+                                                                              Runtime::SceneObjectId camera,
+                                                                              std::span<const Runtime::SceneObjectId> meshes,
+                                                                              Runtime::PrimitiveMeshCache &primitives,
+                                                                              Render::RenderOriginSceneAdapter &renderer) const;
+
         /** @brief Observe the exact mounted World frame; the caller keeps this complete mount alive. */
         [[nodiscard]] const WorldStreaming::OriginFrameOwner &Origin() const noexcept;
         /** @brief Revoke mounted authority and close the registry before releasing the borrowed Scene service. */
         ~MountedWorld();
 
     private:
+        enum class GeometryScope {
+            Active,
+            PrivateStartup
+        };
+        /** @brief Shares origin/mesh projection after applying the selected private or live ownership boundary. */
+        [[nodiscard]] Result<MountedWorldRenderPacket> CaptureScopedGeometry(
+            const Runtime::RuntimeSceneView &parent, Runtime::SceneObjectId camera, std::span<const Runtime::SceneObjectId> meshes,
+            Runtime::PrimitiveMeshCache &primitives, Render::RenderOriginSceneAdapter &renderer, Render::RenderOriginCoordinateBasis basis,
+            GeometryScope scope) const;
         struct State;
         explicit MountedWorld(std::unique_ptr<State> state) noexcept;
         std::unique_ptr<State> state_;

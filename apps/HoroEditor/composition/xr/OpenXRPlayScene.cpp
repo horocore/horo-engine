@@ -1,6 +1,7 @@
 #include "EditorVulkanXrViewportAccess.h"
 #include "EditorXrTrackingRoot.h"
 #include "Horo/Foundation/Assertions.h"
+#include "Horo/Runtime/Render/RenderOriginScene.h"
 #include "Horo/XR/XRSessionErrors.h"
 #include "OpenXRPlayFrameState.h"
 
@@ -55,7 +56,8 @@ namespace Horo::Application::Internal {
 
     class OpenXRPlayHost::SceneParticipant final : public Runtime::SceneActivationParticipant {
     public:
-        explicit SceneParticipant(OpenXRPlayHost &host) : host_(&host) {}
+        SceneParticipant(OpenXRPlayHost &host, Editor::EditorMountedXrGeometryCapture mounted)
+            : host_(&host), mounted_(std::move(mounted)) {}
 
         Result<std::unique_ptr<Runtime::SceneActivationCandidate>> Prepare(const Runtime::RuntimeSceneDefinition &definition,
                                                                            const Runtime::RuntimeSceneView &scene) override {
@@ -87,12 +89,16 @@ namespace Horo::Application::Internal {
         /** @brief Prepares the exact Scene/native candidate under the existing host rollback scope. */
         [[nodiscard]] Result<std::shared_ptr<SceneState>> PrepareCurrent(const Runtime::RuntimeSceneDefinition &definition,
                                                                          const Runtime::RuntimeSceneView &candidate);
+        /** @brief Validates the mounted World geometry before the native reference-calibration gate. */
+        [[nodiscard]] Result<std::shared_ptr<SceneState>> PrepareMounted(const Runtime::RuntimeSceneView &candidate) const;
         OpenXRPlayHost *host_;
+        Editor::EditorMountedXrGeometryCapture mounted_;
     };
 
     /** @copydoc OpenXRPlayHost::MakeSceneParticipant */
-    std::unique_ptr<Runtime::SceneActivationParticipant> OpenXRPlayHost::MakeSceneParticipant() {
-        return std::make_unique<SceneParticipant>(*this);
+    std::unique_ptr<Runtime::SceneActivationParticipant> OpenXRPlayHost::MakeSceneParticipant(
+        Editor::EditorMountedXrGeometryCapture mounted) {
+        return std::make_unique<SceneParticipant>(*this, std::move(mounted));
     }
 
     /** @copydoc OpenXRPlayHost::UpdateScene */
@@ -202,8 +208,11 @@ namespace Horo::Application::Internal {
             return Output::Failure(MakeError(XRErrors::RuntimeUnavailable, "Reopen the editor to select a fresh XR instance and device."));
         if (owner.setupCleanupPending_)
             return Output::Failure(MakeError(XRSessionErrors::SetupCleanupPending));
-        if (owner.scene_ || !owner.input_.port || !owner.input_.geometry || !owner.input_.router ||
-            candidate.DefinitionRevision() != definition.Revision())
+        if (owner.scene_ || !owner.input_.port || !owner.input_.router || candidate.DefinitionRevision() != definition.Revision())
+            return Output::Failure(MakeError(XRErrors::OperationIncompatible));
+        if (mounted_)
+            return PrepareMounted(candidate);
+        if (!owner.input_.geometry)
             return Output::Failure(MakeError(XRErrors::OperationIncompatible));
         const Operation operation{owner};
         if (auto ready = owner.AdmitReferenceReplacement(); ready.HasError())
@@ -253,6 +262,24 @@ namespace Horo::Application::Internal {
             return fail(prepared.ErrorValue());
         rollback.accepted = true;
         return Output::Success(owner.scene_);
+    }
+
+    /** @copydoc OpenXRPlayHost::SceneParticipant::PrepareMounted */
+    Result<std::shared_ptr<OpenXRPlayHost::SceneState>> OpenXRPlayHost::SceneParticipant::PrepareMounted(
+        const Runtime::RuntimeSceneView &candidate) const {
+        using Output = Result<std::shared_ptr<SceneState>>;
+        const auto captured = mounted_(candidate);
+        if (captured.HasError())
+            return Output::Failure(captured.ErrorValue());
+        const auto &geometry = captured.Value();
+        if (!geometry || !candidate.IsCurrent() || geometry->scene.lightSceneDomain != candidate.RuntimeId().value ||
+            !geometry->view.IsValid() || !geometry->scene.IsValid())
+            return Output::Failure(MakeError(XRErrors::IdentityStale));
+        if (const auto origin = geometry->origin.Get(); origin.HasError())
+            return Output::Failure(origin.ErrorValue());
+        return Output::Failure(
+            MakeError(XRErrors::OperationIncompatible,
+                      "Mounted World XR requires a calibrated native reference-space pose in this exact World origin generation."));
     }
 
     /** @copydoc OpenXRPlayHost::SceneState::PrepareResources */

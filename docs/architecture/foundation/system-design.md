@@ -91,8 +91,10 @@ Executable-specific adapters and composition live with their host:
   Scene/Physics lifetime adaptation, animation owner identities and committed
   World mounting. The non-installed `HoroMountedWorldHostInternal` adapter uses
   `HoroWorldStreaming` for partition and origin authority,
-  `HoroSceneCellPayload` for exact cooked cell admission through the active
-  Scene, and `HoroSceneRenderExtraction` for optional CPU geometry capture.
+  `HoroSceneCellPayload` for exact cooked cell admission through the Scene
+  service, and `HoroSceneRenderExtraction` for optional CPU geometry capture.
+  The selected OpenXR application host consumes the renderer's origin-relative
+  view through the Editor Play composition port.
   The standalone and Editor hosts choose their own startup scope and own
   the mount lifetime. GPU execution, windows and presentation stay with the
   graphical host. Keep each

@@ -9,6 +9,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -16,6 +17,10 @@ namespace Horo::Runtime {
     class SceneActivationParticipant;
     class RuntimeSceneView;
 }  // namespace Horo::Runtime
+
+namespace Horo::Render {
+    struct RenderOriginLocalScene;
+}
 
 namespace Horo::XR {
     enum class XRFeatureProfile : std::uint8_t;
@@ -30,6 +35,11 @@ namespace Horo::XR {
 
 namespace Horo::Editor {
     class EditorXrSceneSourcePort;
+    /** @brief Captures one mounted World geometry packet for the exact private Play Scene.
+     * @details The returned shared owner pins both geometry and its canonical origin lease. This source owns no XR reference calibration.
+     */
+    using EditorMountedXrGeometryCapture =
+        std::function<Result<std::shared_ptr<const Render::RenderOriginLocalScene>>(const Runtime::RuntimeSceneView &)>;
 
     /** @brief Explicit local player selected by application startup for the selected XR Play source. */
     struct EditorXrInputPlayerSelection final {
@@ -326,10 +336,12 @@ namespace Horo::Editor {
          */
         [[nodiscard]] virtual Result<void> DetachInput() = 0;
         /** @brief Creates the narrow participant used by the actual Play Scene factory, before the UI participant.
-         * @return Owned canonical Scene observer/preparation participant; it never publishes a second Scene.
+         * @param mounted Explicit private mounted geometry source, absent on the ordinary Scene path.
+         * @return Owned canonical Scene observer or null for unsupported composition. It never publishes another Scene.
          * @pre The application host outlives the factory, every returned participant and retained native retirement debt.
          */
-        [[nodiscard]] virtual std::unique_ptr<Runtime::SceneActivationParticipant> MakeSceneParticipant() = 0;
+        [[nodiscard]] virtual std::unique_ptr<Runtime::SceneActivationParticipant> MakeSceneParticipant(
+            EditorMountedXrGeometryCapture mounted = {}) = 0;
         /** @brief Non-allocating logical revocation for failed-enter/destructor recovery.
          * @pre Owner lane. The host outlives the screen; native parents/completion debt stay retained by the host.
          * @post No native callback, wait, clock, Input commit or exception; next canonical cutoff commits neutral state.

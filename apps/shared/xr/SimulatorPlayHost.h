@@ -29,7 +29,8 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> UpdateScene(const Runtime::RuntimeSceneView &scene) override;
         [[nodiscard]] Result<void> SetPlayState(Editor::EditorPlayState state) override;
         [[nodiscard]] Result<void> DetachInput() override;
-        [[nodiscard]] std::unique_ptr<Runtime::SceneActivationParticipant> MakeSceneParticipant() override;
+        [[nodiscard]] std::unique_ptr<Runtime::SceneActivationParticipant> MakeSceneParticipant(
+            Editor::EditorMountedXrGeometryCapture mounted = {}) override;
         void RevokeInput() noexcept override;
         /** @brief Revoke and sever every Input/Scene source borrow before the application router is destroyed. */
         void ReleaseInputOwner() noexcept;

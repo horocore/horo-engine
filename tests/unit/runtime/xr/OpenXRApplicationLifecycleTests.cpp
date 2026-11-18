@@ -1,5 +1,6 @@
 #include "EditorVulkanXrViewportAccess.h"
 #include "Horo/Runtime/Render/NullBackendModule.h"
+#include "Horo/Runtime/Render/RenderOriginScene.h"
 #include "Horo/Runtime/RuntimeHost.h"
 #include "Horo/XR/XRSessionErrors.h"
 #include "OpenXRApplicationSession.h"
@@ -350,6 +351,58 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(prepared.ErrorValue().code.Value() == XR::XRErrors::CapacityExceeded.code.Value());
         CHECK_FALSE(fixture.play->UsesXrScene());
         CHECK(fixture.play->PresentationState() == Host::OpenXRPlayPresentation::Pending);
+    }
+
+    TEST_CASE("Selected OpenXR Play consumes mounted origin geometry before requiring reference calibration",
+              "[xr][application][play][mounted_origin]") {
+        namespace WS = WorldStreaming;
+        ApplicationFixture fixture;
+        fixture.CreatePlay();
+        REQUIRE(fixture.play->SetPlayState(Editor::EditorPlayState::Playing).HasValue());
+        REQUIRE(fixture.play->AttachInput(fixture.InputPort(), fixture.source.Port()).HasValue());
+        const auto preparedCalls = fixture.script.native.calls.size();
+        const auto retainedSessions = fixture.script.native.liveSessions;
+        const auto actionSets = fixture.script.actions.liveSets;
+        const auto originPosition = Math::WorldCoordinate64::FromMillimeters(9'007'199'254'740'993, 0, 0);
+        const auto origin = RequireValue(
+            WS::OriginFrame::Create({RequireValue(WS::OriginFrameId::Create(7)), RequireValue(WS::OriginFrameRevision::Create(1)),
+                                     RequireValue(WS::OriginGeneration::Create(1))},
+                                    originPosition));
+        auto owner = RequireValue(WS::OriginFrameOwner::Create(origin));
+        const auto view = RequireValue(fixture.frontend->CreateRenderViewIdentity());
+        auto adapter = RequireValue(Render::RenderOriginSceneAdapter::Create(*owner, view,
+                                                                             {RequireValue(WS::OriginRebaseParticipantId::Create(7)),
+                                                                              RequireValue(WS::OriginRebaseParticipantRevision::Create(1))},
+                                                                             {1, 0, 0}));
+        const auto runtime = fixture.scene->View().RuntimeId();
+        const Render::RenderOriginSceneSource source{{originPosition,
+                                                      Math::WorldCoordinate64::FromMillimeters(9'007'199'254'740'993, 0, -1000)},
+                                                     {},
+                                                     {},
+                                                     runtime.value};
+        const auto frame = RequireValue(adapter->Capture(source, Render::RenderOriginCoordinateBasis::OriginRelative));
+        std::shared_ptr<const Render::RenderOriginLocalScene> packet =
+            std::make_shared<Render::RenderOriginLocalScene>(RequireValue(frame.OriginScene({})));
+        bool read{};
+        auto participant = fixture.play->MakeSceneParticipant([&](const Runtime::RuntimeSceneView &candidate) {
+            CHECK(candidate.SameIncarnation(fixture.scene->View()));
+            read = true;
+            return Result<std::shared_ptr<const Render::RenderOriginLocalScene>>::Success(packet);
+        });
+        const auto prepared = participant->Prepare(fixture.definition, fixture.scene->View());
+        REQUIRE(prepared.HasError());
+        CHECK(read);
+        CHECK(prepared.ErrorValue().code.Value() == XR::XRErrors::OperationIncompatible.code.Value());
+        CHECK(fixture.script.native.calls.size() == preparedCalls);
+        CHECK(fixture.script.native.liveSessions == retainedSessions);
+        CHECK(fixture.script.actions.liveSets == actionSets);
+        CHECK_FALSE(fixture.play->UsesXrScene());
+
+        owner->Shutdown();
+        const auto stale = participant->Prepare(fixture.definition, fixture.scene->View());
+        REQUIRE(stale.HasError());
+        CHECK(stale.ErrorValue().code.Value() == WS::WorldStreamingErrors::OriginFrameStale.code.Value());
+        CHECK(fixture.script.native.calls.size() == preparedCalls);
     }
 
     TEST_CASE("Input revocation cancels the exact unpublished application Play attempt", "[xr][application][play]") {

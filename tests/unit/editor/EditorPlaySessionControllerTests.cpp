@@ -201,7 +201,9 @@ namespace {
             CpuSelectedXrHost &host_;
         };
 
-        std::unique_ptr<Runtime::SceneActivationParticipant> MakeSceneParticipant() override {
+        std::unique_ptr<Runtime::SceneActivationParticipant> MakeSceneParticipant(Editor::EditorMountedXrGeometryCapture mounted) override {
+            if (mounted)
+                return {};
             return std::make_unique<Participant>(*this);
         }
 

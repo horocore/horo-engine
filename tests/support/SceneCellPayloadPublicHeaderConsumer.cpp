@@ -77,6 +77,8 @@ static_assert(
                        const Horo::Runtime::RuntimeSceneView &, std::span<const Horo::Runtime::SceneBaselinePreparationView>) const>);
 
 static_assert(std::is_default_constructible_v<Horo::Runtime::RuntimeSceneService>);
+static_assert(std::is_same_v<decltype(&Horo::Runtime::RuntimeSceneService::IsInitialStreamedCandidate),
+                             bool (Horo::Runtime::RuntimeSceneService::*)(const Horo::Runtime::RuntimeSceneView &) const noexcept>);
 static_assert(std::is_constructible_v<Horo::Runtime::RuntimeSceneService, Horo::Runtime::SceneRuntimeId>);
 static_assert(!std::is_convertible_v<Horo::Runtime::SceneRuntimeId, Horo::Runtime::RuntimeSceneService>);
 static_assert(std::is_constructible_v<Horo::Runtime::RuntimeSceneService, Horo::Assets::AssetRegistry &, Horo::Assets::AssetLoadService &,

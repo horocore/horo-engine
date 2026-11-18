@@ -13,6 +13,7 @@
 #include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <fstream>
+#include <functional>
 
 namespace Horo::WorldCook {
     namespace {
@@ -22,6 +23,31 @@ namespace Horo::WorldCook {
         namespace T = A::OutputTestSupport;
         using W::TestSupport::Asset;
         using W::TestSupport::IdentityFrom;
+
+        /** @brief Observes the actual private candidate without publishing any test-owned geometry. */
+        class StartupGeometryObserver final : public S::SceneActivationParticipant {
+        public:
+            explicit StartupGeometryObserver(const std::function<void(const S::RuntimeSceneView &)> &observe) : observe_(observe) {}
+
+            Result<std::unique_ptr<S::SceneActivationCandidate>> Prepare(const S::RuntimeSceneDefinition &,
+                                                                         const S::RuntimeSceneView &candidate) override {
+                if (observe_)
+                    observe_(candidate);
+                return Result<std::unique_ptr<S::SceneActivationCandidate>>::Success(std::make_unique<Observed>());
+            }
+
+        private:
+            class Observed final : public S::SceneActivationCandidate {
+            public:
+                Result<void> ValidatePublication() const override {
+                    return Result<void>::Success();
+                }
+
+                void Shutdown() noexcept override {}
+            };
+
+            const std::function<void(const S::RuntimeSceneView &)> &observe_;
+        };
 
         /** @brief Independent finite host ceilings for the complete actual two-cell publication. */
         PublicationLimits Limits() {
@@ -279,7 +305,9 @@ namespace Horo::WorldCook {
         A::MemoryAssetProvider provider;
         A::AssetLoadService loads{jobs, provider};
         A::AssetRegistry registry;
+        std::function<void(const S::RuntimeSceneView &)> observeStartup;
         S::RuntimeSceneService parent{registry, loads, S::RuntimeSceneAssetLimits{}, S::SceneRuntimeId{101}};
+        REQUIRE(parent.AddActivationParticipant(std::make_unique<StartupGeometryObserver>(observeStartup)).HasValue());
         auto definition = std::move(S::SceneDefinitionBuilder{{99}, {1}}).Build();
         REQUIRE(definition.HasValue());
         HeadlessSceneLoadBoundary boundary{{}, std::chrono::steady_clock::now() + std::chrono::seconds(5)};
@@ -320,8 +348,31 @@ namespace Horo::WorldCook {
             REQUIRE(registry.Publish(std::vector<A::AssetRecord>{}).status == A::AssetRegistryBuildStatus::Complete);
             const auto revision = registry.Snapshot().Revision();
             REQUIRE(revision != A::AssetRegistryRevision{});
+            const W::OriginRebaseParticipantRequirement participant{IdentityFrom<W::OriginRebaseParticipantId>(1),
+                                                                    IdentityFrom<W::OriginRebaseParticipantRevision>(1)};
+            auto renderer = Render::RenderOriginSceneAdapter::Create(mount->Origin(), {2}, participant, {2, 1, 1}).Value();
+            S::PrimitiveMeshCache primitives;
+            const std::array drawObjects{cameraEntity.object};
+            std::optional<MountedWorldRenderPacket> geometry;
+            CHECK_FALSE(parent.IsInitialStreamedCandidate(old));
+            CHECK(mount->CaptureInitialGeometry(old, cameraEntity.object, drawObjects, primitives, *renderer).HasError());
+            observeStartup = [&](const S::RuntimeSceneView &candidate) {
+                REQUIRE(parent.IsInitialStreamedCandidate(candidate));
+                CHECK(parent.ActiveScene()->SameIncarnation(old));
+                auto packet = mount->CaptureInitialGeometry(candidate, cameraEntity.object, drawObjects, primitives, *renderer);
+                REQUIRE(packet.HasValue());
+                geometry.emplace(std::move(packet).Value());
+                const auto captured = geometry->OriginScene();
+                REQUIRE(captured.HasValue());
+                REQUIRE(captured.Value().scene.IsValid());
+                CHECK(captured.Value().origin.Get().Value() == lease.Get().Value());
+                CHECK(captured.Value().scene.camera.position == Math::Vec3{1.25F, 0, 0});
+                REQUIRE(captured.Value().scene.instances.size() == 1);
+                CHECK(captured.Value().scene.instances.front().localToWorld.At(0, 3) == 1.25F);
+            };
             const auto next = std::move(S::SceneDefinitionBuilder{{100}, {1}}).Build().Value();
             REQUIRE(mount->QueueInitialCell(next, request, {boundary.cancellation, boundary.deadline}, revision).HasValue());
+            REQUIRE(geometry);
             const auto waiting = mount->ReconcileInitialCell();
             REQUIRE(waiting.HasValue());
             CHECK_FALSE(waiting.Value());
@@ -333,6 +384,8 @@ namespace Horo::WorldCook {
             const auto current = parent.ActiveScene();
             REQUIRE(current);
             REQUIRE(S::FindStreamedSceneInstance(*current, successor, selected, epoch));
+            CHECK_FALSE(parent.IsInitialStreamedCandidate(*current));
+            CHECK(mount->CaptureInitialGeometry(*current, cameraEntity.object, drawObjects, primitives, *renderer).HasError());
             CHECK(mount->Anchors(*current).empty());
             const auto active = mount->ReconcileInitialCell();
             REQUIRE(active.HasValue());
@@ -340,8 +393,11 @@ namespace Horo::WorldCook {
             REQUIRE(mount->Anchors(*current).size() == 1);
             CHECK(mount->Anchors(*current).front() == anchors.front());
             CHECK_FALSE(old.IsCurrent());
+            CHECK(geometry->OriginScene().HasValue());
+            renderer->Shutdown();
             mount.reset();
             CHECK_FALSE(parent.ActiveScene());
+            CHECK(geometry->OriginScene().HasError());
         }
         SECTION("An initial cell conflict rejects the private root and retires the mount operation") {
             const auto old = *parent.ActiveScene();

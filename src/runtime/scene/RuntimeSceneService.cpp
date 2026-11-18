@@ -856,6 +856,12 @@ namespace Horo::Runtime {
                active_.scene.get() != &candidate;
     }
 
+    /** @copydoc RuntimeSceneService::IsInitialStreamedCandidate */
+    bool RuntimeSceneService::IsInitialStreamedCandidate(const RuntimeSceneView &candidate) const noexcept {
+        return std::this_thread::get_id() == restoreRetirementOwner_ && mutatingLifecycle_ && initialStreamedCommands_ && pending_.scene &&
+               candidate.IsCurrent() && candidate.SameIncarnation(pending_.scene->View());
+    }
+
     /** @copydoc RuntimeSceneService::ValidateInitialStreamedAdmission */
     Result<void> RuntimeSceneService::ValidateInitialStreamedAdmission(const SceneRuntimeId runtime,
                                                                        const CancellationToken &cancellation) const {

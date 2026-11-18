@@ -467,6 +467,7 @@ namespace Horo::Application::Internal {
             ActiveCell cell;
             WS::StreamingSchedulerReservation reservation;
             std::optional<Runtime::ScenePublicationReceipt> publication;
+            std::shared_ptr<const InitialCellAuthority> authority;
         };
 
         /** @brief Loads verified Core ECS content through the actual mounted planner and residency ledgers. */
@@ -750,10 +751,11 @@ namespace Horo::Application::Internal {
                                                               .cancellation = boundary.cancellation,
                                                               .ownerCancellation = state_->pendingLifetime->Token()};
             auto authority = std::make_shared<const InitialCellAuthority>(cell.identity, residency, scheduler, *reservation, boundary);
-            state_->pendingCell.emplace(State::PendingCell{std::move(data.source), std::move(data.cell), *reservation, {}});
+            state_->pendingCell.emplace(
+                State::PendingCell{std::move(data.source), std::move(data.cell), *reservation, {}, std::move(authority)});
             auto &pending = *state_->pendingCell;
             auto queued = Runtime::QueuePreparationWithInitialStreamedScene(state_->scene, parent, pending.cell.address, data.payload,
-                                                                            request, std::move(authority));
+                                                                            request, pending.authority);
             if (queued.HasError())
                 return reject(queued.ErrorValue());
             pending.publication.emplace(std::move(queued).Value());
@@ -837,6 +839,24 @@ namespace Horo::Application::Internal {
                                                                    Runtime::PrimitiveMeshCache &primitives,
                                                                    Render::RenderOriginSceneAdapter &renderer,
                                                                    const Render::RenderOriginCoordinateBasis basis) const {
+        return CaptureScopedGeometry(parent, camera, meshes, primitives, renderer, basis, GeometryScope::Active);
+    }
+
+    /** @copydoc MountedWorld::CaptureInitialGeometry */
+    Result<MountedWorldRenderPacket> MountedWorld::CaptureInitialGeometry(const Runtime::RuntimeSceneView &candidate,
+                                                                          const Runtime::SceneObjectId camera,
+                                                                          const std::span<const Runtime::SceneObjectId> meshes,
+                                                                          Runtime::PrimitiveMeshCache &primitives,
+                                                                          Render::RenderOriginSceneAdapter &renderer) const {
+        return CaptureScopedGeometry(candidate, camera, meshes, primitives, renderer, Render::RenderOriginCoordinateBasis::OriginRelative,
+                                     GeometryScope::PrivateStartup);
+    }
+
+    /** @copydoc MountedWorld::CaptureScopedGeometry */
+    Result<MountedWorldRenderPacket> MountedWorld::CaptureScopedGeometry(
+        const Runtime::RuntimeSceneView &parent, const Runtime::SceneObjectId camera, const std::span<const Runtime::SceneObjectId> meshes,
+        Runtime::PrimitiveMeshCache &primitives, Render::RenderOriginSceneAdapter &renderer,
+        const Render::RenderOriginCoordinateBasis basis, const GeometryScope scope) const {
         using Output = Result<MountedWorldRenderPacket>;
         constexpr std::size_t MaximumSelectedMeshes = 64;
         if (meshes.size() > MaximumSelectedMeshes)
@@ -846,22 +866,32 @@ namespace Horo::Application::Internal {
                 MakeError(WS::WorldArtifactErrors::Invalid, "World geometry requires explicit unique ordered object identities."));
         if (!parent.IsCurrent())
             return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale));
-        const auto current = state_->scene.ActiveScene();
-        if (!current || !parent.SameIncarnation(*current))
-            return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale));
-        const auto anchors = Anchors(parent);
-        if (anchors.empty())
+        const State::ActiveCell *scoped = nullptr;
+        if (scope == GeometryScope::PrivateStartup) {
+            const auto &pending = state_->pendingCell;
+            if (!pending || !state_->scene.IsInitialStreamedCandidate(parent) || parent.RuntimeId() != pending->cell.address.parent)
+                return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale));
+            scoped = &pending->cell;
+            if (const auto ready = pending->authority->ValidatePublication(scoped->identity, scoped->fence); ready.HasError())
+                return Output::Failure(ready.ErrorValue());
+        } else {
+            const auto current = state_->scene.ActiveScene();
+            if (!current || !parent.SameIncarnation(*current))
+                return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale));
+            if (state_->activeCell)
+                scoped = &*state_->activeCell;
+        }
+        if (!scoped || scoped->anchors.empty())
             return Output::Failure(
                 MakeError(WS::WorldArtifactErrors::Unsupported, "No canonical World positions are published for this selected cell."));
         if (!renderer.UsesOrigin(Origin()))
             return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale, "The renderer belongs to another World origin."));
 
-        const auto &active = *state_->activeCell;
-        const auto baseline = Runtime::FindStreamedSceneInstance(parent, active.address, active.identity, active.fence.epoch);
+        const auto baseline = Runtime::FindStreamedSceneInstance(parent, scoped->address, scoped->identity, scoped->fence.epoch);
         if (!baseline)
             return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale));
         const auto lookup = [&](const Runtime::SceneObjectId object) {
-            return FindAnchoredGeometryEntity(parent, *baseline, anchors, active.initialLocalPositions, object);
+            return FindAnchoredGeometryEntity(parent, *baseline, scoped->anchors, scoped->initialLocalPositions, object);
         };
         const auto cameraEntity = lookup(camera);
         if (cameraEntity.HasError())

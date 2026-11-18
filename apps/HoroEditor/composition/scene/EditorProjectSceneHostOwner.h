@@ -202,9 +202,20 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         /** @brief Activates selected World geometry before ordinary Play becomes externally visible. */
         [[nodiscard]] Result<void> CompleteWorldStartup(const Runtime::FrameContext &frame);
 
+        /** @brief Creates the renderer participant bound to this exact World and frontend view. */
+        [[nodiscard]] Result<std::unique_ptr<Render::RenderOriginSceneAdapter>> PrepareWorldRenderer(Render::RenderViewId view) const;
+
+        /** @brief Queues the selected mounted World privately so the native participant can observe its canonical geometry. */
+        [[nodiscard]] Result<void> QueueMountedXrScene(const Runtime::RuntimeSceneDefinition &definition,
+                                                       const MountedWorldStartup &boundary);
+
+        /** @brief Returns a retained origin-relative borrow for only this Play host's exact startup candidate. */
+        [[nodiscard]] Result<std::shared_ptr<const Render::RenderOriginLocalScene>> CaptureMountedXrGeometry(
+            const Runtime::RuntimeSceneView &candidate);
+
         /** @copydoc Editor::EditorPlaySceneHost::UsesMountedViewport */
         bool UsesMountedViewport() const noexcept override {
-            return worldViewport_.has_value();
+            return worldViewport_.has_value() && !selectedXrHost_;
         }
 
         /** @copydoc Editor::EditorPlaySceneHost::BindViewportPrimitiveCache */
@@ -370,7 +381,13 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 return added;
             selectedXrHost_ = policy.xrHost;
             if (policy.xrHost) {
-                if (auto added = scenes_->AddActivationParticipant(policy.xrHost->MakeSceneParticipant()); added.HasError())
+                Editor::EditorMountedXrGeometryCapture mounted;
+                if (worldViewport_)
+                    mounted = [this](const Runtime::RuntimeSceneView &candidate) {
+                        return CaptureMountedXrGeometry(candidate);
+                    };
+                auto participant = policy.xrHost->MakeSceneParticipant(std::move(mounted));
+                if (auto added = scenes_->AddActivationParticipant(std::move(participant)); added.HasError())
                     return added;
             }
             // Last participant: sealing the UI generation must be followed only by the

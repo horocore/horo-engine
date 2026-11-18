@@ -3714,7 +3714,7 @@ namespace Horo::Editor {
             screenHost.Services().Register<Runtime::RuntimeSceneService>(*runtimeSceneService);
             screenHost.Services().Register<EditorProjectPlaySceneFactory>(playSceneFactory);
             const EditorMountedWorldPlaySelected mountedPlaySelected;
-            if (mountedViewport)
+            if (mountedViewport && !SelectedEditorPlayHost(p.presentation.composition))
                 screenHost.Services().RegisterConst<EditorMountedWorldPlaySelected>(mountedPlaySelected);
             screenHost.Services().Register<EditorProjectPrefabStageFactory>(prefabStageFactory);
             screenHost.Services().RegisterConst<Prefab::PrefabMetricHandles>(p.telemetry.prefab);
