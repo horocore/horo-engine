@@ -18,7 +18,7 @@ namespace Horo::XR::OpenXRInternal {
     struct NativeSessionEventObservation final {
         bool morePending{};
         bool bindingsChanged{};
-        bool originChanged{};
+        std::optional<XRReferenceSpaceChange> referenceChange;
         bool exitRequested{};
         NativeSessionEventLoss loss{NativeSessionEventLoss::None};
     };
@@ -71,6 +71,13 @@ namespace Horo::XR::OpenXRInternal {
          */
         [[nodiscard]] Result<void> ProcessEvent(const XrEventDataBuffer &buffer, const XrSession_T *session,
                                                 NativeSessionEventObservation &observation);
+
+        /** @brief Validates same-session native recenter/bounds evidence without exposing native poses.
+         * @param event Runtime reference notification already fenced to the current native session.
+         * @return A supported typed notification, no observation for an unadmitted extension reference, or malformed error.
+         */
+        [[nodiscard]] Result<std::optional<XRReferenceSpaceChange>> ReadReferenceChange(
+            const XrEventDataReferenceSpaceChangePending &event) const;
 
         [[nodiscard]] bool ImagesRetired() const noexcept;
         [[nodiscard]] static Error Failure(const char *operation, XrResult result);

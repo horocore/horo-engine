@@ -83,8 +83,7 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         if (current.Value().maximumActions < preparation_->maximumActions)
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
-        if (tracking_.request &&
-            current.Value().maximumSpaces < tracking_.actions.size() + 2 + (tracking_.request->worldFromBase.has_value() ? 1U : 0U))
+        if (tracking_.request && current.Value().maximumSpaces < tracking_.SpaceCount())
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
         if (auto spaces = tracking_.BindSpaces(session); spaces.HasError())
             return spaces;

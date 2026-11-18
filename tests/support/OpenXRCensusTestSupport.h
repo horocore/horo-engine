@@ -94,6 +94,8 @@ namespace Horo::Tests::OpenXR {
                 values[0] = XR_REFERENCE_SPACE_TYPE_VIEW;
                 if (*count > 1)
                     values[1] = active->duplicateSpaces ? XR_REFERENCE_SPACE_TYPE_VIEW : XR_REFERENCE_SPACE_TYPE_LOCAL;
+                if (*count > 2)
+                    values[2] = XR_REFERENCE_SPACE_TYPE_STAGE;
             }
             return Record("spaces");
         }

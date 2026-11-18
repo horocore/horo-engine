@@ -56,6 +56,7 @@ namespace Horo::XR::OpenXRInternal {
         XRSpaceKind base{XRSpaceKind::Local};         /**< Only observed Local or Stage; never an implicit World alias. */
         std::optional<Math::Transform> worldFromBase; /**< Explicit rigid mapping of native base coordinates into authored World.
                                                        Its inverse creates a distinct native World reference space; absence grants none. */
+        bool alternateReferenceAvailable{};           /**< Observed support for the other Local/Stage reference. */
     };
 
     /** @brief Synchronously borrowed native creation request; dispatch and catalogs stay inside the host boundary. */
@@ -250,6 +251,12 @@ namespace Horo::XR::OpenXRInternal {
          * @pre No sampling operation is active; the borrow ends before another owner operation or retirement.
          */
         [[nodiscard]] Result<XrSpace> BorrowPresentationReference(const XRCoordinateSpace &space) const;
+
+        /** @brief Copies the exact current View/Local/Stage identities and Stage bounds without native calls.
+         * @param session Exact bound session on the control lane.
+         * @return Current copied evidence or original authority failure; no live native objects are exposed.
+         */
+        [[nodiscard]] Result<XRReferenceSpaceSnapshot> References(const XRSessionId &session) const;
         /** @brief Quiescent idempotent reverse-order retirement; failed destruction retains exact handles for retry.
          * @return Success or native retirement failure. No further sync/profile query is admitted after Close begins.
          */
@@ -306,6 +313,7 @@ namespace Horo::XR::OpenXRInternal {
             PFN_xrGetActionStateVector2f vectorState{};
             PFN_xrGetActionStatePose poseState{};
             PFN_xrCreateReferenceSpace createReference{};
+            PFN_xrGetReferenceSpaceBoundsRect getBounds{};
             PFN_xrCreateActionSpace createSpace{};
             PFN_xrDestroySpace destroySpace{};
             PFN_xrLocateSpace locate{};
@@ -415,9 +423,12 @@ namespace Horo::XR::OpenXRInternal {
             XrSpace base{XR_NULL_HANDLE};
             XrSpace view{XR_NULL_HANDLE};
             XrSpace world{XR_NULL_HANDLE};
+            XrSpace alternate{XR_NULL_HANDLE};
+            std::optional<XRStageBounds> stageBounds;
             XRCoordinateSpace baseIdentity;
             XRCoordinateSpace viewIdentity;
             XRCoordinateSpace worldIdentity;
+            XRCoordinateSpace alternateIdentity;
             std::array<XRCoordinateSpace, 2> eyeIdentities{};
             std::uint32_t nextSpaceSlot{}; /**< SAME bound per-session semantic space allocator, after native child slots. */
             std::uint32_t generation{};    /**< Non-wrapping space incarnation; retained across Close. */
@@ -432,6 +443,10 @@ namespace Horo::XR::OpenXRInternal {
             [[nodiscard]] Result<std::uint32_t> SuggestPoses(const TrackingContext &context, const Profile &profile,
                                                              std::span<const NativePoseActionPath> paths,
                                                              std::span<XrActionSuggestedBinding> output) const;
+            /** @brief Bounded number of native and semantic slots required before eye views. */
+            [[nodiscard]] std::size_t SpaceCount() const noexcept;
+            /** @brief Queries finite Stage bounds once at cold preparation, leaving native children owned on failure. */
+            [[nodiscard]] Result<void> ReadStageBounds(const TrackingContext &context);
             /** @brief Creates native reference/action spaces without publishing Horo IDs. */
             [[nodiscard]] Result<void> PrepareSpaces(const TrackingContext &context);
             /** @brief Creates the calibrated World child, retaining any native prefix on failure. */

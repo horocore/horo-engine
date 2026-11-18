@@ -250,6 +250,11 @@ namespace Horo::Application::Internal {
          * @param candidate Current lifecycle-issued session. @return Owned typed identity or original stale/unavailable error.
          */
         [[nodiscard]] Result<XR::XRCoordinateSpace> WorldSpace(const XR::XRSessionId &candidate) const;
+        /** @brief Copies the current native reference snapshot.
+         * @param candidate Exact active XR session.
+         * @return Bounded value evidence or a currentness/availability error.
+         */
+        [[nodiscard]] Result<XR::XRReferenceSpaceSnapshot> References(const XR::XRSessionId &candidate) const;
         /** @brief Borrows only this owner's current calibrated native World space for synchronous compositor dispatch.
          * @param space Exact typed World/session/origin identity, not a caller-selected native handle.
          * @return Fenced native borrow; no borrow survives another owner operation or retirement.
@@ -375,6 +380,7 @@ namespace Horo::Application::Internal {
             XR::XRHandGestureCandidates gestures;
             XR::XRTrackingSnapshotRevision gestureRevision;
             XR::XRCapabilityState handAvailability{XR::XRCapabilityState::Unsupported};
+            XR::XRCapabilityState stageAvailability{XR::XRCapabilityState::Unsupported};
             std::array<XR::XRActiveInteractionProfile, 2> profiles{}; /**< Actual post-attachment preparation census. */
         };
 

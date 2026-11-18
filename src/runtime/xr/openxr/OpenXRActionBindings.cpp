@@ -168,6 +168,10 @@ namespace Horo::XR::OpenXRInternal {
             return result;
         if (auto result = Load(request.getProc, instance, "xrCreateReferenceSpace", createReference); result.HasError())
             return result;
+        if (request.tracking->base == XRSpaceKind::Stage || request.tracking->alternateReferenceAvailable) {
+            if (auto result = Load(request.getProc, instance, "xrGetReferenceSpaceBoundsRect", getBounds); result.HasError())
+                return result;
+        }
         if (auto result = Load(request.getProc, instance, "xrCreateActionSpace", createSpace); result.HasError())
             return result;
         if (auto result = Load(request.getProc, instance, "xrLocateSpace", locate); result.HasError())

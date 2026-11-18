@@ -531,6 +531,22 @@ Reference-space changes, recentering, bounds changes, and world-origin rebasing
 are translated through an explicit adapter. Runtime tracking state never mutates
 authoritative gameplay transforms from a native callback.
 
+The selected OpenXR Play owner prepares distinct View and Local spaces and, when
+requested and admitted by the runtime census and host space budget, a Stage
+space. The Stage snapshot carries the optional finite X/Z play rectangle from
+the runtime's natural Stage origin. Space identities and bounds are copied by
+the exact published session with no native calls on read.
+
+An admitted reference-change notification carries the session, reference kind,
+effective runtime time, and whether its relative pose was available. The
+selected Play owner immediately closes the old frame and Input admission,
+drains its actual native session, and waits for the effective runtime time
+before permitting replacement. A fresh Play publication acquires new space
+identities and measures its Stage rectangle again. The legacy editor scene
+continues to derive its tracking calibration from the authored float scene
+root. A canonical world-origin composition must project both the tracking
+anchor and XR geometry from the same world owner and origin generation.
+
 ## Rendering And Presentation
 
 The OpenXR backend supplies view descriptors and generation-safe runtime-owned

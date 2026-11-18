@@ -78,13 +78,39 @@ namespace Horo::Application::Internal {
                                                         const OpenXRApplicationBindings &bindings,
                                                         const NativeTrackingSpaceRequest &tracking) {
         // Retain the caller's original tracking plan before admission and loader callbacks can reenter foreign code.
-        const NativeTrackingSpaceRequest admittedTracking = tracking;
+        NativeTrackingSpaceRequest admittedTracking = tracking;
         if (auto current = Current(); current.HasError())
             return current;
         if (input_.native || input_.projection || input_.bindings)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
-        if (auto census = PrepareSession(); census.HasError())
+        const auto census = PrepareSession();
+        if (census.HasError())
             return Result<void>::Failure(census.ErrorValue());
+        const auto spaces = std::span{census.Value().spaces}.first(census.Value().spaceCount);
+        const auto hasReference = [&](XrReferenceSpaceType type) {
+            return std::ranges::find(spaces, type) != spaces.end();
+        };
+        if (!hasReference(XR_REFERENCE_SPACE_TYPE_VIEW) || !hasReference(XR_REFERENCE_SPACE_TYPE_LOCAL))
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
+        const auto features = settings_.Features();
+        const auto stage = std::ranges::find(features, XRCapability::StageSpace, &XRFeatureRequest::capability);
+        const bool stageRequired =
+            admittedTracking.base == XRSpaceKind::Stage || (stage != features.end() && stage->kind == XRFeatureRequirementKind::Required);
+        const bool wantsStage = stageRequired || (stage != features.end() && stage->kind == XRFeatureRequirementKind::Optional);
+        // The two eyes reserve space IDs from this same budget, even though they create no native XrSpace.
+        constexpr std::size_t baselineSpaces = 5;  // Local, View, calibrated World, and two eye identities.
+        const auto minimumSpaces = baselineSpaces + bindings.poses.size();
+        const auto capacity = settings_.Limits().maximumSpaces;
+        if (capacity < minimumSpaces)
+            return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
+        const bool stageObserved = hasReference(XR_REFERENCE_SPACE_TYPE_STAGE);
+        if (stageRequired && !stageObserved)
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
+        if (stageRequired && capacity == minimumSpaces)
+            return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
+        const bool stageAvailable = stageObserved && capacity > minimumSpaces;
+        input_.stageAvailability = stageAvailable ? XRCapabilityState::Available : XRCapabilityState::Unavailable;
+        admittedTracking.alternateReferenceAvailable = wantsStage && stageAvailable;
         const auto discovery = native_->BorrowDiscovery(selection_.attempt);
         if (discovery.HasError())
             return Result<void>::Failure(discovery.ErrorValue());
@@ -287,6 +313,15 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRApplicationSession::PreparedBindings */
     const XRResolvedActionBindings *OpenXRApplicationSession::PreparedBindings() const noexcept {
         return std::this_thread::get_id() == lane_ && input_.bindings ? &*input_.bindings : nullptr;
+    }
+
+    /** @copydoc OpenXRApplicationSession::References */
+    Result<XRReferenceSpaceSnapshot> OpenXRApplicationSession::References(const XRSessionId &candidate) const {
+        if (auto current = Current(); current.HasError())
+            return Result<XRReferenceSpaceSnapshot>::Failure(current.ErrorValue());
+        if (!input_.native)
+            return Result<XRReferenceSpaceSnapshot>::Failure(MakeError(XRErrors::OperationUnavailable));
+        return input_.native->References(candidate);
     }
 
     /** @copydoc OpenXRApplicationSession::WorldSpace */

@@ -36,6 +36,7 @@ namespace Horo::Application::Internal {
                     state_->Retire(*host_);
                 return;
             }
+            host_->lastReferenceChange_.reset();
             state_->published = true;
             host_->input_.admitted = true;
         }
@@ -264,6 +265,10 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         if (auto finished = host.FinishFrameResources(activatedSession.Value(), facts.capabilities); finished.HasError())
             return Result<void>::Failure(finished.ErrorValue());
+        auto observedReferences = host.composition_.session.References(session);
+        if (observedReferences.HasError())
+            return Result<void>::Failure(observedReferences.ErrorValue());
+        references = std::move(observedReferences).Value();
         if (auto valid = Validate(host); valid.HasError())
             return Result<void>::Failure(valid.ErrorValue());
         return Result<void>::Success();

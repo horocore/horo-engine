@@ -92,7 +92,7 @@ namespace Horo::Application::Internal {
         Result<XRCapabilitySnapshot> ProjectionCapabilities(const NativeSystemCensus &observed, const NativeSessionCensus &session,
                                                             const ProjectionTargets &targets, XRSystemId system,
                                                             XRCapabilityRevision revision, const XRSystemLimits &budget,
-                                                            XRCapabilityState handTracking) {
+                                                            XRCapabilityState handTracking, XRCapabilityState stageSpace) {
             const auto spaces = std::span{session.spaces}.first(session.spaceCount);
             const auto hasSpace = [&](XrReferenceSpaceType space) {
                 return std::ranges::find(spaces, space) != spaces.end();
@@ -111,7 +111,7 @@ namespace Horo::Application::Internal {
             fact(XRCapability::PositionTracking, observed.system.trackingProperties.positionTracking == XR_TRUE);
             fact(XRCapability::ViewSpace, hasSpace(XR_REFERENCE_SPACE_TYPE_VIEW));
             fact(XRCapability::LocalSpace, hasSpace(XR_REFERENCE_SPACE_TYPE_LOCAL));
-            fact(XRCapability::StageSpace, hasSpace(XR_REFERENCE_SPACE_TYPE_STAGE));
+            descriptor.states[static_cast<std::size_t>(XRCapability::StageSpace)] = stageSpace;
             // Action/Input paths were actually prepared; frame/event/swapchain protocol dispatch was resolved above.
             // Native creation and execution still belong to the subsequent resource stages and real event/frame loop.
             for (auto capability :
@@ -192,7 +192,7 @@ namespace Horo::Application::Internal {
         if (revision.HasError())
             return Outcome::Failure(revision.ErrorValue());
         auto capabilities = ProjectionCapabilities(observed, session, targets.Value(), observedSystem.Value(), revision.Value(), budget,
-                                                   input_.handAvailability);
+                                                   input_.handAvailability, input_.stageAvailability);
         if (capabilities.HasError())
             return Outcome::Failure(capabilities.ErrorValue());
         auto plan = AdmitXRProjectSettings(settings_, {authorities_.configuration.Snapshot().Revision(), *preflight_, selection_,

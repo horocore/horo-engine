@@ -198,9 +198,24 @@ namespace Horo::Application::Internal {
                 scene_->Retire(*this);
             return false;
         }
-        if (observed.bindingsChanged || observed.originChanged) {
+        if (observed.bindingsChanged) {
             RevokeEventAdmission();
             return false;
+        }
+        if (observed.referenceChange && scene_ && scene_->projection) {
+            if (observed.referenceChange->kind == XRSpaceKind::Stage) {
+                const auto decision = scene_->projection->plan.Decision(XRCapability::StageSpace).state;
+                if (decision != XRFeatureDecisionState::Required && decision != XRFeatureDecisionState::OptionalEnabled)
+                    return false;
+            }
+            if (!scene_->retiring) {
+                lastReferenceChange_ = observed.referenceChange;
+                // Retire through normal exit/frame drain before a replacement can sample the new definition.
+                scene_->Retire(*this);
+            } else if (lastReferenceChange_ && observed.referenceChange->effectiveTime > lastReferenceChange_->effectiveTime) {
+                // A subsequent queued change can extend the cold replacement barrier.
+                lastReferenceChange_ = observed.referenceChange;
+            }
         }
         return !observed.morePending;
     }
@@ -224,6 +239,29 @@ namespace Horo::Application::Internal {
         if (!input_.coordinator)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         return composition_.session.AppendInput(sessions_, *input_.coordinator, tracking_, clock_, context, input_.origin, frame);
+    }
+
+    /** @copydoc OpenXRPlayHost::ReadReferences */
+    Result<XRReferenceSpaceSnapshot> OpenXRPlayHost::ReadReferences(XRSessionId session) const {
+        using Outcome = Result<XRReferenceSpaceSnapshot>;
+        if (auto lane = Lane(); lane.HasError())
+            return Outcome::Failure(lane.ErrorValue());
+        const auto state = sessions_.Snapshot();
+        if (auto valid = ValidateXRSession(session, state.session); valid.HasError())
+            return Outcome::Failure(valid.ErrorValue());
+        if (state.state == XRSessionState::Lost || !scene_ || !scene_->published || scene_->retiring)
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+        if (eventsPending_)
+            return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
+        return Outcome::Success(scene_->references);
+    }
+
+    /** @copydoc OpenXRPlayHost::ReadReferenceChange */
+    std::optional<XRReferenceSpaceChange> OpenXRPlayHost::ReadReferenceChange(XRSessionId session) const noexcept {
+        if (std::this_thread::get_id() != lane_ || busy_ || closing_ || !lastReferenceChange_ || lastReferenceChange_->session != session)
+            return std::nullopt;
+        const auto active = sessions_.Snapshot().session;
+        return active.IsValid() && active != session ? std::nullopt : lastReferenceChange_;
     }
 
     /** @copydoc OpenXRPlayHost::ReadHandGestures */

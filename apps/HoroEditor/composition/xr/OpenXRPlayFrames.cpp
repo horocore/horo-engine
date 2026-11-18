@@ -375,6 +375,14 @@ namespace Horo::Application::Internal {
         }
         if (!lost && host.events_ && host.events_->Running())
             return Output::Success(false);
+        if (!lost && !host.closing_ && host.lastReferenceChange_ && host.lastReferenceChange_->session == candidate) {
+            // Do not create a replacement or measure fresh Stage bounds before the runtime's effective XrTime.
+            const auto now = host.clock_.PresentationNow();
+            if (now.HasError())
+                return Output::Failure(now.ErrorValue());
+            if (now.Value().Nanoseconds() < host.lastReferenceChange_->effectiveTime.Nanoseconds())
+                return Output::Success(false);
+        }
         return RetireGraphics(host, lost);
     }
 

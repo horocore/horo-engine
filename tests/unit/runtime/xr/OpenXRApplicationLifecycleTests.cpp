@@ -87,7 +87,8 @@ namespace Horo::Tests::OpenXRApplication {
 
             explicit ApplicationFixture(const bool render = false, const std::int64_t maximumSpaces = 5,
                                         const XR::XRProjectFeaturePolicy depth = XR::XRProjectFeaturePolicy::Unrequested,
-                                        const XR::XRProjectFeaturePolicy hands = XR::XRProjectFeaturePolicy::Unrequested) {
+                                        const XR::XRProjectFeaturePolicy hands = XR::XRProjectFeaturePolicy::Unrequested,
+                                        const XR::XRProjectFeaturePolicy stage = XR::XRProjectFeaturePolicy::Unrequested) {
                 ConfigurationResolutionRequest request;
                 request.invocation.emplace(SettingKey{"xr.enabled"}, ConfigurationInputValue{true, std::nullopt});
                 if (depth != XR::XRProjectFeaturePolicy::Unrequested) {
@@ -104,6 +105,9 @@ namespace Horo::Tests::OpenXRApplication {
                     ++script.native.extensionCount;
                     script.census.handsSupported = true;
                 }
+                if (stage != XR::XRProjectFeaturePolicy::Unrequested)
+                    request.invocation.emplace(SettingKey{"xr.features.stage_space"},
+                                               ConfigurationInputValue{static_cast<std::int64_t>(stage), std::nullopt});
                 REQUIRE(bindings->poses.empty());
                 // This zero-pose Play composition reserves five canonical spaces before native activation.
                 request.invocation.emplace(SettingKey{"xr.limits.spaces"}, ConfigurationInputValue{maximumSpaces, std::nullopt});
@@ -807,6 +811,118 @@ namespace Horo::Tests::OpenXRApplication {
         }
         fixture.scheduler->Shutdown();
         scene->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+    }
+
+    TEST_CASE("Real installed Play recenter retires reference identities and replacement rereads Stage bounds",
+              "[xr][application][play][spaces]") {
+        using enum XR::XRProjectFeaturePolicy;
+        ApplicationFixture fixture{true, 6, Unrequested, Unrequested, Required};
+        fixture.script.census.spaces = 3;
+        auto first = PublishPlay(fixture);
+        const auto session = *fixture.session->RetainedSession();
+        const auto references = RequireValue(fixture.play->ReadReferences(session));
+        REQUIRE(references.stage);
+        REQUIRE(references.stageBounds);
+        CHECK(references.stageBounds->widthMeters == 3.0F);
+        CHECK(fixture.script.actions.tracking.boundsReads == 1);
+        unsigned admissionCalls = 0;
+        fixture.onCheckAdmission = [&] {
+            ++admissionCalls;
+        };
+        CHECK(fixture.play->ReadReferences(session).HasValue());
+        CHECK(fixture.script.actions.tracking.boundsReads == 1);
+        CHECK(admissionCalls == 0);
+        fixture.onCheckAdmission = {};
+
+        XrEventDataReferenceSpaceChangePending change{XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING};
+        change.session = fixture.script.events.session;
+        change.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE;
+        change.changeTime = fixture.script.clock.sample + 100;
+        fixture.script.events.referenceChange = change;
+        REQUIRE(fixture.play->PollEvents().HasValue());
+        CHECK_FALSE(fixture.play->UsesXrScene());
+        const auto stale = fixture.play->ReadReferences(session);
+        REQUIRE(stale.HasError());
+        CHECK(stale.ErrorValue().code.Value() == XR::XRErrors::IdentityStale.code.Value());
+        const auto observed = fixture.play->ReadReferenceChange(session);
+        REQUIRE(observed);
+        CHECK(observed->kind == XR::XRSpaceKind::Stage);
+        CHECK(observed->effectiveTime.Nanoseconds() == change.changeTime);
+        CHECK_FALSE(observed->relativePoseKnown);
+        CHECK(fixture.script.events.running);
+
+        REQUIRE(fixture.play->PollEvents().HasValue());
+        CHECK(fixture.script.events.exits == 1);
+        fixture.script.events.Push(XR_SESSION_STATE_STOPPING);
+        fixture.script.events.Push(XR_SESSION_STATE_IDLE);
+        REQUIRE(fixture.play->PollEvents().HasValue());
+        CHECK(fixture.script.events.ends == 1);
+        CHECK(fixture.script.actions.tracking.spaces > 0);
+        fixture.script.clock.sample = change.changeTime;
+        REQUIRE(fixture.play->PollEvents().HasValue());
+        CHECK(fixture.script.actions.tracking.spaces == 0);
+        first->Shutdown();
+        auto cutoff = std::make_unique<AppInputSample>(*fixture.play);
+        REQUIRE(fixture.scheduler->AddParticipant(std::move(cutoff)).HasValue());
+        REQUIRE(fixture.scheduler->Startup().HasValue());
+        REQUIRE(fixture.scheduler->RunFrame().HasValue());  // Real neutral Input commit before replacement reservations.
+        fixture.script.actions.tracking.bounds.width = 5.0F;
+        auto next = RequireValue(Runtime::RuntimeScene::Create(fixture.definition, {2}));
+        auto participant = fixture.play->MakeSceneParticipant();
+        auto replacement = RequireValue(participant->Prepare(fixture.definition, next->View()));
+        REQUIRE(replacement->ValidatePublication().HasValue());
+        replacement->Publish();
+        const auto current = *fixture.session->RetainedSession();
+        CHECK(current != session);
+        const auto replaced = RequireValue(fixture.play->ReadReferences(current));
+        REQUIRE(replaced.stage);
+        REQUIRE(replaced.stageBounds);
+        CHECK(replaced.stage->id != references.stage->id);
+        CHECK(replaced.stageBounds->widthMeters == 5.0F);
+        CHECK(references.stageBounds->widthMeters == 3.0F);
+        CHECK(fixture.script.actions.tracking.boundsReads == 2);
+        CHECK(fixture.play->ReadReferences(session).HasError());
+        CHECK_FALSE(fixture.play->ReadReferenceChange(session));
+        replacement->Shutdown();
+        fixture.scheduler->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+    }
+
+    TEST_CASE("Real installed Play does not create or query a disabled Stage", "[xr][application][play][spaces]") {
+        using enum XR::XRProjectFeaturePolicy;
+        ApplicationFixture fixture{true, 6, Unrequested, Unrequested, Disabled};
+        fixture.script.census.spaces = 3;
+        auto candidate = PublishPlay(fixture);
+        const auto session = *fixture.session->RetainedSession();
+        const auto references = RequireValue(fixture.play->ReadReferences(session));
+        CHECK_FALSE(references.stage);
+        CHECK_FALSE(references.stageBounds);
+        CHECK(fixture.script.actions.tracking.boundsReads == 0);
+        XrEventDataReferenceSpaceChangePending change{XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING};
+        change.session = fixture.script.events.session;
+        change.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE;
+        change.changeTime = fixture.script.clock.sample + 100;
+        fixture.script.events.referenceChange = change;
+        REQUIRE(fixture.play->PollEvents().HasValue());
+        CHECK(fixture.play->UsesXrScene());
+        CHECK_FALSE(fixture.play->ReadReferenceChange(session));
+        candidate->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+    }
+
+    TEST_CASE("Real installed Play rejects an admitted Stage beyond its reference-space budget", "[xr][application][play][spaces]") {
+        using enum XR::XRProjectFeaturePolicy;
+        ApplicationFixture fixture{true, 5, Unrequested, Unrequested, Required};
+        fixture.script.census.spaces = 3;
+        fixture.CreatePlay();
+        REQUIRE(fixture.play->SetPlayState(Editor::EditorPlayState::Playing).HasValue());
+        REQUIRE(fixture.play->AttachInput(fixture.InputPort(), fixture.source.Port()).HasValue());
+        auto participant = fixture.play->MakeSceneParticipant();
+        const auto result = participant->Prepare(fixture.definition, fixture.scene->View());
+        REQUIRE(result.HasError());
+        CHECK(result.ErrorValue().code.Value() == XR::XRErrors::CapacityExceeded.code.Value());
+        CHECK(fixture.script.actions.tracking.references.empty());
         REQUIRE(RequireValue(fixture.ClosePlay()));
     }
 

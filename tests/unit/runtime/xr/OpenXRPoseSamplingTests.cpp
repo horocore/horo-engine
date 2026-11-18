@@ -1,6 +1,7 @@
 #include "support/OpenXRApplicationNativeScriptTestSupport.h"
 
 #include <cmath>
+#include <limits>
 
 namespace Horo::Tests::OpenXRAction {
     namespace {
@@ -8,7 +9,7 @@ namespace Horo::Tests::OpenXRAction {
             ActionFixture actions{false};
             const XRWorldOriginRevision origin{IdentityValue<XRWorldOriginRevision>(1)};
 
-            Result<void> Prepare(std::optional<Math::Transform> worldFromBase = std::nullopt) {
+            Result<void> Prepare(std::optional<Math::Transform> worldFromBase = std::nullopt, const bool stageAvailable = false) {
                 actions.script.tracking.enabled = true;
                 const std::array labels{NativeActionLabel{Input::ActionId{"select"}, "Select"}};
                 const std::array setLabels{NativeActionSetLabel{{1}, "Gameplay"}};
@@ -33,7 +34,8 @@ namespace Horo::Tests::OpenXRAction {
                                                      actions.controlPaths,
                                                      {labels, setLabels},
                                                      poses,
-                                                     NativeTrackingSpaceRequest{origin, XRSpaceKind::Local, worldFromBase}});
+                                                     NativeTrackingSpaceRequest{origin, XRSpaceKind::Local, worldFromBase,
+                                                                                stageAvailable}});
             }
 
             void Activate(std::uint32_t maximumSpaces = 3) {
@@ -338,6 +340,56 @@ namespace Horo::Tests::OpenXRAction {
         REQUIRE(fixture.actions.owner.Close().HasValue());
         CHECK(fixture.actions.script.tracking.spaces == 0);
         CHECK(fixture.actions.owner.BorrowWorldSpace(world.Value()).HasError());
+    }
+
+    TEST_CASE("OpenXR Stage bounds are cold, finite, and owned by the issued reference", "[xr][native][spaces]") {
+        TrackingFixture fixture;
+        auto &tracking = fixture.actions.script.tracking;
+        bool valid = true;
+        SECTION("finite room") {}
+        SECTION("real runtime has no measured rectangle") {
+            tracking.boundsResult = XR_SPACE_BOUNDS_UNAVAILABLE;
+            tracking.bounds = {};
+        }
+        SECTION("runtime data is malformed") {
+            tracking.bounds.width = std::numeric_limits<float>::infinity();
+            valid = false;
+        }
+        SECTION("Stage was withdrawn after census") {
+            tracking.boundsResult = XR_ERROR_REFERENCE_SPACE_UNSUPPORTED;
+            valid = false;
+        }
+        const auto prepared = fixture.Prepare(std::nullopt, true);
+        REQUIRE(tracking.boundsReads == 1);
+        if (!valid) {
+            REQUIRE(prepared.HasError());
+            CHECK(prepared.ErrorValue().code.Value() == (tracking.boundsResult == XR_SUCCESS
+                                                             ? XRErrors::OperationInvalid.code.Value()
+                                                             : XRErrors::OperationUnsupported.code.Value()));
+            CHECK(tracking.spaces == 0);
+            return;
+        }
+        REQUIRE(prepared.HasValue());
+        fixture.Activate(4);
+        const auto session = fixture.actions.session.Request().candidate;
+        const auto references = fixture.actions.owner.References(session);
+        REQUIRE(references.HasValue());
+        CHECK(references.Value().view.kind == XRSpaceKind::View);
+        CHECK(references.Value().local.kind == XRSpaceKind::Local);
+        REQUIRE(references.Value().stage.has_value());
+        CHECK(references.Value().stage->kind == XRSpaceKind::Stage);
+        CHECK(references.Value().stage->id.session == session);
+        CHECK(references.Value().stage->id != references.Value().local.id);
+        CHECK(references.Value().stageBounds.has_value() == (tracking.boundsResult == XR_SUCCESS));
+        if (references.Value().stageBounds) {
+            CHECK(references.Value().stageBounds->widthMeters == 3.0F);
+            CHECK(references.Value().stageBounds->depthMeters == 4.0F);
+        }
+        CHECK(fixture.actions.owner.BorrowPresentationReference(references.Value().local).HasValue());
+        CHECK(fixture.actions.owner.BorrowPresentationReference(*references.Value().stage).HasError());
+        REQUIRE(fixture.actions.owner.Close().HasValue());
+        CHECK(fixture.actions.owner.References(session).HasError());
+        CHECK(tracking.spaces == 0);
     }
 
     TEST_CASE("OpenXR calibrated World rejects scale before creating native children", "[xr][native][poses]") {

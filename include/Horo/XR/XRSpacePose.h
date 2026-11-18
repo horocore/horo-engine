@@ -139,6 +139,31 @@ namespace Horo::XR {
         constexpr auto operator<=>(const XRCoordinateSpace &) const noexcept = default;
     };
 
+    /** @brief Finite Stage play rectangle in metres, centered on the natural X/Z origin. */
+    struct XRStageBounds final {
+        float widthMeters{};
+        float depthMeters{};
+    };
+
+    /** @brief Copied reference-space state from one active owner publication. */
+    struct XRReferenceSpaceSnapshot final {
+        XRSessionId session;
+        XRCoordinateSpace view;
+        XRCoordinateSpace local;
+        std::optional<XRCoordinateSpace> stage;   /**< Absent when Stage is unsupported by the selected runtime. */
+        std::optional<XRStageBounds> stageBounds; /**< Absent when the admitted Stage has no available rectangle. */
+    };
+
+    /** @brief Runtime notification of a new natural reference definition, including user recenter or a bounds change.
+     * @details The runtime does not distinguish these reasons. Relative pose coordinates remain within the native adapter.
+     */
+    struct XRReferenceSpaceChange final {
+        XRSessionId session;
+        XRSpaceKind kind{XRSpaceKind::Local};
+        XRRuntimeTime effectiveTime; /**< Locations at this time and later use the new definition. */
+        bool relativePoseKnown{};    /**< Whether the runtime could relate the old and new definitions. */
+    };
+
     /** @brief One optional pose value paired with its independent validity provenance. */
     template <typename Value> struct XRPoseComponent final {
         std::optional<Value> value;                                         /**< Present only for inferred or tracked evidence. */

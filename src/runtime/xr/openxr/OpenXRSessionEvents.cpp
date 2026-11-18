@@ -204,6 +204,36 @@ namespace Horo::XR::OpenXRInternal {
         return Result<void>::Success();
     }
 
+    /** @copydoc OpenXRSessionEvents::ReadReferenceChange */
+    Result<std::optional<XRReferenceSpaceChange>> OpenXRSessionEvents::ReadReferenceChange(
+        const XrEventDataReferenceSpaceChangePending &event) const {
+        using Outcome = Result<std::optional<XRReferenceSpaceChange>>;
+        XRSpaceKind kind;
+        switch (event.referenceSpaceType) {
+            case XR_REFERENCE_SPACE_TYPE_VIEW:
+                kind = XRSpaceKind::View;
+                break;
+            case XR_REFERENCE_SPACE_TYPE_LOCAL:
+                kind = XRSpaceKind::Local;
+                break;
+            case XR_REFERENCE_SPACE_TYPE_STAGE:
+                kind = XRSpaceKind::Stage;
+                break;
+            default:
+                return Outcome::Success(std::nullopt);
+        }
+        const auto time = XRRuntimeTime::Create(event.changeTime);
+        if (time.HasError() || (event.poseValid != XR_TRUE && event.poseValid != XR_FALSE))
+            return Outcome::Failure(MakeError(XRErrors::OperationInvalid, "Malformed OpenXR reference change evidence."));
+        if (event.poseValid == XR_TRUE) {
+            const auto &p = event.poseInPreviousSpace.position;
+            const auto &q = event.poseInPreviousSpace.orientation;
+            if (!Math::IsFinite(Math::Vec3{p.x, p.y, p.z}) || Math::Quaternion{q.x, q.y, q.z, q.w}.TryNormalized().HasError())
+                return Outcome::Failure(MakeError(XRErrors::OperationInvalid, "Malformed OpenXR recenter pose."));
+        }
+        return Outcome::Success(XRReferenceSpaceChange{session_, kind, time.Value(), event.poseValid == XR_TRUE});
+    }
+
     /** @copydoc OpenXRSessionEvents::ProcessEvent */
     Result<void> OpenXRSessionEvents::ProcessEvent(const XrEventDataBuffer &buffer, const XrSession_T *session,
                                                    NativeSessionEventObservation &observation) {
@@ -226,7 +256,13 @@ namespace Horo::XR::OpenXRInternal {
         } else if (buffer.type == XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING) {
             XrEventDataReferenceSpaceChangePending event;
             std::memcpy(&event, &buffer, sizeof(event));
-            observation.originChanged |= event.session == session;
+            if (event.session == session) {
+                auto evidence = ReadReferenceChange(event);
+                if (evidence.HasError())
+                    return Result<void>::Failure(evidence.ErrorValue());
+                if (evidence.Value())
+                    observation.referenceChange = evidence.Value();
+            }
         }
         return Result<void>::Success();
     }
@@ -251,6 +287,11 @@ namespace Horo::XR::OpenXRInternal {
             if (result == XR_SUCCESS) {
                 if (auto applied = ProcessEvent(buffer, current.Value().session, observation); applied.HasError())
                     return Outcome::Failure(applied.ErrorValue());
+            }
+            if (observation.referenceChange) {
+                // Return one typed notice at a time and force another poll to prove the event queue drained.
+                observation.morePending = true;
+                return Outcome::Success(observation);
             }
             if (loss_ == NativeSessionEventLoss::None && !observation.exitRequested) {
                 // Begin promptly after the actual READY event before consuming later native running-state events.

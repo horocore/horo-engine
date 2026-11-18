@@ -151,6 +151,16 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> BuildInputSnapshot(const Runtime::FrameContext &context, const Input::RawInputSnapshot &raw);
         /** @brief Reads gesture candidates from the current focused cutoff. @return Bounded candidates or empty after loss. */
         [[nodiscard]] XR::XRHandGestureCandidates ReadHandGestures() const noexcept;
+        /** @brief Copies current reference identity and bounds from the selected Play session.
+         * @param session Exact published session.
+         * @return Immutable-by-copy evidence or typed stale/unavailable error.
+         */
+        [[nodiscard]] Result<XR::XRReferenceSpaceSnapshot> ReadReferences(XR::XRSessionId session) const;
+        /** @brief Copies the last reference change which triggered retirement of the specified session.
+         * @param session Exact old owner of the notification.
+         * @return Historical value until a newer Play publication replaces it; never grants space access.
+         */
+        [[nodiscard]] std::optional<XR::XRReferenceSpaceChange> ReadReferenceChange(XR::XRSessionId session) const noexcept;
         /** @brief Severs every router/context borrow before the actual App InputRouter is destroyed.
          * @pre Owner lane, outside a dispatch/native callback; Scene producers are already closed.
          * @post Native/image retirement retains only owned typed values/leases, never outgoing Input storage.
@@ -183,6 +193,7 @@ namespace Horo::Application::Internal {
             Runtime::SceneRuntimeId scene;
             std::unique_ptr<Editor::PreparedEditorXrGeometry> geometry;
             std::optional<OpenXRApplicationProjection> projection;
+            XR::XRReferenceSpaceSnapshot references; /**< Same cold native preparation as this Scene candidate. */
             XR::XRSessionId session;
             CancellationSource preparationCancellation; /**< Exact unpublished attempt; revocation cannot affect a replacement. */
             bool activated{};
@@ -298,6 +309,7 @@ namespace Horo::Application::Internal {
         Editor::EditorXrSetupTestId queuedSetupTest_;
         std::uint64_t lastSetupTest_{};
         const std::thread::id lane_{std::this_thread::get_id()};
+        std::optional<XR::XRReferenceSpaceChange> lastReferenceChange_;
         bool eventsBound_{};
         bool eventsPending_{};
         bool busy_{};

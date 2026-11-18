@@ -58,6 +58,57 @@ namespace Horo::Tests::OpenXR {
             }
         };
 
+        TEST_CASE("OpenXR translates only same-session reference notifications with well-formed evidence", "[xr][native][events][spaces]") {
+            EventFixture fixture;
+            XrEventDataReferenceSpaceChangePending expected{XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING};
+            expected.session = fixture.script.session;
+            expected.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE;
+            expected.changeTime = 350;
+            expected.poseValid = XR_TRUE;
+            expected.poseInPreviousSpace.orientation.w = 1.0F;
+            bool observed = true;
+            bool malformed = false;
+            SECTION("known relative pose") {}
+            SECTION("undefined relative pose is ignored") {
+                expected.poseValid = XR_FALSE;
+                expected.poseInPreviousSpace.orientation = {};
+            }
+            SECTION("foreign native session") {
+                expected.session = NativeHandle<XrSession>(77);
+                observed = false;
+            }
+            SECTION("unsupported native space") {
+                expected.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_MAX_ENUM;
+                observed = false;
+            }
+            SECTION("invalid native runtime timestamp") {
+                expected.changeTime = 0;
+                malformed = true;
+            }
+            SECTION("invalid supposedly known relative pose") {
+                expected.poseInPreviousSpace.orientation = {};
+                malformed = true;
+            }
+            fixture.script.referenceChange = expected;
+            const auto outcome = fixture.events.Poll(false);
+            if (malformed) {
+                REQUIRE(outcome.HasError());
+                CHECK(outcome.ErrorValue().code.Value() == XRErrors::OperationInvalid.code.Value());
+                return;
+            }
+            REQUIRE(outcome.HasValue());
+            REQUIRE(outcome.Value().referenceChange.has_value() == observed);
+            if (observed) {
+                const auto &change = *outcome.Value().referenceChange;
+                CHECK(change.session == fixture.session);
+                CHECK(change.kind == XRSpaceKind::Stage);
+                CHECK(change.effectiveTime.Nanoseconds() == 350);
+                CHECK(change.relativePoseKnown == (expected.poseValid == XR_TRUE));
+                CHECK(fixture.script.polls == 1);
+                CHECK_FALSE(fixture.events.Poll(false).Value().referenceChange.has_value());
+            }
+        }
+
         TEST_CASE("OpenXR native event pump begins and ends two epochs on the same session", "[xr][native][events]") {
             EventFixture f;
             for (unsigned cycle = 0; cycle < 2; ++cycle) {

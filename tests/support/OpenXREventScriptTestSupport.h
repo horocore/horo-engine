@@ -25,6 +25,7 @@ namespace Horo::Tests::OpenXR {
         bool reentryRejected{};
         bool loseEvents{};
         bool loseInstance{};
+        std::optional<XrEventDataReferenceSpaceChangePending> referenceChange;
         XrResult pollResult{XR_SUCCESS};
         XrResult beginResult{XR_SUCCESS};
         XrResult exitResult{XR_SUCCESS};
@@ -62,6 +63,10 @@ namespace Horo::Tests::OpenXR {
                 auto *owner = active->reenter;
                 active->reenter = nullptr;
                 active->reentryRejected = owner->Poll(true).HasError();
+            }
+            if (active->referenceChange) {
+                CopyEvent(*buffer, *std::exchange(active->referenceChange, std::nullopt));
+                return XR_SUCCESS;
             }
             if (active->cursor == active->count)
                 return XR_EVENT_UNAVAILABLE;

@@ -40,6 +40,9 @@ namespace Horo::Tests::OpenXRAction {
         struct TrackingState final {
             unsigned spaces{};
             std::vector<XrReferenceSpaceCreateInfo> references;
+            XrExtent2Df bounds{3.0F, 4.0F};
+            XrResult boundsResult{XR_SUCCESS};
+            unsigned boundsReads{};
             bool enabled{};
             XrTime locatedTime{};
             XrSpaceLocationFlags flags{XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT |
@@ -221,6 +224,14 @@ namespace Horo::Tests::OpenXRAction {
             return result;
         }
 
+        static XRAPI_ATTR XrResult XRAPI_CALL Bounds(XrSession, XrReferenceSpaceType type, XrExtent2Df *extent) {
+            REQUIRE(type == XR_REFERENCE_SPACE_TYPE_STAGE);
+            auto &tracking = active->tracking;
+            ++tracking.boundsReads;
+            *extent = tracking.bounds;
+            return tracking.boundsResult;
+        }
+
         static XRAPI_ATTR XrResult XRAPI_CALL ActionSpace(XrSession, const XrActionSpaceCreateInfo *info, XrSpace *space) {
             REQUIRE(info->action != XR_NULL_HANDLE);
             REQUIRE(info->subactionPath != XR_NULL_PATH);
@@ -284,6 +295,7 @@ namespace Horo::Tests::OpenXRAction {
                                      Entry{"xrGetActionStatePose", std::bit_cast<PFN_xrVoidFunction>(&PoseState)},
                                      Entry{"xrCreateReferenceSpace", std::bit_cast<PFN_xrVoidFunction>(&ReferenceSpace)},
                                      Entry{"xrCreateActionSpace", std::bit_cast<PFN_xrVoidFunction>(&ActionSpace)},
+                                     Entry{"xrGetReferenceSpaceBoundsRect", std::bit_cast<PFN_xrVoidFunction>(&Bounds)},
                                      Entry{"xrDestroySpace", std::bit_cast<PFN_xrVoidFunction>(&DestroySpace)},
                                      Entry{"xrLocateSpace", std::bit_cast<PFN_xrVoidFunction>(&LocateSpace)}};
             const auto found = std::ranges::find(entries, std::string_view{name}, &Entry::name);
