@@ -121,7 +121,51 @@ namespace project_migration_tests {
         REQUIRE((result.HasError()));
         REQUIRE((result.ErrorValue().code.Value() == "project.migration.cancelled"));
         REQUIRE((project.Read("assets/a.txt") == before));
+        for (const auto &entry : std::filesystem::directory_iterator(project.root))
+            REQUIRE((!entry.path().filename().string().starts_with(".horo-migration-dry-run-")));
         jobs.Shutdown(Horo::ShutdownPolicy::Drain);
+    }
+
+    TEST_CASE("Verified Dry Run Cleans A Candidate After Definition Rejection", "[unit][application]") {
+        const auto definition = Definition("test.reject", Horo::Application::ProjectMigrationDefinitionKind::Sequential, "0.0.1", "0.1.0",
+                                           1, 2, Pipeline("test.reject", "A", "never produced"));
+        Horo::Application::ProjectMigrationPlan plan{.source = Version("0.0.1"), .target = Version("0.1.0"), .definitions = {definition}};
+        TemporaryProject project;
+        const std::string before = project.Read("assets/a.txt");
+        Horo::JobSystem jobs({.workerCount = 1, .maxQueuedJobs = 4});
+
+        const auto result = Horo::Application::ProjectMigrationExecutor::VerifiedDryRun(project.root, plan, jobs);
+        REQUIRE((result.HasError()));
+        REQUIRE((result.ErrorValue().code == TestFailure.code));
+        REQUIRE((project.Read("assets/a.txt") == before));
+        for (const auto &entry : std::filesystem::directory_iterator(project.root))
+            REQUIRE((!entry.path().filename().string().starts_with(".horo-migration-dry-run-")));
+    }
+
+    TEST_CASE("Migration Preparation Requires A Vacant Candidate And Bounded Inventory", "[unit][application]") {
+        using Horo::Application::ProjectMigrationExecutor;
+        using Horo::Application::ProjectMigrationPlan;
+
+        const auto definition = Definition("test.reserve", Horo::Application::ProjectMigrationDefinitionKind::Sequential, "0.0.1", "0.1.0",
+                                           1, 2, Pipeline("test.reserve", "A", "A"));
+        const ProjectMigrationPlan plan{.source = Version("0.0.1"), .target = Version("0.1.0"), .definitions = {definition}};
+        TemporaryProject project;
+        const auto staging = project.root / ".horo/local/staging";
+        Horo::JobSystem jobs({.workerCount = 1, .maxQueuedJobs = 4});
+
+        SECTION("Existing staging is neither reused nor cleaned up") {
+            project.Write(".horo/local/staging/assets/a.txt", "another operation");
+            const auto result = ProjectMigrationExecutor::Prepare(project.root, staging, plan, jobs);
+            REQUIRE((result.HasError()));
+            REQUIRE((result.ErrorValue().code.Value() == "project.migration.inventory_invalid"));
+            REQUIRE((project.Read(".horo/local/staging/assets/a.txt") == "another operation"));
+        }
+        SECTION("Inventory admission precedes staging reservation") {
+            const auto result = ProjectMigrationExecutor::Prepare(project.root, staging, plan, jobs, {.maxDocuments = 1});
+            REQUIRE((result.HasError()));
+            REQUIRE((result.ErrorValue().code.Value() == "project.migration.inventory_limit"));
+            REQUIRE_FALSE(std::filesystem::exists(staging));
+        }
     }
 
     TEST_CASE("Production Compression Migration Preserves Unknown Json Semantics", "[unit][application]") {

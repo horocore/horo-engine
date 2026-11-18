@@ -52,7 +52,7 @@ namespace Horo::Application {
         State(const State &) = delete;
         State &operator=(const State &) = delete;
 
-        bool cleanupOwned{true};
+        bool cleanupOwned{false};
     };
 
     namespace {
@@ -81,14 +81,13 @@ namespace Horo::Application {
             return value;
         }
 
-        [[nodiscard]] bool IsExcluded(const std::filesystem::path &relative) {
-            const std::string generic = relative.generic_string();
+        [[nodiscard]] bool IsExcluded(const std::string_view generic, const bool directory) {
             if (generic == ProjectLayout::AssetIndexPath)
                 return true;
             if (generic.starts_with(kMigrationDryRunRootPrefix))
                 return true;
-            return std::ranges::any_of(kExcludedMigrationDirectoryPrefixes, [&generic](const std::string_view prefix) {
-                return generic.starts_with(prefix);
+            return std::ranges::any_of(kExcludedMigrationDirectoryPrefixes, [generic, directory](const std::string_view prefix) {
+                return generic.starts_with(prefix) || (directory && generic == prefix.substr(0, prefix.size() - 1));
             });
         }
 
@@ -160,78 +159,80 @@ namespace Horo::Application {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> CollectInventoryFiles(const std::filesystem::path &canonicalRoot,
-                                                         std::vector<std::filesystem::path> &files) {
+        /** @brief Collects eligible authoritative files within the admitted document limit. */
+        [[nodiscard]] Result<void> CollectInventoryFiles(const std::filesystem::path &canonicalRoot, const std::size_t maxDocuments,
+                                                         const CancellationToken &cancellation, std::vector<std::filesystem::path> &files) {
             std::error_code error;
             TransparentStringSet portablePaths;
-            std::filesystem::recursive_directory_iterator iterator(canonicalRoot,
-                                                                   std::filesystem::directory_options::skip_permission_denied, error);
-            std::filesystem::recursive_directory_iterator end;
-            while (iterator != end) {
-                if (error)
+            std::filesystem::recursive_directory_iterator iterator(canonicalRoot, error);
+            const std::filesystem::recursive_directory_iterator end;
+            for (; !error && iterator != end; iterator.increment(error)) {
+                if (cancellation.IsCancellationRequested())
                     return Result<void>::Failure(
-                        MigrationError(ProjectErrors::MigrationInventoryInvalid, "Project inventory traversal failed."));
-                if (const auto status = iterator->symlink_status(error); error || std::filesystem::is_symlink(status))
+                        MigrationError(ProjectErrors::MigrationCancelled, "Migration cancellation was requested."));
+                const auto status = iterator->symlink_status(error);
+                if (error)
+                    break;
+                if (std::filesystem::is_symlink(status))
                     return Result<void>::Failure(MigrationError(ProjectErrors::MigrationInventoryInvalid,
                                                                 "Symlinks are not accepted in authoritative migration inventory."));
                 const std::filesystem::path relative = iterator->path().lexically_relative(canonicalRoot);
-                if (const std::string relativeText = relative.generic_string();
-                    relative.empty() || relativeText == ".." || relativeText.starts_with("../"))
+                const std::string generic = relative.generic_string();
+                if (relative.empty() || generic == ".." || generic.starts_with("../"))
                     return Result<void>::Failure(
                         MigrationError(ProjectErrors::MigrationInventoryInvalid, "Migration inventory path escapes the project root."));
-                if (iterator->is_directory(error)) {
-                    if (IsExcluded(relative))
+                const bool directory = std::filesystem::is_directory(status);
+                if (IsExcluded(generic, directory)) {
+                    if (directory)
                         iterator.disable_recursion_pending();
-                    iterator.increment(error);
                     continue;
                 }
-                if (!iterator->is_regular_file(error) || IsExcluded(relative)) {
-                    iterator.increment(error);
+                if (!std::filesystem::is_regular_file(status))
                     continue;
-                }
-                if (const std::string generic = relative.generic_string(); !portablePaths.emplace(PortablePathKey(generic)).second)
+                if (files.size() >= maxDocuments)
+                    return Result<void>::Failure(
+                        MigrationError(ProjectErrors::MigrationInventoryLimit, "Migration document count exceeds the configured limit."));
+                if (!portablePaths.emplace(PortablePathKey(generic)).second)
                     return Result<void>::Failure(MigrationError(ProjectErrors::MigrationInventoryInvalid,
                                                                 "Portable case collision in migration inventory: " + generic));
                 files.push_back(relative);
-                iterator.increment(error);
             }
+            if (error)
+                return Result<void>::Failure(
+                    MigrationError(ProjectErrors::MigrationInventoryInvalid, "Project inventory traversal failed."));
             std::ranges::sort(files, [](const auto &left, const auto &right) {
                 return left.generic_string() < right.generic_string();
             });
             return Result<void>::Success();
         }
 
+        /** @brief Captures bounded authoritative bytes without touching candidate storage. */
         [[nodiscard]] Result<std::shared_ptr<ProjectMigrationContext::State>> BuildInventory(const std::filesystem::path &root,
                                                                                              const ProjectMigrationLimits &limits,
-                                                                                             const std::filesystem::path &candidateRoot) {
+                                                                                             const CancellationToken &cancellation) {
             std::error_code error;
             const std::filesystem::path canonicalRoot = std::filesystem::weakly_canonical(root, error);
-            if (error || !std::filesystem::is_directory(canonicalRoot))
+            if (error || !std::filesystem::is_directory(canonicalRoot, error))
                 return Result<std::shared_ptr<ProjectMigrationContext::State>>::Failure(
                     MigrationError(ProjectErrors::MigrationInventoryInvalid, "Project root is not an accessible directory."));
 
             auto state = std::make_shared<ProjectMigrationContext::State>();
             state->authoritativeRoot = canonicalRoot;
-            state->candidateRoot = candidateRoot;
             state->limits = limits;
-            std::filesystem::create_directories(candidateRoot, error);  // NOSONAR(cpp:S2083) candidateRoot is validated by caller.
-            if (error)
-                return Result<std::shared_ptr<ProjectMigrationContext::State>>::Failure(
-                    MigrationError(ProjectErrors::MigrationInventoryInvalid, "Cannot create migration candidate root."));
             if (limits.maxDocuments > std::numeric_limits<std::uint32_t>::max())
                 return Result<std::shared_ptr<ProjectMigrationContext::State>>::Failure(
                     MigrationError(ProjectErrors::MigrationInventoryLimit, "Migration document limit exceeds handle capacity."));
 
             std::vector<std::filesystem::path> files;
-            if (auto collect = CollectInventoryFiles(canonicalRoot, files); collect.HasError())
+            if (auto collect = CollectInventoryFiles(canonicalRoot, limits.maxDocuments, cancellation, files); collect.HasError())
                 return Result<std::shared_ptr<ProjectMigrationContext::State>>::Failure(collect.ErrorValue());
 
-            if (files.size() > limits.maxDocuments)
-                return Result<std::shared_ptr<ProjectMigrationContext::State>>::Failure(
-                    MigrationError(ProjectErrors::MigrationInventoryLimit, "Migration document count exceeds the configured limit."));
-
+            const auto maxBytes = std::min(limits.maxInputBytes, limits.maxOutputBytes);
             for (const std::filesystem::path &relative : files) {
-                const auto read = ReadFile(canonicalRoot / relative, limits.maxInputBytes - state->inputBytes);
+                if (cancellation.IsCancellationRequested())
+                    return Result<std::shared_ptr<ProjectMigrationContext::State>>::Failure(
+                        MigrationError(ProjectErrors::MigrationCancelled, "Migration cancellation was requested."));
+                const auto read = ReadFile(canonicalRoot / relative, maxBytes - state->inputBytes);
                 if (read.HasError())
                     return Result<std::shared_ptr<ProjectMigrationContext::State>>::Failure(read.ErrorValue());
                 ProjectMigrationContext::State::Document document;
@@ -246,9 +247,6 @@ namespace Horo::Application {
                 state->documents.push_back(std::move(document));
             }
             state->outputBytes = state->inputBytes;
-            if (state->outputBytes > limits.maxOutputBytes)
-                return Result<std::shared_ptr<ProjectMigrationContext::State>>::Failure(
-                    MigrationError(ProjectErrors::MigrationInventoryLimit, "Initial candidate exceeds the configured output byte limit."));
             return Result<std::shared_ptr<ProjectMigrationContext::State>>::Success(std::move(state));
         }
 
@@ -577,12 +575,24 @@ namespace Horo::Application {
         LOG_INFO("application.project_migration.execute", "Preparing migration source=%s target=%s.", sourceText.c_str(),
                  targetText.c_str());
         LOG_DEBUG("application.project_migration.execute", "Execution aggregate definitions=%zu.", plan.definitions.size());
-        const auto built = BuildInventory(projectRoot, limits, candidateRoot);
+        if (cancellation.IsCancellationRequested())
+            return Result<PreparedProjectMigration>::Failure(
+                MigrationError(ProjectErrors::MigrationCancelled, "Migration cancellation was requested."));
+        const auto built = BuildInventory(projectRoot, limits, cancellation);
         if (built.HasError()) {
             LOG_ERROR("application.project_migration.execute", "Inventory failed code=%s.", built.ErrorValue().code.Value().c_str());
             return Result<PreparedProjectMigration>::Failure(built.ErrorValue());
         }
+        auto prepared = std::make_unique<PreparedProjectMigration::State>();
         auto state = built.Value();
+        prepared->context = state;
+        prepared->candidateRoot = candidateRoot;
+        state->candidateRoot = candidateRoot;
+        std::error_code error;
+        if (!std::filesystem::create_directories(candidateRoot, error) || error)  // NOSONAR(cpp:S2083) Candidate path comes from the host.
+            return Result<PreparedProjectMigration>::Failure(
+                MigrationError(ProjectErrors::MigrationInventoryInvalid, "Cannot reserve a vacant migration candidate root."));
+        prepared->cleanupOwned = true;
         state->random = services.random;
         LOG_DEBUG("application.project_migration.execute", "Inventory ready documents=%zu input_bytes=%llu.", state->documents.size(),
                   static_cast<unsigned long long>(state->inputBytes));
@@ -593,14 +603,14 @@ namespace Horo::Application {
         }
 
         state->random.reset();
+        if (cancellation.IsCancellationRequested())
+            return Result<PreparedProjectMigration>::Failure(
+                MigrationError(ProjectErrors::MigrationCancelled, "Migration cancellation was requested."));
         if (const Result<void> materialized = MaterializeCandidate(state); materialized.HasError())
             return Result<PreparedProjectMigration>::Failure(materialized.ErrorValue());
         if (const Result<void> unchanged = VerifyAuthoritativeUnchanged(state); unchanged.HasError())
             return Result<PreparedProjectMigration>::Failure(unchanged.ErrorValue());
 
-        auto prepared = std::make_unique<PreparedProjectMigration::State>();
-        prepared->context = state;
-        prepared->candidateRoot = candidateRoot;
         RebuildPreparedChanges(*prepared);
         LOG_INFO("application.project_migration.execute", "Migration candidate prepared source=%s target=%s.", sourceText.c_str(),
                  targetText.c_str());

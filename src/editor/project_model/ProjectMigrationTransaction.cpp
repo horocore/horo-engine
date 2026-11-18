@@ -735,7 +735,7 @@ namespace Horo::Editor {
         const auto operationRoot = request.projectRoot / ".horo/local/migration" / operationId;
         const auto stagingRoot = operationRoot / "staging";
         std::error_code error;
-        if (!std::filesystem::create_directories(stagingRoot, error) || error)  // NOSONAR(cpp:S2083)
+        if (!std::filesystem::create_directories(operationRoot, error) || error)  // NOSONAR(cpp:S2083)
             return Result<ProjectMigrationTransactionResult>::Failure(
                 Failure(ProjectErrors::MigrationPublishFailed, "Cannot reserve migration operation directory."));
         Journal journal{.operationId = operationId,

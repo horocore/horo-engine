@@ -411,7 +411,7 @@ namespace Horo::Application {
         /**
          * @brief Builds an unpublished candidate through all definition-local validation barriers.
          * @param projectRoot Read-only authoritative source root.
-         * @param candidateRoot Disposable unpublished output root.
+         * @param candidateRoot Vacant disposable output root reserved by this operation.
          * @param plan Validated immutable migration plan.
          * @param jobs Operation-owned scheduler.
          * @param limits Finite inventory and execution bounds.
