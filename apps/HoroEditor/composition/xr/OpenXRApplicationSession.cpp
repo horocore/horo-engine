@@ -119,16 +119,9 @@ namespace Horo::Application::Internal {
         return Current();
     }
 
-    /** @copydoc OpenXRApplicationSession::WantsEyeGaze */
-    bool OpenXRApplicationSession::WantsEyeGaze() const noexcept {
-        const auto features = settings_.Features();
-        const auto gaze = std::ranges::find(features, XRCapability::EyeGaze, &XRFeatureRequest::capability);
-        return gaze != features.end() && gaze->kind == XRFeatureRequirementKind::Optional;
-    }
-
     /** @copydoc OpenXRApplicationSession::MayArmEyeGaze */
     bool OpenXRApplicationSession::MayArmEyeGaze() const noexcept {
-        return WantsEyeGaze() && system_ && system_->eyeGazeProvider == XRCapabilityState::Available;
+        return settings_.AllowsEyeGazePreview() && system_ && system_->eyeGazeProvider == XRCapabilityState::Available;
     }
 
     /** @copydoc OpenXRApplicationSession::EyeGazeAvailability */
@@ -136,7 +129,7 @@ namespace Horo::Application::Internal {
         const auto observed = system_ ? system_->eyeGazeProvider : XRCapabilityState::Unsupported;
         if (observed != XRCapabilityState::Available)
             return observed;
-        if (!WantsEyeGaze())
+        if (!settings_.AllowsEyeGazePreview())
             return XRCapabilityState::DisabledByPolicy;
         return input_.gazeAllowed ? XRCapabilityState::Available : XRCapabilityState::Denied;
     }

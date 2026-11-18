@@ -382,8 +382,6 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> Current() const;
         [[nodiscard]] Result<void> DiscoverRuntime();
         [[nodiscard]] bool WantsHands() const noexcept;
-        /** @return Whether product policy explicitly requested optional eye gaze. */
-        [[nodiscard]] bool WantsEyeGaze() const noexcept;
         /** @brief Collects only bounded normalized facts while the exact private native test session exists. */
         [[nodiscard]] Result<OpenXRPackagedCompatibility> CollectPackagedCompatibility(
             const XR::OpenXRInternal::NativeSessionCensus &session);

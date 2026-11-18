@@ -46,7 +46,10 @@ namespace Horo::XR {
         [[nodiscard]] XRFeatureProfile Profile() const noexcept;
         /** @brief Returns requested finite capacities. @return Immutable validated budget. */
         [[nodiscard]] const XRSystemLimits &Limits() const noexcept;
-        /** @brief Returns extra feature requests. @return Snapshot-owned span valid for this object's lifetime. */
+        /** @brief Reports optional policy for the independent eye-pointing preview.
+         * @return True when product policy permits requesting consent; this is never a grant. */
+        [[nodiscard]] bool AllowsEyeGazePreview() const noexcept;
+        /** @brief Returns version-one extra requests. @return Snapshot-owned span valid for this object's lifetime. */
         [[nodiscard]] std::span<const XRFeatureRequest> Features() const noexcept;
         /** @brief Returns safe configuration provenance. @return Retained immutable source snapshot. */
         [[nodiscard]] const ConfigurationSnapshot &Source() const noexcept;
@@ -62,6 +65,7 @@ namespace Horo::XR {
         XRSystemLimits limits_{};
         std::array<XRFeatureRequest, static_cast<std::size_t>(XRCapability::Count)> features_{};
         std::size_t featureCount_{};
+        bool eyeGazePreview_{};
     };
 
     /**

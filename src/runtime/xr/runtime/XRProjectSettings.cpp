@@ -186,6 +186,11 @@ namespace Horo::XR {
         return limits_;
     }
 
+    /** @copydoc XRProjectSettings::AllowsEyeGazePreview */
+    bool XRProjectSettings::AllowsEyeGazePreview() const noexcept {
+        return eyeGazePreview_;
+    }
+
     /** @copydoc XRProjectSettings::Features */
     std::span<const XRFeatureRequest> XRProjectSettings::Features() const noexcept {
         return {features_.data(), featureCount_};
@@ -242,8 +247,13 @@ namespace Horo::XR {
             const auto request = ResolveFeature(source, feature, settings.profile_);
             if (request.HasError())
                 return Result<XRProjectSettings>::Failure(request.ErrorValue());
-            if (request.Value())
-                settings.features_[settings.featureCount_++] = *request.Value();
+            if (!request.Value())
+                continue;
+            if (feature.capability == XRCapability::EyeGaze) {
+                settings.eyeGazePreview_ = request.Value()->kind == XRFeatureRequirementKind::Optional;
+                continue;
+            }
+            settings.features_[settings.featureCount_++] = *request.Value();
         }
         return Result<XRProjectSettings>::Success(std::move(settings));
     }

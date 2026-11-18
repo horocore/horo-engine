@@ -91,6 +91,7 @@ namespace Horo::XR {
             REQUIRE_FALSE(resolved.Value().Enabled());
             REQUIRE(resolved.Value().Profile() == XRFeatureProfile::Projection1_0);
             REQUIRE(resolved.Value().Features().empty());
+            CHECK_FALSE(resolved.Value().AllowsEyeGazePreview());
             const Evidence evidence;
             REQUIRE(AdmitXRProjectSettings(resolved.Value(), evidence.Admission()).ErrorValue().code.Value() ==
                     XRErrors::OperationUnavailable.code.Value());
@@ -143,11 +144,8 @@ namespace Horo::XR {
             Project(request, "xr.features.eye_gaze", static_cast<std::int64_t>(XRProjectFeaturePolicy::OptionalDisable));
             const auto resolved = ResolveXRProjectSettings(Configuration(request));
             REQUIRE(resolved.HasValue());
-            const auto features = resolved.Value().Features();
-            REQUIRE(features.size() == 1);
-            CHECK(features.front().capability == XRCapability::EyeGaze);
-            CHECK(features.front().kind == XRFeatureRequirementKind::Optional);
-            CHECK(features.front().fallback == XRFeatureFallback::Disable);
+            CHECK(resolved.Value().AllowsEyeGazePreview());
+            CHECK(resolved.Value().Features().empty());
             request.project.clear();
             Project(request, "xr.features.eye_gaze", static_cast<std::int64_t>(XRProjectFeaturePolicy::Required));
             const auto required = ResolveXRProjectSettings(Configuration(request));

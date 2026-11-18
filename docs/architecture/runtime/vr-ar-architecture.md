@@ -802,7 +802,8 @@ failure states.
   instance's cold system properties. The installed Editor's explicit
   `--xr-enable-eye-gaze` invocation makes `xr.features.eye_gaze` optional.
   Setup can then grant eye pointing for the next Play session only. The
-  invocation and device census never grant consent.
+  invocation and device census never grant consent. The preview is independent
+  of version-one feature profiles and contributes no requirements to them.
 - A consented Play preparation reserves one action and one space from the
   admitted budget before attaching action sets. The same Input cutoff samples
   the dedicated gaze pose with the reported OpenXR sample time. The owner

@@ -333,8 +333,7 @@ namespace Horo::Application::Internal {
         if (!bindingsCurrent())
             return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
         std::optional<XRPoseSample> gaze;
-        if (const auto plan = sessions.AcceptedPlan();
-            input_.gazeAllowed && plan && plan->Decision(XRCapability::EyeGaze).state == XRFeatureDecisionState::OptionalEnabled) {
+        if (input_.gazeAllowed) {
             constexpr auto maximumGazeAge = Duration::FromMilliseconds(50);
             auto observed = input_.native->SampleConsentedGaze(state.session, time.Value(), maximumGazeAge);
             if (auto current = Current(); current.HasError())
