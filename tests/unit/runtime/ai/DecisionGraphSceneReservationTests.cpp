@@ -144,6 +144,41 @@ namespace Horo::AI {
             CHECK(fixture.probe.starts == 0);
         }
 
+        TEST_CASE("Private Scene activates its cooked scheduler only after scoped host admission",
+                  "[unit][ai][scene][decision_reservation][scheduler]") {
+            Fixture fixture;
+            auto source = TaskTree(11);
+            source.executionTask = MakeIdentity<TaskId>(9000);
+            const auto plan = fixture.Compile(std::span{&source, 1}, 11);
+            auto scene = SceneFixture(fixture, *plan);
+            scene.descriptor.cookedPlan = plan;
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+            auto runtime = std::move(AiSceneRuntime::Create()).Value();
+            auto publication = TestSupport::Publish(runtime, scene);
+            const auto agent = runtime.Snapshot().Value().Agents().front().handle;
+            CHECK(fixture.probe.factories == 0);
+            CHECK(runtime.TaskSchedulerAtSafePoint().HasError());
+            TestSupport::ExpectError(runtime.ActivateCookedDecisionsAtSafePoint({jobs, {}, {.workUnitsPerTick = 1}}),
+                                     AIErrors::SchedulerBudgetExhausted);
+            CHECK(runtime.TaskSchedulerAtSafePoint().HasError());
+            CHECK(fixture.probe.factories == 0);
+
+            REQUIRE(runtime.ActivateCookedDecisionsAtSafePoint({jobs, {}, {}}).HasValue());
+            CHECK(fixture.probe.factories == 1);
+            CHECK(runtime.ActivateCookedDecisionsAtSafePoint({jobs, {}, {}}).HasError());
+            const auto next = runtime.ReserveDecisionTaskSlotsAtSafePoint(agent, 1);
+            REQUIRE(next.HasValue());
+            CHECK(next.Value().FirstSlot() == plan->Storage().taskSlots + 1);
+            const auto scheduler = runtime.TaskSchedulerAtSafePoint();
+            REQUIRE(scheduler.HasValue());
+            REQUIRE(scheduler.Value()->EvaluateAtDecision(1).HasValue());
+            REQUIRE(scheduler.Value()->CommitAtIntentDispatch(1).HasValue());
+            CHECK(fixture.probe.starts == 1);
+            runtime.BeginShutdown();
+            CHECK(fixture.probe.aborts == 1);
+            CHECK(fixture.probe.cleanups == 1);
+        }
+
         TEST_CASE("Cooked controller publication rejects a provider retired after Scene preparation",
                   "[unit][ai][scene][decision_reservation][composition]") {
             Fixture fixture;

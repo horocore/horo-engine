@@ -298,6 +298,14 @@ namespace Horo::AI {
          */
         [[nodiscard]] Result<void> CommitRestoreAtSafePoint(std::unique_ptr<AiSceneRestoreCandidate> candidate);
 
+        /** @brief Activates cooked decisions once on an exact already-staged Scene before host publication.
+         * @param execution Deterministic owner policy with live process jobs and callable provider generation.
+         * @return Success or typed failure preserving the current scheduler, agents and task slots.
+         * @details For composed hosts whose native providers become callable only after exact platform scopes exist.
+         * Call while the initial Scene is still private to the host, before entering its first simulation tick.
+         */
+        [[nodiscard]] Result<void> ActivateCookedDecisionsAtSafePoint(AiSceneCookedDecisionExecution execution);
+
         /** @brief Composes the active scene's scheduler once, at the owner safe point.
          * @param jobs Process JobSystem, retained until every worker image pin drains.
          * @param settings Finite scene-wide scheduling limits. @return Success or typed unavailable/admission failure.

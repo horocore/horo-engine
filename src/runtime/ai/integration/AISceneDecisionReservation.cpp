@@ -116,6 +116,7 @@ namespace Horo::AI {
     Result<void> AiSceneRuntime::PrepareCookedDecisionScheduler(const std::shared_ptr<Detail::AiSceneRuntimeState> &state) const {
         if (!decisionExecution_)
             return Result<void>::Success();
+        const auto revision = state->revision;
         auto scheduler = AiTaskScheduler::Create(decisionExecution_->jobs, state->binding.incarnation, decisionExecution_->scheduler);
         if (scheduler.HasError())
             return Result<void>::Failure(scheduler.ErrorValue());
@@ -126,11 +127,33 @@ namespace Horo::AI {
         auto staged = scheduler.Value()->PreparePopulationChange(registrations.Value(), {});
         if (staged.HasError())
             return Result<void>::Failure(staged.ErrorValue());
+        if (state->closed || state->revision != revision || state->scheduler)
+            return Result<void>::Failure(
+                MakeError(AIErrors::SceneActivationInvalid, "The Scene owner changed while cooked decisions were prepared."));
         if (auto valid = staged.Value()->ValidatePublication(); valid.HasError())
             return valid;
         staged.Value()->Publish();
         state->scheduler = std::move(scheduler).Value();
         state->nextTaskSlot = cursor;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc AiSceneRuntime::ActivateCookedDecisionsAtSafePoint */
+    Result<void> AiSceneRuntime::ActivateCookedDecisionsAtSafePoint(AiSceneCookedDecisionExecution execution) {
+        if (auto valid = CapabilityAtSafePoint().ValidateAtSafePoint(); valid.HasError())
+            return valid;
+        const auto state = active_;
+        if (decisionExecution_ || state->scheduler || execution.scheduler.mode != AiSchedulingMode::Deterministic)
+            return Result<void>::Failure(MakeError(AIErrors::SchedulerPolicyInvalid));
+        if (state->revision == std::numeric_limits<std::uint64_t>::max())
+            return Result<void>::Failure(MakeError(AIErrors::CanonicalRestoreStale));
+        decisionExecution_.emplace(std::move(execution));
+        auto prepared = PrepareCookedDecisionScheduler(state);
+        if (prepared.HasError()) {
+            decisionExecution_.reset();
+            return prepared;
+        }
+        ++state->revision;
         return Result<void>::Success();
     }
 
