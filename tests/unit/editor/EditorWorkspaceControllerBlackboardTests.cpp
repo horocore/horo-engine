@@ -268,12 +268,16 @@ TEST_CASE("Recent AI assets resolve current registered identity after an ordinar
     SECTION("missing identity leaves the visible untyped source unchanged") {
         controller.ProcessCommand(
             {.command = EditorWorkspaceViewCommand::NavigateContentBrowser, .stringPayload = WorkspacePathText(project.root / "assets")});
-        const auto sourcePathText = WorkspacePathText(project.root / project.Path);
+        const auto sourcePath = (project.root / project.Path).lexically_normal();
+        const auto &directory = controller.ViewModel().contentBrowser;
+        REQUIRE(WorkspaceNativePath(directory.absoluteCurrentPath).lexically_normal() == sourcePath.parent_path());
+        const auto isSource = [&](const ContentBrowserEntry &entry) {
+            return WorkspaceNativePath(entry.absolutePath).lexically_normal() == sourcePath;
+        };
         const auto &registeredEntries = controller.ViewModel().contentBrowser.entries;
-        const auto registered = std::ranges::find(registeredEntries, sourcePathText, &ContentBrowserEntry::absolutePath);
+        const auto registered = std::ranges::find_if(registeredEntries, isSource);
         REQUIRE(registered != registeredEntries.end());
         REQUIRE(registered->registered);
-        const auto sourcePath = project.root / project.Path;
         const auto original = Assets::CaptureAssetSource(project.root, sourcePath, AI::BlackboardSchemaSourceCodec::MaximumBytes);
         REQUIRE(original.HasValue());
         REQUIRE(std::filesystem::remove(project.root / (std::string{project.Path} + ".horo")));
@@ -287,7 +291,7 @@ TEST_CASE("Recent AI assets resolve current registered identity after an ordinar
         controller.RefreshAssets(project.registry.Snapshot());
         CHECK_FALSE(history.front().available);
         const auto &entries = controller.ViewModel().contentBrowser.entries;
-        const auto visible = std::ranges::find(entries, sourcePathText, &ContentBrowserEntry::absolutePath);
+        const auto visible = std::ranges::find_if(entries, isSource);
         REQUIRE(visible != entries.end());
         CHECK_FALSE(visible->registered);
         CHECK_FALSE(visible->registeredType.has_value());
