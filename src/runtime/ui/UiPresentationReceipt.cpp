@@ -2,6 +2,8 @@
 
 #include "Horo/Runtime/Ui/UiErrors.h"
 
+#include <cmath>
+
 namespace Horo::Runtime::Ui {
     namespace {
         template <typename T> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor) {
@@ -9,11 +11,26 @@ namespace Horo::Runtime::Ui {
         }
     }  // namespace
 
+    /** @copydoc UiWorldCanvasProjection::IsValid */
+    bool UiWorldCanvasProjection::IsValid() const noexcept {
+        if (!Math::IsFinite(origin) || !Math::IsFinite(horizontalExtent) || !Math::IsFinite(verticalExtent))
+            return false;
+        const auto normalLength = Math::LengthSquared(Math::Cross(horizontalExtent, verticalExtent));
+        const double xx = Math::Dot(horizontalExtent, horizontalExtent);
+        const double xy = Math::Dot(horizontalExtent, verticalExtent);
+        const double yy = Math::Dot(verticalExtent, verticalExtent);
+        const double determinant = xx * yy - xy * xy;
+        return std::isfinite(normalLength) && normalLength > Math::DefaultEpsilon && std::isfinite(determinant) &&
+               determinant > static_cast<double>(Math::DefaultEpsilon) * normalLength;
+    }
+
     /** @copydoc UiPresentationReceipt::IsValid */
     bool UiPresentationReceipt::IsValid() const noexcept {
         using enum UiPresentationOutcome;
         using enum UiPresentationReason;
         if (!view.IsValid() || !canvas.IsValid() || !interactionRevision.IsValid() || !snapshotRevision.IsValid())
+            return false;
+        if (worldProjection && (outcome != Presented || !worldProjection->IsValid()))
             return false;
         if (outcome == Presented)
             return reason == None;
@@ -44,6 +61,7 @@ namespace Horo::Runtime::Ui {
             return Failure<bool>(UiErrors::RenderPresentationStale);
 
         lastObservedSnapshot_ = receipt.snapshotRevision;
+        worldProjection_ = receipt.worldProjection;
         if (receipt.outcome != UiPresentationOutcome::Presented)
             return Result<bool>::Success(false);
 

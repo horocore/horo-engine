@@ -2,6 +2,15 @@
 
 namespace Horo::Runtime::Ui::InputDebugTest {
     namespace {
+        /** @brief Publishes the shared exact world placement after the fixture's initial screen receipt. */
+        void PresentWorld(Fixture &fixture) {
+            constexpr UiWorldCanvasProjection plane{{0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F}, {0.0F, -2.0F, 0.0F}};
+            REQUIRE(fixture.presented
+                        .Apply({fixture.view, Owner().canvas, Owner().interaction, Rev<UiRenderSnapshotRevision>(2),
+                                UiPresentationOutcome::Presented, UiPresentationReason::None, plane})
+                        .HasValue());
+        }
+
         TEST_CASE("UI debugger follows actual structural reload and retains old route evidence", "[runtime_ui][input_debug][reload]") {
             Fixture f;
             Handler handler;
@@ -37,6 +46,7 @@ namespace Horo::Runtime::Ui::InputDebugTest {
 
         TEST_CASE("UI debugger world projection exposes real ray geometry and target decisions", "[runtime_ui][input_debug][world]") {
             Fixture f;
+            PresentWorld(f);
             auto store =
                 UiHitTestStore::Create({Owner().instance, Owner().canvas, Owner().document, UiRenderMode::WorldSpace, {200, 200}, 4, 2})
                     .Value();
@@ -46,10 +56,7 @@ namespace Horo::Runtime::Ui::InputDebugTest {
                 projection[i].zOrder = static_cast<std::int32_t>(i);
             }
             auto hit = store.Publish(f.layout, projection).Value();
-            const UiWorldRayQuery query{f.view,
-                                        Owner().canvas,
-                                        {{0.5F, -0.5F, 1.0F}, {0.0F, 0.0F, -1.0F}, 0.0F, 2.0F},
-                                        {{0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F}, {0.0F, -2.0F, 0.0F}}};
+            const UiWorldRayQuery query{f.view, Owner().canvas, {{0.5F, -0.5F, 1.0F}, {0.0F, 0.0F, -1.0F}, 0.0F, 2.0F}};
             auto ordinary = hit.HitTestWorld(query, f.presented);
             auto observed = f.debugger->HitTestWorld(hit, query, f.presented);
             REQUIRE(ordinary.HasValue());
@@ -68,6 +75,7 @@ namespace Horo::Runtime::Ui::InputDebugTest {
         TEST_CASE("World hit routing admits clipped modal targets only against current presentation",
                   "[runtime_ui][input_debug][world][qualification]") {
             Fixture f;
+            PresentWorld(f);
             auto store =
                 UiHitTestStore::Create({Owner().instance, Owner().canvas, Owner().document, UiRenderMode::WorldSpace, {200, 200}, 4, 2})
                     .Value();
@@ -79,10 +87,7 @@ namespace Horo::Runtime::Ui::InputDebugTest {
             projection.back().hasClip = true;
             projection.back().clip = {{150, 150}, {10, 10}};
             auto hit = store.Publish(f.layout, projection).Value();
-            const UiWorldRayQuery query{f.view,
-                                        Owner().canvas,
-                                        {{0.5F, -0.5F, 1.0F}, {0.0F, 0.0F, -1.0F}, 0.0F, 2.0F},
-                                        {{0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F}, {0.0F, -2.0F, 0.0F}}};
+            const UiWorldRayQuery query{f.view, Owner().canvas, {{0.5F, -0.5F, 1.0F}, {0.0F, 0.0F, -1.0F}, 0.0F, 2.0F}};
             const auto selected = f.debugger->HitTestWorld(hit, query, f.presented);
             REQUIRE(selected.HasValue());
             REQUIRE(selected.Value());
@@ -119,7 +124,7 @@ namespace Horo::Runtime::Ui::InputDebugTest {
             CHECK(observed.Phases()[2].element == *route.modalRoot);
 
             REQUIRE(f.presented
-                        .Apply({f.view, Owner().canvas, Rev<UiInteractionRevision>(2), Rev<UiRenderSnapshotRevision>(2),
+                        .Apply({f.view, Owner().canvas, Rev<UiInteractionRevision>(2), Rev<UiRenderSnapshotRevision>(3),
                                 UiPresentationOutcome::Presented, UiPresentationReason::None})
                         .HasValue());
             const auto stale = f.debugger->HitTestWorld(hit, query, f.presented);

@@ -77,19 +77,11 @@ namespace Horo::Runtime::Ui {
         float pixelY{};                     /**< Physical Y relative to the canvas viewport. */
     };
 
-    /** @brief Backend-neutral world plane spanning one complete logical canvas. */
-    struct UiWorldCanvasProjection final {
-        Math::Vec3 origin;           /**< World position of logical (0, 0). */
-        Math::Vec3 horizontalExtent; /**< World vector spanning the full logical width. */
-        Math::Vec3 verticalExtent;   /**< World vector spanning the full logical height. */
-    };
-
-    /** @brief Bounded world-space pointer ray and exact canvas projection. */
+    /** @brief Bounded world-space pointer ray. Geometry is read from the actual view's presentation tracker. */
     struct UiWorldRayQuery final {
-        UiRenderViewId view;                /**< Exact presented view incarnation. */
-        UiCanvasInstanceId canvas;          /**< Exact queried canvas incarnation. */
-        Math::Ray ray;                      /**< Finite normalized ray segment and bounds. */
-        UiWorldCanvasProjection projection; /**< World-to-logical canvas plane. */
+        UiRenderViewId view;       /**< Exact presented view incarnation. */
+        UiCanvasInstanceId canvas; /**< Exact queried canvas incarnation. */
+        Math::Ray ray;             /**< Finite normalized ray segment and bounds. */
     };
 
     /** @brief Successful topmost semantic target and resolved query coordinates. */

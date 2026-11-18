@@ -351,16 +351,17 @@ namespace Horo::Runtime::Ui {
         if (const auto validation = ValidatePresentation(*storage_, query.view, query.canvas, presented); validation.HasError())
             return Result<std::optional<UiHitTestResult>>::Failure(validation.ErrorValue());
 
+        const auto &placed = presented.WorldProjection();
+        if (!placed)
+            return Failure<std::optional<UiHitTestResult>>(UiErrors::HitTestNotPresented);
+
         const auto &ray = query.ray;
-        const auto &projection = query.projection;
+        const auto &projection = *placed;
         const float directionLength = Math::LengthSquared(ray.direction);
         const Math::Vec3 normal = Math::Cross(projection.horizontalExtent, projection.verticalExtent);
-        const float normalLength = Math::LengthSquared(normal);
         if (!Math::IsFinite(ray.origin) || !Math::IsFinite(ray.direction) || !std::isfinite(ray.minimumDistance) ||
             !std::isfinite(ray.maximumDistance) || ray.minimumDistance < 0.0F || ray.maximumDistance < ray.minimumDistance ||
-            !std::isfinite(directionLength) || std::abs(directionLength - 1.0F) > 0.001F || !Math::IsFinite(projection.origin) ||
-            !Math::IsFinite(projection.horizontalExtent) || !Math::IsFinite(projection.verticalExtent) || !std::isfinite(normalLength) ||
-            normalLength <= Math::DefaultEpsilon)
+            !std::isfinite(directionLength) || std::abs(directionLength - 1.0F) > 0.001F)
             return Failure<std::optional<UiHitTestResult>>(UiErrors::HitTestInvalid);
 
         const float denominator = Math::Dot(normal, ray.direction);
@@ -375,8 +376,6 @@ namespace Horo::Runtime::Ui {
         const double xy = Math::Dot(projection.horizontalExtent, projection.verticalExtent);
         const double yy = Math::Dot(projection.verticalExtent, projection.verticalExtent);
         const double determinant = xx * yy - xy * xy;
-        if (!std::isfinite(determinant) || determinant <= static_cast<double>(Math::DefaultEpsilon) * normalLength)
-            return Failure<std::optional<UiHitTestResult>>(UiErrors::HitTestInvalid);
         const double px = Math::Dot(offset, projection.horizontalExtent);
         const double py = Math::Dot(offset, projection.verticalExtent);
         const double horizontal = (px * yy - py * xy) / determinant;

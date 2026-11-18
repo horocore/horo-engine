@@ -378,6 +378,14 @@ requires a renderer graph that orders the read after the paint write and
 retains the texture through completion. Placement in a camera or scene and
 interaction mapping both depend on the consuming presentation pass.
 
+The presentation receipt carries the exact World canvas plane when a consuming
+pass places the canvas in the scene. Runtime UI adopts that plane with the
+receipt's view, canvas and revisions. A later receipt can move the plane
+without changing layout. Unpresented output revokes the retained placement.
+World ray callers now pass only a view, canvas and ray in `UiWorldRayQuery`.
+Hosts must supply the actual rendered plane in `UiPresentationReceipt`.
+The input debugger follows the same targeting path.
+
 ## Responsive Presentation Profiles
 
 [Responsive Presentation Profiles](responsive-presentation-profiles.md) is the
