@@ -183,13 +183,10 @@ namespace Horo::Application {
             }
         }
         if (const auto &owners = hierarchy.Value()) {
-            for (const auto &file : owners->Sources()) {
-                if (cancellation.IsCancellationRequested())
-                    return Review::Failure(MakeError(DecisionCookErrors::Cancelled));
+            if (const auto inspected = BlackboardUsageSources::Inspect(review, root, *owners, cancellation); inspected.HasError())
+                return Review::Failure(inspected.ErrorValue());
+            for (const auto &file : owners->Sources())
                 AppendStamp(review, file);
-                if (const auto inspected = BlackboardUsageSources::Inspect(review, file, cancellation); inspected.HasError())
-                    return Review::Failure(inspected.ErrorValue());
-            }
             if (const auto verified = owners->VerifyUnchanged(cancellation); verified.HasError())
                 return Review::Failure(verified.ErrorValue());
             const std::array scopes{review.closure, owners->ClosureDigest()};

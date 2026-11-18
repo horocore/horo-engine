@@ -11,7 +11,7 @@ namespace Horo::Application::BlackboardUsageSources {
     /** @brief Adds one explicit owner gap, keeping all review output bounded. */
     [[nodiscard]] Result<void> AddGap(BlackboardUsageReview &review, BlackboardUsageGap gap);
 
-    /** @brief Reviews one registered source for direct schema bindings and identifies undecoded ownership. */
-    [[nodiscard]] Result<void> Inspect(BlackboardUsageReview &review, const Assets::AssetCookPinnedSource &file,
-                                       const CancellationToken &cancellation);
+    /** @brief Reviews the frozen Scene/Prefab source batch and resolves supported authored placements. */
+    [[nodiscard]] Result<void> Inspect(BlackboardUsageReview &review, const std::filesystem::path &root,
+                                       const Assets::AssetCookInputSnapshot &owners, const CancellationToken &cancellation);
 }  // namespace Horo::Application::BlackboardUsageSources

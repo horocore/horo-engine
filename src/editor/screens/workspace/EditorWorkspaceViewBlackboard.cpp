@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <format>
+#include <type_traits>
 
 namespace Horo::Editor {
     namespace {
@@ -267,8 +268,15 @@ namespace Horo::Editor {
                 }
                 if (index < bindingEnd) {
                     const auto &binding = review->schemaBindings[index - review->uses.size()];
-                    const auto object = std::visit([](const auto &value) -> std::uint64_t {
-                        return value.value;
+                    const auto object = std::visit([](const auto &value) -> std::string {
+                        if constexpr (std::is_same_v<std::remove_cvref_t<decltype(value)>, Application::BlackboardPlacedPrefabObject>) {
+                            auto address = std::to_string(value.key.instance.Value());
+                            for (const auto slot : value.key.object.NestedInstanceScope())
+                                address += std::format("/{}", slot.value);
+                            return address + std::format("/{}", value.key.object.SourceObject().value);
+                        } else {
+                            return std::to_string(value.value);
+                        }
                     }, binding.object);
                     frame.Label(std::format("{} ({})", binding.sourcePath, object));
                     continue;

@@ -52,8 +52,15 @@ namespace Horo::Application {
         AI::DecisionBlackboardSourceUse use;
     };
 
-    /** @brief Exact authored Scene object or standalone Prefab-local object. */
-    using BlackboardSchemaBindingObject = std::variant<SceneSource::SceneObjectId, Prefab::LocalObjectId>;
+    /** @brief A source-resolved controller occurrence in an explicitly authored Scene placement. */
+    struct BlackboardPlacedPrefabObject final {
+        Assets::AssetId rootPrefab;          /**< Asset named by the containing Scene placement. */
+        Assets::AssetId sourcePrefab;        /**< Actual authored owner of the nested or inherited object. */
+        Prefab::ExpandedPrefabObjectKey key; /**< Stable Scene instance and nested address. */
+    };
+
+    /** @brief Exact authored Scene object, standalone Prefab-local object or resolved Scene placement object. */
+    using BlackboardSchemaBindingObject = std::variant<SceneSource::SceneObjectId, Prefab::LocalObjectId, BlackboardPlacedPrefabObject>;
 
     /** @brief A controller's authored schema binding. These sources carry SchemaId and GraphId without a key or schema revision. */
     struct BlackboardSchemaBinding final {

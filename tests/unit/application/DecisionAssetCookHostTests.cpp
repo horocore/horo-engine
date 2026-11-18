@@ -238,6 +238,14 @@ namespace {
         const auto sceneAsset = AssetId::FromBytes({0xc2});
         const auto prefabAsset = AssetId::FromBytes({0xc3});
         const auto unrelated = AssetId::FromBytes({0xc4});
+        const auto nestedAsset = AssetId::FromBytes({0xc5});
+        const auto variantAsset = AssetId::FromBytes({0xc6});
+        constexpr HoroVersion version{0, 1, 0};
+        constexpr std::string_view project =
+            R"({"horoVersion":"0.1.0","persistentContract":"sha256:0101010101010101010101010101010101010101010101010101010101010101","projectId":"blackboard-review","name":"Review Test","projectVersion":"0.1.0","createdAt":"2026-07-18T00:00:00Z","settings":{"renderBackend":"opengl"}})";
+        std::filesystem::create_directories(fixture.source.path / ".horo");
+        Files::WriteFile(fixture.source.path / ".horo/project.json",
+                         {reinterpret_cast<const std::uint8_t *>(project.data()), project.size()});
         const auto schemaBytes = BlackboardSchemaCodec::Encode(*fixture.ai.schema);
         REQUIRE(schemaBytes.HasValue());
         const auto writePair = [&](std::string_view name, AssetId id, std::string_view type, std::string_view bytes) {
@@ -257,7 +265,7 @@ namespace {
                                                      .name = "Admitted direct controller",
                                                      .components = {.aiController = controller}};
         const SceneSource::ScenePrefabInstance placement{Prefab::PrefabInstanceId::Create(13).Value(),
-                                                         Prefab::PrefabAssetReference::Create(prefabAsset).Value(),
+                                                         Prefab::PrefabAssetReference::Create(variantAsset).Value(),
                                                          {},
                                                          {}};
         const std::array sceneObjects{sceneObject};
@@ -281,14 +289,35 @@ namespace {
                                                                   .payload = {bytes.begin(), bytes.end()}}};
         const auto limits = Prefab::PrefabLimitProfile::Create({});
         REQUIRE(limits.HasValue());
-        const auto prefab = Prefab::PrefabDocument::Create({.projectVersion = {0, 1, 0},
-                                                            .assetId = prefabAsset,
-                                                            .objects = {{.name = "Direct root", .components = {component}}}},
-                                                           limits.Value());
-        REQUIRE(prefab.HasValue());
-        const auto serialized = prefab.Value().SerializeCanonical();
-        REQUIRE(serialized.HasValue());
-        writePair("assets/unit.prefab", prefabAsset, "core.prefab", serialized.Value());
+        const auto writePrefab = [&](std::string_view path, Prefab::PrefabDocumentData source) {
+            const auto asset = source.assetId;
+            const auto prefab = Prefab::PrefabDocument::Create(std::move(source), limits.Value());
+            REQUIRE(prefab.HasValue());
+            const auto serialized = prefab.Value().SerializeCanonical();
+            REQUIRE(serialized.HasValue());
+            writePair(path, asset, "core.prefab", serialized.Value());
+            return Prefab::PrefabSourceRevision{version, ComputeSha256(std::as_bytes(std::span{serialized.Value()}))};
+        };
+        const auto leaf = writePrefab("assets/unit.prefab", {.projectVersion = version,
+                                                             .assetId = prefabAsset,
+                                                             .objects = {{.name = "Direct root", .components = {component}}}});
+        const auto nested =
+            writePrefab("assets/nested.prefab",
+                        {.projectVersion = version,
+                         .assetId = nestedAsset,
+                         .objects = {{.name = "Containing root"}},
+                         .composition =
+                             Prefab::PrefabComposition{
+                                 .nestedPlacements = {{.placementLocalId = {7},
+                                                       .sourcePrefab = Prefab::PrefabAssetReference::Create(prefabAsset).Value(),
+                                                       .authoredAgainst = leaf}}},
+                         .referencedAssets = {prefabAsset}});
+        writePrefab("assets/variant.prefab",
+                    {.projectVersion = version,
+                     .assetId = variantAsset,
+                     .composition = Prefab::PrefabComposition{.variantParent = Prefab::PrefabAssetReference::Create(nestedAsset).Value(),
+                                                              .variantAuthoredAgainst = nested},
+                     .referencedAssets = {nestedAsset}});
 
         const auto rebuilt = RebuildAssetRegistry(fixture.registry, fixture.source.path, AssetRegistryOpenMode::ReadOnly);
         REQUIRE(rebuilt.HasValue());
@@ -304,10 +333,12 @@ namespace {
         };
         const auto scanned = review();
         REQUIRE(scanned.HasValue());
-        REQUIRE(scanned.Value().schemaBindings.size() == 2);
-        CHECK(scanned.Value().sources.size() == 6);
+        REQUIRE(scanned.Value().schemaBindings.size() == 3);
+        CHECK(scanned.Value().sources.size() == 8);
         CHECK(scanned.Value().uses.size() == 1);  // Authored Decision key use remains a separate finding.
-        const auto scene = std::ranges::find(scanned.Value().schemaBindings, sceneAsset, &BlackboardSchemaBinding::asset);
+        const auto scene = std::ranges::find_if(scanned.Value().schemaBindings, [sceneAsset](const auto &binding) {
+            return binding.asset == sceneAsset && std::holds_alternative<SceneSource::SceneObjectId>(binding.object);
+        });
         REQUIRE(scene != scanned.Value().schemaBindings.end());
         CHECK(scene->sourcePath == "assets/level.horo");
         CHECK(std::get<SceneSource::SceneObjectId>(scene->object).value == 9);
@@ -319,10 +350,59 @@ namespace {
         CHECK(std::ranges::none_of(scanned.Value().gaps, [prefabAsset](const auto &gap) {
             return gap.asset == prefabAsset;
         }));
-        CHECK(std::ranges::any_of(scanned.Value().gaps, [sceneAsset](const auto &gap) {
-            return gap.kind == BlackboardUsageGapKind::SceneSource && gap.asset == sceneAsset;  // Unexpanded placement.
+        const auto occurrence = std::ranges::find_if(scanned.Value().schemaBindings, [sceneAsset](const auto &binding) {
+            return binding.asset == sceneAsset && std::holds_alternative<BlackboardPlacedPrefabObject>(binding.object);
+        });
+        REQUIRE(occurrence != scanned.Value().schemaBindings.end());
+        const auto &address = std::get<BlackboardPlacedPrefabObject>(occurrence->object);
+        CHECK(address.rootPrefab == variantAsset);
+        CHECK(address.sourcePrefab == prefabAsset);
+        CHECK(address.key.instance == placement.instanceId);
+        CHECK(address.key.object.SourceObject().IsRoot());
+        REQUIRE(address.key.object.NestedInstanceScope().size() == 1);
+        CHECK(address.key.object.NestedInstanceScope()[0] == Prefab::LocalObjectId{7});
+        CHECK(occurrence->controller == controller.controller);
+        CHECK(std::ranges::none_of(scanned.Value().gaps, [sceneAsset](const auto &gap) {
+            return gap.kind == BlackboardUsageGapKind::SceneSource && gap.asset == sceneAsset;
+        }));
+        CHECK(std::ranges::any_of(scanned.Value().gaps, [variantAsset](const auto &gap) {
+            return gap.kind == BlackboardUsageGapKind::PrefabSource && gap.asset == variantAsset;
         }));
 
+        SECTION("a stale nested authoring revision cannot manufacture a placement binding") {
+            writePrefab("assets/unit.prefab", {.projectVersion = version,
+                                               .assetId = prefabAsset,
+                                               .objects = {{.name = "New source revision", .components = {component}}}});
+            const auto stale = review();
+            REQUIRE(stale.HasValue());
+            CHECK(stale.Value().schemaBindings.size() == 2);
+            CHECK(stale.Value().uses.size() == 1);
+            CHECK(std::ranges::any_of(stale.Value().gaps, [sceneAsset](const auto &gap) {
+                return gap.asset == sceneAsset && gap.diagnostic &&
+                       gap.diagnostic->code.Value() == Prefab::PrefabErrors::DependencyRevisionMismatch.code.Value();
+            }));
+        }
+        SECTION("missing durable project version cannot manufacture a placement binding") {
+            REQUIRE(std::filesystem::remove(fixture.source.path / ".horo/project.json"));
+            const auto unavailable = review();
+            REQUIRE(unavailable.HasValue());
+            CHECK(unavailable.Value().schemaBindings.size() == 2);
+            CHECK(std::ranges::any_of(unavailable.Value().gaps, [sceneAsset](const auto &gap) {
+                return gap.asset == sceneAsset && gap.diagnostic;
+            }));
+        }
+
+        SECTION("an invalid explicit Prefab policy refuses placement expansion") {
+            constexpr std::string_view invalidPolicy = R"({"hierarchyDepth":-1})";
+            Files::WriteFile(fixture.source.path / ".horo/prefab.json",
+                             {reinterpret_cast<const std::uint8_t *>(invalidPolicy.data()), invalidPolicy.size()});
+            const auto unavailable = review();
+            REQUIRE(unavailable.HasValue());
+            CHECK(unavailable.Value().schemaBindings.size() == 2);
+            CHECK(std::ranges::any_of(unavailable.Value().gaps, [sceneAsset](const auto &gap) {
+                return gap.asset == sceneAsset && gap.diagnostic;
+            }));
+        }
         SECTION("malformed serialized prefab reports a typed gap without losing unrelated evidence") {
             writePair("assets/unit.prefab", prefabAsset, "core.prefab", "{}");
             const auto rejected = review();

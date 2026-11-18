@@ -1836,6 +1836,7 @@ target_compile_features(HoroDecisionCookHost PUBLIC cxx_std_20)
 target_link_libraries(HoroDecisionCookHost
         PUBLIC HoroEngine::AI HoroEngine::Assets HoroEngine::SceneSourceModel
         PRIVATE HoroEngine::ProjectMutationGuard HoroEngine::SceneSource HoroEngine::SceneRuntimeConversion HoroEngine::PrefabAuthoring
+                HoroEngine::Application HoroEngine::PrefabProjectSettings
 )
 
 add_library(HoroAISceneIntegration STATIC
