@@ -76,6 +76,7 @@ namespace Horo::AI {
         friend class QueryExecution;
         QueryId query_;
         Runtime::SceneRuntimeId scene_;
+        std::uint64_t sceneStructure_{};
         std::uint64_t revision_{};
         std::vector<QueryCapturedContext> values_;
     };
@@ -119,8 +120,8 @@ namespace Horo::AI {
 
     /**
      * @brief Owner-thread capture seam for one admitted query and scene incarnation.
-     * @details One instance is bound to one plan. Repeated reads of a revision return the same immutable allocation;
-     *          advancing the revision captures anew. Old snapshots stay valid while consumers retain them.
+     * @details One instance is bound to one plan. Repeated reads of a revision return the same immutable allocation
+     * while the Scene structure matches. Advancing the revision captures anew. Retained snapshots remain readable as history.
      */
     class QueryContextCapture final {
     public:

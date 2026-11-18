@@ -22,11 +22,17 @@ namespace Horo::AI {
         struct ProviderState final {
             int calls{};
             QueryContextValue value{QueryCanonicalContext{}};
+            Runtime::RuntimeScene *editDuringCapture{};
         };
 
         [[nodiscard]] Result<QueryContextValue> CaptureCustom(void *state, const Runtime::RuntimeSceneView &) {
             auto &provider = *static_cast<ProviderState *>(state);
             ++provider.calls;
+            if (auto *scene = std::exchange(provider.editDuringCapture, nullptr)) {
+                Runtime::SceneCommandBuffer commands;
+                REQUIRE(commands.Create({}).IsValid());
+                REQUIRE(scene->Commit(std::move(commands)).HasValue());
+            }
             return Result<QueryContextValue>::Success(provider.value);
         }
 
@@ -195,6 +201,8 @@ namespace Horo::AI {
             Runtime::SceneCommandBuffer destroy;
             destroy.Destroy(*source.target);
             REQUIRE(scene->Commit(std::move(destroy)).HasValue());
+            source.executionRevision = 2;
+            ExpectError(capture.Capture(plan, registry, providers.Value(), scene->View(), source), AIErrors::EnvironmentQueryContextStale);
             source.executionRevision = 3;
             ExpectError(capture.Capture(plan, registry, providers.Value(), scene->View(), source), AIErrors::EnvironmentQueryContextStale);
             CHECK(first.Value()->Values().size() == 6);
@@ -308,6 +316,14 @@ namespace Horo::AI {
             REQUIRE(retried.HasValue());
             CHECK(retried.Value()->Revision() == 2);
             CHECK(state.calls == 3);
+
+            source.executionRevision = 3;
+            state.editDuringCapture = scene.get();
+            ExpectError(capture.Capture(plan, registry, providers.Value(), scene->View(), source), AIErrors::EnvironmentQueryContextStale);
+            const auto recaptured = capture.Capture(plan, registry, providers.Value(), scene->View(), source);
+            REQUIRE(recaptured.HasValue());
+            CHECK(recaptured.Value()->Revision() == 3);
+            CHECK(state.calls == 5);
         }
     }  // namespace
 }  // namespace Horo::AI

@@ -775,7 +775,16 @@ namespace Horo::AI {
             CHECK(captured->winners[0].itemIndex == 1);
             CHECK(captured->winners[0].scoreKey == QueryScoringPlan::ScoreKeyScale);
 
-            probe.current = false;
+            SECTION("provider generation changed") {
+                probe.current = false;
+            }
+            SECTION("the same Scene published a structural replacement") {
+                const auto prior = scene->View().StructuralRevision();
+                Runtime::SceneCommandBuffer commands;
+                REQUIRE(commands.Create({}).IsValid());
+                REQUIRE(scene->Commit(std::move(commands)).HasValue());
+                CHECK(scene->View().StructuralRevision() != prior);
+            }
             const auto stale = query->ReadDebugSnapshot(scene->View());
             REQUIRE(stale);
             CHECK(stale->stale);

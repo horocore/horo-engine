@@ -213,13 +213,16 @@ namespace Horo::AI {
         if (plan_.IsValid() && (plan_ != plan.Id() || source.executionRevision < latestRevision_ ||
                                 (latest_ != nullptr && latest_->Scene() != scene.RuntimeId())))
             return SnapshotResult::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
+        const auto structure = scene.StructuralRevision();
         if (latest_ != nullptr && source.executionRevision == latestRevision_)
-            return SnapshotResult::Success(latest_);
+            return latest_->sceneStructure_ == structure ? SnapshotResult::Success(latest_)
+                                                         : SnapshotResult::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
         if (const auto valid = ValidateEntity(scene, source.querier); valid.HasError())
             return SnapshotResult::Failure(valid.ErrorValue());
 
         auto captured = std::make_shared<QueryContextSnapshot>();
         captured->scene_ = scene.RuntimeId();
+        captured->sceneStructure_ = structure;
         captured->query_ = plan.Id();
         captured->revision_ = source.executionRevision;
         captured->values_.reserve(plan.RequiredContexts().size());
@@ -229,6 +232,8 @@ namespace Horo::AI {
                 return SnapshotResult::Failure(resolved.ErrorValue());
             captured->values_.push_back(std::move(resolved).Value());
         }
+        if (!scene.IsCurrent() || scene.StructuralRevision() != structure)
+            return SnapshotResult::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
         plan_ = plan.Id();
         latestRevision_ = source.executionRevision;
         latest_ = std::move(captured);
