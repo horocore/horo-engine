@@ -213,6 +213,12 @@ namespace Horo::Application::Internal {
         return world ? world->PerceptionSnapshot() : nullptr;
     }
 
+    /** @copydoc InspectHeadlessScene */
+    std::optional<Runtime::RuntimeSceneView> InspectHeadlessScene(const Network::INetworkModeService &service) noexcept {
+        const auto *world = dynamic_cast<const WorldService *>(&service);
+        return world ? world->ActiveScene() : std::nullopt;
+    }
+
     std::optional<Runtime::EntityRef> InspectHeadlessAnimationEntity(const Network::INetworkModeService &service,
                                                                      Runtime::SceneObjectId object) noexcept {
         const auto *world = dynamic_cast<const WorldService *>(&service);

@@ -82,6 +82,11 @@ namespace Horo::Application::Internal {
     /** @brief Reads the authoritative world's last complete spatial publication on its owner lane. */
     [[nodiscard]] std::shared_ptr<const AI::PerceptionSpatialSnapshot> InspectHeadlessPerception(
         const Network::INetworkModeService &service) noexcept;
+    /** @brief Borrows the committed configured Scene for read-only diagnostics on its owner lane.
+     * @param service Actual retained Scene/Physics service facade.
+     * @return View until the next lifecycle mutation, or no view when absent, closing, or called off-lane.
+     */
+    [[nodiscard]] std::optional<Runtime::RuntimeSceneView> InspectHeadlessScene(const Network::INetworkModeService &service) noexcept;
     [[nodiscard]] std::optional<Runtime::EntityRef> InspectHeadlessAnimationEntity(const Network::INetworkModeService &service,
                                                                                    Runtime::SceneObjectId object) noexcept;
 

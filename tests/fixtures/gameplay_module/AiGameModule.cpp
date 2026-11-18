@@ -71,6 +71,7 @@ extern "C" HORO_GAME_EXPORT void HoroTestCopyAiPrefabCapability(
 
 namespace {
     std::uint32_t *decisionLifecycleCounters{};
+    std::uint32_t *decisionFactoryCounter{};
 
     /** @brief Identifies a deliberate rejection by the unloadable native fixture factory. */
     class FixtureFactoryRejection final : public std::runtime_error {
@@ -90,6 +91,8 @@ namespace {
         }
 
         explicit FixtureDecisionNode(std::span<const Horo::AI::BehaviorTreeProperty> properties) {
+            if (decisionFactoryCounter)
+                ++*decisionFactoryCounter;
             if (std::get<bool>(properties.front().value))
                 throw FixtureFactoryRejection("fixture factory rejection");
         }
@@ -183,6 +186,11 @@ extern "C" HORO_GAME_EXPORT void HoroTestObservePerceptionSenseLifecycle(std::ui
 
 extern "C" HORO_GAME_EXPORT void HoroTestObserveDecisionNodeLifecycle(std::uint32_t *counters) noexcept {
     decisionLifecycleCounters = counters;
+}
+
+/** @brief Observes native decision factory attempts without changing the lifecycle probe ABI. */
+extern "C" HORO_GAME_EXPORT void HoroTestObserveDecisionFactory(std::uint32_t *counter) noexcept {
+    decisionFactoryCounter = counter;
 }
 
 extern "C" HORO_GAME_EXPORT Horo::Gameplay::IGameModule *CreateGameModule() noexcept {

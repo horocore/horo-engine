@@ -432,6 +432,7 @@ namespace Horo::Application::PrefabAtomicTest {
 
             ~NativeCookedDecisionProbe() {
                 observeDecision_(nullptr);
+                observeFactories_(nullptr);
                 observeModule_(nullptr, false);
             }
 
@@ -444,6 +445,7 @@ namespace Horo::Application::PrefabAtomicTest {
                 return capability;
             }
 
+            std::uint32_t factories{};
             std::array<std::uint32_t, 3> decision{};
             std::array<std::uint32_t, 4> module{};
 
@@ -457,18 +459,28 @@ namespace Horo::Application::PrefabAtomicTest {
 
             void Bind() {
                 ReadObserver("HoroTestObserveDecisionNodeLifecycle", observeDecision_);
+                ReadObserver("HoroTestObserveDecisionFactory", observeFactories_);
                 ReadObserver("HoroTestObservePerceptionSenseLifecycle", observeModule_);
                 observeDecision_(decision.data());
+                observeFactories_(&factories);
                 observeModule_(module.data(), false);
             }
 
             std::unique_ptr<Platform::DynamicLibrary> image_;
             void (*observeDecision_)(std::uint32_t *) noexcept {};
+            void (*observeFactories_)(std::uint32_t *) noexcept {};
             void (*observeModule_)(std::uint32_t *, bool) noexcept {};
         };
 
+        /** @brief Returns a well-formed authored controller for which the captured catalog has no descriptor. */
+        AI::AiControllerComponent UnavailableController(AI::AiControllerComponent component) {
+            component.controller = AI::TestSupport::MakeIdentity<AI::ControllerTypeId>(999);
+            return component;
+        }
+
         /** @brief Encodes two actual authored controllers using the runtime prefab codec and typed Scene payload projection. */
-        std::vector<std::uint8_t> EncodeDecisionPrefab(Assets::AssetId asset, const AI::TestSupport::ActivationFixture &controller) {
+        std::vector<std::uint8_t> EncodeDecisionPrefab(Assets::AssetId asset, const AI::TestSupport::ActivationFixture &controller,
+                                                       const bool missingChildController) {
             Prefab::CookedPrefabEntity root;
             root.provenance = {asset, {}, ComputeSha256(std::as_bytes(std::span("decision fixture", 16)))};
             SceneSource::SceneObjectComponentSet values{.aiAgent = controller.agent.agent, .aiController = controller.agent.controller};
@@ -480,6 +492,10 @@ namespace Horo::Application::PrefabAtomicTest {
             child.provenance.sourceObject = Prefab::PrefabObjectAddress::Create({}, {7}).Value();
             values.aiAgent->agent = AI::TestSupport::MakeIdentity<AI::AgentId>(2);
             child.members.front() = Builtin(values, Kind::AiAgent, "aiAgent", 3);
+            if (missingChildController) {
+                values.aiController = UnavailableController(*values.aiController);
+                child.members.back() = Builtin(values, Kind::AiController, "aiController", 4);
+            }
 
             auto encoded = Prefab::CookedPrefab::Create({.assetId = asset, .entities = {std::move(root), std::move(child)}},
                                                         Prefab::PrefabLimitProfile::Create({}).Value());
@@ -505,12 +521,13 @@ namespace Horo::Application::PrefabAtomicTest {
         /** @brief Runs native task ownership through the real grouped spawn or atomic scheduler admission refusal. */
         void RunSelectedDecisionPrefab(Network::INetworkModeService &physics, NativeCookedDecisionProbe &probe,
                                        const Prefab::PrefabTemplateLoadRequest &source, const CancellationToken &cancellation,
-                                       const bool rollback) {
+                                       const bool rollback, const std::optional<AI::AiControllerComponent> &degradedController) {
             using enum Prefab::PrefabSpawnState;
             const auto tick = [&](const std::uint64_t frame) {
                 REQUIRE(physics.RunFixedTick({frame, Duration::FromNanoseconds(16'666'667), cancellation}).HasValue());
             };
             tick(1);
+            CHECK(probe.factories == 0);
             CHECK(probe.decision[0] == 0);
             const auto capability = probe.PrefabCapability();
             auto spawn = capability->Spawn({.source = source});
@@ -529,13 +546,37 @@ namespace Horo::Application::PrefabAtomicTest {
             }
             auto instance = spawn.Value().Spawned();
             REQUIRE(instance.HasValue());
-            CHECK(probe.decision[0] == 2);
+            const auto taskCount = degradedController ? 1u : 2u;
+            CHECK(probe.factories == taskCount);
+            CHECK(probe.decision[0] == taskCount);
+            std::optional<Runtime::EntityRef> degradedEntity;
+            if (degradedController) {
+                const auto scene = Internal::InspectHeadlessScene(physics);
+                REQUIRE(scene);
+                for (std::size_t slot = 0; slot < scene->SlotCount(); ++slot) {
+                    const auto entity = scene->EntityAt(slot);
+                    if (!entity || entity->parent != instance.Value().Root())
+                        continue;
+                    REQUIRE_FALSE(degradedEntity);
+                    degradedEntity = entity->entity;
+                    CHECK(entity->components->aiController == degradedController);
+                    REQUIRE(entity->components->aiAgent);
+                    CHECK(entity->components->aiAgent->enabled);
+                }
+                REQUIRE(degradedEntity);
+            }
             auto despawn = capability->Despawn(instance.Value(), 2);
             REQUIRE(despawn.HasValue());
             AwaitHeadlessAiPrefab(physics, despawn.Value(), Committed);
-            CHECK((probe.decision == std::array{2u, 2u, 2u}));
+            if (degradedEntity) {
+                const auto scene = Internal::InspectHeadlessScene(physics);
+                REQUIRE(scene);
+                CHECK(scene->Get(*degradedEntity).HasError());
+            }
+            CHECK((probe.decision == std::array{taskCount, taskCount, taskCount}));
             tick(3);
-            CHECK((probe.decision == std::array{2u, 2u, 2u}));
+            CHECK((probe.decision == std::array{taskCount, taskCount, taskCount}));
+            CHECK(probe.factories == taskCount);
         }
 
         /** @brief Writes only the project metadata and sidecars needed to admit a committed scene in the real executable. */
@@ -556,11 +597,17 @@ namespace Horo::Application::PrefabAtomicTest {
             }
         }
 
+        struct DecisionProductTerminalOptions final {
+            std::optional<Assets::AssetId> prefab;
+            std::string_view missingController;
+            std::string_view refusal{"Selected cooked AI artifact has the wrong family."};
+        };
+
         /** @brief Runs the real terminal executable and checks its bounded admission outcome. */
         void ExpectDecisionProductExit(const int expected, const std::filesystem::path &project, const std::filesystem::path &cooked,
                                        const Assets::AssetCookTargetId &target, Assets::AssetId scene,
                                        const Internal::GameplayWorldSelection &gameplay, AI::ControllerTypeId controller,
-                                       Assets::AssetId decision, const std::optional<Assets::AssetId> prefab = {}) {
+                                       Assets::AssetId decision, const DecisionProductTerminalOptions &options = {}) {
             const auto utf8 = [](const std::filesystem::path &path) {
                 const auto value = path.generic_u8string();
                 return std::string{value.begin(), value.end()};
@@ -585,22 +632,23 @@ namespace Horo::Application::PrefabAtomicTest {
                                                          gameplay.moduleId,
                                                          std::to_string(gameplay.descriptorRevision),
                                                          "deny",
-                                                         prefab ? "--ai-prefab-decision" : "--ai-decision",
+                                                         options.prefab ? "--ai-prefab-decision" : "--ai-decision",
                                                          std::to_string(controller.Value()),
                                                          decision.ToString()},
                                            .timeout = std::chrono::seconds{30},
                                            .onOutput = [&output](ProcessOutputLine line) {
                 output += line.text + '\n';
             }};
-            if (prefab)
-                request.arguments.insert(request.arguments.end(), {prefab->ToString(), "--prefab", "grant"});
+            if (options.prefab)
+                request.arguments.insert(request.arguments.end(), {options.prefab->ToString(), "--prefab", "grant"});
+            if (!options.missingController.empty())
+                request.arguments.insert(request.arguments.end(), {"--ai-missing-controller", std::string{options.missingController}});
             auto result = NativeExternalProcessRunner{}.Run(request, {});
             INFO(output);
             REQUIRE(result.HasValue());
             REQUIRE(result.Value().reason == ProcessTerminationReason::Exited);
             CHECK(result.Value().exitCode == expected);
-            const std::string_view diagnostic =
-                expected == 0 ? "network product completed 2 frames" : "Selected cooked AI artifact has the wrong family.";
+            const std::string_view diagnostic = expected == 0 ? "network product completed 2 frames" : options.refusal;
             CHECK(output.find(diagnostic) != std::string::npos);
         }
 
@@ -636,7 +684,26 @@ namespace Horo::Application::PrefabAtomicTest {
             bool runTerminal = false;
             bool prefabOnly = false;
             bool rollbackPrefab = false;
+            bool preserveInactive = false;
             auto selectedPrefab = prefabId;
+            SECTION("degraded prefab preserves a missing child controller while only its registered sibling obtains a native task") {
+                prepareNative = true;
+                prefabOnly = true;
+                preserveInactive = true;
+            }
+            SECTION("terminal missing-controller policy preserves authored Scene data and validates explicitly selected assets") {
+                prepareNative = true;
+                runTerminal = true;
+                prefabOnly = true;
+                preserveInactive = true;
+            }
+            SECTION("terminal degraded policy rejects an explicitly selected malformed decision asset") {
+                prepareNative = true;
+                runTerminal = true;
+                prefabOnly = true;
+                preserveInactive = true;
+                malformed = true;
+            }
             SECTION("prefab-only selection refuses a committed asset of another type") {
                 prepareNative = true;
                 prefabOnly = true;
@@ -777,8 +844,8 @@ namespace Horo::Application::PrefabAtomicTest {
                 REQUIRE((revision >> gameplay->descriptorRevision));
                 nativeProbe.emplace();
                 auto image = Gameplay::GameModuleHost::PrepareImage(gameplay->nativeArtifact,
-                                                                    {gameplay->moduleId, Gameplay::CurrentGameplayBuildFingerprint(),
-                                                                     gameplay->descriptorRevision});
+                                                                          {gameplay->moduleId, Gameplay::CurrentGameplayBuildFingerprint(),
+                                                                           gameplay->descriptorRevision});
                 REQUIRE(image.HasValue());
                 auto nodes = image.Value()->AcquireDecisionNodes();
                 REQUIRE(nodes.HasValue());
@@ -820,7 +887,8 @@ namespace Horo::Application::PrefabAtomicTest {
             Prefab::PrefabTemplateLoadRequest prefabSource{prefabId, {}, target};
             if (prefabOnly) {
                 const auto prefabType = Output::Type("core.prefab");
-                prefabSource.artifactDigest = Put(raw, prefabId, prefabType, target, EncodeDecisionPrefab(prefabId, controller));
+                prefabSource.artifactDigest =
+                    Put(raw, prefabId, prefabType, target, EncodeDecisionPrefab(prefabId, controller, preserveInactive && !runTerminal));
                 auto cookedPrefab = raw.Load(prefabId, {});
                 REQUIRE(cookedPrefab.HasValue());
                 artifacts.push_back(std::move(cookedPrefab).Value());
@@ -850,6 +918,10 @@ namespace Horo::Application::PrefabAtomicTest {
             } else {
                 source.Add({.object = {1}, .components = {.aiAgent = controller.agent.agent, .aiController = controller.agent.controller}});
             }
+            if (preserveInactive && runTerminal)
+                source.Add({.object = {2},
+                            .components = {.aiAgent = controller.agent.agent,
+                                           .aiController = UnavailableController(*controller.agent.controller)}});
             if (conflictingSceneDeclaration) {
                 auto conflicting = controller.agent;
                 conflicting.agent.agent = Decisions::MakeIdentity<AI::AgentId>(2);
@@ -876,11 +948,26 @@ namespace Horo::Application::PrefabAtomicTest {
                 REQUIRE(published.HasValue());
                 Output::TempDir project;
                 WriteDecisionProductSources(project.path, records);
-                const auto prefab = prefabOnly ? std::optional{prefabId} : std::nullopt;
+                DecisionProductTerminalOptions options{.prefab = prefabOnly ? std::optional{prefabId} : std::nullopt};
+                if (malformed) {
+                    options.missingController = "degrade";
+                    options.refusal = AI::AIErrors::DecisionAssetSchemaInvalid.summary;
+                    ExpectDecisionProductExit(3, project.path, directory.path, target, sceneId, *gameplay, controller.descriptor.controller,
+                                              artifactId, options);
+                    return;
+                }
+                if (preserveInactive) {
+                    auto strict = options;
+                    strict.missingController = "reject";
+                    strict.refusal = AI::AIErrors::ControllerDescriptorMissing.summary;
+                    ExpectDecisionProductExit(3, project.path, directory.path, target, sceneId, *gameplay, controller.descriptor.controller,
+                                              artifactId, strict);
+                    options.missingController = "degrade";
+                }
                 ExpectDecisionProductExit(0, project.path, directory.path, target, sceneId, *gameplay, controller.descriptor.controller,
-                                          artifactId, prefab);
+                                          artifactId, options);
                 ExpectDecisionProductExit(3, project.path, directory.path, target, sceneId, *gameplay, controller.descriptor.controller,
-                                          sceneId, prefab);
+                                          sceneId, options);
                 return;
             }
             REQUIRE(Output::PublishFixture(directory.path, target, manifest, artifacts).HasValue());
@@ -926,11 +1013,14 @@ namespace Horo::Application::PrefabAtomicTest {
                                                          .load = load,
                                                          .aiControllers =
                                                              std::span{catalog}.first(sceneDeclaresController ? 0 : catalog.size()),
+                                                         .aiSettings = {.missingController =
+                                                                            preserveInactive
+                                                                                ? AI::AiMissingControllerPolicy::PreserveInactive
+                                                                                : AI::AiMissingControllerPolicy::Reject},
                                                          .prefabLoads = prefabOnly ? &prefabLoader : nullptr,
                                                          .cookedDecisions = decisions};
-            const auto composed = Internal::ComposeHeadlessSceneNetworkServices(std::make_shared<const Runtime::RuntimeSceneDefinition>(
-                                                                                    std::move(definition).Value()),
-                                                                                std::move(input), {}, gameplay);
+            const auto composed = Internal::ComposeHeadlessSceneNetworkServices(
+                std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(definition).Value()), std::move(input), {}, gameplay);
             REQUIRE(composed.HasValue());
             const auto built = composed.Value().factories.services[static_cast<std::size_t>(NetworkModeServiceKind::Scene)](
                 {NetworkModeServiceKind::Scene, NetworkProjectRole::Standalone, {}, NetworkModeWorldKind::Standalone, {7}});
@@ -957,7 +1047,9 @@ namespace Horo::Application::PrefabAtomicTest {
                 }
                 if (nativeProbe && prefabOnly) {
                     CHECK(nativeProbe->module[3] == 1);
-                    RunSelectedDecisionPrefab(*physics.Value(), *nativeProbe, prefabSource, startup.Token(), rollbackPrefab);
+                    const auto degraded =
+                        preserveInactive ? std::optional{UnavailableController(*controller.agent.controller)} : std::nullopt;
+                    RunSelectedDecisionPrefab(*physics.Value(), *nativeProbe, prefabSource, startup.Token(), rollbackPrefab, degraded);
                 } else if (nativeProbe && !cancelBeforeNativeActivation) {
                     CHECK(nativeProbe->module[3] == 1);
                     CHECK(nativeProbe->decision[0] == 0);
@@ -986,7 +1078,8 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(ai.probe.cleanups == (ranCaptured ? 1 : 0));
             if (nativeProbe) {
                 const auto modules = cancelBeforeNativeActivation || expected ? 0u : 1u;
-                const auto tasks = modules == 0 || rollbackPrefab ? 0u : prefabOnly ? 2u : 1u;
+                const auto activeDecisions = prefabOnly && !preserveInactive ? 2u : 1u;
+                const auto tasks = modules == 0 || rollbackPrefab ? 0u : activeDecisions;
                 CHECK(nativeProbe->module[3] == modules);
                 CHECK((nativeProbe->decision == std::array{tasks, tasks, tasks}));
                 REQUIRE(gameplay->moduleRetirements->Close().HasValue());

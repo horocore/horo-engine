@@ -257,14 +257,32 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Decodes the Scene's missing-controller policy independently of explicit asset selection. */
+        Result<void> ReadMissingControllerPolicy(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch) {
+            if (launch.aiMissingController || arguments.size() - index < 2)
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "Duplicate or missing AI controller policy."));
+            const std::string_view value{arguments[index + 1]};
+            if (value != "reject" && value != "degrade")
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "Use --ai-missing-controller <reject|degrade>."));
+            launch.aiMissingController =
+                value == "degrade" ? AI::AiMissingControllerPolicy::PreserveInactive : AI::AiMissingControllerPolicy::Reject;
+            index += 2;
+            return Result<void>::Success();
+        }
+
         /** @brief Requires the authoritative terminal path and the matching native/cooked authority. */
         Result<void> ValidateCookedDecisions(const ProductLaunch &launch) {
+            if (launch.aiMissingController && (launch.role != Net::NetworkProjectRole::Standalone || launch.sceneInput.scene.empty()))
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "AI controller policy requires a configured standalone Scene."));
             if (!launch.cookedDecisionBindings.empty() &&
                 (launch.role != Net::NetworkProjectRole::Standalone || !launch.gameplay || launch.gameplay->nativeArtifact.empty() ||
                  !launch.sceneInput.scene.starts_with("cooked:") || launch.sceneInput.cookedRoot.empty()))
-                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
-                                                       "AI decisions require standalone mode, a native gameplay module, a "
-                                                       "cooked Scene and its committed generation."));
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "AI decisions require standalone mode, a native gameplay module, a "
+                                                                      "cooked Scene and its committed generation."));
             if (launch.gameplay && launch.gameplay->prefabPermission != GameplayPrefabPermission::Granted &&
                 std::ranges::any_of(launch.cookedDecisionBindings, [](const auto &binding) {
                 return binding.prefab.has_value();
@@ -295,6 +313,11 @@ namespace Horo::Application::Internal {
                 if (key == "--game-module" || key == "--game-script") {
                     if (auto selected = ReadGameplaySelection(arguments, index, launch); selected.HasError())
                         return selected;
+                    continue;
+                }
+                if (key == "--ai-missing-controller") {
+                    if (auto policy = ReadMissingControllerPolicy(arguments, index, launch); policy.HasError())
+                        return policy;
                     continue;
                 }
                 if (key == "--ai-decision" || key == "--ai-prefab-decision") {

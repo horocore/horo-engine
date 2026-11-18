@@ -30,10 +30,15 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             return record_->perception.Current();
         }
 
-        std::optional<Runtime::EntityRef> AnimationEntity(Runtime::SceneObjectId object) const noexcept {
-            if (std::this_thread::get_id() != owners_->owner || !record_ || !record_->scenes)
+        /** @brief Borrows the committed configured Scene on the current owner lane. */
+        std::optional<Runtime::RuntimeSceneView> ActiveScene() const noexcept {
+            if (std::this_thread::get_id() != owners_->owner || !record_ || record_->closeRequested || !record_->scenes)
                 return {};
-            const auto scene = record_->scenes->ActiveScene();
+            return record_->scenes->ActiveScene();
+        }
+
+        std::optional<Runtime::EntityRef> AnimationEntity(Runtime::SceneObjectId object) const noexcept {
+            const auto scene = ActiveScene();
             return scene ? scene->Find(object) : std::nullopt;
         }
 

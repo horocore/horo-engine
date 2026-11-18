@@ -336,6 +336,8 @@ namespace Horo::Application::Internal {
                                                .registry = resources->registry,
                                                .loads = *resources->loads,
                                                .load = resources->load,
+                                               .aiSettings = {.missingController = launch.aiMissingController.value_or(
+                                                                  AI::AiMissingControllerPolicy::Reject)},
                                                .prefabLoads = resources->prefabLoads.get(),
                                                .prefabMetrics = resources->prefabMetrics,
                                                .prefabPolicy = resources->prefabPolicy,

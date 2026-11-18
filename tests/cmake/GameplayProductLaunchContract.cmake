@@ -117,3 +117,10 @@ expect_ai_launch(2 "AI prefab selection requires explicit --prefab grant"
     --project "${SOURCE_ROOT}" --scene "cooked:${scene_id}" --cooked-root "${SOURCE_ROOT}" --cook-target headless-null
     --game-module "${MODULE}" game.tests "${revision}" deny --ai-prefab-decision 1 "${decision_id}" "${prefab_id}")
 message(STATUS "3 prefab-only AI option refusals passed")
+
+expect_ai_launch(2 "Duplicate or missing AI controller policy" --ai-missing-controller)
+expect_ai_launch(2 "Use --ai-missing-controller" --ai-missing-controller implicit)
+expect_ai_launch(2 "Duplicate or missing AI controller policy"
+    --ai-missing-controller reject --ai-missing-controller degrade)
+expect_ai_launch(2 "AI controller policy requires a configured standalone Scene" --ai-missing-controller degrade)
+message(STATUS "4 explicit missing-controller policy refusals passed")

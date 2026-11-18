@@ -22,6 +22,7 @@ namespace Horo::Application::Internal {
         std::optional<GameplayWorldSelection> gameplay;
         HeadlessProjectSceneOptions sceneInput;
         std::vector<HeadlessCookedDecisionBinding> cookedDecisionBindings;
+        std::optional<AI::AiMissingControllerPolicy> aiMissingController;
     };
 
     /** @brief Parses existing positional network modes plus explicit optional Scene input without native activation.
