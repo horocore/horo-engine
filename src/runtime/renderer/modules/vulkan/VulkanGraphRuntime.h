@@ -51,6 +51,12 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<VulkanFrameRetentionSlot> FrameSlot(FrameToken frame) const;
         /** @brief Reports whether this current frame still precedes every native recording use. */
         [[nodiscard]] bool CanWriteFrameInputs(FrameToken frame) const noexcept;
+        /** @copydoc IVulkanEditorGraphicsPort::ObservePreparationBuffer */
+        [[nodiscard]] Result<bool> ObservePreparationBuffer(std::uint64_t instance);
+        /** @copydoc IVulkanEditorGraphicsPort::WritePreparationUniform */
+        [[nodiscard]] Result<void> WritePreparationUniform(std::uint64_t instance, std::span<const std::byte> bytes);
+        /** @copydoc IVulkanEditorGraphicsPort::WriteFrameBuffer */
+        [[nodiscard]] Result<void> WriteFrameBuffer(FrameToken frame, std::uint64_t instance, std::span<const std::byte> bytes);
         [[nodiscard]] Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request);
         /** @brief Records one bounded reflected material pass using this runtime's existing submission owner.
          * @param request Exact frame, offscreen target, immutable draws and explicit frontend submission/lease.

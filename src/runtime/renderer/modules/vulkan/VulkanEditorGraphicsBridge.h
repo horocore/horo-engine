@@ -75,6 +75,17 @@ namespace Horo::Render::Detail {
         [[nodiscard]] virtual Result<void> PreparePrimaryOutput(FrameToken frame, PrimaryOutputAttachment attachment) = 0;
         [[nodiscard]] virtual Result<void> ExecuteGui(const GuiCompositionRequest &request, IVulkanGuiEncoder &encoder) = 0;
         [[nodiscard]] virtual Result<void> WriteFrameBuffer(FrameToken frame, std::uint64_t instance, std::span<const std::byte> bytes) = 0;
+        /** @brief Polls prior GPU readers/writers of a frontend-resolved buffer without beginning a frame.
+         * @param instance Exact live native buffer instance from the selected frontend.
+         * @return True for a reusable preparation slot, false while native work remains, or typed owner/lifecycle failure.
+         */
+        [[nodiscard]] virtual Result<bool> ObservePreparationBuffer(std::uint64_t instance) = 0;
+        /** @brief Writes a whole host-visible uniform only after its exact prior native use retires.
+         * @param instance Exact live uniform buffer instance from the selected frontend.
+         * @param bytes Prepared full-size native uniform contents.
+         * @return Success or typed busy, owner, lifecycle or resource failure. Never waits or starts a native frame.
+         */
+        [[nodiscard]] virtual Result<void> WritePreparationUniform(std::uint64_t instance, std::span<const std::byte> bytes) = 0;
         [[nodiscard]] virtual Result<void> AttachDeviceChild(IVulkanEditorDeviceChild &child) = 0;
         virtual void DetachDeviceChild(IVulkanEditorDeviceChild &child) noexcept = 0;
     };

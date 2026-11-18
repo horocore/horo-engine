@@ -162,6 +162,14 @@ Result<void> VulkanResourceRuntime::WriteHostFrameBuffer(const std::uint64_t ins
     return Result<void>::Success();
 }
 
+/** @copydoc VulkanResourceRuntime::WriteHostUniform */
+Result<void> VulkanResourceRuntime::WriteHostUniform(const std::uint64_t instance, const std::span<const std::byte> bytes) {
+    const auto *buffer = Impl::Find(impl_->buffers, instance);
+    if (!buffer || buffer->descriptor.usage != RenderBufferUsage::Uniform)
+        return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceRequestInvalid));
+    return WriteHostFrameBuffer(instance, bytes);
+}
+
 /** @copydoc VulkanResourceRuntime::VfxPublication */
 Result<VulkanVfxPublication> VulkanResourceRuntime::VfxPublication(const std::uint64_t instance) const {
     const auto *buffer = Impl::Find(impl_->buffers, instance);

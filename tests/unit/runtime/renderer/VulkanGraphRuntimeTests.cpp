@@ -10,6 +10,49 @@ namespace {
 #include "VulkanMaterialCommandTests.inl"
 #include "VulkanMultiviewCommandTests.inl"
 
+    TEST_CASE("Vulkan pre-frame uniform preparation waits for exact native readers by polling only",
+              "[renderer][vulkan][graph][reconstruction][retirement]") {
+        NativeGraphFixture fixture;
+        MultiviewPacket packet(fixture, false);
+        const auto uniform = packet.parameters;
+        constexpr std::size_t UniformBytes = 224;
+        std::array<std::byte, UniformBytes> initial;
+        initial.fill(std::byte{0x35});
+        std::array<std::byte, UniformBytes> next;
+        next.fill(std::byte{0x61});
+        auto written = std::span{fixture.resourceState.state.mapped}.first(UniformBytes);
+        REQUIRE(SubmissionTest::Take(fixture.graph.ObservePreparationBuffer(uniform)));
+        CHECK(fixture.graph.ObservePreparationBuffer(0).HasError());
+        CHECK(fixture.graph.WritePreparationUniform(packet.native.vertex, initial).HasError());
+        CHECK(fixture.graph.WritePreparationUniform(uniform, std::span{initial}.first(1)).HasError());
+        REQUIRE(fixture.graph.WritePreparationUniform(uniform, initial).HasValue());
+        CHECK(std::ranges::equal(written, initial));
+
+        REQUIRE(fixture.graph.BeginFrame({1}).HasValue());
+        CHECK(fixture.graph.ObservePreparationBuffer(uniform).HasError());
+        CHECK(fixture.graph.WritePreparationUniform(uniform, next).HasError());
+        CHECK(std::ranges::equal(written, initial));
+        RenderGraphLeaseTransfer transfer;
+        REQUIRE(fixture.graph.ExecuteGraph(packet.Request(fixture, transfer)).HasValue());
+        REQUIRE(fixture.graph.SubmitFrame({1}).HasValue());
+        CHECK_FALSE(SubmissionTest::Take(fixture.graph.ObservePreparationBuffer(uniform)));
+        const auto busy = fixture.graph.WritePreparationUniform(uniform, next);
+        REQUIRE(busy.HasError());
+        CHECK(busy.ErrorValue().code.Value() == VulkanBackendErrors::SubmissionBusy.code.Value());
+        CHECK(std::ranges::equal(written, initial));
+        CHECK(fixture.commandState.state.waitCalls == 0);
+
+        fixture.commandState.state.Complete();
+        REQUIRE(SubmissionTest::Take(fixture.graph.ObservePreparationBuffer(uniform)));
+        REQUIRE(fixture.graph.WritePreparationUniform(uniform, next).HasValue());
+        CHECK(std::ranges::equal(written, next));
+        REQUIRE(fixture.graph.BeginShutdown().HasValue());
+        CHECK(fixture.graph.ObservePreparationBuffer(uniform).HasError());
+        CHECK(fixture.graph.WritePreparationUniform(uniform, initial).HasError());
+        CHECK(std::ranges::equal(written, next));
+        CHECK(fixture.commandState.state.waitCalls == 0);
+    }
+
     TEST_CASE("Vulkan VFX publication rejects active recording and closed admission without native writes or waits",
               "[unit][runtime][renderer][vulkan][vfx]") {
         NativeGraphFixture fixture;

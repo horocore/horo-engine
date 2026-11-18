@@ -354,6 +354,13 @@ the new pre-display raster and comes before exposure/display mapping and
 overlays. Temporal reconstruction also requires same-view positive linear
 depth and jitter-free motion producers.
 
+Vulkan pre-frame preparation observes exact resident buffer use through the
+selected renderer's queue timeline and may update a host-visible uniform only
+after retirement. It uses the same completion owner as in-frame buffer writes
+and does not acquire an image, begin a frame, or wait on the GPU. This is the
+resource boundary needed by the viewport exposure and output color owner's
+existing pre-frame ring preparation.
+
 The release cook uses the existing locked Ubuntu 26.04 x86-64 shader host.
 Run `HoroEditorVulkanShaderCook --describe-tools` for the approved external
 tool identities and pass the release job's existing candidate ID:

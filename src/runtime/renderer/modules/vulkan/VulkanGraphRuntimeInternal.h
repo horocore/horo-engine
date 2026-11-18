@@ -250,6 +250,10 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> FinishPass(const RenderGraphExecutionRequest &, std::size_t);
         [[nodiscard]] Result<void> ValidateColor(const RenderGraphColorAttachment &, RenderQueueId);
         [[nodiscard]] Result<void> GpuAccess(bool cold) const;
+        /** @brief Polls the selected queue timeline for this exact buffer's last native use. Caller admits owner and phase. */
+        [[nodiscard]] Result<bool> ObserveBufferRetirement(std::uint64_t instance);
+        /** @brief Returns typed busy when a prior reader/writer still retains this native buffer. */
+        [[nodiscard]] Result<void> RequireBufferRetirement(std::uint64_t instance);
         [[nodiscard]] Result<void> ValidateGraphAdmission(const RenderGraphExecutionRequest &) const;
         [[nodiscard]] Result<void> ExecuteGraphCommands(const RenderGraphExecutionRequest &);
         [[nodiscard]] Result<void> RecordPass(VkCommandBuffer, VulkanCommandTicket, const RenderQueueSubmission &,

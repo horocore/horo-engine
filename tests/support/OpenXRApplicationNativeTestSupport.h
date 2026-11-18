@@ -50,6 +50,14 @@ namespace Horo::Tests::OpenXRApplication {
             return Unavailable();
         }
 
+        Result<bool> ObservePreparationBuffer(std::uint64_t) override {
+            return Result<bool>::Failure(MakeError(XR::XRErrors::OperationUnavailable));
+        }
+
+        Result<void> WritePreparationUniform(std::uint64_t, std::span<const std::byte>) override {
+            return Unavailable();
+        }
+
         Result<void> AttachDeviceChild(RenderNative::IVulkanEditorDeviceChild &) override {
             return Result<void>::Success();
         }

@@ -174,6 +174,11 @@ namespace Horo::Render::Detail {
          * @pre Caller admits the exact active canonical frame and verifies BufferCompletion before writing.
          * No index/storage usage, allocation, submission or completion authority is introduced. */
         [[nodiscard]] Result<void> WriteHostFrameBuffer(std::uint64_t instance, std::span<const std::byte> bytes);
+        /** @brief Writes an exact host-visible uniform buffer after the prepared-frame owner proves retirement.
+         * @param instance Selected frontend's bound native buffer instance.
+         * @param bytes Complete uniform contents. @return Success or typed size, usage, visibility or I/O failure.
+         */
+        [[nodiscard]] Result<void> WriteHostUniform(std::uint64_t instance, std::span<const std::byte> bytes);
         /** @brief Publishes one exact prepared VFX block after the command owner proves all prior buffer uses retired. */
         [[nodiscard]] Result<void> UpdateVfxFrame(const NativeVfxFrameUpdate &update, const bool &closing);
         /** @brief Reads accepted publication from the exact live native buffer generation without allocation. */

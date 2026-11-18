@@ -48,20 +48,17 @@ Result<void> ExecuteGui(const GuiCompositionRequest &request, Detail::IVulkanGui
 
 /** @copydoc IVulkanEditorGraphicsPort::WriteFrameBuffer */
 Result<void> WriteFrameBuffer(const FrameToken frame, const std::uint64_t instance, const std::span<const std::byte> bytes) override {
-    if (!graph_.CanWriteFrameInputs(frame))
-        return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
-    const auto completion = resources_.BufferCompletion(instance);
-    if (completion.HasError())
-        return Result<void>::Failure(completion.ErrorValue());
-    if (completion.Value().IsValid()) {
-        const auto retired = graph_.ObserveSubmission(
-            {.completion = completion.Value(), .expectedDeviceIncarnation = resourceCapabilities_.deviceIncarnation});
-        if (retired.HasError())
-            return Result<void>::Failure(retired.ErrorValue());
-        if (!retired.Value())
-            return Result<void>::Failure(MakeError(VulkanBackendErrors::SubmissionBusy));
-    }
-    return resources_.WriteHostFrameBuffer(instance, bytes);
+    return graph_.WriteFrameBuffer(frame, instance, bytes);
+}
+
+/** @copydoc IVulkanEditorGraphicsPort::ObservePreparationBuffer */
+Result<bool> ObservePreparationBuffer(const std::uint64_t instance) override {
+    return graph_.ObservePreparationBuffer(instance);
+}
+
+/** @copydoc IVulkanEditorGraphicsPort::WritePreparationUniform */
+Result<void> WritePreparationUniform(const std::uint64_t instance, const std::span<const std::byte> bytes) override {
+    return graph_.WritePreparationUniform(instance, bytes);
 }
 
 /** @copydoc IVulkanEditorGraphicsPort::AttachDeviceChild */

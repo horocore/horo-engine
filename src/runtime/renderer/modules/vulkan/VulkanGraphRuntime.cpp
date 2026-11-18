@@ -188,6 +188,51 @@ namespace Horo::Render::Detail {
                impl_->lifecycle.pins->references == 0;
     }
 
+    /** @copydoc VulkanGraphRuntime::Impl::ObserveBufferRetirement */
+    Result<bool> VulkanGraphRuntime::Impl::ObserveBufferRetirement(std::uint64_t instance) {
+        const auto completion = resources->BufferCompletion(instance);
+        if (completion.HasError())
+            return Result<bool>::Failure(completion.ErrorValue());
+        if (!completion.Value().IsValid())
+            return Result<bool>::Success(true);
+        return commands.Observe({.completion = completion.Value(), .expectedDeviceIncarnation = deviceIncarnation});
+    }
+
+    /** @copydoc VulkanGraphRuntime::Impl::RequireBufferRetirement */
+    Result<void> VulkanGraphRuntime::Impl::RequireBufferRetirement(std::uint64_t instance) {
+        const auto retired = ObserveBufferRetirement(instance);
+        if (retired.HasError())
+            return Result<void>::Failure(retired.ErrorValue());
+        if (!retired.Value())
+            return Result<void>::Failure(MakeError(VulkanBackendErrors::SubmissionBusy));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc VulkanGraphRuntime::ObservePreparationBuffer */
+    Result<bool> VulkanGraphRuntime::ObservePreparationBuffer(std::uint64_t instance) {
+        if (const auto admitted = impl_->GpuAccess(true); admitted.HasError())
+            return Result<bool>::Failure(admitted.ErrorValue());
+        return impl_->ObserveBufferRetirement(instance);
+    }
+
+    /** @copydoc VulkanGraphRuntime::WritePreparationUniform */
+    Result<void> VulkanGraphRuntime::WritePreparationUniform(std::uint64_t instance, std::span<const std::byte> bytes) {
+        if (const auto admitted = impl_->GpuAccess(true); admitted.HasError())
+            return admitted;
+        if (const auto available = impl_->RequireBufferRetirement(instance); available.HasError())
+            return available;
+        return impl_->resources->WriteHostUniform(instance, bytes);
+    }
+
+    /** @copydoc VulkanGraphRuntime::WriteFrameBuffer */
+    Result<void> VulkanGraphRuntime::WriteFrameBuffer(FrameToken frame, std::uint64_t instance, std::span<const std::byte> bytes) {
+        if (!CanWriteFrameInputs(frame))
+            return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
+        if (const auto available = impl_->RequireBufferRetirement(instance); available.HasError())
+            return available;
+        return impl_->resources->WriteHostFrameBuffer(instance, bytes);
+    }
+
     Result<void> VulkanGraphRuntime::Impl::ValidateGraphAdmission(const RenderGraphExecutionRequest &request) const {
         if (auto access = Access(); access.HasError())
             return access;
@@ -310,17 +355,11 @@ namespace Horo::Render::Detail {
 
         impl_->lifecycle.uploadingVfx = true;
         const UploadScope scope{impl_->lifecycle.uploadingVfx};
-        const auto completion = impl_->resources->BufferCompletion(update.instance);
-        if (completion.HasError())
-            return Result<void>::Failure(completion.ErrorValue());
-        if (completion.Value().IsValid()) {
-            const auto retired =
-                impl_->commands.Observe({.completion = completion.Value(), .expectedDeviceIncarnation = update.deviceIncarnation});
-            if (retired.HasError())
-                return Result<void>::Failure(retired.ErrorValue());
-            if (!retired.Value())
-                return Result<void>::Failure(MakeError(VfxFrameErrors::Pending));
-        }
+        const auto retired = impl_->ObserveBufferRetirement(update.instance);
+        if (retired.HasError())
+            return Result<void>::Failure(retired.ErrorValue());
+        if (!retired.Value())
+            return Result<void>::Failure(MakeError(VfxFrameErrors::Pending));
         if (impl_->lifecycle.closing)
             return Result<void>::Failure(MakeError(VfxFrameErrors::InvalidInput));
         return impl_->resources->UpdateVfxFrame(update, impl_->lifecycle.closing);
