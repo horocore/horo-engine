@@ -5,39 +5,40 @@
 #include <limits>
 
 namespace Horo::Application::Internal {
-    namespace {}  // namespace
+    namespace {
+        /** @brief Projects stable XR error identities without exposing native diagnostic text to a presentation caller. */
+        Editor::EditorXrSetupIssue SetupIssue(const Error &error) noexcept {
+            using enum Editor::EditorXrSetupIssue;
+            using namespace XR;
+            const auto &code = error.code.Value();
+            if (code == XRSessionErrors::SetupCleanupPending.code.Value())
+                return Cleanup;
+            if (code == XRErrors::PermissionDenied.code.Value())
+                return Permission;
+            if (code == XRErrors::IdentityStale.code.Value() || code == XRErrors::CapabilityStale.code.Value() ||
+                code == XRErrors::LoaderPreflightStale.code.Value())
+                return Stale;
+            if (code == XRErrors::OperationIncompatible.code.Value())
+                return Renderer;
+            if (code == XRErrors::OperationUnsupported.code.Value() || code == XRErrors::SystemUnsupported.code.Value())
+                return Unsupported;
+            if (code == XRErrors::CapacityExceeded.code.Value())
+                return Capacity;
+            if (code == XRErrors::OperationInvalid.code.Value())
+                return Invalid;
+            return Unavailable;
+        }
 
-    /** @brief Projects stable XR error identities without exposing native diagnostic text to a presentation caller. */
-    Editor::EditorXrSetupIssue SetupIssue(const Error &error) noexcept {
-        using enum Editor::EditorXrSetupIssue;
-        using namespace XR;
-        const auto &code = error.code.Value();
-        if (code == XRSessionErrors::SetupCleanupPending.code.Value())
-            return Cleanup;
-        if (code == XRErrors::PermissionDenied.code.Value())
-            return Permission;
-        if (code == XRErrors::IdentityStale.code.Value() || code == XRErrors::CapabilityStale.code.Value() ||
-            code == XRErrors::LoaderPreflightStale.code.Value())
-            return Stale;
-        if (code == XRErrors::OperationIncompatible.code.Value())
-            return Renderer;
-        if (code == XRErrors::OperationUnsupported.code.Value() || code == XRErrors::SystemUnsupported.code.Value())
-            return Unsupported;
-        if (code == XRErrors::CapacityExceeded.code.Value())
-            return Capacity;
-        if (code == XRErrors::OperationInvalid.code.Value())
-            return Invalid;
-        return Unavailable;
-    }
+        /** @brief Copies finite classifications only. Raw pose and joint fields are never read by the inspector. */
+        void AddValidity(Editor::EditorXrInspectionValidity &out, const XR::XRPoseComponents &components) noexcept {
+            static_assert(static_cast<std::size_t>(XR::XRPoseComponentValidity::Count) == decltype(out.position){}.size());
+            static_assert(static_cast<std::size_t>(XR::XRTrackingConfidence::Count) == decltype(out.confidence){}.size());
+            ++out.position[static_cast<std::size_t>(components.positionMeters.validity)];
+            ++out.orientation[static_cast<std::size_t>(components.orientation.validity)];
+            ++out.confidence[static_cast<std::size_t>(components.confidence)];
+        }
 
-    /** @brief Copies finite classifications only. Raw pose and joint fields are never read by the inspector. */
-    void AddValidity(Editor::EditorXrInspectionValidity &out, const XR::XRPoseComponents &components) noexcept {
-        static_assert(static_cast<std::size_t>(XR::XRPoseComponentValidity::Count) == decltype(out.position){}.size());
-        static_assert(static_cast<std::size_t>(XR::XRTrackingConfidence::Count) == decltype(out.confidence){}.size());
-        ++out.position[static_cast<std::size_t>(components.positionMeters.validity)];
-        ++out.orientation[static_cast<std::size_t>(components.orientation.validity)];
-        ++out.confidence[static_cast<std::size_t>(components.confidence)];
-    }
+    }  // namespace
 
     /** @copydoc CopyOpenXRInspectionTracking */
     void CopyOpenXRInspectionTracking(Editor::EditorXrInspectionSnapshot &out, const XR::XRTrackingSnapshot &tracking) noexcept {
