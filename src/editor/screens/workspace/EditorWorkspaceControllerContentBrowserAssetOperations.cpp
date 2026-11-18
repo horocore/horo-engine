@@ -1,4 +1,5 @@
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
+#include "Horo/Foundation/Paths.h"
 #include "WorkspacePathText.h"
 #include "editor/menu/EditorMenuPlatform.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
@@ -73,6 +74,30 @@ namespace Horo::Editor {
             .companions = std::move(companions),
             .assetId = assetId,
         };
+    }
+
+    /** @copydoc EditorWorkspaceController::CreateContentBrowserEnvironmentQuery */
+    void EditorWorkspaceController::CreateContentBrowserEnvironmentQuery(const EnvironmentQueryCreationRequest &request) {
+        auto &error = m_viewModel.contentBrowserOperationError;
+        error.clear();
+        if (!m_viewModel.environmentQueryCreationAvailable) {
+            error = "workspace.environment_query.descriptors_unavailable";
+            return;
+        }
+        const auto directory = NormalizeAbsolute(WorkspaceNativePath(request.directory));
+        const auto root = ProjectLayout::AssetRoot(ProjectRoot());
+        if (!IsPortableEntryName(request.name) || request.name.size() > AI::EnvironmentQuerySchemaLimits::DisplayNameBytes ||
+            !IsContentBrowserDirectoryTargetAllowed(root, directory)) {
+            error = "workspace.content_browser.operation.invalid_name";
+            return;
+        }
+        const auto name = request.name + std::string{AI::EnvironmentQuerySourceExtension};
+        if (DirectoryContainsPortableName(directory, name) || DirectoryContainsPortableName(directory, name + ".horo")) {
+            error = "workspace.content_browser.operation.name_exists";
+            return;
+        }
+        PublishInitialEnvironmentQuery(directory / WorkspaceNativePath(name), request,
+                                       GenerateRandomAssetId(m_mutableAssetRegistry->Snapshot()));
     }
 
     bool EditorWorkspaceController::CopyContentBrowserAssetTo(const std::filesystem::path &absoluteSource,

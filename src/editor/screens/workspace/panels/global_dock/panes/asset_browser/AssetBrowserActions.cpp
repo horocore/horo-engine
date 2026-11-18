@@ -83,15 +83,17 @@ namespace Horo::Editor {
     void DrawAssetBrowserBackgroundActions(const EditorWorkspaceViewModel &viewModel, AssetBrowserInteractionSession &interactionSession,
                                            EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
         const ILocalizationService &localization = context.localization;
-        constexpr std::array actionKeys = {"action.paste_here",
-                                           "action.move_here",
-                                           "action.create_folder",
-                                           "action.create_lua_behavior",
-                                           "action.create_native_behavior",
-                                           "action.import_here",
-                                           "action.refresh"};
+        const auto &directory = viewModel.contentBrowser;
+        const bool canCreateQuery = viewModel.environmentQueryCreationAvailable && directory.rootKind == ContentBrowserRootKind::Assets;
+        constexpr std::string_view createQueryAction = "action.create_environment_query";
+        constexpr std::array actionKeys = {"action.paste_here",          "action.move_here",
+                                           "action.create_folder",       createQueryAction.data(),
+                                           "action.create_lua_behavior", "action.create_native_behavior",
+                                           "action.import_here",         "action.refresh"};
         float widestLabel = 0.0F;
         for (const char *key : actionKeys) {
+            if (!canCreateQuery && key == createQueryAction)
+                continue;
             const std::string &label = AssetBrowserPane::kTextScope.Text(localization, key);
             widestLabel =
                 std::max(widestLabel, context.theme.fonts.sans->CalcTextSizeA(Theme::TextPx::Label(), FLT_MAX, 0.0F, label.c_str()).x);
@@ -102,7 +104,6 @@ namespace Horo::Editor {
         if (!Ui::BeginContextWindowMenu("##ContentBrowserBackgroundMenu"))
             return;
 
-        const ContentBrowserDirectory &directory = viewModel.contentBrowser;
         DrawPasteAction(directory.absoluteCurrentPath, viewModel.contentBrowserClipboard.mode, context, command);
         Ui::ContextMenuSeparator();
         if (Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, "action.create_folder") +
@@ -110,6 +111,12 @@ namespace Horo::Editor {
                                     .c_str(),
                                 nullptr, context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.create")) {
             interactionSession.OpenCreateFolder();
+        }
+        if (canCreateQuery && Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, createQueryAction) +
+                                                   "###content_browser_create_environment_query")
+                                                      .c_str(),
+                                                  nullptr, context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.create")) {
+            interactionSession.OpenCreateQuery(directory.absoluteCurrentPath);
         }
         if (Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, "action.create_lua_behavior") +
                                  "###content_browser_create_lua_behavior")

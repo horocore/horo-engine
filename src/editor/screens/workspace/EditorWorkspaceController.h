@@ -56,6 +56,10 @@ namespace Horo::Platform {
     class IProjectReadFiles;
 }
 
+namespace Horo::Application {
+    struct ProjectAssetImportReceipt;
+}  // namespace Horo::Application
+
 namespace Horo::Editor {
     struct TerrainDocumentView;
     class IEditorPlayXrHost;
@@ -130,6 +134,7 @@ namespace Horo::Editor {
         std::optional<SceneSource::TriggerVolumeConversionContext> triggerBinding; /**< Immutable project capture; omitted in Null. */
         const Application::TerrainAuthoringCookFactory *terrainCook{};
         const Application::TerrainAuthoringAssetFactory *terrainAssets{};
+        AI::LatticeQueryAuthoringFactory latticeQueryFactory{};
         const AI::QuerySchemaRegistry *querySchema{}; /**< Application-owned immutable descriptor registry. */
     };
 
@@ -658,6 +663,7 @@ namespace Horo::Editor {
         CancellationSource m_prefabCancellation;
 
         Assets::AssetRegistry *m_mutableAssetRegistry{};
+        AI::LatticeQueryAuthoringFactory m_latticeQueryFactory{};
         const AI::QuerySchemaRegistry *m_querySchema{};
         UiInspectorResources *m_uiInspectorResources{};
         JobSystem *m_sourceRecoveryJobs{};
@@ -1243,6 +1249,15 @@ namespace Horo::Editor {
         void OpenDiagnosticSource(const DiagnosticSourceRequest &source);
         /** @brief Creates a registered EQS source from an explicitly selected existing query. */
         [[nodiscard]] bool CopyEnvironmentQuerySource(const ContentBrowserAssetTransferPlan &plan, Assets::AssetId newId);
+
+        /** @brief Validates the browser request and attempts to create an initial authored EQS source. */
+        void CreateContentBrowserEnvironmentQuery(const EnvironmentQueryCreationRequest &request);
+        /** @brief Creates and opens one registered query using the installed typed provider's authoring factory. */
+        void PublishInitialEnvironmentQuery(const std::filesystem::path &destination, const EnvironmentQueryCreationRequest &request,
+                                            Assets::AssetId newId);
+        /** @brief Resolves the authored publication outcome and refreshes the shared browser and registry projection. */
+        [[nodiscard]] bool FinishEnvironmentQueryPublication(const Application::ProjectAssetImportReceipt &receipt,
+                                                             const Result<void> &outcome, std::string_view failureKey);
         [[nodiscard]] bool CopyContentBrowserAssetTo(const std::filesystem::path &absoluteSource,
                                                      const std::filesystem::path &absoluteDestinationDirectory);
         [[nodiscard]] std::optional<ContentBrowserAssetTransferPlan> PrepareContentBrowserAssetTransfer(

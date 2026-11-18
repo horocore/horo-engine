@@ -203,6 +203,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                                                                   PCGEditorCatalog &&catalog,
                                                                                   PCGPreviewInputs &&previewInputs) const {
         const auto *bakeDependencies = services_.TryGetConst<Application::WorldBakeDependencySource>();
+        const auto *latticeFactory = services_.TryGetConst<AI::LatticeQueryAuthoringFactory>();
         return EditorWorkspaceDependencies{.assets = {.mutableAssetRegistry = projectServices_.assetRegistry,
                                                       .source = std::move(sources.registry),
                                                       .importerCatalog = projectServices_.importerCatalog},
@@ -236,6 +237,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                            .procedural = {.catalog = std::move(catalog), .previewInputs = std::move(previewInputs)},
                                            .terrainCook = services_.TryGetConst<Application::TerrainAuthoringCookFactory>(),
                                            .terrainAssets = services_.TryGetConst<Application::TerrainAuthoringAssetFactory>(),
+                                           .latticeQueryFactory = latticeFactory ? *latticeFactory : nullptr,
                                            .querySchema = services_.TryGetConst<AI::QuerySchemaRegistry>()};
     }
 

@@ -26,57 +26,93 @@ namespace Horo::Editor {
                                                                    EnvironmentQuerySourceCodec::MaximumBytes);
         }
 
-        /** @brief Creates a new semantic QueryId while retaining the selected source's exact stage and result contracts. */
-        Result<std::vector<std::uint8_t>> PrepareQueryCopy(const std::filesystem::path &root, const Assets::AssetRegistrySnapshot &registry,
-                                                           Assets::AssetId selected) {
-            using Copy = Result<std::vector<std::uint8_t>>;
+        /** @brief Exact query and result namespaces from current pinned source pairs. */
+        struct QueryNamespace final {
+            std::set<AI::QueryId> queries;
+            std::set<AI::QueryResultSchemaId> results;
+            std::optional<AI::EnvironmentQueryAsset> selected;
+        };
+
+        /** @brief Captures all registered query IDs and one optional duplication source, with bounded exact inputs. */
+        Result<QueryNamespace> CaptureQueryNamespace(const std::filesystem::path &root, const Assets::AssetRegistrySnapshot &registry,
+                                                     std::optional<Assets::AssetId> selected = {}) {
+            using Namespace = Result<QueryNamespace>;
             std::vector<Assets::AssetId> queries;
             const Assets::AssetCookLimits limits{.maximumSourceBytes = EnvironmentQuerySourceCodec::MaximumBytes};
             for (const auto &record : registry.Records()) {
                 if (record.type.Value() != AI::EnvironmentQuerySourceAssetType)
                     continue;
                 if (queries.size() == limits.maximumAssets)
-                    return Copy::Failure(MakeError(Assets::AssetSourceErrors::Limit));
+                    return Namespace::Failure(MakeError(Assets::AssetSourceErrors::Limit));
                 queries.push_back(record.id);
             }
             constexpr std::uint64_t MaximumInventoryBytes = 64ULL * 1024ULL * 1024ULL;
             const auto inventory = Assets::AssetCookInputSnapshot::CaptureSelected(root, registry, queries, limits, MaximumInventoryBytes);
             if (inventory.HasError())
-                return Copy::Failure(inventory.ErrorValue());
+                return Namespace::Failure(inventory.ErrorValue());
 
-            std::set<AI::QueryId> known;
-            std::optional<AI::EnvironmentQueryAsset> original;
+            QueryNamespace names;
             for (const auto &file : inventory.Value().Sources()) {
                 auto query = EnvironmentQuerySourceCodec::Decode(file.bytes);
                 if (query.HasError())
-                    return Copy::Failure(query.ErrorValue());
-                if (!known.insert(query.Value().Id()).second)
-                    return Copy::Failure(MakeError(AI::AIErrors::EnvironmentQueryIdentityConflict));
+                    return Namespace::Failure(query.ErrorValue());
+                if (!names.queries.insert(query.Value().Id()).second)
+                    return Namespace::Failure(MakeError(AI::AIErrors::EnvironmentQueryIdentityConflict));
+                names.results.insert(query.Value().ResultSchema().id);
                 if (file.record.id == selected)
-                    original = std::move(query).Value();
+                    names.selected = std::move(query).Value();
             }
-            if (!original)
-                return Copy::Failure(MakeError(AI::AIErrors::EnvironmentQuerySchemaInvalid));
+            if (selected && !names.selected)
+                return Namespace::Failure(MakeError(AI::AIErrors::EnvironmentQuerySchemaInvalid));
             if (const auto verified = inventory.Value().VerifyUnchanged(); verified.HasError())
-                return Copy::Failure(verified.ErrorValue());
+                return Namespace::Failure(verified.ErrorValue());
+            return Namespace::Success(std::move(names));
+        }
 
+        /** @brief Issues a nonzero stable identity from the editor's local entropy source. */
+        template <typename Identity> Result<Identity> IssueQueryIdentity(const std::set<Identity> &used = {}) {
             std::random_device entropy;
             std::uniform_int_distribution<std::uint64_t> ids;
             for (unsigned attempt = 0; attempt < 32; ++attempt) {
-                const auto id = AI::QueryId::Create(ids(entropy));
-                if (id.HasError() || known.contains(id.Value()))
-                    continue;
-                const auto stages = original->Stages();
-                AI::QueryAssetSource source{.id = id.Value(),
-                                            .displayName = original->DisplayName(),
-                                            .result = original->ResultSchema(),
-                                            .stages = {stages.begin(), stages.end()}};
-                const auto query = AI::EnvironmentQueryAsset::Capture(source);
-                if (query.HasError())
-                    return Copy::Failure(query.ErrorValue());
-                return EnvironmentQuerySourceCodec::Encode(query.Value());
+                const auto identity = Identity::Create(ids(entropy));
+                if (identity.HasValue() && !used.contains(identity.Value()))
+                    return identity;
             }
-            return Copy::Failure(MakeError(AI::AIErrors::EnvironmentQueryIdentityConflict));
+            return Result<Identity>::Failure(MakeError(AI::AIErrors::EnvironmentQueryIdentityConflict));
+        }
+
+        /** @brief Retains the selected source's exact stage and result contracts beneath a new QueryId. */
+        Result<std::vector<std::uint8_t>> PrepareQueryCopy(const QueryNamespace &names) {
+            using Copy = Result<std::vector<std::uint8_t>>;
+            const auto id = IssueQueryIdentity(names.queries);
+            if (id.HasError())
+                return Copy::Failure(id.ErrorValue());
+            const auto &original = *names.selected;
+            const auto stages = original.Stages();
+            const auto query = AI::EnvironmentQueryAsset::Capture({.id = id.Value(),
+                                                                   .displayName = original.DisplayName(),
+                                                                   .result = original.ResultSchema(),
+                                                                   .stages = {stages.begin(), stages.end()}});
+            return query.HasValue() ? EnvironmentQuerySourceCodec::Encode(query.Value()) : Copy::Failure(query.ErrorValue());
+        }
+
+        /** @brief Checks current durable pairs under the publisher's Project lease, including other editors' creations. */
+        Result<void> AdmitInitialQueryNamespace(const std::filesystem::path &root, AI::QueryId id, AI::QueryResultSchemaId result) {
+            auto current = Assets::PrepareAssetRegistryCandidate(root);
+            if (current.HasError())
+                return Result<void>::Failure(current.ErrorValue());
+            if (current.Value().status != Assets::AssetRegistryBuildStatus::Complete)
+                return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed));
+            Assets::AssetRegistry detached;
+            const auto rebuilt = detached.Publish(std::move(current).Value());
+            if (rebuilt.status != Assets::AssetRegistryBuildStatus::Complete)
+                return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed));
+            const auto names = CaptureQueryNamespace(root, detached.Snapshot());
+            if (names.HasError())
+                return Result<void>::Failure(names.ErrorValue());
+            if (names.Value().queries.contains(id) || names.Value().results.contains(result))
+                return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryIdentityConflict));
+            return Result<void>::Success();
         }
 
         /** @brief Checks source descriptors without activating the plan or hiding unresolved authored stages. */
@@ -209,7 +245,10 @@ namespace Horo::Editor {
             const auto *current = registry.Find(plan.assetId);
             if (!current || current->sourcePath.String() != WorkspacePortablePathText(plan.source.lexically_relative(plan.projectRoot)))
                 return fail("workspace.environment_query.copy_failed");
-            const auto prepared = PrepareQueryCopy(plan.projectRoot, registry, plan.assetId);
+            const auto names = CaptureQueryNamespace(plan.projectRoot, registry, plan.assetId);
+            if (names.HasError())
+                return fail("workspace.environment_query.copy_failed");
+            const auto prepared = PrepareQueryCopy(names.Value());
             if (prepared.HasError() || m_mutableAssetRegistry->Snapshot().Revision() != registry.Revision())
                 return fail("workspace.environment_query.copy_failed");
             const auto bytes = std::as_bytes(std::span{prepared.Value()});
@@ -218,21 +257,68 @@ namespace Horo::Editor {
                                                                  {{newId, type.Value(), path.Value(), {bytes.begin(), bytes.end()}}}};
             Application::ProjectAssetImportCommitter writer{*m_mutations, *m_durableFiles, m_mutableAssetRegistry};
             const auto written = writer.CommitAuthored(batch);
-            if (writer.LastReceipt().registryPublished) {
-                m_assetRegistry = m_mutableAssetRegistry->Snapshot();
-                m_viewModel.assetRegistryRevision = m_assetRegistry.Revision();
-                if (m_collisionInventory)
-                    *m_collisionInventory = {};
-                if (m_collisionSettings)
-                    static_cast<void>(m_collisionSettings->ObserveInventory({}));
-                RebuildContentBrowserProjection(plan.projectRoot, WorkspaceNativePath(m_viewModel.contentBrowser.absoluteCurrentPath));
-            }
-            return written.HasValue() || fail(writer.LastReceipt().status == Application::ProjectAssetImportStatus::ReconciliationRequired
-                                                  ? "workspace.content_browser.operation.rollback_failed"
-                                                  : "workspace.environment_query.copy_failed");
+            return FinishEnvironmentQueryPublication(writer.LastReceipt(), written, "workspace.environment_query.copy_failed");
         } catch (...) {
             return fail("workspace.environment_query.copy_failed");
         }
+    }
+
+    /** @copydoc EditorWorkspaceController::PublishInitialEnvironmentQuery */
+    void EditorWorkspaceController::PublishInitialEnvironmentQuery(const std::filesystem::path &destination,
+                                                                   const EnvironmentQueryCreationRequest &request, Assets::AssetId newId) {
+        auto &error = m_viewModel.contentBrowserOperationError;
+        error = "workspace.environment_query.create_failed";
+        try {
+            const auto root = ProjectRoot();
+            const auto path = ProjectPath::Parse(WorkspacePortablePathText(destination.lexically_relative(root)));
+            const auto type = Assets::AssetTypeId::Parse(AI::EnvironmentQuerySourceAssetType);
+            const auto id = IssueQueryIdentity<AI::QueryId>();
+            const auto stage = IssueQueryIdentity<AI::QueryStageId>();
+            const auto result = IssueQueryIdentity<AI::QueryResultSchemaId>();
+            if (!newId.IsValid() || path.HasError() || type.HasError() || id.HasError() || stage.HasError() || result.HasError())
+                return;
+            const auto source =
+                m_latticeQueryFactory(id.Value(), stage.Value(), result.Value(), request.name, request.lattice, request.maximumResults);
+            if (source.HasError() || source.Value().Id() != id.Value() || source.Value().ResultSchema().id != result.Value() ||
+                source.Value().Stages().size() != 1 || source.Value().Stages().front().id != stage.Value() ||
+                DescriptorAvailability(source.Value(), m_querySchema) != QueryDescriptorAvailability::Validated)
+                return;
+            const auto encoded = EnvironmentQuerySourceCodec::Encode(source.Value());
+            if (encoded.HasError())
+                return;
+            const auto bytes = std::as_bytes(std::span{encoded.Value()});
+            const Application::PreparedAuthoredProjectAssetBatch batch{newId.ToString(),
+                                                                       root,
+                                                                       {{newId, type.Value(), path.Value(), {bytes.begin(), bytes.end()}}}};
+            Application::ProjectAssetImportCommitter writer{*m_mutations, *m_durableFiles, m_mutableAssetRegistry};
+            const auto written = writer.CommitAuthored(batch, {}, [&] {
+                return AdmitInitialQueryNamespace(root, id.Value(), result.Value());
+            });
+            if (FinishEnvironmentQueryPublication(writer.LastReceipt(), written, "workspace.environment_query.create_failed"))
+                OpenSourceFile({.path = destination, .origin = SourceOpenOrigin::Command, .mode = SourceOpenMode::EmbeddedOnly});
+        } catch (...) {
+            // The publisher contains native and admission failures and returns its durable receipt.
+        }
+    }
+
+    /** @copydoc EditorWorkspaceController::FinishEnvironmentQueryPublication */
+    bool EditorWorkspaceController::FinishEnvironmentQueryPublication(const Application::ProjectAssetImportReceipt &receipt,
+                                                                      const Result<void> &outcome, std::string_view failureKey) {
+        if (receipt.registryPublished) {
+            m_assetRegistry = m_mutableAssetRegistry->Snapshot();
+            m_viewModel.assetRegistryRevision = m_assetRegistry.Revision();
+            if (m_collisionInventory)
+                *m_collisionInventory = {};
+            if (m_collisionSettings)
+                static_cast<void>(m_collisionSettings->ObserveInventory({}));
+            RebuildContentBrowserProjection(ProjectRoot(), WorkspaceNativePath(m_viewModel.contentBrowser.absoluteCurrentPath));
+        }
+        if (outcome.HasValue())
+            return true;
+        m_viewModel.contentBrowserOperationError = receipt.status == Application::ProjectAssetImportStatus::ReconciliationRequired
+                                                       ? "workspace.content_browser.operation.rollback_failed"
+                                                       : failureKey;
+        return false;
     }
 
     /** @copydoc EditorWorkspaceView::DrawEnvironmentQueryDocument */

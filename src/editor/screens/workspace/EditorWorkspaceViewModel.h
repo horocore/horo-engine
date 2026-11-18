@@ -1,6 +1,7 @@
 #pragma once
 
 #include "EditorPlayState.h"
+#include "Horo/AI/EnvironmentQueryAuthoring.h"
 #include "Horo/Editor/ActivityBarLayout.h"
 #include "Horo/Editor/AudioComponentPreview.h"
 #include "Horo/Editor/BlackboardSchemaDocument.h"
@@ -244,6 +245,7 @@ namespace Horo::Editor {
         TransferContentBrowserAsset,
         CancelContentBrowserClipboard,
         CreateContentBrowserFolder,
+        CreateEnvironmentQuery,
         CreateLuaBehavior,
         CreateNativeBehavior,
         ReimportContentBrowserAsset,
@@ -321,6 +323,14 @@ namespace Horo::Editor {
         std::filesystem::path absolutePath;
         std::uint32_t line{};
         std::uint32_t column{};
+    };
+
+    /** @brief Confirmed initial source creation, with an explicitly selected directory and typed lattice parameters. */
+    struct EnvironmentQueryCreationRequest final {
+        std::string directory;
+        std::string name;
+        AI::QueryPointLattice lattice;
+        std::uint32_t maximumResults{};
     };
 
     /** @brief Result of checking a saved query against the application's current descriptor registry. */
@@ -489,6 +499,7 @@ namespace Horo::Editor {
         std::uint64_t uiCanvasInspectorResourcePublication{};
         Runtime::Ui::RuntimeStyleAssetId uiCanvasTheme;
         std::optional<BlackboardWorkspaceRequest> blackboard;
+        std::optional<EnvironmentQueryCreationRequest> newEnvironmentQuery;
         std::optional<SequenceTimelineState> sequenceTimeline;
         std::optional<PCGEditorRequest> pcgRequest;
         std::optional<EditorMenuInvocation> menuInvocation = std::nullopt;
@@ -668,6 +679,7 @@ namespace Horo::Editor {
         std::string activeDocumentPanelId = "horo.viewport";
         std::vector<SequenceWorkspaceDocument> sequenceDocuments;
         std::vector<EnvironmentQueryWorkspaceDocument> environmentQueryDocuments;
+        bool environmentQueryCreationAvailable{};
         std::vector<BlackboardWorkspaceDocument> blackboardDocuments;
         std::vector<PCGWorkspaceDocument> pcgDocuments;
         std::vector<PCGPaletteEntry> pcgPalette;

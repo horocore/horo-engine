@@ -70,6 +70,39 @@ namespace Horo::Editor {
         m_state.openCreateFolder = true;
     }
 
+    /** @copydoc AssetBrowserInteractionSession::OpenCreateQuery */
+    void AssetBrowserInteractionSession::OpenCreateQuery(std::string_view directory) {
+        m_state.createQuery = {.directory = std::string{directory}};
+        m_state.openCreateQuery = true;
+    }
+
+    /** @copydoc AssetBrowserInteractionSession::CanConfirmCreateQuery */
+    bool AssetBrowserInteractionSession::CanConfirmCreateQuery(const EnvironmentQueryCreationDraft &draft) noexcept {
+        return !draft.directory.empty() && draft.name.front() != char{} && draft.stepMillimeters > 0 && draft.outerSteps >= 0 &&
+               draft.outerSteps <= static_cast<int>(AI::MaximumQueryLatticeOuterSteps) && draft.maximumResults > 0 &&
+               draft.maximumResults <= static_cast<int>(AI::EnvironmentQuerySchemaLimits::MaximumResults) &&
+               (!draft.annulus || (draft.innerSteps >= 0 && draft.innerSteps <= draft.outerSteps));
+    }
+
+    /** @copydoc AssetBrowserInteractionSession::ConfirmCreateQuery */
+    std::optional<EditorWorkspaceViewCommandData> AssetBrowserInteractionSession::ConfirmCreateQuery(
+        const EnvironmentQueryCreationDraft &draft) {
+        if (!CanConfirmCreateQuery(draft))
+            return {};
+        EditorWorkspaceViewCommandData command;
+        command.command = EditorWorkspaceViewCommand::CreateEnvironmentQuery;
+        command.newEnvironmentQuery =
+            EnvironmentQueryCreationRequest{.directory = draft.directory,
+                                            .name = {draft.name.begin(), std::ranges::find(draft.name, char{})},
+                                            .lattice = {.stepMillimeters = static_cast<std::uint32_t>(draft.stepMillimeters),
+                                                        .outerSteps = static_cast<std::uint32_t>(draft.outerSteps),
+                                                        .innerSteps = draft.annulus
+                                                                          ? std::optional{static_cast<std::uint32_t>(draft.innerSteps)}
+                                                                          : std::nullopt},
+                                            .maximumResults = static_cast<std::uint32_t>(draft.maximumResults)};
+        return command;
+    }
+
     /** @copydoc AssetBrowserInteractionSession::Navigate */
     EditorWorkspaceViewCommandData AssetBrowserInteractionSession::Navigate(const std::string_view absolutePath) {
         return PathCommand(EditorWorkspaceViewCommand::NavigateContentBrowser, absolutePath);

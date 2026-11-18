@@ -20,11 +20,10 @@ namespace Horo::AI {
         constexpr std::uint64_t OuterSteps = LatticeProvider + 4;
         constexpr std::uint64_t InnerSteps = LatticeProvider + 5;
         constexpr QueryVersionRange LatticeVersion{1, 1};
-        constexpr std::uint32_t MaximumOuterSteps = 31;  // (2 * 31 + 1)^2 bounded visits per pass.
 
         /** @brief Uses the same numeric admission for authored settings and actual candidate generation. */
         bool ValidLattice(const QueryPointLattice &settings) {
-            return settings.stepMillimeters > 0 && settings.outerSteps <= MaximumOuterSteps &&
+            return settings.stepMillimeters > 0 && settings.outerSteps <= MaximumQueryLatticeOuterSteps &&
                    settings.innerSteps.value_or(0) <= settings.outerSteps;
         }
 

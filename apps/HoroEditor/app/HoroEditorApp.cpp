@@ -3371,6 +3371,7 @@ namespace Horo::Editor {
                                              p.operationServices.operationStore, p.operationServices.buildOutputStore);
             auto terrainAssetsFactory = MakeEditorTerrainAssetFactory(assetRegistry, mutationCoordinator, durableFiles);
             const auto querySchema = AI::CaptureBuiltinQuerySchema();
+            constexpr AI::LatticeQueryAuthoringFactory latticeQueryFactory = AI::CreateBuiltinLatticeQuery;
             if (querySchema.HasError())
                 LOG_ERROR("editor.ai", "Cannot compose the built-in query schema: %s", querySchema.ErrorValue().message.c_str());
             WorldStreamingPreviewHost streamingPreview;
@@ -3439,8 +3440,10 @@ namespace Horo::Editor {
             const EditorWorkerShutdown jobShutdown{p.background.jobs, p.operationServices.shaderBuild,  &screenHost,
                                                    packages,          p.operationServices.shaderReload, playSaveRetirement};
             screenHost.Services().Register<EditorPlaySaveRetirement>(*playSaveRetirement);
-            if (querySchema.HasValue())
+            if (querySchema.HasValue()) {
                 screenHost.Services().RegisterConst(querySchema.Value());
+                screenHost.Services().RegisterConst(latticeQueryFactory);
+            }
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
             RegisterEditorXrPlayServices(screenHost, xrComposition.xrPlay.get());
 #endif

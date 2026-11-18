@@ -15,6 +15,17 @@ namespace Horo::Editor {
         List,
     };
 
+    /** @brief Draft of the typed point-lattice creation dialog. Signed controls preserve invalid draft values. */
+    struct EnvironmentQueryCreationDraft final {
+        std::string directory;
+        std::array<char, AI::EnvironmentQuerySchemaLimits::DisplayNameBytes + 1> name{};
+        int stepMillimeters{1000};
+        int outerSteps{1};
+        int innerSteps{};
+        int maximumResults{9};
+        bool annulus{};
+    };
+
     /** @brief Cross-frame presentation state for one Content Browser panel. */
     struct AssetBrowserInteractionState {
         std::optional<ContentBrowserEntry> popupEntry;
@@ -30,6 +41,8 @@ namespace Horo::Editor {
         bool openRename{false};
         bool openDeleteConfirmation{false};
         bool openCreateFolder{false};
+        EnvironmentQueryCreationDraft createQuery;
+        bool openCreateQuery{};
     };
 
     /**
@@ -63,6 +76,15 @@ namespace Horo::Editor {
 
         /** @brief Prepares the create-folder workflow. */
         void OpenCreateFolder();
+
+        /** @brief Captures the active asset folder for the independent query creation modal. */
+        void OpenCreateQuery(std::string_view directory);
+
+        /** @brief Checks signed draft input and native lattice bounds without allocating. */
+        [[nodiscard]] static bool CanConfirmCreateQuery(const EnvironmentQueryCreationDraft &draft) noexcept;
+
+        /** @brief Creates a typed workspace confirmation only for representable, bounded authoring inputs. */
+        [[nodiscard]] static std::optional<EditorWorkspaceViewCommandData> ConfirmCreateQuery(const EnvironmentQueryCreationDraft &draft);
 
         /** @brief Creates an absolute directory-navigation command. */
         [[nodiscard]] static EditorWorkspaceViewCommandData Navigate(std::string_view absolutePath);

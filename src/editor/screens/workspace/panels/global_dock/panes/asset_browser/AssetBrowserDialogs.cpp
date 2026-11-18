@@ -384,6 +384,59 @@ namespace Horo::Editor {
             }
             PopModalStyle();
         }
+
+        void DrawCreateQueryPopup(AssetBrowserInteractionState &state, EditorWorkspaceViewCommandData &command,
+                                  const EditorGuiContext &context) {
+            constexpr const char *popupId = "##ContentBrowserCreateEnvironmentQuery";
+            if (state.openCreateQuery) {
+                ImGui::OpenPopup(popupId);
+                state.openCreateQuery = false;
+            }
+            const ImGuiViewport *viewport = ImGui::GetMainViewport();
+            const float width = std::max(160.0F, std::min(460.0F, viewport->WorkSize.x - 32.0F));
+            ImGui::SetNextWindowPos(viewport->GetWorkCenter(), ImGuiCond_Appearing, {0.5F, 0.5F});
+            ImGui::SetNextWindowSizeConstraints({width, 0.0F}, {width, viewport->WorkSize.y - 48.0F});
+            PushModalStyle();
+            if (ImGui::BeginPopupModal(popupId, nullptr,
+                                       ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar |
+                                           ImGuiWindowFlags_NoSavedSettings)) {
+                const auto text = [&](std::string_view key) -> const std::string & {
+                    return context.localization.Get("editor", key);
+                };
+                const auto &fonts = context.theme.fonts;
+                auto &draft = state.createQuery;
+                DrawModalHeading(text("workspace.environment_query.create_title"), context);
+                Ui::FieldLabel(text("workspace.environment_query.create_name").c_str(), fonts);
+                static_cast<void>(Ui::InputTextControl("##NewQueryName", draft.name.data(), draft.name.size(), fonts));
+                const auto integer = [&](const char *identity, std::string_view label, int &value) {
+                    Ui::FieldLabel(text(label).c_str(), fonts);
+                    Ui::InputIntControl(identity, &value, fonts);
+                };
+                integer("##NewQueryStep", "workspace.environment_query.create_step", draft.stepMillimeters);
+                integer("##NewQueryOuter", "workspace.environment_query.create_outer", draft.outerSteps);
+                static_cast<void>(Ui::CheckboxControl(text("workspace.environment_query.create_annulus").c_str(), &draft.annulus, fonts));
+                if (draft.annulus)
+                    integer("##NewQueryInner", "workspace.environment_query.create_inner", draft.innerSteps);
+                integer("##NewQueryMaximum", "workspace.environment_query.create_limit", draft.maximumResults);
+                ImGui::Dummy({0.0F, 12.0F});
+                if (Ui::Button({.label = AssetBrowserPane::kTextScope.Text(context.localization, "action.cancel").c_str(),
+                                .variant = Ui::ButtonVariant::Secondary,
+                                .font = fonts.sans}))
+                    ImGui::CloseCurrentPopup();
+                ImGui::SameLine();
+                if (Ui::Button({.label = text("workspace.environment_query.create_confirm").c_str(),
+                                .variant = Ui::ButtonVariant::Primary,
+                                .enabled = AssetBrowserInteractionSession::CanConfirmCreateQuery(draft),
+                                .font = fonts.sans})) {
+                    if (auto confirmed = AssetBrowserInteractionSession::ConfirmCreateQuery(draft)) {
+                        command = std::move(*confirmed);
+                        ImGui::CloseCurrentPopup();
+                    }
+                }
+                ImGui::EndPopup();
+            }
+            PopModalStyle();
+        }
     }  // namespace
 
     /** @copydoc DrawAssetBrowserDialogs */
@@ -393,5 +446,6 @@ namespace Horo::Editor {
         DrawRenamePopup(state, command, context);
         DrawDeletePopup(state, command, context);
         DrawCreateFolderPopup(state, directory, command, context);
+        DrawCreateQueryPopup(state, command, context);
     }
 }  // namespace Horo::Editor

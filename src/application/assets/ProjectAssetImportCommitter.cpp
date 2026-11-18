@@ -373,7 +373,8 @@ namespace Horo::Application {
 
     /** @copydoc ProjectAssetImportCommitter::CommitAuthored */
     Result<void> ProjectAssetImportCommitter::CommitAuthored(const PreparedAuthoredProjectAssetBatch &batch,
-                                                             const CancellationToken &cancellation) {
+                                                             const CancellationToken &cancellation,
+                                                             const std::function<Result<void>()> &admit) {
         if (busy_)
             return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Authority));
         BusyScope busy(busy_);
@@ -383,6 +384,9 @@ namespace Horo::Application {
                 return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Cancelled));
             if (auto lease = mutations_.TryAcquire({batch.projectRoot, Editor::ProjectMutationOwner::Asset, batch.operationId});
                 lease.HasValue()) {
+                if (admit)
+                    if (const auto admitted = admit(); admitted.HasError())
+                        return admitted;
                 auto prepared = PrepareAuthored(batch);
                 if (prepared.HasError())
                     return Result<void>::Failure(std::move(prepared).ErrorValue());

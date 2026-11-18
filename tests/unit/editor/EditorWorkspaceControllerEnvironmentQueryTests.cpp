@@ -3,7 +3,9 @@
 #include "OwnedTestDirectory.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/WorkspacePathText.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <format>
 #include <fstream>
@@ -25,10 +27,10 @@ namespace {
         ProjectMutationCoordinator mutations{files};
         Assets::AssetRegistry registry;
 
-        Project() {
+        explicit Project(bool existingQuery = true) {
             REQUIRE(std::filesystem::create_directories(root / "assets"));
-            WriteQuery("Saved query");
-            {
+            if (existingQuery) {
+                WriteQuery("Saved query");
                 std::ofstream sidecar(root / (std::string{Path} + ".horo"), std::ios::binary);
                 sidecar << std::format(R"({{"schemaVersion":1,"assetId":"{}","assetType":"{}"}})", asset.ToString(),
                                        EnvironmentQuerySourceAssetType);
@@ -177,4 +179,87 @@ TEST_CASE("Environment Query workspace uses the composed native descriptor regis
     REQUIRE(documents.size() == 1);
     CHECK(documents.front().query->Id() == query.Value().Id());
     CHECK(documents.front().descriptors == QueryDescriptorAvailability::Validated);
+}
+
+TEST_CASE("Environment Query New creates the first registered source from explicit native lattice settings",
+          "[unit][editor][eqs][workspace]") {
+    Project project{false};
+    const auto registry = CaptureBuiltinQuerySchema();
+    REQUIRE(registry.HasValue());
+    EditorWorkspaceController controller(project.root, project.runtime, project.registry.Snapshot(),
+                                         {.assets = {.mutableAssetRegistry = &project.registry},
+                                          .mutations = &project.mutations,
+                                          .durableFiles = &project.files,
+                                          .latticeQueryFactory = CreateBuiltinLatticeQuery,
+                                          .querySchema = &registry.Value()});
+    REQUIRE(controller.ViewModel().environmentQueryCreationAvailable);
+    AssetBrowserInteractionSession browser;
+    browser.OpenCreateQuery(WorkspacePathText(project.root / "assets"));
+    auto &draft = browser.State().createQuery;
+    CHECK_FALSE(AssetBrowserInteractionSession::CanConfirmCreateQuery(draft));
+    constexpr std::string_view name = "First lattice";
+    std::ranges::copy(name, draft.name.begin());
+    draft.stepMillimeters = 250;
+    draft.outerSteps = 2;
+    draft.maximumResults = 7;
+    draft.annulus = true;
+    draft.innerSteps = 1;
+
+    constexpr auto path = "assets/First lattice.horo_eqs";
+    SECTION("accepted workspace command stages the pair and opens the exact registered result") {
+        const auto command = AssetBrowserInteractionSession::ConfirmCreateQuery(draft);
+        REQUIRE(command.has_value());
+        controller.ProcessCommand(*command);
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        const auto current = project.registry.Snapshot();
+        const auto *record = current.FindByPath(path);
+        REQUIRE(record);
+        CHECK(record->type.Value() == EnvironmentQuerySourceAssetType);
+        CHECK(std::filesystem::is_regular_file(project.root / path));
+        CHECK(std::filesystem::is_regular_file(project.root / (std::string{path} + ".horo")));
+        const auto &documents = controller.ViewModel().environmentQueryDocuments;
+        REQUIRE(documents.size() == 1);
+        CHECK(documents.front().asset == record->id);
+        CHECK(documents.front().query->DisplayName() == name);
+        CHECK(documents.front().descriptors == QueryDescriptorAvailability::Validated);
+        CHECK(documents.front().query->ResultSchema().maximumResults == 7);
+        REQUIRE(documents.front().query->Stages().size() == 1);
+        const auto &stage = documents.front().query->Stages().front();
+        CHECK(stage.kind == QueryStageKind::Generator);
+        REQUIRE(registry.Value().Find(stage.generator));
+        REQUIRE(stage.properties.size() == 3);
+        for (const auto value : {250, 2, 1})
+            CHECK(std::ranges::any_of(stage.properties, [value](const auto &property) {
+                const auto *number = std::get_if<std::uint64_t>(&property.value);
+                return number && *number == static_cast<std::uint64_t>(value);
+            }));
+        CHECK(controller.ViewModel().workspacePanelHost.ActiveDocument() == documents.front().identity.instance);
+
+        controller.ProcessCommand(*command);
+        CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.content_browser.operation.name_exists");
+        CHECK(project.registry.Snapshot().Revision() == current.Revision());
+    }
+    SECTION("invalid fields are refused by the modal and stale or synthetic commands cannot write") {
+        draft.innerSteps = 3;
+        CHECK_FALSE(AssetBrowserInteractionSession::ConfirmCreateQuery(draft).has_value());
+        draft.innerSteps = 1;
+        auto command = AssetBrowserInteractionSession::ConfirmCreateQuery(draft);
+        REQUIRE(command.has_value());
+        command->newEnvironmentQuery->lattice.stepMillimeters = 0;
+        controller.ProcessCommand(*command);
+        CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.environment_query.create_failed");
+        CHECK(project.registry.Snapshot().FindByPath(path) == nullptr);
+        CHECK_FALSE(std::filesystem::exists(project.root / path));
+        CHECK_FALSE(std::filesystem::exists(project.root / (std::string{path} + ".horo")));
+    }
+    SECTION("the existing project mutation owner excludes a concurrent first creation") {
+        const auto lease = project.mutations.TryAcquire({project.root, ProjectMutationOwner::Asset, "other-author"});
+        REQUIRE(lease.HasValue());
+        const auto command = AssetBrowserInteractionSession::ConfirmCreateQuery(draft);
+        REQUIRE(command.has_value());
+        controller.ProcessCommand(*command);
+        CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.environment_query.create_failed");
+        CHECK(project.registry.Snapshot().FindByPath(path) == nullptr);
+        CHECK_FALSE(std::filesystem::exists(project.root / path));
+    }
 }

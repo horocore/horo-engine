@@ -6,6 +6,7 @@
  */
 
 #include "Horo/AI/AIScenePerceptionSource.h"
+#include "Horo/AI/EnvironmentQueryAuthoring.h"
 #include "Horo/AI/EnvironmentQueryContexts.h"
 
 #include <cstddef>
@@ -41,13 +42,6 @@ namespace Horo::AI {
         QueryGeneratorProvenance provenance;
         std::size_t itemCount{};
         std::size_t invalidCoordinateCount{}; /**< Offsets outside the canonical world coordinate range. */
-    };
-
-    /** @brief Horizontal square or annulus sampled on an exact millimeter lattice. */
-    struct QueryPointLattice final {
-        std::uint32_t stepMillimeters{};
-        std::uint32_t outerSteps{};
-        std::optional<std::uint32_t> innerSteps; /**< Absent for a square; present for a closed annulus. */
     };
 
     /**

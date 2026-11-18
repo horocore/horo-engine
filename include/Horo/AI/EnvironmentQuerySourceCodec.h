@@ -14,6 +14,7 @@
 namespace Horo::AI {
     /** @brief Asset Registry type identity for an authored EQS source with a .horo_eqs file extension. */
     inline constexpr std::string_view EnvironmentQuerySourceAssetType = "core.environment_query";
+    inline constexpr std::string_view EnvironmentQuerySourceExtension = ".horo_eqs"; /**< Native authored query source suffix. */
 
     /** @brief Canonical versioned source owned independently from project sidecars and cooked plans. */
     class EnvironmentQuerySourceCodec final {

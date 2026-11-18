@@ -36,6 +36,10 @@ namespace Horo::Editor {
             case EditorWorkspaceViewCommand::CancelContentBrowserClipboard:
                 ClearContentBrowserClipboard();
                 break;
+            case EditorWorkspaceViewCommand::CreateEnvironmentQuery:
+                if (cmd.newEnvironmentQuery)
+                    CreateContentBrowserEnvironmentQuery(*cmd.newEnvironmentQuery);
+                break;
             case EditorWorkspaceViewCommand::CreateContentBrowserFolder:
                 if (cmd.stringPayload.has_value() && cmd.secondaryStringPayload.has_value())
                     CreateContentBrowserFolder(WorkspaceNativePath(*cmd.stringPayload), *cmd.secondaryStringPayload);

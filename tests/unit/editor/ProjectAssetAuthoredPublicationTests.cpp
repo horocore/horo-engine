@@ -306,3 +306,22 @@ TEST_CASE("Authored mutation lease excludes both coordinator and native writers 
     const auto after = competing.TryAcquire(request);
     REQUIRE(after.HasValue());
 }
+
+TEST_CASE("Authored namespace admission runs inside the project lease and before native staging", "[assets][authored-publication]") {
+    Project project;
+    bool called{};
+    const auto denied = project.committer.CommitAuthored(project.batch, {}, [&] {
+        called = true;
+        const auto nested =
+            project.mutations.TryAcquire({project.batch.projectRoot, Editor::ProjectMutationOwner::Asset, "competing-author"});
+        CHECK(nested.HasError());
+        CHECK(project.files.writes == 0);
+        return Result<void>::Failure(MakeError(AssetSourceErrors::Conflict));
+    });
+    CHECK(called);
+    REQUIRE(denied.HasError());
+    CHECK(denied.ErrorValue().code.Value() == AssetSourceErrors::Conflict.code.Value());
+    CHECK(project.files.writes == 0);
+    project.CheckUnpublished();
+    REQUIRE(project.committer.CommitAuthored(project.batch).HasValue());
+}

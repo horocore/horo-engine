@@ -97,7 +97,16 @@ TEST_CASE("Environment Query workspace labels resolve in both shipped locales", 
                               "unknown",
                               "descriptors_valid",
                               "descriptors_incompatible",
-                              "descriptors_unavailable"};
+                              "descriptors_unavailable",
+                              "create_title",
+                              "create_name",
+                              "create_step",
+                              "create_outer",
+                              "create_annulus",
+                              "create_inner",
+                              "create_limit",
+                              "create_confirm",
+                              "create_failed"};
     const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
     const std::array locales{"en-US", "tr-TR"};
     LocalizationService service{{"en-US"}};
@@ -106,6 +115,7 @@ TEST_CASE("Environment Query workspace labels resolve in both shipped locales", 
     for (const auto locale : locales) {
         REQUIRE(service.Prepare({locale}));
         REQUIRE(service.ActivatePrepared());
+        CHECK_FALSE(service.Get("editor", "workspace.content_browser.action.create_environment_query").starts_with("[missing:"));
         for (const auto key : keys) {
             INFO(locale);
             INFO(key);

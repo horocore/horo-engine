@@ -101,11 +101,11 @@ namespace Horo::Editor {
           m_prefabSourceCapture(dependencies.prefab.sources), m_workspaceSession(dependencies.world.documentSessionOwner),
           m_streamingPreviewPolicy(dependencies.world.streamingPreviewPolicy), m_streamingPreview(dependencies.world.streamingPreview),
           m_worldSourceFiles(dependencies.world.sourceFiles), m_mutableAssetRegistry(dependencies.assets.mutableAssetRegistry),
-          m_querySchema(dependencies.querySchema), m_uiInspectorResources(dependencies.uiInspectorResources),
-          m_sourceRecoveryJobs(dependencies.jobs), m_collisionInventory(dependencies.collision.inventory),
-          m_collisionActivation(dependencies.collision.activation), m_previewCollisionReceipt(dependencies.collision.previewReceipt),
-          m_collisionSceneOwner(dependencies.world.documentSessionOwner), m_mutations(dependencies.mutations),
-          m_durableFiles(dependencies.durableFiles), m_assetRegistrySource(dependencies.assets.source),
+          m_latticeQueryFactory(dependencies.latticeQueryFactory), m_querySchema(dependencies.querySchema),
+          m_uiInspectorResources(dependencies.uiInspectorResources), m_sourceRecoveryJobs(dependencies.jobs),
+          m_collisionInventory(dependencies.collision.inventory), m_collisionActivation(dependencies.collision.activation),
+          m_previewCollisionReceipt(dependencies.collision.previewReceipt), m_collisionSceneOwner(dependencies.world.documentSessionOwner),
+          m_mutations(dependencies.mutations), m_durableFiles(dependencies.durableFiles), m_assetRegistrySource(dependencies.assets.source),
           m_importerCatalog(dependencies.assets.importerCatalog),
           m_assetPreviews(dependencies.jobs != nullptr ? std::make_unique<Assets::AssetPreviewService>(*dependencies.jobs) : nullptr),
           m_sourceOpenNavigator(dependencies.sourceNavigation.sourceOpenNavigator),
@@ -123,6 +123,8 @@ namespace Horo::Editor {
         m_viewModel.terrainCookAvailable = m_terrainCookFactory && static_cast<bool>(*m_terrainCookFactory);
         m_viewModel.terrainAssetCreationAvailable =
             m_terrainAssetFactory && static_cast<bool>(*m_terrainAssetFactory) && m_mutableAssetRegistry && m_mutations;
+        m_viewModel.environmentQueryCreationAvailable =
+            m_latticeQueryFactory && m_querySchema && m_mutableAssetRegistry && m_mutations && m_durableFiles;
         InitializeWorldBake(dependencies);
         if (dependencies.gameplay.retirements)
             m_gameplayRetirements = dependencies.gameplay.retirements;

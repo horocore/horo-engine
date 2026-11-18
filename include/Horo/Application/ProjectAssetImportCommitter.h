@@ -4,6 +4,8 @@
 #include "Horo/Assets/AssetRegistry.h"
 #include "Horo/Editor/ProjectMutation.h"
 
+#include <functional>
+
 namespace Horo::Application {
     /** @brief Observable outcome independent from a typed operation failure. */
     enum class ProjectAssetImportStatus : std::uint8_t {
@@ -64,12 +66,15 @@ namespace Horo::Application {
 
         /** @brief Publish new host-authored sources through the same lease/stage/rollback/registry boundary as imports.
          * @param batch Actual reserved identities and complete canonical source bytes. @param cancellation Cooperative stop.
+         * @param admit Optional read-only domain/namespace check. Runs synchronously under the same Project mutation lease
+         * before staging any bytes. It must neither publish data nor reacquire the lease.
          * @return Durable completion or typed failure with LastReceipt preserving irreversible publication evidence.
          * @details Sidecars contain canonical schema1 asset identity/type only; no synthetic importer, input path or source hash
          * is fabricated. Existing destinations and duplicate identities reject. Source semantics remain the producer's authority.
          */
         [[nodiscard]] Result<void> CommitAuthored(const PreparedAuthoredProjectAssetBatch &batch,
-                                                  const CancellationToken &cancellation = {});
+                                                  const CancellationToken &cancellation = {},
+                                                  const std::function<Result<void>()> &admit = {});
 
         /** @brief Returns the latest owner-thread scalar publication evidence, including failure compensation uncertainty.
          * @return Borrow valid until the next Commit or destruction.
