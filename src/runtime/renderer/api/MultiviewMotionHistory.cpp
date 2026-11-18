@@ -57,6 +57,13 @@ namespace Horo::Render {
                current.viewCount == previous.viewCount;
     }
 
+    /** @copydoc MultiviewMotionHistory::PreviousFrame */
+    std::optional<MultiviewMotionFrame> MultiviewMotionHistory::PreviousFrame(const MultiviewMotionFrame &frame) const noexcept {
+        if (!staged_ || !published_ || slots_[writable_].frame != frame || !Adjacent())
+            return std::nullopt;
+        return slots_[1 - writable_].frame;
+    }
+
     /** @copydoc MultiviewMotionHistory::Previous */
     std::optional<MultiviewMotionPredecessor> MultiviewMotionHistory::Previous(const MultiviewMotionFrame &frame,
                                                                                const RenderMotionObjectId object,

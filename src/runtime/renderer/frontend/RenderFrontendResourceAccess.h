@@ -33,14 +33,14 @@ namespace Horo::Render::Detail {
          * @param scope Canonical memory scope charged for this resource.
          * @param extent Exact single-sample depth extent.
          * @param viewCount Complete view count, bounded by the selected backend's effective multiview support.
-         * @return Pending Depth32Float attachment storage with one layer per view, or the original admission/budget error.
+         * @param sampled Also admits sampled usage for explicitly retained previous depth.
+         * @return Pending Depth32Float
+         * attachment storage with one layer per view, or the original admission/budget error.
          * @details Uses the ordinary registry, upload queue, generation and retirement owners. It admits no initial data,
-         * sampled usage, arbitrary array format or native handle. Ordinary CreateTexture admission is unchanged.
+         * arbitrary array format or native handle. Ordinary CreateTexture admission is unchanged.
          */
-        [[nodiscard]] static Result<ResourceCreation<RenderTextureHandle>> CreateMultiviewDepth(RenderFrontend &frontend,
-                                                                                                RenderMemoryScopeId scope,
-                                                                                                FramebufferExtent extent,
-                                                                                                std::uint32_t viewCount);
+        [[nodiscard]] static Result<ResourceCreation<RenderTextureHandle>> CreateMultiviewDepth(
+            RenderFrontend &frontend, RenderMemoryScopeId scope, FramebufferExtent extent, std::uint32_t viewCount, bool sampled = false);
         /** @brief Retires an owned creation, recognizing only its already-retired failed operation as complete.
          * @param frontend Same canonical creation owner.
          * @param creation Unmodified handle/operation pair returned by this frontend's creation request.

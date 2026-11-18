@@ -87,8 +87,9 @@ namespace Horo::Render {
 
     /** @copydoc Detail::RenderFrontendResourceAccess::CreateMultiviewDepth */
     Result<ResourceCreation<RenderTextureHandle>> Detail::RenderFrontendResourceAccess::CreateMultiviewDepth(
-        RenderFrontend &frontend, const RenderMemoryScopeId scope, const FramebufferExtent extent, const std::uint32_t viewCount) {
-        return frontend.CreateMultiviewDepthTexture(scope, extent, viewCount);
+        RenderFrontend &frontend, const RenderMemoryScopeId scope, const FramebufferExtent extent, const std::uint32_t viewCount,
+        const bool sampled) {
+        return frontend.CreateMultiviewDepthTexture(scope, extent, viewCount, sampled);
     }
 
     /** @copydoc RenderFrontend::UploadSnapshot */

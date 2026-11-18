@@ -134,7 +134,8 @@ namespace Horo::Application::Internal {
                 auto requiredFinal = acquired;
                 requiredFinal.scope = Render::RenderGraphPipelineScope::External;
                 return Editor::EditorVulkanXrViewportAccess::Prepare(composition_.viewport, scene_->geometry->Resources(),
-                                                                     scene_->projection->color, acquired, requiredFinal);
+                                                                     scene_->projection->color, acquired, requiredFinal,
+                                                                     WantsMotionHistory(plan));
             }
             case InputAndUi: {
                 input_.coordinator = std::make_unique<XRActionBindingCoordinator>(candidate, static_cast<IXRBindingNeutralizer &>(*this));

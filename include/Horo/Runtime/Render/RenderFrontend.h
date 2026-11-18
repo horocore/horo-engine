@@ -1178,7 +1178,7 @@ namespace Horo::Render {
         /** @brief Admits exact complete-view depth storage for the noninstalled matching integration only. */
         [[nodiscard]] Result<ResourceCreation<RenderTextureHandle>> CreateMultiviewDepthTexture(RenderMemoryScopeId scope,
                                                                                                 FramebufferExtent extent,
-                                                                                                std::uint32_t viewCount);
+                                                                                                std::uint32_t viewCount, bool sampled);
         /** @brief Queues a previously admitted owned texture through the canonical budget, registry and upload owners. */
         [[nodiscard]] Result<ResourceCreation<RenderTextureHandle>> QueueOwnedTexture(
             RenderMemoryScopeId scope, const RenderTextureDescriptor &descriptor, std::span<const std::byte> initialData,

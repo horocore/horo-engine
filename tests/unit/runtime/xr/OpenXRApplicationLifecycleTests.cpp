@@ -1052,6 +1052,99 @@ namespace Horo::Tests::OpenXRApplication {
         REQUIRE(RequireValue(fixture.ClosePlay()));
     }
 
+    TEST_CASE("Selected Play retains previous sampled eye depths only after exact projection completion",
+              "[xr][application][play][reprojection][depth]") {
+        using enum XR::XRProjectFeaturePolicy;
+        using namespace Render;
+        ApplicationFixture fixture{true, 5, Unrequested, Unrequested, Unrequested, true};
+        constexpr std::array<std::int64_t, 3> formats{VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT};
+        fixture.script.census.formats = formats.size();
+        fixture.script.census.formatPublication = formats;
+        const auto motion = ApplicationVulkanFixture::CookMotion();
+        fixture.viewport->StageXrMotionProgram(RequireValue(
+            Editor::LoadEditorVulkanMultiviewMotionCook(motion.compiled.payload,
+                                                        RequireValue(Render::EncodeReflectedShaderArtifact(motion.reflected)))));
+        auto scene = PublishPlay(fixture);
+        fixture.script.clock.sample = 1;
+        const auto previous = [&] {
+            return Editor::EditorVulkanXrViewportAccess::PreviousDepth(*fixture.viewport);
+        };
+        auto &vulkan = fixture.vulkan->native;
+        const auto submit = [&](std::uint64_t number) {
+            auto frame = RequireValue(fixture.frontend->BeginFrame({number, {8, 8}}));
+            REQUIRE(fixture.play->ExecuteRenderFrame(frame, {}).HasValue());
+            REQUIRE(frame.Present().HasValue());
+            REQUIRE(fixture.play->FinishGui(true).HasValue());
+        };
+        const auto complete = [&] {
+            vulkan.commandState.state.Complete();
+            REQUIRE(fixture.play->ProgressRenderTail().HasValue());
+            fixture.script.frames.prediction += 1'000'000;
+        };
+
+        REQUIRE(fixture.play->PrepareRenderFrame(1).Value());
+        CHECK_FALSE(previous());
+        submit(1);
+        REQUIRE(fixture.play->ProgressRenderTail().HasValue());
+        CHECK(fixture.script.frames.ends == 0);
+        CHECK_FALSE(previous());
+        REQUIRE(vulkan.encoded.renderingCalls.size() >= 2);
+        const auto depthImage = [&] {
+            const auto &barriers = vulkan.encoded.imageBarriers;
+            const auto selected = std::find_if(barriers.rbegin(), barriers.rend(), [](const auto &barrier) {
+                return barrier.newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL &&
+                       (barrier.subresourceRange.aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT) != 0;
+            });
+            REQUIRE(selected != barriers.rend());
+            return selected->image;
+        };
+        const auto firstDepth = depthImage();
+        const auto priorCalls = vulkan.encoded.renderingCalls.size();
+        complete();
+        REQUIRE(fixture.play->PrepareRenderFrame(2).Value());
+        const auto first = previous();
+        REQUIRE(first);
+        CHECK(first->frame.projectionSequence == 1);
+        CHECK(first->eyes.front() != first->eyes.back());
+        CHECK(first->state.layout == RenderGraphTextureLayout::DepthStencilAttachment);
+        CHECK(RequireValue(fixture.frontend->ResourceState(first->texture)) == RenderResourceState::Ready);
+
+        auto builder = RequireValue(RenderGraphBuilder::Create());
+        const auto sample = RequireValue(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
+        const auto retained = RequireValue(builder.ImportTexture(first->texture, RenderGraphResourceClass::Persistent));
+        REQUIRE(builder.AddUsage({sample, retained, RenderGraphAccess::Read, RenderGraphUsageKind::Sampled}).HasValue());
+        const auto authored = RequireValue(builder.Finalize());
+        const auto scheduled = RequireValue(CompileRenderGraph(authored));
+        const std::array queue{RenderQueueAssignment{RenderQueueRole::Graphics, first->state.queue}};
+        const std::array initial{RenderGraphImportedState{retained, first->state}};
+        const auto transition = RequireValue(SynthesizeRenderGraphSynchronization(authored, scheduled, queue, initial));
+        REQUIRE(transition.Transitions().size() == 1);
+        CHECK(transition.Transitions().front().oldState == first->state);
+        CHECK(transition.Transitions().front().newState.layout == RenderGraphTextureLayout::ShaderReadOnly);
+
+        submit(2);
+        REQUIRE(vulkan.encoded.renderingCalls.size() == priorCalls + 2);
+        CHECK(depthImage() != firstDepth);
+        CHECK_FALSE(previous());
+        complete();
+        REQUIRE(fixture.play->PrepareRenderFrame(3).Value());
+        const auto second = previous();
+        REQUIRE(second);
+        CHECK(second->texture != first->texture);
+        CHECK(second->frame.projectionSequence == 2);
+        REQUIRE(fixture.play->FinishGui(false).HasValue());
+        complete();
+        REQUIRE(fixture.play->PrepareRenderFrame(4).Value());
+        CHECK_FALSE(previous());
+        REQUIRE(fixture.play->FinishGui(false).HasValue());
+        complete();
+        CHECK(fixture.script.frames.ends == 4);
+        CHECK(fixture.script.frames.layers == 0);
+        CHECK(vulkan.commandState.state.waitCalls == 0);
+        scene->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+    }
+
     TEST_CASE("Real installed Play suspends XR admission while the bounded event poll has unread work", "[xr][application][play][events]") {
         ApplicationFixture fixture{true};
         auto scene = PublishPlay(fixture);
@@ -1257,6 +1350,35 @@ namespace Horo::Tests::OpenXRApplication {
 }  // namespace Horo::Tests::OpenXRApplication
 
 namespace Horo::Tests::OpenXRApplication {
+    TEST_CASE("Selected XR depth history keeps ordinary projection on optional second allocation failure", "[xr][vulkan][host][depth]") {
+        using namespace Render;
+        ApplicationFixture fixture{true};
+        const auto cooked = ApplicationVulkanFixture::CookMotion();
+        fixture.viewport->StageXrMotionProgram(
+            RequireValue(Editor::LoadEditorVulkanMultiviewMotionCook(cooked.compiled.payload,
+                                                                     RequireValue(EncodeReflectedShaderArtifact(cooked.reflected)))));
+        REQUIRE(fixture.viewport->PrepareXrMotionPipeline(RenderTextureFormat::Rgba16Float, RenderTextureFormat::Depth32Float).Value());
+        const auto baseline = fixture.frontend->MemorySnapshot();
+        auto &native = fixture.vulkan->native.resourceState.state;
+        const auto priorViews = native.createViewCount;
+        native.failCreateViewCall = priorViews + 4;
+        const auto device = RequireValue(Editor::EditorVulkanXrViewportAccess::Device(*fixture.viewport));
+        const RenderTextureDescriptor color{.extent = {8, 8},
+                                            .layerCount = 2,
+                                            .usage = RenderTextureUsage::RenderAttachment | RenderTextureUsage::Sampled};
+        const RenderGraphLogicalState acquired{RenderGraphSynchronizationAccess::ReadWrite,
+                                               RenderGraphSynchronizationOperation::ColorAttachment, RenderGraphPipelineScope::Graphics,
+                                               RenderGraphTextureLayout::ColorAttachment, device.graphicsIdentity};
+        auto final = acquired;
+        final.scope = RenderGraphPipelineScope::External;
+        REQUIRE(fixture.viewport->PrepareXrGraph({}, color, acquired, final, true).HasValue());
+        CHECK(native.createViewCount == priorViews + 4);
+        REQUIRE(Editor::EditorVulkanXrViewportAccess::Retire(*fixture.viewport).HasValue());
+        CHECK(fixture.frontend->MemorySnapshot().allocationCount == baseline.allocationCount);
+        CHECK(fixture.frontend->MemorySnapshot().committedBackingBytes == baseline.committedBackingBytes);
+        CHECK(fixture.frontend->UploadSnapshot().pendingRequests == 0);
+    }
+
     TEST_CASE("Actual XR viewport retires failed depth prefixes and admits a fresh preparation", "[xr][vulkan][host][lifecycle]") {
         ApplicationFixture fixture{true};
         auto &frontend = *fixture.frontend;

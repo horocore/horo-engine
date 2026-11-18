@@ -170,13 +170,21 @@ with zero unresolved samples. The report must name the exact current and
 predecessor projections, image generations, and eye layers. Missing, stale,
 or incomplete evidence leaves the projection in color-only mode.
 
+The selected optional path can retain two owned sampled eye-depth
+attachments in alternating projection graphs. It publishes the newest
+depth only after the renderer has observed completion and the same native
+projection ends successfully. The next compatible frame may borrow that
+texture and its actual depth-attachment state for a graph-synchronized
+sampled read. Missing preparation, a skipped or aborted projection, or
+incompatible history leaves no previous-depth borrow.
+
 Play still renders color and internal depth. The current motion shader
-detects previous clip boundaries, but cannot compare against a previous
-visible surface. EXT ignores the engine validity alpha and FB consumes the
-RGB vector. Activation requires previous per-eye visibility, a selected
-renderer classification or resolution pass, and a bounded observation path
-before the native submission cutoff. Neither a finished draw nor a
-successful image release establishes that coverage.
+checks previous clip boundaries. Activation requires a selected
+classification or resolution pass that samples the previous surface and
+reports coverage through a bounded observation path before the native
+cutoff. EXT ignores the engine validity alpha and FB consumes the RGB
+vector. Neither a finished draw nor a successful image release
+establishes that coverage.
 [OpenXR frame synthesis contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrFrameSynthesisInfoEXT.html)
 
 ## Public contract migration and evidence

@@ -40,14 +40,16 @@ namespace Horo::Editor {
                                                                 Render::RenderTextureFormat depth);
         /** @brief Cold-prepare topology over exact canonical meshes and native allocation/release policy.
          * @param viewport Existing selected owner. @param meshes Complete immutable canonical mesh resource projection.
-         * @param color Native allocation. @param acquired Actual acquisition state. @param final Required native release state.
+         * @param color Native allocation. @param acquired Actual acquisition state. @param requiredFinal Required native release state.
+
+         * * @param retainPreviousDepth Current optional policy admits retaining sampled predecessor depth.
          * @return Original owner/resource/graph error or successful preparation before interactive admission.
          */
         [[nodiscard]] static Result<void> Prepare(EditorViewportRendererVulkan &viewport,
                                                   std::span<const Render::RenderMeshResourceView> meshes,
                                                   const Render::RenderTextureDescriptor &color,
                                                   const Render::RenderGraphLogicalState &acquired,
-                                                  const Render::RenderGraphLogicalState &requiredFinal);
+                                                  const Render::RenderGraphLogicalState &requiredFinal, bool retainPreviousDepth);
         /** @brief Bind one real acquisition before BeginFrame, using fixed owner storage and exact live publications.
          * @param viewport Existing owner. @param color Fresh native import. @param views Exact layer views.
          * @param publication Current Scene/frame/origin/device evidence. @param cameras Actual native view matrices.
@@ -60,6 +62,25 @@ namespace Horo::Editor {
                                                const Render::MultiviewPublication &publication,
                                                std::span<const Render::MultiviewSceneView> cameras,
                                                std::span<const Render::RenderStaticMeshInstance> instances, const MotionInput *motion);
+
+        /** @brief The previous successful projection's immutable owned depth and actual committed import state. */
+        struct PreviousEyeDepth final {
+            Render::MultiviewMotionFrame frame;
+            Render::RenderTextureHandle texture;
+            std::array<Render::RenderTextureViewHandle, 2> eyes;
+            Render::FramebufferExtent extent;
+            Render::RenderGraphLogicalState state;
+        };
+
+        /** @brief Observes previous depth only while an adjacent compatible current projection is staged.
+         * @param viewport Exact
+         * live renderer owner. @return The retained sampleable depth or absence.
+         * @pre Synchronous control-lane use. A sampling
+         * graph imports this owned texture with preserved contents and the given state;
+         * it must retain its own graph pin and
+         * restore the committed attachment state before releasing the borrow.
+         */
+        [[nodiscard]] static std::optional<PreviousEyeDepth> PreviousDepth(const EditorViewportRendererVulkan &viewport) noexcept;
         /** @brief Records the exact projection or zero-layer completion after successful native end only. */
         static void CompleteMotion(EditorViewportRendererVulkan &viewport, const std::optional<Render::MultiviewMotionFrame> &frame,
                                    bool projected) noexcept;

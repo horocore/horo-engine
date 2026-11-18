@@ -230,6 +230,9 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<void> FinishFrameRetirement(const XR::XRSessionId &candidate);
 
+        /** @brief Checks whether the exact optional provider policy needs the current projection's history. */
+        [[nodiscard]] static bool WantsMotionHistory(const XR::XRFeaturePlan &plan) noexcept;
+
         /** @brief Creates the SAME native color owner/views after the canonical candidate activates that session.
          * @param candidate Actual issued candidate. @param color Exact previously observed sampled UNORM tuple.
          * @return Original native/device error; any partial cleanup debt remains owned in render_.

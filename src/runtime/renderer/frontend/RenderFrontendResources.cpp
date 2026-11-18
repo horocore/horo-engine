@@ -469,7 +469,8 @@ namespace Horo::Render {
     /** @copydoc RenderFrontend::CreateMultiviewDepthTexture */
     Result<ResourceCreation<RenderTextureHandle>> RenderFrontend::CreateMultiviewDepthTexture(const RenderMemoryScopeId scope,
                                                                                               const FramebufferExtent extent,
-                                                                                              const std::uint32_t viewCount) {
+                                                                                              const std::uint32_t viewCount,
+                                                                                              const bool sampled) {
         if (const auto owner = RequireOpenOwner(); owner.HasError())
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(owner.ErrorValue());
         if (activeFrameScope_ != nullptr)
@@ -477,7 +478,8 @@ namespace Horo::Render {
         const RenderTextureDescriptor descriptor{.extent = extent,
                                                  .format = RenderTextureFormat::Depth32Float,
                                                  .layerCount = viewCount,
-                                                 .usage = RenderTextureUsage::RenderAttachment};
+                                                 .usage = sampled ? RenderTextureUsage::RenderAttachment | RenderTextureUsage::Sampled
+                                                                  : RenderTextureUsage::RenderAttachment};
         if (ValidateRenderTextureDescriptor(descriptor).HasError())
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(MakeError(FrontendErrors::InvalidTextureDescriptor));
         const auto &capabilities = backend_->Capabilities();

@@ -52,6 +52,8 @@ namespace Horo::Editor {
          * @param meshes Complete canonical scene mesh resources; no desktop camera or target is synthesized.
          * @param color Exact native allocation admitted with sampled first-eye mirror usage before acquisition.
          * @param acquired Exact native acquisition state. @param requiredFinal Exact native release state.
+         * @param
+         * retainPreviousDepth Current optional feature policy requests the compatible depth predecessor.
          * @return Success or original resource/graph/tuple failure; partial cold resources remain owned for teardown.
          * @pre The previous XR scene, scene/UI/GUI references and native acquisitions have retired. This operation
          * must finish before interactive admission; no first-frame compilation or allocation fallback is allowed.
@@ -59,7 +61,7 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> PrepareXrGraph(std::span<const EditorViewportMeshResourceView> meshes,
                                                   const Render::RenderTextureDescriptor &color,
                                                   const Render::RenderGraphLogicalState &acquired,
-                                                  const Render::RenderGraphLogicalState &requiredFinal);
+                                                  const Render::RenderGraphLogicalState &requiredFinal, bool retainPreviousDepth = false);
         /** @brief Binds a fresh native eye acquisition to the cold graph before the SAME RenderFrameScope begins.
          * @param color Fresh imported acquisition. @param eyeViews Exact current per-layer frontend views.
          * @param publication Canonical Scene/frame/origin/view and actual device/capability evidence.
@@ -138,6 +140,7 @@ namespace Horo::Editor {
 
     private:
         friend class EditorVulkanXrViewportAccess;
+        struct XrProjectionGraph;
         struct XrGraph;
         /** @brief Drops only cold scene graph/depth resources after their canonical scene/GUI lease has drained. */
         void ReleaseXrGraph() noexcept;

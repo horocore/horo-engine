@@ -46,6 +46,11 @@ namespace Horo::Render {
         [[nodiscard]] bool Stage(const MultiviewMotionFrame &frame, const MultiviewSceneSnapshot &snapshot,
                                  std::span<const RenderMotionObjectId> objects) noexcept;
 
+        /** @brief Observes the exact compatible predecessor while the supplied current publication is staged.
+         * @param frame Exact
+         * live candidate. @return Prior completed projection identity, or absence on any history break.
+         */
+        [[nodiscard]] std::optional<MultiviewMotionFrame> PreviousFrame(const MultiviewMotionFrame &frame) const noexcept;
         /** @brief Returns a predecessor only for an exact live candidate and a visible object in the same eye in both frames.
          * @param frame Exact staged frame. @param object Canonical current draw identity. @param view Dense renderer view index.
          * @return Copied predecessor, absent for skipped, stale, changed, missing or culled history.

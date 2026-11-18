@@ -199,6 +199,13 @@ namespace Horo::Application::Internal {
         return Output::Success(true);
     }
 
+    /** @copydoc OpenXRPlayHost::WantsMotionHistory */
+    bool OpenXRPlayHost::WantsMotionHistory(const XRFeaturePlan &plan) noexcept {
+        const auto decision = plan.Decision(XRCapability::SpaceWarp);
+        return decision.state == XRFeatureDecisionState::OptionalEnabled ||
+               (decision.state == XRFeatureDecisionState::BaselineProjection && decision.observed == XRCapabilityState::DependencyMissing);
+    }
+
     /** @copydoc OpenXRPlayHost::BindRenderFrame */
     Result<void> OpenXRPlayHost::BindRenderFrame(const std::uint64_t frameNumber) {
         if (!scene_ || !scene_->projection || !render_->views || !render_->acquisition)
@@ -235,10 +242,7 @@ namespace Horo::Application::Internal {
         auto converted = render_->ConvertScene(plan.Value(), configuration, revision.Value(), input_.origin, publication);
         if (converted.HasError())
             return Result<void>::Failure(converted.ErrorValue());
-        const auto motionDecision = scene_->projection->plan.Decision(XRCapability::SpaceWarp);
-        const bool prepareMotion = motionDecision.state == XRFeatureDecisionState::OptionalEnabled ||
-                                   (motionDecision.state == XRFeatureDecisionState::BaselineProjection &&
-                                    motionDecision.observed == XRCapabilityState::DependencyMissing);
+        const bool prepareMotion = WantsMotionHistory(scene_->projection->plan);
         const Editor::EditorVulkanXrViewportAccess::MotionInput motion{{publication, frame.frame.sequence,
                                                                         frame.predictedDisplayTime.Nanoseconds()},
                                                                        scene_->geometry->MotionObjects()};
