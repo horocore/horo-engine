@@ -394,10 +394,11 @@ namespace Horo::Runtime::Ui {
 
     /** @brief Immutable request supplied to a text or image intrinsic measurement provider. */
     struct UiLayoutIntrinsicRequest final {
-        UiElementHandle element;   /**< Exact element being measured. */
-        UiLogicalExtent available; /**< Finite logical upper bound for the measurement. */
-        bool widthDefinite{};      /**< Whether width is independently definite. */
-        bool heightDefinite{};     /**< Whether height is independently definite. */
+        UiElementHandle element;         /**< Exact element being measured. */
+        UiLogicalExtent available;       /**< Finite logical upper bound for the measurement. */
+        bool widthDefinite{};            /**< Whether width is independently definite. */
+        bool heightDefinite{};           /**< Whether height is independently definite. */
+        UiCanvasScaleFactor fontScale{}; /**< Text scale for MeasureText. MeasureImage receives the neutral scale. */
     };
 
     /** @brief Revision-scoped intrinsic contribution returned by a provider. */
@@ -442,6 +443,8 @@ namespace Horo::Runtime::Ui {
         bool dependsOnParentHeight{}; /**< Whether a changed assigned height requires one remeasure. */
         UiLayoutConstraintResult constraintResult{UiLayoutConstraintResult::Satisfied}; /**< Deterministic clamp/unsatisfied evidence. */
         std::int32_t baseline{NoUiBaseline};                                            /**< Optional intrinsic baseline. */
+        bool dependsOnFontScale{
+            true}; /**< Whether font scale can change this direct measurement. Custom evaluators default to sensitive. */
         /** @brief Checks that desired extent is clamped to its measure range.
          * @param constraints Exact range used for measurement.
          * @return Whether this contribution is valid.

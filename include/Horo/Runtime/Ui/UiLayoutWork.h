@@ -27,6 +27,7 @@ namespace Horo::Runtime::Ui {
         MeasurementChanged = 1U << 6U,   /**< New measurement required arrangement. */
         ParentAssignment = 1U << 7U,     /**< Parent assigned a different content rectangle. */
         ParentDependency = 1U << 8U,     /**< Assigned extent required the bounded dependent remeasure. */
+        FontScale = 1U << 9U,            /**< Text scale changed this measurement or an intrinsic descendant. */
     };
 
     /**

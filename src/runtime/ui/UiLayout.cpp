@@ -7,6 +7,7 @@
 #include <atomic>
 #include <limits>
 #include <new>
+#include <ranges>
 #include <utility>
 #include <vector>
 
@@ -270,6 +271,23 @@ namespace Horo::Runtime::Ui {
             }
         }
 
+        /** @brief Marks direct consumers and their ancestors in one reverse-preorder pass. */
+        void MarkFontScaleChanges() noexcept {
+            for (auto &node : candidateTree.nodes | std::views::reverse) {
+                if (node.measurement.dependsOnFontScale)
+                    AddCause(node.work, UiLayoutWorkCause::FontScale);
+                if (!node.work.HasCause(UiLayoutWorkCause::FontScale))
+                    continue;
+                node.measureDirty = true;
+                node.arrangeDirty = true;
+                if (node.parent != NoParent) {
+                    auto &parent = candidateTree.nodes[node.parent];
+                    AddCause(parent.work, UiLayoutWorkCause::FontScale);
+                    AddCause(parent.work, UiLayoutWorkCause::AncestorMeasure);
+                }
+            }
+        }
+
         [[nodiscard]] Result<void> ApplyInvalidations(const UiRuntimeTreeRevision treeRevision) {
             for (const auto &invalidation : invalidations) {
                 if (!IsDirtyKind(invalidation.kind) || !invalidation.tree.IsValid())
@@ -428,6 +446,8 @@ namespace Horo::Runtime::Ui {
             }
             if (rootChanged)
                 MarkAll(UiLayoutWorkCause::RootInputs);
+            else if (!topologyChanged && current && published.fontScale != request.fontScale)
+                MarkFontScaleChanges();
             if (sourcesChanged && invalidations.empty() && (!current || published.sources != request.sources))
                 MarkAll(UiLayoutWorkCause::SourceRevision);
             return ApplyInvalidations(request.sources.tree);
@@ -719,10 +739,9 @@ namespace Horo::Runtime::Ui {
         if (admittedRoot.HasError())
             return Failure<PreparedUpdate>(UiErrors::LayoutSourceStale);
         const bool topologyChanged = owner->activeNodes.empty() || owner->published.sources.tree != request.sources.tree;
-        const bool rootChanged =
-            owner->current &&
-            (owner->published.rootConstraints != request.rootConstraints || owner->published.rootContent != request.rootContent ||
-             owner->published.fontScale != request.fontScale || owner->published.inlineDirection != request.inlineDirection);
+        const bool rootChanged = owner->current && (owner->published.rootConstraints != request.rootConstraints ||
+                                                    owner->published.rootContent != request.rootContent ||
+                                                    owner->published.inlineDirection != request.inlineDirection);
         const bool sourcesChanged = owner->HasSourceChanges(request, exactInteraction);
         if (!sourcesChanged && owner->invalidations.empty()) {
             owner->current->leases.fetch_add(1);

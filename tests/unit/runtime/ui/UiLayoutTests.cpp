@@ -187,14 +187,17 @@ namespace Horo::Runtime::Ui {
         public:
             mutable std::uint32_t textCalls{};
             mutable std::uint32_t imageCalls{};
+            mutable UiCanvasScaleFactor textScale;
             bool failText{};
             bool failImage{};
 
             Result<UiLayoutIntrinsicMeasurement> MeasureText(const UiLayoutIntrinsicRequest &request) const override {
                 ++textCalls;
+                textScale = request.fontScale;
                 if (failText)
                     return Result<UiLayoutIntrinsicMeasurement>::Failure(MakeError(UiErrors::LayoutIntrinsicUnavailable));
-                return Result<UiLayoutIntrinsicMeasurement>::Success({{128, 32}, 24, true, false});
+                const auto width = static_cast<UiScalar>(std::int64_t{128} * textScale.numerator / textScale.denominator);
+                return Result<UiLayoutIntrinsicMeasurement>::Success({{width, 32}, 24, true, false});
             }
 
             Result<UiLayoutIntrinsicMeasurement> MeasureImage(const UiLayoutIntrinsicRequest &request) const override {
@@ -622,6 +625,49 @@ namespace Horo::Runtime::Ui {
             malformed.fontScale.denominator = 0;
             RequireError(engine.Update(tree, malformed), UiErrors::LayoutInvalid);
             REQUIRE(scaled.Value().Descriptor().fontScale == UiCanvasScaleFactor{3, 2});
+        }
+
+        TEST_CASE("Font scale reaches declarative text and remeasures only affected layout branches", "[runtime_ui][layout][font_scale]") {
+            auto tree = Tree();
+            const auto root = tree.Root().Value().handle;
+            const auto group = tree.Find(Stable<UiElementId>(2)).Value();
+            const auto text = tree.Find(Stable<UiElementId>(3)).Value();
+            const auto image = tree.Find(Stable<UiElementId>(4)).Value();
+            const std::array styles{Descriptor(root, {}), Descriptor(group, {}),
+                                    Descriptor(text, {}, {UiLayoutIntrinsicKind::Text, true, {}}),
+                                    Descriptor(image, {}, {UiLayoutIntrinsicKind::Image, true, {}})};
+            IntrinsicProvider provider;
+            auto evaluator = UiDeclarativeLayoutEvaluator::Create(styles, &provider);
+            REQUIRE(evaluator.HasValue());
+            auto engine = Engine();
+            auto request = Request(evaluator.Value());
+            const auto baseline = engine.Update(tree, request);
+            REQUIRE(baseline.HasValue());
+            REQUIRE(baseline.Value().Get(text).Value().measurement.desired.width == 128);
+            const auto imageCalls = provider.imageCalls;
+            request.fontScale = {3, 2};
+            const auto scaled = engine.Update(tree, request);
+            REQUIRE(scaled.HasValue());
+            CHECK(provider.textScale == request.fontScale);
+            CHECK(provider.imageCalls == imageCalls);
+            CHECK(scaled.Value().Get(text).Value().measurement.desired.width == 192);
+            CHECK(scaled.Value().Get(group).Value().work.HasCause(UiLayoutWorkCause::FontScale));
+            CHECK(scaled.Value().Get(image).Value().work.measurements == 0);
+            CHECK(baseline.Value().Get(text).Value().measurement.desired.width == 128);
+
+            request.fontScale = {2, 1};
+            provider.failText = true;
+            RequireError(engine.Update(tree, request), UiErrors::LayoutIntrinsicUnavailable);
+            auto retainedRequest = request;
+            retainedRequest.fontScale = {3, 2};
+            const auto retained = engine.Update(tree, retainedRequest);
+            REQUIRE(retained.HasValue());
+            CHECK(retained.Value().Descriptor().interaction == scaled.Value().Descriptor().interaction);
+            provider.failText = false;
+            const auto recovered = engine.Update(tree, request);
+            REQUIRE(recovered.HasValue());
+            CHECK(recovered.Value().Get(text).Value().measurement.desired.width == 256);
+            CHECK(provider.imageCalls == imageCalls);
         }
 
         TEST_CASE("Layout frame-hot updates allocate no fallback storage", "[runtime_ui][layout][allocation]") {

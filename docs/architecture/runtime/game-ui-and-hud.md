@@ -828,6 +828,11 @@ Font/locale/style/content changes prepare a complete new font/layout generation.
 Old face bytes, metrics, shaped runs, layout and atlas resources remain leased by
 old interaction/render snapshots until retirement.
 
+When only text scale changes, layout passes the new scale to text measurement
+providers and invalidates the measured text nodes and their ancestors. Images
+receive the neutral text scale. A new logical extent may still reassign downstream
+geometry. Required measurement failure preserves the prior published layout.
+
 Missing required family/artifact fails candidate activation and retains last-good
 state. Unsupported later content follows the declared replacement,
 omit-with-advance or strict policy with bounded redacted diagnostics; it cannot
