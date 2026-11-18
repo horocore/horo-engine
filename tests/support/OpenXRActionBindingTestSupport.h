@@ -67,6 +67,14 @@ namespace Horo::Tests::OpenXRAction {
             XrSpaceVelocityFlags velocityFlags{XR_SPACE_VELOCITY_LINEAR_VALID_BIT | XR_SPACE_VELOCITY_ANGULAR_VALID_BIT};
         } tracking;
 
+        struct GazeState final {
+            XrAction action{XR_NULL_HANDLE};
+            XrSpace space{XR_NULL_HANDLE};
+            XrTime sampleTime{};
+            XrBool32 active{XR_TRUE};
+            unsigned locationReads{};
+        } gaze;
+
         bool throwFormat{};
         bool throwRuntime{};
         bool throwAllocation{};
@@ -116,16 +124,23 @@ namespace Horo::Tests::OpenXRAction {
 
         static XRAPI_ATTR XrResult XRAPI_CALL CreateAction(XrActionSet, const XrActionCreateInfo *info, XrAction *action) {
             REQUIRE(info->type == XR_TYPE_ACTION_CREATE_INFO);
-            REQUIRE(info->countSubactionPaths == 1);
-            REQUIRE(info->subactionPaths[0] != XR_NULL_PATH);
-            if (info->actionType == XR_ACTION_TYPE_POSE_INPUT) {
+            const bool gaze = std::string_view{info->actionName} == "horo_eye_gaze";
+            if (gaze) {
+                REQUIRE(info->actionType == XR_ACTION_TYPE_POSE_INPUT);
+                REQUIRE(info->countSubactionPaths == 0);
+                REQUIRE(info->subactionPaths == nullptr);
+            } else {
+                REQUIRE(info->countSubactionPaths == 1);
+                REQUIRE(info->subactionPaths[0] != XR_NULL_PATH);
+            }
+            if (info->actionType == XR_ACTION_TYPE_POSE_INPUT && !gaze) {
                 REQUIRE(active->tracking.enabled);
                 const std::string_view label{info->localizedActionName};
                 REQUIRE((label == "Grip" || label == "Aim"));
             } else if (info->actionType == XR_ACTION_TYPE_VIBRATION_OUTPUT) {
                 REQUIRE(std::string_view{info->localizedActionName} == "Vibration");
                 active->haptic.hand = info->subactionPaths[0];
-            } else {
+            } else if (!gaze) {
                 REQUIRE(info->actionType == active->sample.expectedType);
                 REQUIRE(std::string_view{info->localizedActionName} == "Select");
             }
@@ -135,6 +150,8 @@ namespace Horo::Tests::OpenXRAction {
                 *action = NativeHandle<XrAction>(200 + ++active->liveActions);
                 if (info->actionType == XR_ACTION_TYPE_VIBRATION_OUTPUT)
                     active->haptic.action = *action;
+                if (gaze)
+                    active->gaze.action = *action;
             }
             if (active->throwFormat)
                 throw std::format_error("scripted action formatting exception");
@@ -161,6 +178,11 @@ namespace Horo::Tests::OpenXRAction {
             REQUIRE(info->type == XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING);
             REQUIRE(info->interactionProfile != XR_NULL_PATH);
             const auto suggestions = std::span{info->suggestedBindings, info->countSuggestedBindings};
+            if (suggestions.size() == 1 && active->gaze.action != XR_NULL_HANDLE && suggestions.front().action == active->gaze.action) {
+                REQUIRE(info->interactionProfile == active->Find("/interaction_profiles/ext/eye_gaze_interaction"));
+                REQUIRE(suggestions.front().binding == active->Find("/user/eyes_ext/input/gaze_ext/pose"));
+                return Script::Record("suggest-gaze");
+            }
             const auto vibration = std::ranges::find(suggestions, active->haptic.action, &XrActionSuggestedBinding::action);
             if (vibration != suggestions.end()) {
                 active->haptic.source = vibration->binding;
@@ -267,6 +289,11 @@ namespace Horo::Tests::OpenXRAction {
 
         static XRAPI_ATTR XrResult XRAPI_CALL PoseState(XrSession, const XrActionStateGetInfo *info, XrActionStatePose *state) {
             REQUIRE(info->action != XR_NULL_HANDLE);
+            if (info->action == active->gaze.action) {
+                REQUIRE(info->subactionPath == XR_NULL_PATH);
+                state->isActive = active->gaze.active;
+                return Script::Record("sample-gaze");
+            }
             REQUIRE(info->subactionPath != XR_NULL_PATH);
             const auto result = Script::Record("sample-pose");
             state->isActive = active->tracking.poseActive.value_or(active->sample.active);
@@ -298,11 +325,15 @@ namespace Horo::Tests::OpenXRAction {
 
         static XRAPI_ATTR XrResult XRAPI_CALL ActionSpace(XrSession, const XrActionSpaceCreateInfo *info, XrSpace *space) {
             REQUIRE(info->action != XR_NULL_HANDLE);
-            REQUIRE(info->subactionPath != XR_NULL_PATH);
+            const bool gaze = info->action == active->gaze.action;
+            REQUIRE((info->subactionPath == XR_NULL_PATH) == gaze);
             REQUIRE(info->poseInActionSpace.orientation.w == 1.0F);
             const auto result = Script::Record("create-action-space");
-            if (XR_SUCCEEDED(result))
+            if (XR_SUCCEEDED(result)) {
                 *space = NativeHandle<XrSpace>(300 + ++active->tracking.spaces);
+                if (gaze)
+                    active->gaze.space = *space;
+            }
             return result;
         }
 
@@ -324,6 +355,14 @@ namespace Horo::Tests::OpenXRAction {
                 location->pose.position = {1.0F, 2.0F, 3.0F};
             if ((location->locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0)
                 location->pose.orientation = {0.0F, 0.0F, 0.0F, 1.0F};
+            if (source == active->gaze.space) {
+                auto *sampleTime = static_cast<XrEyeGazeSampleTimeEXT *>(location->next);
+                REQUIRE(sampleTime->type == XR_TYPE_EYE_GAZE_SAMPLE_TIME_EXT);
+                REQUIRE(sampleTime->next == nullptr);
+                ++active->gaze.locationReads;
+                sampleTime->time = active->gaze.sampleTime;
+                return Script::Record("locate-gaze");
+            }
             auto *velocity = static_cast<XrSpaceVelocity *>(location->next);
             velocity->velocityFlags = active->tracking.velocityFlags;
             velocity->linearVelocity = {4.0F, 0.0F, 0.0F};

@@ -71,10 +71,11 @@ namespace Horo::XR::OpenXRInternal {
     /** @brief Exact current origin and observed reference-space choice for private tracking preparation. */
     struct NativeTrackingSpaceRequest final {
         XRWorldOriginRevision origin;
-        XRSpaceKind base{XRSpaceKind::Local};         /**< Only observed Local or Stage; never an implicit World alias. */
-        std::optional<Math::Transform> worldFromBase; /**< Explicit rigid mapping of native base coordinates into authored World.
-                                                       Its inverse creates a distinct native World reference space; absence grants none. */
-        bool alternateReferenceAvailable{};           /**< Observed support for the other Local/Stage reference. */
+        XRSpaceKind base{XRSpaceKind::Local};          /**< Only observed Local or Stage; never an implicit World alias. */
+        std::optional<Math::Transform> worldFromBase;  /**< Explicit rigid mapping of native base coordinates into authored World.
+                                                        Its inverse creates a distinct native World reference space; absence grants none. */
+        bool alternateReferenceAvailable{};            /**< Observed support for the other Local/Stage reference. */
+        std::optional<XRActionSetId> consentedGazeSet; /**< Registered set selected only after capability and purpose consent. */
     };
 
     /** @brief Synchronously borrowed native creation request; dispatch and catalogs stay inside the host boundary. */
@@ -332,6 +333,17 @@ namespace Horo::XR::OpenXRInternal {
          * No frame/capability or tracking validity is published.
          */
         [[nodiscard]] Result<void> PreparePresentation(NativeOpenXRDispatch dispatch);
+
+        /**
+         * @brief Reads at most one consented gaze sample from the exact synchronized cutoff.
+         * @param session Exact retained owner. @param cutoff Current runtime and simulation clock evidence.
+         * @param ageLimit Positive maximum sample age in the same native clock domain.
+         * @pre The app has revalidated its purpose grant, focus and permission for this exact session.
+         * @return Current separately scoped pose, empty for inactive or untracked eyes, or a typed rejection.
+         * @post Never appends to the ordinary tracking snapshot, scalar actions or capture stream.
+         */
+        [[nodiscard]] Result<std::optional<XRPoseSample>> SampleConsentedGaze(const XRSessionId &session, const XRTimeEvidence &cutoff,
+                                                                              Duration ageLimit) const;
         /** @brief Locates actual primary-stereo views at the runtime's exact predicted display time.
          * @param session Same issued active owner. @param time Actual OS-converted sample plus native frame prediction, no simulation time.
          * @param expectedViews Complete primary view count observed by the same native system census.
@@ -509,10 +521,18 @@ namespace Horo::XR::OpenXRInternal {
             std::uint32_t nextSpaceSlot{}; /**< SAME bound per-session semantic space allocator, after native child slots. */
             std::uint32_t generation{};    /**< Non-wrapping space incarnation; retained across Close. */
             mutable std::uint64_t sampledSequence{};
+            XrAction gazeAction{XR_NULL_HANDLE};
+            XrSpace gazeSpace{XR_NULL_HANDLE};
+            XRCoordinateSpace gazeIdentity;
+            mutable std::uint64_t gazeSequence{};
 
             /** @brief Validates exact registered grip/aim paths before creating native children. */
             [[nodiscard]] Result<void> ValidatePosePaths(const NativeActionBindingRequest &bindingRequest,
                                                          std::uint32_t maximumActions) const;
+            /** @brief Creates one separately scoped gaze action in the exact registered set. */
+            [[nodiscard]] Result<void> PrepareGazeAction(const TrackingContext &context);
+            /** @brief Prepares the gaze space after the sole immutable action-set attachment. */
+            [[nodiscard]] Result<void> PrepareGazeSpace(const TrackingContext &context);
             /** @brief Creates tracking actions before the sole immutable action-set attachment. */
             [[nodiscard]] Result<void> CreatePoseActions(const TrackingContext &context, std::span<const NativePoseActionPath> paths);
             /** @brief Appends registered pose paths to one profile's existing suggestion transaction. */

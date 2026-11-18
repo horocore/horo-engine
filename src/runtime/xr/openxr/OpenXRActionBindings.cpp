@@ -379,6 +379,8 @@ namespace Horo::XR::OpenXRInternal {
             return result;
         if (auto result = CreateHapticActions(request.hapticPaths); result.HasError())
             return result;
+        if (auto result = tracking_.PrepareGazeAction(TrackingContext{*this}); result.HasError())
+            return result;
         if (auto result = Suggest(schema, catalog, overrides, profiles, controls, poses); result.HasError())
             return result;
         if (auto valid = ValidateOwner(); valid.HasError())
@@ -489,6 +491,7 @@ namespace Horo::XR::OpenXRInternal {
         // A failed resynchronization must not leave the previous unsampled state eligible.
         sampledSequence_ = syncSequence_;
         tracking_.sampledSequence = syncSequence_;
+        tracking_.gazeSequence = syncSequence_;
         const Operation operation{sampling_};
         const auto native = Current(session);
         if (native.HasError())
@@ -555,6 +558,7 @@ namespace Horo::XR::OpenXRInternal {
         tracking_.actions.clear();
         tracking_.request.reset();
         tracking_.sampledSequence = 0;
+        tracking_.gazeSequence = 0;
         return Result<void>::Success();
     }
 }  // namespace Horo::XR::OpenXRInternal

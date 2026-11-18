@@ -110,9 +110,13 @@ namespace Horo::XR::OpenXRInternal {
         };
         Result<void> prepared = Result<void>::Success();
         try {
-            const auto haptics = ValidateHapticPaths(request, maximumActions);
+            const auto gazeCount = request.tracking && request.tracking->consentedGazeSet ? 1U : 0U;
+            if (gazeCount != 0 && request.schema.actions.size() >= maximumActions)
+                return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
+            const auto actionBudget = maximumActions - gazeCount;
+            const auto haptics = ValidateHapticPaths(request, actionBudget);
             prepared = haptics.HasError() ? Result<void>::Failure(haptics.ErrorValue())
-                                          : tracking_.ValidatePosePaths(request, maximumActions - haptics.Value());
+                                          : tracking_.ValidatePosePaths(request, actionBudget - haptics.Value());
             if (prepared.HasValue()) {
                 tracking_.request = request.tracking;
                 prepared = dispatch_.Resolve(request, native_.instance);

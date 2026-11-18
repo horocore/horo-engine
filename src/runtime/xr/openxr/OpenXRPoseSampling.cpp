@@ -60,19 +60,25 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Success();
         }
 
-        /** @brief Validates the exact native location/velocity chain and independent known validity bits. */
-        Result<void> ValidateLocation(const XrSpaceLocation &location, const XrSpaceVelocity &velocity) {
+        /** @brief Validates the exact native location and independent known validity bits. */
+        Result<void> ValidateLocation(const XrSpaceLocation &location, const void *chain) {
             constexpr XrSpaceLocationFlags known = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT |
                                                    XR_SPACE_LOCATION_POSITION_TRACKED_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
-            if (constexpr XrSpaceVelocityFlags knownVelocity = XR_SPACE_VELOCITY_LINEAR_VALID_BIT | XR_SPACE_VELOCITY_ANGULAR_VALID_BIT;
-                location.type != XR_TYPE_SPACE_LOCATION || location.next != &velocity || velocity.type != XR_TYPE_SPACE_VELOCITY ||
-                velocity.next != nullptr || (location.locationFlags & ~known) != 0 || (velocity.velocityFlags & ~knownVelocity) != 0 ||
+            if (location.type != XR_TYPE_SPACE_LOCATION || location.next != chain || (location.locationFlags & ~known) != 0 ||
                 ((location.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT) != 0 &&
                  (location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) == 0) ||
                 ((location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT) != 0 &&
                  (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) == 0))
                 return Result<void>::Failure(MakeError(XRErrors::PoseInvalid));
             return Result<void>::Success();
+        }
+
+        /** @brief Validates the native velocity chain only for consumers that requested it. */
+        Result<void> ValidateLocation(const XrSpaceLocation &location, const XrSpaceVelocity &velocity) {
+            constexpr XrSpaceVelocityFlags known = XR_SPACE_VELOCITY_LINEAR_VALID_BIT | XR_SPACE_VELOCITY_ANGULAR_VALID_BIT;
+            if (velocity.type != XR_TYPE_SPACE_VELOCITY || velocity.next || (velocity.velocityFlags & ~known) != 0)
+                return Result<void>::Failure(MakeError(XRErrors::PoseInvalid));
+            return ValidateLocation(location, &velocity);
         }
 
         /** @brief Validates complete stereo ABI, independent component flags and asymmetric view ranges before any publication. */
@@ -126,6 +132,71 @@ namespace Horo::XR::OpenXRInternal {
         const auto validated = XRPoseSample::Create(descriptor, context.Session(), request->origin);
         return validated.HasError() ? Result<XRPoseDescriptor>::Failure(validated.ErrorValue())
                                     : Result<XRPoseDescriptor>::Success(descriptor);
+    }
+
+    /** @copydoc OpenXRActionBindings::SampleConsentedGaze */
+    Result<std::optional<XRPoseSample>> OpenXRActionBindings::SampleConsentedGaze(const XRSessionId &session, const XRTimeEvidence &cutoff,
+                                                                                  const Duration ageLimit) const {
+        using Outcome = Result<std::optional<XRPoseSample>>;
+        if (auto lane = ControlLane(); lane.HasError())
+            return Outcome::Failure(lane.ErrorValue());
+        if (sampling_ || syncSequence_ == 0 || tracking_.gazeSequence == syncSequence_)
+            return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
+        const Operation operation{sampling_};
+        if (const auto current = Current(session); current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        if (!tracking_.request || tracking_.gazeSpace == XR_NULL_HANDLE)
+            return Outcome::Failure(MakeError(XRErrors::OperationUnsupported));
+        if (!cutoff.runtimeSample.IsValid() || !cutoff.simulation || !cutoff.simulation->IsValid() || cutoff.renderPrediction ||
+            ageLimit <= Duration{})
+            return Outcome::Failure(MakeError(XRErrors::TimeDomainIncompatible));
+        tracking_.gazeSequence = syncSequence_;
+        const XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO, nullptr, tracking_.gazeAction, XR_NULL_PATH};
+        XrActionStatePose state{XR_TYPE_ACTION_STATE_POSE};
+        const auto queried = dispatch_.poseState(native_.session, &info, &state);
+        if (queried != XR_SUCCESS)
+            return Outcome::Failure(PoseFailure("query gaze activity", queried));
+        if (state.type != XR_TYPE_ACTION_STATE_POSE || state.next || state.isActive > XR_TRUE)
+            return Outcome::Failure(MakeError(XRErrors::TrackingSnapshotInvalid));
+        if (state.isActive == XR_FALSE)
+            return Outcome::Success(std::nullopt);
+        if (const auto current = ValidateOwner(); current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+
+        XrEyeGazeSampleTimeEXT sampleTime{XR_TYPE_EYE_GAZE_SAMPLE_TIME_EXT};
+        XrSpaceLocation location{XR_TYPE_SPACE_LOCATION, &sampleTime};
+        const auto located = dispatch_.locate(tracking_.gazeSpace, tracking_.base, cutoff.runtimeSample.Nanoseconds(), &location);
+        if (located != XR_SUCCESS)
+            return Outcome::Failure(PoseFailure("locate gaze space", located));
+        if (sampleTime.type != XR_TYPE_EYE_GAZE_SAMPLE_TIME_EXT || sampleTime.next)
+            return Outcome::Failure(MakeError(XRErrors::PoseInvalid));
+        if (auto valid = ValidateLocation(location, &sampleTime); valid.HasError())
+            return Outcome::Failure(valid.ErrorValue());
+        constexpr auto position = XR_SPACE_LOCATION_POSITION_TRACKED_BIT;
+        constexpr auto orientation = XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
+        const auto tracked = location.locationFlags & (position | orientation);
+        if (tracked == 0)
+            return Outcome::Success(std::nullopt);
+        if (tracked != (position | orientation))
+            return Outcome::Failure(MakeError(XRErrors::PoseInvalid));
+        const auto when = XRRuntimeTime::Create(sampleTime.time);
+        if (when.HasError() || when.Value() > cutoff.runtimeSample ||
+            cutoff.runtimeSample.Nanoseconds() - when.Value().Nanoseconds() > ageLimit.ToNanoseconds())
+            return Outcome::Failure(MakeError(XRErrors::TrackingSnapshotStale));
+        if (const auto current = ValidateOwner(); current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        // Gaze velocity is not part of the granted pointing purpose.
+        const auto components = Components(location, XrSpaceVelocity{XR_TYPE_SPACE_VELOCITY});
+        auto sample = XRPoseSample::Create({session,
+                                            tracking_.gazeIdentity,
+                                            tracking_.baseIdentity,
+                                            XRPosePurpose::SimulationInput,
+                                            {when.Value(), cutoff.simulation, {}},
+                                            components},
+                                           session, tracking_.request->origin);
+        if (sample.HasError())
+            return Outcome::Failure(sample.ErrorValue());
+        return Outcome::Success(std::move(sample).Value());
     }
 
     /** @copydoc OpenXRActionBindings::Tracking::LocateAction */

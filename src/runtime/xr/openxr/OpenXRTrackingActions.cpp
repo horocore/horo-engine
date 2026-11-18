@@ -123,8 +123,53 @@ namespace Horo::XR::OpenXRInternal {
         return Result<std::uint32_t>::Success(count);
     }
 
+    /** @copydoc OpenXRActionBindings::Tracking::PrepareGazeAction */
+    Result<void> OpenXRActionBindings::Tracking::PrepareGazeAction(const TrackingContext &context) {
+        if (!request || !request->consentedGazeSet)
+            return Result<void>::Success();
+        const auto set = std::ranges::find(context.Sets(), *request->consentedGazeSet, &Set::id);
+        if (set == context.Sets().end())
+            return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
+
+        const auto &native = context.Native();
+        const auto &dispatch = context.DispatchTable();
+        constexpr char profilePath[] = "/interaction_profiles/ext/eye_gaze_interaction";
+        constexpr char inputPath[] = "/user/eyes_ext/input/gaze_ext/pose";
+        XrPath profile{XR_NULL_PATH};
+        XrPath input{XR_NULL_PATH};
+        const auto resolve = [&](const char *path, XrPath &destination) {
+            const auto result = dispatch.stringToPath(native.instance, path, &destination);
+            return result == XR_SUCCESS && destination == XR_NULL_PATH ? XR_ERROR_PATH_INVALID : result;
+        };
+        if (const auto result = resolve(profilePath, profile); result != XR_SUCCESS)
+            return Result<void>::Failure(PoseActionFailure("resolve gaze interaction profile", result));
+        if (const auto result = resolve(inputPath, input); result != XR_SUCCESS)
+            return Result<void>::Failure(PoseActionFailure("resolve gaze input", result));
+
+        XrActionCreateInfo info{XR_TYPE_ACTION_CREATE_INFO};
+        constexpr char name[] = "horo_eye_gaze";
+        constexpr char label[] = "Eye gaze";
+        std::ranges::copy(name, info.actionName);
+        std::ranges::copy(label, info.localizedActionName);
+        info.actionType = XR_ACTION_TYPE_POSE_INPUT;
+        if (const auto result = dispatch.createAction(set->native, &info, &gazeAction);
+            result != XR_SUCCESS || gazeAction == XR_NULL_HANDLE)
+            return Result<void>::Failure(PoseActionFailure("create gaze action", result == XR_SUCCESS ? XR_ERROR_RUNTIME_FAILURE : result));
+        const XrActionSuggestedBinding binding{gazeAction, input};
+        const XrInteractionProfileSuggestedBinding suggestion{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING, nullptr, profile, 1, &binding};
+        if (const auto result = dispatch.suggest(native.instance, &suggestion); result != XR_SUCCESS)
+            return Result<void>::Failure(PoseActionFailure("suggest gaze binding", result));
+        return Result<void>::Success();
+    }
+
     /** @copydoc OpenXRActionBindings::Tracking::ClosePoseActions */
     Result<void> OpenXRActionBindings::Tracking::ClosePoseActions(const TrackingContext &context) {
+        if (gazeAction != XR_NULL_HANDLE) {
+            const auto result = context.DispatchTable().destroyAction(gazeAction);
+            if (XR_FAILED(result))
+                return Result<void>::Failure(PoseActionFailure("destroy gaze action", result));
+            gazeAction = XR_NULL_HANDLE;
+        }
         for (auto action = actions.rbegin(); action != actions.rend(); ++action) {
             if (action->native == XR_NULL_HANDLE)
                 continue;

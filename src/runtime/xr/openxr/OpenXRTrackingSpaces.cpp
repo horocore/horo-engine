@@ -42,7 +42,8 @@ namespace Horo::XR::OpenXRInternal {
     /** @copydoc OpenXRActionBindings::Tracking::SpaceCount */
     std::size_t OpenXRActionBindings::Tracking::SpaceCount() const noexcept {
         return actions.size() + 2 + static_cast<std::size_t>(request->worldFromBase.has_value()) +
-               static_cast<std::size_t>(request->alternateReferenceAvailable);
+               static_cast<std::size_t>(request->alternateReferenceAvailable) +
+               static_cast<std::size_t>(request->consentedGazeSet.has_value());
     }
 
     /** @copydoc OpenXRActionBindings::Tracking::ReadStageBounds */
@@ -100,6 +101,19 @@ namespace Horo::XR::OpenXRInternal {
             if (XR_FAILED(result) || action.space == XR_NULL_HANDLE)
                 return Result<void>::Failure(SpaceFailure("create action space", XR_FAILED(result) ? result : XR_ERROR_RUNTIME_FAILURE));
         }
+        return PrepareGazeSpace(context);
+    }
+
+    /** @copydoc OpenXRActionBindings::Tracking::PrepareGazeSpace */
+    Result<void> OpenXRActionBindings::Tracking::PrepareGazeSpace(const TrackingContext &context) {
+        if (gazeAction == XR_NULL_HANDLE)
+            return Result<void>::Success();
+        XrActionSpaceCreateInfo info{XR_TYPE_ACTION_SPACE_CREATE_INFO};
+        info.action = gazeAction;
+        info.poseInActionSpace.orientation.w = 1.0F;
+        const auto result = context.DispatchTable().createSpace(context.Native().session, &info, &gazeSpace);
+        if (result != XR_SUCCESS || gazeSpace == XR_NULL_HANDLE)
+            return Result<void>::Failure(SpaceFailure("create gaze space", result == XR_SUCCESS ? XR_ERROR_RUNTIME_FAILURE : result));
         return Result<void>::Success();
     }
 
@@ -147,11 +161,20 @@ namespace Horo::XR::OpenXRInternal {
             action.identity = issue(XRSpaceKind::Action);
         if (world != XR_NULL_HANDLE)
             worldIdentity = issue(XRSpaceKind::World);
+        if (gazeSpace != XR_NULL_HANDLE)
+            gazeIdentity = issue(XRSpaceKind::Action);
         return Result<void>::Success();
     }
 
     /** @copydoc OpenXRActionBindings::Tracking::CloseSpaces */
     Result<void> OpenXRActionBindings::Tracking::CloseSpaces(const TrackingContext &context) {
+        if (gazeSpace != XR_NULL_HANDLE) {
+            const auto result = context.DispatchTable().destroySpace(gazeSpace);
+            if (XR_FAILED(result))
+                return Result<void>::Failure(SpaceFailure("destroy gaze space", result));
+            gazeSpace = XR_NULL_HANDLE;
+            gazeIdentity = {};
+        }
         for (auto action = actions.rbegin(); action != actions.rend(); ++action) {
             if (action->space == XR_NULL_HANDLE)
                 continue;

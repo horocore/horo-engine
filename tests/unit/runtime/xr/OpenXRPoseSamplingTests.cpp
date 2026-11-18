@@ -9,7 +9,8 @@ namespace Horo::Tests::OpenXRAction {
             ActionFixture actions{false};
             const XRWorldOriginRevision origin{IdentityValue<XRWorldOriginRevision>(1)};
 
-            Result<void> Prepare(std::optional<Math::Transform> worldFromBase = std::nullopt, const bool stageAvailable = false) {
+            Result<void> Prepare(std::optional<Math::Transform> worldFromBase = std::nullopt, const bool stageAvailable = false,
+                                 const std::optional<XRActionSetId> gazeSet = std::nullopt) {
                 actions.script.tracking.enabled = true;
                 const std::array labels{NativeActionLabel{Input::ActionId{"select"}, "Select"}};
                 const std::array setLabels{NativeActionSetLabel{{1}, "Gameplay"}};
@@ -25,7 +26,7 @@ namespace Horo::Tests::OpenXRAction {
                                                             XRTrackedPoseKind::Grip,
                                                             "/user/hand/left/input/grip/pose",
                                                             "Grip"}};
-                return actions.owner.PrepareAttempt({actions.session.preflight, actions.session.preflight.Attempt()}, 2,
+                return actions.owner.PrepareAttempt({actions.session.preflight, actions.session.preflight.Attempt()}, gazeSet ? 3 : 2,
                                                     {&ActionScript::GetProc,
                                                      {1, actions.actions, actions.suggestions, {}, {1}, actions.registered},
                                                      actions.controls,
@@ -34,8 +35,8 @@ namespace Horo::Tests::OpenXRAction {
                                                      actions.controlPaths,
                                                      {labels, setLabels},
                                                      poses,
-                                                     NativeTrackingSpaceRequest{origin, XRSpaceKind::Local, worldFromBase,
-                                                                                stageAvailable}});
+                                                     NativeTrackingSpaceRequest{origin, XRSpaceKind::Local, worldFromBase, stageAvailable,
+                                                                                gazeSet}});
             }
 
             void Activate(std::uint32_t maximumSpaces = 3) {
@@ -67,6 +68,65 @@ namespace Horo::Tests::OpenXRAction {
         };
 
     }  // namespace
+
+    TEST_CASE("OpenXR gaze requires a separate route and a fresh supported sample", "[xr][native][poses][gaze]") {
+        TrackingFixture fixture;
+        const auto sample = [&] {
+            return fixture.actions.owner.SampleConsentedGaze(fixture.actions.session.Request().candidate, fixture.Time(),
+                                                             Duration::FromNanoseconds(10));
+        };
+        SECTION("ordinary pose tracking never prepares an eye action") {
+            REQUIRE(fixture.Prepare().HasValue());
+            fixture.Activate();
+            fixture.Sync();
+            const auto denied = sample();
+            REQUIRE(denied.HasError());
+            CHECK(denied.ErrorValue().code.Value() == XRErrors::OperationUnsupported.code.Value());
+            CHECK(fixture.actions.script.gaze.locationReads == 0);
+            CHECK(fixture.actions.script.gaze.action == XR_NULL_HANDLE);
+        }
+        SECTION("only a current synchronized gaze sample leaves the native owner") {
+            REQUIRE(fixture.Prepare(std::nullopt, false, XRActionSetId{1}).HasValue());
+            fixture.Activate(4);
+            auto &gaze = fixture.actions.script.gaze;
+            gaze.sampleTime = 95;
+            fixture.Sync();
+            const auto admitted = sample();
+            REQUIRE(admitted.HasValue());
+            REQUIRE(admitted.Value().has_value());
+            CHECK(admitted.Value()->Time().runtimeSample.Nanoseconds() == 95);
+            CHECK(admitted.Value()->Components().confidence == XRTrackingConfidence::High);
+            CHECK_FALSE(admitted.Value()->Components().linearVelocityMetersPerSecond.value.has_value());
+            CHECK(fixture.Sample().HasValue());
+            CHECK(sample().HasError());
+
+            for (const XrTime time : {0, 89, 101}) {
+                gaze.sampleTime = time;
+                fixture.Sync();
+                const auto stale = sample();
+                REQUIRE(stale.HasError());
+                CHECK(stale.ErrorValue().code.Value() == XRErrors::TrackingSnapshotStale.code.Value());
+            }
+            gaze.active = XR_FALSE;
+            fixture.Sync();
+            const auto reads = gaze.locationReads;
+            const auto inactive = sample();
+            REQUIRE(inactive.HasValue());
+            CHECK_FALSE(inactive.Value().has_value());
+            CHECK(gaze.locationReads == reads);
+
+            gaze.active = XR_TRUE;
+            gaze.sampleTime = 95;
+            fixture.actions.script.tracking.flags = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_POSITION_TRACKED_BIT;
+            fixture.Sync();
+            const auto malformed = sample();
+            REQUIRE(malformed.HasError());
+            CHECK(malformed.ErrorValue().code.Value() == XRErrors::PoseInvalid.code.Value());
+            REQUIRE(fixture.actions.owner.Close().HasValue());
+            CHECK(fixture.actions.script.tracking.spaces == 0);
+            CHECK(fixture.actions.script.liveActions == 0);
+        }
+    }
 
     TEST_CASE("OpenXR application dispatch composes canonical projection and preserves missing-entry rejection", "[xr][native][poses]") {
         OpenXRApplication::ApplicationNativeScript script;
