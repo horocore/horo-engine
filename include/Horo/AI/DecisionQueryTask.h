@@ -8,6 +8,8 @@
 #include "Horo/AI/EnvironmentQueryExecution.h"
 
 namespace Horo::AI {
+    struct DecisionNodeConfiguration;
+
     /** @brief Inert authored node and exact query result/output declaration. */
     struct DecisionQueryTaskDescriptor final {
         DecisionNodeId node;
@@ -50,6 +52,17 @@ namespace Horo::AI {
                                                                              const QuerySchemaRegistry &registry,
                                                                              const BehaviorTreeExecutionPlan &tree,
                                                                              IDecisionQueryTaskHost &host);
+
+        /** @brief Binds a compiled task using its one explicit authored query output property.
+         * @param configuration Authored properties of the exact compiled node. @param plan Admitted query plan.
+         * @param registry Exact registry used to compile the query. @param tree Compiled decision tree and Blackboard bindings.
+         * @param host Explicit query admission adapter. @return Bound task or a typed declaration or output failure.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<DecisionQueryTask>> BindAuthored(const DecisionNodeConfiguration &configuration,
+                                                                                     const EnvironmentQueryPlan &plan,
+                                                                                     const QuerySchemaRegistry &registry,
+                                                                                     const BehaviorTreeExecutionPlan &tree,
+                                                                                     IDecisionQueryTaskHost &host);
 
         /** @copydoc IBehaviorTreeExecutor::Start */
         [[nodiscard]] Result<AiTaskState> Start(const BehaviorTreeEvaluationContext &context,

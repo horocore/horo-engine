@@ -100,6 +100,84 @@ namespace Horo::AI {
             CHECK(preserved.Value() == encoded.Value());
         }
 
+        TEST_CASE("Decision source preserves typed EQS output through cook and requires a writable declaration", "[ai][decision-codec]") {
+            Fixture fixture;
+            const auto key = MakeIdentity<BlackboardKeyId>(4);
+            const BehaviorTreeQueryOutput output{MakeIdentity<QueryId>(20),
+                                                 MakeIdentity<QueryResultSchemaId>(21),
+                                                 2,
+                                                 MakeIdentity<QueryItemTypeId>(23),
+                                                 key,
+                                                 90};
+            const BehaviorTreeProperty property{MakeIdentity<BehaviorTreePropertyId>(9), "Query output",
+                                                BehaviorTreePropertyKind::QueryOutput, output};
+            auto task = TreeNode(2, DecisionControlKind::Task);
+            task.properties.push_back(property);
+            bool writable{};
+            bool explicitlyAuthored{true};
+            const auto addWritable = [&] {
+                task.requirements.push_back({.key = key,
+                                             .kind = BlackboardValueKind::WorldCoordinate,
+                                             .access = BlackboardKeyAccess::ReadWrite,
+                                             .source = Location()});
+            };
+            SECTION("the task declares its writable output") {
+                writable = true;
+                addWritable();
+            }
+            SECTION("the task cannot assume an undeclared output") {
+                CHECK(task.requirements.empty());
+            }
+            SECTION("a registered default cannot stand in for the authored binding") {
+                writable = true;
+                explicitlyAuthored = false;
+                task.properties.clear();
+                addWritable();
+            }
+            const auto graph = Tree(1, {TreeNode(1, DecisionControlKind::Root), task}, {Edge(1, 1, 2)});
+            const auto encoded = DecisionPlanCodec::EncodeSource(std::span{&graph, 1}, Graph(1));
+            REQUIRE(encoded.HasValue());
+            DecisionGraphAssetId root;
+            const auto decoded = DecisionPlanCodec::DecodeSource(encoded.Value(), root);
+            REQUIRE(decoded.HasValue());
+            CHECK(DecisionPlanCodec::EncodeSource(decoded.Value(), root).Value() == encoded.Value());
+            const auto &tree = *std::get<std::shared_ptr<const BehaviorTreeAsset>>(decoded.Value().front().body);
+            CHECK(tree.Nodes().back().properties == task.properties);
+
+            auto registration = Registration(fixture.probe);
+            registration.contract.properties.push_back(property);
+            const auto generation = DecisionNodeGeneration::Capture(std::span{&registration, 1}, fixture.admission);
+            REQUIRE(generation.HasValue());
+            const std::array keys{BlackboardKeyDescriptor{.key = key,
+                                                          .kind = BlackboardValueKind::WorldCoordinate,
+                                                          .presence = BlackboardKeyPresence::Optional}};
+            auto schema = BlackboardSchema::Capture({.identity = SchemaId(), .keys = keys});
+            REQUIRE(schema.HasValue());
+            const DecisionCompilationEnvironment environment{generation.Value(),
+                                                             {std::make_shared<const BlackboardSchema>(std::move(schema).Value())}};
+            const auto compiled = DecisionGraphCompiler::Compile(root, decoded.Value(), environment);
+            REQUIRE(compiled.HasValue());
+            if (writable && explicitlyAuthored) {
+                const auto plan = compiled.Value().plan;
+                REQUIRE(plan);
+                const auto graphs = plan->Graphs();
+                REQUIRE(graphs.size() == 1);
+                const auto &configuration = graphs.front().providerProperties;
+                REQUIRE(configuration.size() == 1);
+                CHECK(configuration.front().properties == std::vector{property});
+                auto cooked = DecisionPlanCodec::EncodeCooked(*plan);
+                REQUIRE(cooked.HasValue());
+                const auto reopened = DecisionPlanCodec::DecodeCooked(cooked.Value(), environment);
+                REQUIRE(reopened.HasValue());
+                REQUIRE(reopened.Value().plan);
+                CHECK(reopened.Value().plan->Digest() == plan->Digest());
+            } else {
+                CHECK_FALSE(compiled.Value().plan);
+                CHECK(compiled.Value().validation.HasErrors());
+            }
+            CHECK(fixture.probe.factories == 0);
+        }
+
         TEST_CASE("Decision source transport rejects malformed typed property values without altering authored input",
                   "[ai][decision-codec]") {
             Fixture fixture;

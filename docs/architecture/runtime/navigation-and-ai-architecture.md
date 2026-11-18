@@ -2348,6 +2348,13 @@ bounded test lookup and evaluation. It rejects a retired Scene revision before
 publishing a winner. A Decision task can commit the winning point through the
 existing typed Blackboard binding at BlackboardSync.
 
+A Decision task can store a `QueryOutput` property with the query, result
+schema and version, item type, Blackboard key and timeout. The Decision compiler
+requires a writable scalar point or entity key declaration. Runtime binding
+checks the saved query and item contract against the actual plan before starting
+work. The new property kind appends to the source wire vocabulary. Graphs without
+it keep the same bytes. Readers that predate it reject graphs that use it.
+
 Each native distance stage can store a positive integer relative score weight.
 An omitted weight means `1` and keeps existing source payloads valid. The scorer
 normalizes enabled scoring stages by their total weight. A filter-only stage

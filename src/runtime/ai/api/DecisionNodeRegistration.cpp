@@ -34,6 +34,10 @@ namespace Horo::AI {
                     const auto *value = std::get_if<BehaviorTreeNodeId>(&property.value);
                     return value && value->IsValid();
                 }
+                case QueryOutput: {
+                    const auto *output = std::get_if<BehaviorTreeQueryOutput>(&property.value);
+                    return output && output->IsValid();
+                }
                 default:
                     return false;  // Unknown properties remain authored data but cannot become executable defaults.
             }

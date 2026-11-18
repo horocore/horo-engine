@@ -19,22 +19,15 @@
 #include <vector>
 
 namespace Horo::AI {
-    struct QueryIdentityTag;
     struct QueryStageIdentityTag;
-    struct QueryItemTypeIdentityTag;
     struct QueryContextIdentityTag;
     struct QueryGeneratorIdentityTag;
     struct QueryTestIdentityTag;
     struct QueryPropertyIdentityTag;
     struct QueryProviderIdentityTag;
-    struct QueryResultSchemaIdentityTag;
 
-    /** @brief Stable authored EQS asset identity; AssetRegistry binds it to an AssetId outside HoroAI. */
-    using QueryId = AiStableIdentity<QueryIdentityTag>;
     /** @brief Stable authored stage identity, independent of label or array position. */
     using QueryStageId = AiStableIdentity<QueryStageIdentityTag>;
-    /** @brief Stable item payload type identity. */
-    using QueryItemTypeId = AiStableIdentity<QueryItemTypeIdentityTag>;
     /** @brief Stable context type identity. */
     using QueryContextId = AiStableIdentity<QueryContextIdentityTag>;
     /** @brief Stable generator descriptor identity. */
@@ -45,8 +38,6 @@ namespace Horo::AI {
     using QueryPropertyId = AiStableIdentity<QueryPropertyIdentityTag>;
     /** @brief Stable identity of a native, script, or package descriptor provider. */
     using QueryProviderId = AiStableIdentity<QueryProviderIdentityTag>;
-    /** @brief Stable identity of an authored query result schema. */
-    using QueryResultSchemaId = AiStableIdentity<QueryResultSchemaIdentityTag>;
 
     /** @brief Current authored EQS schema version; cooked artifact versions are separate. */
     inline constexpr std::uint32_t CurrentEnvironmentQuerySchemaVersion = 1;

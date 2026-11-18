@@ -1,6 +1,7 @@
 #include "Horo/AI/DecisionQueryTask.h"
 
 #include "Horo/AI/AIErrors.h"
+#include "Horo/AI/DecisionNodeRegistration.h"
 
 #include <algorithm>
 #include <limits>
@@ -10,6 +11,31 @@ namespace Horo::AI {
     namespace {
         template <typename T> Result<T> Failure(const ErrorCodeDescriptor &error) {
             return Result<T>::Failure(MakeError(error));
+        }
+
+        /** @brief Resolves only a compiled task with the given semantic identity. */
+        const BehaviorTreeExecutionNode *FindTask(const BehaviorTreeExecutionPlan &tree, DecisionNodeId id) {
+            const auto node = std::ranges::find(tree.Nodes(), id, [](const auto &entry) {
+                return entry.execution.id;
+            });
+            if (node == tree.Nodes().end() || node->execution.operation != BehaviorTreeOperation::Task)
+                return nullptr;
+            return &node->execution;
+        }
+
+        /** @brief Accepts exactly one explicitly authored query output from the task properties. */
+        const BehaviorTreeQueryOutput *FindAuthoredOutput(std::span<const BehaviorTreeProperty> properties) {
+            const BehaviorTreeQueryOutput *output{};
+            for (const auto &property : properties) {
+                if (property.kind != BehaviorTreePropertyKind::QueryOutput)
+                    continue;
+                if (output || !property.id.IsValid())
+                    return nullptr;
+                output = std::get_if<BehaviorTreeQueryOutput>(&property.value);
+                if (!output || !output->IsValid())
+                    return nullptr;
+            }
+            return output;
         }
 
         /** @brief Resolves the exact authored result and distinguishes supported native output kinds. */
@@ -58,14 +84,9 @@ namespace Horo::AI {
                                                                        IDecisionQueryTaskHost &host) {
         using Output = std::unique_ptr<DecisionQueryTask>;
         const auto kind = OutputKind(descriptor, plan, registry);
-        if (!kind || !descriptor.node.IsValid() || !descriptor.task.IsValid() || !descriptor.output.IsValid() ||
-            descriptor.timeoutTicks == 0)
+        if (!kind.has_value() || !descriptor.output.IsValid() || descriptor.timeoutTicks == 0)
             return Failure<Output>(AIErrors::EnvironmentQuerySchemaInvalid);
-        const auto node = std::ranges::find(tree.Nodes(), descriptor.node, [](const auto &entry) {
-            return entry.execution.id;
-        });
-        if (node == tree.Nodes().end() || node->execution.operation != BehaviorTreeOperation::Task ||
-            node->execution.task != descriptor.task)
+        if (const auto *node = FindTask(tree, descriptor.node); !node || node->task != descriptor.task)
             return Failure<Output>(AIErrors::EnvironmentQuerySchemaInvalid);
         const auto keys = tree.Bindings().BindingsForNode(descriptor.node);
         const auto key = std::ranges::find(keys, descriptor.output, &DecisionPlanBlackboardBinding::key);
@@ -77,6 +98,21 @@ namespace Horo::AI {
         } catch (const std::bad_alloc &) {
             return Failure<Output>(AIErrors::EnvironmentQueryLimitExceeded);
         }
+    }
+
+    /** @copydoc DecisionQueryTask::BindAuthored */
+    Result<std::unique_ptr<DecisionQueryTask>> DecisionQueryTask::BindAuthored(const DecisionNodeConfiguration &configuration,
+                                                                               const EnvironmentQueryPlan &plan,
+                                                                               const QuerySchemaRegistry &registry,
+                                                                               const BehaviorTreeExecutionPlan &tree,
+                                                                               IDecisionQueryTaskHost &host) {
+        const auto *node = FindTask(tree, configuration.node);
+        const auto *output = FindAuthoredOutput(configuration.properties);
+        if (!node || !output)
+            return Failure<std::unique_ptr<DecisionQueryTask>>(AIErrors::EnvironmentQuerySchemaInvalid);
+        return Bind({configuration.node, node->task, output->query, output->result, output->resultVersion, output->item, output->key,
+                     output->timeoutTicks},
+                    plan, registry, tree, host);
     }
 
     /** @copydoc DecisionQueryTask::DecisionQueryTask */

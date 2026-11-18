@@ -37,6 +37,10 @@ namespace Horo::AI::Detail {
                     return ReferenceProperty(property.value);
                 case Opaque:
                     return OpaqueProperty(property.value);
+                case QueryOutput: {
+                    const auto *output = std::get_if<BehaviorTreeQueryOutput>(&property.value);
+                    return output && output->IsValid();
+                }
                 default:
                     return false;
             }
@@ -46,6 +50,15 @@ namespace Horo::AI::Detail {
             writer.Unsigned(value.contractVersion, 4);
             writer.Unsigned(value.bytes.size(), 4);
             writer.Bytes(value.bytes);
+        }
+
+        void WriteQueryOutput(DecisionWriter &writer, const BehaviorTreeQueryOutput &output) {
+            writer.IdentityValue(output.query);
+            writer.IdentityValue(output.result);
+            writer.Unsigned(output.resultVersion, 4);
+            writer.IdentityValue(output.item);
+            writer.IdentityValue(output.key);
+            writer.Unsigned(output.timeoutTicks);
         }
 
         void WritePropertyValue(DecisionWriter &writer, const BehaviorTreePropertyValue &value) {
@@ -63,6 +76,8 @@ namespace Horo::AI::Detail {
                     writer.IdentityValue(item);
                 else if constexpr (std::is_same_v<T, BehaviorTreeOpaqueProperty>)
                     WriteOpaque(writer, item);
+                else if constexpr (std::is_same_v<T, BehaviorTreeQueryOutput>)
+                    WriteQueryOutput(writer, item);
             }, value);
         }
 
@@ -90,6 +105,13 @@ namespace Horo::AI::Detail {
                     value.bytes.assign(bytes.begin(), bytes.end());
                     return value;
                 }
+                case QueryOutput:
+                    return BehaviorTreeQueryOutput{reader.IdentityValue<QueryId>(),
+                                                   reader.IdentityValue<QueryResultSchemaId>(),
+                                                   static_cast<std::uint32_t>(reader.Unsigned(4)),
+                                                   reader.IdentityValue<QueryItemTypeId>(),
+                                                   reader.IdentityValue<BlackboardKeyId>(),
+                                                   reader.Unsigned()};
                 default:
                     reader.Reject();
                     return {};

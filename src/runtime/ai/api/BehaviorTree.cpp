@@ -63,6 +63,10 @@ namespace Horo::AI {
                     const auto &opaque = std::get<BehaviorTreeOpaqueProperty>(property.value);
                     return opaque.contractVersion != 0 && opaque.bytes.size() <= limits.maximumPropertyBytes;
                 }
+                case QueryOutput: {
+                    const auto *output = std::get_if<BehaviorTreeQueryOutput>(&property.value);
+                    return output && output->IsValid();
+                }
                 case Count:
                     return false;
             }

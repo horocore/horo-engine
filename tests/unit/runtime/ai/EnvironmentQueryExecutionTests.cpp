@@ -1,6 +1,7 @@
 #include "AllocationProbe.h"
 #include "EnvironmentQueryTestSupport.h"
 #include "Horo/AI/AIErrors.h"
+#include "Horo/AI/DecisionNodeRegistration.h"
 #include "Horo/AI/DecisionQueryTask.h"
 #include "Horo/AI/EnvironmentQueryCache.h"
 #include "Horo/AI/EnvironmentQueryContexts.h"
@@ -302,9 +303,16 @@ namespace Horo::AI {
             Result<std::unique_ptr<DecisionQueryTask>> Bind(const BehaviorTreeExecutionPlan &tree) {
                 if (host.native.has_value()) {
                     const auto &plan = host.native->plan;
-                    return DecisionQueryTask::Bind({node, task, plan.Id(), plan.ResultSchema().id, plan.ResultSchema().version,
-                                                    plan.ResultSchema().itemType, output, 30},
-                                                   plan, host.native->registry, tree, host);
+                    const BehaviorTreeQueryOutput property{plan.Id(),
+                                                           plan.ResultSchema().id,
+                                                           plan.ResultSchema().version,
+                                                           plan.ResultSchema().itemType,
+                                                           output,
+                                                           30};
+                    const DecisionNodeConfiguration authored{node,
+                                                             {{MakeIdentity<BehaviorTreePropertyId>(99), "Query output",
+                                                               BehaviorTreePropertyKind::QueryOutput, property}}};
+                    return DecisionQueryTask::BindAuthored(authored, plan, host.native->registry, tree, host);
                 }
                 QueryFixture fixture;
                 if (host.probe.actor)
@@ -346,6 +354,33 @@ namespace Horo::AI {
             QueryTaskFixture fixture;
             const auto tree = fixture.BuildTree(BlackboardValueKind::Boolean);
             ExpectError(fixture.Bind(*tree), AIErrors::BlackboardValueTypeMismatch);
+            CHECK(fixture.host.admissions == 0);
+        }
+
+        TEST_CASE("EQS authored binding refuses a stale result version or an ambiguous output", "[unit][ai][eqs][task]") {
+            QueryTaskFixture fixture;
+            QueryFixture source;
+            const auto registry = source.Registry();
+            const auto plan = source.Plan(registry);
+            const auto tree = fixture.BuildTree(BlackboardValueKind::WorldCoordinate);
+            BehaviorTreeQueryOutput output{plan.Id(),
+                                           plan.ResultSchema().id,
+                                           plan.ResultSchema().version,
+                                           plan.ResultSchema().itemType,
+                                           fixture.output,
+                                           4};
+            DecisionNodeConfiguration authored{fixture.node};
+            SECTION("a saved version must match the admitted query") {
+                ++output.resultVersion;
+            }
+            SECTION("a node cannot choose between two output declarations") {
+                authored.properties.emplace_back(MakeIdentity<BehaviorTreePropertyId>(1), "First", BehaviorTreePropertyKind::QueryOutput,
+                                                 output);
+            }
+            authored.properties.emplace_back(MakeIdentity<BehaviorTreePropertyId>(2), "Output", BehaviorTreePropertyKind::QueryOutput,
+                                             output);
+            ExpectError(DecisionQueryTask::BindAuthored(authored, plan, registry, *tree, fixture.host),
+                        AIErrors::EnvironmentQuerySchemaInvalid);
             CHECK(fixture.host.admissions == 0);
         }
 

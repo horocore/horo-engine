@@ -119,6 +119,7 @@ namespace Horo::AI {
         String,
         NodeReference,
         Opaque,
+        QueryOutput,
         Count,
     };
 
@@ -130,9 +131,26 @@ namespace Horo::AI {
         [[nodiscard]] bool operator==(const BehaviorTreeOpaqueProperty &) const = default;
     };
 
+    /** @brief Authored query result identity and Blackboard output of a Decision task. */
+    struct BehaviorTreeQueryOutput final {
+        QueryId query;
+        QueryResultSchemaId result;
+        std::uint32_t resultVersion{};
+        QueryItemTypeId item;
+        BlackboardKeyId key;
+        std::uint64_t timeoutTicks{};
+
+        /** @brief Checks the durable identities and finite deadline before semantic admission. */
+        [[nodiscard]] constexpr bool IsValid() const noexcept {
+            return query.IsValid() && result.IsValid() && resultVersion != 0 && item.IsValid() && key.IsValid() && timeoutTicks != 0;
+        }
+
+        [[nodiscard]] bool operator==(const BehaviorTreeQueryOutput &) const = default;
+    };
+
     /** @brief Closed scalar/opaque value carrier for one semantic node property. */
-    using BehaviorTreePropertyValue =
-        std::variant<std::monostate, bool, std::int64_t, double, std::string, BehaviorTreeNodeId, BehaviorTreeOpaqueProperty>;
+    using BehaviorTreePropertyValue = std::variant<std::monostate, bool, std::int64_t, double, std::string, BehaviorTreeNodeId,
+                                                   BehaviorTreeOpaqueProperty, BehaviorTreeQueryOutput>;
 
     /** @brief Stable typed property whose display name is never used as identity. */
     struct BehaviorTreeProperty final {
