@@ -1,6 +1,69 @@
 #include "EditorProjectSceneHostOwner.h"
+#include "Horo/Foundation/JobSystem.h"
+
+#include <new>
 
 namespace Horo::Application::Internal::EditorProjectSceneDetail {
+    /** @copydoc ProjectPlaySceneHost::QueueInitialScene */
+    Result<void> ProjectPlaySceneHost::QueueInitialScene(const Runtime::RuntimeSceneDefinition &definition,
+                                                         const Editor::EditorPlayChildSceneSource *source,
+                                                         const CancellationToken &cancellation) {
+        if (!source)
+            return Editor::EditorPlaySceneHost::QueueInitialScene(definition, nullptr, cancellation);
+        if (cancellation.IsCancellationRequested())
+            return JobCancelled();
+        if (!resources_.assets_)
+            return Result<void>::Failure(MakeError(InvalidProjectScene, "Child Scenes require a committed cook selection."));
+        try {
+            const auto path = source->projectRelativeSource.generic_u8string();
+            const auto relative = ProjectPath::Parse({reinterpret_cast<const char *>(path.data()), path.size()});
+            if (relative.HasError())
+                return Result<void>::Failure(relative.ErrorValue());
+            const auto registry = resources_.registry_.Snapshot();
+            const auto *record = registry.FindByPath(relative.Value().String());
+            if (!record || record->type.Value() != "core.scene")
+                return Result<void>::Failure(MakeError(InvalidProjectScene, "Register the exact saved Play Scene as a Scene asset."));
+            const auto *artifact = resources_.assets_->Find(record->id);
+            if (!artifact || artifact->sourceDigest != source->sourceDigest)
+                return Result<void>::Failure(MakeError(InvalidProjectScene, "Re-cook the exact saved Scene before Play."));
+            auto cooked = resources_.assets_->DecodeScene(record->id);
+            if (cooked.HasError())
+                return Result<void>::Failure(cooked.ErrorValue());
+            if (cooked.Value().ChildScenes().empty())
+                return Result<void>::Failure(MakeError(InvalidProjectScene, "The committed Scene has no matching child references."));
+
+            std::vector<Runtime::RuntimeSceneDefinition> children;
+            children.reserve(cooked.Value().ChildScenes().size());
+            Runtime::SceneDefinitionBuilder parent{definition.Id(), definition.Revision()};
+            for (const auto &entity : definition.Entities())
+                parent.Add(entity);
+            for (const auto &dependency : definition.AssetDependencies())
+                if (auto required = parent.RequireAsset(dependency); required.HasError())
+                    return required;
+            for (const auto &evidence : definition.TriggerVolumeEvidence())
+                if (auto required = parent.RequireTriggerVolume(evidence); required.HasError())
+                    return required;
+            for (const auto &reference : cooked.Value().ChildScenes()) {
+                if (cancellation.IsCancellationRequested())
+                    return JobCancelled();
+                auto child = resources_.assets_->DecodeChildScene(reference);
+                if (child.HasError())
+                    return Result<void>::Failure(child.ErrorValue());
+                if (auto required = parent.RequireChildScene(reference); required.HasError())
+                    return required;
+                children.push_back(std::move(child).Value());
+            }
+            auto ready = std::move(parent).Build();
+            if (ready.HasError())
+                return Result<void>::Failure(ready.ErrorValue());
+            auto queued = scenes_->QueuePreparationWithActivatedChildren(ready.Value(), std::move(children), cancellation);
+            hasActivatedChildren_ = queued.HasValue();
+            return queued;
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(InvalidProjectScene, "Child Scene preparation exceeded available storage."));
+        }
+    }
+
     /** @copydoc ProjectSceneAssetOwners::CaptureAssets */
     Result<void> ProjectSceneAssetOwners::CaptureAssets(const std::filesystem::path &root, JobSystem &jobs,
                                                         const EditorProjectScenePolicy &policy,

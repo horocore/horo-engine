@@ -1,4 +1,6 @@
+#include "ActivatedSceneInstancesInternal.h"
 #include "Horo/Assets/AssetProvider.h"
+#include "Horo/Foundation/JobSystem.h"
 #include "Horo/Runtime/Save/SaveRestoreTransaction.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 #include "RuntimeSceneErrors.h"
@@ -30,6 +32,9 @@ namespace Horo::Runtime {
             service.active_.candidates.swap(service.pending_.candidates);
             std::swap(service.active_.datasets, service.pending_.datasets);
             service.active_.restore.swap(service.pending_.restore);
+            retiredChildren.swap(service.activatedInstances_);
+            if (service.initialActivatedChildren_)
+                service.activatedInstances_.swap(service.initialActivatedChildren_->ready);
             if (service.publicationReceipt_) {
                 const auto view = service.active_.scene->View();
                 service.publicationReceipt_->snapshot = {ScenePublicationStatus::Published, view.RuntimeId(), view.StructuralRevision(),
@@ -39,10 +44,17 @@ namespace Horo::Runtime {
 
         RuntimeSceneService &service;
         SceneAggregate &retired;
+        std::unique_ptr<Detail::ActivatedSceneInstances> retiredChildren;
     };
 
     /** @copydoc RuntimeSceneService::PreparePendingPublication */
-    Result<bool> RuntimeSceneService::PreparePendingPublication() {
+    Result<bool> RuntimeSceneService::PreparePendingPublication(const FrameContext &context) {
+        if (initialActivatedChildren_ && !initialActivatedChildren_->ready) {
+            auto children = Detail::ActivatedSceneInstances::PrepareInitial(*this, context);
+            if (children.HasError())
+                return Result<bool>::Failure(children.ErrorValue());
+            initialActivatedChildren_->ready = std::move(children).Value();
+        }
         if (aggregateRestore_) {
             const auto ready = aggregateRestore_->PrepareOwners();
             if (ready.HasError())
@@ -79,7 +91,10 @@ namespace Horo::Runtime {
         }
         RetirePublicationReceipt(ScenePublicationStatus::Rejected);
         publicationCheck_.reset();
-        RetireActivatedInstances();
+        initialActivatedChildren_.reset();
+        if (transfer.retiredChildren)
+            transfer.retiredChildren->CancelPending();
+        transfer.retiredChildren.reset();
         ScenePublicationDetail::ShutdownCandidates(transfer.retired.candidates);
         transfer.retired.restore.reset();
         transfer.retired.scene.reset();
@@ -120,7 +135,8 @@ namespace Horo::Runtime {
         }
     }
 
-    Result<void> RuntimeSceneService::CommitDeferredChanges(const CancellationToken &cancellation) {
+    Result<void> RuntimeSceneService::CommitDeferredChanges(const FrameContext &context) {
+        const auto &cancellation = context.cancellation;
         using enum TransitionKind;
         if (structuralCommands_) {
             const auto revision = assetPreparationServices_.registry ? assetPreparationServices_.registry->Snapshot().Revision()
@@ -142,7 +158,7 @@ namespace Horo::Runtime {
             structuralReceipt_.reset();
         }
         if (transition_ == Activate) {
-            const auto prepared = PreparePendingPublication();
+            const auto prepared = PreparePendingPublication(context);
             if (prepared.HasError()) {
                 RejectPendingPublication(prepared.ErrorValue());
                 return Result<void>::Success();
@@ -151,6 +167,11 @@ namespace Horo::Runtime {
                 return Result<void>::Success();
             if (const auto valid = ValidateActivatedParentPublication(); valid.HasError()) {
                 RejectPendingPublication(valid.ErrorValue());
+                return Result<void>::Success();
+            }
+            if (initialActivatedChildren_ &&
+                (initialActivatedChildren_->cancellation.IsCancellationRequested() || context.cancellation.IsCancellationRequested())) {
+                RejectPendingPublication(JobCancelled().ErrorValue());
                 return Result<void>::Success();
             }
             if (const auto published = PublishPendingAggregate(); published.HasError()) {
@@ -171,6 +192,7 @@ namespace Horo::Runtime {
             aggregateRestore_->Rollback();
         aggregateRestore_.reset();
         operationError_ = std::move(error);
+        initialActivatedChildren_.reset();
         ScenePublicationDetail::ShutdownCandidates(pending_.candidates);
         pending_.scene.reset();
         RetirePublicationReceipt(ScenePublicationStatus::Rejected);

@@ -2,12 +2,14 @@
 
 #include "EditorPlayXrHost.h"
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "Horo/Scene/SceneSource.h"
 #include "ProjectGameplayRegistry.h"
 
 #include <algorithm>
 #include <format>
 #include <new>
 #include <ranges>
+#include <stdexcept>
 #include <string_view>
 #include <utility>
 
@@ -153,6 +155,16 @@ namespace Horo::Editor {
             std::terminate();
     }
 
+    /** @copydoc EditorPlaySceneHost::QueueInitialScene */
+    Result<void> EditorPlaySceneHost::QueueInitialScene(const Runtime::RuntimeSceneDefinition &definition,
+                                                        const EditorPlayChildSceneSource *source, const CancellationToken &cancellation) {
+        if (source)
+            return Result<void>::Failure(InvalidTransition("Play requires an installed child Scene readiness owner for this document."));
+        if (cancellation.IsCancellationRequested())
+            return Result<void>::Failure(InvalidTransition("Play Scene preparation was cancelled."));
+        return Scenes().QueuePreparation(definition);
+    }
+
     /** @copydoc EditorPlaySessionController::Start */
     Result<void> EditorPlaySessionController::Start(const SceneDocumentSnapshot &authoring, const Gameplay::BehaviorRegistry &registry,
                                                     const EditorPlaySceneFactory &factory,
@@ -170,7 +182,8 @@ namespace Horo::Editor {
     Result<void> EditorPlaySessionController::Start(const SceneDocumentSnapshot &authoring, const Gameplay::BehaviorRegistry &registry,
                                                     const Gameplay::ComponentRegistry &components, const EditorPlaySceneFactory &factory,
                                                     const std::optional<SceneSource::TriggerVolumeConversionContext> &triggerBinding,
-                                                    const EditorPlayViewSource viewSource, const IEditorPlayXrHost *selectedXrHost) {
+                                                    const EditorPlayViewSource viewSource, const IEditorPlayXrHost *selectedXrHost,
+                                                    const std::filesystem::path &projectRelativeSource) {
         if (state_ != EditorPlaySessionState::Idle && state_ != EditorPlaySessionState::Failed)
             return Result<void>::Failure(InvalidTransition("A play session is already active."));
         Stop();
@@ -201,10 +214,30 @@ namespace Horo::Editor {
             Fail(error);
             return Result<void>::Failure(error);
         }
+        std::optional<EditorPlayChildSceneSource> childSource;
         if (!authoring.childScenes.empty()) {
-            const auto error = InvalidTransition("Play requires an installed child Scene readiness owner for this document.");
-            Fail(error);
-            return Result<void>::Failure(error);
+            if (projectRelativeSource.empty() || projectRelativeSource.is_absolute()) {
+                const auto error = InvalidTransition("Play with child Scenes requires a saved project-relative Scene source.");
+                Fail(error);
+                return Result<void>::Failure(error);
+            }
+            const auto references = SceneSource::ValidateSceneChildReferences(authoring.childScenes);
+            if (references.HasError()) {
+                Fail(references.ErrorValue());
+                return references;
+            }
+            try {
+                const auto encoded = SceneSource::EncodeSceneSource({authoring.objects, authoring.prefabInstances, authoring.childScenes});
+                childSource.emplace(projectRelativeSource, ComputeSha256(std::as_bytes(std::span{encoded})));
+            } catch (const std::invalid_argument &) {
+                const auto error = InvalidTransition("The authored child Scene document cannot be encoded.");
+                Fail(error);
+                return Result<void>::Failure(error);
+            } catch (const std::bad_alloc &) {
+                const auto error = MakeError(Runtime::SaveErrors::StorageAllocationFailed);
+                Fail(error);
+                return Result<void>::Failure(error);
+            }
         }
         prefabComponents_ = components;
         auto converted = ConvertSceneDocumentToRuntime(authoring, Runtime::SceneDefinitionId{2}, triggerBinding);
@@ -212,7 +245,8 @@ namespace Horo::Editor {
             Fail(converted.ErrorValue());
             return Result<void>::Failure(converted.ErrorValue());
         }
-        if (auto prepared = BeginPreparation(std::move(converted).Value(), registry, factory); prepared.HasError()) {
+        if (auto prepared = BeginPreparation(std::move(converted).Value(), registry, factory, childSource ? &*childSource : nullptr);
+            prepared.HasError()) {
             Fail(prepared.ErrorValue());
             return prepared;
         }
@@ -239,7 +273,8 @@ namespace Horo::Editor {
     /** @copydoc EditorPlaySessionController::BeginPreparation */
     Result<void> EditorPlaySessionController::BeginPreparation(Runtime::RuntimeSceneDefinition definition,
                                                                const Gameplay::BehaviorRegistry &registry,
-                                                               const EditorPlaySceneFactory &factory) {
+                                                               const EditorPlaySceneFactory &factory,
+                                                               const EditorPlayChildSceneSource *childSource) {
         if (const auto reserved = ReservePlayOwnership(); reserved.HasError())
             return reserved;
         const Runtime::SceneRuntimeId identity{nextRuntimeId_};
@@ -261,15 +296,16 @@ namespace Horo::Editor {
                 sceneHost_->Scenes().AddStructuralParticipant(std::make_unique<PlayGameplayParticipant>(runtimeBinding_));
             registered.HasError())
             return registered;
-        return StartPreparedScene(std::move(definition), registry);
+        return StartPreparedScene(std::move(definition), registry, childSource);
     }
 
     /** @copydoc EditorPlaySessionController::StartPreparedScene */
     Result<void> EditorPlaySessionController::StartPreparedScene(Runtime::RuntimeSceneDefinition definition,
-                                                                 const Gameplay::BehaviorRegistry &registry) {
+                                                                 const Gameplay::BehaviorRegistry &registry,
+                                                                 const EditorPlayChildSceneSource *childSource) {
         if (const auto started = sceneHost_->Scenes().Startup(preparationCancellation_.Token()); started.HasError())
             return started;
-        if (const auto queued = sceneHost_->Scenes().QueuePreparation(definition); queued.HasError())
+        if (const auto queued = sceneHost_->QueueInitialScene(definition, childSource, preparationCancellation_.Token()); queued.HasError())
             return queued;
         pendingRegistry_ = &registry;
         return Result<void>::Success();

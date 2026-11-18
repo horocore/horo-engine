@@ -15,6 +15,10 @@ namespace Horo::Runtime::Detail {
         [[nodiscard]] static Result<void> Remove(RuntimeSceneService &parent, const ActivatedSceneInstanceOperation &current);
         [[nodiscard]] static std::optional<RuntimeSceneView> Find(const RuntimeSceneService &parent,
                                                                   const ActivatedSceneInstanceOperation &current) noexcept;
+        /** @brief Builds and validates a hidden child set while the containing parent remains pending. */
+        [[nodiscard]] static Result<std::unique_ptr<ActivatedSceneInstances>> PrepareInitial(RuntimeSceneService &parent,
+                                                                                             const FrameContext &context);
+        [[nodiscard]] std::optional<RuntimeSceneView> Find(SceneInstanceId occurrence) const noexcept;
         void Advance(RuntimeSceneService &parent, const FrameContext &context);
         void CancelPending() noexcept;
         /** @brief Revalidates the actual pending owner after child participant validation and before publication. */
@@ -45,5 +49,13 @@ namespace Horo::Runtime::Detail {
         std::vector<Entry> active_;
         std::optional<Pending> pending_;
         SceneRuntimeId removal_;
+    };
+
+    /** @brief Host-supplied exact cold input and private prepared set for one pending parent aggregate. */
+    struct InitialActivatedSceneChildren final {
+        std::vector<RuntimeSceneDefinition> definitions;
+        std::vector<SceneChildDefinitionReference> references;
+        CancellationToken cancellation;
+        std::unique_ptr<ActivatedSceneInstances> ready;
     };
 }  // namespace Horo::Runtime::Detail

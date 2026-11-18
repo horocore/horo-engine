@@ -299,6 +299,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         /** @copydoc Editor::EditorPlaySceneHost::ConfigureSaveSession */
         Result<void> ConfigureSaveSession(std::vector<Editor::PlaySaveGameplayBinding> bindings,
                                           std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner) override {
+            if (hasActivatedChildren_)
+                return Result<void>::Failure(
+                    MakeError(Runtime::SaveErrors::CompositionUnsupported, "Save requires independent child Scene capture and restore."));
             if (saves_.saveError_)
                 return Result<void>::Failure(*saves_.saveError_);
             if (saves_.save_)
@@ -379,6 +382,11 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 return Result<std::shared_ptr<Gameplay::GameplayPrefabContext>>::Success(nullptr);
             return prefab_.services->Bind(registry, components, tick_);
         }
+
+        /** @copydoc Editor::EditorPlaySceneHost::QueueInitialScene */
+        [[nodiscard]] Result<void> QueueInitialScene(const Runtime::RuntimeSceneDefinition &definition,
+                                                     const Editor::EditorPlayChildSceneSource *source,
+                                                     const CancellationToken &cancellation) override;
 
         Result<void> CommitSceneChanges(const Runtime::FrameContext &frame) override {
             const auto phase = Runtime::RuntimePhase::CommitDeferredLifecycleChanges;
@@ -519,6 +527,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         std::optional<Physics::PhysicsRuntimeRetirement> physicsRetirement_;
         std::optional<Error> physicsStateUnavailable_;
         bool sceneClosed_{};
+        bool hasActivatedChildren_{};
         Physics::PhysicsSceneActivationAuthority authority_;
         ScenePhysicsHost native_;
         std::vector<AI::AiControllerDescriptor> controllers_;

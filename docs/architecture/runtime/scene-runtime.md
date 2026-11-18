@@ -797,8 +797,15 @@ require the exact child leaf bytes in the captured generation.
 
 The Editor preserves authoring references in the document, external reload,
 save and autosave recovery. The old source reader still rejects child-bearing
-documents. The workspace previews the parent entities, and Play requires a
-host that completes child readiness before publishing the parent aggregate.
+documents. The workspace previews the parent entities. Installed Editor Play
+matches the workspace source path and canonical authored digest against the
+exact committed Scene generation. Its initial Activated route admits assetless
+Core ECS leaf Scenes. The parent owns their independent runtime IDs and
+prepares their private worlds before any parent publication callbacks. The
+parent and child set become visible in the same aggregate transfer.
+Stale content, cancellation and unsupported child adapters preserve the
+previous aggregate. Save and Restore require independent child capture and are
+unavailable for this Play scope.
 
 ## Editor Interaction
 

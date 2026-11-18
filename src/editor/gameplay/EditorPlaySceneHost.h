@@ -5,6 +5,7 @@
  * @brief Non-installed app-injected ownership boundary for isolated Editor Play Scene services.
  */
 #include "EditorPlaySaveSession.h"
+#include "Horo/Foundation/Sha256.h"
 #include "Horo/Gameplay/BehaviorRuntimeRestore.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
@@ -59,6 +60,12 @@ namespace Horo::Editor {
      */
     class IEditorPlayXrHost;
 
+    /** @brief Exact authored root to resolve against the immutable installed Scene inventory. */
+    struct EditorPlayChildSceneSource final {
+        std::filesystem::path projectRelativeSource;
+        Sha256Digest sourceDigest;
+    };
+
     class EditorPlaySceneHost {
     public:
         /** @brief Identifies the actual selected XR participant in this factory composition.
@@ -74,6 +81,15 @@ namespace Horo::Editor {
          * @return Service owned by this host until shutdown/destruction.
          */
         [[nodiscard]] virtual Runtime::RuntimeSceneService &Scenes() noexcept = 0;
+
+        /** @brief Queues the initial Scene using an explicitly selected installed child-aware host when required.
+         * @param definition Existing immutable authored parent conversion. @param source Exact source evidence for child-bearing roots.
+         * @param cancellation Actual Play preparation lifetime.
+         * @return Typed initial admission result. Hosts without an installed child catalog reject that scope.
+         */
+        [[nodiscard]] virtual Result<void> QueueInitialScene(const Runtime::RuntimeSceneDefinition &definition,
+                                                             const EditorPlayChildSceneSource *source,
+                                                             const CancellationToken &cancellation);
 
         /** @brief Borrows the actual composed Animation owner on its owner lane; never register a second evaluation path.
          * @return Null when unselected; the Scene host retains lifecycle ownership through shutdown/retirement. */

@@ -34,9 +34,74 @@ namespace Horo::Runtime {
             ActivatedSceneInstanceRequest request_;
             std::unique_ptr<ScenePublicationCheck> source_;
         };
+
+        /** @brief Preserves the genuine typed child publication receipt while the parent retains private ownership. */
+        class InitialChildPublicationCheck final : public ScenePublicationCheck {
+        public:
+            explicit InitialChildPublicationCheck(CancellationToken cancellation) noexcept : cancellation_(std::move(cancellation)) {}
+
+            Result<void> ValidatePublication() const override {
+                return cancellation_.IsCancellationRequested() ? JobCancelled() : Result<void>::Success();
+            }
+
+        private:
+            CancellationToken cancellation_;
+        };
     }  // namespace
 
     namespace Detail {
+        /** @copydoc ActivatedSceneInstances::PrepareInitial */
+        Result<std::unique_ptr<ActivatedSceneInstances>> ActivatedSceneInstances::PrepareInitial(RuntimeSceneService &parent,
+                                                                                                 const FrameContext &context) {
+            using Outcome = Result<std::unique_ptr<ActivatedSceneInstances>>;
+            const auto &input = *parent.initialActivatedChildren_;
+            const auto parentId = parent.pending_.scene->View().RuntimeId();
+            try {
+                auto owner = std::make_unique<ActivatedSceneInstances>();
+                owner->active_.reserve(input.references.size());
+                for (std::size_t index = 0; index < input.references.size(); ++index) {
+                    if (input.cancellation.IsCancellationRequested() || context.cancellation.IsCancellationRequested())
+                        return Outcome::Failure(JobCancelled().ErrorValue());
+                    if (parent.nextRuntimeId_ == 0)
+                        return Outcome::Failure(MakeError(SceneErrors::BaselineCapacityExceeded));
+                    const auto &reference = input.references[index];
+                    const SceneRuntimeId identity{parent.nextRuntimeId_++};
+                    auto child = std::make_unique<RuntimeSceneService>(identity);
+                    if (auto started = child->Startup(input.cancellation); started.HasError())
+                        return Outcome::Failure(started.ErrorValue());
+                    auto prepared =
+                        child->QueuePreparationWithPublicationCheck(input.definitions[index],
+                                                                    std::make_unique<InitialChildPublicationCheck>(input.cancellation));
+                    if (prepared.HasError())
+                        return Outcome::Failure(prepared.ErrorValue());
+                    if (auto ready = child->OnPhase(RuntimePhase::CommitDeferredLifecycleChanges, context); ready.HasError())
+                        return Outcome::Failure(ready.ErrorValue());
+                    if (const auto error = child->TakeOperationError())
+                        return Outcome::Failure(*error);
+                    const auto view = child->ActiveScene();
+                    if (!view || view->RuntimeId() != identity)
+                        return Outcome::Failure(MakeError(SceneErrors::BaselineStale));
+                    owner->active_.push_back({{parentId, reference.occurrence, reference.definition, reference.mode},
+                                              identity,
+                                              reference.revision,
+                                              input.cancellation,
+                                              std::move(child),
+                                              std::move(prepared).Value()});
+                }
+                return Outcome::Success(std::move(owner));
+            } catch (const std::bad_alloc &) {
+                return Outcome::Failure(MakeError(SceneErrors::BaselineCapacityExceeded));
+            }
+        }
+
+        std::optional<RuntimeSceneView> ActivatedSceneInstances::Find(const SceneInstanceId occurrence) const noexcept {
+            const auto found = std::ranges::find_if(active_, [&](const Entry &entry) {
+                return entry.address.instance == occurrence;
+            });
+            return found != active_.end() && !found->parentCancellation.IsCancellationRequested() ? found->service->ActiveScene()
+                                                                                                  : std::nullopt;
+        }
+
         bool ActivatedSceneInstances::Matches(const Entry &entry, const ActivatedSceneInstanceOperation &operation) noexcept {
             return entry.address == operation.address_ && entry.identity == operation.child_ &&
                    entry.receipt.state_ == operation.receipt_.state_;
@@ -286,6 +351,15 @@ namespace Horo::Runtime {
     /** @copydoc QueueActivatedSceneRemoval */
     Result<void> QueueActivatedSceneRemoval(RuntimeSceneService &parent, const ActivatedSceneInstanceOperation &current) {
         return Detail::ActivatedSceneInstances::Remove(parent, current);
+    }
+
+    /** @copydoc RuntimeSceneService::ActiveChildScene */
+    std::optional<RuntimeSceneView> RuntimeSceneService::ActiveChildScene(const SceneRuntimeId parent,
+                                                                          const SceneInstanceId occurrence) const noexcept {
+        if (std::this_thread::get_id() != restoreRetirementOwner_ || !activatedInstances_ || shutdown_ || shutdownDeferred_)
+            return std::nullopt;
+        const auto active = ActiveScene();
+        return active && active->RuntimeId() == parent ? activatedInstances_->Find(occurrence) : std::nullopt;
     }
 
     /** @copydoc RuntimeSceneService::ValidateActivatedParentPublication */

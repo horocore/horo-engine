@@ -311,11 +311,12 @@ namespace Horo::Runtime {
     Result<std::unique_ptr<RuntimeScene>> RuntimeScene::CreateResolved(const RuntimeSceneDefinition &definition,
                                                                        const SceneRuntimeId runtimeId, const RuntimeSceneConfig config,
                                                                        const Assets::AssetRegistryRevision assetRevision,
-                                                                       std::vector<ResolvedAsset> &&assets) {
+                                                                       std::vector<ResolvedAsset> &&assets,
+                                                                       const ChildActivationAdmission children) {
         if (!runtimeId.IsValid() || config.maximumGeneration == 0)
             return Failure<std::unique_ptr<RuntimeScene>>(SceneErrors::InvalidCandidate,
                                                           "Runtime identity and maximum generation must be non-zero.");
-        if (!definition.ChildScenes().empty())
+        if (!definition.ChildScenes().empty() && children != ChildActivationAdmission::ExplicitHost)
             return Failure<std::unique_ptr<RuntimeScene>>(SceneErrors::BaselineUnsupported,
                                                           "Cooked Scene children require an explicit host activation owner.");
         if (assets.size() != definition.AssetDependencies().size())

@@ -34,7 +34,8 @@ namespace Horo::Runtime {
 
     namespace Detail {
         class ActivatedSceneInstances;
-    }
+        struct InitialActivatedSceneChildren;
+    }  // namespace Detail
 
     /** @brief Exact durable member inventory for one private structural partition; entity is a dense command index. */
     struct SceneRestorePartitionMember final {
@@ -990,10 +991,14 @@ namespace Horo::Runtime {
             std::optional<Error> *notificationError = nullptr, CommitPurpose purpose = CommitPurpose::Ordinary,
             std::optional<StructuralCommitResult> *trackedResult = nullptr);
 
-        [[nodiscard]] static Result<std::unique_ptr<RuntimeScene>> CreateResolved(const RuntimeSceneDefinition &definition,
-                                                                                  SceneRuntimeId runtimeId, RuntimeSceneConfig config,
-                                                                                  Assets::AssetRegistryRevision assetRevision,
-                                                                                  std::vector<ResolvedAsset> &&assets);
+        enum class ChildActivationAdmission : std::uint8_t {
+            Unsupported,
+            ExplicitHost
+        };
+        [[nodiscard]] static Result<std::unique_ptr<RuntimeScene>> CreateResolved(
+            const RuntimeSceneDefinition &definition, SceneRuntimeId runtimeId, RuntimeSceneConfig config,
+            Assets::AssetRegistryRevision assetRevision, std::vector<ResolvedAsset> &&assets,
+            ChildActivationAdmission children = ChildActivationAdmission::Unsupported);
 
         struct Slot {
             std::uint32_t generation{1};
@@ -1107,6 +1112,17 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<ScenePublicationReceipt> QueuePreparationWithPublicationCheck(
             const RuntimeSceneDefinition &definition, std::unique_ptr<ScenePublicationCheck> publicationCheck,
             RuntimeSceneConfig config = {});
+        /** @brief Stages a parent and its exact direct children as one cold activation.
+         * @param definition Parent definition with fully resolved cooked child references.
+         * @param children Verified child definitions in the exact parent occurrence order.
+         * @param cancellation Parent operation lifetime. Cancellation before publication rejects the complete aggregate.
+         * @return Success or typed failure. Deferred rejection preserves the current published parent and child set.
+         * @pre The host verifies each child payload digest and supported owner composition before admission.
+         * This installed route initially supports only assetless direct Core ECS leaf Scenes.
+         */
+        [[nodiscard]] Result<void> QueuePreparationWithActivatedChildren(const RuntimeSceneDefinition &definition,
+                                                                         std::vector<RuntimeSceneDefinition> children,
+                                                                         const CancellationToken &cancellation);
         /** @brief Queues a composite save restore through the existing exclusive Scene admission path.
          * @param definition Borrowed validated compatible immutable authored defaults; pending preparation retains an independent copy.
          * @param restore Non-null owned restore composition, retained through pending preparation/rollback.
@@ -1158,6 +1174,11 @@ namespace Horo::Runtime {
         [[nodiscard]] bool IsRestoreCandidate(const RuntimeScene &candidate) const noexcept;
         /** @brief Returns the current immutable active scene view. */
         [[nodiscard]] std::optional<RuntimeSceneView> ActiveScene() const noexcept;
+        /** @brief Borrows a ready direct child of the currently published parent, by authored occurrence.
+         * @param parent Exact published parent runtime. @param occurrence Stable authored child ID.
+         * @return Current child view or absence while pending, replaced, cancelled or on another lane.
+         */
+        [[nodiscard]] std::optional<RuntimeSceneView> ActiveChildScene(SceneRuntimeId parent, SceneInstanceId occurrence) const noexcept;
         /**
          * @brief Clones the active prepared scene into a separate runtime domain.
          * @param runtimeId Unique identity for the clone; must not match the active domain.
@@ -1245,12 +1266,12 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> SubmitPreparationLoads();
         [[nodiscard]] Result<void> PrepareParticipants(const RuntimeSceneDefinition &definition);
         [[nodiscard]] Result<void> PrepareParticipantPhase(const RuntimeSceneDefinition &definition, SceneActivationPhase phase);
-        [[nodiscard]] Result<void> CommitDeferredChanges(const CancellationToken &cancellation);
+        [[nodiscard]] Result<void> CommitDeferredChanges(const FrameContext &context);
         /** @brief Prepares and validates all unload owners before the existing no-fail lifecycle publication boundary. */
         [[nodiscard]] Result<void> RetireActiveScene(const CancellationToken &cancellation);
         /** @brief Waits for owners and validates every candidate before any ownership transfer.
          * @return Ready, pending, or the original typed preparation/validation failure. */
-        [[nodiscard]] Result<bool> PreparePendingPublication();
+        [[nodiscard]] Result<bool> PreparePendingPublication(const FrameContext &context);
         /** @brief Transfers all prepared roots and retains the retired aggregate through completion observers.
          * @return Success or the original pre-transfer gate failure. */
         [[nodiscard]] Result<void> PublishPendingAggregate();
@@ -1272,6 +1293,7 @@ namespace Horo::Runtime {
         SceneAggregate active_;
         Vfx::VfxExtractionOutcome vfxFrame_;
         std::unique_ptr<Detail::ActivatedSceneInstances> activatedInstances_;
+        std::unique_ptr<Detail::InitialActivatedSceneChildren> initialActivatedChildren_;
         const RuntimeSceneService *activationParent_{}; /**< Private one-use Activated child publication fence. */
         SceneAggregate pending_;
         std::vector<std::unique_ptr<SceneActivationParticipant>> participants_;

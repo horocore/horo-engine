@@ -219,6 +219,51 @@ namespace Horo::Runtime {
         }
     }
 
+    /** @copydoc RuntimeSceneService::QueuePreparationWithActivatedChildren */
+    Result<void> RuntimeSceneService::QueuePreparationWithActivatedChildren(const RuntimeSceneDefinition &definition,
+                                                                            std::vector<RuntimeSceneDefinition> children,
+                                                                            const CancellationToken &cancellation) {
+        if (std::this_thread::get_id() != restoreRetirementOwner_)
+            return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
+        if (shutdown_)
+            return Result<void>::Failure(MakeError(SceneErrors::ServiceShutdown));
+        if (mutatingLifecycle_ || transition_ != TransitionKind::None || structuralCommands_ || preparation_ || initialActivatedChildren_)
+            return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
+        if (cancellation.IsCancellationRequested())
+            return JobCancelled();
+        const auto references = definition.ChildScenes();
+        if (references.empty() || references.size() != children.size())
+            return Result<void>::Failure(MakeError(SceneErrors::BaselineInvalid));
+        try {
+            const RuntimeComponentSet coreOnly;
+            for (std::size_t index = 0; index < children.size(); ++index) {
+                const auto &child = children[index];
+                if (child.Id() != references[index].definition || child.Revision() != references[index].revision)
+                    return Result<void>::Failure(MakeError(SceneErrors::BaselineStale));
+                if (!child.AssetDependencies().empty() || !child.ChildScenes().empty() ||
+                    std::ranges::any_of(child.Entities(), [&](const auto &entity) {
+                    return entity.primitiveMesh.has_value() || entity.components != coreOnly;
+                }))
+                    return Result<void>::Failure(
+                        MakeError(SceneErrors::BaselineUnsupported, "This Play route requires assetless Core ECS leaf Scenes."));
+            }
+            initialActivatedChildren_ =
+                std::make_unique<Detail::InitialActivatedSceneChildren>(std::move(children),
+                                                                        std::vector<SceneChildDefinitionReference>{references.begin(),
+                                                                                                                   references.end()},
+                                                                        cancellation);
+            auto queued = QueuePreparation(definition);
+            if (queued.HasError())
+                initialActivatedChildren_.reset();
+            if (shutdown_)
+                return Result<void>::Failure(MakeError(SceneErrors::ServiceShutdown));
+            return queued;
+        } catch (const std::bad_alloc &) {
+            initialActivatedChildren_.reset();
+            return Result<void>::Failure(MakeError(SceneErrors::BaselineCapacityExceeded));
+        }
+    }
+
     /** @copydoc RuntimeSceneService::QueuePreparationWithRestore */
     Result<void> RuntimeSceneService::QueuePreparationWithRestore(const RuntimeSceneDefinition &definition,
                                                                   std::unique_ptr<SceneAggregateRestore> restore,
@@ -324,6 +369,7 @@ namespace Horo::Runtime {
         aggregateRestore_.reset();
         ScenePublicationDetail::ShutdownCandidates(pending_.candidates);
         pending_.scene.reset();
+        initialActivatedChildren_.reset();
         RetirePublicationReceipt(ScenePublicationStatus::Cancelled);
         publicationCheck_.reset();
         transition_ = None;
@@ -441,6 +487,12 @@ namespace Horo::Runtime {
             if (mutatingLifecycle_)
                 return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
             const LifecycleMutation mutation{*this};
+            if (initialActivatedChildren_ &&
+                (initialActivatedChildren_->cancellation.IsCancellationRequested() || context.cancellation.IsCancellationRequested())) {
+                CancelPreparation(false);
+                RejectPendingPublication(JobCancelled().ErrorValue());
+                return Result<void>::Success();
+            }
             if (preparation_ && publicationCheck_) {
                 if (const auto valid = publicationCheck_->ValidatePublication(); valid.HasError()) {
                     operationError_ = valid.ErrorValue();
@@ -451,7 +503,7 @@ namespace Horo::Runtime {
                 }
             }
             AdvancePreparation(context.cancellation);
-            auto committed = CommitDeferredChanges(context.cancellation);
+            auto committed = CommitDeferredChanges(context);
             if (committed.HasValue() && !shutdownDeferred_)
                 ProgressActivatedInstances(context);
             return committed;
@@ -483,6 +535,7 @@ namespace Horo::Runtime {
         operationError_.reset();
         ScenePublicationDetail::ShutdownCandidates(pending_.candidates);
         pending_.scene.reset();
+        initialActivatedChildren_.reset();
         RetirePublicationReceipt(ScenePublicationStatus::Cancelled);
         publicationCheck_.reset();
         RetireActivatedInstances();
@@ -785,7 +838,10 @@ namespace Horo::Runtime {
                                                      const Assets::AssetRegistryRevision revision,
                                                      std::vector<RuntimeScene::ResolvedAsset> &&assets) {
         try {
-            auto candidate = RuntimeScene::CreateResolved(definition, SceneRuntimeId{nextRuntimeId_}, config, revision, std::move(assets));
+            const auto childAdmission = initialActivatedChildren_ ? RuntimeScene::ChildActivationAdmission::ExplicitHost
+                                                                  : RuntimeScene::ChildActivationAdmission::Unsupported;
+            auto candidate = RuntimeScene::CreateResolved(definition, SceneRuntimeId{nextRuntimeId_}, config, revision, std::move(assets),
+                                                          childAdmission);
             if (candidate.HasError())
                 return Result<void>::Failure(candidate.ErrorValue());
             pending_.scene = std::move(candidate).Value();

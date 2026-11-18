@@ -69,6 +69,7 @@ namespace Horo::Editor {
          * @param triggerBinding Exact project capture used when conversion is required.
          * @param viewSource Explicit authored-camera or selected-XR behavior.
          * @param selectedXrHost Exact factory participant identity, mandatory for selected XR; outlives Play.
+         * @param projectRelativeSource Current workspace-owned installed source route, required for authored children.
          * @return Accepted preparation or a typed Play-gate/conversion/runtime activation error.
          * @pre Registry/module ownership outlives pending preparation and Play; reload waits until readiness.
          * @details No normal-frame wait: presentation/fixed updates pump bounded Scene progress while Starting.
@@ -79,7 +80,8 @@ namespace Horo::Editor {
                                          const Gameplay::ComponentRegistry &components, const EditorPlaySceneFactory &factory = {},
                                          const std::optional<SceneSource::TriggerVolumeConversionContext> &triggerBinding = {},
                                          EditorPlayViewSource viewSource = EditorPlayViewSource::AuthoredCamera,
-                                         const IEditorPlayXrHost *selectedXrHost = nullptr);
+                                         const IEditorPlayXrHost *selectedXrHost = nullptr,
+                                         const std::filesystem::path &projectRelativeSource = {});
         /** @brief Selects explicit application lifetime storage before activation. No queue is discovered implicitly.
          * @param owner Cold bounded queue outliving the controller and actual scheduler join. */
         void ConfigureSaveRetirement(std::shared_ptr<EditorPlaySaveRetirement> owner) noexcept;
@@ -186,12 +188,13 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> ReservePlayOwnership();
         /** @brief Acquires one configured owner and admits its asynchronous Scene preparation without waiting. */
         [[nodiscard]] Result<void> BeginPreparation(Runtime::RuntimeSceneDefinition definition, const Gameplay::BehaviorRegistry &registry,
-                                                    const EditorPlaySceneFactory &factory);
+                                                    const EditorPlaySceneFactory &factory, const EditorPlayChildSceneSource *childSource);
         /** @brief Starts the configured Scene and retains the actual pending registry through activation.
          * @param definition Validated owned Play definition. @param registry Live frozen registry retained by the Play unit.
          * @return Original Scene startup/preparation failure or genuine queue admission. */
         [[nodiscard]] Result<void> StartPreparedScene(Runtime::RuntimeSceneDefinition definition,
-                                                      const Gameplay::BehaviorRegistry &registry);
+                                                      const Gameplay::BehaviorRegistry &registry,
+                                                      const EditorPlayChildSceneSource *childSource);
         /** @brief Registers the canonical Scene-owned runtime before any Scene
          * preparation is admitted. */
         [[nodiscard]] Result<void> PrepareBehaviorOwner(const Gameplay::BehaviorRegistry &registry);

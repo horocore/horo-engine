@@ -398,4 +398,42 @@ namespace {
         CHECK(pending.Value().Snapshot().Value().status == ScenePublicationStatus::Cancelled);
         CHECK(attemptProbe.publishes == 0);
     }
+
+    TEST_CASE("Initial Activated children and the parent become visible in one Scene commit", "[unit][scene][instances][activated]") {
+        Fixture f;
+        const auto old = f.scene.ActiveScene();
+        REQUIRE(old);
+        const auto child = Fixture::MakeChild({1});
+        const auto asset = Assets::AssetId::Parse("00112233-4455-6677-8899-aabbccddeeff").Value();
+        Sha256Digest digest{};
+        digest.bytes[0] = 1;
+        SceneDefinitionBuilder builder{{92}, {13}};
+        builder.Add(Entity(1));
+        REQUIRE(builder.RequireChildScene({{3}, asset, child.Id(), child.Revision(), digest}).HasValue());
+        const auto prepared = std::move(builder).Build();
+        REQUIRE(prepared.HasValue());
+        CHECK(f.scene.QueuePreparation(prepared.Value()).HasError());
+        CHECK(f.scene.QueuePreparationWithActivatedChildren(prepared.Value(), {Fixture::MakeChild({2})}, {}).HasError());
+        const auto expected = f.scene.NextRuntimeId();
+        CancellationSource cancellation;
+        REQUIRE(f.scene.QueuePreparationWithActivatedChildren(prepared.Value(), {child}, cancellation.Token()).HasValue());
+        REQUIRE(f.scene.ActiveScene()->RuntimeId() == old->RuntimeId());
+        CHECK_FALSE(f.scene.ActiveChildScene(expected, {3}));
+        SECTION("both owners publish at the regular parent cutoff") {
+            f.Commit();
+            REQUIRE(f.scene.ActiveScene()->RuntimeId() == expected);
+            const auto attached = f.scene.ActiveChildScene(expected, {3});
+            REQUIRE(attached);
+            CHECK(attached->RuntimeId() != expected);
+            CHECK(attached->Find({10}));
+            CHECK_FALSE(f.scene.ActiveChildScene(old->RuntimeId(), {3}));
+        }
+        SECTION("cancelling the complete staged set preserves the previous published parent") {
+            cancellation.RequestCancellation();
+            f.Commit();
+            CHECK(f.scene.ActiveScene()->RuntimeId() == old->RuntimeId());
+            REQUIRE(f.scene.TakeOperationError());
+            CHECK_FALSE(f.scene.ActiveChildScene(expected, {3}));
+        }
+    }
 }  // namespace

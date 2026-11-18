@@ -180,7 +180,8 @@ namespace Horo::Editor {
             m_playSession.Start(m_document.Snapshot(), m_gameplayRegistry->Registry(), m_gameplayRegistry->Components(), m_playSceneFactory,
                                 m_triggerBinding,
                                 m_selectedXrPlayHost ? m_selectedXrPlayHost->ViewSource() : EditorPlayViewSource::AuthoredCamera,
-                                m_selectedXrPlayHost);
+                                m_selectedXrPlayHost,
+                                m_defaultScenePath ? m_defaultScenePath->lexically_relative(ProjectRoot()) : std::filesystem::path{});
         m_viewModel.activeDocumentPanelId = "horo.game";
         SyncPanelHost(WorkspaceDockArea::Document, "horo.game");
         if (started.HasError())
