@@ -257,6 +257,40 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Reads the native module's explicit bounded path-only grant. */
+        Result<void> ReadNavigationPathPolicy(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch) {
+            if (launch.navigationPath || arguments.size() - index < 3)
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "Use --game-navigation-path <filter id> <deadline ticks> once."));
+            const auto number = [](const std::string_view text, auto &value) {
+                const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+                return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size();
+            };
+            std::uint64_t filterValue{};
+            std::uint32_t deadline{};
+            if (!number(arguments[index + 1], filterValue) || !number(arguments[index + 2], deadline) || deadline == 0 ||
+                deadline > HeadlessNavigationPathPolicy::MaximumDeadlineTicks)
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                                       "Navigation path filter and deadline must be positive bounded integers."));
+            auto filter = Navigation::NavigationFilterId::Create(filterValue);
+            if (filter.HasError())
+                return Result<void>::Failure(filter.ErrorValue());
+            launch.navigationPath.emplace(HeadlessNavigationPathPolicy{filter.Value(), deadline});
+            index += 3;
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates the explicit best-effort path authority before project IO. */
+        Result<void> ValidateNavigationPathPolicy(const ProductLaunch &launch) {
+            if (launch.navigationPath &&
+                (launch.role != Net::NetworkProjectRole::Standalone || !launch.gameplay || launch.gameplay->nativeArtifact.empty() ||
+                 launch.sceneInput.navigationMode != HeadlessNavigationMode::RecastDetour || !launch.cookedDecisionBindings.empty()))
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                              "A best-effort Navigation path grant requires standalone cooked Navigation and native gameplay."));
+            return Result<void>::Success();
+        }
+
         /** @brief Decodes the Scene's missing-controller policy independently of explicit asset selection. */
         Result<void> ReadMissingControllerPolicy(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch) {
             if (launch.aiMissingController || arguments.size() - index < 2)
@@ -315,6 +349,11 @@ namespace Horo::Application::Internal {
                         return selected;
                     continue;
                 }
+                if (key == "--game-navigation-path") {
+                    if (auto policy = ReadNavigationPathPolicy(arguments, index, launch); policy.HasError())
+                        return policy;
+                    continue;
+                }
                 if (key == "--ai-missing-controller") {
                     if (auto policy = ReadMissingControllerPolicy(arguments, index, launch); policy.HasError())
                         return policy;
@@ -335,7 +374,9 @@ namespace Horo::Application::Internal {
                 return permission;
             if (auto valid = ValidateSceneOptions(seen, launch.sceneInput); valid.HasError())
                 return valid;
-            return ValidateCookedDecisions(launch);
+            if (auto ai = ValidateCookedDecisions(launch); ai.HasError())
+                return ai;
+            return ValidateNavigationPathPolicy(launch);
         }
 
     }  // namespace

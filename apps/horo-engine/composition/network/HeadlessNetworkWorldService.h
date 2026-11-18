@@ -14,6 +14,13 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             return gameplay_ ? gameplay_->PhysicsContext() : nullptr;
         }
 
+        std::shared_ptr<const Gameplay::GameplayNavigationContext> NavigationContext() const noexcept {
+            if (std::this_thread::get_id() != owners_->owner || !gameplay_ || !record_ || record_->closeRequested ||
+                !record_->navigationPath)
+                return {};
+            return record_->navigationPath->Context();
+        }
+
         const Vfx::VfxExtractionOutcome *VfxFrame() const noexcept {
             if (std::this_thread::get_id() != owners_->owner || !record_ || record_->closeRequested || record_->closed || !record_->scenes)
                 return nullptr;
@@ -241,6 +248,9 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return Result<void>::Failure(
                     MakeError(Network::NetworkErrors::NetworkModeInvalid, "Each world record admits exactly one Scene candidate."));
             const auto &input = *owners_->configured;
+            if (input.navigationPath && request_.world != Network::NetworkModeWorldKind::Standalone)
+                return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid,
+                                                       "The best-effort Navigation path scope requires standalone authority."));
             const auto &boundary = input.load;
             record_->sceneCancellation = boundary.cancellation;
             record_->scenes = std::make_unique<Runtime::RuntimeSceneService>(input.registry, input.loads,
@@ -435,12 +445,30 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return Result<void>::Success();
             auto selected = *selectedGameplay_;
             selected.vfxScene = record_->vfxScene;
+            if (auto bound = BindNavigationPath(selected); bound.HasError())
+                return bound;
             auto gameplay = ComposeConfiguredGameplay(selected, scope.Value().physics, scope.Value().character);
             if (gameplay.HasError())
                 return Result<void>::Failure(gameplay.ErrorValue());
             gameplay_ = std::move(gameplay).Value();
             record_->activeGameplay = gameplay_.get();
             record_->gameplay = gameplay_->PhysicsContext();
+            return Result<void>::Success();
+        }
+
+        /** @brief Binds only the module's selected registered path scope to the already activated immutable provider. */
+        Result<void> BindNavigationPath(GameplayWorldSelection &selected) {
+            const auto &policy = owners_->configured->navigationPath;
+            if (!policy)
+                return Result<void>::Success();
+            auto paths = HeadlessNavigationPathScope::Create(*record_->navigation, *owners_->configured->navigation, *policy,
+                                                             request_.scene, selected.moduleId);
+            if (paths.HasError())
+                return Result<void>::Failure(paths.ErrorValue());
+            if (auto retained = owners_->HoldNavigationRetirement(record_); retained.HasError())
+                return retained;
+            record_->navigationPath = std::move(paths).Value();
+            selected.navigationContext = record_->navigationPath->Context();
             return Result<void>::Success();
         }
 
@@ -494,6 +522,12 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         Result<void> RunConfiguredTick(const Runtime::FixedStepContext &context) {
             if (!configuredActivated_ || !record_ || record_->closeRequested)
                 return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
+            if (record_->navigationPath) {
+                if (context.cancellation.IsCancellationRequested())
+                    return JobCancelled();
+                if (const auto committed = record_->navigationPath->CommitAtFixedTick(context.simulationTick); committed.HasError())
+                    return committed;
+            }
             if (const auto decisions = RunConfiguredDecisions(context); decisions.HasError())
                 return decisions;
             if (const auto gameplay = RunConfiguredGameplay(context); gameplay.HasError())
@@ -504,9 +538,14 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                     return animation;
             }
             auto advanced = record_->native.AdvanceFixedTick(context.fixedDelta);
-            if (advanced.HasError() && gameplay_)
-                gameplay_->Shutdown();
-            return advanced;
+            if (advanced.HasError()) {
+                if (gameplay_)
+                    gameplay_->Shutdown();
+                return advanced;
+            }
+            if (record_->navigationPath)
+                record_->navigationPath->DispatchAtFixedTick(context.simulationTick);
+            return Result<void>::Success();
         }
 
         /** @brief Prepare only canonical Physics for this exact paired Scene; no fallback or ambient lookup. */

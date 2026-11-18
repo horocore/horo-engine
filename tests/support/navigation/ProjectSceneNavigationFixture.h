@@ -22,14 +22,15 @@ namespace Horo::Application::CharacterSceneProductTest {
         };
         HostFixture project;
         SceneSource::SceneSourceDocument source;
+        const Navigation::NavigationFilterId pathFilter{Navigation::NavigationFilterId::Create(13).Value()};
         const Assets::AssetId definitionId{Id("11223344-5566-7788-99aa-bbccddeeff88")};
 
-        void Publish(const Input input) {
+        void Publish(const Input input, const bool nativeClient = false) {
             using namespace Navigation;
             const auto profile = NavigationAgentProfileId::Create(7).Value();
             const auto surface = SurfaceId::Create(53).Value();
             const auto area = NavigationAreaId::Create(11).Value();
-            const auto filter = NavigationFilterId::Create(13).Value();
+            const auto filter = pathFilter;
             const auto origin = NavigationDescriptorSource{.id = NavigationDescriptorSourceId::Create(2).Value()};
             const NavigationAgentBuildGeometry geometry{.cellSizeMeters = 0.5F};
             auto definition = NavigationDefinition::Create({.profiles = {{profile, "Grounded", geometry}},
@@ -99,6 +100,13 @@ namespace Horo::Application::CharacterSceneProductTest {
                                               NavigationCookedContentProvenance{{digest, digest, digest},
                                                                                 NavigationProjectProfile::Create(policy).Value()}};
             source.objects.push_back({.id = {1}, .name = "Play camera", .components = {.camera = Runtime::CameraComponent{}}});
+            if (nativeClient)
+                source.objects.front().components.behaviors.push_back(
+                    {{1},
+                     Gameplay::BehaviorTypeId::Parse("game.tests.navigation_client").Value(),
+                     1,
+                     true,
+                     {{"destinationX", 2.0}, {"destinationZ", 2.0}}});
             if (input != Input::MissingSurface) {
                 source.objects.push_back(
                     {.id = {2},

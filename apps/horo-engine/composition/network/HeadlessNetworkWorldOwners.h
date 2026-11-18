@@ -2,6 +2,7 @@
 /** @file HeadlessNetworkWorldOwners.h
  * @brief Target-private generation-owned Scene, Physics and fixed-participant lifetimes.
  */
+#include "HeadlessNavigationPathScope.h"
 #include "HeadlessNetworkServices.h"
 #include "Horo/AI/PerceptionSpatialBroadphase.h"
 #include "Horo/Gameplay/GameplayVfxScene.h"
@@ -43,6 +44,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         std::unique_ptr<AI::AiSceneRuntime> ai;
         AI::PerceptionSpatialBroadphase perception;
         std::unique_ptr<ProjectSceneNavigationWorld> navigation;
+        std::unique_ptr<HeadlessNavigationPathScope>
+            navigationPath; /**< Revoked before Scene shutdown, drained before releasing its coordinator. */
         std::unique_ptr<Gameplay::PreparedGameModuleImage>
             preparedGameplay;                                      /**< Retained through metadata qualification and scoped activation. */
         std::vector<AI::AiControllerDescriptor> cookedControllers; /**< Outlives the Scene participant's immutable borrow. */
@@ -86,12 +89,56 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             return Result<void>::Success();
         }
 
+        /** @brief Reserves bounded retention before any module callback can submit a path. */
+        Result<void> HoldNavigationRetirement(const std::shared_ptr<WorldRecord> &record) {
+            if (auto retired = PollNavigationRetirement(navigationRetirements.size()); retired.HasError())
+                return Result<void>::Failure(retired.ErrorValue());
+            const auto available = std::ranges::find_if(navigationRetirements, [](const auto &retained) {
+                return !retained;
+            });
+            if (available == navigationRetirements.end())
+                return Result<void>::Failure(MakeError(Navigation::NavigationErrors::CapacityExceeded));
+            *available = record;
+            return Result<void>::Success();
+        }
+
+        /** @brief Drains only closed worlds' owned query leases; active paths are never reconciled here. */
+        Result<bool> PollNavigationRetirement(const std::size_t maximumRecords) {
+            bool complete = true;
+            std::size_t observed{};
+            for (auto &record : navigationRetirements) {
+                if (!record)
+                    continue;
+                if (!record->closed || observed == maximumRecords) {
+                    complete = false;
+                    continue;
+                }
+                ++observed;
+                auto retired = record->navigationPath->PollRetirement();
+                if (retired.HasError())
+                    return Result<bool>::Failure(retired.ErrorValue());
+                if (!retired.Value()) {
+                    complete = false;
+                    continue;
+                }
+                record->navigationPath.reset();
+                record.reset();
+            }
+            return Result<bool>::Success(complete);
+        }
+
         /** @brief Called only after actual product services stop; preserves SAME owner on pending/error. */
         Result<bool> PollRetirement(std::uint32_t maximumRecords) {
             if (std::this_thread::get_id() != owner)
                 return Result<bool>::Failure(MakeError(Physics::PhysicsErrors::ThreadAffinityViolation));
             retirementStarted = true;
-            return PollProductPhysicsRetirement(physics, retirement, maximumRecords);
+            auto paths = PollNavigationRetirement(maximumRecords);
+            if (paths.HasError())
+                return paths;
+            auto physicsOwners = PollProductPhysicsRetirement(physics, retirement, maximumRecords);
+            if (physicsOwners.HasError())
+                return physicsOwners;
+            return Result<bool>::Success(paths.Value() && physicsOwners.Value());
         }
 
         std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition;
@@ -112,6 +159,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         // Weak receipts retain known IDs while any actual service still owns that record;
         // retired slots are reusable without keeping an unbounded historical ID set.
         std::array<std::weak_ptr<WorldRecord>, 4> known;
+        std::array<std::shared_ptr<WorldRecord>, 4>
+            navigationRetirements;          /**< Keeps revoked world/SDK scopes alive through actual worker fences. */
         HeadlessFixedParticipant *fixed{};  // Borrowed only while its lifecycle owner retains these owners.
         bool fixedBound{};                  // Permanent one-shot binding, even after the participant retires.
     };
@@ -128,6 +177,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             record.animation->Shutdown();
         if (record.templates)
             record.templates->Shutdown();
+        if (record.navigationPath)
+            record.navigationPath->Revoke();
         if (record.navigation)
             record.navigation->coordinator.BeginShutdown();
         if (record.scenes)

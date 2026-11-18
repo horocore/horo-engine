@@ -36,6 +36,8 @@ namespace Horo::Application::Internal {
         std::unique_ptr<Assets::AssetPayloadCache> cache;
         Navigation::NavigationAgentRegistry agents;
         Navigation::NavigationCoordinator coordinator;
+        std::uint32_t maximumPendingPathRequests{};                            /**< Exact coordinator caller reservation capacity. */
+        const Navigation::NavigationAssetSceneActivationParticipant *assets{}; /**< Borrowed until Scene service teardown. */
     };
 
     /** @brief Captures the registered definition, selected scoped surface and exact project runtime policy. */

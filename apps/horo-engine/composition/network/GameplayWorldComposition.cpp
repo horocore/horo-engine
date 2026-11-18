@@ -1,6 +1,7 @@
 #include "GameplayWorldComposition.h"
 
 #include "Horo/AI/AISceneActivation.h"
+#include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/GameplayVfxScene.h"
 #include "Horo/Physics/CharacterWorld.h"
 #include "Horo/Physics/PhysicsWorld.h"
@@ -191,7 +192,12 @@ namespace Horo::Application::Internal {
         if (admission.HasError())
             return Result<void>::Failure(admission.ErrorValue());
         retirementAdmission_.emplace(std::move(admission).Value());
-        GameModuleHostOptions options{{}, {.physics = physics_, .character = character_, .runtimeUi = runtimeUi_}};
+        navigation_ = selection.navigationContext;
+        if (navigation_ && (navigation_->Binding().scene.scene.Value() != physics_->Binding().scene ||
+                            navigation_->Binding().scene.sceneGeneration.Value() != physics_->Binding().sceneGeneration))
+            return Result<void>::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
+        GameModuleHostOptions options{{},
+                                      {.physics = physics_, .character = character_, .navigation = navigation_, .runtimeUi = runtimeUi_}};
         options.replicationAdmission = selection.replicationAdmission;
         GameModuleHost loader{std::move(options)};
         auto loaded = prepared ? loader.ActivatePrepared(prepared->image, prepared->cancellation)
@@ -322,6 +328,7 @@ namespace Horo::Application::Internal {
         }
         auto runtime = Gameplay::BehaviorRuntime::Create(scenes, registry_, {},
                                                          {.physics = physics_,
+                                                          .navigation = navigation_,
                                                           .character = CharacterContext(),
                                                           .runtimeUi = runtimeUi_,
                                                           .vfx = vfx_,
@@ -531,6 +538,8 @@ namespace Horo::Application::Internal {
             prefabContext_->Revoke();
         if (prefabs_)
             prefabs_->Shutdown();
+        if (navigation_)
+            navigation_->Revoke();
         if (character_)
             character_->Revoke();
         if (physics_)
@@ -544,6 +553,7 @@ namespace Horo::Application::Internal {
         if (behaviors_)
             behaviors_->Shutdown();
         behaviors_.reset();
+        navigation_.reset();
         vfx_.reset();
         vfxModuleId_.clear();
         vfxScene_.reset();

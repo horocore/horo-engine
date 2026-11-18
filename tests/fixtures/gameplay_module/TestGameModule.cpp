@@ -212,6 +212,7 @@ public:
     static BehaviorDescriptor DescribeBehavior() {
         BehaviorDescriptor descriptor;
         descriptor.displayName = "Native Navigation Client";
+        descriptor.fields = {{"destinationX", 9.0}, {"destinationZ", 9.0}};
         return descriptor;
     }
 
@@ -220,8 +221,15 @@ public:
         if (!navigation)
             return;
         if (!request_) {
+            Math::Vec3 destination{9, 0, 9};
+            for (const auto &field : context.Fields()) {
+                if (field.name == "destinationX")
+                    destination.x = static_cast<float>(std::get<double>(field.value));
+                if (field.name == "destinationZ")
+                    destination.z = static_cast<float>(std::get<double>(field.value));
+            }
             auto submitted =
-                navigation->Submit({.start = {1, 0, 1}, .destination = {9, 0, 9}, .context = Telemetry::CaptureOperationContext()});
+                navigation->Submit({.start = {1, 0, 1}, .destination = destination, .context = Telemetry::CaptureOperationContext()});
             if (submitted.HasValue())
                 request_ = std::move(submitted).Value();
             return;

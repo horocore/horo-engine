@@ -4,6 +4,7 @@
 #include "GameplayWorldComposition.h"
 #include "HeadlessSceneLoadBoundary.h"
 #include "Horo/AI/AISceneActivation.h"
+#include "Horo/Navigation/NavigationAreas.h"
 #include "Horo/Network/NetworkModeComposition.h"
 #include "Horo/Prefab/PrefabLimits.h"
 #include "Horo/Runtime/Scene/RuntimeSceneDefinition.h"
@@ -21,6 +22,17 @@ namespace Horo::Vfx {
 namespace Horo::Application::Internal {
     struct ProjectSceneNavigationSelection;
     struct HeadlessCookedDecisionInput;
+
+    /** @brief Exact registered traversal filter and bounded deadline for the standalone best-effort path grant. */
+    struct HeadlessNavigationPathPolicy final {
+        static constexpr std::uint32_t MaximumDeadlineTicks = 10'000;
+        Navigation::NavigationFilterId filter;
+        std::uint32_t deadlineTicks{};
+
+        [[nodiscard]] bool IsValid() const noexcept {
+            return filter.IsValid() && deadlineTicks != 0 && deadlineTicks <= MaximumDeadlineTicks;
+        }
+    };
     // Installs the real gameplay-world participants shared by standalone and dedicated products.
     // Network and presentation factories remain explicit application decisions.
     [[nodiscard]] Network::NetworkModeFactories ComposeHeadlessNetworkServices(
@@ -58,6 +70,8 @@ namespace Horo::Application::Internal {
         std::shared_ptr<const ProjectSceneNavigationSelection> navigation;
         std::shared_ptr<const HeadlessCookedDecisionInput>
             cookedDecisions; /**< Optional explicit authoritative controller/asset catalog. */
+        std::optional<HeadlessNavigationPathPolicy>
+            navigationPath; /**< Explicit native scope for the installed immutable Navigation world. */
     };
 
     /** @brief Composes actual project Scene services and their sole aggregate-owned Physics/Character pair.
@@ -89,6 +103,10 @@ namespace Horo::Application::Internal {
     [[nodiscard]] std::optional<Runtime::RuntimeSceneView> InspectHeadlessScene(const Network::INetworkModeService &service) noexcept;
     [[nodiscard]] std::optional<Runtime::EntityRef> InspectHeadlessAnimationEntity(const Network::INetworkModeService &service,
                                                                                    Runtime::SceneObjectId object) noexcept;
+
+    /** @brief Reads the already-bound native path scope on its owner lane, when explicitly selected. */
+    [[nodiscard]] std::shared_ptr<const Gameplay::GameplayNavigationContext> InspectHeadlessNavigationContext(
+        const Network::INetworkModeService &service) noexcept;
 
     /** @brief Inspect the already-bound execution context of an explicitly selected headless world service.
      * @param service Borrowed application-owned service, not a process-global discovery source.

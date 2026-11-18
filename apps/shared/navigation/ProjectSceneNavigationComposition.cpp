@@ -170,11 +170,13 @@ namespace Horo::Application::Internal {
         auto agents = Nav::NavigationAgentRegistry::Create({capacity.maximumAgents});
         if (agents.HasError())
             return World::Failure(agents.ErrorValue());
-        auto coordinator = Nav::NavigationCoordinator::Create(selection.jobs, CoordinatorLimits(selection.policy));
+        const auto limits = CoordinatorLimits(selection.policy);
+        auto coordinator = Nav::NavigationCoordinator::Create(selection.jobs, limits);
         if (coordinator.HasError())
             return World::Failure(coordinator.ErrorValue());
         return World::Success(std::make_unique<ProjectSceneNavigationWorld>(
-            ProjectSceneNavigationWorld{std::move(cache).Value(), std::move(agents).Value(), std::move(coordinator).Value()}));
+            ProjectSceneNavigationWorld{std::move(cache).Value(), std::move(agents).Value(), std::move(coordinator).Value(),
+                                        limits.maximumPendingPerCaller}));
     }
 
     /** @copydoc RegisterProjectSceneNavigation */
@@ -206,6 +208,9 @@ namespace Horo::Application::Internal {
             return added;
         if (auto added = scene.AddActivationParticipant(std::move(agents)); added.HasError())
             return added;
-        return scene.AddStructuralParticipant(std::move(groups));
+        if (auto added = scene.AddStructuralParticipant(std::move(groups)); added.HasError())
+            return added;
+        world.assets = assetOwner;
+        return Result<void>::Success();
     }
 }  // namespace Horo::Application::Internal

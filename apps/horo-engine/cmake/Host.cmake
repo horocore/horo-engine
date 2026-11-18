@@ -8,6 +8,7 @@ add_library(HoroNetworkProductHost STATIC
     horo-engine/composition/network/NetworkProductTransport.cpp
     horo-engine/composition/network/HeadlessNetworkServices.cpp
     horo-engine/composition/network/HeadlessCookedDecisionAdmission.cpp
+    horo-engine/composition/network/HeadlessNavigationPathScope.cpp
     horo-engine/composition/network/HeadlessAnimationFixed.h
     horo-engine/composition/network/NetworkProductComposition.h
     horo-engine/composition/network/HeadlessSceneLoadBoundary.cpp
@@ -23,7 +24,7 @@ target_link_libraries(HoroNetworkProductHost PRIVATE HoroProjectSceneNavigationH
 target_include_directories(HoroNetworkProductHost PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/horo-engine/composition/network)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::NetworkRuntime HoroEngine::RuntimeScene
     HoroEngine::Physics HoroEngine::Runtime HoroEngine::GameplayModuleHost HoroEngine::GameplayLua
-    HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::PrefabRuntime HoroEngine::NetworkDebuggerApplication
+    HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::GameplayNavigationIntegration HoroEngine::PrefabRuntime HoroEngine::NetworkDebuggerApplication
     HoroEngine::ProjectCollisionSettings HoroEngine::PlatformProjectReadFiles HoroEngine::SceneRuntimeConversion HoroEngine::AISceneIntegration)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroScenePhysicsHost)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::AnimationSceneIntegration HoroAnimationHostIdentityInternal)

@@ -153,6 +153,11 @@ namespace Horo::Application::Internal {
             if (needsPrefab && (!gameplay || gameplay->prefabPermission != GameplayPrefabPermission::Granted))
                 return Result<void>::Failure(
                     MakeError(Network::NetworkErrors::NetworkModeInvalid, "AI prefab selection requires the actual host's prefab grant."));
+            if (input.navigationPath && (!input.navigationPath->IsValid() || !input.navigation || !gameplay || !gameplay->enabled ||
+                                         gameplay->nativeArtifact.empty() || (decisions && decisions->execution)))
+                return Result<void>::Failure(
+                    MakeError(Network::NetworkErrors::NetworkModeInvalid,
+                              "Best-effort paths require cooked Navigation and native gameplay without deterministic AI dispatch."));
             if (gameplay && gameplay->prefabPermission == GameplayPrefabPermission::Granted && !input.prefabLoads)
                 return Result<void>::Failure(
                     MakeError(Network::NetworkErrors::NetworkModeInvalid, "Prefab grant requires an explicit committed artifact loader."));
@@ -223,6 +228,13 @@ namespace Horo::Application::Internal {
                                                                      Runtime::SceneObjectId object) noexcept {
         const auto *world = dynamic_cast<const WorldService *>(&service);
         return world ? world->AnimationEntity(object) : std::nullopt;
+    }
+
+    /** @copydoc InspectHeadlessNavigationContext */
+    std::shared_ptr<const Gameplay::GameplayNavigationContext> InspectHeadlessNavigationContext(
+        const Network::INetworkModeService &service) noexcept {
+        const auto *world = dynamic_cast<const WorldService *>(&service);
+        return world ? world->NavigationContext() : nullptr;
     }
 
     /** @copydoc InspectHeadlessGameplayContext */

@@ -58,6 +58,7 @@ namespace Horo::Application::Internal {
         std::optional<Gameplay::GameplayReplicationAdmissionPolicy>
             replicationAdmission;                                /**< Complete host inventory; absent only for non-network hosts. */
         std::shared_ptr<const Gameplay::GameplayVfxContext> vfx; /**< Explicit module capability; no ambient asset grant. */
+        std::shared_ptr<Gameplay::GameplayNavigationContext> navigationContext; /**< Exact private Scene grant, prepared by the host. */
         std::shared_ptr<Gameplay::GameplayVfxScene>
             vfxScene; /**< Explicit Scene owner; configured factories clone its original cold policy per WorldRecord. */
     };
@@ -260,6 +261,7 @@ namespace Horo::Application::Internal {
         std::shared_ptr<Gameplay::GameplayPhysicsContext> physics_;
         std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi_;
         std::shared_ptr<Gameplay::GameplayCharacterContext> character_;
+        std::shared_ptr<Gameplay::GameplayNavigationContext> navigation_;
         std::unique_ptr<Gameplay::LoadedGameModule> native_;
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> moduleRetirements_;
         std::optional<Gameplay::GameModuleRetirementQueue::Reservation> retirementAdmission_;

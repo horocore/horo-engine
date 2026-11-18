@@ -392,6 +392,18 @@ down the coordinator/JobSystem before provider code unload. The additive public
 need no migration or dependency changes. Headless hosts compose the same lifecycle;
 Null navigation remains typed unavailable rather than fabricating movement.
 
+The standalone terminal composition owns an explicit native path-only grant for its
+installed immutable cooked Recast world. The project registry supplies the traversal
+filter, the project profile supplies query work limits, and the caller supplies a
+bounded deadline in simulation ticks. The immutable topology generation also
+identifies its sealed filter table, static overlay and baked coordinate frame. The
+project profile keeps its own revision. The real fixed owner commits eligible path
+results before Gameplay and dispatches newly submitted work after the successful
+simulation step. The independent best-effort grant excludes movement and is
+unavailable with deterministic cooked AI dispatch. HoroNetworkProductHost composes
+the grant through HoroGameplayNavigationIntegration and retains its exact
+Navigation owner during shutdown until worker and request fences drain.
+
 `HoroNavigationCharacterIntegration` is the downstream NAV-004.9 composition
 boundary. It depends on `HoroNavigationRuntime` and `HoroCharacterInput`; neither
 Character nor Physics imports Navigation. The host creates a

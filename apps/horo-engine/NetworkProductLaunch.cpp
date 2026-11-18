@@ -343,7 +343,8 @@ namespace Horo::Application::Internal {
                                                .prefabPolicy = resources->prefabPolicy,
                                                .animationTarget = animationTarget,
                                                .animationIdentities = animationTarget.IsValid() ? std::move(animationIdentities) : nullptr,
-                                               .navigation = resources->navigation};
+                                               .navigation = resources->navigation,
+                                               .navigationPath = launch.navigationPath};
             if (!launch.cookedDecisionBindings.empty()) {
                 if (!resources->committed)
                     return Result<NetworkProductComposition>::Failure(
