@@ -38,6 +38,9 @@ namespace Horo::Render {
     /** @brief Returns whether one entry declares this image descriptor. */
     [[nodiscard]] bool NativeReconstructionUsesImage(NativeReconstructionEntry entry, NativeReconstructionImage image) noexcept;
 
+    /** @brief Checks the closed floating-point native texture format for one image role. */
+    [[nodiscard]] bool NativeReconstructionImageFormatMatches(NativeReconstructionImage role, RenderTextureFormat format) noexcept;
+
     /** @brief Returns whether this image role is exclusively written by the shader. */
     [[nodiscard]] constexpr bool NativeReconstructionWritesImage(NativeReconstructionImage image) noexcept {
         return image == NativeReconstructionImage::OutputColor || image == NativeReconstructionImage::OutputDepth;

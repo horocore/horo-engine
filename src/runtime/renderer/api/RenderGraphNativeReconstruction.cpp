@@ -47,28 +47,29 @@ namespace Horo::Render {
                    usage->access == (write ? RenderGraphAccess::Write : RenderGraphAccess::Read);
         }
 
-        /** @brief Separates source guide precision from the exact resolved history/write formats. */
-        bool MatchesFormat(Image role, RenderTextureFormat format) noexcept {
-            using enum RenderTextureFormat;
-            switch (role) {
-                case Image::CurrentColor:
-                    return format == Rgba16Float || format == Rgba32Float;
-                case Image::OutputColor:
-                case Image::PreviousColor:
-                    return format == Rgba32Float;
-                case Image::CurrentDepth:
-                    return format == R16Float || format == R32Float;
-                case Image::PreviousDepth:
-                case Image::OutputDepth:
-                    return format == R32Float;
-                case Image::Motion:
-                    return format == Rg16Float || format == Rg32Float;
-                case Image::Count:
-                    return false;
-            }
-            return false;
-        }
     }  // namespace
+
+    /** @copydoc NativeReconstructionImageFormatMatches */
+    bool NativeReconstructionImageFormatMatches(NativeReconstructionImage role, RenderTextureFormat format) noexcept {
+        using enum RenderTextureFormat;
+        switch (role) {
+            case Image::CurrentColor:
+                return format == Rgba16Float || format == Rgba32Float;
+            case Image::OutputColor:
+            case Image::PreviousColor:
+                return format == Rgba32Float;
+            case Image::CurrentDepth:
+                return format == R16Float || format == R32Float;
+            case Image::PreviousDepth:
+            case Image::OutputDepth:
+                return format == R32Float;
+            case Image::Motion:
+                return format == Rg16Float || format == Rg32Float;
+            case Image::Count:
+                return false;
+        }
+        return false;
+    }
 
     /** @copydoc ValidateNativeReconstructionGraphWorkload */
     Result<void> ValidateNativeReconstructionGraphWorkload(const RenderGraphExecutionRequest &request, const RenderGraphExecutionPass &pass,
@@ -101,7 +102,8 @@ namespace Horo::Render {
     /** @copydoc MatchesNativeReconstructionImage */
     bool MatchesNativeReconstructionImage(const NativeReconstructionDispatchPlan &dispatch, Image role,
                                           const RenderTextureDescriptor &descriptor) noexcept {
-        if (!NativeReconstructionUsesImage(dispatch.entry, role) || !descriptor.IsValid() || !MatchesFormat(role, descriptor.format))
+        if (!NativeReconstructionUsesImage(dispatch.entry, role) || !descriptor.IsValid() ||
+            !NativeReconstructionImageFormatMatches(role, descriptor.format))
             return false;
         const bool source = role == Image::CurrentColor || role == Image::CurrentDepth || role == Image::Motion;
         const auto &sizes = dispatch.constants.extents;

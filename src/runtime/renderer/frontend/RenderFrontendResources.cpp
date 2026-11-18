@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Render/NativeReconstructionKernel.h"
 #include "Horo/Runtime/Render/RenderCapabilities.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Render/RenderMemoryBudgetErrors.h"
@@ -111,19 +112,47 @@ namespace Horo::Render {
             return IsDepthCopySourceDescriptor(descriptor) && support.IsValid() && support.Supports(descriptor);
         }
 
-        /** @brief Keeps legacy admission while requiring complete advertised facts for additional copy roles. */
-        [[nodiscard]] constexpr bool TextureDescriptorAdmitted(const RenderTextureDescriptor &descriptor,
-                                                               const RenderCapabilitySnapshot &support) noexcept {
-            return AdmitCurrentTextureDescriptor(descriptor, support.features.Supports(RenderCapability::UiPaint)) ==
-                       ResourceDescriptorAdmission::Supported ||
-                   AdmitColorTextureDescriptor(descriptor, support) || AdmitDepthCopySourceDescriptor(descriptor, support);
+        /** @brief Checks which closed reconstruction role can use the selected texture format. */
+        bool ReconstructionTextureFormat(RenderTextureFormat format, bool storage) noexcept {
+            using Image = NativeReconstructionImage;
+            if (storage)
+                return NativeReconstructionImageFormatMatches(Image::OutputColor, format) ||
+                       NativeReconstructionImageFormatMatches(Image::OutputDepth, format);
+            for (const auto role : {Image::CurrentColor, Image::CurrentDepth, Image::Motion})
+                if (NativeReconstructionImageFormatMatches(role, format))
+                    return true;
+            return false;
         }
 
-        [[nodiscard]] constexpr ResourceDescriptorAdmission AdmitCurrentTextureViewDescriptor(const RenderTextureViewDescriptor &descriptor,
-                                                                                              const bool uiPaintAvailable) noexcept {
+        /** @brief Admits whole image reconstruction storage and guides only on a qualified selected renderer. */
+        bool AdmitReconstructionTextureDescriptor(const RenderTextureDescriptor &descriptor,
+                                                  const RenderCapabilitySnapshot &support) noexcept {
+            using enum RenderTextureUsage;
+            if (!support.features.Supports(RenderCapability::NativeReconstruction) || !IsSingleColorTexture(descriptor) ||
+                !HasTextureUsage(descriptor.usage, Sampled))
+                return false;
+            const bool storage = HasTextureUsage(descriptor.usage, Storage);
+            const auto permitted = storage ? Sampled | Storage | CopySource : Sampled | RenderAttachment | CopySource | CopyDestination;
+            return (static_cast<std::uint8_t>(descriptor.usage) & ~static_cast<std::uint8_t>(permitted)) == 0 &&
+                   ReconstructionTextureFormat(descriptor.format, storage) && support.IsValid() && support.Supports(descriptor);
+        }
+
+        /** @brief Keeps legacy admission while requiring complete advertised facts for additional copy roles. */
+        [[nodiscard]] bool TextureDescriptorAdmitted(const RenderTextureDescriptor &descriptor,
+                                                     const RenderCapabilitySnapshot &support) noexcept {
+            return AdmitCurrentTextureDescriptor(descriptor, support.features.Supports(RenderCapability::UiPaint)) ==
+                       ResourceDescriptorAdmission::Supported ||
+                   AdmitColorTextureDescriptor(descriptor, support) || AdmitDepthCopySourceDescriptor(descriptor, support) ||
+                   AdmitReconstructionTextureDescriptor(descriptor, support);
+        }
+
+        [[nodiscard]] ResourceDescriptorAdmission AdmitCurrentTextureViewDescriptor(const RenderTextureViewDescriptor &descriptor,
+                                                                                    const RenderCapabilitySet &features) noexcept {
             return descriptor.dimension == RenderTextureViewDimension::TwoD &&
-                           (IsCurrentTextureFormatSupported(descriptor.format, uiPaintAvailable) ||
-                            IsColorPipelineFormat(descriptor.format))
+                           (IsCurrentTextureFormatSupported(descriptor.format, features.Supports(RenderCapability::UiPaint)) ||
+                            IsColorPipelineFormat(descriptor.format) ||
+                            (features.Supports(RenderCapability::NativeReconstruction) && descriptor.aspect == RenderTextureAspect::Color &&
+                             ReconstructionTextureFormat(descriptor.format, false)))
                        ? ResourceDescriptorAdmission::Supported
                        : ResourceDescriptorAdmission::Unsupported;
         }
@@ -534,7 +563,7 @@ namespace Horo::Render {
             return Result<ResourceCreation<RenderTextureViewHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::InvalidTextureViewDescriptor, "The texture-view descriptor is structurally invalid."));
         }
-        if (AdmitCurrentTextureViewDescriptor(descriptor, backend_->Capabilities().support.features.Supports(RenderCapability::UiPaint)) ==
+        if (AdmitCurrentTextureViewDescriptor(descriptor, backend_->Capabilities().support.features) ==
             ResourceDescriptorAdmission::Unsupported) {
             return Result<ResourceCreation<RenderTextureViewHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported,

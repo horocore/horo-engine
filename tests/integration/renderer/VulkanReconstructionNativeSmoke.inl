@@ -1,6 +1,12 @@
 namespace ReconstructionSmoke {
-    using SubmissionTest::Take;
     namespace Cook = Horo::Tests::ShaderCompilerFixture;
+
+    /** @brief Keeps typed renderer failures visible in the active GPU test. */
+    template <typename Value> Value Take(Result<Value> result) {
+        INFO((result.HasError() ? result.ErrorValue().message : "renderer operation succeeded"));
+        REQUIRE(result.HasValue());
+        return std::move(result).Value();
+    }
 
     /** @brief Cooks through the existing locked adapter and admits the exact SPIR-V shader. */
     CookedNativeReconstructionKernel CookSpatial() {
