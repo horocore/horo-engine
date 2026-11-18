@@ -38,6 +38,8 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Translates status and errors without recording geometry or provider entity identifiers. */
         Error QueryError(XrResult result) {
             switch (result) {
+                case XR_ERROR_PERMISSION_INSUFFICIENT:
+                    return MakeError(XRErrors::PermissionDenied);
                 case XR_ERROR_SIZE_INSUFFICIENT:
                     return MakeError(XRErrors::CapacityExceeded);
                 case XR_SESSION_LOSS_PENDING:

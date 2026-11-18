@@ -24,6 +24,7 @@ namespace Horo::Tests::OpenXR {
         bool invalidReprojectionExtent{};
         std::uint32_t synthesisEyeWidthStep{160};
         std::string_view fail;
+        PFN_xrGetInstanceProcAddr extraProc{};
         std::vector<std::string_view> calls;
 
         CensusScript() {
@@ -169,6 +170,12 @@ namespace Horo::Tests::OpenXR {
         }
 
         static XRAPI_ATTR XrResult XRAPI_CALL GetProc(XrInstance instance, const char *name, PFN_xrVoidFunction *function) {
+            if (active->extraProc && instance != XR_NULL_HANDLE) {
+                const auto extra = active->extraProc(instance, name, function);
+                if (extra != XR_ERROR_FUNCTION_UNSUPPORTED)
+                    return extra;
+            }
+
             struct Entry {
                 std::string_view name;
                 PFN_xrVoidFunction function;

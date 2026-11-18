@@ -332,6 +332,7 @@ namespace Horo::XR::OpenXRInternal {
 
     private:
         friend class OpenXRHandTracking;
+        friend class OpenXRPlaneCapture;
 
         /** @brief Dispatch already resolved by a native child while preparing this exact native session. */
         struct PreparedFeatureDispatch final {
@@ -344,9 +345,12 @@ namespace Horo::XR::OpenXRInternal {
                                                                                   NativeFeatureProviderRoute route,
                                                                                   std::optional<PreparedFeatureDispatch> prepared);
 
-        /** @brief Checks either prepared discovery or an exact active session before native sizing queries. */
-        [[nodiscard]] Result<NativeDiscoveryBorrow> BorrowReprojectionOwner(XRLoaderPreflightAttempt attempt,
-                                                                            const std::optional<XRSessionId> &session) const;
+        /** @brief Checks either prepared discovery or an exact active session before native feature queries. */
+        [[nodiscard]] Result<NativeDiscoveryBorrow> BorrowFeatureDiscovery(XRLoaderPreflightAttempt attempt,
+                                                                           const std::optional<XRSessionId> &session) const;
+        /** @brief Reads exact active owner plane capabilities before creating a spatial context. */
+        [[nodiscard]] Result<NativePlaneCensus> DiscoverPlaneProvider(XRLoaderPreflightAttempt attempt, const XRSessionId &session) const;
+
         /** @brief Finds the bounded host-requested policy slot for this exact extension name. */
         [[nodiscard]] std::size_t ExtensionSlot(std::string_view name) const noexcept;
         /** @brief Checks the exact generation before lending or revoking a provider. */

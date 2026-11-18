@@ -2551,6 +2551,7 @@ if(HORO_BUILD_XR_OPENXR)
         runtime/xr/openxr/OpenXRNativeRetirement.cpp
         runtime/xr/openxr/OpenXRNativeCensus.cpp
         runtime/xr/openxr/OpenXRPlaneSnapshot.cpp
+        runtime/xr/openxr/OpenXRPlaneCapture.cpp
         runtime/xr/openxr/OpenXRHandTracking.cpp
         runtime/xr/openxr/OpenXRActionBindings.cpp
         runtime/xr/openxr/OpenXRActionSampling.cpp

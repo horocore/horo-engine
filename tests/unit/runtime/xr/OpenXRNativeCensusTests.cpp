@@ -1,3 +1,4 @@
+#include "OpenXRPlaneCapture.h"
 #include "OpenXRPlaneSnapshot.h"
 #include "support/OpenXRCensusTestSupport.h"
 
@@ -83,6 +84,120 @@ namespace Horo::Tests::OpenXR {
                 output->entityStates[2] = output->entityStates[0];
                 rectangles.bounds[0] = {{.orientation = {0, 0, 0, 1}, .position = {1, 2, 3}}, {4, 5}};
                 rectangles.bounds[2] = {{.orientation = {0, 0, 0, 1}, .position = {7, 8, 9}}, {current->malformed ? 0.0F : 4.0F, 5}};
+                return XR_SUCCESS;
+            }
+        };
+
+        struct SpatialCaptureScript final {
+            static inline SpatialCaptureScript *current{};
+            static constexpr XrFutureEXT ContextFuture = 9;
+            static constexpr XrFutureEXT ScanFuture = 17;
+            bool ready{};
+            bool failDestroy{};
+            XrResult completeResult{XR_SUCCESS};
+            std::uint32_t scans{};
+            std::uint32_t cancels{};
+            bool hasContext{};
+            bool hasSnapshot{};
+
+            SpatialCaptureScript() {
+                current = this;
+            }
+
+            ~SpatialCaptureScript() {
+                current = nullptr;
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL Create(XrSession session, const XrSpatialContextCreateInfoEXT *info,
+                                                         XrFutureEXT *future) {
+                CHECK(session != XR_NULL_HANDLE);
+                REQUIRE(info->capabilityConfigCount == 1);
+                REQUIRE(info->capabilityConfigs[0]->capability == XR_SPATIAL_CAPABILITY_PLANE_TRACKING_EXT);
+                REQUIRE(info->capabilityConfigs[0]->enabledComponents[0] == XR_SPATIAL_COMPONENT_TYPE_BOUNDED_2D_EXT);
+                *future = ContextFuture;
+                return XR_SUCCESS;
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL Complete(XrSession, XrFutureEXT future, XrCreateSpatialContextCompletionEXT *value) {
+                CHECK(future == ContextFuture);
+                CHECK_FALSE(current->hasContext);
+                current->hasContext = true;
+                value->futureResult = XR_SUCCESS;
+                value->spatialContext = NativeHandle<XrSpatialContextEXT>(33);
+                return XR_SUCCESS;
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL Destroy(XrSpatialContextEXT) {
+                CHECK(current->hasContext);
+                CHECK_FALSE(current->hasSnapshot);
+                if (current->failDestroy)
+                    return XR_ERROR_RUNTIME_FAILURE;
+                current->hasContext = false;
+                return XR_SUCCESS;
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL Poll(XrInstance, const XrFuturePollInfoEXT *info, XrFuturePollResultEXT *value) {
+                CHECK(info->future == (current->hasContext ? ScanFuture : ContextFuture));
+                value->state = current->ready ? XR_FUTURE_STATE_READY_EXT : XR_FUTURE_STATE_PENDING_EXT;
+                return XR_SUCCESS;
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL Cancel(XrInstance, const XrFutureCancelInfoEXT *info) {
+                CHECK(info->future == (current->hasContext ? ScanFuture : ContextFuture));
+                ++current->cancels;
+                return XR_SUCCESS;
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL StartScan(XrSpatialContextEXT, const XrSpatialDiscoverySnapshotCreateInfoEXT *info,
+                                                            XrFutureEXT *future) {
+                CHECK(current->hasContext);
+                CHECK(info->componentTypeCount == 1);
+                ++current->scans;
+                *future = ScanFuture;
+                return XR_SUCCESS;
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL CompleteScan(XrSpatialContextEXT,
+                                                               const XrCreateSpatialDiscoverySnapshotCompletionInfoEXT *info,
+                                                               XrCreateSpatialDiscoverySnapshotCompletionEXT *value) {
+                CHECK(info->future == ScanFuture);
+                CHECK(info->baseSpace == NativeHandle<XrSpace>(4));
+                CHECK(info->time > 0);
+                value->futureResult = current->completeResult;
+                if (value->futureResult == XR_SUCCESS) {
+                    current->hasSnapshot = true;
+                    value->snapshot = NativeHandle<XrSpatialSnapshotEXT>(44);
+                }
+                return XR_SUCCESS;
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL DestroySnapshot(XrSpatialSnapshotEXT) {
+                CHECK(current->hasSnapshot);
+                current->hasSnapshot = false;
+                return XR_SUCCESS;
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL GetProc(XrInstance, const char *name, PFN_xrVoidFunction *function) {
+                struct Entry {
+                    std::string_view name;
+                    PFN_xrVoidFunction function;
+                };
+
+                const std::array table{
+                    Entry{"xrCreateSpatialContextAsyncEXT", std::bit_cast<PFN_xrVoidFunction>(&Create)},
+                    Entry{"xrCreateSpatialContextCompleteEXT", std::bit_cast<PFN_xrVoidFunction>(&Complete)},
+                    Entry{"xrDestroySpatialContextEXT", std::bit_cast<PFN_xrVoidFunction>(&Destroy)},
+                    Entry{"xrPollFutureEXT", std::bit_cast<PFN_xrVoidFunction>(&Poll)},
+                    Entry{"xrCancelFutureEXT", std::bit_cast<PFN_xrVoidFunction>(&Cancel)},
+                    Entry{"xrCreateSpatialDiscoverySnapshotAsyncEXT", std::bit_cast<PFN_xrVoidFunction>(&StartScan)},
+                    Entry{"xrCreateSpatialDiscoverySnapshotCompleteEXT", std::bit_cast<PFN_xrVoidFunction>(&CompleteScan)},
+                    Entry{"xrDestroySpatialSnapshotEXT", std::bit_cast<PFN_xrVoidFunction>(&DestroySnapshot)},
+                    Entry{"xrQuerySpatialComponentDataEXT", std::bit_cast<PFN_xrVoidFunction>(&PlaneSnapshotFixture::Query)},
+                };
+                const auto found = std::ranges::find(table, std::string_view{name}, &Entry::name);
+                if (found == table.end())
+                    return XR_ERROR_FUNCTION_UNSUPPORTED;
+                *function = found->function;
                 return XR_SUCCESS;
             }
         };
@@ -268,6 +383,106 @@ namespace Horo::Tests::OpenXR {
             CHECK(result.Value().Planes().empty());
             CHECK(fixture.calls == 1);
         }
+    }
+
+    TEST_CASE("OpenXR plane capture owns asynchronous work and publishes only completed authorized scopes", "[unit][xr][native][planes]") {
+        using enum XRCapabilityState;
+        CensusFixture fixture;
+        SpatialCaptureScript script;
+        PlaneSnapshotFixture geometry;
+        constexpr std::array<std::string_view, 3> extensions{XR_EXT_FUTURE_EXTENSION_NAME, XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME,
+                                                             XR_EXT_SPATIAL_PLANE_TRACKING_EXTENSION_NAME};
+        const std::array routes{NativeExtensionRequest{extensions[0]}, NativeExtensionRequest{extensions[1]},
+                                NativeExtensionRequest{extensions[2]}};
+        fixture.native.extraExtensions = extensions;
+        fixture.native.extensionCount += static_cast<std::uint32_t>(extensions.size());
+        fixture.census.extraProc = &SpatialCaptureScript::GetProc;
+        const auto capabilities = Capabilities();
+        const auto plan = Plan(capabilities);
+        const XRSessionId session{capabilities.System(), {1, 1}};
+        const auto attempt = fixture.preflight.Attempt();
+        NativeSessionRequest request{.candidate = session,
+                                     .preflight = fixture.preflight,
+                                     .capabilities = capabilities,
+                                     .plan = plan,
+                                     .activeAttempt = attempt,
+                                     .extensions = routes};
+        REQUIRE(fixture.owner.Create(request).HasValue());
+        const XRPlaneScope scope{session,
+                                 {{session, {2, 1}}, XRSpaceKind::World, IdentityValue<XRWorldOriginRevision>(1)},
+                                 IdentityValue<XRPlaneGrant>(1)};
+        const XRPlaneLimits limits{4, Duration::FromNanoseconds(10), Duration::FromNanoseconds(30)};
+        OpenXRPlaneCapture capture{fixture.owner};
+        const auto time = [](const std::int64_t tick) {
+            return XRRuntimeTime::Create(tick).Value();
+        };
+        const auto world = NativeHandle<XrSpace>(4);
+        const auto advance = [&](const std::int64_t tick) {
+            return capture.Advance(scope, world, time(tick));
+        };
+        const auto noPublication = [&](const std::int64_t tick) {
+            const auto result = advance(tick);
+            REQUIRE(result.HasValue());
+            CHECK_FALSE(result.Value());
+        };
+        const auto publish = [&](const std::int64_t tick) {
+            const auto result = advance(tick);
+            REQUIRE(result.HasValue());
+            CHECK(result.Value());
+            const auto snapshot = capture.Read(scope, time(tick));
+            REQUIRE(snapshot.HasValue());
+            return snapshot.Value();
+        };
+        REQUIRE(capture.Start(attempt, scope, limits, time(100)).HasValue());
+        SECTION("timed-out context cancels its one outstanding future") {
+            RequireFailureIdentity(advance(131), XRErrors::TrackingSnapshotStale);
+            CHECK(script.cancels == 1);
+        }
+        SECTION("context and discoveries use the same exact World grant") {
+            noPublication(102);
+            script.ready = true;
+            noPublication(103);
+            noPublication(109);
+            CHECK(script.scans == 0);
+            noPublication(110);
+            CHECK(script.scans == 1);
+            const auto first = publish(111);
+            REQUIRE(first.Planes().size() == 2);
+            const auto original = first.Planes()[0].id;
+            CHECK(first.Planes()[0].classification == XRPlaneClassification::Platform);
+            CHECK_FALSE(script.hasSnapshot);
+            noPublication(121);
+
+            SECTION("paused world observations expire and recovered entities use new portable generations") {
+                geometry.noTracking = true;
+                CHECK(publish(122).Planes().empty());
+                geometry.noTracking = false;
+                noPublication(132);
+                const auto recovered = publish(133);
+                REQUIRE(recovered.Planes().size() == 2);
+                CHECK(recovered.Planes()[0].id != original);
+            }
+            SECTION("native permission loss immediately revokes the previously published result") {
+                script.completeResult = XR_ERROR_PERMISSION_INSUFFICIENT;
+                RequireFailureIdentity(advance(122), XRErrors::PermissionDenied);
+                RequireFailureIdentity(capture.Read(scope, time(122)), XRErrors::OperationUnavailable);
+            }
+            SECTION("recenter rejects the old grant and retirement retains retryable native debt") {
+                auto replacement = scope;
+                replacement.space.worldOriginRevision = IdentityValue<XRWorldOriginRevision>(2);
+                RequireFailureIdentity(capture.Advance(replacement, world, time(122)), XRErrors::IdentityStale);
+                RequireFailureIdentity(capture.Read(scope, time(122)), XRErrors::OperationUnavailable);
+                script.failDestroy = true;
+                RequireFailureIdentity(capture.Close(), XRErrors::OperationUnavailable);
+                CHECK(script.cancels == 1);
+                CHECK(script.hasContext);
+                script.failDestroy = false;
+            }
+        }
+        REQUIRE(capture.Close().HasValue());
+        CHECK_FALSE(script.hasContext);
+        CHECK_FALSE(script.hasSnapshot);
+        REQUIRE(fixture.owner.Close().HasValue());
     }
 
     TEST_CASE("OpenXR reprojection census observes advertised routes without enabling them or issuing sizing calls",
