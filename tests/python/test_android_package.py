@@ -473,12 +473,20 @@ class AndroidAssemblyTests(unittest.TestCase):
         self.assertNotIn('ninja==', workflow)
         self.assertEqual(len(self.tools["ninjaSha256"]), 64)
 
-    def test_hosted_gradle_cache_keys_all_locked_resolution_inputs(self):
+    def test_hosted_gradle_cache_isolates_profiles_and_keys_locked_resolution_inputs(self):
         workflow = (android_package.ROOT / ".github/workflows/android-package.yml").read_text()
-        java_setup = workflow.split("uses: actions/setup-java@", 1)[1].split("- name:", 1)[0]
-        self.assertIn("cache: gradle", java_setup)
-        key_paths = java_setup.split("cache-dependency-path:", 1)[1].splitlines()[1:]
-        self.assertEqual(set(filter(None, map(str.strip, key_paths))), {
+        cache_step = workflow.split("- name: Cache Gradle dependencies by qualification profile", 1)[1]
+        cache_step = cache_step.split("- name:", 1)[0]
+        self.assertIn("uses: actions/cache@", cache_step)
+        cache_paths, key = cache_step.split("key:", 1)
+        self.assertEqual(set(cache_paths.split("path: |", 1)[1].split()), {
+            "~/.gradle/caches/modules-2/files-2.1",
+            "~/.gradle/caches/modules-2/metadata-*",
+        })
+        self.assertIn("${{ matrix.profile }}", key)
+        self.assertNotIn("restore-keys:", cache_step)
+        hashed_files = key.split("hashFiles(", 1)[1].split(")", 1)[0]
+        self.assertEqual({path.strip().strip("'") for path in hashed_files.split(",")}, {
             "android/toolchain-lock.json",
             "android/package-profiles.json",
             "android/gradle/build.gradle",
