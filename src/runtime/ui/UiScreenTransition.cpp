@@ -63,6 +63,12 @@ namespace Horo::Runtime::Ui {
             std::uint64_t lastTick{};
         };
 
+        /** @brief Retains one startup display minimum independently of the next screen's loading state. */
+        struct StartupTiming final {
+            std::uint64_t minimumTicks{};
+            std::optional<std::uint64_t> firstPresented;
+        };
+
         Storage(UiRuntimeAssetLoadService &service, UiOwnershipGeneration owner, UiScreenTransitionLimits bounds)
             : loader(service), ownership(owner), limits(bounds), retired(bounds.maximumRetiredScreens) {}
 
@@ -165,6 +171,7 @@ namespace Horo::Runtime::Ui {
         UiCanvasId currentCanvas;
         UiScreenTransitionProgress progress;
         Timing timing;
+        StartupTiming startup;
         std::uint64_t nextOperation{1};
         std::uint32_t lastInstanceSlot{};
         FailureState failures;
@@ -217,7 +224,8 @@ namespace Horo::Runtime::Ui {
         if (s.collecting || s.request || s.loading || s.candidate)
             return Fail<UiScreenTransitionId>(UiScreenTransitionErrors::Busy);
         if (!request.instance.IsValid() || request.instance.ownership != s.ownership || request.instance.slot <= s.lastInstanceSlot ||
-            !request.route.IsValid() || request.timeoutTicks == 0 || now < s.timing.lastTick)
+            !request.route.IsValid() || request.timeoutTicks == 0 || now < s.timing.lastTick ||
+            (request.minimumStartupDisplayTicks != 0 && s.current))
             return Fail<UiScreenTransitionId>(UiScreenTransitionErrors::Invalid);
         if (s.nextOperation == 0)
             return Fail<UiScreenTransitionId>(UiErrors::GenerationExhausted);
@@ -256,13 +264,17 @@ namespace Horo::Runtime::Ui {
         if (!storage_)
             return {{}, Stopped, 0, 0};
         auto &s = *storage_;
-        if (s.collecting || !Pending(s.progress.state))
+        const bool pending = Pending(s.progress.state);
+        if (s.collecting || s.progress.state == Stopped || (!pending && s.startup.minimumTicks == 0))
             return s.progress;
         if (now < s.timing.lastTick) {
-            s.progress.state = Failed;
+            if (pending)
+                s.progress.state = Failed;
             return s.progress;
         }
         s.timing.lastTick = now;
+        if (!pending)
+            return s.progress;
         s.progress.elapsedTicks = now - s.timing.started;
         if (s.cancellation.IsCancellationRequested()) {
             s.progress.state = Cancelled;
@@ -324,9 +336,11 @@ namespace Horo::Runtime::Ui {
         if (generation.HasError())
             return s.Reject(generation.ErrorValue());
         auto preparedGeneration = std::move(generation).Value();
-        if (auto *canvas = preparedGeneration.Canvas(s.request->asset.canvas.canvas);
-            !canvas || !canvas->routes || !canvas->routes->Empty())
+        const auto *canvas = preparedGeneration.Canvas(s.request->asset.canvas.canvas);
+        if (!canvas || !canvas->routes || !canvas->routes->Empty())
             return s.Reject(MakeError(UiErrors::RouteStackInvalid));
+        if (s.request->minimumStartupDisplayTicks != 0 && (!canvas->layout || canvas->presentations.empty()))
+            return s.Reject(MakeError(UiScreenTransitionErrors::Invalid, "Startup display minimum requires an admitted canvas view."));
         auto publisher = UiHotReload::Create(std::move(preparedGeneration), s.limits.reload);
         if (publisher.HasError())
             return s.Reject(publisher.ErrorValue());
@@ -368,6 +382,8 @@ namespace Horo::Runtime::Ui {
         if (s.current) {
             if (!s.SourceMatches())
                 return UiScreenTransitionCommitResult::SourceStale;
+            if (StartupDisplay().remainingTicks != 0)
+                return UiScreenTransitionCommitResult::StartupDisplayPending;
             if (!s.RoutesCanRetire())
                 return UiScreenTransitionCommitResult::RouteBusy;
             if (slot == s.retired.end())
@@ -377,6 +393,7 @@ namespace Horo::Runtime::Ui {
         }
         s.current = std::move(s.candidate);
         s.currentCanvas = s.request->asset.canvas.canvas;
+        s.startup = {s.request->minimumStartupDisplayTicks, std::nullopt};
         s.progress.state = UiScreenTransitionState::Committed;
         return UiScreenTransitionCommitResult::Committed;
     }
@@ -415,6 +432,35 @@ namespace Horo::Runtime::Ui {
     bool UiScreenTransition::IsCurrent(const UiReloadLease &lease) const noexcept {
         return storage_ && !storage_->collecting && storage_->progress.state != UiScreenTransitionState::Stopped && storage_->current &&
                storage_->current->IsCurrent(lease);
+    }
+
+    /** @copydoc UiScreenTransition::ApplyPresentation */
+    Result<bool> UiScreenTransition::ApplyPresentation(const UiReloadLease &screen, const UiPresentationReceipt &receipt,
+                                                       const std::uint64_t now) {
+        if (!IsCurrent(screen))
+            return Fail<bool>(UiErrors::RevisionStale);
+        auto &s = *storage_;
+        if (now < s.timing.lastTick)
+            return Fail<bool>(UiScreenTransitionErrors::Invalid);
+        auto applied = s.current->ApplyPresentation(s.currentCanvas, receipt);
+        if (applied.HasError())
+            return applied;
+        if (receipt.outcome == UiPresentationOutcome::Presented && s.startup.minimumTicks != 0 && !s.startup.firstPresented)
+            s.startup.firstPresented = now;
+        s.timing.lastTick = now;
+        static_cast<void>(Poll(now));
+        return applied;
+    }
+
+    /** @copydoc UiScreenTransition::StartupDisplay */
+    UiScreenStartupDisplay UiScreenTransition::StartupDisplay() const noexcept {
+        if (!storage_ || storage_->progress.state == UiScreenTransitionState::Stopped || storage_->startup.minimumTicks == 0)
+            return {};
+        const auto &s = *storage_;
+        if (!s.startup.firstPresented)
+            return {true, s.startup.minimumTicks};
+        const auto elapsed = s.timing.lastTick - *s.startup.firstPresented;
+        return {false, s.startup.minimumTicks - std::min(elapsed, s.startup.minimumTicks)};
     }
 
     /** @copydoc UiScreenTransition::Progress */

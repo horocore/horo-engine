@@ -1659,6 +1659,15 @@ swaps complete publishers at an ADR-073 structural safe point. Frame polling
 reads stage/deadline facts without pumping assets; composition and deferred
 reclamation are explicit load-time operations. Old whole-generation leases remain
 pinned, while fresh presentation evidence gates the replacement screen's input.
+
+The first screen can be composed and presented before any gameplay Scene is
+activated. When that startup request declares a visible minimum, it must prepare
+an admitted layout and presentation view. The first successful receipt starts
+the minimum. The next screen may load in parallel, but its commit is refused
+until the minimum elapses. Cancellation, timeout and failure retain the current
+startup screen and its display evidence. The host uses the typed transition
+progress and failure to present status without polling the gameplay Scene.
+
 See [the asynchronous screen transition contract](../../guides/runtime-ui-screen-transition-migration.md).
 
 `UiHotReload` is owned by `HoroEngine::RuntimeUi`. It prepares complete real
