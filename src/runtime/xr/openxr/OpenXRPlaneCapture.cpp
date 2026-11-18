@@ -294,6 +294,7 @@ namespace Horo::XR::OpenXRInternal {
     Result<XRPlaneSnapshot> OpenXRPlaneCapture::Read(const XRPlaneScope &scope, XRRuntimeTime now) const {
         if (std::this_thread::get_id() != lane_ || busy_)
             return Result<XRPlaneSnapshot>::Failure(MakeError(XRErrors::OperationIncompatible));
+        const ScopedOperation guard{busy_};
         const auto native = owner_.Borrow(scope.session);
         if (native.HasError() || native.Value().incarnation != incarnation_)
             return Result<XRPlaneSnapshot>::Failure(MakeError(XRErrors::IdentityStale));

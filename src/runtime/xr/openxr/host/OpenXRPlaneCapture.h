@@ -85,6 +85,6 @@ namespace Horo::XR::OpenXRInternal {
         XRRuntimeTime lastRequest_;
         XRRuntimeTime lastCutoff_;
         std::array<PlaneSlot, XRPlaneSnapshot::MaximumPlanes> slots_{};
-        bool busy_{};
+        mutable bool busy_{};
     };
 }  // namespace Horo::XR::OpenXRInternal

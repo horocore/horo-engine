@@ -514,7 +514,11 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRApplicationSession::SetPlaneCaptureConsent */
     void OpenXRApplicationSession::SetPlaneCaptureConsent(const bool allowed) noexcept {
-        planes_.allowed = allowed && MayArmPlaneCapture();
+        if (!allowed || !MayArmPlaneCapture()) {
+            RevokePlaneCapture();
+            return;
+        }
+        planes_.allowed = true;
     }
 
     /** @copydoc OpenXRApplicationSession::RevokePlaneCapture */

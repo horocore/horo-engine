@@ -83,7 +83,7 @@ namespace Horo::XR {
 
         TEST_CASE("XR settings defaults are inert and disabled", "[unit][xr][settings]") {
             const auto descriptors = XRProjectSettingDescriptors();
-            REQUIRE(descriptors.size() == 18);
+            REQUIRE(descriptors.size() == 19);
             for (const auto &descriptor : descriptors)
                 REQUIRE(descriptor.reloadPolicy == ReloadPolicy::ProjectReopen);
             const auto resolved = ResolveXRProjectSettings(Configuration());
@@ -92,6 +92,7 @@ namespace Horo::XR {
             REQUIRE(resolved.Value().Profile() == XRFeatureProfile::Projection1_0);
             REQUIRE(resolved.Value().Features().empty());
             CHECK_FALSE(resolved.Value().AllowsEyeGazePreview());
+            CHECK_FALSE(resolved.Value().AllowsPlaneCapturePreview());
             const Evidence evidence;
             REQUIRE(AdmitXRProjectSettings(resolved.Value(), evidence.Admission()).ErrorValue().code.Value() ==
                     XRErrors::OperationUnavailable.code.Value());
