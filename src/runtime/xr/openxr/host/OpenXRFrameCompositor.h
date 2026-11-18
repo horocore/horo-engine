@@ -59,6 +59,14 @@ namespace Horo::XR::OpenXRInternal {
         XRSwapchainImageId image;
     };
 
+    /** @brief Exact released owners and renderer-produced optional evidence borrowed through synchronous frame end. */
+    struct NativeReprojectionSubmission final {
+        const NativeReprojectionProvider &provider;
+        const OpenXRSwapchain &motion;
+        const OpenXRSwapchain &depth;
+        const XRReprojectionInputs &inputs;
+    };
+
     /** @brief Explicit normalized depth range and matching metric clip planes used to render every submitted view. */
     struct NativeProjectionDepth final {
         float minimumDepth{0};
@@ -110,6 +118,15 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> EndProjection(const XRFrameId &frame, const XRViewRenderPlan &plan,
                                                  std::span<const NativeProjectionTarget> targets,
                                                  const NativeProjectionDepth *depth = nullptr);
+        /** @brief Ends the exact projection once, attaching native synthesis only when all optional evidence is current.
+         * @param frame Exact begun frame. @param plan Complete ordinary color projection.
+         * @param targets Exact released ordinary owners. @param synthesis Renderer-produced optional inputs.
+         * @return The actual optional selection or original frame/native error. Missing optional evidence submits baseline.
+         * @pre The selected Renderer produced the motion/depth inputs and resolved invalid/disoccluded pixel policy for the route.
+         */
+        [[nodiscard]] Result<XRReprojectionStatus> EndReprojectedProjection(const XRFrameId &frame, const XRViewRenderPlan &plan,
+                                                                            std::span<const NativeProjectionTarget> targets,
+                                                                            const NativeReprojectionSubmission &synthesis);
         /** @brief Ends runtime-disabled or explicitly aborted work with no layers after all image releases.
          * @param frame Exact begun frame. @return Native end result; failure retains debt for quiescent recovery. */
         [[nodiscard]] Result<void> EndEmpty(const XRFrameId &frame);
@@ -134,6 +151,17 @@ namespace Horo::XR::OpenXRInternal {
             const NativeProjectionDepth *depth;
         };
 
+        struct ReprojectionEncoding final {
+            std::array<XrFrameSynthesisInfoEXT, XRHardLimits::MaximumViews> ext{};
+            std::array<XrCompositionLayerSpaceWarpInfoFB, XRHardLimits::MaximumViews> fb{};
+            NativeReprojectionRoute route{NativeReprojectionRoute::None};
+            XrSession session{XR_NULL_HANDLE};
+            PFN_xrEndFrame end{};
+        };
+
+        [[nodiscard]] Result<bool> EndEncodedProjection(const XRFrameId &frame, const ProjectionEncoding &encoding,
+                                                        const NativeReprojectionSubmission *synthesis);
+        [[nodiscard]] std::optional<ReprojectionEncoding> EncodeReprojection(const NativeReprojectionSubmission &synthesis) const;
         /** @brief Preflights the exact complete frame, profile and owner set without native work. */
         [[nodiscard]] Result<void> ValidateProjection(const XRFrameId &frame, const ProjectionEncoding &encoding) const;
         /** @brief Validates complete optional depth intent and negotiated native support. */
@@ -146,8 +174,9 @@ namespace Horo::XR::OpenXRInternal {
                                                XrCompositionLayerDepthInfoKHR &output) const;
         [[nodiscard]] Result<NativeSessionBorrow> Current() const;
         [[nodiscard]] Result<void> ValidateFrame(const XRFrameId &frame) const;
-        [[nodiscard]] Result<void> EndNative(const XRFrameId &frame, XrEnvironmentBlendMode blend,
-                                             const XrCompositionLayerBaseHeader *layer, const XRViewRenderPlan *projection);
+        [[nodiscard]] Result<void> EndNative(const XRFrameId &frame, XrSession session, XrEnvironmentBlendMode blend,
+                                             const XrCompositionLayerBaseHeader *layer, const XRViewRenderPlan *projection,
+                                             PFN_xrEndFrame dispatch);
         [[nodiscard]] Result<XrSwapchainSubImage> SubImage(const XRExternalRenderTargetDescriptor &target,
                                                            std::span<const NativeProjectionTarget> owners) const;
 

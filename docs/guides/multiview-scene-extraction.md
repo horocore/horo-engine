@@ -148,10 +148,16 @@ image set. The next optional attempt waits for this native debt. When the
 Renderer accepted a pair but the compositor uses color only, both exact
 auxiliary releases still precede native frame end.
 
+The native provider registry admits the actual selected EXT or FB route only
+with an enabled renderer feature plan and the exact active native attempt.
+Its compositor adapter borrows both released owners, checks the preceding
+projection and exact per-eye evidence, and attaches the corresponding OpenXR
+extension structure to every view. Missing optional evidence uses the same
+single color projection. A native end failure retains the original frame fault.
+
 The selected Play frame currently uses a color shader and internal depth.
-Activation still requires the packaged motion pass, provider encoding and a
-disocclusion policy for the provider's format. EXT ignores the engine validity
-alpha.
+Activation still requires wiring the packaged motion pass and a disocclusion
+policy for the provider's format. EXT ignores the engine validity alpha.
 [OpenXR frame synthesis contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrFrameSynthesisInfoEXT.html)
 
 ## Public contract migration and evidence

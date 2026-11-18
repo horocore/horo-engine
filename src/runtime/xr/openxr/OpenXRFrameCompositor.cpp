@@ -327,12 +327,120 @@ namespace Horo::XR::OpenXRInternal {
         return Outcome::Success(space.Value());
     }
 
+    namespace {
+        /** @brief Exposes only the latest released image on this provider, with its exact per-eye bounds. */
+        std::optional<XrSwapchainSubImage> ReprojectionSubImage(const OpenXRSwapchain &owner, const XRReprojectionSubImage &image,
+                                                                const NativeReprojectionProviderBorrow &provider,
+                                                                const NativeSwapchainRole expected, const std::size_t eye) {
+            const auto released = owner.BorrowReleased(image.image);
+            if (released.HasError())
+                return std::nullopt;
+            const auto &allocation = released.Value().allocation;
+            const auto &rect = image.rectangle;
+            const auto &extent = provider.offer.extents[eye];
+            constexpr auto maximum = static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max());
+            if (allocation.role != expected || !allocation.reprojection || allocation.reprojection->attempt != provider.attempt ||
+                allocation.reprojection->route != provider.offer.route || allocation.reprojection->eyeExtents != provider.offer.extents ||
+                image.arrayLayer >= allocation.texture.layerCount || rect.width != extent.width || rect.height != extent.height ||
+                !rect.FitsWithin(allocation.texture.extent) || allocation.texture.extent.width > maximum ||
+                allocation.texture.extent.height > maximum)
+                return std::nullopt;
+            return XrSwapchainSubImage{released.Value().swapchain,
+                                       {{static_cast<std::int32_t>(rect.x), static_cast<std::int32_t>(rect.y)},
+                                        {static_cast<std::int32_t>(rect.width), static_cast<std::int32_t>(rect.height)}},
+                                       image.arrayLayer};
+        }
+    }  // namespace
+
+    /** @copydoc OpenXRFrameCompositor::EncodeReprojection */
+    std::optional<OpenXRFrameCompositor::ReprojectionEncoding> OpenXRFrameCompositor::EncodeReprojection(
+        const NativeReprojectionSubmission &synthesis) const {
+        if (synthesis.motion.session_ != session_ || synthesis.depth.session_ != session_)
+            return std::nullopt;
+        const auto borrowed = session_->BorrowReprojectionProvider(synthesis.provider);
+        if (borrowed.HasError())
+            return std::nullopt;
+        const auto &provider = borrowed.Value();
+        const auto &inputs = synthesis.inputs;
+        if (inputs.views.size() != provider.offer.extents.size() || !inputs.applicationDelta)
+            return std::nullopt;
+        const auto &delta = *inputs.applicationDelta;
+        const auto &p = delta.translationMeters;
+        const auto &q = delta.rotation;
+        const XrPosef pose{{q.x, q.y, q.z, q.w}, {p.x, p.y, p.z}};
+        ReprojectionEncoding encoded{.route = provider.offer.route};
+        for (std::size_t eye = 0; eye < inputs.views.size(); ++eye) {
+            const auto &input = inputs.views[eye];
+            const auto motion = ReprojectionSubImage(synthesis.motion, input.motion, provider, NativeSwapchainRole::Motion, eye);
+            const auto depth = ReprojectionSubImage(synthesis.depth, input.depth, provider, NativeSwapchainRole::ReprojectionDepth, eye);
+            if (!motion || !depth)
+                return std::nullopt;
+            if (encoded.route == NativeReprojectionRoute::FrameSynthesisExt) {
+                encoded.ext[eye] = {XR_TYPE_FRAME_SYNTHESIS_INFO_EXT,
+                                    nullptr,
+                                    0,
+                                    *motion,
+                                    {1, 1, 1, 0},
+                                    {},
+                                    pose,
+                                    *depth,
+                                    input.minimumDepth,
+                                    input.maximumDepth,
+                                    input.nearMeters,
+                                    input.farMeters};
+            } else if (encoded.route == NativeReprojectionRoute::SpaceWarpFb) {
+                encoded.fb[eye] = {XR_TYPE_COMPOSITION_LAYER_SPACE_WARP_INFO_FB,
+                                   nullptr,
+                                   0,
+                                   *motion,
+                                   pose,
+                                   *depth,
+                                   input.minimumDepth,
+                                   input.maximumDepth,
+                                   input.nearMeters,
+                                   input.farMeters};
+            } else {
+                return std::nullopt;
+            }
+        }
+        const auto current = session_->BorrowReprojectionProvider(synthesis.provider);
+        if (current.HasError())
+            return std::nullopt;
+        encoded.session = current.Value().session;
+        encoded.end = current.Value().end;
+        return encoded;
+    }
+
+    /** @copydoc OpenXRFrameCompositor::EndReprojectedProjection */
+    Result<XRReprojectionStatus> OpenXRFrameCompositor::EndReprojectedProjection(const XRFrameId &frame, const XRViewRenderPlan &plan,
+                                                                                 const std::span<const NativeProjectionTarget> targets,
+                                                                                 const NativeReprojectionSubmission &synthesis) {
+        using Outcome = Result<XRReprojectionStatus>;
+        const ProjectionEncoding encoding{plan, targets, nullptr};
+        if (const auto baseline = ValidateProjection(frame, encoding); baseline.HasError())
+            return Outcome::Failure(baseline.ErrorValue());
+        const auto status = frames_->ValidateReprojection(frame, plan, synthesis.inputs);
+        const bool ready = status == XRReprojectionStatus::Ready;
+        const auto ended = EndEncodedProjection(frame, encoding, ready ? &synthesis : nullptr);
+        if (ended.HasError())
+            return Outcome::Failure(ended.ErrorValue());
+        return Outcome::Success(ready && !ended.Value() ? XRReprojectionStatus::InputsInvalid : status);
+    }
+
     /** @copydoc OpenXRFrameCompositor::EndProjection */
     Result<void> OpenXRFrameCompositor::EndProjection(const XRFrameId &frame, const XRViewRenderPlan &plan,
                                                       std::span<const NativeProjectionTarget> targets, const NativeProjectionDepth *depth) {
         const ProjectionEncoding encoding{plan, targets, depth};
         if (const auto valid = ValidateProjection(frame, encoding); valid.HasError())
             return valid;
+        const auto ended = EndEncodedProjection(frame, encoding, nullptr);
+        return ended.HasError() ? Result<void>::Failure(ended.ErrorValue()) : Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRFrameCompositor::EndEncodedProjection */
+    Result<bool> OpenXRFrameCompositor::EndEncodedProjection(const XRFrameId &frame, const ProjectionEncoding &encoding,
+                                                             const NativeReprojectionSubmission *synthesis) {
+        const auto &plan = encoding.plan;
         // PERF: fixed bounded native encoding storage; no frame allocation or native discovery.
         std::array<XrCompositionLayerProjectionView, XRHardLimits::MaximumViews> views{};
         std::array<XrCompositionLayerDepthInfoKHR, XRHardLimits::MaximumViews> depths{};
@@ -340,11 +448,26 @@ namespace Horo::XR::OpenXRInternal {
         for (std::size_t index = 0; index < plan.Views().size(); ++index) {
             const auto space = EncodeView(encoding, plan.Views()[index], views[index], depths[index]);
             if (space.HasError())
-                return Result<void>::Failure(space.ErrorValue());
+                return Result<bool>::Failure(space.ErrorValue());
             if (reference != XR_NULL_HANDLE && reference != space.Value())
-                return Result<void>::Failure(MakeError(XRErrors::CoordinateSpaceIncompatible));
+                return Result<bool>::Failure(MakeError(XRErrors::CoordinateSpaceIncompatible));
             reference = space.Value();
         }
+        const auto optional = synthesis ? EncodeReprojection(*synthesis) : std::nullopt;
+        XrSession session{XR_NULL_HANDLE};
+        if (optional) {
+            session = optional->session;
+        } else {
+            const auto native = Current();
+            if (native.HasError())
+                return Result<bool>::Failure(native.ErrorValue());
+            session = native.Value().session;
+        }
+        if (optional)
+            for (std::size_t eye = 0; eye < plan.Views().size(); ++eye)
+                views[eye].next = optional->route == NativeReprojectionRoute::FrameSynthesisExt
+                                      ? static_cast<const void *>(&optional->ext[eye])
+                                      : static_cast<const void *>(&optional->fb[eye]);
         const XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION,
                                                  nullptr,
                                                  0,
@@ -353,18 +476,18 @@ namespace Horo::XR::OpenXRInternal {
                                                  views.data()};
         // OpenXR defines this native base-header view for projection layer dispatch.
         static_assert(sizeof(const XrCompositionLayerBaseHeader *) == sizeof(&layer));
-        return EndNative(frame, XR_ENVIRONMENT_BLEND_MODE_OPAQUE, std::bit_cast<const XrCompositionLayerBaseHeader *>(&layer), &plan);
+        const auto ended = EndNative(frame, session, XR_ENVIRONMENT_BLEND_MODE_OPAQUE,
+                                     std::bit_cast<const XrCompositionLayerBaseHeader *>(&layer), &plan, optional ? optional->end : end_);
+        return ended.HasError() ? Result<bool>::Failure(ended.ErrorValue()) : Result<bool>::Success(optional.has_value());
     }
 
     /** @copydoc OpenXRFrameCompositor::EndNative */
-    Result<void> OpenXRFrameCompositor::EndNative(const XRFrameId &frame, XrEnvironmentBlendMode blend,
-                                                  const XrCompositionLayerBaseHeader *layer, const XRViewRenderPlan *projection) {
-        const auto native = Current();
-        if (native.HasError())
-            return Result<void>::Failure(native.ErrorValue());
+    Result<void> OpenXRFrameCompositor::EndNative(const XRFrameId &frame, XrSession session, XrEnvironmentBlendMode blend,
+                                                  const XrCompositionLayerBaseHeader *layer, const XRViewRenderPlan *projection,
+                                                  PFN_xrEndFrame dispatch) {
         // SYNC: cleanup must echo the completed native wait even when its prediction could not enter Horo's time contract.
         const XrFrameEndInfo info{XR_TYPE_FRAME_END_INFO, nullptr, nativeDisplayTime_, blend, layer ? 1U : 0U, layer ? &layer : nullptr};
-        const XrResult result = end_(native.Value().session, &info);
+        const XrResult result = dispatch(session, &info);
         if (XR_FAILED(result)) {
             fault_ = NativeError("end frame", result);
             return Result<void>::Failure(*fault_);
@@ -383,7 +506,9 @@ namespace Horo::XR::OpenXRInternal {
             return valid;
         if (!begun_ || frames_->ValidateEnd(frame, 0) != XRFrameStatus::Ok)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
-        return EndNative(frame, XR_ENVIRONMENT_BLEND_MODE_OPAQUE, nullptr, nullptr);
+        const auto native = Current();
+        return native.HasError() ? Result<void>::Failure(native.ErrorValue())
+                                 : EndNative(frame, native.Value().session, XR_ENVIRONMENT_BLEND_MODE_OPAQUE, nullptr, nullptr, end_);
     }
 
     /** @copydoc OpenXRFrameCompositor::RetainedFault */

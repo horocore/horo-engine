@@ -339,6 +339,46 @@ namespace Horo::XR::OpenXRInternal {
         return Outcome::Success(offer);
     }
 
+    /** @copydoc OpenXRNativeSession::RegisterReprojectionProvider */
+    Result<NativeReprojectionProvider> OpenXRNativeSession::RegisterReprojectionProvider(const XRSessionId &session,
+                                                                                         const XRLoaderPreflightAttempt attempt) {
+        using Outcome = Result<NativeReprojectionProvider>;
+        const auto owner = BorrowReprojectionOwner(attempt, session);
+        if (owner.HasError())
+            return Outcome::Failure(owner.ErrorValue());
+        if (retainedPlan_->Decision(XRCapability::SpaceWarp).state != XRFeatureDecisionState::OptionalEnabled)
+            return Outcome::Failure(MakeError(XRErrors::OperationUnsupported));
+        const auto observed = DiscoverReprojection(attempt, session);
+        if (observed.HasError())
+            return Outcome::Failure(observed.ErrorValue());
+        const auto &offer = observed.Value();
+        const auto route = std::ranges::find(ReprojectionRoutes, offer.route, &ReprojectionRoute::kind);
+        if (route == ReprojectionRoutes.end() || !std::ranges::all_of(offer.extents, [](const auto &extent) {
+            return extent.IsValid();
+        }))
+            return Outcome::Failure(MakeError(XRErrors::OperationUnsupported));
+        auto registered = RegisterFeatureProvider(session, {route->extension, "xrEndFrame"});
+        if (registered.HasError())
+            return Outcome::Failure(registered.ErrorValue());
+        return Outcome::Success(NativeReprojectionProvider{std::move(registered).Value(), attempt, offer});
+    }
+
+    /** @copydoc OpenXRNativeSession::BorrowReprojectionProvider */
+    Result<NativeReprojectionProviderBorrow> OpenXRNativeSession::BorrowReprojectionProvider(
+        const NativeReprojectionProvider &provider) const {
+        using Outcome = Result<NativeReprojectionProviderBorrow>;
+        const auto registered = BorrowFeatureProvider(provider.handle_);
+        if (registered.HasError())
+            return Outcome::Failure(registered.ErrorValue());
+        return Outcome::Success({provider.attempt_, provider.offer_, registered.Value().native.session,
+                                 std::bit_cast<PFN_xrEndFrame>(registered.Value().function)});
+    }
+
+    /** @copydoc OpenXRNativeSession::RevokeReprojectionProvider */
+    void OpenXRNativeSession::RevokeReprojectionProvider(const NativeReprojectionProvider &provider) noexcept {
+        RevokeFeatureProvider(provider.handle_);
+    }
+
     /** @copydoc OpenXRNativeSession::DiscoverSession */
     Result<NativeSessionCensus> OpenXRNativeSession::DiscoverSession(const NativeSessionPreparation &request) const {
         const auto session = BorrowPreparedSession(request);

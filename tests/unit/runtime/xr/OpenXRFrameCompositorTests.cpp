@@ -157,6 +157,134 @@ namespace Horo::Tests::OpenXR {
             CHECK(f.script.layers == 1);
         }
 
+        TEST_CASE("OpenXR synthesis provider requires the accepted renderer policy and exact native attempt",
+                  "[unit][xr][compositor][reprojection]") {
+            CompositorFixture fallback{false, true};
+            CHECK(fallback.native.owner.RegisterReprojectionProvider(fallback.session, fallback.native.preflight.Attempt()).HasError());
+            CHECK(fallback.native.owner.RegisterReprojectionProvider(fallback.session, {}).HasError());
+        }
+
+        TEST_CASE("OpenXR ends the frame once with typed native synthesis chains or baseline color",
+                  "[unit][xr][compositor][reprojection]") {
+            enum class Handoff {
+                Exact,
+                Revoked,
+                LateRevoke,
+                ForeignOwner,
+                NativeFailure
+            };
+            const auto handoff =
+                GENERATE(Handoff::Exact, Handoff::Revoked, Handoff::LateRevoke, Handoff::ForeignOwner, Handoff::NativeFailure);
+            const auto route = GENERATE(NativeReprojectionRoute::FrameSynthesisExt, NativeReprojectionRoute::SpaceWarpFb);
+            CompositorFixture f{false, true, true, route};
+            f.CreateSynthesisPair();
+            f.Bind();
+            auto provider = f.native.owner.RegisterReprojectionProvider(f.session, f.native.preflight.Attempt());
+            REQUIRE(provider.HasValue());
+            CHECK(f.native.owner.RegisterReprojectionProvider(f.session, f.native.preflight.Attempt()).HasError());
+            OpenXRReprojectionFrameImages pair{f.frames, f.motionOwner, f.synthesisDepthOwner};
+
+            const auto prior = f.Begin();
+            const auto priorColor = f.Acquire(prior);
+            const std::array priorImages{priorColor};
+            const auto priorPlan = f.Plan(prior, priorColor);
+            f.images.complete = true;
+            REQUIRE(f.frames.Submit(prior, priorImages) == XRFrameStatus::Ok);
+            REQUIRE(f.color.PollRelease().Value());
+            REQUIRE(f.frames.Release(prior, priorColor) == XRFrameStatus::Ok);
+            const std::array priorTargets{NativeProjectionTarget{&f.color, priorColor}};
+            REQUIRE(f.compositor.EndProjection(prior, priorPlan, priorTargets).HasValue());
+
+            f.script.prediction += 5'000'000;
+            const auto frame = f.Begin();
+            const auto color = f.Acquire(frame);
+            const std::array images{color};
+            const auto plan = f.Plan(frame, color);
+            const std::array targets{NativeProjectionTarget{&f.color, color}};
+            const auto prepared = pair.Prepare(frame, images);
+            REQUIRE(prepared.HasValue());
+            REQUIRE(prepared.Value());
+            const auto &acquired = *prepared.Value();
+            REQUIRE(pair.Submit(frame, images).HasValue());
+            REQUIRE(f.color.PollRelease().Value());
+            REQUIRE(f.frames.Release(frame, color) == XRFrameStatus::Ok);
+            f.motionImages.complete = true;
+            f.synthesisDepthImages.complete = true;
+            REQUIRE(pair.PollRetirement().Value());
+
+            std::array<XRReprojectionViewInput, 2> eyes{};
+            for (std::uint32_t eye = 0; eye < eyes.size(); ++eye) {
+                eyes[eye] = {plan.Views()[eye].id,
+                             {acquired.motion.evidence.image, {0, 0, 640, 512}, eye},
+                             {acquired.depth.evidence.image, {0, 0, 640, 512}, eye},
+                             0.25F,
+                             0.75F,
+                             0.2F,
+                             300.0F};
+            }
+            const XRReprojectionInputs input{priorPlan.PredictedDisplayTime(), prior.sequence,
+                                             XRReprojectionSpaceDelta{f.local, {0.125F, 0.0F, 0.0F}, Math::Quaternion::Identity()}, eyes};
+            REQUIRE(f.frames.ValidateReprojection(frame, plan, input) == XRReprojectionStatus::Ready);
+            if (handoff == Handoff::Revoked)
+                f.native.owner.RevokeReprojectionProvider(provider.Value());
+            if (handoff == Handoff::LateRevoke) {
+                f.spaces.providerOwner = &f.native.owner;
+                f.spaces.revokeDuringBorrow = &provider.Value();
+            }
+            if (handoff == Handoff::NativeFailure)
+                f.script.endResult = XR_ERROR_RUNTIME_FAILURE;
+            const NativeReprojectionSubmission synthesis{provider.Value(), f.motionOwner,
+                                                         handoff == Handoff::ForeignOwner ? f.motionOwner : f.synthesisDepthOwner, input};
+            const auto actual = f.compositor.EndReprojectedProjection(frame, plan, targets, synthesis);
+            CHECK(f.script.ends == 2);
+            if (handoff == Handoff::NativeFailure) {
+                CHECK(actual.HasError());
+                CHECK(f.compositor.RetainedFault() != nullptr);
+                CHECK(f.compositor.EndReprojectedProjection(frame, plan, targets, synthesis).HasError());
+                CHECK(f.script.ends == 2);
+                f.Recover();
+            } else {
+                REQUIRE(actual.HasValue());
+                CHECK(actual.Value() == (handoff == Handoff::Exact ? XRReprojectionStatus::Ready : XRReprojectionStatus::InputsInvalid));
+            }
+            for (std::size_t eye = 0; eye < eyes.size(); ++eye) {
+                const auto &ext = f.script.ext[eye];
+                const auto &fb = f.script.fb[eye];
+                const bool synthesized = handoff == Handoff::Exact || handoff == Handoff::NativeFailure;
+                if (!synthesized) {
+                    CHECK(f.script.encoded[eye].next == nullptr);
+                    continue;
+                }
+                const bool extension = route == NativeReprojectionRoute::FrameSynthesisExt;
+                if (extension) {
+                    CHECK(ext.type == XR_TYPE_FRAME_SYNTHESIS_INFO_EXT);
+                    CHECK(ext.next == nullptr);
+                    CHECK(ext.motionVectorScale.x == 1.0F);
+                    CHECK(ext.motionVectorScale.y == 1.0F);
+                    CHECK(ext.motionVectorScale.z == 1.0F);
+                    CHECK(ext.motionVectorOffset.z == 0.0F);
+                    CHECK(fb.type == XR_TYPE_UNKNOWN);
+                } else {
+                    CHECK(fb.type == XR_TYPE_COMPOSITION_LAYER_SPACE_WARP_INFO_FB);
+                    CHECK(fb.next == nullptr);
+                    CHECK(ext.type == XR_TYPE_UNKNOWN);
+                }
+                const auto motion = extension ? ext.motionVectorSubImage : fb.motionVectorSubImage;
+                const auto depth = extension ? ext.depthSubImage : fb.depthSubImage;
+                CHECK(motion.swapchain != depth.swapchain);
+                CHECK(motion.swapchain != f.script.encoded[eye].subImage.swapchain);
+                CHECK(motion.imageArrayIndex == eye);
+                CHECK(depth.imageArrayIndex == eye);
+                CHECK(motion.imageRect.extent.width == 640);
+                CHECK(depth.imageRect.extent.height == 512);
+                CHECK((extension ? ext.appSpaceDeltaPose.position.x : fb.appSpaceDeltaPose.position.x) == 0.125F);
+                CHECK((extension ? ext.minDepth : fb.minDepth) == 0.25F);
+                CHECK((extension ? ext.maxDepth : fb.maxDepth) == 0.75F);
+                CHECK((extension ? ext.nearZ : fb.nearZ) == 0.2F);
+                CHECK((extension ? ext.farZ : fb.farZ) == 300.0F);
+            }
+        }
+
         TEST_CASE("Native XR compositor snapshots admitted pacing before loader callbacks", "[unit][xr][compositor][pacing]") {
             CompositorFixture f;
             NativeFramePacingPolicy pacing;

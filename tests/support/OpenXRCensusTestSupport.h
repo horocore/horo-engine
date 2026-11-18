@@ -15,6 +15,7 @@ namespace Horo::Tests::OpenXR {
         bool invalidView{};
         bool handsSupported{};
         bool invalidReprojectionExtent{};
+        std::uint32_t synthesisEyeWidthStep{160};
         std::string_view fail;
         std::vector<std::string_view> calls;
 
@@ -82,7 +83,8 @@ namespace Horo::Tests::OpenXR {
                     if (values[index].next) {
                         auto &synthesis = *static_cast<XrFrameSynthesisConfigViewEXT *>(values[index].next);
                         REQUIRE(synthesis.type == XR_TYPE_FRAME_SYNTHESIS_CONFIG_VIEW_EXT);
-                        synthesis.recommendedMotionVectorImageRectWidth = active->invalidReprojectionExtent ? 4096 : 640 + index * 160;
+                        synthesis.recommendedMotionVectorImageRectWidth =
+                            active->invalidReprojectionExtent ? 4096 : 640 + index * active->synthesisEyeWidthStep;
                         synthesis.recommendedMotionVectorImageRectHeight = 512;
                     }
                 }

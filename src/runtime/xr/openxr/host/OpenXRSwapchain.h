@@ -278,6 +278,7 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] NativeSwapchainPhase Phase() const noexcept;
 
     private:
+        friend class OpenXRFrameCompositor;
         friend class OpenXRReprojectionFrameImages;
         [[nodiscard]] Result<void> CheckThread() const;
         [[nodiscard]] Result<void> CheckCurrent() const;

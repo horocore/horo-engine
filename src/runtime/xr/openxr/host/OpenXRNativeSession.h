@@ -101,6 +101,27 @@ namespace Horo::XR::OpenXRInternal {
         PFN_xrVoidFunction function;
     };
 
+    /** @brief Non-callable evidence that one exact renderer-admitted native synthesis route is registered. */
+    class NativeReprojectionProvider final {
+        friend class OpenXRNativeSession;
+
+        NativeReprojectionProvider(NativeFeatureProviderHandle handle, XRLoaderPreflightAttempt attempt,
+                                   NativeReprojectionOffer offer) noexcept
+            : handle_(std::move(handle)), attempt_(attempt), offer_(offer) {}
+
+        NativeFeatureProviderHandle handle_;
+        XRLoaderPreflightAttempt attempt_;
+        NativeReprojectionOffer offer_;
+    };
+
+    /** @brief Synchronous typed dispatch and exact native eye limits from the registered synthesis provider. */
+    struct NativeReprojectionProviderBorrow final {
+        XRLoaderPreflightAttempt attempt;
+        NativeReprojectionOffer offer;
+        XrSession session;
+        PFN_xrEndFrame end;
+    };
+
     /** @brief Exact host publication fence, called before acquisition and before exposing a native candidate. */
     class IOpenXRCompositionFence {
     public:
@@ -263,6 +284,18 @@ namespace Horo::XR::OpenXRInternal {
          */
         [[nodiscard]] Result<NativeReprojectionOffer> DiscoverReprojection(XRLoaderPreflightAttempt attempt,
                                                                            std::optional<XRSessionId> session = std::nullopt) const;
+        /** @brief Registers the exact enabled wire route once the selected renderer feature plan admits synthesis.
+         * @param session Exact published owner. @param attempt Exact retained native selection.
+         * @return An owner-fenced native provider or typed policy, sizing or dispatch error.
+         */
+        [[nodiscard]] Result<NativeReprojectionProvider> RegisterReprojectionProvider(const XRSessionId &session,
+                                                                                      XRLoaderPreflightAttempt attempt);
+        /** @brief Obtains typed xrEndFrame dispatch and exact native bounds for a synchronous call.
+         * @param provider Owner-issued registration. @return Borrow or its original stale or native owner error.
+         */
+        [[nodiscard]] Result<NativeReprojectionProviderBorrow> BorrowReprojectionProvider(const NativeReprojectionProvider &provider) const;
+        /** @brief Revokes this renderer route before its resources retire. @param provider Exact issued registration. */
+        void RevokeReprojectionProvider(const NativeReprojectionProvider &provider) noexcept;
         /** @brief Copies extension evidence while the exact discovered owner is current on the control thread.
          * @param attempt Exact discovery attempt. @param name Known extension policy name or advertised native name.
          * @return Owned observation or typed invalid, stale or wrong-thread failure.

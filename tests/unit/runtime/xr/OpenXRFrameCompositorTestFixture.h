@@ -27,8 +27,12 @@ namespace Horo::Tests::OpenXR {
         public:
             bool stale{};
             XRCoordinateSpace reference;
+            OpenXRNativeSession *providerOwner{};
+            const NativeReprojectionProvider *revokeDuringBorrow{};
 
             Result<XrSpace> Borrow(const XRCoordinateSpace &space) const override {
+                if (revokeDuringBorrow)
+                    providerOwner->RevokeReprojectionProvider(*revokeDuringBorrow);
                 return stale || space != reference ? Result<XrSpace>::Failure(MakeError(XRErrors::IdentityStale))
                                                    : Result<XrSpace>::Success(NativeHandle<XrSpace>(8));
             }
@@ -89,19 +93,28 @@ namespace Horo::Tests::OpenXR {
             XRViewConfigurationId configuration;
             XRCoordinateSpace local;
             NativeSwapchainRequest allocation;
+            NativeReprojectionRoute synthesisRoute;
 
-            static XRAPI_ATTR XrResult XRAPI_CALL ResolveSynthesisProperties(XrInstance, const char *name, PFN_xrVoidFunction *function) {
-                if (std::string_view{name} != "xrGetSystemProperties")
-                    return XR_ERROR_FUNCTION_UNSUPPORTED;
-                *function = std::bit_cast<PFN_xrVoidFunction>(&CensusScript::System);
+            static XRAPI_ATTR XrResult XRAPI_CALL ResolveSynthesisProperties(XrInstance instance, const char *name,
+                                                                             PFN_xrVoidFunction *function) {
+                if (std::string_view{name} == "xrGetSystemProperties")
+                    *function = std::bit_cast<PFN_xrVoidFunction>(&CensusScript::System);
+                else if (std::string_view{name} == "xrEnumerateViewConfigurationViews")
+                    *function = std::bit_cast<PFN_xrVoidFunction>(&CensusScript::Views);
+                else
+                    return FrameScript::GetProc(instance, name, function);
                 return XR_SUCCESS;
             }
 
-            explicit CompositorFixture(bool enableDepth = false, bool requestSpaceWarp = false, bool enableSynthesis = false) {
+            explicit CompositorFixture(bool enableDepth = false, bool requestSpaceWarp = false, bool enableSynthesis = false,
+                                       NativeReprojectionRoute route = NativeReprojectionRoute::SpaceWarpFb)
+                : synthesisRoute(route) {
                 if (enableSynthesis) {
                     native.capabilities = Capabilities(16, true);
                     native.script.resolveExtra = &ResolveSynthesisProperties;
-                    native.script.spaceWarpExtension = true;
+                    native.script.spaceWarpExtension = route == NativeReprojectionRoute::SpaceWarpFb;
+                    native.script.synthesisExtension = route == NativeReprojectionRoute::FrameSynthesisExt;
+                    census.synthesisEyeWidthStep = 0;
                     ++native.script.extensionCount;
                     requestSpaceWarp = true;
                 }
@@ -127,7 +140,10 @@ namespace Horo::Tests::OpenXR {
                     native.script.extensionCount = 2;
                     request.extensions = extensions;
                 }
-                const std::array synthesisExtensions{NativeExtensionRequest{XR_FB_SPACE_WARP_EXTENSION_NAME, true}};
+                const std::array synthesisExtensions{NativeExtensionRequest{native.script.synthesisExtension
+                                                                                ? XR_EXT_FRAME_SYNTHESIS_EXTENSION_NAME
+                                                                                : XR_FB_SPACE_WARP_EXTENSION_NAME,
+                                                                            true}};
                 if (enableSynthesis)
                     request.extensions = synthesisExtensions;
                 REQUIRE(native.owner.Create(request).HasValue());
@@ -172,7 +188,7 @@ namespace Horo::Tests::OpenXR {
                                                                     Render::RenderTextureUsage::RenderAttachment},
                                                .role = NativeSwapchainRole::Motion,
                                                .reprojection = NativeReprojectionAllocation{native.preflight.Attempt(),
-                                                                                            NativeReprojectionRoute::SpaceWarpFb,
+                                                                                            synthesisRoute,
                                                                                             {extent, extent}}};
                 motionImages.textureSlot = 2;
                 synthesisDepthImages.textureSlot = 3;
