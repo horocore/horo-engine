@@ -1,7 +1,12 @@
 #include "../packages/PackageArchiveTestSupport.h"
 #include "Horo/Application/PrefabSceneCookHost.h"
+#include "Horo/Assets/AssetArchive.h"
 #include "Horo/Packages/PackageRequest.h"
+#include "Horo/Prefab/CookedPrefab.h"
 #include "Horo/Prefab/PrefabDocument.h"
+#include "Horo/Release/ReleaseCandidatePublisher.h"
+#include "Horo/Release/ReleaseCandidateVerification.h"
+#include "Horo/Scene/CookedSceneDefinition.h"
 #include "Horo/Scene/SceneSource.h"
 #include "PrefabSceneCookHostFixture.h"
 #include "ReleaseTestFixtures.h"
@@ -257,6 +262,87 @@ namespace {
         REQUIRE(preflight.plan.has_value());
         return {std::move(facts), std::move(preflight)};
     }
+
+    /** @brief Captures a standard player release with distinct cook and final output roots. */
+    HostReleaseInputs PreparePlayerRelease(const HostFixture &fixture, const std::filesystem::path &output) {
+        using namespace Release;
+        const ReleaseCapabilityId capability{"release.packaging"};
+        ReleaseProfilePreset preset{.id = {"player"},
+                                    .product = DistributionProductIdentity{DistributionProductKind::GameRuntime, {}},
+                                    .artifactClass = DistributionArtifactClass::InstallableProduct,
+                                    .platform = DistributionPlatform::Linux,
+                                    .packageFormat = DistributionPackageFormat::TarGzip,
+                                    .content = ReleaseContentPolicy{true, true, ReleaseAssetPolicy::SinglePackage, false, false},
+                                    .symbols = ReleaseSymbolPolicy::Omit,
+                                    .signing = ReleaseSigningPolicy::Disabled,
+                                    .notarizationRequired = false,
+                                    .includeLicensesAndNotices = true,
+                                    .includeReleaseNotes = true,
+                                    .updateEligible = false,
+                                    .patchEligible = false,
+                                    .eligibleDestinations = std::vector<ReleaseDestinationId>{},
+                                    .requiredCapabilities = std::vector{capability}};
+        const auto catalog = ReleaseProfileCatalog::Create({std::move(preset)});
+        REQUIRE(catalog.HasValue());
+        auto profile = catalog.Value().Resolve({"player"}, std::span{&capability, 1});
+        REQUIRE(profile.HasValue());
+        auto request = ReleaseTestFixtures::Request();
+        request.projectId = "horo-player";
+        request.version.productVersion = GameProductVersion{ParseReleaseVersion("0.4.2").Value()};
+        request.profile = std::move(profile).Value();
+        request.projectRoot = fixture.project.dir.path;
+        request.outputRoot = output;
+        auto facts = ReleaseTestFixtures::Facts(request);
+        facts.releaseNotesSnapshot = ReleaseTestFixtures::Notes("0.4.2", request.projectId);
+        facts.dependencyLockDigest = ComputeSha256(std::span<const std::byte>{});
+        auto preflight = PreflightRelease(request, facts);
+        REQUIRE(preflight.issues.empty());
+        REQUIRE(preflight.plan);
+        return {std::move(facts), std::move(preflight)};
+    }
+
+    constexpr std::string_view PlayerArchivePath{"assets.horo"};
+
+    /** @brief Opens the actual final archive through the production player provider during release verification. */
+    class PlayerArchiveSmoke final : public Release::IReleaseCandidateSmokeProbe {
+    public:
+        PlayerArchiveSmoke(const DurableFileSystem &files, const AssetCookTargetId &target) : files_(files), target_(target) {}
+
+        Release::ReleaseCandidateSmokeKind Kind() const noexcept override {
+            return Release::ReleaseCandidateSmokeKind::ArchiveReadable;
+        }
+
+        Result<void> Check(const std::filesystem::path &root, const Release::ReleaseArtifactManifest &manifest) override {
+            const auto inventory = manifest.Artifacts();
+            const auto archive = std::ranges::find(inventory, PlayerArchivePath, &Release::ReleaseArtifactRecord::path);
+            if (archive == inventory.end() || archive->role != Release::ReleaseArtifactRole::AssetArchive)
+                return Result<void>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
+            const auto bytes = files_.ReadFileBounded(root / PlayerArchivePath, 1024U * 1024U);
+            if (bytes.HasError())
+                return Result<void>::Failure(bytes.ErrorValue());
+            const auto player = AssetArchiveProvider::Open(bytes.Value(), target_);
+            return player.HasValue() ? Result<void>::Success() : Result<void>::Failure(player.ErrorValue());
+        }
+
+    private:
+        const DurableFileSystem &files_;
+        const AssetCookTargetId &target_;
+    };
+
+    /** @brief Reads an exact verified player envelope and verifies its commitment against the pinned cook manifest. */
+    AssetCookArtifact RequireArchivedArtifact(const AssetArchiveProvider &player, std::span<const AssetCookManifestEntry> entries,
+                                              const AssetId asset) {
+        const auto expected = std::ranges::find(entries, asset, &AssetCookManifestEntry::assetId);
+        REQUIRE(expected != entries.end());
+        const auto bytes = player.Load(asset, {});
+        REQUIRE(bytes.HasValue());
+        CHECK(ComputeSha256(std::as_bytes(std::span{bytes.Value()})) == expected->artifactHash);
+        auto artifact = DecodeCookedArtifact(bytes.Value());
+        REQUIRE(artifact.HasValue());
+        CHECK(artifact.Value().id == expected->assetId);
+        CHECK(artifact.Value().type == expected->assetType);
+        return std::move(artifact).Value();
+    }
 }  // namespace
 
 TEST_CASE("Release cook handoff pins the actual generation and rejects changed frozen inputs", "[native][prefab-cook][host][release]") {
@@ -302,6 +388,129 @@ TEST_CASE("Release executor packages the concrete static prefab cook generation"
     CHECK(stages.PackagedPinnedGeneration());
     REQUIRE(result.candidate.has_value());
     CHECK(result.candidate->state == Release::ReleaseCandidateState::FinalVerified);
+}
+
+TEST_CASE("Player release verifies prefab archive digests and promotes only the staged bytes", "[native][prefab-cook][host][release]") {
+    using namespace Release;
+    HostFixture fixture;
+    TempDir releaseRoot;
+    const auto sourceOnly = fixture.AddSpawnableRoot();
+    const auto dependency = TestMeshRecord().id;
+    fixture.WritePrefab(4, {dependency});
+    fixture.request.runtimePrefabRoots = {fixture.prefabId};
+    const auto release = PreparePlayerRelease(fixture, releaseRoot.path);
+    const auto &plan = *release.preflight.plan;
+    ReleaseTestFixtures::FixedReleaseFacts facts{release.facts};
+
+    auto cookHost = fixture.MakeHost();
+    const auto cooked = cookHost.CookForRelease(plan, facts, fixture.request, {});
+    REQUIRE(cooked.HasValue());
+    const auto frozen = ResolveCurrentCookGeneration(fixture.files, fixture.cooked.path);
+    REQUIRE(frozen.HasValue());
+    REQUIRE(frozen.Value().generationRoot == cooked.Value().root);
+    REQUIRE(frozen.Value().manifestDigest == cooked.Value().bytesDigest);
+    const auto inventory = ReadCookGenerationContents(fixture.files, frozen.Value(), 1024U * 1024U);
+    REQUIRE(inventory.HasValue());
+
+    const AssetChunkDefinition chunk{.id = AssetChunkId::Parse("base").Value(),
+                                     .kind = AssetChunkKind::Base,
+                                     .assets = {fixture.sceneId, fixture.prefabId, dependency}};
+    const auto chunks = AssetChunkPlan::Create(std::span{&chunk, 1});
+    REQUIRE(chunks.HasValue());
+    auto incompleteChunk = chunk;
+    std::erase(incompleteChunk.assets, fixture.prefabId);
+    const auto incomplete = AssetChunkPlan::Create(std::span{&incompleteChunk, 1});
+    REQUIRE(incomplete.HasValue());
+    CHECK(BuildAssetArchive(fixture.files, incomplete.Value(), frozen.Value()).HasError());
+
+    const auto archive = BuildAssetArchive(fixture.files, chunks.Value(), frozen.Value());
+    REQUIRE(archive.HasValue());
+    const auto player = AssetArchiveProvider::Open(archive.Value(), frozen.Value().target);
+    REQUIRE(player.HasValue());
+    REQUIRE(player.Value().Members().size() == chunk.assets.size());
+    CHECK_FALSE(player.Value().Exists(sourceOnly, {}).Value());
+    const auto sceneArtifact = RequireArchivedArtifact(player.Value(), inventory.Value().entries, fixture.sceneId);
+    const auto templateArtifact = RequireArchivedArtifact(player.Value(), inventory.Value().entries, fixture.prefabId);
+    const auto resource = RequireArchivedArtifact(player.Value(), inventory.Value().entries, dependency);
+    const auto scene =
+        SceneCook::DecodeCookedSceneWithEmbeddedRevision(sceneArtifact.payload, SceneCook::SceneDefinitionIdForAsset(fixture.sceneId));
+    REQUIRE(scene.HasValue());
+    CHECK(scene.Value().Entities().size() == 3);
+    CHECK(std::ranges::any_of(scene.Value().Entities(), [](const auto &entity) {
+        return entity.localTransform.translation.y == 4;
+    }));
+    const auto runtimeTemplate = Prefab::CookedPrefab::Parse(std::as_bytes(std::span{templateArtifact.payload}), fixture.prefabId,
+                                                             Prefab::PrefabLimitProfile::Create({}).Value());
+    REQUIRE(runtimeTemplate.HasValue());
+    CHECK(runtimeTemplate.Value().GetObjectCount() == 2);
+    REQUIRE(runtimeTemplate.Value().Data().dependencies.size() == 1);
+    const auto resourceEntry = std::ranges::find(inventory.Value().entries, resource.id, &AssetCookManifestEntry::assetId);
+    REQUIRE(resourceEntry != inventory.Value().entries.end());
+    CHECK(runtimeTemplate.Value().Data().dependencies.front().artifactDigest == resourceEntry->artifactHash);
+
+    NativeReleaseCandidatePublisher publisher{fixture.files};
+    const auto stage = publisher.Begin(plan, ReleaseCandidateId{42});
+    REQUIRE(stage.HasValue());
+    const auto stagedArchive = stage.Value().StageRoot() / PlayerArchivePath;
+    REQUIRE(fixture.files.WriteDurable(stagedArchive, std::as_bytes(std::span{archive.Value()})).HasValue());
+    const ReleaseArtifactRecord content{std::string{PlayerArchivePath}, ReleaseArtifactRole::AssetArchive, archive.Value().size(),
+                                        ComputeSha256(std::as_bytes(std::span{archive.Value()}))};
+    const auto stagedInventory = ReleasePreSignInventory::Create(stage.Value().Candidate(), {content});
+    REQUIRE(stagedInventory.HasValue());
+    REQUIRE(VerifyReleaseStagedTree(stage.Value().StageRoot(), stagedInventory.Value()).HasValue());
+
+    const auto &request = plan.Request();
+    const auto manifest = ReleaseArtifactManifest::Create({.candidate = stage.Value().Candidate(),
+                                                           .product = request.profile.Product(),
+                                                           .version = request.version.productVersion,
+                                                           .sourceRevision = request.version.sourceRevision,
+                                                           .platform = request.profile.Platform(),
+                                                           .architecture = request.architecture,
+                                                           .configuration = request.configuration,
+                                                           .build = {"prefab_release"},
+                                                           .toolchainId = request.toolchainId,
+                                                           .frozen = plan.Identities(),
+                                                           .artifacts = {content}});
+    REQUIRE(manifest.HasValue());
+    REQUIRE(manifest.Value().Artifacts().size() == 1);
+    CHECK(manifest.Value().Artifacts().front().digest == content.digest);
+
+    SECTION("promotion consumes the verified bytes after the cook selector and source change") {
+        fixture.WritePrefab(99, {dependency});
+        const auto replacement = fixture.Cook();
+        REQUIRE(replacement.HasValue());
+        REQUIRE(replacement.Value().generation.manifestDigest != frozen.Value().manifestDigest);
+        fixture.WriteText("assets/hierarchy.prefab", "source is intentionally unavailable for recook");
+        REQUIRE(publisher.Promote(plan, stage.Value(), manifest.Value()).HasValue());
+        CHECK_FALSE(std::filesystem::exists(stage.Value().StageRoot()));
+        PlayerArchiveSmoke smoke{fixture.files, frozen.Value().target};
+        const std::array smokeKinds{smoke.Kind()};
+        const std::array<IReleaseCandidateSmokeProbe *, 1> probes{&smoke};
+        const auto verified = VerifyReleaseCandidate(stage.Value().FinalRoot(), manifest.Value(), smokeKinds, nullptr, probes);
+        REQUIRE(verified.HasValue());
+        CHECK(verified.Value().ManifestDigest() == manifest.Value().Digest());
+        const auto promoted = fixture.files.ReadFileBounded(stage.Value().FinalRoot() / PlayerArchivePath, archive.Value().size());
+        REQUIRE(promoted.HasValue());
+        CHECK(promoted.Value() == archive.Value());
+        REQUIRE(publisher.Promote(plan, stage.Value(), manifest.Value()).HasValue());
+        fixture.AssertRetained(replacement.Value().generation);
+    }
+    SECTION("changed staged bytes are rejected even after pre-sign verification") {
+        auto changed = archive.Value();
+        changed.back() ^= 1;
+        REQUIRE(fixture.files.WriteDurable(stagedArchive, std::as_bytes(std::span{changed})).HasValue());
+        CHECK(publisher.Promote(plan, stage.Value(), manifest.Value()).HasError());
+        CHECK_FALSE(std::filesystem::exists(stage.Value().FinalRoot()));
+        fixture.AssertRetained(frozen.Value());
+    }
+    SECTION("raw prefab sources and sidecars cannot enter a verified player stage") {
+        WriteFile(stage.Value().StageRoot() / "hierarchy.prefab", std::array<std::uint8_t, 1>{1});
+        WriteFile(stage.Value().StageRoot() / "hierarchy.prefab.horo", std::array<std::uint8_t, 1>{1});
+        CHECK(VerifyReleaseStagedTree(stage.Value().StageRoot(), stagedInventory.Value()).HasError());
+        CHECK(publisher.Promote(plan, stage.Value(), manifest.Value()).HasError());
+        CHECK_FALSE(std::filesystem::exists(stage.Value().FinalRoot()));
+        fixture.AssertRetained(frozen.Value());
+    }
 }
 
 namespace {
