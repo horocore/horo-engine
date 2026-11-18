@@ -548,10 +548,13 @@ the exact published session with no native calls on read.
 
 An admitted reference-change notification carries the session, reference kind,
 effective runtime time, and whether its relative pose was available. The
-selected Play owner immediately closes the old frame and Input admission,
-drains its actual native session, and waits for the effective runtime time
-before permitting replacement. A fresh Play publication acquires new space
-identities and measures its Stage rectangle again. The legacy editor scene
+selected Play owner immediately closes the old frame and Input admission and
+drains its actual native session. The latest accepted change fences replacement
+until the effective runtime time. Only replacement admission reads that time
+from the retained instance, so a future change cannot delay native session
+retirement. Session loss preserves the same-instance replacement fence. A fresh
+Play publication acquires new space identities and measures its Stage rectangle
+again. The legacy editor scene
 continues to derive its tracking calibration from the authored float scene
 root. A canonical world-origin composition must project both the tracking
 anchor and XR geometry from the same world owner and origin generation.

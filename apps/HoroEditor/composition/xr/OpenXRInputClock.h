@@ -71,13 +71,19 @@ namespace Horo::Application::Internal {
          * No tick, offset, guessed refresh interval, wait or Input publication is introduced.
          */
         [[nodiscard]] Result<XR::XRRenderPredictionTime> PresentationNow() const;
+        /** @brief Reads the same native runtime time after the prior session has physically retired.
+         * @param attempt Exact still-prepared loader instance and system.
+         * @return Current runtime time or original lane, route, dispatch, conversion or lifetime failure.
+         * @details Cold replacement admission only. This grants no frame, pose or Input cutoff authority.
+         */
+        [[nodiscard]] Result<XR::XRRuntimeTime> ReadRetiredSessionTime(XR::XRLoaderPreflightAttempt attempt) const;
 
     private:
         /** @brief Samples actual OS evidence through the same retained native conversion under the owner/reentry fence.
          * @return Positive same-instance XrTime, or original lane/currentness/native error without publication.
          */
         [[nodiscard]] Result<XR::XRRuntimeTime> PresentationSample() const;
-        [[nodiscard]] static Result<XR::XRRuntimeTime> NativeSample(const XR::OpenXRInternal::NativeFeatureProviderBorrow &provider);
+        [[nodiscard]] static Result<XR::XRRuntimeTime> NativeSample(XrInstance instance, PFN_xrVoidFunction convert);
         XR::OpenXRInternal::OpenXRNativeSession *native_;
         Runtime::RuntimeDispatchSource source_;
         Duration fixedStep_;

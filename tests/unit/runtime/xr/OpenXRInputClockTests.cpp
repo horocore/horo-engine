@@ -177,4 +177,41 @@ namespace Horo::Tests::OpenXR {
         CHECK(fixture.clock.Bind(fixture.host->DispatchSource(), ClockFixture::Step).HasError());
         CHECK(fixture.script.conversions == 0);
     }
+
+    TEST_CASE("Cold XR replacement reads only the selected prepared instance clock without frame admission", "[xr][host][clock]") {
+        Fixture fixture;
+        OpenXRInputClock clock{fixture.owner};
+        ClockScript script{&clock};
+        fixture.script.resolveExtra = &ClockScript::Resolve;
+        fixture.script.clockExtension = true;
+        fixture.script.extensionCount = 2;
+        const auto attempt = fixture.preflight.Attempt();
+        const std::array extensions{NativeExtensionRequest{ClockExtension, true}};
+        REQUIRE(fixture.owner
+                    .PrepareDiscovery({.selection = {.attempt = attempt,
+                                                     .backend = fixture.preflight.Backend(),
+                                                     .installRecord = fixture.preflight.InstallRecord(),
+                                                     .productProfile = fixture.preflight.ProductProfile(),
+                                                     .admittedLoaderVersions = {{1, 0, 0}, {1, 1, 63}}},
+                                       .requestedApi = fixture.preflight.LoaderApiVersion(),
+                                       .extensions = extensions})
+                    .HasValue());
+        CHECK(clock.ReadRetiredSessionTime(IdentityValue<XRLoaderPreflightAttempt>(attempt.Value() + 1)).HasError());
+        CHECK(script.conversions == 0);
+        script.missing = true;
+        CHECK(clock.ReadRetiredSessionTime(attempt).HasError());
+        CHECK(script.conversions == 0);
+        script.missing = false;
+        script.reenter = true;
+        const auto now = clock.ReadRetiredSessionTime(attempt);
+        REQUIRE(now.HasValue());
+        CHECK(now.Value().Nanoseconds() == script.sample);
+        CHECK(script.nestedRejected);
+        CHECK(script.conversions == 1);
+        CHECK(clock.PresentationNow().HasError());
+        CHECK(fixture.script.liveSessions == 0);
+        REQUIRE(fixture.owner.Close().HasValue());
+        CHECK(clock.ReadRetiredSessionTime(attempt).HasError());
+        CHECK(script.conversions == 1);
+    }
 }  // namespace Horo::Tests::OpenXR

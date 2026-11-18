@@ -1112,16 +1112,28 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK_FALSE(observed->relativePoseKnown);
         CHECK(fixture.script.events.running);
 
-        REQUIRE(fixture.play->PollEvents().HasValue());
-        CHECK(fixture.script.events.exits == 1);
-        fixture.script.events.Push(XR_SESSION_STATE_STOPPING);
-        fixture.script.events.Push(XR_SESSION_STATE_IDLE);
-        REQUIRE(fixture.play->PollEvents().HasValue());
-        CHECK(fixture.script.events.ends == 1);
-        CHECK(fixture.script.actions.tracking.spaces > 0);
-        fixture.script.clock.sample = change.changeTime;
-        REQUIRE(fixture.play->PollEvents().HasValue());
+        SECTION("a later notice extends replacement while old native work retires") {
+            change.changeTime += 100;
+            fixture.script.events.referenceChange = change;
+            REQUIRE(fixture.play->PollEvents().HasValue());
+            const auto latest = fixture.play->ReadReferenceChange(session);
+            REQUIRE(latest);
+            CHECK(latest->effectiveTime.Nanoseconds() == change.changeTime);
+            REQUIRE(fixture.play->PollEvents().HasValue());
+            CHECK(fixture.script.events.exits == 1);
+            fixture.script.events.Push(XR_SESSION_STATE_STOPPING);
+            fixture.script.events.Push(XR_SESSION_STATE_IDLE);
+            REQUIRE(fixture.play->PollEvents().HasValue());
+            CHECK(fixture.script.events.ends == 1);
+        }
+        SECTION("native session loss still fences replacement in the retained instance clock") {
+            fixture.script.events.loseEvents = true;
+            REQUIRE(fixture.play->PollEvents().HasValue());
+        }
         CHECK(fixture.script.actions.tracking.spaces == 0);
+        CHECK_FALSE(fixture.session->RetainedSession());
+        CHECK(fixture.script.native.liveSessions == 0);
+        REQUIRE(fixture.play->ReadReferenceChange(session));
         first->Shutdown();
         auto cutoff = std::make_unique<AppInputSample>(*fixture.play);
         REQUIRE(fixture.scheduler->AddParticipant(std::move(cutoff)).HasValue());
@@ -1130,6 +1142,14 @@ namespace Horo::Tests::OpenXRApplication {
         fixture.script.actions.tracking.bounds.width = 5.0F;
         auto next = RequireValue(Runtime::RuntimeScene::Create(fixture.definition, {2}));
         auto participant = fixture.play->MakeSceneParticipant();
+        const auto nativeStarts = std::ranges::count(fixture.script.native.calls, "session");
+        const auto premature = participant->Prepare(fixture.definition, next->View());
+        REQUIRE(premature.HasError());
+        CHECK(premature.ErrorValue().code.Value() == XR::XRErrors::OperationUnavailable.code.Value());
+        CHECK(std::ranges::count(fixture.script.native.calls, "session") == nativeStarts);
+        CHECK(fixture.script.actions.tracking.boundsReads == 1);
+        CHECK(fixture.script.native.liveSessions == 0);
+        fixture.script.clock.sample = change.changeTime;
         auto replacement = RequireValue(participant->Prepare(fixture.definition, next->View()));
         REQUIRE(replacement->ValidatePublication().HasValue());
         replacement->Publish();

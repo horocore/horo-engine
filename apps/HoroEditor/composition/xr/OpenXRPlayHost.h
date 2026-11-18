@@ -186,6 +186,10 @@ namespace Horo::Application::Internal {
          * or the original profile/admission failure when a changed input plan must retire.
          */
         [[nodiscard]] Result<bool> ApplyEventObservation(const XR::OpenXRInternal::NativeSessionEventObservation &observed);
+        /** @brief Fences replacement against the old session's latest effective reference-change time.
+         * @return Success when the exact retained runtime time passed the barrier, or typed pending/currentness failure.
+         */
+        [[nodiscard]] Result<void> AdmitReferenceReplacement() const;
         struct FrameState;
         [[nodiscard]] Result<void> ProgressTail();
         [[nodiscard]] Result<void> AbortRenderFrame();
@@ -298,6 +302,7 @@ namespace Horo::Application::Internal {
         Parents composition_;
 
         XR::OpenXRInternal::OpenXRNativeSession &native_;
+        const XR::XRLoaderPreflightAttempt discoveryAttempt_;
         PFN_xrGetInstanceProcAddr getProc_;
         XR::XRSessionLifecycle sessions_{*this};
         XR::XRFrameLifecycle frames_{sessions_};

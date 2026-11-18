@@ -121,7 +121,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc OpenXRInputClock::NativeSample */
-    Result<XR::XRRuntimeTime> OpenXRInputClock::NativeSample(const XR::OpenXRInternal::NativeFeatureProviderBorrow &provider) {
+    Result<XR::XRRuntimeTime> OpenXRInputClock::NativeSample(XrInstance instance, PFN_xrVoidFunction convert) {
         using Outcome = Result<XR::XRRuntimeTime>;
         XrTime sample{};
 #if defined(_WIN32)
@@ -140,8 +140,7 @@ namespace Horo::Application::Internal {
         if (clock_gettime(CLOCK_MONOTONIC, &counter) != 0)
 #endif
             return Outcome::Failure(MakeError(XR::XRErrors::OperationUnavailable));
-        if (const auto result = std::bit_cast<NativeCounterConversion>(provider.function)(provider.native.instance, &counter, &sample);
-            result != XR_SUCCESS)
+        if (const auto result = std::bit_cast<NativeCounterConversion>(convert)(instance, &counter, &sample); result != XR_SUCCESS)
             return Outcome::Failure(MakeError(XR::XRErrors::OperationUnavailable,
                                               std::format("{} failed (XrResult {})", OpenXRPlatformTimeRoute().extensionSymbol,
                                                           static_cast<std::int32_t>(result))));
@@ -165,7 +164,7 @@ namespace Horo::Application::Internal {
         auto native = native_->BorrowFeatureProvider(*provider_);
         if (native.HasError())
             return Outcome::Failure(native.ErrorValue());
-        auto sample = NativeSample(native.Value());
+        auto sample = NativeSample(native.Value().native.instance, native.Value().function);
         if (sample.HasError())
             return Outcome::Failure(sample.ErrorValue());
         if (auto fence = native_->BorrowFeatureProvider(*provider_); fence.HasError())
@@ -200,6 +199,46 @@ namespace Horo::Application::Internal {
         return XR::XRRenderPredictionTime::Create(sample.Value().Nanoseconds());
     }
 
+    /** @copydoc OpenXRInputClock::ReadRetiredSessionTime */
+    Result<XR::XRRuntimeTime> OpenXRInputClock::ReadRetiredSessionTime(const XR::XRLoaderPreflightAttempt attempt) const {
+        using Outcome = Result<XR::XRRuntimeTime>;
+        if (std::this_thread::get_id() != lane_ || reading_ || provider_)
+            return Outcome::Failure(MakeError(XR::XRErrors::OperationIncompatible));
+        ReadScope scope{reading_};
+        const auto selection = native_->BorrowDiscovery(attempt);
+        if (selection.HasError())
+            return Outcome::Failure(selection.ErrorValue());
+        const auto route = OpenXRPlatformTimeRoute();
+        const auto admitted = native_->ReadExtensionAdmission(attempt, route.extension);
+        if (admitted.HasError())
+            return Outcome::Failure(admitted.ErrorValue());
+        if (admitted.Value().state != XR::OpenXRInternal::NativeExtensionState::Enabled)
+            return Outcome::Failure(
+                MakeError(XR::XRErrors::OperationUnsupported, "XR reference change requires an admitted runtime clock."));
+
+        const auto &native = selection.Value();
+        const auto fenced = [&]() -> Result<void> {
+            const auto current = native_->BorrowDiscovery(attempt);
+            if (current.HasError())
+                return Result<void>::Failure(current.ErrorValue());
+            if (current.Value().instance != native.instance || current.Value().system != native.system)
+                return Result<void>::Failure(MakeError(XR::XRErrors::IdentityStale));
+            return Result<void>::Success();
+        };
+        PFN_xrVoidFunction convert{};
+        const auto resolved = native.getProc(native.instance, route.extensionSymbol.data(), &convert);
+        if (auto current = fenced(); current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        if (resolved != XR_SUCCESS || !convert)
+            return Outcome::Failure(
+                MakeError(XR::XRErrors::LoaderIncompatible,
+                          std::format("{} unavailable (XrResult {})", route.extensionSymbol, static_cast<std::int32_t>(resolved))));
+        auto sampled = NativeSample(native.instance, convert);
+        if (auto current = fenced(); current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        return sampled;
+    }
+
     /** @copydoc OpenXRInputClock::PresentationSample */
     Result<XR::XRRuntimeTime> OpenXRInputClock::PresentationSample() const {
         using Outcome = Result<XR::XRRuntimeTime>;
@@ -209,7 +248,7 @@ namespace Horo::Application::Internal {
         auto native = native_->BorrowFeatureProvider(*provider_);
         if (native.HasError())
             return Outcome::Failure(native.ErrorValue());
-        auto sample = NativeSample(native.Value());
+        auto sample = NativeSample(native.Value().native.instance, native.Value().function);
         if (sample.HasError())
             return Outcome::Failure(sample.ErrorValue());
         if (auto fenced = native_->BorrowFeatureProvider(*provider_); fenced.HasError())

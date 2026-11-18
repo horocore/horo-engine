@@ -381,8 +381,10 @@ namespace Horo::Application::Internal {
             return Output::Failure(MakeError(XRErrors::IdentityStale));
         if (host.sessions_.Snapshot().state != XRSessionState::Lost && host.events_ && (host.eventsPending_ || host.events_->Running())) {
             const auto observed = host.events_->Poll(false);
-            if (observed.HasError())
+            if (observed.HasError()) {
+                host.RevokeEventAdmission();
                 return Output::Failure(observed.ErrorValue());
+            }
             static_cast<void>(host.ApplyEventObservation(observed.Value()));
         }
         const bool lost = host.sessions_.Snapshot().state == XRSessionState::Lost;
@@ -396,14 +398,6 @@ namespace Horo::Application::Internal {
         }
         if (!lost && host.events_ && host.events_->Running())
             return Output::Success(false);
-        if (!lost && !host.closing_ && host.lastReferenceChange_ && host.lastReferenceChange_->session == candidate) {
-            // Do not create a replacement or measure fresh Stage bounds before the runtime's effective XrTime.
-            const auto now = host.clock_.PresentationNow();
-            if (now.HasError())
-                return Output::Failure(now.ErrorValue());
-            if (now.Value().Nanoseconds() < host.lastReferenceChange_->effectiveTime.Nanoseconds())
-                return Output::Success(false);
-        }
         return RetireGraphics(host, lost);
     }
 

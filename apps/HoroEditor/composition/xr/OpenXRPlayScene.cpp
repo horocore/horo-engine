@@ -178,6 +178,19 @@ namespace Horo::Application::Internal {
         tracking_.Revoke();  // Input's ONE actual cutoff owns the neutral commit; callbacks cannot commit Gameplay input.
     }
 
+    /** @copydoc OpenXRPlayHost::AdmitReferenceReplacement */
+    Result<void> OpenXRPlayHost::AdmitReferenceReplacement() const {
+        if (!lastReferenceChange_)
+            return Result<void>::Success();
+        const auto now = clock_.ReadRetiredSessionTime(discoveryAttempt_);
+        if (now.HasError())
+            return Result<void>::Failure(now.ErrorValue());
+        if (now.Value() < lastReferenceChange_->effectiveTime)
+            return Result<void>::Failure(
+                MakeError(XRErrors::OperationUnavailable, "Wait for the runtime reference-space change before restarting XR Play."));
+        return Result<void>::Success();
+    }
+
     /** @copydoc OpenXRPlayHost::SceneParticipant::PrepareCurrent */
     Result<std::shared_ptr<OpenXRPlayHost::SceneState>> OpenXRPlayHost::SceneParticipant::PrepareCurrent(
         const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView &candidate) {
@@ -193,6 +206,8 @@ namespace Horo::Application::Internal {
             candidate.DefinitionRevision() != definition.Revision())
             return Output::Failure(MakeError(XRErrors::OperationIncompatible));
         const Operation operation{owner};
+        if (auto ready = owner.AdmitReferenceReplacement(); ready.HasError())
+            return Output::Failure(ready.ErrorValue());
         auto geometry = owner.input_.geometry->Capture(definition.Revision(), candidate);
         if (geometry.HasError())
             return Output::Failure(geometry.ErrorValue());

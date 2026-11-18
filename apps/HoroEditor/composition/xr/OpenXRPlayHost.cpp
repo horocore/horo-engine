@@ -17,7 +17,7 @@ namespace Horo::Application::Internal {
                        std::move(composition.dispatch),
                        composition.fixedStep,
                        composition.trackingRoot},
-          native_(preparation.native), getProc_(preparation.getProc), clock_(native_) {
+          native_(preparation.native), discoveryAttempt_(preparation.preflight.Attempt()), getProc_(preparation.getProc), clock_(native_) {
         input_.router = &composition.router;
         const auto version = preparation.preflight.LoaderApiVersion();
         setup_ = {.loaderMajor = version.major,
@@ -224,20 +224,18 @@ namespace Horo::Application::Internal {
                 return Result<bool>::Failure(refreshed.ErrorValue());
             }
         }
-        if (observed.referenceChange && scene_ && scene_->projection) {
-            if (observed.referenceChange->kind == XRSpaceKind::Stage) {
+        if (const auto &change = observed.referenceChange; change && scene_ && scene_->projection && change->session == scene_->session) {
+            if (change->kind == XRSpaceKind::Stage) {
                 const auto decision = scene_->projection->plan.Decision(XRCapability::StageSpace).state;
                 if (decision != XRFeatureDecisionState::Required && decision != XRFeatureDecisionState::OptionalEnabled)
                     return Result<bool>::Success(false);
             }
-            if (!scene_->retiring) {
-                lastReferenceChange_ = observed.referenceChange;
-                // Retire through normal exit/frame drain before a replacement can sample the new definition.
+            if (!lastReferenceChange_ || lastReferenceChange_->session != change->session ||
+                change->effectiveTime > lastReferenceChange_->effectiveTime)
+                lastReferenceChange_ = change;
+            // Retirement never waits on reference time. Only new Scene admission borrows that fence.
+            if (!scene_->retiring)
                 scene_->Retire(*this);
-            } else if (lastReferenceChange_ && observed.referenceChange->effectiveTime > lastReferenceChange_->effectiveTime) {
-                // A subsequent queued change can extend the cold replacement barrier.
-                lastReferenceChange_ = observed.referenceChange;
-            }
         }
         return Result<bool>::Success(!observed.morePending);
     }
