@@ -81,11 +81,12 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::StartCameraCutPreview */
     Result<void> EditorWorkspaceController::StartCameraCutPreview(Cinematic::SequencePlaybackActivation activation,
                                                                   const Cinematic::CameraCutActivation &cuts,
-                                                                  const Runtime::CameraViewContextId view) {
+                                                                  const Runtime::CameraViewContextId view,
+                                                                  const Runtime::CameraTransitionSupport transitions) {
         const auto scene = m_runtimeScene.ActiveScene();
         if (!scene || !EligiblePreview(activation, m_playSession.IsActive()))
             return Result<void>::Failure(MakeError(Runtime::CameraErrors::InvalidContext));
-        auto camera = Runtime::CameraService::Create({view, scene->RuntimeId(), Runtime::CameraViewDomain::EditorPreview});
+        auto camera = Runtime::CameraService::Create({view, scene->RuntimeId(), Runtime::CameraViewDomain::EditorPreview}, transitions);
         if (camera.HasError())
             return Result<void>::Failure(camera.ErrorValue());
         auto runtime = Cinematic::CinematicRuntimeService::Create({activation.player.handle.session});

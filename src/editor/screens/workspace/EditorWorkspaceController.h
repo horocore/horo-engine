@@ -213,11 +213,13 @@ namespace Horo::Editor {
          * @return Unchanged dirty rejection or successful owner shutdown. */
         [[nodiscard]] Result<void> ShutdownCollisionSettings(bool discardDirty = false);
 
-        /** @brief Starts a camera-only authored preview using the same runtime hard-cut composition as a packaged view.
+        /** @brief Starts a camera-only authored preview using the runtime camera admission policy.
          * @param activation Owned camera-only plan and player descriptor. @param cuts Required camera bindings/end policy.
-         * @param view Host-issued generation-safe preview view. @return Success or typed admission failure. */
-        [[nodiscard]] Result<void> StartCameraCutPreview(Cinematic::SequencePlaybackActivation activation,
-                                                         const Cinematic::CameraCutActivation &cuts, Runtime::CameraViewContextId view);
+         * @param view Host-issued generation-safe preview view. @param transitions Camera transitions admitted by the host.
+         * @return Success or typed admission failure. */
+        [[nodiscard]] Result<void> StartCameraCutPreview(
+            Cinematic::SequencePlaybackActivation activation, const Cinematic::CameraCutActivation &cuts, Runtime::CameraViewContextId view,
+            Runtime::CameraTransitionSupport transitions = Runtime::CameraTransitionSupport::SingleViewBlend);
         /** @brief Advances the preview with exact owner-clock ticks before viewport extraction.
          * @param delta Non-negative exact timeline delta. @return Success or typed runtime/binding failure. */
         [[nodiscard]] Result<void> AdvanceCameraCutPreview(Cinematic::SequenceTime delta);

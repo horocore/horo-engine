@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Camera/CameraErrors.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "support/CameraCutTestSupport.h"
 
@@ -75,34 +76,64 @@ namespace Horo::Editor {
         CHECK(fixture.controller.ViewportScene().camera.IsValid());
     }
 
-    TEST_CASE("Controller blend extraction refreshes camera poses without a scene definition change",
-              "[unit][cinematic][camera][editor][rebase]") {
+    TEST_CASE("Editor and runtime camera blends stay in sync after a scene coordinate shift", "[unit][cinematic][camera][editor][rebase]") {
         const auto curve = GENERATE(Cinematic::CameraBlendCurve::Linear, Cinematic::CameraBlendCurve::SmoothStep);
         PreviewFixture fixture;
-        REQUIRE(fixture.controller
-                    .StartCameraCutPreview(TransitionActivation(Cinematic::CameraTransitionTier::SingleViewBlend, curve),
-                                           fixture.Settings(), {1, 1})
-                    .HasValue());
-        REQUIRE(fixture.controller.SeekCameraCutPreview(6).HasValue());
-        const auto before = fixture.controller.ViewportScene();
-        CHECK(before.camera.position.x == 15.0F);
         const auto scene = *fixture.scene.ActiveScene();
-        const auto definition = scene.DefinitionRevision();
-        const auto revision = scene.StructuralRevision();
+        auto runtime = Take(Cinematic::CinematicRuntimeService::Create({{1, 1}}));
+        auto camera = Take(Runtime::CameraService::Create({{2, 1}, scene.RuntimeId(), Runtime::CameraViewDomain::Runtime}));
+        const auto activation = TransitionActivation(Cinematic::CameraTransitionTier::SingleViewBlend, curve);
+        auto playback = Take(Cinematic::CinematicCameraPlayback::Activate(runtime, camera, activation, fixture.Settings(), scene));
+        REQUIRE(runtime.Play(playback.Player()).HasValue());
+        REQUIRE(fixture.controller.StartCameraCutPreview(activation, fixture.Settings(), {1, 1}).HasValue());
+
+        std::array<Cinematic::SequenceFrameCameraCutRequest, 64> crossings{};
+        REQUIRE(playback.Evaluate(6, scene, {{}, {}, crossings}, {}).HasValue());
+        REQUIRE(fixture.controller.SeekCameraCutPreview(6).HasValue());
+        const auto selection = Take(camera.Commit(1, scene, std::nullopt));
+        const auto before = fixture.controller.ViewportScene().camera;
+        CHECK(before.position.x == 15.0F);
+        CHECK(selection.selected.values.position == before.position);
+
         Runtime::SceneCommandBuffer commands;
         for (std::uint64_t id = 1; id <= 3; ++id)
             commands.SetLocalTransform(*scene.Find({id}), {{static_cast<float>(id * 10) - 100.0F, 0.0F, 0.0F}});
+        const auto definition = scene.DefinitionRevision();
+        const auto revision = scene.StructuralRevision();
         REQUIRE(fixture.scene.QueueStructuralCommands(std::move(commands)).HasValue());
         fixture.CommitScene();
         const auto current = *fixture.scene.ActiveScene();
         CHECK(current.DefinitionRevision() == definition);
         CHECK(current.StructuralRevision() != revision);
         CHECK_FALSE(scene.IsCurrent());
-        const auto after = fixture.controller.ViewportScene();
-        CHECK(after.camera.position.x == -85.0F);
-        CHECK(before.camera.position.x == 15.0F);
+
+        REQUIRE(playback.Publish(current).HasValue());
+        const auto republished = Take(camera.Commit(2, current, std::nullopt));
+        const auto after = fixture.controller.ViewportScene().camera;
+        CHECK(after.position.x == -85.0F);
+        CHECK(republished.selected.values.position == after.position);
+        CHECK(republished.selected.values.target == after.target);
+        CHECK(republished.selected.values.up == after.up);
+        CHECK(selection.selected.values.position.x == 15.0F);
         REQUIRE(fixture.controller.AdvanceCameraCutPreview(0).HasValue());
-        CHECK(fixture.controller.ViewportScene().camera.position == after.camera.position);
+        CHECK(fixture.controller.ViewportScene().camera.position == after.position);
+    }
+
+    TEST_CASE("Editor preview honors host camera transition capabilities and authored fallback", "[unit][cinematic][camera][editor]") {
+        PreviewFixture fixture;
+        fixture.Start();
+        REQUIRE(fixture.controller.SeekCameraCutPreview(3).HasValue());
+        constexpr auto support = Runtime::CameraTransitionSupport::HardCutOnly;
+        const auto denied = fixture.controller.StartCameraCutPreview(TransitionActivation(), fixture.Settings(), {2, 1}, support);
+        REQUIRE(denied.HasError());
+        CHECK(denied.ErrorValue().code.Value() == Runtime::CameraErrors::UnsupportedTransition.code.Value());
+        CHECK(fixture.controller.ViewportScene().camera.position.x == 10.0F);
+
+        const auto activation = TransitionActivation(Cinematic::CameraTransitionTier::SingleViewBlend, Cinematic::CameraBlendCurve::Linear,
+                                                     Cinematic::CameraTransitionFallback::HardCut);
+        REQUIRE(fixture.controller.StartCameraCutPreview(activation, fixture.Settings(), {2, 1}, support).HasValue());
+        REQUIRE(fixture.controller.SeekCameraCutPreview(6).HasValue());
+        CHECK(fixture.controller.ViewportScene().camera.position.x == 20.0F);
     }
 
     TEST_CASE("Controller extraction uses runtime hard cuts and hands off to the current authoring owner",
