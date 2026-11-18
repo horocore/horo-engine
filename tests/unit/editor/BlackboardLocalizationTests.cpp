@@ -127,7 +127,14 @@ TEST_CASE("Environment Query workspace labels resolve in both shipped locales", 
                               "preview_generated",
                               "preview_shown",
                               "preview_ranked",
-                              "preview_invalid_coordinates"};
+                              "preview_invalid_coordinates",
+                              "create_distance",
+                              "create_radius",
+                              "create_prefer_nearer",
+                              "preview_distance",
+                              "preview_passed",
+                              "preview_filtered",
+                              "preview_contribution"};
     const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
     const std::array locales{"en-US", "tr-TR"};
     LocalizationService service{{"en-US"}};

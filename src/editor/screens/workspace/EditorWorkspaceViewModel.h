@@ -346,6 +346,7 @@ namespace Horo::Editor {
         std::string name;
         AI::QueryPointLattice lattice;
         std::uint32_t maximumResults{};
+        std::optional<AI::QueryPointDistanceTest> distance;
     };
 
     /** @brief Result of checking a saved query against the application's current descriptor registry. */

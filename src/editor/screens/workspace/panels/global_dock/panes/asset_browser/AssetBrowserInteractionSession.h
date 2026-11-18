@@ -30,6 +30,9 @@ namespace Horo::Editor {
         int innerSteps{};
         int maximumResults{9};
         bool annulus{};
+        bool distance{};
+        int radiusMillimeters{1500};
+        bool preferNearer{true};
     };
 
     /** @brief Cross-frame presentation state for one Content Browser panel. */

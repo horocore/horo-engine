@@ -679,6 +679,12 @@ namespace Horo::Editor {
                 if (draft.annulus)
                     integer("##NewQueryInner", "workspace.environment_query.create_inner", draft.innerSteps);
                 integer("##NewQueryMaximum", "workspace.environment_query.create_limit", draft.maximumResults);
+                static_cast<void>(Ui::CheckboxControl(text("workspace.environment_query.create_distance").c_str(), &draft.distance, fonts));
+                if (draft.distance) {
+                    integer("##NewQueryRadius", "workspace.environment_query.create_radius", draft.radiusMillimeters);
+                    static_cast<void>(
+                        Ui::CheckboxControl(text("workspace.environment_query.create_prefer_nearer").c_str(), &draft.preferNearer, fonts));
+                }
                 ImGui::Dummy({0.0F, 12.0F});
                 if (Ui::Button({.label = AssetBrowserPane::kTextScope.Text(context.localization, "action.cancel").c_str(),
                                 .variant = Ui::ButtonVariant::Secondary,

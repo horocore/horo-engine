@@ -238,6 +238,21 @@ TEST_CASE("Environment Query workspace previews the saved native lattice from an
 
     using enum EnvironmentQueryPreviewStatus;
     auto expected = Ready;
+    std::optional<QueryStageId> distanceStage;
+    SECTION("the saved native test filters and reports the actual distance contribution") {
+        const auto small = CreateBuiltinLatticeQuery(query.Value().Id(), query.Value().Stages().front().id, query.Value().ResultSchema().id,
+                                                     "Distance points", {.stepMillimeters = 1000, .outerSteps = 2}, 7);
+        REQUIRE(small.HasValue());
+        distanceStage = QueryStageId::Create(12).Value();
+        const auto scored = AddBuiltinPointDistanceTest(small.Value(), *distanceStage, {1500, true});
+        REQUIRE(scored.HasValue());
+        project.WriteAsset(scored.Value());
+        Project::Open(controller, Project::Path);
+        auto edited = pinned;
+        edited.source = document.source;
+        submit(edited);
+        REQUIRE(document.preview.status == Running);
+    }
     SECTION("the retained preview is bounded, stable and leaves the Scene owner unchanged") {
         submit(pinned);
         REQUIRE(document.preview.status == Running);
@@ -274,6 +289,25 @@ TEST_CASE("Environment Query workspace previews the saved native lattice from an
     }
     REQUIRE(document.preview.snapshot);
     const auto &preview = *document.preview.snapshot;
+    if (distanceStage) {
+        REQUIRE(preview.candidates.size() == 25);
+        REQUIRE(preview.stages.size() == 25);
+        CHECK(preview.generated == 25);
+        CHECK(preview.winnerCount == 7);
+        CHECK(preview.stages[0].candidateIndex == 0);
+        CHECK(preview.stages[0].score.stage == *distanceStage);
+        CHECK(preview.stages[0].score.status == QueryScoreStatus::Filtered);
+        CHECK(preview.stages[0].score.contribution == 0.0);
+        CHECK(preview.stages[12].score.status == QueryScoreStatus::Eligible);
+        CHECK(preview.stages[12].score.contribution == 1.0);
+        CHECK(preview.stages[13].score.status == QueryScoreStatus::Eligible);
+        CHECK(preview.stages[13].score.contribution > 0.3);
+        CHECK(preview.stages[13].score.contribution < 0.4);
+        REQUIRE_FALSE(preview.winners.empty());
+        CHECK(preview.winners.front().itemIndex == 12);
+        CHECK(preview.winners.front().scoreKey == QueryScoringPlan::ScoreKeyScale);
+        return;
+    }
     constexpr std::size_t width = MaximumQueryLatticeOuterSteps * 2 + 1;
     CHECK(preview.query == query.Value().Id());
     CHECK(preview.generated == width * width);
@@ -329,6 +363,36 @@ TEST_CASE("Environment Query New creates the first registered source from explic
     draft.innerSteps = 1;
 
     constexpr auto path = "assets/First lattice.horo_eqs";
+    SECTION("the New route validates explicit distance settings before publishing the registered stage") {
+        draft.distance = true;
+        draft.radiusMillimeters = 0;
+        CHECK_FALSE(AssetBrowserInteractionSession::ConfirmCreateQuery(draft));
+        draft.radiusMillimeters = 1250;
+        draft.preferNearer = false;
+        const auto command = AssetBrowserInteractionSession::ConfirmCreateQuery(draft);
+        REQUIRE(command);
+        controller.ProcessCommand(*command);
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        const auto &documents = controller.ViewModel().environmentQueryDocuments;
+        REQUIRE(documents.size() == 1);
+        const auto document = documents.front().identity.instance;
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = document});
+        REQUIRE(documents.empty());
+        Project::Open(controller, path);
+        REQUIRE(documents.size() == 1);
+        const auto plan = EnvironmentQueryPlan::Compile(*documents.front().query, registry.Value());
+        REQUIRE(plan.HasValue());
+        REQUIRE(plan.Value().Stages().size() == 2);
+        const auto stage = BuiltinPointDistanceQuery::Capture(plan.Value().Stages().back(), registry.Value());
+        REQUIRE(stage.HasValue());
+        CHECK_FALSE(stage.Value().Rule().score);
+        const auto boundary = stage.Value().Evaluate({}, Math::WorldCoordinate64::FromMillimeters(1250, 0, 0));
+        REQUIRE(boundary.HasValue());
+        CHECK(boundary.Value().filter == true);
+        const auto outside = stage.Value().Evaluate({}, Math::WorldCoordinate64::FromMillimeters(1251, 0, 0));
+        REQUIRE(outside.HasValue());
+        CHECK(outside.Value().filter == false);
+    }
     SECTION("accepted workspace command stages the pair and opens the exact registered result") {
         const auto command = AssetBrowserInteractionSession::ConfirmCreateQuery(draft);
         REQUIRE(command.has_value());

@@ -151,6 +151,12 @@ namespace Horo::AI {
         [[nodiscard]] Result<std::span<const QueryCandidateScore>> SelectBest(std::span<QueryCandidateScore> candidates,
                                                                               std::size_t bestCount) const;
 
+        /** @brief Describes one completed sample through the same normalized policy used for ranking.
+         * @param sample One evaluated sample keyed by its exact stage ID.
+         * @return Redacted filter/result evidence, or empty for an unregistered stage.
+         */
+        [[nodiscard]] std::optional<QueryStageScore> DescribeSample(const QueryTestSample &sample) const noexcept;
+
     private:
         friend class QueryExecution;
 

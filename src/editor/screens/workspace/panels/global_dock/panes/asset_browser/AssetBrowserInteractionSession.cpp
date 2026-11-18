@@ -159,7 +159,8 @@ namespace Horo::Editor {
         return !draft.directory.empty() && draft.name.front() != char{} && draft.stepMillimeters > 0 && draft.outerSteps >= 0 &&
                draft.outerSteps <= static_cast<int>(AI::MaximumQueryLatticeOuterSteps) && draft.maximumResults > 0 &&
                draft.maximumResults <= static_cast<int>(AI::EnvironmentQuerySchemaLimits::MaximumResults) &&
-               (!draft.annulus || (draft.innerSteps >= 0 && draft.innerSteps <= draft.outerSteps));
+               (!draft.annulus || (draft.innerSteps >= 0 && draft.innerSteps <= draft.outerSteps)) &&
+               (!draft.distance || draft.radiusMillimeters > 0);
     }
 
     /** @copydoc AssetBrowserInteractionSession::ConfirmCreateQuery */
@@ -177,7 +178,12 @@ namespace Horo::Editor {
                                                         .innerSteps = draft.annulus
                                                                           ? std::optional{static_cast<std::uint32_t>(draft.innerSteps)}
                                                                           : std::nullopt},
-                                            .maximumResults = static_cast<std::uint32_t>(draft.maximumResults)};
+                                            .maximumResults = static_cast<std::uint32_t>(draft.maximumResults),
+                                            .distance = draft.distance
+                                                            ? std::optional{AI::QueryPointDistanceTest{static_cast<std::uint32_t>(
+                                                                                                           draft.radiusMillimeters),
+                                                                                                       draft.preferNearer}}
+                                                            : std::nullopt};
         return command;
     }
 

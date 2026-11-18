@@ -8,6 +8,7 @@
 #include "Horo/AI/AIScenePerceptionSource.h"
 #include "Horo/AI/EnvironmentQueryAuthoring.h"
 #include "Horo/AI/EnvironmentQueryContexts.h"
+#include "Horo/AI/EnvironmentQueryScoring.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -91,6 +92,35 @@ namespace Horo::AI {
     [[nodiscard]] Result<QueryGenerationResult> GenerateBuiltinQueryCandidates(const EnvironmentQueryPlan &plan,
                                                                                const QueryContextSnapshot &contexts,
                                                                                const QueryGeneratorOutput &output);
+
+    /** @brief Adds the registered point-distance stage to an initial lattice source.
+     * @param lattice Admitted initial lattice source. @param stage Fresh stable test stage identity.
+     * @param settings Explicit radius and optional score. @return Detached complete source or typed refusal.
+     */
+    [[nodiscard]] Result<EnvironmentQueryAsset> AddBuiltinPointDistanceTest(const EnvironmentQueryAsset &lattice, QueryStageId stage,
+                                                                            QueryPointDistanceTest settings);
+
+    /** @brief Prepares the exact installed point-distance test without invoking a provider callback. */
+    class BuiltinPointDistanceQuery final {
+    public:
+        /** @brief Resolves one compiled stage against the exact registered native descriptor.
+         * @param stage Compiled test. @param registry Same registry used to compile the query.
+         * @return Typed immutable kernel or refusal for unsupported descriptors/settings.
+         */
+        [[nodiscard]] static Result<BuiltinPointDistanceQuery> Capture(const QueryPlanStage &stage, const QuerySchemaRegistry &registry);
+        /** @brief Returns the canonical filter and optional scoring policy for this stage. @return Scoring rule. */
+        [[nodiscard]] QueryScoreRule Rule() const;
+        /** @brief Runs the actual distance kernel on two captured canonical points.
+         * @param center Querier position. @param point Candidate position. @return Typed filter and metric evidence.
+         */
+        [[nodiscard]] Result<QueryTestSample> Evaluate(Math::WorldCoordinate64 center, Math::WorldCoordinate64 point) const;
+
+    private:
+        BuiltinPointDistanceQuery(QueryStageId stage, QueryPointDistanceTest settings) : stage_(stage), settings_(settings) {}
+
+        QueryStageId stage_;
+        QueryPointDistanceTest settings_;
+    };
 
     /** @brief Borrows the recipient's current authorized perception publication on the scene owner lane. */
     struct QueryPerceivedEntitySource final {

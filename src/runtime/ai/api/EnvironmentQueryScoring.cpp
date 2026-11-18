@@ -229,6 +229,16 @@ namespace Horo::AI {
         return {rule.stage, status, contribution};
     }
 
+    /** @copydoc QueryScoringPlan::DescribeSample */
+    std::optional<QueryStageScore> QueryScoringPlan::DescribeSample(const QueryTestSample &sample) const noexcept {
+        const auto stage = std::ranges::lower_bound(stages_, sample.stage, {}, [](const Stage &value) {
+            return value.rule.stage;
+        });
+        if (stage == stages_.end() || stage->rule.stage != sample.stage)
+            return std::nullopt;
+        return DescribeStage(static_cast<std::size_t>(stage - stages_.begin()), sample);
+    }
+
     /** @copydoc QueryScoringPlan::SelectBest */
     Result<std::span<const QueryCandidateScore>> QueryScoringPlan::SelectBest(const std::span<QueryCandidateScore> candidates,
                                                                               const std::size_t bestCount) const {

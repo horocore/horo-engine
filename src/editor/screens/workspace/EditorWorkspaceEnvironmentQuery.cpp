@@ -62,9 +62,10 @@ namespace Horo::Editor {
                                    {.querier = *entity, .querierLocation = coordinate.Value(), .executionRevision = pin.document.value});
         }
 
-        /** @brief Evaluates the installed native generator and canonical empty scoring plan using frozen inputs only. */
+        /** @brief Evaluates the native generator and optional distance stage through canonical scoring using frozen inputs only. */
         Result<AI::QueryDebugSnapshot> EvaluateLatticePreview(const AI::EnvironmentQueryPlan &plan, const AI::QueryContextSnapshot &context,
                                                               const AI::QueryScoringPlan &scoring,
+                                                              const std::optional<AI::BuiltinPointDistanceQuery> &distance,
                                                               const AI::QueryGeneratorProvenance &provenance,
                                                               const CancellationToken &cancel) {
             using Preview = Result<AI::QueryDebugSnapshot>;
@@ -83,27 +84,41 @@ namespace Horo::Editor {
                                             .generated = generated.Value().itemCount,
                                             .evaluated = generated.Value().itemCount,
                                             .invalidCoordinates = generated.Value().invalidCoordinateCount};
+            const auto samples = std::min(snapshot.generated, AI::QueryDebugCaptureSettings::MaximumSamples);
+            snapshot.candidates.reserve(samples);
+            if (distance)
+                snapshot.stages.reserve(samples);
+            const auto *center = context.Find(AI::BuiltinQueryContextId(AI::BuiltinQueryContext::QuerierLocation));
+            if (!center || !std::holds_alternative<Math::WorldCoordinate64>(center->value))
+                return Preview::Failure(MakeError(AI::AIErrors::EnvironmentQueryContextMissing));
+            const auto origin = std::get<Math::WorldCoordinate64>(center->value);
             std::vector<AI::QueryCandidateScore> scores;
             scores.reserve(snapshot.generated);
             for (std::uint32_t index = 0; index < snapshot.generated; ++index) {
                 if (cancel.IsCancellationRequested())
                     return cancelled();
-                scores.push_back(scoring.Evaluate(index, 0, {}));
-            }
-            constexpr auto maximumSamples = AI::QueryDebugCaptureSettings::MaximumSamples;
-            const auto samples = std::min(snapshot.generated, maximumSamples);
-            snapshot.candidates.reserve(samples);
-            for (std::size_t sample = 0; sample < samples; ++sample) {
-                const auto index = samples > 1 ? sample * (snapshot.generated - 1) / (samples - 1) : 0;
-                snapshot.candidates.push_back({.index = static_cast<std::uint32_t>(index),
-                                               .point = std::get<Math::WorldCoordinate64>(items[index]),
-                                               .score = scores[index]});
+                const auto point = std::get<Math::WorldCoordinate64>(items[index]);
+                AI::QueryTestSample fact;
+                if (distance) {
+                    const auto evaluated = distance->Evaluate(origin, point);
+                    if (evaluated.HasError())
+                        return Preview::Failure(evaluated.ErrorValue());
+                    fact = evaluated.Value();
+                }
+                const auto facts = distance ? std::span<const AI::QueryTestSample>{&fact, 1} : std::span<const AI::QueryTestSample>{};
+                scores.push_back(scoring.Evaluate(index, 0, facts));
+                const auto sampled = snapshot.candidates.size();
+                if (sampled < samples && index == sampled * (snapshot.generated - 1) / std::max<std::size_t>(1, samples - 1)) {
+                    snapshot.candidates.push_back({.index = index, .point = point, .score = scores.back()});
+                    if (const auto stage = scoring.DescribeSample(fact))
+                        snapshot.stages.push_back({index, *stage});
+                }
             }
             const auto winners = scoring.SelectBest(scores, plan.ResultSchema().maximumResults);
             if (winners.HasError())
                 return Preview::Failure(winners.ErrorValue());
             snapshot.winnerCount = winners.Value().size();
-            const auto retained = winners.Value().first(std::min(snapshot.winnerCount, maximumSamples));
+            const auto retained = winners.Value().first(std::min(snapshot.winnerCount, AI::QueryDebugCaptureSettings::MaximumSamples));
             snapshot.winners.assign(retained.begin(), retained.end());
             if (cancel.IsCancellationRequested())
                 return cancelled();
@@ -321,13 +336,23 @@ namespace Horo::Editor {
             return Result<void>::Failure(plan.ErrorValue());
         const auto stages = plan.Value().Stages();
         const auto required = plan.Value().RequiredContexts();
-        if (stages.size() != 1 || stages.front().kind != AI::QueryStageKind::Generator || required.size() != 1 ||
+        if (stages.empty() || stages.size() > 2 || stages.front().kind != AI::QueryStageKind::Generator || required.size() != 1 ||
             required.front().id != AI::BuiltinQueryContextId(AI::BuiltinQueryContext::QuerierLocation))
             return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
         const auto *generator = m_querySchema->Find(stages.front().generator);
         if (!generator)
             return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
-        auto scoring = AI::QueryScoringPlan::Capture(plan.Value(), *m_querySchema, {}, AI::QueryScoreTieBreak::StableIndex);
+        std::optional<AI::BuiltinPointDistanceQuery> distance;
+        std::optional<AI::QueryScoreRule> rule;
+        if (stages.size() == 2) {
+            auto supported = AI::BuiltinPointDistanceQuery::Capture(stages.back(), *m_querySchema);
+            if (supported.HasError())
+                return Result<void>::Failure(supported.ErrorValue());
+            distance = std::move(supported).Value();
+            rule = distance->Rule();
+        }
+        const auto rules = rule ? std::span<const AI::QueryScoreRule>{&*rule, 1} : std::span<const AI::QueryScoreRule>{};
+        auto scoring = AI::QueryScoringPlan::Capture(plan.Value(), *m_querySchema, rules, AI::QueryScoreTieBreak::StableIndex);
         if (scoring.HasError())
             return Result<void>::Failure(scoring.ErrorValue());
 
@@ -337,11 +362,11 @@ namespace Horo::Editor {
         const AI::QueryGeneratorProvenance origin{stages.front().id, generator->id, generator->origin.provider,
                                                   contexts.Value()->Revision()};
         auto output = std::make_shared<std::shared_ptr<const AI::QueryDebugSnapshot>>();
-        auto job =
-            m_sourceRecoveryJobs->SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Cpu},
-                                               [plan = std::move(plan).Value(), contexts = std::move(contexts).Value(),
-                                                scoring = std::move(scoring).Value(), origin, output](const CancellationToken &cancel) {
-            auto evaluated = EvaluateLatticePreview(plan, *contexts, scoring, origin, cancel);
+        auto job = m_sourceRecoveryJobs->SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Cpu},
+                                                      [plan = std::move(plan).Value(), contexts = std::move(contexts).Value(),
+                                                       scoring = std::move(scoring).Value(), distance, origin,
+                                                       output](const CancellationToken &cancel) {
+            auto evaluated = EvaluateLatticePreview(plan, *contexts, scoring, distance, origin, cancel);
             if (evaluated.HasError())
                 return Result<void>::Failure(std::move(evaluated).ErrorValue());
             *output = std::make_shared<const AI::QueryDebugSnapshot>(std::move(evaluated).Value());
@@ -488,12 +513,24 @@ namespace Horo::Editor {
             const auto result = AuthoredAiSources::Issue<AI::QueryResultSchemaId>();
             if (!newId.IsValid() || path.HasError() || type.HasError() || id.HasError() || stage.HasError() || result.HasError())
                 return;
-            const auto source =
+            auto source =
                 m_latticeQueryFactory(id.Value(), stage.Value(), result.Value(), request.name, request.lattice, request.maximumResults);
             if (source.HasError() || source.Value().Id() != id.Value() || source.Value().ResultSchema().id != result.Value() ||
                 source.Value().Stages().size() != 1 || source.Value().Stages().front().id != stage.Value() ||
                 DescriptorAvailability(source.Value(), m_querySchema) != QueryDescriptorAvailability::Validated)
                 return;
+            if (request.distance) {
+                const auto test = AuthoredAiSources::Issue<AI::QueryStageId>(std::set{stage.Value()});
+                if (test.HasError())
+                    return;
+                auto withTest = AI::AddBuiltinPointDistanceTest(source.Value(), test.Value(), *request.distance);
+                if (withTest.HasError())
+                    return;
+                const auto plan = AI::EnvironmentQueryPlan::Compile(withTest.Value(), *m_querySchema);
+                if (plan.HasError() || !AI::BuiltinPointDistanceQuery::Capture(plan.Value().Stages().back(), *m_querySchema).HasValue())
+                    return;
+                source = std::move(withTest);
+            }
             const auto encoded = EnvironmentQuerySourceCodec::Encode(source.Value());
             if (encoded.HasError())
                 return;
@@ -561,7 +598,9 @@ namespace Horo::Editor {
         if (!preview.snapshot)
             return true;
         const auto &snapshot = *preview.snapshot;
-        label(text("workspace.environment_query.preview_generator_only"), Theme::Muted());
+        label(text(query.Stages().size() == 1 ? "workspace.environment_query.preview_generator_only"
+                                              : "workspace.environment_query.preview_distance"),
+              Theme::Muted());
         label(std::format("{} {} / {} {} / {} {} / {} {}", text("workspace.environment_query.preview_generated"), snapshot.generated,
                           text("workspace.environment_query.preview_shown"), snapshot.candidates.size(),
                           text("workspace.environment_query.preview_ranked"), snapshot.winnerCount,
@@ -569,7 +608,18 @@ namespace Horo::Editor {
               Theme::Text());
         for (const auto &candidate : snapshot.candidates) {
             const auto point = candidate.point->Millimeters();
-            label(std::format("#{}  ({}, {}, {})", candidate.index, point[0], point[1], point[2]), Theme::Text());
+            const auto stage = std::ranges::lower_bound(snapshot.stages, candidate.index, {}, &AI::QueryDebugStage::candidateIndex);
+            if (stage == snapshot.stages.end() || stage->candidateIndex != candidate.index) {
+                label(std::format("#{}  ({}, {}, {})", candidate.index, point[0], point[1], point[2]), Theme::Text());
+                continue;
+            }
+            const bool passed = stage->score.status == AI::QueryScoreStatus::Eligible;
+            const auto status =
+                text(passed ? "workspace.environment_query.preview_passed" : "workspace.environment_query.preview_filtered");
+            label(std::format("#{}  ({}, {}, {}) / {} {} / {} / {} {:.3f}", candidate.index, point[0], point[1], point[2],
+                              text("workspace.environment_query.test"), stage->score.stage.Value(), status,
+                              text("workspace.environment_query.preview_contribution"), stage->score.contribution),
+                  passed ? Theme::Text() : Theme::Warn());
         }
         return true;
     }
