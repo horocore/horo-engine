@@ -8,6 +8,7 @@
 #include <limits>
 #include <new>
 #include <optional>
+#include <vector>
 
 namespace {
     std::atomic<std::size_t> layoutAllocations{};
@@ -41,6 +42,14 @@ namespace Horo::Runtime::Ui {
 
         template <typename Id> Id Stable(const std::uint8_t marker) {
             return Id::Create(StableBytes(marker)).Value();
+        }
+
+        /** @brief Builds distinct stable IDs for the large declarative fixture. */
+        UiElementId LargeElementId(const std::uint32_t ordinal) {
+            SerializedUiId bytes{};
+            bytes[bytes.size() - 2] = static_cast<std::uint8_t>(ordinal >> 8U);
+            bytes.back() = static_cast<std::uint8_t>(ordinal);
+            return UiElementId::Create(bytes).Value();
         }
 
         UiOwnershipGeneration Owner(const std::uint64_t value = 31) {
@@ -628,6 +637,79 @@ namespace Horo::Runtime::Ui {
                 REQUIRE(snapshot.HasValue());
             }
             REQUIRE(layoutAllocations.load(std::memory_order_relaxed) == before);
+        }
+
+        TEST_CASE("Large nested declarative layouts preserve geometry within bounded preparation budgets",
+                  "[runtime_ui][layout][allocation][qualification]") {
+            constexpr std::uint32_t groups = 32;
+            constexpr std::uint32_t leavesPerGroup = 64;
+            constexpr std::uint32_t elementCount = 1 + groups * (1 + leavesPerGroup);
+            auto descriptor = TreeDescriptor();
+            descriptor.limits = {elementCount, 3, 8};
+            std::vector<UiElementDescriptor> elements;
+            elements.reserve(elementCount);
+            elements.push_back({LargeElementId(1), {}});
+            for (std::uint32_t group = 0; group < groups; ++group) {
+                const auto parent = LargeElementId(2 + group * (1 + leavesPerGroup));
+                elements.push_back({parent, LargeElementId(1)});
+                for (std::uint32_t leaf = 0; leaf < leavesPerGroup; ++leaf)
+                    elements.push_back({LargeElementId(3 + group * (1 + leavesPerGroup) + leaf), parent});
+            }
+
+            auto allocated = UiElementSlotAllocator::Create(Owner());
+            REQUIRE(allocated.HasValue());
+            auto allocator = std::move(allocated).Value();
+            auto tree = UiElementTree::Create(allocator, descriptor, elements);
+            REQUIRE(tree.HasValue());
+            auto engine = UiLayoutEngine::Create(
+                {descriptor.instance, descriptor.canvas, descriptor.document, elementCount, 8, 3, Rev<UiInteractionRevision>(1), true});
+            REQUIRE(engine.HasValue());
+
+            UiLayoutStyle groupStyle;
+            groupStyle.container.kind = UiLayoutContainerKind::Stack;
+            groupStyle.container.orientation = UiLayoutOrientation::Vertical;
+            UiLayoutStyle leafStyle;
+            leafStyle.width = UiLength::Dip(16);
+            leafStyle.height = UiLength::Dip(8);
+            std::vector<UiLayoutElementDescriptor> styles;
+            styles.reserve(elementCount);
+            for (std::uint32_t index = 0; index < elementCount; ++index) {
+                const auto handle = tree.Value().Find(LargeElementId(index + 1));
+                REQUIRE(handle.HasValue());
+                styles.push_back(
+                    Descriptor(handle.Value(), index == 0 || (index - 1) % (leavesPerGroup + 1) == 0 ? groupStyle : leafStyle));
+            }
+            auto evaluator = UiDeclarativeLayoutEvaluator::Create(styles);
+            REQUIRE(evaluator.HasValue());
+            auto layout = std::move(engine).Value();
+            const auto request = Request(evaluator.Value());
+            const auto before = layoutAllocations.load(std::memory_order_relaxed);
+            const auto baseline = layout.Update(tree.Value(), request);
+            const auto coldAllocations = layoutAllocations.load(std::memory_order_relaxed) - before;
+            REQUIRE(baseline.HasValue());
+            REQUIRE(baseline.Value().Records().size() == elementCount);
+            CHECK(coldAllocations == 0);
+            // Wall-time ceilings catch stalls on shared Debug runners. Work counts below are the portable budget.
+            CHECK(layout.CpuWorkStatistics().lastNanoseconds < 250'000'000);
+
+            const auto leaf = styles.back().element;
+            REQUIRE(layout.Invalidate({leaf, tree.Value().Revision(), UiLayoutDirtyKind::Measure}).HasValue());
+            const auto beforeIncremental = layoutAllocations.load(std::memory_order_relaxed);
+            const auto updated = layout.Update(tree.Value(), request);
+            const auto incrementalAllocations = layoutAllocations.load(std::memory_order_relaxed) - beforeIncremental;
+            REQUIRE(updated.HasValue());
+            REQUIRE(updated.Value().Records().size() == elementCount);
+            CHECK(incrementalAllocations == 0);
+            CHECK(layout.CpuWorkStatistics().lastNanoseconds < 100'000'000);
+            std::uint32_t measurements = 0;
+            for (std::size_t index = 0; index < elementCount; ++index) {
+                const auto &oldRecord = baseline.Value().Records()[index];
+                const auto &newRecord = updated.Value().Records()[index];
+                REQUIRE(newRecord.element == oldRecord.element);
+                REQUIRE(newRecord.arrangement.contentBox == oldRecord.arrangement.contentBox);
+                measurements += newRecord.work.measurements;
+            }
+            CHECK(measurements == 3);
         }
 
         TEST_CASE("Declarative layout resolves anchors pivots offsets box model and intrinsic metrics", "[runtime_ui][layout][semantic]") {
