@@ -147,6 +147,7 @@ namespace Horo::XR {
         };
         add("xr.schema_version", SettingValueType::Integer, XRProjectSettingsSchemaVersion);
         add("xr.enabled", SettingValueType::Boolean, false);
+        add("xr.preview.spatial_planes", SettingValueType::Boolean, false);
         add("xr.runtime_selection", SettingValueType::Integer, std::int64_t{0});
         add("xr.capability_profile", SettingValueType::Integer, std::int64_t{0});
         add("xr.limits.views", SettingValueType::Integer, std::int64_t{2});
@@ -191,6 +192,11 @@ namespace Horo::XR {
         return eyeGazePreview_;
     }
 
+    /** @copydoc XRProjectSettings::AllowsPlaneCapturePreview */
+    bool XRProjectSettings::AllowsPlaneCapturePreview() const noexcept {
+        return planeCapturePreview_;
+    }
+
     /** @copydoc XRProjectSettings::Features */
     std::span<const XRFeatureRequest> XRProjectSettings::Features() const noexcept {
         return {features_.data(), featureCount_};
@@ -214,6 +220,14 @@ namespace Horo::XR {
             return Result<XRProjectSettings>::Failure(Failure(source, "xr.enabled", XRErrors::OperationInvalid,
                                                               "Register xr.enabled as a boolean before resolving project policy."));
         settings.enabled_ = *flag;
+        const auto *planes = source.FindResolved(SettingKey{"xr.preview.spatial_planes"});
+        if (planes) {
+            const auto *allowCapture = std::get_if<bool>(&planes->value);
+            if (!allowCapture)
+                return Result<XRProjectSettings>::Failure(Failure(source, "xr.preview.spatial_planes", XRErrors::OperationInvalid,
+                                                                  "Register spatial preview policy as a boolean."));
+            settings.planeCapturePreview_ = *allowCapture;
+        }
         const auto runtime = Integer(source, "xr.runtime_selection", 0, static_cast<std::int64_t>(XRRuntimeSelectionPolicy::Count) - 1);
         if (runtime.HasError())
             return Result<XRProjectSettings>::Failure(runtime.ErrorValue());

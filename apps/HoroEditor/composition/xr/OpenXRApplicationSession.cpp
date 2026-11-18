@@ -79,11 +79,29 @@ namespace Horo::Application::Internal {
         const XRLoaderApiVersion compiled{XR_VERSION_MAJOR(XR_CURRENT_API_VERSION), XR_VERSION_MINOR(XR_CURRENT_API_VERSION),
                                           XR_VERSION_PATCH(XR_CURRENT_API_VERSION)};
         // The editor composition owns a time provider and color projection; its renderer has no native depth provider.
-        const std::array extensions{NativeExtensionRequest{OpenXRPlatformTimeRoute().extension, true},
-                                    NativeExtensionRequest{XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME},
-                                    NativeExtensionRequest{XR_EXT_HAND_TRACKING_EXTENSION_NAME}};
-        // The eye extension is used only for a cold system property census. No gaze action or space is created.
-        const auto requested = std::span{extensions}.first(WantsHands() ? extensions.size() : extensions.size() - 1);
+        constexpr std::array<std::string_view, 1> spatialDependencies{XR_EXT_FUTURE_EXTENSION_NAME};
+        constexpr std::array<std::string_view, 2> planeDependencies{XR_EXT_FUTURE_EXTENSION_NAME, XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME};
+        const bool planePreview = settings_.AllowsPlaneCapturePreview();
+
+        struct Selection final {
+            NativeExtensionRequest request;
+            bool selected;
+        };
+
+        const std::array routes{
+            Selection{{OpenXRPlatformTimeRoute().extension, true}, true},
+            Selection{{XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME}, true},
+            Selection{{XR_EXT_HAND_TRACKING_EXTENSION_NAME}, WantsHands()},
+            Selection{{XR_EXT_FUTURE_EXTENSION_NAME}, planePreview},
+            Selection{{.name = XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME, .dependencies = spatialDependencies}, planePreview},
+            Selection{{.name = XR_EXT_SPATIAL_PLANE_TRACKING_EXTENSION_NAME, .dependencies = planeDependencies}, planePreview},
+        };
+        std::array<NativeExtensionRequest, routes.size()> extensions{};
+        std::size_t count{};
+        for (const auto &route : routes)
+            if (route.selected)
+                extensions[count++] = route.request;
+        const auto requested = std::span{extensions}.first(count);
         const NativeDiscoveryRequest request{selection_,
                                              std::min(compiled, selection_.admittedLoaderVersions.maximum),
                                              requested,
@@ -399,6 +417,8 @@ namespace Horo::Application::Internal {
 
         RevokeInput();
         sessionCensus_.reset();
+        if (auto retired = RetirePlaneCapture(); retired.HasError())
+            return retired;
         if (auto retired = RetireHands(); retired.HasError())
             return retired;
         if (input_.native) {
@@ -437,6 +457,8 @@ namespace Horo::Application::Internal {
 
         RevokeInput();
         sessionCensus_.reset();
+        if (auto retired = RetirePlaneCapture(); retired.HasError())
+            return retired;
         if (auto retired = RetireHands(); retired.HasError())
             return retired;
         if (input_.native) {
@@ -458,6 +480,8 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         closing_ = true;
         RevokeInput();
+        if (auto retired = RetirePlaneCapture(); retired.HasError())
+            return retired;
         if (auto retired = RetireHands(); retired.HasError())
             return retired;
         if (input_.native) {

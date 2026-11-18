@@ -25,6 +25,7 @@ namespace Horo::Editor {
         /** @brief Projects and submits one explicit preview request without invoking native output. */
         void DrawHapticPreview(IEditorXrHapticPreview &preview);
         /** @brief Shows consent controls and current redacted pointing evidence. */
+        void DrawPlaneCapturePreview(IEditorXrPlaneCapturePreview &preview);
         void DrawEyeGazePreview(IEditorXrEyeGazePreview &preview);
         [[nodiscard]] const std::string &Text(const char *key) const;
         const EditorGuiContext &context_;
@@ -32,6 +33,7 @@ namespace Horo::Editor {
         EditorXrSetupTestId request_;
         EditorXrHapticPreviewId previewRequest_;
         bool previewRejected_{};
+        bool planesRejected_{};
         bool gazeRejected_{};
         bool rejected_{};
     };

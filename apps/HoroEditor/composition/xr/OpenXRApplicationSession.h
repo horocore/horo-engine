@@ -7,6 +7,7 @@
 #include "OpenXRApplicationBindings.h"
 #include "OpenXRHandTracking.h"
 #include "OpenXRInstalledProductSelection.h"
+#include "OpenXRPlaneCapture.h"
 #include "OpenXRSelectedVulkanBinding.h"
 
 #include <functional>
@@ -232,6 +233,19 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> PrepareInput(const Input::InputActionCollection &port, const Input::InputRouter &router,
                                                 const OpenXRApplicationBindings &bindings,
                                                 const XR::OpenXRInternal::NativeTrackingSpaceRequest &tracking, bool gazeConsent = false);
+        /** @return Whether policy and exact native evidence permit requesting plane consent. */
+        [[nodiscard]] bool MayArmPlaneCapture() const noexcept;
+        /** @brief Transfers the one-use Setup grant to the prepared Play owner. @param allowed Granted by Setup. */
+        void SetPlaneCaptureConsent(bool allowed) noexcept;
+        /** @brief Immediately withdraws geometry before beginning native retirement. */
+        void RevokePlaneCapture() noexcept;
+        /** @return Successful update or native debt that must be retried by the control lane. */
+        [[nodiscard]] Result<void> ProgressPlaneRetirement();
+        /** @return Redacted evidence for the current Play scope. */
+        [[nodiscard]] XR::XRCapabilityState PlaneCaptureAvailability() const noexcept;
+        /** @brief Copies current geometry only for exact focused tracking evidence. @param tracking Current Input publication.
+         * @return Immutable plane batch or typed privacy/identity/age failure. */
+        [[nodiscard]] Result<XR::XRPlaneSnapshot> ReadPlaneObservations(const XR::XRTrackingSnapshot &tracking) const;
         /** @return Whether both signed host policy and observed hardware permit arming the optional gaze preview. */
         [[nodiscard]] bool MayArmEyeGaze() const noexcept;
         /** @return Current supported/denied gaze availability, without exposing any pose. */
@@ -385,6 +399,13 @@ namespace Horo::Application::Internal {
         /** @brief Collects only bounded normalized facts while the exact private native test session exists. */
         [[nodiscard]] Result<OpenXRPackagedCompatibility> CollectPackagedCompatibility(
             const XR::OpenXRInternal::NativeSessionCensus &session);
+        /** @return Retired plane children or native error retaining exact cleanup debt. */
+        [[nodiscard]] Result<void> RetirePlaneCapture();
+        /** @brief Advances one async operation after canonical tracking publication. @param tracking Current Input evidence. */
+        void AdvancePlaneCapture(const XR::XRTrackingSnapshot &tracking);
+        /** @brief Starts the one authorized native capture in the current calibrated space. */
+        [[nodiscard]] bool StartPlaneCapture(const XR::XRSessionId &session, const XR::XRCoordinateSpace &space, XR::XRRuntimeTime now);
+
         /** @brief Verifies the required projection protocol through the one selected native instance. */
         [[nodiscard]] Result<void> ValidateProjectionDispatch(XrInstance instance) const;
         [[nodiscard]] Result<void> PrepareHands();
@@ -485,6 +506,15 @@ namespace Horo::Application::Internal {
             XR::XRCapabilityState stageAvailability{XR::XRCapabilityState::Unsupported};
             std::array<XR::XRActiveInteractionProfile, 2> profiles{}; /**< Actual post-attachment preparation census. */
         };
+
+        struct PlaneCaptureStateStorage final {
+            std::optional<XR::OpenXRInternal::OpenXRPlaneCapture> native;
+            std::optional<XR::XRPlaneScope> scope;
+            XR::XRRuntimeTime latestCutoff;
+            XR::XRRuntimeTime publishedAt;
+            std::uint64_t lastGrant{};
+            bool allowed{};
+        } planes_;
 
         InputPreparation input_;
         XR::XRContactPinchGesturePolicy pinchPolicy_;

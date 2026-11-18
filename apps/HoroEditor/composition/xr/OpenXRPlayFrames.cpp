@@ -309,6 +309,8 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRPlayHost::ProgressTail */
     Result<void> OpenXRPlayHost::ProgressTail() {
+        if (auto retired = composition_.session.ProgressPlaneRetirement(); retired.HasError())
+            return retired;
         if (eventsPending_ || !render_ || frames_.Snapshot().phase == XRFramePhase::Idle)
             return Result<void>::Success();
         if (sessions_.Snapshot().state == XRSessionState::Lost)

@@ -821,6 +821,12 @@ failure states.
   only redacted status to Setup. Pause, focus interruption, platform
   permission denial, explicit revocation and session retirement discard the
   grant and current pose.
+- The signed OpenXR host may opt into spatial planes with `--xr-enable-spatial-planes`.
+  XR Setup separately grants capture for the next Play session. The application
+  advances one asynchronous OpenXR future at the canonical focused Input cutoff
+  and resolves snapshots in the same calibrated World space. Pause, focus or tracking
+  loss, origin replacement, permission denial and retirement withdraw geometry.
+  Setup exposes only redacted state, and room geometry stays out of records and diagnostics.
 - Persistent anchors identify localization state and failure; they do not imply
   that every runtime supports cross-session restore.
 - Renderer consumes admitted passthrough/composition descriptors without owning

@@ -260,6 +260,7 @@ namespace Horo::Application::Internal {
         const auto cancellation = preparationCancellation.Token();
         if (cancellation.IsCancellationRequested())
             return Result<void>::Failure(MakeError(XRSessionErrors::ActivationCancelled));
+        const bool planeConsent = std::exchange(host.planesArmed_, false);
         const bool gazeConsent = std::exchange(host.gazeArmed_, false);
         if (auto prepared = host.composition_.session.PrepareInput(*host.input_.port, *host.input_.router, *host.composition_.bindings,
                                                                    tracking, gazeConsent);
@@ -267,6 +268,7 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(prepared.ErrorValue());
         if (cancellation.IsCancellationRequested())
             return Result<void>::Failure(MakeError(XRSessionErrors::ActivationCancelled));
+        host.composition_.session.SetPlaneCaptureConsent(planeConsent);
         auto preparedProjection = host.composition_.session.PrepareProjection(host.composition_.frontend, host.composition_.viewport,
                                                                               *host.composition_.bindings);
         if (preparedProjection.HasError())

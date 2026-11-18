@@ -91,10 +91,13 @@ namespace Horo::Tests::OpenXRApplication {
                                         const XR::XRProjectFeaturePolicy hands = XR::XRProjectFeaturePolicy::Unrequested,
                                         const XR::XRProjectFeaturePolicy stage = XR::XRProjectFeaturePolicy::Unrequested,
                                         const bool synthesis = false, std::optional<std::string> controllerBindings = std::nullopt,
-                                        const XR::XRProjectFeaturePolicy gaze = XR::XRProjectFeaturePolicy::Unrequested)
+                                        const XR::XRProjectFeaturePolicy gaze = XR::XRProjectFeaturePolicy::Unrequested,
+                                        const bool planePreview = false)
                 : product{HORO_TEST_OPENXR_LOADER, std::move(controllerBindings)} {
                 ConfigurationResolutionRequest request;
                 request.invocation.emplace(SettingKey{"xr.enabled"}, ConfigurationInputValue{true, std::nullopt});
+                if (planePreview)
+                    request.invocation.emplace(SettingKey{"xr.preview.spatial_planes"}, ConfigurationInputValue{true, std::nullopt});
                 if (gaze != XR::XRProjectFeaturePolicy::Unrequested) {
                     request.invocation.emplace(SettingKey{"xr.features.eye_gaze"},
                                                ConfigurationInputValue{static_cast<std::int64_t>(gaze), std::nullopt});
@@ -824,6 +827,34 @@ namespace Horo::Tests::OpenXRApplication {
             CHECK(fixture.script.native.liveSessions == 0);
         }
         CHECK(std::ranges::count(fixture.script.census.calls, "eye-gaze-properties") == 1);
+    }
+
+    TEST_CASE("Signed XR Setup spatial plane policy and operator consent are independent", "[xr][application][play][planes]") {
+        using enum XR::XRProjectFeaturePolicy;
+        using enum Editor::EditorXrPlaneCaptureState;
+        const bool policy = GENERATE(false, true);
+        ApplicationFixture fixture{true, 6, Unrequested, Unrequested, Unrequested, false, std::nullopt, Unrequested, policy};
+        constexpr std::array<std::string_view, 3> extensions{XR_EXT_FUTURE_EXTENSION_NAME, XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME,
+                                                             XR_EXT_SPATIAL_PLANE_TRACKING_EXTENSION_NAME};
+        fixture.script.native.extraExtensions = extensions;
+        fixture.script.native.extensionCount += static_cast<std::uint32_t>(extensions.size());
+        fixture.CreatePlay();
+        auto &preview = *fixture.play->PlaneCapturePreview();
+        CHECK(preview.ReadPlaneCaptureState() == (policy ? Ready : Unavailable));
+        CHECK(fixture.play->ReadPlaneObservations().HasError());
+        CHECK((std::ranges::find(fixture.script.native.enabledExtensions, XR_EXT_SPATIAL_PLANE_TRACKING_EXTENSION_NAME) !=
+               fixture.script.native.enabledExtensions.end()) == policy);
+        if (policy) {
+            RequireValue(preview.ArmPlaneCapture());
+            CHECK(preview.ReadPlaneCaptureState() == Armed);
+            CHECK(fixture.play->ReadPlaneObservations().HasError());
+            preview.RevokePlaneCapture();
+            CHECK(preview.ReadPlaneCaptureState() == Ready);
+        } else {
+            CHECK(preview.ArmPlaneCapture().HasError());
+        }
+        CHECK(fixture.script.native.liveSessions == 0);
+        REQUIRE(RequireValue(fixture.ClosePlay()));
     }
 
     TEST_CASE("Signed XR Play admits only current consenting eye pointing", "[xr][application][play][gaze]") {

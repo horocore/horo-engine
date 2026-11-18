@@ -139,6 +139,19 @@ namespace Horo::XR {
             REQUIRE(ResolveXRProjectSettings(missing.Value()).HasError());
         }
 
+        TEST_CASE("XR spatial plane preview remains outside required product settings", "[unit][xr][settings]") {
+            ConfigurationResolutionRequest request;
+            const auto baseline = ResolveXRProjectSettings(Configuration(request));
+            REQUIRE(baseline.HasValue());
+            CHECK_FALSE(baseline.Value().AllowsPlaneCapturePreview());
+            Project(request, "xr.preview.spatial_planes", true);
+            const auto preview = ResolveXRProjectSettings(Configuration(request));
+            REQUIRE(preview.HasValue());
+            CHECK(preview.Value().AllowsPlaneCapturePreview());
+            CHECK(preview.Value().Profile() == baseline.Value().Profile());
+            CHECK(preview.Value().Features().size() == baseline.Value().Features().size());
+        }
+
         TEST_CASE("XR project policy can offer optional eye gaze without granting consent", "[unit][xr][settings]") {
             ConfigurationResolutionRequest request;
             Project(request, "xr.features.eye_gaze", static_cast<std::int64_t>(XRProjectFeaturePolicy::OptionalDisable));

@@ -35,6 +35,8 @@ namespace Horo::XR::OpenXRInternal {
          * @return Current complete portable observations or typed absence/staleness. */
         [[nodiscard]] Result<XRPlaneSnapshot> Read(const XRPlaneScope &scope, XRRuntimeTime now) const;
 
+        /** @brief Revokes geometry synchronously without calling native code. */
+        void Revoke() noexcept;
         /** @brief Revokes publication immediately and releases pending future, snapshot and context in order.
          * @return Successful retirement, or typed cleanup failure retaining native debt for explicit retry. */
         [[nodiscard]] Result<void> Close();

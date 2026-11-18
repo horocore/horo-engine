@@ -49,6 +49,9 @@ namespace Horo::XR {
         /** @brief Reports optional policy for the independent eye-pointing preview.
          * @return True when product policy permits requesting consent; this is never a grant. */
         [[nodiscard]] bool AllowsEyeGazePreview() const noexcept;
+        /** @brief Reports policy for the independent plane-capture preview.
+         * @return True when the product permits a separate operator request for consent. */
+        [[nodiscard]] bool AllowsPlaneCapturePreview() const noexcept;
         /** @brief Returns version-one extra requests. @return Snapshot-owned span valid for this object's lifetime. */
         [[nodiscard]] std::span<const XRFeatureRequest> Features() const noexcept;
         /** @brief Returns safe configuration provenance. @return Retained immutable source snapshot. */
@@ -65,6 +68,7 @@ namespace Horo::XR {
         XRSystemLimits limits_{};
         std::array<XRFeatureRequest, static_cast<std::size_t>(XRCapability::Count)> features_{};
         std::size_t featureCount_{};
+        bool planeCapturePreview_{};
         bool eyeGazePreview_{};
     };
 

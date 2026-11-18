@@ -122,6 +122,7 @@ namespace Horo::Application::Internal {
         if (state == Paused) {
             composition_.session.RequestHapticCancellation();
             RevokeEyeGaze();
+            RevokePlaneCapture();
         }
         if (state == Idle || state == Stopping || state == Failed)
             RevokeSource();
@@ -134,6 +135,7 @@ namespace Horo::Application::Internal {
         input_.admitted = false;
         tracking_.Revoke();
         RevokeEyeGaze();
+        RevokePlaneCapture();
         composition_.session.RequestHapticCancellation();
         if (busy_) {
             if (scene_ && !scene_->activated)
@@ -214,6 +216,7 @@ namespace Horo::Application::Internal {
         if (observed.actionsInterrupted) {
             tracking_.Revoke();
             RevokeEyeGaze();
+            RevokePlaneCapture();
             input_.neutralPending = true;
         }
         const bool invalidateOutput = observed.actionsInterrupted || observed.bindingsChanged;

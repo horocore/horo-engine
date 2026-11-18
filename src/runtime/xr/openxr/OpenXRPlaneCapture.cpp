@@ -336,6 +336,12 @@ namespace Horo::XR::OpenXRInternal {
         return Result<void>::Success();
     }
 
+    /** @copydoc OpenXRPlaneCapture::Revoke */
+    void OpenXRPlaneCapture::Revoke() noexcept {
+        if (std::this_thread::get_id() == lane_)
+            publication_.Revoke();
+    }
+
     /** @copydoc OpenXRPlaneCapture::Close */
     Result<void> OpenXRPlaneCapture::Close() {
         if (std::this_thread::get_id() != lane_ || busy_)

@@ -301,6 +301,58 @@ namespace Horo::Application::Internal {
         return snapshot ? composition_.session.ReadEyeGaze(*snapshot) : std::nullopt;
     }
 
+    /** @copydoc OpenXRPlayHost::ReadPlaneObservations */
+    Result<XR::XRPlaneSnapshot> OpenXRPlayHost::ReadPlaneObservations() const {
+        using Outcome = Result<XR::XRPlaneSnapshot>;
+        if (std::this_thread::get_id() != lane_ || closing_ || busy_ || eventsPending_ || !input_.admitted ||
+            input_.play != Editor::EditorPlayState::Playing || !sessions_.Snapshot().admitsActions)
+            return Outcome::Failure(MakeError(XR::XRErrors::OperationUnavailable));
+        const auto *tracking = tracking_.Current();
+        return tracking ? composition_.session.ReadPlaneObservations(*tracking)
+                        : Outcome::Failure(MakeError(XR::XRErrors::TrackingSnapshotStale));
+    }
+
+    /** @copydoc Editor::IEditorXrPlaneCapturePreview::ReadPlaneCaptureState */
+    Editor::EditorXrPlaneCaptureState OpenXRPlayHost::ReadPlaneCaptureState() const noexcept {
+        using enum Editor::EditorXrPlaneCaptureState;
+        if (std::this_thread::get_id() != lane_ || closing_ || busy_ || instanceLost_)
+            return Unavailable;
+        if (planesArmed_)
+            return Armed;
+        if (SetupIdle() && composition_.session.MayArmPlaneCapture())
+            return Ready;
+        if (eventsPending_ || !input_.admitted || input_.play != Editor::EditorPlayState::Playing || !sessions_.Snapshot().admitsActions)
+            return Unavailable;
+        switch (composition_.session.PlaneCaptureAvailability()) {
+            case XR::XRCapabilityState::Available:
+                return Tracking;
+            case XR::XRCapabilityState::TemporarilyUnavailable:
+                return WaitingForSample;
+            default:
+                return Unavailable;
+        }
+    }
+
+    /** @copydoc Editor::IEditorXrPlaneCapturePreview::ArmPlaneCapture */
+    Result<void> OpenXRPlayHost::ArmPlaneCapture() {
+        if (auto lane = Lane(); lane.HasError())
+            return lane;
+        if (!SetupIdle())
+            return Result<void>::Failure(MakeError(XR::XRErrors::OperationUnavailable));
+        if (!composition_.session.MayArmPlaneCapture())
+            return Result<void>::Failure(MakeError(XR::XRErrors::OperationUnsupported));
+        planesArmed_ = true;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc Editor::IEditorXrPlaneCapturePreview::RevokePlaneCapture */
+    void OpenXRPlayHost::RevokePlaneCapture() noexcept {
+        if (std::this_thread::get_id() != lane_)
+            return;
+        planesArmed_ = false;
+        composition_.session.RevokePlaneCapture();
+    }
+
     /** @copydoc Editor::IEditorXrEyeGazePreview::ReadEyeGazeState */
     Editor::EditorXrEyeGazeState OpenXRPlayHost::ReadEyeGazeState() const noexcept {
         using enum Editor::EditorXrEyeGazeState;

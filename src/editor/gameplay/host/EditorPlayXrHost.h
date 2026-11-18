@@ -220,6 +220,27 @@ namespace Horo::Editor {
         virtual void RevokeEyeGaze() noexcept = 0;
     };
 
+    /** @brief Redacted state of an explicitly consented spatial plane preview. */
+    enum class EditorXrPlaneCaptureState : std::uint8_t {
+        Unavailable,
+        Ready,
+        Armed,
+        WaitingForSample,
+        Tracking
+    };
+
+    /** @brief Grants spatial plane capture to one Play session. Exposes no room geometry to Setup. */
+    class IEditorXrPlaneCapturePreview {
+    public:
+        virtual ~IEditorXrPlaneCapturePreview() = default;
+        /** @return Redacted state for the current operator consent. */
+        [[nodiscard]] virtual EditorXrPlaneCaptureState ReadPlaneCaptureState() const noexcept = 0;
+        /** @return A one-use in-memory grant or a typed policy/lifecycle rejection. */
+        [[nodiscard]] virtual Result<void> ArmPlaneCapture() = 0;
+        /** @brief Revokes armed or live consent and withdraws geometry immediately. */
+        virtual void RevokePlaneCapture() noexcept = 0;
+    };
+
     /** @brief Borrowed editor setup and optional preview composition. */
     class IEditorXrSetup {
     public:
@@ -232,6 +253,11 @@ namespace Horo::Editor {
 
         /** @return Optional eye pointing preview protected by an explicit operator grant. */
         [[nodiscard]] virtual IEditorXrEyeGazePreview *EyeGazePreview() noexcept {
+            return nullptr;
+        }
+
+        /** @return Optional consent control for the selected native plane capture provider. */
+        [[nodiscard]] virtual IEditorXrPlaneCapturePreview *PlaneCapturePreview() noexcept {
             return nullptr;
         }
 

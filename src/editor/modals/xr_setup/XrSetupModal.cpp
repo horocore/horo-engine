@@ -333,6 +333,32 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc XrSetupModal::DrawPlaneCapturePreview */
+    void XrSetupModal::DrawPlaneCapturePreview(IEditorXrPlaneCapturePreview &preview) {
+        using enum EditorXrPlaneCaptureState;
+        const auto state = preview.ReadPlaneCaptureState();
+        if (state == Unavailable && !planesRejected_)
+            return;
+        const auto &fonts = context_.theme.fonts;
+        constexpr std::array keys{"planes_rejected", "planes_scope", "planes_armed", "planes_waiting", "planes_tracking"};
+        const auto index = static_cast<std::size_t>(state);
+        if (index >= keys.size())
+            return;
+        Ui::WrappedText(ImGui::GetContentRegionAvail().x, Text(planesRejected_ ? "planes_rejected" : keys[index]), Theme::Muted(), fonts);
+        const bool canArm = state == Ready;
+        if (state != Unavailable && Ui::Button({.label = Text(canArm ? "planes_allow" : "planes_revoke").c_str(),
+                                                .variant = Ui::ButtonVariant::Secondary,
+                                                .font = fonts.sans,
+                                                .style = {.width = Ui::StyleWidth::FillAvailable}})) {
+            if (canArm)
+                planesRejected_ = preview.ArmPlaneCapture().HasError();
+            else {
+                preview.RevokePlaneCapture();
+                planesRejected_ = false;
+            }
+        }
+    }
+
     ModalFrameResult XrSetupModal::Draw() {
         const auto &fonts = context_.theme.fonts;
         Ui::ScopedModalShell shell({.id = "XrSetup",
@@ -361,6 +387,8 @@ namespace Horo::Editor {
         DrawInspection(setup_ ? setup_->ReadInspection() : EditorXrInspectionSnapshot{});
         if (auto *preview = setup_ ? setup_->HapticPreview() : nullptr)
             DrawHapticPreview(*preview);
+        if (auto *preview = setup_ ? setup_->PlaneCapturePreview() : nullptr)
+            DrawPlaneCapturePreview(*preview);
         if (auto *preview = setup_ ? setup_->EyeGazePreview() : nullptr)
             DrawEyeGazePreview(*preview);
         ImGui::EndChild();

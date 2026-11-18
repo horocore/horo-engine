@@ -4,9 +4,13 @@
 #include "XRTrackingPublication.h"
 
 #include <algorithm>
+#include <limits>
 
 namespace Horo::Application::Internal {
     namespace {
+        constexpr XR::XRPlaneLimits PlaneCapturePolicy{XR::XRPlaneSnapshot::MaximumPlanes, Duration::FromMilliseconds(250),
+                                                       Duration::FromMilliseconds(1500)};
+
         /** @brief Maps the already-normalized native pose vocabulary to its exact issuer capability. */
         XR::XRTrackedDeviceCapability NativePoseCapability(const XR::XRTrackedPoseKind kind) {
             using enum XR::XRTrackedDeviceCapability;
@@ -353,6 +357,8 @@ namespace Horo::Application::Internal {
             input_.profiles = actions.Value().Profiles();
             if (input_.gazeAllowed)
                 input_.gaze = std::move(gaze);
+            if (const auto *tracking = publication.Current())
+                AdvancePlaneCapture(*tracking);
             if (const auto *published = publication.Current(); published && input_.gaze)
                 input_.gazeRevision = published->Revision();
         }
@@ -501,6 +507,131 @@ namespace Horo::Application::Internal {
         return input_.native->LocatePresentation(candidate, time, system_->primaryViewCount);
     }
 
+    /** @copydoc OpenXRApplicationSession::MayArmPlaneCapture */
+    bool OpenXRApplicationSession::MayArmPlaneCapture() const noexcept {
+        return settings_.AllowsPlaneCapturePreview() && system_ && system_->planes.state == XRCapabilityState::Available;
+    }
+
+    /** @copydoc OpenXRApplicationSession::SetPlaneCaptureConsent */
+    void OpenXRApplicationSession::SetPlaneCaptureConsent(const bool allowed) noexcept {
+        planes_.allowed = allowed && MayArmPlaneCapture();
+    }
+
+    /** @copydoc OpenXRApplicationSession::RevokePlaneCapture */
+    void OpenXRApplicationSession::RevokePlaneCapture() noexcept {
+        planes_.allowed = false;
+        planes_.scope.reset();
+        planes_.latestCutoff = {};
+        planes_.publishedAt = {};
+        if (planes_.native)
+            planes_.native->Revoke();
+    }
+
+    /** @copydoc OpenXRApplicationSession::RetirePlaneCapture */
+    Result<void> OpenXRApplicationSession::RetirePlaneCapture() {
+        RevokePlaneCapture();
+        if (planes_.native) {
+            if (auto retired = planes_.native->Close(); retired.HasError())
+                return retired;
+            planes_.native.reset();
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRApplicationSession::ProgressPlaneRetirement */
+    Result<void> OpenXRApplicationSession::ProgressPlaneRetirement() {
+        if (!planes_.allowed && planes_.native)
+            return RetirePlaneCapture();
+        return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRApplicationSession::PlaneCaptureAvailability */
+    XRCapabilityState OpenXRApplicationSession::PlaneCaptureAvailability() const noexcept {
+        if (!planes_.allowed)
+            return XRCapabilityState::Unavailable;
+        if (planes_.publishedAt.IsValid() && planes_.latestCutoff >= planes_.publishedAt &&
+            planes_.latestCutoff.Nanoseconds() - planes_.publishedAt.Nanoseconds() <= PlaneCapturePolicy.maximumAge.ToNanoseconds())
+            return XRCapabilityState::Available;
+        return XRCapabilityState::TemporarilyUnavailable;
+    }
+
+    /** @copydoc OpenXRApplicationSession::ReadPlaneObservations */
+    Result<XRPlaneSnapshot> OpenXRApplicationSession::ReadPlaneObservations(const XRTrackingSnapshot &tracking) const {
+        using Outcome = Result<XRPlaneSnapshot>;
+        if (std::this_thread::get_id() != lane_ || !planes_.allowed || !planes_.scope || !planes_.native)
+            return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
+        if (tracking.Focus() != XRTrackingFocusState::Focused || tracking.State() != XRTrackingState::Active ||
+            tracking.Session() != planes_.scope->session || tracking.SampledAt() != planes_.latestCutoff)
+            return Outcome::Failure(MakeError(XRErrors::TrackingSnapshotStale));
+        const auto scope = *planes_.scope;
+        const auto now = planes_.latestCutoff;
+        auto result = planes_.native->Read(scope, now);
+        if (!planes_.allowed || planes_.scope != scope)
+            return Outcome::Failure(MakeError(XRErrors::PermissionDenied));
+        return result;
+    }
+
+    /** @copydoc OpenXRApplicationSession::AdvancePlaneCapture */
+    void OpenXRApplicationSession::AdvancePlaneCapture(const XRTrackingSnapshot &tracking) {
+        if (!planes_.allowed)
+            return;
+        if (tracking.Focus() != XRTrackingFocusState::Focused || tracking.State() != XRTrackingState::Active) {
+            if (planes_.native)
+                RevokePlaneCapture();
+            return;
+        }
+        const auto space = WorldSpace(tracking.Session());
+        if (space.HasError()) {
+            RevokePlaneCapture();
+            return;
+        }
+        const auto world = BorrowWorldSpace(space.Value());
+        if (world.HasError()) {
+            RevokePlaneCapture();
+            return;
+        }
+        if (!planes_.allowed)
+            return;
+        const auto now = tracking.SampledAt();
+        if (!planes_.native) {
+            if (!StartPlaneCapture(tracking.Session(), space.Value(), now))
+                RevokePlaneCapture();
+            return;
+        }
+        if (!planes_.scope) {
+            RevokePlaneCapture();
+            return;
+        }
+        const XRPlaneScope scope{tracking.Session(), space.Value(), planes_.scope->grant};
+        const auto progress = planes_.native->Advance(scope, world.Value(), now);
+        if (progress.HasError()) {
+            RevokePlaneCapture();
+            return;
+        }
+        if (!planes_.allowed)
+            return;
+        planes_.latestCutoff = now;
+        if (progress.Value())
+            planes_.publishedAt = now;
+    }
+
+    /** @copydoc OpenXRApplicationSession::StartPlaneCapture */
+    bool OpenXRApplicationSession::StartPlaneCapture(const XRSessionId &session, const XRCoordinateSpace &space, XRRuntimeTime now) {
+        if (planes_.lastGrant == std::numeric_limits<std::uint64_t>::max())
+            return false;
+        const auto grant = XRPlaneGrant::Create(++planes_.lastGrant);
+        if (grant.HasError())
+            return false;
+        planes_.native.emplace(*native_);
+        const XRPlaneScope scope{session, space, grant.Value()};
+        if (const auto started = planes_.native->Start(selection_.attempt, scope, PlaneCapturePolicy, now);
+            started.HasError() || !planes_.allowed)
+            return false;
+        planes_.scope = scope;
+        planes_.latestCutoff = now;
+        return true;
+    }
+
     /** @copydoc OpenXRApplicationSession::RevokeEyeGaze */
     void OpenXRApplicationSession::RevokeEyeGaze() noexcept {
         input_.gazeAllowed = false;
@@ -529,6 +660,7 @@ namespace Horo::Application::Internal {
         HORO_INVARIANT_MSG(std::this_thread::get_id() == lane_, "XR Input retirement requires its owner lane");
         RequestHapticCancellation();
         RevokeEyeGaze();
+        RevokePlaneCapture();
         input_.projection.reset();
         input_.handCutoff.reset();
     }

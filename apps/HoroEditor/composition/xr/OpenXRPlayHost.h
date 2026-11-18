@@ -95,6 +95,7 @@ namespace Horo::Application::Internal {
     class OpenXRPlayHost final : public Editor::IEditorPlayXrHost,
                                  public Editor::IEditorXrSetup,
                                  public Editor::IEditorXrHapticPreview,
+                                 public Editor::IEditorXrPlaneCapturePreview,
                                  public Editor::IEditorXrEyeGazePreview,
                                  private XR::RuntimeInternal::IXRSessionRetirementResources,
                                  private XR::IXRBindingNeutralizer {
@@ -140,6 +141,14 @@ namespace Horo::Application::Internal {
         /** @brief Runs one admitted preview between RuntimeHost frames and progresses its scoped cancellation. */
         void PumpHapticPreview();
 
+        [[nodiscard]] Editor::IEditorXrPlaneCapturePreview *PlaneCapturePreview() noexcept override {
+            return this;
+        }
+
+        [[nodiscard]] Editor::EditorXrPlaneCaptureState ReadPlaneCaptureState() const noexcept override;
+        [[nodiscard]] Result<void> ArmPlaneCapture() override;
+        void RevokePlaneCapture() noexcept override;
+
         [[nodiscard]] Editor::IEditorXrEyeGazePreview *EyeGazePreview() noexcept override {
             return this;
         }
@@ -149,6 +158,8 @@ namespace Horo::Application::Internal {
         void RevokeEyeGaze() noexcept override;
         /** @return Only the exact current Play pointing sample, gated by the focused cutoff and consent. */
         [[nodiscard]] std::optional<XR::XRPoseSample> ReadEyeGaze() const noexcept;
+        /** @return Live authorized geometry for the current calibrated Play cutoff or typed unavailability. */
+        [[nodiscard]] Result<XR::XRPlaneSnapshot> ReadPlaneObservations() const;
         /** @brief Supplies bounded, current runtime prerequisites to the separate device qualification runner. */
         [[nodiscard]] Result<OpenXRPackagedPreflight> ReadDeviceQualificationPreflight() const;
         [[nodiscard]] Result<void> AttachInput(const Input::InputActionCollection &input,
@@ -382,7 +393,8 @@ namespace Horo::Application::Internal {
         [[nodiscard]] bool HasCurrentAssignedInput() const;
         std::optional<HapticPreviewRecord> hapticPreview_;
         std::uint64_t nextHapticPreview_{};
-        bool gazeArmed_{}; /**< In-memory grant consumed by one actual Play preparation. */
+        bool planesArmed_{}; /**< One-use Setup consent, consumed by an actual Play preparation. */
+        bool gazeArmed_{};   /**< In-memory grant consumed by one actual Play preparation. */
 
         struct InputState final {
             Input::InputRouter *router{};
