@@ -88,13 +88,10 @@ namespace Horo::Application::PrefabCookDetail {
                 const auto document = ReadDocument(source);
                 if (document.HasError())
                     return Result<void>::Failure(document.ErrorValue());
-                const auto cooked = CookedUiDocument::Decode(payload);
+                const auto cooked = CookedUiDocument::Cook(document.Value());
                 if (cooked.HasError())
                     return Result<void>::Failure(cooked.ErrorValue());
-                if (cooked.Value().Id() != document.Value().Id() || cooked.Value().SourceRevision() != document.Value().Revision() ||
-                    cooked.Value().SchemaVersion() != document.Value().SchemaVersion() ||
-                    !std::ranges::equal(cooked.Value().Canvases(), document.Value().Canvases()) ||
-                    !std::ranges::equal(cooked.Value().Dependencies(), document.Value().Dependencies()))
+                if (!std::ranges::equal(cooked.Value().Payload(), payload))
                     return Result<void>::Failure(MakeError(UiErrors::CookedPayloadMalformed));
                 return Result<void>::Success();
             }
