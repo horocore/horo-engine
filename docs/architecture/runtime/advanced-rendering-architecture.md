@@ -290,6 +290,10 @@ reconstruction-owned history. Histories are scoped to view, provider, mode,
 extent, input, color and device generations and advance only after a successful
 real frame.
 Camera cuts, missing predecessors and incompatible generations reset explicitly.
+Provider adapters admit borrowed scene textures, exposure and graph output through
+`ReconstructionFrameRequest`. The Temporal History store checks the exact
+compatibility and resident resource owner before opening a real-frame attempt.
+An explicit reset survives abandonment until the next successful publication.
 
 ## Upscaling
 

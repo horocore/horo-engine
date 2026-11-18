@@ -1,9 +1,11 @@
+#include "Horo/Runtime/Render/ReconstructionFrame.h"
 #include "Horo/Runtime/Render/TemporalHistory.h"
 #include "Horo/Runtime/Render/TemporalHistoryErrors.h"
 
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <limits>
 #include <string>
 #include <thread>
 #include <utility>
@@ -59,7 +61,174 @@ namespace {
         REQUIRE_FALSE(error.message.empty());
         REQUIRE_FALSE(descriptor.remediationHint.empty());
     }
+
+    RenderCapabilitySnapshot ReconstructionCapabilities() {
+        RenderCapabilitySnapshot capabilities{.deviceIncarnation = 1, .capabilityRevision = 1};
+        capabilities.features.Enable(RenderCapability::TextureResources);
+        capabilities.limits.maxTextureDimension2D = 4096;
+        capabilities.formats.sampleCountMask = 1 << 1;
+        capabilities.formats.usages.fill(RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment | RenderTextureUsage::Storage);
+        return capabilities;
+    }
+
+    ReconstructionFrameRequest ReconstructionRequest(const std::uint64_t frameId = 1, const std::uint64_t predecessor = 0) {
+        using enum RenderTextureFormat;
+        const auto compatibility = Compatibility();
+        const auto input = [&](std::uint32_t slot, RenderTextureFormat format) {
+            return ReconstructionTextureInput{{{9}, slot, 1},
+                                              {.extent = compatibility.renderExtent,
+                                               .format = format,
+                                               .usage = RenderTextureUsage::Sampled},
+                                              compatibility.view,
+                                              frameId};
+        };
+        return {.compatibility = compatibility,
+                .resourceOwner = {9},
+                .timing = {frameId, predecessor, 12, std::chrono::milliseconds{16}, 1},
+                .currentJitterUv = {0.001F, 0.002F},
+                .previousJitterUv = {-0.001F, 0.001F},
+                .color = input(3, Rgba16Float),
+                .positiveLinearDepth = input(4, R32Float),
+                .motion = input(5, Rg16Float),
+                .masks = {.reactive = ReconstructionMaskInput{input(6, R8Unorm), {{1}, {1}}}},
+                .output = {.descriptor = {.extent = compatibility.targetExtent,
+                                          .format = Rgba16Float,
+                                          .usage = RenderTextureUsage::RenderAttachment}}};
+    }
 }  // namespace
+
+TEST_CASE("Reconstruction accepts typed temporal and spatial input on the admitted device", "[runtime][renderer][reconstruction]") {
+    const auto capabilities = ReconstructionCapabilities();
+    auto request = ReconstructionRequest();
+    REQUIRE(ValidateReconstructionFrame(request, capabilities).HasValue());
+    request = ReconstructionRequest(2, 1);
+    request.exposure = ReconstructionExposureBuffers{request.compatibility.view,
+                                                     request.compatibility.exposureGeneration,
+                                                     {{9}, 1, 1},
+                                                     RenderBufferHandle{{9}, 2, 1}};
+    REQUIRE(ValidateReconstructionFrame(request, capabilities).HasValue());
+    request.kind = ReconstructionKind::Spatial;
+    request.positiveLinearDepth.reset();
+    request.motion.reset();
+    request.colorStage = ReconstructionColorStage::Exposed;
+    REQUIRE(ValidateReconstructionFrame(request, capabilities).HasValue());
+    auto store = Store();
+    const auto history = AddHistory(store);
+    const auto rejected = BeginTemporalReconstructionFrame(request, capabilities, store, history);
+    REQUIRE(rejected.HasError());
+    RequireErrorCode(rejected.ErrorValue(), ReconstructionErrors::InvalidFrame);
+}
+
+TEST_CASE("Reconstruction rejects malformed or unsupported data independently of provider", "[runtime][renderer][reconstruction]") {
+    auto capabilities = ReconstructionCapabilities();
+    auto request = ReconstructionRequest(2, 1);
+    const ErrorCodeDescriptor *expected = &ReconstructionErrors::IncompatibleInput;
+    SECTION("Display transfer format cannot stand in for scene-linear color") {
+        request.color.descriptor.format = RenderTextureFormat::Rgba8UnormSrgb;
+    }
+    SECTION("Color from another real frame") {
+        request.color.frameId = 1;
+    }
+    SECTION("Same numeric frame in another view cannot supply a guide") {
+        ++request.motion->view.value;
+    }
+    SECTION("Device depth cannot be inferred as linear meters") {
+        request.positiveLinearDepth->descriptor.format = RenderTextureFormat::Depth32Float;
+    }
+    SECTION("Motion is required for a temporal mode") {
+        request.motion.reset();
+        expected = &ReconstructionErrors::MissingGuides;
+    }
+    SECTION("Mask requires valid producer evidence") {
+        request.masks.reactive->producer = {};
+    }
+    SECTION("Distinct semantics cannot reuse a slot's stale or current generation") {
+        request.masks.reactive->image.texture.slot = request.positiveLinearDepth->texture.slot;
+        ++request.masks.reactive->image.texture.generation;
+    }
+    SECTION("Exposure rescale must be representable") {
+        request.exposure = ReconstructionExposureScales{std::numeric_limits<float>::max(), 0.5F};
+    }
+    SECTION("Temporal GPU exposure requires exact previous input when history can be read") {
+        request.exposure = ReconstructionExposureBuffers{request.compatibility.view, request.compatibility.exposureGeneration, {{9}, 1, 1}};
+    }
+    SECTION("Projection and jitter are explicit and finite") {
+        request.currentJitterUv.x = std::numeric_limits<float>::infinity();
+        expected = &ReconstructionErrors::InvalidFrame;
+    }
+    SECTION("A non-current device cannot admit this frame") {
+        ++capabilities.deviceIncarnation;
+        expected = &ReconstructionErrors::InvalidFrame;
+    }
+    SECTION("Negative source time is not a real-frame interval") {
+        request.timing.realFrameDelta = std::chrono::nanoseconds{-1};
+        expected = &ReconstructionErrors::InvalidFrame;
+    }
+    SECTION("An unknown reset cause cannot open a pending attempt") {
+        request.reset = static_cast<TemporalHistoryResetCause>(255);
+        expected = &TemporalHistoryErrors::InvalidResetCause;
+    }
+    SECTION("Output requires compatible graph write usage") {
+        request.output.writeUsage = RenderGraphUsageKind::Storage;
+        expected = &ReconstructionErrors::IncompatibleOutput;
+    }
+    SECTION("A resident output cannot alias a sampled input") {
+        request.output.lifetime = RenderGraphResourceClass::Persistent;
+        request.output.resident = request.color.texture;
+        expected = &ReconstructionErrors::IncompatibleOutput;
+    }
+    SECTION("Well-formed output beyond the backend extent limit has no implicit fallback") {
+        capabilities.limits.maxTextureDimension2D = request.compatibility.renderExtent.width;
+        expected = &ReconstructionErrors::UnsupportedResource;
+    }
+    const auto rejected = ValidateReconstructionFrame(request, capabilities);
+    REQUIRE(rejected.HasError());
+    RequireErrorCode(rejected.ErrorValue(), *expected);
+}
+
+TEST_CASE("Reconstruction history rejects stale input and keeps an abandoned cut fenced", "[runtime][renderer][reconstruction]") {
+    const auto capabilities = ReconstructionCapabilities();
+    auto store = Store();
+    const auto history = AddHistory(store);
+    const auto first = BeginTemporalReconstructionFrame(ReconstructionRequest(), capabilities, store, history);
+    REQUIRE(first.HasValue());
+    CHECK(first.Value().resetCause == TemporalHistoryResetCause::FirstFrame);
+    REQUIRE(store.Publish(first.Value()).HasValue());
+
+    auto mismatched = ReconstructionRequest(2, 1);
+    ++mismatched.compatibility.colorGeneration;
+    const auto stale = BeginTemporalReconstructionFrame(mismatched, capabilities, store, history);
+    REQUIRE(stale.HasError());
+    RequireErrorCode(stale.ErrorValue(), TemporalHistoryErrors::ResetRequired);
+    const std::array foreignResources{RenderTextureHandle{{10}, 1, 1}};
+    const auto foreignHistory = store.Add(Compatibility(), foreignResources);
+    REQUIRE(foreignHistory.HasValue());
+    const auto foreign = BeginTemporalReconstructionFrame(ReconstructionRequest(2, 1), capabilities, store, foreignHistory.Value());
+    REQUIRE(foreign.HasError());
+    RequireErrorCode(foreign.ErrorValue(), TemporalHistoryErrors::ResetRequired);
+
+    const auto second = BeginTemporalReconstructionFrame(ReconstructionRequest(2, 1), capabilities, store, history);
+    REQUIRE(second.HasValue());
+    CHECK(second.Value().canReadPrevious);
+    REQUIRE(store.Publish(second.Value()).HasValue());
+
+    auto cut = ReconstructionRequest(3, 2);
+    cut.reset = TemporalHistoryResetCause::CameraCut;
+    cut.exposure = ReconstructionExposureBuffers{cut.compatibility.view, cut.compatibility.exposureGeneration, {{9}, 1, 1}};
+    const auto interrupted = BeginTemporalReconstructionFrame(cut, capabilities, store, history);
+    REQUIRE(interrupted.HasValue());
+    CHECK_FALSE(interrupted.Value().canReadPrevious);
+    REQUIRE(store.Abandon(interrupted.Value()).HasValue());
+    const auto next = BeginTemporalReconstructionFrame(ReconstructionRequest(4, 2), capabilities, store, history);
+    REQUIRE(next.HasValue());
+    CHECK(next.Value().resetCause == TemporalHistoryResetCause::CameraCut);
+    CHECK(next.Value().contentGeneration == interrupted.Value().contentGeneration);
+    CHECK_FALSE(next.Value().canReadPrevious);
+    REQUIRE(store.Publish(next.Value()).HasValue());
+    REQUIRE(store.Retire(history).HasValue());
+    REQUIRE(store.Shutdown().HasValue());
+    CHECK(BeginTemporalReconstructionFrame(ReconstructionRequest(5, 4), capabilities, store, history).HasError());
+}
 
 TEST_CASE("Temporal history identities and capacities are bounded", "[runtime][renderer][temporal-history]") {
     REQUIRE(TemporalHistoryOwnerId{1}.IsValid());

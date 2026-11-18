@@ -66,6 +66,7 @@ set(HORO_RENDER_API_SOURCES
     runtime/renderer/api/PostProcessVolumes.cpp
     runtime/renderer/api/PostProcessGraph.cpp
     runtime/renderer/api/PostProcessGraphAdmission.cpp
+    runtime/renderer/api/ReconstructionFrame.cpp
     runtime/renderer/api/MotionHistory.cpp
     runtime/renderer/api/MotionHistoryErrors.cpp
     runtime/renderer/api/MaterialBinding.cpp

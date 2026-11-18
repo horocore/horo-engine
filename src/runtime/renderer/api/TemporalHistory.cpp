@@ -37,11 +37,6 @@ namespace Horo::Render {
             return Result<TemporalHistoryOwnerId>::Failure(MakeError(TemporalHistoryErrors::OwnerExhausted));
         }
 
-        /** @brief Reports whether a reset cause belongs to the public contract. */
-        [[nodiscard]] constexpr bool IsKnown(const TemporalHistoryResetCause cause) noexcept {
-            return static_cast<std::uint8_t>(cause) <= static_cast<std::uint8_t>(TemporalHistoryResetCause::ProviderRequested);
-        }
-
         /** @brief Validates the exact bounded resident texture generations adopted by a history. */
         [[nodiscard]] bool AreResourcesValid(const std::span<const RenderTextureHandle> resources,
                                              const TemporalHistoryLimits &limits) noexcept {
@@ -192,6 +187,18 @@ namespace Horo::Render {
     /** @copydoc TemporalHistoryStore::BeginFrame */
     Result<TemporalHistoryFrame> TemporalHistoryStore::BeginFrame(const TemporalHistoryHandle history, const std::uint64_t frameId,
                                                                   const std::uint64_t predecessorFrameId) {
+        return Begin(history, frameId, predecessorFrameId, nullptr);
+    }
+
+    /** @copydoc TemporalHistoryStore::BeginFrame(const TemporalHistoryFrameRequest &) */
+    Result<TemporalHistoryFrame> TemporalHistoryStore::BeginFrame(const TemporalHistoryFrameRequest &request) {
+        return Begin(request.history, request.frameId, request.predecessorFrameId, &request);
+    }
+
+    /** @copydoc TemporalHistoryStore::Begin */
+    Result<TemporalHistoryFrame> TemporalHistoryStore::Begin(const TemporalHistoryHandle history, const std::uint64_t frameId,
+                                                             const std::uint64_t predecessorFrameId,
+                                                             const TemporalHistoryFrameRequest *expected) {
         if (auto state = ValidateThreadAndState(); state.HasError())
             return Result<TemporalHistoryFrame>::Failure(state.ErrorValue());
         auto resolved = Resolve(history);
@@ -200,10 +207,20 @@ namespace Horo::Render {
         Record &record = *resolved.Value();
         if (auto valid = ValidateFrameRequest(record, frameId); valid.HasError())
             return Result<TemporalHistoryFrame>::Failure(valid.ErrorValue());
+        if (expected && (!expected->compatibility.IsValid() || !expected->resourceOwner.IsValid() || predecessorFrameId >= frameId))
+            return Result<TemporalHistoryFrame>::Failure(MakeError(TemporalHistoryErrors::InvalidFrame));
+        if (expected && (expected->compatibility != record.compatibility ||
+                         std::ranges::any_of(record.resources, [expected](const RenderTextureHandle resource) {
+            return resource.owner != expected->resourceOwner;
+        })))
+            return Result<TemporalHistoryFrame>::Failure(MakeError(TemporalHistoryErrors::ResetRequired));
+        const auto reset = expected ? expected->reset : std::nullopt;
+        if (reset && !IsKnownTemporalHistoryResetCause(*reset))
+            return Result<TemporalHistoryFrame>::Failure(MakeError(TemporalHistoryErrors::InvalidResetCause));
         if (record.nextAttempt == std::numeric_limits<std::uint64_t>::max())
             return Result<TemporalHistoryFrame>::Failure(MakeError(TemporalHistoryErrors::InvalidFrame));
 
-        std::optional<TemporalHistoryResetCause> cause = record.pendingReset;
+        std::optional<TemporalHistoryResetCause> cause = reset ? reset : record.pendingReset;
         const bool predecessorMatches = record.valid && predecessorFrameId == record.lastPublishedFrame;
         if (!cause.has_value() && !predecessorMatches)
             cause = TemporalHistoryResetCause::MissingPredecessor;
@@ -220,6 +237,8 @@ namespace Horo::Render {
             record.pendingAttempt = record.nextAttempt;
             record.pendingCanReadPrevious = frame.canReadPrevious;
             record.pendingFrameReset = frame.resetCause;
+            if (reset)
+                record.pendingReset = reset;
             ++record.nextAttempt;
             return Result<TemporalHistoryFrame>::Success(std::move(frame));
         } catch (const std::bad_alloc &) {
@@ -271,7 +290,7 @@ namespace Horo::Render {
                                              const std::span<const RenderTextureHandle> resources, const TemporalHistoryResetCause cause) {
         if (auto state = ValidateThreadAndState(); state.HasError())
             return state;
-        if (!IsKnown(cause))
+        if (!IsKnownTemporalHistoryResetCause(cause))
             return Result<void>::Failure(MakeError(TemporalHistoryErrors::InvalidResetCause));
         if (!compatibility.IsValid() || !AreResourcesValid(resources, m_limits))
             return Result<void>::Failure(MakeError(TemporalHistoryErrors::InvalidDescriptor));

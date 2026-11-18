@@ -104,6 +104,13 @@ namespace Horo::Render {
         ProviderRequested,
     };
 
+    /** @brief Tests whether a reset cause is declared in the portable contract.
+     * @param cause Candidate cause. @return True when the cause can be admitted.
+     */
+    [[nodiscard]] constexpr bool IsKnownTemporalHistoryResetCause(TemporalHistoryResetCause cause) noexcept {
+        return static_cast<std::uint8_t>(cause) <= static_cast<std::uint8_t>(TemporalHistoryResetCause::ProviderRequested);
+    }
+
     /** @brief Generation-complete compatibility identity for one temporal history. */
     struct TemporalHistoryCompatibility {
         RenderViewId view;
@@ -175,6 +182,16 @@ namespace Horo::Render {
         std::vector<RenderTextureHandle> resources;
     };
 
+    /** @brief Exact compatibility and optional invalidation supplied by a real-frame consumer. */
+    struct TemporalHistoryFrameRequest final {
+        TemporalHistoryHandle history;
+        TemporalHistoryCompatibility compatibility;
+        RenderResourceOwnerId resourceOwner; /**< Exact resident texture owner expected by the real frame. */
+        std::uint64_t frameId{};
+        std::uint64_t predecessorFrameId{};
+        std::optional<TemporalHistoryResetCause> reset;
+    };
+
     /**
      * @brief Owner-thread store for bounded view-scoped temporal histories.
      *
@@ -215,6 +232,13 @@ namespace Horo::Render {
          */
         [[nodiscard]] Result<TemporalHistoryFrame> BeginFrame(TemporalHistoryHandle history, std::uint64_t frameId,
                                                               std::uint64_t predecessorFrameId);
+
+        /** @brief Begins an attempt only when the retained history matches the consumer's complete compatibility.
+         * @param request Exact history and resource owners, frame sequence and optional current-frame invalidation.
+         * @return Owning frame attempt or typed reset/sequence/lifecycle failure. Rejection leaves no attempt.
+         * @details An explicit reset disables prior reads until successful publication. Abandon does not publish a new generation.
+         */
+        [[nodiscard]] Result<TemporalHistoryFrame> BeginFrame(const TemporalHistoryFrameRequest &request);
 
         /**
          * @brief Publishes a successfully completed real frame as the next history generation.
@@ -271,6 +295,9 @@ namespace Horo::Render {
         [[nodiscard]] Result<Record *> Resolve(TemporalHistoryHandle history);
         [[nodiscard]] Result<Record *> ResolveIdle(TemporalHistoryHandle history);
         [[nodiscard]] Result<Record *> ResolvePending(const TemporalHistoryFrame &frame);
+        /** @brief Opens one owner-thread attempt with optional exact consumer evidence. */
+        [[nodiscard]] Result<TemporalHistoryFrame> Begin(TemporalHistoryHandle history, std::uint64_t frameId,
+                                                         std::uint64_t predecessorFrameId, const TemporalHistoryFrameRequest *expected);
         [[nodiscard]] Result<void> CompletePending(const TemporalHistoryFrame &frame, PendingCompletion completion);
         [[nodiscard]] Result<void> ValidateFrameRequest(const Record &record, std::uint64_t frameId) const;
         [[nodiscard]] Result<void> ValidatePendingFrame(const TemporalHistoryFrame &frame, const Record &record) const;

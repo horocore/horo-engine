@@ -1331,6 +1331,7 @@ Horo/Runtime/Render/VfxGraphScheduling.h
     Horo/Runtime/Render/ExposureGpuWorkload.h
     Horo/Runtime/Render/PostProcessVolumes.h
     Horo/Runtime/Render/PostProcessGraph.h
+    Horo/Runtime/Render/ReconstructionFrame.h
     Horo/Runtime/Render/PostProcessErrors.h
     Horo/Runtime/Render/MaterialBindingBackend.h
     Horo/Runtime/Render/MaterialBinding.h
