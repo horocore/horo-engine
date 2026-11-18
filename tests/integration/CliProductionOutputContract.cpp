@@ -599,6 +599,64 @@ namespace {
                 "malformed prefab replaced the previously committed generation");
     }
 
+    /** @brief Exercises the shipped read-only planner against the real generated migration chain. */
+    void PrefabMigrationPlanCases(ProcessFixture &process) {
+        using namespace Horo::Application;
+        TemporaryDirectory directory;
+        const auto root = std::filesystem::canonical(directory.Path());
+        const auto write = [&](const std::string_view path, const std::string_view bytes) {
+            PlatformProtocol::Fixture::WriteAt(root, path, bytes);
+        };
+        const auto read = [&](const std::string_view path) {
+            std::ifstream file(root / path, std::ios::binary);
+            Require(file.is_open(), "migration planner removed project evidence");
+            return std::string{std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{}};
+        };
+        static_cast<void>(process.Run({"prefab", "migration-plan", "--output", "json"}, 2));
+        static_cast<void>(process.Run({"prefab", "migration-plan", "--project", ".", "--output", "json"}, 2));
+        const std::vector<std::string> command{"prefab", "migration-plan", "--project", Utf8Path(root), "--output", "json"};
+        const auto *target = BuiltInReleaseCompatibilityRegistry().Find(CurrentEngineReleaseVersion());
+        Require(target != nullptr, "built-in compatibility catalog has no current release");
+        const auto targetBaseline = FormatHoroVersion(target->contractBaseline.value);
+
+        constexpr std::string_view Legacy =
+            R"({"horoVersion":"0.0.1","persistentContract":"sha256:5ef87e96e24c0a3a5e44f4dee182dbd3bfb5402e08e07aaf3d64d4a3ff24ae6d","projectId":"migration-fixture","name":"Fixture","projectVersion":"0.2.0","createdAt":"2026-07-19T00:00:00Z","settings":{"renderBackend":"opengl"}})";
+        constexpr std::string_view Authored = R"({"projectVersion":"0.0.1","objects":[]})";
+        write(".horo/project.json", Legacy);
+        write("assets/player.prefab", Authored);
+        const auto wire = Json::parse(process.Run(command, 0));
+        Envelope(wire);
+        Require(wire.at("outputSchema").at("id") == "horo.prefab.migration-plan", "prefab plan schema changed");
+        const auto &plan = wire.at("result");
+        Require(plan.at("prefabAdoptionRequired") == true && plan.at("sourceBaseline") == "0.0.1" &&
+                    plan.at("targetBaseline") == targetBaseline && plan.at("definitionCount") == 4 &&
+                    plan.at("definitionChain").get<std::string>() ==
+                        "core.project_settings.compression_defaults\ncore.authoring.navigation_network\n"
+                        "core.authoring.semantic_surfaces\ncore.authoring.platform_services_identity",
+                "prefab CLI did not project the full ordered production adoption chain");
+        Require(Json::parse(process.Run(command, 0)).at("result") == plan, "repeat planning changed the selected chain");
+        Require(read(".horo/project.json") == Legacy && read("assets/player.prefab") == Authored,
+                "prefab migration planning rewrote authored source");
+
+        write(".horo/local/migration/outstanding/journal.json", "{");
+        const auto blocked = process.Run(command, 5);
+        Require(Json::parse(blocked).at("error").at("code") == "project.migration.recovery_failed",
+                "pending recovery was overlooked during prefab planning");
+        Require(blocked.find(Utf8Path(root)) == std::string::npos && read(".horo/local/migration/outstanding/journal.json") == "{" &&
+                    read(".horo/project.json") == Legacy,
+                "prefab planning exposed native paths or modified recovery evidence");
+
+        TemporaryDirectory current;
+        const auto currentRoot = std::filesystem::canonical(current.Path());
+        PlatformProtocol::Fixture::WriteAt(currentRoot, ".horo/project.json", PlatformProtocol::Fixture::Initial().projectSource);
+        const auto currentPlan =
+            Json::parse(process.Run({"prefab", "migration-plan", "--project", Utf8Path(currentRoot), "--output", "json"}, 0)).at("result");
+        Require(currentPlan.at("prefabAdoptionRequired") == false && currentPlan.at("sourceBaseline") == targetBaseline &&
+                    currentPlan.at("targetBaseline") == targetBaseline && currentPlan.at("definitionCount") == 0 &&
+                    currentPlan.at("definitionChain") == "",
+                "compatible project reported required prefab migration");
+    }
+
     /** @brief Checks rejected exports emit no collection progress and preserve occupied destinations. */
     void RejectedBundleCases(ProcessFixture &process) {
         TemporaryDirectory directory;
@@ -630,6 +688,7 @@ int main(const int argc, char **argv) {
         JsonLinesCases(process);
         PlatformServicesCases(process);
         PrefabCookCases(process);
+        PrefabMigrationPlanCases(process);
         RejectedBundleCases(process);
         return 0;
     } catch (const std::exception &error) {

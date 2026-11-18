@@ -147,3 +147,17 @@ The host resolves built-in headless contributions without package activation.
 Projects requiring additional cooker providers or package restore evidence
 need a host that explicitly supplies those capabilities. Complete required
 project migrations before running the command.
+
+## Headless migration planning
+
+```sh
+horo-engine prefab migration-plan --project /absolute/project --non-interactive --output json
+```
+
+The command reports the source and target contract baselines, whether the
+selected chain contains prefab source adoption, and its ordered definition
+IDs as a newline-delimited string. It uses the same compatibility, recovery
+inspection and migration registry as editor project-open. A compatible project
+returns an empty chain. Pending recovery or an unavailable chain returns a typed
+failure. Planning reads project metadata and recovery evidence without running
+transforms or modifying project files.

@@ -252,6 +252,7 @@ namespace Horo::Application::Internal {
         descriptors.push_back(DescribePlatformServicesValidationCommand());
         descriptors.push_back(DescribePlatformServicesCookCommand());
         descriptors.push_back(DescribePrefabCookCommand());
+        descriptors.push_back(DescribePrefabMigrationPlanCommand());
         return descriptors;
     }
 

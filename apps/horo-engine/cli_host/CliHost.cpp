@@ -200,6 +200,7 @@ namespace Horo::Application::Internal {
             adapters.push_back(MakePlatformServicesCookCommandAdapter({.profile = PlatformServices::PlatformServicesHostProfile::Cook},
                                                                       std::make_shared<NativeDurableFileSystem>()));
             adapters.push_back(MakePrefabCookCommandAdapter());
+            adapters.push_back(MakePrefabMigrationPlanCommandAdapter());
             return adapters;
         }
 
@@ -207,7 +208,8 @@ namespace Horo::Application::Internal {
         std::vector<CliCapabilityId> CommandCapabilities() {
             return {{"horo.extension.module-run"},       {"horo.extension.script-run"},   {"horo.mcp.serve"},
                     {"horo.observability.smoke"},        {"horo.package.manage"},         {"horo.navigation.bake"},
-                    {"horo.platform-services.validate"}, {"horo.platform-services.cook"}, {"horo.prefab.cook"}};
+                    {"horo.platform-services.validate"}, {"horo.platform-services.cook"}, {"horo.prefab.cook"},
+                    {"horo.prefab.migration-plan"}};
         }
 
         /** @brief Admits mutation authority before application startup and preserves the same policy for dispatch. */

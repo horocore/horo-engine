@@ -3,6 +3,8 @@
 #include "Horo/Application/PrefabSceneCookHost.h"
 #include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Cli/CliErrors.h"
+#include "Horo/Editor/ProjectMutation.h"
+#include "Horo/Editor/ProjectOpenService.h"
 #include "Horo/Foundation/ImmutableFileStorage.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "NativePrefabCookComposition.h"
@@ -13,6 +15,7 @@
 namespace Horo::Application::Internal {
     namespace {
         constexpr std::string_view Capability = "horo.prefab.cook";
+        constexpr std::string_view MigrationPlanCapability = "horo.prefab.migration-plan";
         using Return = Result<Cli::CliCommandResult>;
 
         /** @brief Borrow parser-owned typed values without reparsing argv. */
@@ -21,22 +24,37 @@ namespace Horo::Application::Internal {
             return found == request.options.end() ? std::span<const Cli::CliResolvedValue>{} : std::span{found->values};
         }
 
-        /** @brief Resolve one explicit root, target and a bounded unique list of runtime root IDs. */
-        Result<NativePrefabCookInvocation> Parse(const Cli::CliCommandRequest &request, const Cli::CliExecutionContext &context) {
-            using Parsed = Result<NativePrefabCookInvocation>;
+        /** @brief Admit only a project path supplied in the current invocation. */
+        Result<std::filesystem::path> ExplicitProjectRoot(const Cli::CliCommandRequest &request) {
+            using Parsed = Result<std::filesystem::path>;
             const auto project = Option(request, "project");
-            const auto targets = Option(request, "target");
-            if (project.size() != 1 || project.front().source != Cli::CliValueSource::Invocation || targets.size() != 1)
+            if (project.size() != 1 || project.front().source != Cli::CliValueSource::Invocation)
                 return Parsed::Failure(MakeError(Cli::CliErrors::ParseFailed));
             const auto *path = std::get_if<Cli::CliPathValue>(&project.front().value);
+            if (!path || path->value.empty() || path->value.find('\0') != std::string::npos)
+                return Parsed::Failure(MakeError(Cli::CliErrors::ParseFailed));
+            std::filesystem::path root{std::u8string{path->value.begin(), path->value.end()}};
+            if (!root.is_absolute() || root != root.lexically_normal())
+                return Parsed::Failure(MakeError(Cli::CliErrors::ParseFailed));
+            return Parsed::Success(std::move(root));
+        }
+
+        /** @brief Resolve the cook target and a bounded unique list of runtime root IDs. */
+        Result<NativePrefabCookInvocation> Parse(const Cli::CliCommandRequest &request, const Cli::CliExecutionContext &context) {
+            using Parsed = Result<NativePrefabCookInvocation>;
+            auto root = ExplicitProjectRoot(request);
+            if (root.HasError())
+                return Parsed::Failure(std::move(root).ErrorValue());
+            const auto targets = Option(request, "target");
+            if (targets.size() != 1)
+                return Parsed::Failure(MakeError(Cli::CliErrors::ParseFailed));
             const auto *text = std::get_if<std::string>(&targets.front().value);
-            if (!path || !text || path->value.empty() || path->value.find('\0') != std::string::npos)
+            if (!text)
                 return Parsed::Failure(MakeError(Cli::CliErrors::ParseFailed));
-            const std::filesystem::path root{std::u8string{path->value.begin(), path->value.end()}};
             auto target = AssetCookTargetId::Parse(*text);
-            if (!root.is_absolute() || root != root.lexically_normal() || target.HasError() || target.Value().Value() != *text)
+            if (target.HasError() || target.Value().Value() != *text)
                 return Parsed::Failure(MakeError(Cli::CliErrors::ParseFailed));
-            NativePrefabCookInvocation invocation{.project = root,
+            NativePrefabCookInvocation invocation{.project = std::move(root).Value(),
                                                   .target = std::move(target).Value(),
                                                   .deadline =
                                                       context.AbsoluteDeadline().value_or(std::chrono::steady_clock::time_point::max())};
@@ -142,6 +160,78 @@ namespace Horo::Application::Internal {
         private:
             Cli::CliCommandDescriptor descriptor_{DescribePrefabCookCommand()};
         };
+
+        /** @brief Recognize source adoption in the selected pipeline by its stable stage ID. */
+        bool AdoptsPrefabSource(const ProjectMigrationDefinition &definition) {
+            return std::ranges::any_of(definition.pipeline->Nodes(), [](const ProjectMigrationNode &node) {
+                return node.kind == ProjectMigrationNodeKind::Then && node.stage->Describe().id.value == "adopt_prefab_source_identity";
+            });
+        }
+
+        /** @brief Project the authoritative chain or fail with the preflight's typed diagnostic. */
+        Return ProjectAdoptionPlan(const Editor::ProjectOpenPreflightSnapshot &snapshot) {
+            const auto &admission = snapshot.compatibility;
+            using enum ProjectCompatibilityStatus;
+            const auto &plan = snapshot.migrationPlan;
+            if (!plan && (!admission.sourceBaseline || (admission.status != Current && admission.status != CompatibleReleaseLine))) {
+                const auto error = admission.diagnostic.value_or(MakeError(Prefab::PrefabErrors::MigrationRequired));
+                return Return::Failure({.code = error.code,
+                                        .domain = error.domain,
+                                        .severity = error.severity,
+                                        .message = "Project migration planning failed."});
+            }
+            bool adoptionRequired{};
+            std::string definitions;
+            if (plan) {
+                adoptionRequired = std::ranges::any_of(plan->definitions, AdoptsPrefabSource);
+                for (const auto &definition : plan->definitions) {
+                    if (!definitions.empty())
+                        definitions.push_back('\n');
+                    definitions.append(definition.id.value);
+                }
+            }
+            const auto &source = plan ? plan->source : *admission.sourceBaseline;
+            const auto &target = plan ? plan->target : source;
+            return Return::Success({.fields = {{"prefabAdoptionRequired", adoptionRequired},
+                                               {"sourceBaseline", FormatHoroVersion(source.value)},
+                                               {"targetBaseline", FormatHoroVersion(target.value)},
+                                               {"definitionCount", static_cast<std::int64_t>(plan ? plan->definitions.size() : 0)},
+                                               {"definitionChain", std::move(definitions)}}});
+        }
+
+        /** @brief Inspect migration compatibility and recovery through the existing project-open authority. */
+        class PrefabMigrationPlanAdapter final : public Cli::ICliCommandAdapter {
+        public:
+            const Cli::CliCommandDescriptor &GetDescriptor() const noexcept override {
+                return descriptor_;
+            }
+
+            Return Execute(const Cli::CliCommandRequest &request, Cli::CliExecutionContext &context) override {
+                if (context.IsStopRequested())
+                    return Return::Failure(MakeError(Cli::CliErrors::ExecutionCancelled));
+                auto input = ExplicitProjectRoot(request);
+                if (input.HasError())
+                    return Return::Failure(std::move(input).ErrorValue());
+                std::error_code error;
+                const auto root = std::filesystem::canonical(input.Value(), error);
+                if (error)
+                    return Return::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed));
+
+                NativeDurableFileSystem files;
+                SystemWallClock clock;
+                Editor::ProjectMutationCoordinator mutations{files};
+                JobSystem jobs{{.workerCount = 0, .maxQueuedJobs = 1}};
+                Editor::ProjectMigrationTransactionService transactions{files, clock, mutations, jobs};
+                const Editor::ProjectOpenPreflightService preflight{transactions};
+                const auto snapshot = preflight.Inspect(root);
+                if (context.IsStopRequested())
+                    return Return::Failure(MakeError(Cli::CliErrors::ExecutionCancelled));
+                return ProjectAdoptionPlan(snapshot);
+            }
+
+        private:
+            Cli::CliCommandDescriptor descriptor_{DescribePrefabMigrationPlanCommand()};
+        };
     }  // namespace
 
     /** @copydoc DescribePrefabCookCommand */
@@ -174,5 +264,27 @@ namespace Horo::Application::Internal {
     /** @copydoc MakePrefabCookCommandAdapter */
     Cli::CliCommandAdapterRegistration MakePrefabCookCommandAdapter() {
         return {.adapter = std::make_unique<PrefabCookAdapter>(), .capabilities = {{std::string{Capability}}}};
+    }
+
+    /** @copydoc DescribePrefabMigrationPlanCommand */
+    Cli::CliCommandDescriptor DescribePrefabMigrationPlanCommand() {
+        using namespace Cli;
+        return {.path = {{"prefab", "migration-plan"}},
+                .summary = "Inspect the project migration chain for prefab source adoption.",
+                .requiredCapabilities = {{std::string{MigrationPlanCapability}}},
+                .output = {.id = "horo.prefab.migration-plan",
+                           .version = 1,
+                           .formats = CliOutputFormat::Human | CliOutputFormat::Json | CliOutputFormat::JsonLines},
+                .interactive = CliInteractivePolicy::Forbidden,
+                .hosts = CliHostAvailability::HoroEngine,
+                .contractVersion = {1, 0, 0},
+                .sideEffects = CliSideEffectPolicy::ReadsState,
+                .cancellation = CliCancellationPolicy::Cooperative,
+                .ownerId = "horo.prefab.cli"};
+    }
+
+    /** @copydoc MakePrefabMigrationPlanCommandAdapter */
+    Cli::CliCommandAdapterRegistration MakePrefabMigrationPlanCommandAdapter() {
+        return {.adapter = std::make_unique<PrefabMigrationPlanAdapter>(), .capabilities = {{std::string{MigrationPlanCapability}}}};
     }
 }  // namespace Horo::Application::Internal
