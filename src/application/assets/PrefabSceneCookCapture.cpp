@@ -243,7 +243,7 @@ namespace Horo::Application {
             auto packages = PackageIdentity(rawPackages.Value(), rawIntent.Value(), request.restoredPackages);
             if (packages.HasError())
                 return Result<HostCapture>::Failure(packages.ErrorValue());
-            std::string semantic{"horo.prefab-scene.host.v1"};
+            std::string semantic{"horo.prefab-scene.host.v2"};
             Append(semantic, FormatHoroVersion(metadata.horoVersion.value));
             Append(semantic, FormatPersistentContractHash(metadata.persistentContract));
             Append(semantic, packages.Value());
@@ -252,6 +252,7 @@ namespace Horo::Application {
             if (auto released = AppendRelease(semantic, rawPackages.Value(), releasePlan); released.HasError())
                 return Result<HostCapture>::Failure(released.ErrorValue());
             const auto cacheDigest = ComputeSha256(std::as_bytes(std::span{semantic}));
+            // Whole-schema authority guards publication. The dependency key selects it only for authored typed layers.
             Append(semantic, FormatSha256(OverrideSchemaIdentity(request)));
             Append(semantic, request.schemas ? FormatSha256(request.schemas->Digest()) : "no-project-schema-context");
             return Result<HostCapture>::Success({metadata, ComputeSha256(std::as_bytes(std::span{semantic})), cacheDigest,

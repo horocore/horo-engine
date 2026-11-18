@@ -62,8 +62,8 @@ namespace Horo::Application::PrefabCookDetail {
                     return;
                 schemaBackedOverrides = schemaBackedOverrides || !overrides->componentRecords.empty() ||
                                         std::ranges::any_of(overrides->records, [](const Prefab::PrefabValueOverrideRecord &record) {
-                                            return std::holds_alternative<Prefab::PrefabPropertyAddress>(record.target);
-                                        });
+                    return std::holds_alternative<Prefab::PrefabPropertyAddress>(record.target);
+                });
                 for (const auto &operation : overrides->componentRecords)
                     if (const auto *added = std::get_if<Prefab::PrefabAddComponentOverride>(&operation))
                         CollectComponent(added->payload.component.typeId);
@@ -236,7 +236,7 @@ namespace Horo::Application::PrefabCookDetail {
             SemanticCookInputs result;
             for (const auto &[asset, color] : closure.colors)
                 result.sources.push_back(asset);
-            std::string identity{"horo.prefab.cook.root-inputs.v1"};
+            std::string identity{"horo.prefab.cook.root-inputs.v2"};
             Append(identity, target.Value());
             const auto overrideRevision = closure.schemaBackedOverrides ? resolver.ValueSchemaRevision() : Sha256Digest{};
             if (closure.schemaBackedOverrides && overrideRevision == Sha256Digest{})

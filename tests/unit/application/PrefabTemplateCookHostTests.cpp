@@ -226,7 +226,7 @@ TEST_CASE("Host flattens nested and variant source closure without publishing so
                                                      .variantAuthoredAgainst = revision};
         count = 1;
     }
-    const auto document = Prefab::PrefabDocument::Create(std::move(root), limits);
+    const auto document = Prefab::PrefabDocument::Create(root, limits);
     REQUIRE(document.HasValue());
     fixture.WriteText("assets/hierarchy.prefab", document.Value().SerializeCanonical().Value());
     fixture.request.runtimePrefabRoots = {fixture.prefabId};
@@ -241,6 +241,36 @@ TEST_CASE("Host flattens nested and variant source closure without publishing so
     CHECK(prefab.Value().GetObjectCount() == count);
     CHECK(prefab.Value().Data().entities.back().provenance.sourceAsset == base);
     CHECK(prefab.Value().Data().dependencies.empty());
+
+    auto changedBase = baseDocument.Value().Data();
+    changedBase.objects.front().localTransform.translation.x = 3.0F;
+    const auto updatedBase = Prefab::PrefabDocument::Create(std::move(changedBase), limits);
+    REQUIRE(updatedBase.HasValue());
+    const auto updatedCanonical = updatedBase.Value().SerializeCanonical();
+    REQUIRE(updatedCanonical.HasValue());
+    fixture.WriteText("assets/second.prefab", updatedCanonical.Value());
+    REQUIRE(fixture.Cook().HasError());
+    fixture.AssertRetained(cooked.Value().generation);
+
+    const Prefab::PrefabSourceRevision updatedRevision{fixture.version, ComputeSha256(std::as_bytes(std::span{updatedCanonical.Value()}))};
+    if (root.composition->variantParent)
+        root.composition->variantAuthoredAgainst = updatedRevision;
+    else
+        root.composition->nestedPlacements.front().authoredAgainst = updatedRevision;
+    const auto rebased = Prefab::PrefabDocument::Create(std::move(root), limits);
+    REQUIRE(rebased.HasValue());
+    fixture.WriteText("assets/hierarchy.prefab", rebased.Value().SerializeCanonical().Value());
+    const auto recooked = fixture.Cook();
+    REQUIRE(recooked.HasValue());
+    CHECK(recooked.Value().cacheHits == 1);
+    for (const auto id : {fixture.prefabId, fixture.sceneId}) {
+        const auto before = GenerationArtifact(cooked.Value().generation, id);
+        const auto after = GenerationArtifact(recooked.Value().generation, id);
+        REQUIRE(before.HasValue());
+        REQUIRE(after.HasValue());
+        CHECK(before.Value().cacheKeyDigest != after.Value().cacheKeyDigest);
+        CHECK(before.Value().payload != after.Value().payload);
+    }
 }
 
 TEST_CASE("Dynamic template cache binds actual changed resource envelopes without a registry replacement",

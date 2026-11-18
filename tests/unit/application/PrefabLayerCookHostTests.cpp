@@ -81,8 +81,8 @@ namespace {
                                                  .displayName = "Layer data",
                                                  .category = "Tests"};
         if (optionalProperty)
-            descriptor.properties.push_back({Value(Gameplay::ComponentPropertyId::Parse("optional")), "Optional",
-                                             Gameplay::ComponentPropertyKind::String, false});
+            descriptor.properties.push_back(
+                {Value(Gameplay::ComponentPropertyId::Parse("optional")), "Optional", Gameplay::ComponentPropertyKind::String, false});
         return descriptor;
     }
 
@@ -107,19 +107,21 @@ namespace {
         const Prefab::PrefabSourceRevision revision{fixture.version, ComputeSha256(std::as_bytes(std::span{source}))};
         const auto resolver = Value(Prefab::BuildPrefabSourceResolverSnapshot(fixture.registry.Snapshot(), {{document, revision}}, limits));
         const auto original = Value(resolver.Resolve(base, Value(Prefab::PrefabInstanceId::Create(7)), limits));
-        auto schemas = Value(Prefab::PrefabValueSchemaSnapshot::Create({}, limits, {{.component = LayerDescriptor(), .allowAddition = true}}));
+        auto schemas =
+            Value(Prefab::PrefabValueSchemaSnapshot::Create({}, limits, {{.component = LayerDescriptor(), .allowAddition = true}}));
         const auto root = Value(Prefab::PrefabObjectAddress::Create({}, {0}));
-        const auto edited = Value(Prefab::PreparePrefabComponentEdit(
-            original, {}, Prefab::PrefabAddComponentOverride{root, payload}, &schemas, limits));
+        const auto edited =
+            Value(Prefab::PreparePrefabComponentEdit(original, {}, Prefab::PrefabAddComponentOverride{root, payload}, &schemas, limits));
         REQUIRE(edited.effective.has_value());
-        const auto variant = Value(Prefab::PrefabDocument::Create(
-            {.projectVersion = fixture.version,
-             .assetId = fixture.prefabId,
-             .composition = Prefab::PrefabComposition{.variantParent = Value(Prefab::PrefabAssetReference::Create(base)),
-                                                      .variantAuthoredAgainst = revision,
-                                                      .variantOverrides = edited.rebased},
-             .referencedAssets = {base}},
-            limits));
+        const auto variant =
+            Value(Prefab::PrefabDocument::Create({.projectVersion = fixture.version,
+                                                  .assetId = fixture.prefabId,
+                                                  .composition = Prefab::PrefabComposition{.variantParent = Value(
+                                                                                               Prefab::PrefabAssetReference::Create(base)),
+                                                                                           .variantAuthoredAgainst = revision,
+                                                                                           .variantOverrides = edited.rebased},
+                                                  .referencedAssets = {base}},
+                                                 limits));
         fixture.WriteText("assets/hierarchy.prefab", Value(variant.SerializeCanonical()));
         fixture.request.runtimePrefabRoots = {fixture.prefabId, base};
         fixture.request.overrideSchemas = std::make_shared<const Prefab::PrefabValueSchemaSnapshot>(std::move(schemas));
@@ -165,12 +167,13 @@ TEST_CASE("Actual scene and template cook normalizes layer record order but pres
 TEST_CASE("Layer-introduced gameplay schema invalidates its template while unrelated cook inputs retain hits",
           "[native][prefab-cook][host][layer][closure-key]") {
     HostFixture fixture;
-    const Prefab::RawComponentPayload payload{
-        .instance = Value(Prefab::PrefabComponentInstanceId::Create(1)),
-        .component = {.typeId = LayerDescriptor().typeId, .schemaVersion = 1, .payload = {std::byte{'{'}, std::byte{'}'}}}};
+    const Prefab::RawComponentPayload payload{.instance = Value(Prefab::PrefabComponentInstanceId::Create(1)),
+                                              .component = {.typeId = LayerDescriptor().typeId,
+                                                            .schemaVersion = 1,
+                                                            .payload = {std::byte{'{'}, std::byte{'}'}}}};
     const auto base = PrepareTopologyVariant(fixture, payload);
-    const std::vector<SceneSource::ScenePrefabInstance> placements{{.instanceId = Value(Prefab::PrefabInstanceId::Create(7)),
-                                                                   .sourcePrefab = Value(Prefab::PrefabAssetReference::Create(base))}};
+    const std::vector<SceneSource::ScenePrefabInstance> placements{
+        {.instanceId = Value(Prefab::PrefabInstanceId::Create(7)), .sourcePrefab = Value(Prefab::PrefabAssetReference::Create(base))}};
     const std::vector<SceneSource::SceneObjectSnapshot> objects{
         {.id = {900}, .name = "Scene-owned data", .components = {.gameplayComponents = {payload.component}}}};
     fixture.WriteText("assets/level.scene", SceneSource::EncodeSceneSource({objects, placements}));
@@ -178,7 +181,7 @@ TEST_CASE("Layer-introduced gameplay schema invalidates its template while unrel
     const auto first = Value(fixture.Cook());
     const auto templateArtifact = Artifact(first.generation, fixture.prefabId);
     const auto cooked = Value(Prefab::CookedPrefab::Parse(std::as_bytes(std::span{templateArtifact.payload}), fixture.prefabId,
-                                                         Value(Prefab::PrefabLimitProfile::Create({}))));
+                                                          Value(Prefab::PrefabLimitProfile::Create({}))));
     REQUIRE(cooked.Data().entities.size() == 1);
     REQUIRE(cooked.Data().entities.front().members.size() == 1);
     CHECK(std::get<Prefab::RawComponentPayload>(cooked.Data().entities.front().members.front()) == payload);
@@ -210,8 +213,8 @@ TEST_CASE("An unused override schema leaves transform-only scenes templates and 
     const auto layer = Prepare(fixture);
     fixture.request.runtimePrefabRoots.push_back(layer.base);
     const auto first = Value(fixture.Cook());
-    auto schemas = Value(Prefab::PrefabValueSchemaSnapshot::Create(
-        {}, Value(Prefab::PrefabLimitProfile::Create({})), {{.component = LayerDescriptor(), .allowAddition = true}}));
+    auto schemas = Value(Prefab::PrefabValueSchemaSnapshot::Create({}, Value(Prefab::PrefabLimitProfile::Create({})),
+                                                                   {{.component = LayerDescriptor(), .allowAddition = true}}));
     fixture.request.overrideSchemas = std::make_shared<const Prefab::PrefabValueSchemaSnapshot>(std::move(schemas));
     const auto second = Value(fixture.Cook());
     CHECK(second.totalAssets == 4);

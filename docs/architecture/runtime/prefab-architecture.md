@@ -1423,7 +1423,10 @@ series bounds, integration and focused validation.
 package, policy and provider publication fences through generation publication.
 Cache reuse is a separate decision: each scene or explicit runtime template commits
 its own canonical source closure, including nested placements, variant parents,
-declared resource dependencies and only the component/behavior descriptors it uses.
+declared resource dependencies and the component/behavior descriptors used by
+direct members and layer-added components. The selected prefab override schema
+revision contributes to branches that carry typed property or topology intent.
+The full override schema revision remains part of the host freshness fence.
 The scene definition revision derives from that same local closure. Source paths,
 registry publication counters and unrelated selected template roots do not alter
 semantic keys. Target, format, selected producer/tool settings and project-wide
