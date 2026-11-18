@@ -165,13 +165,13 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(discovery.ErrorValue());
 
         const auto &observed = *system_;
-        const auto blends = std::span{observed.primaryBlendModes}.first(observed.primaryBlendModeCount);
+        if (const auto targets = ValidatePackagedProjectionTargets(observed, session); targets.HasError())
+            return Outcome::Failure(targets.ErrorValue());
         const auto spaces = std::span{session.spaces}.first(session.spaceCount);
-        if (observed.primaryViewCount != 2 || std::ranges::find(blends, XR_ENVIRONMENT_BLEND_MODE_OPAQUE) == blends.end() ||
-            std::ranges::find(spaces, XR_REFERENCE_SPACE_TYPE_VIEW) == spaces.end() ||
+        if (std::ranges::find(spaces, XR_REFERENCE_SPACE_TYPE_VIEW) == spaces.end() ||
             std::ranges::find(spaces, XR_REFERENCE_SPACE_TYPE_LOCAL) == spaces.end())
             return Outcome::Failure(
-                MakeError(XRErrors::OperationUnsupported, "The packaged projection profile needs opaque stereo and view/local spaces."));
+                MakeError(XRErrors::OperationUnsupported, "The packaged projection profile needs both view and local reference spaces."));
         if (const auto dispatch = ValidateProjectionDispatch(discovery.Value().instance); dispatch.HasError())
             return Outcome::Failure(dispatch.ErrorValue());
         PFN_xrVoidFunction timeConverter{};

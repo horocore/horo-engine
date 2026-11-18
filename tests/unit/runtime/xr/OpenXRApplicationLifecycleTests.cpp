@@ -430,7 +430,7 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(row.graphicsApi == renderer);
         CHECK(row.externallySuppliedOsAbiCount > 0);
         CHECK(row.referenceSpaceCount == fixture.script.census.spaces);
-        CHECK(row.colorFormatCount == fixture.script.census.formats);
+        CHECK(row.runtimeSwapchainFormatCount == fixture.script.census.formats);
         const auto graphics = static_cast<std::size_t>(Host::OpenXRPackagedRoute::Graphics);
         const auto time = static_cast<std::size_t>(Host::OpenXRPackagedRoute::PlatformTime);
         const auto hands = static_cast<std::size_t>(Host::OpenXRPackagedRoute::HandTracking);
@@ -472,6 +472,65 @@ namespace Horo::Tests::OpenXRApplication {
         fixture.play.reset();
         RequireValue(fixture.session->Close());
         CHECK(fixture.session->ValidateDeviceQualification(admitted).HasError());
+    }
+
+    TEST_CASE("XR setup rejects unsupported or invalid swapchain formats and withdraws prior qualification", "[xr][application][setup]") {
+        using enum Editor::EditorXrSetupTestState;
+        using enum Editor::EditorXrSetupIssue;
+        ApplicationFixture fixture;
+        fixture.CreatePlay();
+        const auto run = [&] {
+            RequireValue(fixture.play->RequestSetupTest());
+            fixture.play->PumpSetupTest();
+        };
+        run();
+        REQUIRE(fixture.play->ReadSetup().test == Passed);
+        const auto prior = RequireValue(fixture.play->ReadDeviceQualificationPreflight());
+        constexpr std::array incompatibleFormats{std::int64_t{VK_FORMAT_D32_SFLOAT}, std::int64_t{VK_FORMAT_R8G8B8A8_SRGB}};
+        constexpr std::array malformedFormats{std::int64_t{VK_FORMAT_R8G8B8A8_UNORM}, std::int64_t{VK_FORMAT_R8G8B8A8_UNORM}};
+        auto issue = Unsupported;
+        const ErrorCodeDescriptor *reason = &XR::XRErrors::OperationUnsupported;
+        SECTION("only nonmatching formats, including a real depth format") {
+            fixture.script.census.formatPublication = incompatibleFormats;
+        }
+        SECTION("duplicate native format") {
+            fixture.script.census.formatPublication = malformedFormats;
+            issue = Invalid;
+            reason = &XR::XRErrors::OperationInvalid;
+        }
+        SECTION("over-capacity native format inventory") {
+            fixture.script.census.formats = Native::NativeSessionCensus{}.formats.size() + 1;
+            issue = Capacity;
+            reason = &XR::XRErrors::CapacityExceeded;
+        }
+
+        run();
+        CHECK(fixture.play->ReadSetup().test == Failed);
+        CHECK(fixture.play->ReadSetup().issue == issue);
+        CHECK(fixture.play->ReadDeviceQualificationPreflight().HasError());
+        CHECK(fixture.session->ValidateDeviceQualification(prior).HasError());
+        CHECK(fixture.script.native.liveSessions == 0);
+        CHECK(fixture.script.native.liveInstances == 1);
+
+        const auto &row = prior.Compatibility();
+        const Host::OpenXRDesktopProbeTarget target{row.platform.operatingSystem, "Actual scripted runtime", "Observed native system",
+                                                    row.installDigest};
+        const auto rejected = fixture.session->ProbeDesktopTarget(*fixture.bindings, target);
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == reason->code.Value());
+        CHECK(fixture.script.native.liveSessions == 0);
+
+        constexpr std::array supportedFormats{std::int64_t{VK_FORMAT_D32_SFLOAT}, std::int64_t{VK_FORMAT_R8G8B8A8_UNORM}};
+        fixture.script.census.formats = supportedFormats.size();
+        fixture.script.census.formatPublication = supportedFormats;
+        run();
+        REQUIRE(fixture.play->ReadSetup().test == Passed);
+        const auto recovered = RequireValue(fixture.play->ReadDeviceQualificationPreflight());
+        CHECK(recovered.Compatibility().runtimeSwapchainFormatCount == supportedFormats.size());
+        CHECK(fixture.session->ValidateDeviceQualification(recovered).HasValue());
+        CHECK(fixture.session->ValidateDeviceQualification(prior).HasError());
+        CHECK(fixture.script.native.liveSessions == 0);
+        REQUIRE(RequireValue(fixture.ClosePlay()));
     }
 
     TEST_CASE("XR setup probes the explicit installed desktop runtime and HMD in the actual package owner",

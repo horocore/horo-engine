@@ -47,13 +47,24 @@ namespace Horo::Application::Internal {
             bool exactImages{};
         };
 
-        /** @brief Validates the actual bounded view census and same-device sampled-eye allocation intent. */
-        Result<ProjectionTargets> PrepareProjectionTargets(const Render::RenderFrontend &frontend, const NativeSystemCensus &observed,
-                                                           const NativeSessionCensus &session) {
-            if (observed.primaryViewCount != 2 || observed.configurationCount > observed.configurations.size() ||
+        /** @brief Common stereo target and required format support observed on the native runtime. */
+        struct NativeProjectionTargets final {
+            Render::RenderTextureDescriptor color;
+            bool stereo{};
+            bool colorAvailable{};
+        };
+
+        /** @brief Resolves the common native stereo target used by both the packaged probe and live Play. */
+        Result<NativeProjectionTargets> ObserveNativeProjectionTargets(const NativeSystemCensus &observed,
+                                                                       const NativeSessionCensus &session) {
+            using Outcome = Result<NativeProjectionTargets>;
+            if (observed.configurationCount > observed.configurations.size() ||
                 observed.primaryBlendModeCount > observed.primaryBlendModes.size() || session.spaceCount > session.spaces.size() ||
                 session.formatCount > session.formats.size())
-                return Result<ProjectionTargets>::Failure(MakeError(XRErrors::OperationUnsupported));
+                return Outcome::Failure(MakeError(XRErrors::CapacityExceeded));
+            if (observed.primaryViewCount != 2)
+                return Outcome::Failure(
+                    MakeError(XRErrors::OperationUnsupported, "The selected projection requires exactly two stereo views."));
             const auto configurations = std::span{observed.configurations}.first(observed.configurationCount);
             const auto blends = std::span{observed.primaryBlendModes}.first(observed.primaryBlendModeCount);
             const auto formats = std::span{session.formats}.first(session.formatCount);
@@ -67,26 +78,38 @@ namespace Horo::Application::Internal {
             for (std::uint32_t view = 0; view < observed.primaryViewCount; ++view)
                 if (!extent.IsValid() || extent.width > observed.primaryViews[view].maxImageRectWidth ||
                     extent.height > observed.primaryViews[view].maxImageRectHeight || !observed.primaryViews[view].maxSwapchainSampleCount)
-                    return Result<ProjectionTargets>::Failure(MakeError(XRErrors::OperationUnsupported));
+                    return Outcome::Failure(
+                        MakeError(XRErrors::OperationUnsupported, "Stereo view or system limits reject the shared swapchain extent."));
             if (extent.width > observed.system.graphicsProperties.maxSwapchainImageWidth ||
                 extent.height > observed.system.graphicsProperties.maxSwapchainImageHeight ||
                 !observed.system.graphicsProperties.maxLayerCount)
-                return Result<ProjectionTargets>::Failure(MakeError(XRErrors::OperationUnsupported));
+                return Outcome::Failure(
+                    MakeError(XRErrors::OperationUnsupported, "Stereo view or system limits reject the shared swapchain extent."));
             const Render::RenderTextureDescriptor color{.extent = extent,
                                                         .format = Render::RenderTextureFormat::Rgba8Unorm,
                                                         .layerCount = 2,
                                                         .usage = Render::RenderTextureUsage::RenderAttachment |
                                                                  Render::RenderTextureUsage::Sampled};
-            const Render::RenderTextureDescriptor depth{.extent = extent,
+            const auto colorAvailable = std::ranges::find(formats, static_cast<std::int64_t>(VK_FORMAT_R8G8B8A8_UNORM)) != formats.end();
+            return Outcome::Success({color, hasStereo, colorAvailable});
+        }
+
+        /** @brief Checks the selected render device's baseline raster requirements against the same native target. */
+        Result<ProjectionTargets> PrepareProjectionTargets(const Render::RenderFrontend &frontend, const NativeSystemCensus &observed,
+                                                           const NativeSessionCensus &session) {
+            const auto native = ObserveNativeProjectionTargets(observed, session);
+            if (native.HasError())
+                return Result<ProjectionTargets>::Failure(native.ErrorValue());
+            const auto &[color, stereo, colorAvailable] = native.Value();
+            const Render::RenderTextureDescriptor depth{.extent = color.extent,
                                                         .format = Render::RenderTextureFormat::Depth32Float,
                                                         .layerCount = 2,
                                                         .usage = Render::RenderTextureUsage::RenderAttachment};
             const auto &support = frontend.Capabilities().support;
             const auto multiview = Render::ResolveMultiviewCapabilities(support);
-            const bool exactImages = support.Supports(color) && support.Supports(depth) && multiview.multipass &&
-                                     multiview.indexedShaders && multiview.maximumViews >= 2 &&
-                                     std::ranges::find(formats, static_cast<std::int64_t>(VK_FORMAT_R8G8B8A8_UNORM)) != formats.end();
-            return Result<ProjectionTargets>::Success({color, hasStereo, exactImages});
+            const bool exactImages = colorAvailable && support.Supports(color) && support.Supports(depth) && multiview.multipass &&
+                                     multiview.indexedShaders && multiview.maximumViews >= 2;
+            return Result<ProjectionTargets>::Success({color, stereo, exactImages});
         }
 
         struct OptionalProjectionEvidence final {
@@ -135,6 +158,20 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRApplicationSession::ValidateProjectionDispatch */
     Result<void> OpenXRApplicationSession::ValidateProjectionDispatch(XrInstance instance) const {
         return ValidateProjectionProtocol(getProc_, instance);
+    }
+
+    /** @copydoc OpenXRApplicationSession::ValidatePackagedProjectionTargets */
+    Result<void> OpenXRApplicationSession::ValidatePackagedProjectionTargets(const NativeSystemCensus &system,
+                                                                             const NativeSessionCensus &session) {
+        const auto targets = ObserveNativeProjectionTargets(system, session);
+        if (targets.HasError())
+            return Result<void>::Failure(targets.ErrorValue());
+        if (!targets.Value().stereo)
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported, "The packaged projection profile needs opaque stereo."));
+        if (!targets.Value().colorAvailable)
+            return Result<void>::Failure(
+                MakeError(XRErrors::OperationUnsupported, "The installed runtime does not offer RGBA8 UNORM stereo swapchains for Play."));
+        return Result<void>::Success();
     }
 
     /** @copydoc OpenXRApplicationSession::ValidateProjectionPolicy */

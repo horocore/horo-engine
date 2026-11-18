@@ -99,7 +99,7 @@ namespace Horo::Application::Internal {
         XR::XRCapabilityState handTracking;
         std::array<XR::OpenXRInternal::NativeExtensionAdmission, static_cast<std::size_t>(OpenXRPackagedRoute::Count)> extensionRoutes;
         std::uint32_t referenceSpaceCount{};
-        std::uint32_t colorFormatCount{};
+        std::uint32_t runtimeSwapchainFormatCount{}; /**< Total native format inventory, including non-color formats. */
         std::uint8_t externallySuppliedOsAbiCount{}; /**< Signed OS dependencies, never bundled vendor runtime paths. */
     };
 
@@ -333,6 +333,12 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> ValidateProjectionDispatch(XrInstance instance) const;
         [[nodiscard]] Result<void> PrepareHands();
         [[nodiscard]] Result<void> RetireHands();
+        /** @brief Validates the exact native baseline stereo target shared with live Play without allocating swapchains.
+         * @param system Current selected instance/system census. @param session Current reversible session census.
+         * @return Success only when the native runtime offers the selected stereo target and color format.
+         */
+        [[nodiscard]] static Result<void> ValidatePackagedProjectionTargets(const XR::OpenXRInternal::NativeSystemCensus &system,
+                                                                            const XR::OpenXRInternal::NativeSessionCensus &session);
         /** @brief Validates the same selected profile and static capacity required by Play. */
         [[nodiscard]] Result<void> ValidateProjectionPolicy(const OpenXRApplicationBindings &bindings) const;
 

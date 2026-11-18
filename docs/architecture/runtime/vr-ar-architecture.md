@@ -839,7 +839,9 @@ loader. The official loader selects the external runtime, and signed deployment
 metadata declares unique OS ABI dependency names. The application neither
 packages nor opens a vendor runtime directly. Device qualification consumes this
 row only while the verified installation, runtime attempt and exact graphics
-device remain current. The row contains no physical-device test result.
+device remain current. Both Setup and the terminal probe require the same native
+opaque stereo target, shared eye extent, and RGBA8 UNORM format as Play. The row
+contains no physical-device test result.
 
 On Windows and Linux the packaged terminal host can supervise one bounded
 Desktop OpenXR probe through the installed Editor.
@@ -864,7 +866,7 @@ requires successful exit and a current executable digest.
 
 The receipt records the installed component digest, host, loader route,
 renderer, a digest of the explicit runtime/HMD pair, the runtime and graphics
-versions, the observed space and format counts, and the admitted provider
+versions, the observed space and native swapchain format counts, and the admitted provider
 routes. Treat it as packaged Desktop preflight evidence. Per-unit headset
 selection, remote installation, connection transport provenance, interaction
 profile, and physical-device smoke results remain separate qualification work.

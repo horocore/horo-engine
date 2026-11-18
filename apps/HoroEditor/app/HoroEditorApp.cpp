@@ -4338,7 +4338,7 @@ namespace Horo::Editor {
                                             static_cast<unsigned>(runtime.minor), static_cast<unsigned>(runtime.patch),
                                             static_cast<unsigned>(graphics.major), static_cast<unsigned>(graphics.minor),
                                             static_cast<unsigned>(graphics.patch), static_cast<unsigned>(observed.referenceSpaceCount),
-                                            static_cast<unsigned>(observed.colorFormatCount), admittedRoutes) > 0 &&
+                                            static_cast<unsigned>(observed.runtimeSwapchainFormatCount), admittedRoutes) > 0 &&
                                std::fflush(stdout) == 0;
         }
         return CompleteEditorSession(startup, terminal, nullptr);
