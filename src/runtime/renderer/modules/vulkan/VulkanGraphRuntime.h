@@ -74,6 +74,11 @@ namespace Horo::Render::Detail {
                                                                          const VfxGpuStepIdentity &step, std::span<std::byte> destination);
         [[nodiscard]] Result<void> DiscardCompletedVfxGpuObservation(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
                                                                      const VfxGpuStepIdentity &step);
+        /** @brief Realizes one offline-cooked reconstruction kernel before beginning a frame. */
+        [[nodiscard]] Result<std::shared_ptr<IResidentNativeReconstructionKernel>> RealizeNativeReconstructionKernel(
+            const CookedNativeReconstructionKernel &kernel);
+        /** @brief Reports exact native dispatch and selected compute-queue support. */
+        [[nodiscard]] bool SupportsNativeReconstruction() const noexcept;
         [[nodiscard]] bool SupportsVfxGpu() const noexcept;
         /** @brief Reports the initialized indexed forward draw route without requiring GPU particle compute.
          * @return True only for the live resource owner and all required native raster entry points.

@@ -56,7 +56,7 @@ namespace Horo::Render::Detail {
             submissions.reserve(RenderGraphSubmissionLimits::MaximumSubmissions);
             retention.resize(frames);
             for (auto &pins : retention)
-                pins.resources.reserve(RenderGraphLimits::HardMaxResources +
+                pins.resources.reserve(RenderGraphLimits::HardMaxResources + RenderGraphNativeReconstruction::MaximumPassesPerFrame +
                                        (MultiviewExtractionLimits::HardMaximumInstances + MaximumVfxGraphDraws) * 3);
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(
@@ -94,9 +94,12 @@ namespace Horo::Render::Detail {
             initialized.HasError())
             return initialized;
         multiview.Initialize(request.device, request.deviceIncarnation, request.vertexLayerEnabled, request.resolver);
-        if (request.properties)
+        if (request.properties) {
+            if (std::ranges::any_of(request.queues, &VulkanCommandQueue::supportsCompute))
+                reconstruction.Initialize(request.device, request.properties->limits, request.frames, request.resolver);
             return vfxGpu.Initialize(request.device, *request.properties, request.frames, request.deviceIncarnation, request.queues,
                                      request.resources, commands, request.resolver);
+        }
         return Result<void>::Success();
     }
 
@@ -142,6 +145,22 @@ namespace Horo::Render::Detail {
         impl_->guiPrepared = false;
         impl_->guiRecorded = false;
         return Result<void>::Success();
+    }
+
+    /** @copydoc VulkanGraphRuntime::RealizeNativeReconstructionKernel */
+    Result<std::shared_ptr<IResidentNativeReconstructionKernel>> VulkanGraphRuntime::RealizeNativeReconstructionKernel(
+        const CookedNativeReconstructionKernel &kernel) {
+        using Outcome = Result<std::shared_ptr<IResidentNativeReconstructionKernel>>;
+        if (const auto access = impl_->Access(); access.HasError())
+            return Outcome::Failure(access.ErrorValue());
+        if (impl_->lifecycle.frame.IsValid())
+            return Outcome::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
+        return impl_->reconstruction.Realize(kernel);
+    }
+
+    /** @copydoc VulkanGraphRuntime::SupportsNativeReconstruction */
+    bool VulkanGraphRuntime::SupportsNativeReconstruction() const noexcept {
+        return impl_->reconstruction.Supported();
     }
 
     /** @copydoc VulkanGraphRuntime::FrameSlot */
@@ -340,6 +359,7 @@ namespace Horo::Render::Detail {
         for (const auto &pins : retention)
             if (pins.references != 0 || pins.lease)
                 std::terminate();
+        reconstruction.Reset();
         resources = nullptr;
         owner = {};
     }

@@ -2,6 +2,7 @@
 
 #include "VulkanGraphRuntime.h"
 #include "VulkanMultiviewRuntime.h"
+#include "VulkanReconstructionRuntime.h"
 #include "VulkanRenderBackendErrors.h"
 #include "VulkanVfxGpuRuntime.h"
 
@@ -44,6 +45,7 @@ namespace Horo::Render::Detail {
             RenderGraphExecutionRange after;
             VulkanMaterialTarget vfxTarget;
             RenderGraphExecutionRange vfxDraws;
+            VulkanPreparedReconstruction reconstruction;
         };
 
         struct Update {
@@ -125,6 +127,8 @@ namespace Horo::Render::Detail {
         VulkanCommandRuntime commands;
         VulkanVfxGpuRuntime vfxGpu;
         VulkanMultiviewRecorder multiview;
+        VulkanReconstructionRuntime reconstruction;
+        std::size_t reconstructionPassCount{};
         VulkanResourceRuntime *resources{};
         std::thread::id owner;
         std::vector<VulkanCommandQueue> queues;
@@ -241,6 +245,8 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> ValidatePassUses(const RenderGraphExecutionRequest &, std::size_t) const;
         [[nodiscard]] Result<void> PrepareClassicWork(const RenderGraphExecutionRequest &, std::size_t, VulkanCommandRetention &);
         [[nodiscard]] Result<void> PrepareParticleWork(const RenderGraphExecutionRequest &, std::size_t);
+        [[nodiscard]] Result<void> PrepareReconstruction(const RenderGraphExecutionRequest &, std::size_t pass,
+                                                         const RenderGraphNativeReconstruction &, VulkanCommandRetention &);
         [[nodiscard]] Result<void> FinishPass(const RenderGraphExecutionRequest &, std::size_t);
         [[nodiscard]] Result<void> ValidateColor(const RenderGraphColorAttachment &, RenderQueueId);
         [[nodiscard]] Result<void> GpuAccess(bool cold) const;

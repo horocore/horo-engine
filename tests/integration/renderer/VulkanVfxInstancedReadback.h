@@ -120,6 +120,17 @@ namespace Horo::Render::Test::VfxInstanced {
             return rendered_;
         }
 
+        /** @brief Returns the only captured reconstruction storage output marked for diagnostic transfer. */
+        Image ReconstructedColor() const {
+            REQUIRE_FALSE(invalid_);
+            const auto candidate = [](const Image &image) {
+                constexpr auto required = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+                return image.image && image.format == VK_FORMAT_R32G32B32A32_SFLOAT && (image.usage & required) == required;
+            };
+            REQUIRE(std::ranges::count_if(images_, candidate) == 1);
+            return *std::ranges::find_if(images_, candidate);
+        }
+
         /** @brief Returns actual successfully created device and retrieved graphics queue identities. */
         VkDevice Device() const noexcept {
             return device_;
@@ -247,7 +258,8 @@ namespace Horo::Render::Test::VfxInstanced {
         void RecordImage(VkImage image, const VkImageCreateInfo &info) noexcept {
             if (info.extent.width != 64 || info.extent.height != 32 || info.samples != VK_SAMPLE_COUNT_1_BIT)
                 return;
-            if (info.format != VK_FORMAT_R16G16B16A16_SFLOAT && info.format != VK_FORMAT_D32_SFLOAT)
+            if (info.format != VK_FORMAT_R16G16B16A16_SFLOAT && info.format != VK_FORMAT_D32_SFLOAT &&
+                info.format != VK_FORMAT_R32G32B32A32_SFLOAT)
                 return;
             const auto free = std::ranges::find(images_, VkImage{}, &Image::image);
             if (free == images_.end()) {
@@ -357,7 +369,8 @@ namespace Horo::Render::Test::VfxInstanced {
     class NativeReadback final {
     public:
         /** @brief Borrows the actual live backend observer after ordinary frontend completion has been proved. */
-        explicit NativeReadback(const ObservedLoader &loader) noexcept : loader_(loader) {}
+        explicit NativeReadback(const ObservedLoader &loader, bool reconstructed = false) noexcept
+            : loader_(loader), byteCount_(reconstructed ? ReconstructedBytes : TotalBytes) {}
 
         /** @brief Contains every native wait to five seconds and destroys partial children before the frontend/device parent. */
         ~NativeReadback() {
@@ -377,7 +390,7 @@ namespace Horo::Render::Test::VfxInstanced {
         /** @brief Allocates a real coherent staging destination and a one-use same-queue diagnostic command. */
         void Prepare() {
             const VkBufferCreateInfo buffer{.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-                                            .size = TotalBytes,
+                                            .size = byteCount_,
                                             .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                             .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
             REQUIRE(loader_.DeviceFunction<PFN_vkCreateBuffer>("vkCreateBuffer")(loader_.Device(), &buffer, nullptr, &buffer_) ==
@@ -408,14 +421,43 @@ namespace Horo::Render::Test::VfxInstanced {
         /** @brief Transitions actual completed attachments, copies their contents, and restores the canonical graph's final layouts. */
         Pixels Read() {
             const auto images = loader_.Rendered();
-            const VkCommandBufferBeginInfo begin{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-                                                 .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
-            REQUIRE(loader_.DeviceFunction<PFN_vkBeginCommandBuffer>("vkBeginCommandBuffer")(commands_, &begin) == VK_SUCCESS);
+            Begin();
             Copy(images.color.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
             Copy(images.depth.image, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, ColorBytes,
                  VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+            Submit();
+            return Mapped();
+        }
+
+        /** @brief Reads exact native RGBA32F pixels after canonical graph completion, restoring General layout. */
+        std::vector<float> ReadReconstructed() {
+            REQUIRE(byteCount_ == ReconstructedBytes);
+            const auto image = loader_.ReconstructedColor();
+            Begin();
+            Copy(image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, 0, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                 VK_ACCESS_SHADER_WRITE_BIT);
+            Submit();
+            std::vector<float> result(64 * 32 * 4);
+            void *mapped{};
+            REQUIRE(loader_.DeviceFunction<PFN_vkMapMemory>("vkMapMemory")(loader_.Device(), memory_, 0, VK_WHOLE_SIZE, 0, &mapped) ==
+                    VK_SUCCESS);
+            std::memcpy(result.data(), mapped, ReconstructedBytes);
+            loader_.DeviceFunction<PFN_vkUnmapMemory>("vkUnmapMemory")(loader_.Device(), memory_);
+            return result;
+        }
+
+    private:
+        /** @brief Opens the test-only diagnostic recorder after preparation. */
+        void Begin() {
+            const VkCommandBufferBeginInfo begin{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                                                 .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
+            REQUIRE(loader_.DeviceFunction<PFN_vkBeginCommandBuffer>("vkBeginCommandBuffer")(commands_, &begin) == VK_SUCCESS);
+        }
+
+        /** @brief Observes actual diagnostic completion before the staging buffer can be mapped. */
+        void Submit() {
             const VkBufferMemoryBarrier host{.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
                                              .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
                                              .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
@@ -423,7 +465,7 @@ namespace Horo::Render::Test::VfxInstanced {
                                              .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                                              .buffer = buffer_,
                                              .offset = 0,
-                                             .size = TotalBytes};
+                                             .size = byteCount_};
             loader_.DeviceFunction<PFN_vkCmdPipelineBarrier>("vkCmdPipelineBarrier")(commands_, VK_PIPELINE_STAGE_TRANSFER_BIT,
                                                                                      VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &host, 0,
                                                                                      nullptr);
@@ -434,11 +476,10 @@ namespace Horo::Render::Test::VfxInstanced {
             REQUIRE(loader_.DeviceFunction<PFN_vkQueueSubmit>("vkQueueSubmit")(loader_.Queue(), 1, &submit, fence_) == VK_SUCCESS);
             submitted_ = true;
             REQUIRE(Wait() == VK_SUCCESS);
-            return Mapped();
         }
 
-    private:
         static constexpr VkDeviceSize ColorBytes = 64 * 32 * 8, TotalBytes = ColorBytes + 64 * 32 * 4;
+        static constexpr VkDeviceSize ReconstructedBytes = 64 * 32 * 4 * sizeof(float);
 
         /** @brief Chooses only a real host-visible/coherent memory type allowed by this exact native allocation. */
         std::uint32_t MemoryType(std::uint32_t bits) const {
@@ -494,6 +535,7 @@ namespace Horo::Render::Test::VfxInstanced {
         }
 
         const ObservedLoader &loader_;
+        const VkDeviceSize byteCount_;
         VkBuffer buffer_{};
         VkDeviceMemory memory_{};
         VkCommandPool pool_{};

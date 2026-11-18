@@ -88,6 +88,18 @@ namespace Horo::Render::Detail {
             return ResolveRasterReads(raster.reads, output, registry);
         }
 
+        Result<void> ResolveReconstructionImages(const RenderGraphNativeReconstruction &reconstruction, ResolvedMultiviewResources &output,
+                                                 const RenderResourceRegistry &registry) {
+            for (const auto &image : reconstruction.images) {
+                if (!image.view.IsValid())
+                    continue;
+                if (const auto resolved = Resolve(image.view, RenderResourceClass::TextureView, output.views, output.viewCount, registry);
+                    resolved.HasError())
+                    return resolved;
+            }
+            return Result<void>::Success();
+        }
+
     }  // namespace
 
     /** @copydoc ResolveMultiviewResources */
@@ -96,6 +108,9 @@ namespace Horo::Render::Detail {
         ResolvedMultiviewResources output;
         std::size_t scenes = 0;
         for (const auto &entry : workloads) {
+            if (const auto *reconstruction = std::get_if<RenderGraphNativeReconstruction>(&entry.workload))
+                if (const auto resolved = ResolveReconstructionImages(*reconstruction, output, registry); resolved.HasError())
+                    return Result<ResolvedMultiviewResources>::Failure(resolved.ErrorValue());
             if (const auto *raster = std::get_if<RenderGraphMaterialRaster>(&entry.workload))
                 if (auto resolved = ResolveMaterialRaster(*raster, output, registry); resolved.HasError())
                     return Result<ResolvedMultiviewResources>::Failure(resolved.ErrorValue());

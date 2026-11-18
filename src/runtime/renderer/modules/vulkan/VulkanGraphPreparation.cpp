@@ -54,6 +54,7 @@ namespace Horo::Render::Detail {
         barriers.clear();
         updates.clear();
         materialPassStateCount = 0;
+        reconstructionPassCount = 0;
         submissions.clear();
         vfxDraws.clear();
         identities.clear();
@@ -216,6 +217,26 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
+    /** @copydoc VulkanGraphRuntime::Impl::PrepareReconstruction */
+    Result<void> VulkanGraphRuntime::Impl::PrepareReconstruction(const RenderGraphExecutionRequest &request, std::size_t index,
+                                                                 const RenderGraphNativeReconstruction &work,
+                                                                 VulkanCommandRetention &pins) {
+        const auto *queue = Queue(request.graph.Passes()[index].queue);
+        if (!queue || !queue->supportsCompute)
+            return Result<void>::Failure(Unsupported("Reconstruction requires actual compute queue support."));
+        const auto frame = static_cast<std::size_t>(&pins - retention.data());
+        const auto prepared = reconstruction.Prepare(work, request, bindings, *resources, pins, frame, reconstructionPassCount);
+        if (prepared.HasError())
+            return Result<void>::Failure(prepared.ErrorValue());
+        ++reconstructionPassCount;
+        passes[index].reconstruction = prepared.Value();
+        using Image = NativeReconstructionImage;
+        states[work.images[static_cast<std::size_t>(Image::OutputColor)].resource.value - 1].contentsDefined = true;
+        if (NativeReconstructionUsesImage(work.dispatch.entry, Image::OutputDepth))
+            states[work.images[static_cast<std::size_t>(Image::OutputDepth)].resource.value - 1].contentsDefined = true;
+        return Result<void>::Success();
+    }
+
     Result<void> VulkanGraphRuntime::Impl::FinishPass(const RenderGraphExecutionRequest &request, std::size_t index) {
         const auto &pass = request.graph.Passes()[index];
         const auto usages = request.graph.Usages().subspan(pass.usages.offset, pass.usages.count);
@@ -245,6 +266,7 @@ namespace Horo::Render::Detail {
         const auto &pass = request.graph.Passes()[index];
         auto &prepared = passes[index];
         prepared.vfxDraws = {};
+        prepared.reconstruction = {};
         if (const auto valid = ValidatePassUses(request, index); valid.HasError())
             return valid;
         prepared.before.offset = barriers.size();
@@ -254,8 +276,13 @@ namespace Horo::Render::Detail {
             return classic;
         if (const auto particles = PrepareParticleWork(request, index); particles.HasError())
             return particles;
-        if (const auto work = ValidateWorkload(request.workloads[index].workload, pass.queue); work.HasError())
-            return work;
+        const auto &operation = request.workloads[index].workload;
+        if (const auto *work = std::get_if<RenderGraphNativeReconstruction>(&operation)) {
+            if (const auto result = PrepareReconstruction(request, index, *work, pins); result.HasError())
+                return result;
+        } else if (const auto result = ValidateWorkload(operation, pass.queue); result.HasError()) {
+            return result;
+        }
         prepared.before.count = barriers.size() - prepared.before.offset;
         return FinishPass(request, index);
     }

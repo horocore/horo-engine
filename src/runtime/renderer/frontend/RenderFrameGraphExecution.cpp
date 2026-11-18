@@ -44,6 +44,17 @@ namespace Horo::Render {
             return Result<void>::Success();
         }
 
+        Result<void> ValidateReconstructionSupport(const IRenderBackend &backend, std::span<const RenderGraphPassWorkload> workloads,
+                                                   bool explicitSubmissions) {
+            const auto hasReconstruction = std::ranges::any_of(workloads, [](const auto &entry) {
+                return std::holds_alternative<RenderGraphNativeReconstruction>(entry.workload);
+            });
+            if (hasReconstruction &&
+                (!explicitSubmissions || !backend.Capabilities().support.features.Supports(RenderCapability::NativeReconstruction)))
+                return Result<void>::Failure(MakeError(NativeReconstructionErrors::Unsupported));
+            return Result<void>::Success();
+        }
+
         /** @brief Rejects unavailable encoders before resources or native work are acquired. */
         Result<void> ValidateGraphWorkloadSupport(const IRenderBackend &backend, const std::span<const RenderGraphPassWorkload> workloads,
                                                   const bool explicitSubmissions, RenderGraphExecutionRole role,
@@ -63,6 +74,9 @@ namespace Horo::Render {
                 return std::holds_alternative<RenderGraphVfx>(workload.workload);
             }))
                 return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::VfxExecutionUnavailable));
+            if (const auto reconstruction = ValidateReconstructionSupport(backend, workloads, explicitSubmissions);
+                reconstruction.HasError())
+                return reconstruction;
             return ValidateGpuVfxSupport(backend, workloads, explicitSubmissions);
         }
 

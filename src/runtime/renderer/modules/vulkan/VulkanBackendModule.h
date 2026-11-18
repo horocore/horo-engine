@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Runtime/Render/MaterialBindingErrors.h"
+#include "Horo/Runtime/Render/NativeReconstructionKernel.h"
 #include "Horo/Runtime/Render/RenderBackendRegistry.h"
 #include "Horo/Runtime/Render/VfxFrameUpload.h"
 #include "VulkanHostGraphicsRequirements.h"
@@ -223,6 +224,13 @@ namespace Horo::Render {
         /** @brief Publishes a prepared VFX block only through the canonical command owner's retirement proof. */
         [[nodiscard]] virtual Result<void> UpdateVfxFrame(const NativeVfxFrameUpdate &) {
             return Result<void>::Failure(MakeError(VfxFrameErrors::Unavailable));
+        }
+
+        /** @brief Cold realization through the device's canonical reconstruction command owner. */
+        [[nodiscard]] virtual Result<std::shared_ptr<IResidentNativeReconstructionKernel>> RealizeNativeReconstructionKernel(
+            const CookedNativeReconstructionKernel &) {
+            return Result<std::shared_ptr<IResidentNativeReconstructionKernel>>::Failure(
+                MakeError(NativeReconstructionErrors::Unsupported));
         }
 
         [[nodiscard]] virtual Result<NativeVfxGpuPreparationResources> QueryVfxGpuNativePreparationResources(

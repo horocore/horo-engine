@@ -340,6 +340,7 @@ TEST_CASE("Locked Vulkan shader tools cook and admit the native reconstruction e
     const auto other = (entry == Spatial) ? TemporalHistory : Spatial;
     auto request = Request(ShaderTargetBackend::Vulkan, ShaderPayloadFormat::SpirV16, {dxc->identity, spirvTools->identity});
     auto &target = request.targets.front().requirement;
+    target.maximumInlineConstantBytes = 128;
     target.supportsCompute = true;
     target.supportsStorageResources = true;
     auto contract = DescribeNativeReconstructionShader(entry, target);

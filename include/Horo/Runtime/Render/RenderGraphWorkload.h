@@ -7,12 +7,14 @@
 #include "Horo/Runtime/Render/ExposureGpuWorkload.h"
 #include "Horo/Runtime/Render/LightCullingKernel.h"
 #include "Horo/Runtime/Render/MultiviewGraphWorkload.h"
+#include "Horo/Runtime/Render/NativeReconstructionKernel.h"
 #include "Horo/Runtime/Render/RenderGraphExecution.h"
 #include "Horo/Runtime/Render/UiPaintWorkload.h"
 #include "Horo/Runtime/Render/VfxGpuKernel.h"
 #include "Horo/Runtime/Render/VfxGpuSimulation.h"
 #include "Horo/Runtime/Render/VfxGraphWorkload.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <variant>
@@ -141,11 +143,47 @@ namespace Horo::Render {
         bool depthOnly{};
     };
 
+    /** @brief Exact graph image and separately resolved whole-image view generation. */
+    struct RenderGraphReconstructionImage final {
+        RenderGraphResourceId resource;
+        RenderTextureViewHandle view;
+    };
+
+    /** @brief One native reconstruction operation submitted with the canonical graph queue and lease.
+     * @details Images are indexed by NativeReconstructionImage. Unused roles are empty. Inputs use Sampled Read,
+     * outputs use Storage Write, and every role is on a distinct whole texture. Native preparation resolves the exact
+     * pipeline, view generation, image formats and GPU completion ownership.
+     */
+    struct RenderGraphNativeReconstruction final {
+        static constexpr auto ImageCount = static_cast<std::size_t>(NativeReconstructionImage::Count);
+        static constexpr auto MaximumPassesPerFrame = MultiviewExtractionLimits::HardMaximumViews;
+        NativeReconstructionDispatchPlan dispatch;
+        std::array<RenderGraphReconstructionImage, ImageCount> images;
+        std::shared_ptr<IResidentNativeReconstructionKernel> kernel;
+    };
+
     /** @brief Exact typed operation; an empty workload represents an ordering-only pass. */
-    using RenderGraphWorkload =
-        std::variant<std::monostate, PrimaryOutputAttachment, RenderGraphColorAttachment, RenderGraphBufferCopy, RenderGraphLightCulling,
-                     RenderGraphVfx, RenderGraphDepthAttachment, RenderGraphMultiview, RenderGraphUiPaint, RenderGraphMaterialRaster,
-                     RenderGraphVfxGpuCompute, RenderGraphVfxGpuDraw, RenderGraphExposureGpu, RenderGraphTextureUpload>;
+    using RenderGraphWorkload = std::variant<std::monostate, PrimaryOutputAttachment, RenderGraphColorAttachment, RenderGraphBufferCopy,
+                                             RenderGraphLightCulling, RenderGraphVfx, RenderGraphDepthAttachment, RenderGraphMultiview,
+                                             RenderGraphUiPaint, RenderGraphMaterialRaster, RenderGraphVfxGpuCompute, RenderGraphVfxGpuDraw,
+                                             RenderGraphExposureGpu, RenderGraphTextureUpload, RenderGraphNativeReconstruction>;
+
+    /** @brief Validates exact native reconstruction graph roles before resolving backend descriptors.
+     * @param request Immutable execution request. @param pass Exact compiled compute pass.
+     * @param workload One typed dispatch over graph-local images.
+     * @return Success or typed invalid graph. Native ownership and image descriptor validation follow independently.
+     */
+    [[nodiscard]] Result<void> ValidateNativeReconstructionGraphWorkload(const RenderGraphExecutionRequest &request,
+                                                                         const RenderGraphExecutionPass &pass,
+                                                                         const RenderGraphNativeReconstruction &workload);
+
+    /** @brief Matches one captured texture against the closed shader role and dispatch extents.
+     * @param dispatch Validated packed dispatch. @param image Exact closed image role.
+     * @param descriptor Actual resident texture descriptor.
+     * @return True for the required sample/storage usage, supported format and whole image shape.
+     */
+    [[nodiscard]] bool MatchesNativeReconstructionImage(const NativeReconstructionDispatchPlan &dispatch, NativeReconstructionImage image,
+                                                        const RenderTextureDescriptor &descriptor) noexcept;
 
     /** @brief Checks exact whole-upload shape and byte bounds against captured resource descriptors without native mutation.
      * @param upload Explicit tightly packed upload value. @param source Exact source buffer descriptor.

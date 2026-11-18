@@ -299,9 +299,12 @@ The Vulkan native shader cook provides spatial, temporal seed and temporal accum
 First/reset frames bind only current inputs and resolved destinations.
 The initial compute ABI uses RGBA32F sampled and storage output, R32F resolved
 depth for the temporal entry, and explicit scalar exposure. The cooked interface
-requires exact shader entry, descriptor bindings, storage image formats, constant
-packing and group size. Provider availability depends on native graph execution
-and image qualification as specified by ADR-040.
+requires exact shader entry, descriptor bindings, storage image formats, 48 bytes
+of push constants and group size. The Vulkan graph records on the explicitly
+admitted compute queue and retains exact image views and the kernel until
+completion. The graph retains writes through the same journal as other native
+workloads. Provider availability requires qualified image behavior and product
+composition as specified by ADR-040.
 
 ## Upscaling
 

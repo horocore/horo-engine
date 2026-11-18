@@ -4694,6 +4694,7 @@ add_executable(HoroRenderGraphTests
         unit/runtime/renderer/RenderGraphValidationTests.cpp
         unit/runtime/renderer/RenderGraphSynchronizationTests.cpp
         unit/runtime/renderer/RenderGraphTextureUploadTests.cpp
+        unit/runtime/renderer/RenderGraphNativeReconstructionTests.cpp
 )
 target_compile_features(HoroRenderGraphTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRenderGraphTests PRIVATE HoroEngine::RenderApi)
@@ -6792,7 +6793,8 @@ if (HORO_BUILD_RENDER_VULKAN)
                 HORO_VFX_GPU_VULKAN_FIXTURE_PATH="${PROJECT_SOURCE_DIR}/tests/fixtures/shaders/vfx_gpu_vulkan_locked")
         target_link_libraries(HoroVulkanCommandExecutionSmoke PRIVATE Catch2::Catch2WithMain
                 HoroEngine::RenderFrontend HoroEngine::RenderVulkan HoroRenderVulkanHostInterface
-                HoroEngine::VfxApi HoroVfxGpuVulkanCookInternal Vulkan::Headers ${CMAKE_DL_LIBS})
+                HoroEngine::VfxApi HoroVfxGpuVulkanCookInternal HoroEngine::ShaderCompilerToolchain
+                HoroEngine::Platform Vulkan::Headers ${CMAKE_DL_LIBS})
         add_test(NAME HoroVulkanCommandExecutionSmoke COMMAND HoroVulkanCommandExecutionSmoke)
         set_tests_properties(HoroVulkanCommandExecutionSmoke PROPERTIES
                 LABELS "gpu;vulkan;renderer;qualification" TIMEOUT 45 RUN_SERIAL TRUE SKIP_RETURN_CODE 4

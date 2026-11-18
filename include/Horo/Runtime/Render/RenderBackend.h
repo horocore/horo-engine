@@ -33,6 +33,8 @@
 #include <vector>
 
 namespace Horo::Render {
+    struct CookedNativeReconstructionKernel;
+    class IResidentNativeReconstructionKernel;
     struct RenderGraphExecutionRequest;
     struct NativeUiPaintFrameUpdate;
     struct NativeVfxFrameUpdate;
@@ -609,6 +611,13 @@ namespace Horo::Render {
 
         [[nodiscard]] virtual Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
             const CookedLightCullingKernel &kernel);
+
+        /** @brief Realizes one closed offline-cooked native reconstruction entry outside frame recording.
+         * @param kernel Exact typed entry, target descriptor and digest-bound cook artifact.
+         * @return Resident native lease or typed unsupported/original preparation failure.
+         */
+        [[nodiscard]] virtual Result<std::shared_ptr<IResidentNativeReconstructionKernel>> RealizeNativeReconstructionKernel(
+            const CookedNativeReconstructionKernel &kernel);
 
         /** @brief Realizes the complete cooked GPU particle compute/direct-draw family at a cold owner boundary.
          * @param programs Exact canonical artifacts and final-target reflection, never runtime source.

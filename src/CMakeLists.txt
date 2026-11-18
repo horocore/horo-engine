@@ -3126,6 +3126,7 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderFrontendVfxResources.cpp
         runtime/renderer/frontend/LightCullingPreparation.cpp
         runtime/renderer/frontend/ExposureGpuPreparation.cpp
+        runtime/renderer/frontend/NativeReconstructionPreparation.cpp
         runtime/renderer/frontend/VfxPreparation.cpp
         runtime/renderer/frontend/VfxGpuInventoryLease.cpp
         runtime/renderer/frontend/VfxGpuPreparation.cpp
@@ -3454,6 +3455,7 @@ if (HORO_BUILD_RENDER_VULKAN)
         runtime/renderer/modules/vulkan/VulkanGuiCommands.cpp
             runtime/renderer/modules/vulkan/VulkanGraphPreparation.cpp
             runtime/renderer/modules/vulkan/VulkanGraphCommands.cpp
+            runtime/renderer/modules/vulkan/VulkanReconstructionRuntime.cpp
             runtime/renderer/modules/vulkan/VulkanMaterialCommands.cpp
             runtime/renderer/modules/vulkan/VulkanVfxCommands.cpp
             runtime/renderer/modules/vulkan/VulkanMultiviewEncoding.cpp

@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Render/NativeReconstructionKernel.h"
 
+#include "Horo/Runtime/Render/RenderBackend.h"
 #include "Horo/Runtime/Render/ShaderArtifact.h"
 #include "RenderErrorDescriptor.h"
 
@@ -32,20 +33,6 @@ namespace Horo::Render {
     static_assert(offsetof(NativeReconstructionDispatch, sample) == 16 && offsetof(NativeReconstructionDispatch, depth) == 32);
 
     namespace {
-        /** @brief Identifies the engine-owned compute entry points. */
-        constexpr std::string_view EntryName(NativeReconstructionEntry entry) noexcept {
-            using enum NativeReconstructionEntry;
-            switch (entry) {
-                case Spatial:
-                    return "ReconstructSpatial";
-                case TemporalSeed:
-                    return "ReconstructTemporalSeed";
-                case TemporalHistory:
-                    return "ReconstructTemporal";
-            }
-            return {};
-        }
-
         /** @brief Supports the exact storage image and sampled-resource variant defined by this shader. */
         bool SupportsDispatch(const ReconstructionFrameRequest &frame, const RenderCapabilitySnapshot &capabilities) noexcept {
             const auto output = frame.output.descriptor;
@@ -95,7 +82,6 @@ namespace Horo::Render {
             KernelBinding{SampledTexture, "PreviousColor", TemporalHistory},
             KernelBinding{SampledTexture, "PreviousDepth", TemporalHistory},
             KernelBinding{StorageTexture, "ReconstructedDepth", TemporalSeed},
-            KernelBinding{UniformBuffer, "type.ReconstructionDispatch"},
         };
 
         /** @brief Chooses a seed when valid prior color and depth are intentionally unused. */
@@ -105,20 +91,38 @@ namespace Horo::Render {
             return readsHistory ? TemporalHistory : TemporalSeed;
         }
 
-        /** @brief Verifies active final ABI offsets and the exact Vulkan descriptor slots. */
+        /** @brief Verifies active final ABI and the exact Vulkan descriptor slots. */
         bool ExactLayout(const NormalizedShaderReflection &reflected) noexcept {
-            if (reflected.parameters.size() != 3 || !reflected.stageInterface.empty() ||
+            if (!reflected.parameters.empty() || !reflected.stageInterface.empty() ||
                 reflected.targetBindings.size() != reflected.bindings.size())
                 return false;
             return std::ranges::all_of(reflected.bindings, &ShaderReflectedBinding::active) &&
-                   std::ranges::all_of(reflected.parameters, [](const auto &parameter) {
-                return parameter.active && parameter.byteOffset == (parameter.id.value - 1) * 16;
-            }) && std::ranges::all_of(reflected.targetBindings, [](const auto &binding) {
+                   std::ranges::all_of(reflected.targetBindings, [](const auto &binding) {
                 return binding.active && binding.nativeSpace == 0 && binding.nativeBinding == binding.id.value - 1 &&
                        binding.generatedHelperIndex == 0;
             });
         }
     }  // namespace
+
+    /** @copydoc NativeReconstructionEntryName */
+    std::string_view NativeReconstructionEntryName(NativeReconstructionEntry entry) noexcept {
+        switch (entry) {
+            case Spatial:
+                return "ReconstructSpatial";
+            case TemporalSeed:
+                return "ReconstructTemporalSeed";
+            case TemporalHistory:
+                return "ReconstructTemporal";
+        }
+        return {};
+    }
+
+    /** @copydoc NativeReconstructionUsesImage */
+    bool NativeReconstructionUsesImage(NativeReconstructionEntry entry, NativeReconstructionImage image) noexcept {
+        const auto slot = static_cast<std::size_t>(image);
+        return entry <= TemporalHistory && slot < static_cast<std::size_t>(NativeReconstructionImage::Count) &&
+               entry >= KernelBindings[slot].minimum;
+    }
 
     /** @copydoc PrepareNativeReconstructionDispatch */
     Result<NativeReconstructionDispatchPlan> PrepareNativeReconstructionDispatch(const ReconstructionFrameRequest &request,
@@ -154,16 +158,18 @@ namespace Horo::Render {
     Result<NativeReconstructionShaderContract> DescribeNativeReconstructionShader(NativeReconstructionEntry entry,
                                                                                   const ShaderTargetRequirement &target) {
         using Outcome = Result<NativeReconstructionShaderContract>;
-        const auto name = EntryName(entry);
+        const auto name = NativeReconstructionEntryName(entry);
         if (name.empty() || target.backend != ShaderTargetBackend::Vulkan || target.payloadFormat != ShaderPayloadFormat::SpirV16 ||
-            !target.supportsCompute || !target.supportsStorageResources)
+            !target.supportsCompute || !target.supportsStorageResources ||
+            target.maximumInlineConstantBytes < sizeof(NativeReconstructionDispatch))
             return Outcome::Failure(MakeError(NativeReconstructionErrors::Unsupported));
         NativeReconstructionShaderContract result;
         auto &manifest = result.manifest;
         manifest.schemaVersion = 1;
         manifest.sourceIdentity = "horo/runtime/native_reconstruction.hlsl";
-        manifest.sourceRevision = 2;
+        manifest.sourceRevision = 3;
         manifest.entryPoints = {{ShaderStage::Compute, std::string{name}}};
+        manifest.inlineConstants = {{0, sizeof(NativeReconstructionDispatch), ShaderStageVisibility::Compute}};
         manifest.targets = {target};
         for (std::uint32_t slot = 0; slot < KernelBindings.size(); ++slot) {
             const auto &binding = KernelBindings[slot];
@@ -172,13 +178,7 @@ namespace Horo::Render {
             const ShaderBindingId id{slot + 1};
             const auto access = binding.kind == StorageTexture ? ShaderResourceAccess::ReadWrite : ShaderResourceAccess::ReadOnly;
             manifest.bindings.push_back({id, binding.kind, access, 1, ShaderStageVisibility::Compute});
-            auto &names = result.reflectionNames.emplace_back(ShaderReflectionBindingName{id, std::string{binding.name}, {}});
-            if (binding.kind == UniformBuffer) {
-                manifest.parameters = {{{1}, id, ShaderValueType::Uint32, 1, 4, 1},
-                                       {{2}, id, ShaderValueType::Float32, 1, 4, 1},
-                                       {{3}, id, ShaderValueType::Float32, 1, 4, 1}};
-                names.parameters = {{{1}, "Extents"}, {{2}, "SampleParameters"}, {{3}, "DepthParameters"}};
-            }
+            result.reflectionNames.push_back({id, std::string{binding.name}, {}});
         }
         if (const auto valid = ValidateShaderManifest(manifest); valid.HasError())
             return Outcome::Failure(valid.ErrorValue());
@@ -202,7 +202,8 @@ namespace Horo::Render {
         if (decoded.HasError())
             return Outcome::Failure(decoded.ErrorValue());
         const auto &package = decoded.Value();
-        if (package.stageCount != 1 || package.stages[0].stage != ShaderStage::Compute || package.stages[0].entryPoint != EntryName(entry))
+        if (package.stageCount != 1 || package.stages[0].stage != ShaderStage::Compute ||
+            package.stages[0].entryPoint != NativeReconstructionEntryName(entry))
             return Outcome::Failure(MakeError(NativeReconstructionErrors::InvalidArtifact));
         const auto &reflection = artifact.reflection->reflection;
         const ShaderReflectionCandidate candidate{reflection.backend,    reflection.interfaceSchemaVersion, reflection.bindings,
@@ -214,5 +215,11 @@ namespace Horo::Render {
         if (normalized.Value().interfaceCompatibility != reflection.interfaceCompatibility || !ExactLayout(normalized.Value()))
             return Outcome::Failure(MakeError(NativeReconstructionErrors::InvalidArtifact));
         return Outcome::Success(package.stages[0].bytes);
+    }
+
+    /** @copydoc IRenderBackend::RealizeNativeReconstructionKernel */
+    Result<std::shared_ptr<IResidentNativeReconstructionKernel>> IRenderBackend::RealizeNativeReconstructionKernel(
+        const CookedNativeReconstructionKernel &) {
+        return Result<std::shared_ptr<IResidentNativeReconstructionKernel>>::Failure(MakeError(NativeReconstructionErrors::Unsupported));
     }
 }  // namespace Horo::Render

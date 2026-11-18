@@ -406,8 +406,11 @@ namespace Horo::Render {
                                                        .properties = &properties.properties});
                     prepared.HasError())
                     return prepared;
+                const bool computeRole = std::ranges::any_of(request.queueAssignments, [](const auto &assignment) {
+                    return assignment.role == RenderQueueRole::Compute;
+                });
                 if (auto published = PublishResourceCapabilities(physical, properties.properties, allocationLimits.maxMemoryAllocationSize,
-                                                                 incarnation.Value());
+                                                                 incarnation.Value(), computeRole);
                     published.HasError())
                     return published;
                 return request.enableSwapchainMaintenance ? InitializePresentation(physical, request, incarnation.Value())
@@ -454,6 +457,11 @@ namespace Horo::Render {
 
             RenderCapabilitySnapshot ResourceCapabilities() const noexcept override {
                 return resourceCapabilities_;
+            }
+
+            Result<std::shared_ptr<IResidentNativeReconstructionKernel>> RealizeNativeReconstructionKernel(
+                const CookedNativeReconstructionKernel &kernel) override {
+                return graph_.RealizeNativeReconstructionKernel(kernel);
             }
 
             Result<NativeVfxGpuPreparationResources> QueryVfxGpuNativePreparationResources(
@@ -675,7 +683,8 @@ namespace Horo::Render {
 
             /** @brief Publishes queried device/format facts, intersected with this concrete implementation's resource policy. */
             Result<void> PublishResourceCapabilities(const VkPhysicalDevice device, const VkPhysicalDeviceProperties &properties,
-                                                     const VkDeviceSize allocationLimit, const std::uint64_t incarnation) {
+                                                     const VkDeviceSize allocationLimit, const std::uint64_t incarnation,
+                                                     bool computeRole) {
                 using enum RenderTextureFormat;
                 auto &snapshot = resourceCapabilities_;
                 snapshot = {.deviceIncarnation = incarnation,
@@ -702,11 +711,16 @@ namespace Horo::Render {
                                   "vkGetPhysicalDeviceFormatProperties is required to publish native resource capabilities."));
                 }
                 snapshot.formats.sampleCountMask = std::uint64_t{1} << 1U;
-                for (const auto format : {Rgba8Unorm, Rgba16Float, Depth24Stencil8, Depth32Float}) {
+                const bool reconstruction = computeRole && graph_.SupportsNativeReconstruction();
+                for (const auto format :
+                     {Rgba8Unorm, Rgba16Float, Depth24Stencil8, Depth32Float, R16Float, R32Float, Rg16Float, Rg32Float, Rgba32Float}) {
                     using enum RenderTextureUsage;
                     VkFormatProperties native{};
                     query(device, Detail::VulkanResourceConversion::TextureFormat(format), &native);
                     auto usage = None;
+                    if (reconstruction && (format == Rgba32Float || format == R32Float) &&
+                        (native.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0)
+                        usage = usage | Storage;
                     if ((native.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) != 0)
                         usage = usage | Sampled;
                     if ((native.optimalTilingFeatures &
@@ -717,6 +731,16 @@ namespace Horo::Render {
                     if ((native.optimalTilingFeatures & VK_FORMAT_FEATURE_TRANSFER_DST_BIT) != 0)
                         usage = usage | CopyDestination;
                     snapshot.formats.usages[static_cast<std::size_t>(format)] = usage;
+                }
+                const auto hasFormat = [&](RenderTextureFormat format, RenderTextureUsage usage) {
+                    return HasTextureUsage(snapshot.formats.usages[static_cast<std::size_t>(format)], usage);
+                };
+                if (reconstruction && hasFormat(Rgba32Float, RenderTextureUsage::Sampled | RenderTextureUsage::Storage) &&
+                    hasFormat(R32Float, RenderTextureUsage::Sampled | RenderTextureUsage::Storage) &&
+                    (hasFormat(Rg16Float, RenderTextureUsage::Sampled) || hasFormat(Rg32Float, RenderTextureUsage::Sampled))) {
+                    snapshot.queues.compute = true;
+                    snapshot.features.Enable(RenderCapability::Compute);
+                    snapshot.features.Enable(RenderCapability::NativeReconstruction);
                 }
                 PublishVfxCapabilities();
                 return PublishMultiviewCapabilities(device, properties);

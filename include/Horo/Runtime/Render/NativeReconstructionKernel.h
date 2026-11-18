@@ -6,8 +6,10 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace Horo::Render {
@@ -17,6 +19,29 @@ namespace Horo::Render {
         TemporalSeed,    /**< Writes resolved color/depth without motion or prior-history descriptors. */
         TemporalHistory, /**< Uses motion and exact previous resolved color/depth. */
     };
+
+    /** @brief Returns the exact NUL-terminated shader entry literal or an empty view for an unknown entry. */
+    [[nodiscard]] std::string_view NativeReconstructionEntryName(NativeReconstructionEntry entry) noexcept;
+
+    /** @brief Image shader slots in exact native descriptor order. */
+    enum class NativeReconstructionImage : std::uint8_t {
+        CurrentColor,
+        OutputColor,
+        CurrentDepth,
+        Motion,
+        PreviousColor,
+        PreviousDepth,
+        OutputDepth,
+        Count,
+    };
+
+    /** @brief Returns whether one entry declares this image descriptor. */
+    [[nodiscard]] bool NativeReconstructionUsesImage(NativeReconstructionEntry entry, NativeReconstructionImage image) noexcept;
+
+    /** @brief Returns whether this image role is exclusively written by the shader. */
+    [[nodiscard]] constexpr bool NativeReconstructionWritesImage(NativeReconstructionImage image) noexcept {
+        return image == NativeReconstructionImage::OutputColor || image == NativeReconstructionImage::OutputDepth;
+    }
 
     /** @brief Exact native reconstruction kernel constants shared with native_reconstruction.hlsl. */
     struct alignas(16) NativeReconstructionDispatch final {
@@ -58,6 +83,22 @@ namespace Horo::Render {
     struct NativeReconstructionShaderContract final {
         ShaderManifest manifest;
         std::vector<ShaderReflectionBindingName> reflectionNames;
+    };
+
+    /** @brief Exact offline-cooked compute stage for cold native pipeline realization. */
+    struct CookedNativeReconstructionKernel final {
+        NativeReconstructionEntry entry;
+        ShaderTargetRequirement target;
+        CompiledShaderArtifact artifact;
+    };
+
+    /** @brief Backend-owned native pipeline lease with no native handles in the public API.
+     * @details The host releases the lease on the render owner thread. Accepted submissions retain the exact lease
+     * through completion. Backend shutdown revokes it after the command owner has drained.
+     */
+    class IResidentNativeReconstructionKernel {
+    public:
+        virtual ~IResidentNativeReconstructionKernel() = default;
     };
 
     namespace NativeReconstructionErrors {

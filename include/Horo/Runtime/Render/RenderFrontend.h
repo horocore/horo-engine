@@ -663,6 +663,13 @@ namespace Horo::Render {
         [[nodiscard]] Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
             const CookedLightCullingKernel &kernel);
 
+        /** @brief Realizes one closed offline-cooked native reconstruction entry on the render owner.
+         * @param kernel Exact cooked artifact and final-target reflection.
+         * @return Native lease or typed lifecycle, capability or backend failure.
+         */
+        [[nodiscard]] Result<std::shared_ptr<IResidentNativeReconstructionKernel>> RealizeNativeReconstructionKernel(
+            const CookedNativeReconstructionKernel &kernel);
+
         /**
          * @brief Updates exact ready frame-slot buffers before opening a frame; submitted slots remain immutable until complete.
          * @param buffers Four distinct host-visible storage generations allocated at preparation time.

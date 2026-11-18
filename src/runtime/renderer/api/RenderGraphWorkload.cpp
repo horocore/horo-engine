@@ -99,7 +99,8 @@ namespace Horo::Render {
         bool ExternallyValidated(const RenderGraphWorkload &workload) {
             return std::holds_alternative<RenderGraphMaterialRaster>(workload) || std::holds_alternative<RenderGraphMultiview>(workload) ||
                    std::holds_alternative<RenderGraphVfx>(workload) || std::holds_alternative<RenderGraphExposureGpu>(workload) ||
-                   std::holds_alternative<RenderGraphTextureUpload>(workload);
+                   std::holds_alternative<RenderGraphTextureUpload>(workload) ||
+                   std::holds_alternative<RenderGraphNativeReconstruction>(workload);
         }
 
         bool MatchesBasic(const RenderGraphExecutionPass &pass, std::span<const RenderGraphResourceUsage> uses,
@@ -319,6 +320,8 @@ namespace Horo::Render {
         /** @brief Preserves semantic validator failures instead of collapsing them into a generic boolean graph error. */
         Result<void> ValidateTypedPass(const RenderGraphExecutionRequest &request, const RenderGraphExecutionPass &pass,
                                        const RenderGraphWorkload &workload) {
+            if (const auto *reconstruction = std::get_if<RenderGraphNativeReconstruction>(&workload))
+                return ValidateNativeReconstructionGraphWorkload(request, pass, *reconstruction);
             if (const auto *upload = std::get_if<RenderGraphTextureUpload>(&workload))
                 return ValidateTextureUploadGraphWorkload(request, pass, *upload);
             if (const auto *raster = std::get_if<RenderGraphMaterialRaster>(&workload))
@@ -332,8 +335,12 @@ namespace Horo::Render {
 
         Result<void> ValidateTypedWorkloads(const RenderGraphExecutionRequest &request) {
             std::size_t multiviewCount = 0;
+            std::size_t reconstructionCount = 0;
             for (std::size_t index = 0; index < request.workloads.size(); ++index) {
                 const auto &binding = request.workloads[index];
+                if (std::holds_alternative<RenderGraphNativeReconstruction>(binding.workload) &&
+                    ++reconstructionCount > RenderGraphNativeReconstruction::MaximumPassesPerFrame)
+                    return Result<void>::Failure(MakeError(NativeReconstructionErrors::InvalidDispatch));
                 if (auto valid = ValidateTypedPass(request, request.graph.Passes()[index], binding.workload); valid.HasError())
                     return valid;
                 if (const auto *scene = std::get_if<RenderGraphMultiview>(&binding.workload)) {

@@ -101,6 +101,7 @@ set(HORO_RENDER_API_SOURCES
     runtime/renderer/api/RenderGraphLifetime.cpp
     runtime/renderer/api/RenderGraphWorkload.cpp
     runtime/renderer/api/RenderGraphTextureUpload.cpp
+    runtime/renderer/api/RenderGraphNativeReconstruction.cpp
     runtime/renderer/api/UiPaintWorkload.cpp
     runtime/renderer/api/UiPaintKernel.cpp
     runtime/renderer/api/UiPaintFrameUpload.cpp

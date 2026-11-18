@@ -211,8 +211,11 @@ namespace Horo::Render::Detail {
         else if (std::holds_alternative<RenderGraphVfxGpuCompute>(workload) || std::holds_alternative<RenderGraphVfxGpuDraw>(workload)) {
             if (const auto encoded = vfxGpu.Encode(command, ticket, submission, request, pass, bindings); encoded.HasError())
                 return encoded;
-        } else
+        } else if (const auto *work = std::get_if<RenderGraphNativeReconstruction>(&workload)) {
+            reconstruction.Encode(command, work->dispatch.constants, passes[pass].reconstruction);
+        } else {
             Encode(command, workload);
+        }
         Barriers(command, passes[pass].after);
         return Result<void>::Success();
     }

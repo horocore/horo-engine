@@ -12,10 +12,13 @@
 
 namespace Horo::Render::Detail {
     namespace {
-        /** @brief Pins multiview workloads in order; the caller's lease transaction owns partial-prefix rollback. */
+        /** @brief Pins workloads with separate view identities in order; the caller's lease transaction owns partial-prefix rollback. */
         template <typename Lease>
-        [[nodiscard]] Result<void> PinMultiviewWorkloads(Lease &lease, const std::span<const RenderGraphPassWorkload> workloads) {
+        [[nodiscard]] Result<void> PinAdditionalGraphWorkloads(Lease &lease, const std::span<const RenderGraphPassWorkload> workloads) {
             for (const auto &entry : workloads) {
+                if (const auto *reconstruction = std::get_if<RenderGraphNativeReconstruction>(&entry.workload))
+                    if (const auto pinned = lease.PinReconstruction(*reconstruction); pinned.HasError())
+                        return pinned;
                 if (const auto *raster = std::get_if<RenderGraphMaterialRaster>(&entry.workload))
                     if (auto pinned = lease.PinMaterialRaster(*raster); pinned.HasError())
                         return pinned;
@@ -244,6 +247,18 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
+    /** @copydoc RenderGraphResourceLeasePool::Lease::PinReconstruction */
+    Result<void> RenderGraphResourceLeasePool::Lease::PinReconstruction(const RenderGraphNativeReconstruction &workload) {
+        for (const auto &image : workload.images) {
+            const auto view = image.view;
+            if (!view.IsValid())
+                continue;
+            if (auto pinned = PinIdentity({RenderResourceClass::TextureView, {view.owner, view.slot, view.generation}}); pinned.HasError())
+                return pinned;
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc RenderGraphResourceLeasePool::Lease::PinMultiview */
     Result<void> RenderGraphResourceLeasePool::Lease::PinMultiview(const RenderGraphMultiview &workload) {
         if (!workload.scene || workload.geometry.size() > materials.size() - materialCount)
@@ -332,7 +347,7 @@ namespace Horo::Render::Detail {
             }
             lease.uiCount = 1;
         }
-        if (const auto pinned = PinMultiviewWorkloads(lease, workloads); pinned.HasError())
+        if (const auto pinned = PinAdditionalGraphWorkloads(lease, workloads); pinned.HasError())
             return Result<IRenderGraphResourceLease *>::Failure(pinned.ErrorValue());
         for (const auto &entry : workloads)
             if (const auto *vfx = std::get_if<RenderGraphVfx>(&entry.workload))

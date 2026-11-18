@@ -121,6 +121,33 @@ namespace Horo::Render {
             return stage == ShaderStage::Vertex ? ShaderStageVisibility::Vertex : ShaderStageVisibility::Fragment;
         }
 
+        /** @brief Requires the complete compiler-reported push block without descriptor or packed-member indirection. */
+        void ValidateReconstructionConstants(const Json &json) {
+            const auto &blocks = json.at("push_constants");
+            if (!blocks.is_array() || blocks.size() != 1)
+                throw InvalidEvidence{};
+            const auto &block = blocks.front();
+            if (block.at("name") != "Dispatch" || block.at("push_constant") != true || block.contains("array") ||
+                block.contains("binding") || block.contains("set"))
+                throw InvalidEvidence{};
+            const auto &type = json.at("types").at(block.at("type").get<std::string>());
+            const auto &members = type.at("members");
+            constexpr std::array names{"Extents", "SampleParameters", "DepthParameters"};
+            constexpr std::array types{"uvec4", "vec4", "vec4"};
+            constexpr std::array offsets{offsetof(NativeReconstructionDispatch, extents), offsetof(NativeReconstructionDispatch, sample),
+                                         offsetof(NativeReconstructionDispatch, depth)};
+            if (type.at("name") != "type.ConstantBuffer.ReconstructionDispatch" || !members.is_array() || members.size() != names.size())
+                throw InvalidEvidence{};
+            for (std::size_t i = 0; i < names.size(); ++i) {
+                const auto &member = members[i];
+                if (member.at("name") != names[i] || member.at("type") != types[i] || Unsigned(member.at("offset")) != offsets[i])
+                    throw InvalidEvidence{};
+                for (const auto key : {"array", "array_stride", "array_size_is_literal", "matrix_stride", "row_major", "physical_pointer"})
+                    if (member.contains(key))
+                        throw InvalidEvidence{};
+            }
+        }
+
         class Normalizer final {
         public:
             Normalizer(const ShaderManifest &manifest, const ShaderTargetRequirement &target,
@@ -152,6 +179,7 @@ namespace Horo::Render {
                 SampledResources(json, stage.stage, "separate_images", ShaderResourceKind::SampledTexture, seen);
                 SampledResources(json, stage.stage, "separate_samplers", ShaderResourceKind::Sampler, seen);
                 if (reconstruction_) {
+                    ValidateReconstructionConstants(json);
                     StorageImages(json, stage.stage, seen);
                     if (!std::ranges::all_of(candidate_.bindings, &ShaderReflectedBinding::active))
                         throw InvalidEvidence{};
@@ -161,7 +189,7 @@ namespace Horo::Render {
             ShaderReflectionCandidate candidate_;
 
         private:
-            /** @brief Restricts native resource classes to the implemented read-only raster contract. */
+            /** @brief Restricts native resource classes to the admitted raster or reconstruction profile. */
             bool SupportedBinding(const ShaderResourceBinding &binding) const noexcept {
                 using enum Horo::Render::ShaderResourceKind;
                 if (reconstruction_ && binding.kind == StorageTexture)
@@ -230,16 +258,20 @@ namespace Horo::Render {
 
             /** @brief Other resource classes need their own typed native admission rather than silent omission. */
             void RejectUnsupportedResources(const Json &json) const {
-                if (!reconstruction_ && json.contains("images") && !json.at("images").empty())
-                    throw InvalidEvidence{};
-                if (reconstruction_)
-                    for (const auto key : {"inputs", "outputs", "separate_samplers"})
-                        if (json.contains(key) && !json.at(key).empty())
-                            throw InvalidEvidence{};
-                for (const auto key : {"textures", "ssbos", "push_constants", "subpass_inputs", "counters", "acceleration_structures",
-                                       "tensors", "specialization_constants"})
+                const auto requireAbsent = [&](const char *key) {
                     if (json.contains(key) && !json.at(key).empty())
                         throw InvalidEvidence{};
+                };
+                if (!reconstruction_) {
+                    requireAbsent("images");
+                    requireAbsent("push_constants");
+                }
+                if (reconstruction_)
+                    for (const auto key : {"inputs", "outputs", "separate_samplers", "ubos"})
+                        requireAbsent(key);
+                for (const auto key :
+                     {"textures", "ssbos", "subpass_inputs", "counters", "acceleration_structures", "tensors", "specialization_constants"})
+                    requireAbsent(key);
             }
 
             /** @brief Every named resource must occur once in its actual class and declared stage. */
@@ -343,8 +375,7 @@ namespace Horo::Render {
                 if (!members.is_array() || members.size() != name->parameters.size() || members.size() > 512)
                     throw InvalidEvidence{};
                 const auto blockBytes = Unsigned(ubo.at("block_size"));
-                if (blockBytes == 0 || blockBytes > 16U * 1024U * 1024U ||
-                    (reconstruction_ && blockBytes != sizeof(NativeReconstructionDispatch)))
+                if (blockBytes == 0 || blockBytes > 16U * 1024U * 1024U)
                     throw InvalidEvidence{};
                 std::array<bool, 512> memberSeen{};
                 for (const auto &member : members) {
@@ -367,8 +398,7 @@ namespace Horo::Render {
                 const auto declared = std::ranges::find(candidate_.parameters, name->id, &ShaderReflectedParameter::id);
                 if (declared == candidate_.parameters.end() || declared->binding != binding.id)
                     throw InvalidEvidence{};
-                const auto type = member.at("type").get<std::string>();
-                const auto shape = reconstruction_ && type == "uvec4" ? Shape{ShaderValueType::Uint32, 1, 4} : ValueShape(type);
+                const auto shape = ValueShape(member.at("type").get<std::string>());
                 const auto stride = member.contains("matrix_stride") ? Unsigned(member.at("matrix_stride")) : 0;
                 const auto offset = Unsigned(member.at("offset"));
                 const bool columnMajor = !member.value("row_major", false);
@@ -376,8 +406,7 @@ namespace Horo::Render {
                     stride ? stride * std::uint64_t{columnMajor ? shape.columns : shape.rows} : 4U * shape.rows * shape.columns;
                 const auto totalSize = std::uint64_t{arrayCount - 1} * arrayStride + size;
                 if (size == 0 || (arrayCount > 1 && arrayStride < size) || offset > blockBytes || totalSize > blockBytes - offset ||
-                    arrayCount != declared->arrayCount ||
-                    (reconstruction_ && (offset != (declared->id.value - 1) * 16 || stride != 0 || arrayStride != 0)))
+                    arrayCount != declared->arrayCount)
                     throw InvalidEvidence{};
                 const ShaderReflectedParameter value{name->id, binding.id,  shape.type, shape.rows,  shape.columns, arrayCount,
                                                      offset,   arrayStride, stride,     columnMajor, true};

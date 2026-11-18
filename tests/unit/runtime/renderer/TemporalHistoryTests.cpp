@@ -309,23 +309,25 @@ TEST_CASE("Native reconstruction cook contracts name only the closed entry and b
                                    .descriptorVersion = 1,
                                    .interfaceSchemaVersion = 1,
                                    .maximumBindings = 16,
+                                   .maximumInlineConstantBytes = 128,
                                    .supportsCompute = true,
                                    .supportsStorageResources = true};
     const auto spatial = DescribeNativeReconstructionShader(NativeReconstructionEntry::Spatial, target);
     REQUIRE(spatial.HasValue());
     CHECK(spatial.Value().manifest.entryPoints.front().name == "ReconstructSpatial");
-    CHECK(spatial.Value().manifest.bindings.size() == 3);
-    CHECK(spatial.Value().reflectionNames.back().parameters.size() == 3);
+    CHECK(spatial.Value().manifest.bindings.size() == 2);
+    REQUIRE(spatial.Value().manifest.inlineConstants.size() == 1);
+    CHECK(spatial.Value().manifest.inlineConstants.front().byteSize == sizeof(NativeReconstructionDispatch));
 
     const auto temporal = DescribeNativeReconstructionShader(NativeReconstructionEntry::TemporalHistory, target);
     REQUIRE(temporal.HasValue());
     CHECK(temporal.Value().manifest.entryPoints.front().name == "ReconstructTemporal");
-    CHECK(temporal.Value().manifest.bindings.size() == 8);
+    CHECK(temporal.Value().manifest.bindings.size() == 7);
     CHECK(temporal.Value().reflectionNames[6].name == "ReconstructedDepth");
     const auto seed = DescribeNativeReconstructionShader(NativeReconstructionEntry::TemporalSeed, target);
     REQUIRE(seed.HasValue());
     CHECK(seed.Value().manifest.entryPoints.front().name == "ReconstructTemporalSeed");
-    constexpr std::array seedBindings{1U, 2U, 3U, 7U, 8U};
+    constexpr std::array seedBindings{1U, 2U, 3U, 7U};
     REQUIRE(seed.Value().manifest.bindings.size() == seedBindings.size());
     for (std::size_t i = 0; i < seedBindings.size(); ++i)
         CHECK(seed.Value().manifest.bindings[i].id.value == seedBindings[i]);

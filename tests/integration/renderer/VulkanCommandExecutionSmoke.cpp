@@ -6,6 +6,7 @@
 #include "Horo/Vfx/VfxWorld.h"
 #include "VfxGpuVulkanCook.h"
 #include "VulkanVfxInstancedReadback.h"
+#include "support/ShaderCompilerToolchainFixture.h"
 #include "support/VfxGpuQualification.h"
 #include "support/VfxTestSupport.h"
 
@@ -354,6 +355,7 @@ namespace {
         Horo::Render::Test::RequireDrainedOwner(*owner.frontend);
     }
 
+#include "VulkanReconstructionNativeSmoke.inl"
 #include "VulkanVfxGpuNativeSmoke.inl"
 #include "VulkanVfxInstancedNativeSmoke.inl"
 }  // namespace

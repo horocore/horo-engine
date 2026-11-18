@@ -245,6 +245,8 @@ namespace Horo::Render::Detail {
     /** @copydoc MetalResourceRuntime::ValidateGraphWorkload */
     Result<void> MetalResourceRuntime::ValidateGraphWorkload(const RenderGraphWorkload &workload,
                                                              const std::span<const RenderGraphResourceInstance> resources) const {
+        if (std::holds_alternative<RenderGraphNativeReconstruction>(workload))
+            return Result<void>::Failure(MakeError(NativeReconstructionErrors::Unsupported));
         if (std::holds_alternative<RenderGraphTextureUpload>(workload))
             return Result<void>::Failure(
                 MakeError(RenderGraphExecutionErrors::UnsupportedWorkload, "Metal graph texture uploads are unsupported."));

@@ -80,6 +80,19 @@ namespace Horo::Render {
 
 #include "VulkanBackendShaderDelegation.inl"
 
+            /** @copydoc IRenderBackend::RealizeNativeReconstructionKernel */
+            Result<std::shared_ptr<IResidentNativeReconstructionKernel>> RealizeNativeReconstructionKernel(
+                const CookedNativeReconstructionKernel &kernel) override {
+                using Outcome = Result<std::shared_ptr<IResidentNativeReconstructionKernel>>;
+                if (const auto access = CommandAccess(); access.HasError())
+                    return Outcome::Failure(access.ErrorValue());
+                if (closing_ || activeFrame_.IsValid())
+                    return Outcome::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
+                if (!capabilities_.support.features.Supports(RenderCapability::NativeReconstruction))
+                    return Outcome::Failure(MakeError(NativeReconstructionErrors::Unsupported));
+                return commandPort_->RealizeNativeReconstructionKernel(kernel);
+            }
+
             Result<NativeVfxGpuPreparationResources> QueryVfxGpuNativePreparationResources(
                 const VfxGpuSimulationDescriptor &descriptor) const override {
                 if (const auto access = VfxGpuAccess(true); access.HasError())

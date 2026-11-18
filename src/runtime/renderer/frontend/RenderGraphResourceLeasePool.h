@@ -92,6 +92,9 @@ namespace Horo::Render::Detail {
             /** @brief Retains exact multiview mesh/material/view generations using this existing completion lease. */
             [[nodiscard]] Result<void> PinMultiview(const RenderGraphMultiview &workload);
             /** @brief Retains exact graph material views, meshes and immutable bindings through this same completion lease. */
+            /** @brief Pins exact separately resolved reconstruction views through the native submission. */
+            [[nodiscard]] Result<void> PinReconstruction(const RenderGraphNativeReconstruction &workload);
+
             [[nodiscard]] Result<void> PinMaterialRaster(const RenderGraphMaterialRaster &workload);
             /** @brief Pins exact VFX mesh/target generations and retains the immutable source/order/slot revision. */
             [[nodiscard]] Result<void> PinVfx(const RenderGraphVfx &workload);
