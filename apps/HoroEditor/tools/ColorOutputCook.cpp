@@ -42,15 +42,19 @@ namespace Horo::Editor::Offline {
 
         /** @brief Compiles one exact source generation through the authenticated native compiler/reflection route. */
         ShaderCompilationBatch Compile(const Family &family, std::size_t index, const ShaderCompilerTargetDescriptor &target,
-                                       const IShaderCompilerAdapter &adapter) {
-            Require(target.tools.size() == 4);
-            ShaderCompilationRequest request{.manifest = family.manifests[index],
-                                             .source = family.sources[index],
-                                             .targets = {target},
-                                             .reflection =
-                                                 ShaderCompilerReflectionRequest{target.tools[2],
-                                                                                 ColorOutputShaderReflectionNames(
-                                                                                     static_cast<ColorOutputShaderStage>(index))}};
+                                       const IShaderCompilerAdapter &adapter, const ShaderCompilerToolIdentity &reflector) {
+            const bool vulkan = target.requirement.backend == ShaderTargetBackend::Vulkan;
+            Require(target.tools.size() == (vulkan ? 2u : 4u));
+            ShaderCompilationRequest
+                request{.manifest = family.manifests[index],
+                        .source = family.sources[index],
+                        .targets = {target},
+                        .reflection =
+                            ShaderCompilerReflectionRequest{reflector,
+                                                            ColorOutputShaderReflectionNames(static_cast<ColorOutputShaderStage>(index),
+                                                                                             target.requirement.backend)}};
+            if (vulkan && index == 0)
+                request.defines = {{"HORO_COLOR_OUTPUT_MANUAL_ONLY", "1"}};
             ShaderCompilerLimits limits;
             limits.maximumSourceBytes = 1024U * 1024U;
             limits.maximumPayloadBytes = 16U * 1024U * 1024U;
@@ -88,11 +92,38 @@ namespace Horo::Editor::Offline {
             for (std::size_t index = 0; index < family.programCount; ++index) {
                 family.manifests[index] =
                     Take(MakeColorOutputShaderManifest(static_cast<ColorOutputShaderStage>(index), target.requirement));
-                family.compiled[index] = Compile(family, index, target, adapter);
+                family.compiled[index] = Compile(family, index, target, adapter, target.tools[2]);
             }
             return Publish(destination, family, host);
         } catch (const Failure &failed) {
             return Result<void>::Failure(failed.error);
+        } catch (const std::exception &) {
+            return Result<void>::Failure(Invalid());
+        }
+    }
+
+    /** @copydoc CookVulkanManualColorOutput */
+    Result<void> CookVulkanManualColorOutput(const std::filesystem::path &repositoryRoot, const std::filesystem::path &analyticRoot,
+                                             const std::filesystem::path &destination, const std::filesystem::path &scratch,
+                                             std::span<const ShaderCompilerToolIdentity, 3> tools, const IShaderCompilerAdapter &compiler) {
+        try {
+            if (auto paths = ValidateAtomicShaderCookPaths(destination, scratch, ".color-output-vulkan-"); paths.HasError())
+                return paths;
+            Family family;
+            family.target = Render::Internal::ColorOutputVulkanManualCookTarget();
+            family.analytic = Take(LoadColorOutputAnalyticBundle(analyticRoot));
+            Sources(family, Root(repositoryRoot));
+            const ShaderCompilerTargetDescriptor target{.requirement = family.target,
+                                                        .platformTriple = "linux-x86_64",
+                                                        .intermediateEnvironment = ShaderIntermediateEnvironment::Vulkan13SpirV16,
+                                                        .tools = {tools[0], tools[1]}};
+            for (std::size_t index = 0; index < family.programCount; ++index) {
+                family.manifests[index] = Take(MakeColorOutputShaderManifest(static_cast<ColorOutputShaderStage>(index), family.target));
+                family.compiled[index] = Compile(family, index, target, compiler, tools[2]);
+            }
+            return PublishVulkan(destination, family);
+        } catch (const Failure &failure) {
+            return Result<void>::Failure(failure.error);
         } catch (const std::exception &) {
             return Result<void>::Failure(Invalid());
         }

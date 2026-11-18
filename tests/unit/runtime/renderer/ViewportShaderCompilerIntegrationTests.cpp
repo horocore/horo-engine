@@ -1,8 +1,11 @@
+#include "ColorOutputCook.h"
+#include "ColorOutputShaderRecipe.h"
 #include "EditorViewportShaderRecipe.h"
 #include "EditorVulkanViewportShader.h"
 #include "support/ShaderCompilerToolchainFixture.h"
 
 #include <array>
+#include <cstdlib>
 
 using namespace Horo::Tests::ShaderCompilerFixture;
 
@@ -140,5 +143,49 @@ TEST_CASE("Reviewed Vulkan tools cook and separate the linear scene raster from 
     const auto state = EditorVulkanSceneLinearPipelineState();
     CHECK(state.colorFormat == RenderTextureFormat::Rgba16Float);
     CHECK(state.depthFormat == RenderTextureFormat::Depth32Float);
+#endif
+}
+
+TEST_CASE("Reviewed Vulkan tools publish the analytic manual exposure and SDR encoder package",
+          "[runtime][renderer][shader-compiler][toolchain][integration][viewport][color-output]") {
+#ifndef __linux__
+    SKIP("The real product cook uses the reviewed Linux tool artifacts.");
+#else
+    using namespace Horo::Render::Internal;
+    using Horo::Editor::Offline::CookVulkanManualColorOutput;
+    const auto dxc = Installation(ShaderCompilerTool::Dxc, "HORO_TEST_SHADER_DXC");
+    const auto spirvTools = Installation(ShaderCompilerTool::SpirvTools, "HORO_TEST_SHADER_SPIRV_VAL");
+    const auto spirvCross = Installation(ShaderCompilerTool::SpirvCross, "HORO_TEST_SHADER_SPIRV_CROSS");
+    const auto *analytic = std::getenv("HORO_TEST_COLOR_ANALYTIC_ROOT");
+    if (!dxc || !spirvTools || !spirvCross || !analytic)
+        SKIP("Set the three reviewed tool paths and HORO_TEST_COLOR_ANALYTIC_ROOT to genuine pinned producer output.");
+
+    TemporaryDirectory temporary;
+    const auto scratch = temporary.Path() / "scratch";
+    REQUIRE(std::filesystem::create_directory(scratch));
+    ShaderCompilerToolchainConfiguration configuration;
+    configuration.hostPlatform = "linux-x86_64-ubuntu-26.04";
+    configuration.scratchRoot = scratch;
+    configuration.tools = {*dxc, *spirvTools, *spirvCross};
+    const auto adapter = ExternalShaderCompilerAdapter::Create(std::move(configuration), std::make_shared<NativeExternalProcessRunner>());
+    REQUIRE(adapter.HasValue());
+    const std::array tools{dxc->identity, spirvTools->identity, spirvCross->identity};
+    const auto destination = temporary.Path() / "manual color output";
+    const auto cooked =
+        CookVulkanManualColorOutput(HORO_PROJECT_SOURCE_DIR, std::filesystem::path{analytic}, destination, scratch, tools, adapter.Value());
+    INFO((cooked.HasError() ? cooked.ErrorValue().message : "manual Vulkan package written"));
+    REQUIRE(cooked.HasValue());
+    auto package = LoadColorOutputCookPackage(destination, ShaderTargetBackend::Vulkan);
+    REQUIRE(package.HasValue());
+    CHECK(package.Value().programCount == 2);
+    CHECK(package.Value().LookProgram() == nullptr);
+    CHECK(package.Value().target.backend == ShaderTargetBackend::Vulkan);
+    CHECK(package.Value().target.payloadFormat == ShaderPayloadFormat::SpirV16);
+    CHECK(LoadColorOutputCookPackage(destination).HasError());
+    CHECK(
+        CookVulkanManualColorOutput(HORO_PROJECT_SOURCE_DIR, std::filesystem::path{analytic}, destination, scratch, tools, adapter.Value())
+            .HasError());
+    std::filesystem::remove(destination / (std::string{ColorOutputCookPrefix(1, ShaderTargetBackend::Vulkan)} + ".reflection.json"));
+    CHECK(LoadColorOutputCookPackage(destination, ShaderTargetBackend::Vulkan).HasError());
 #endif
 }

@@ -11,13 +11,15 @@ namespace Horo::Render {
         EncodeSdr,
         SceneToDisplayLinearWithLook
     };
-    /** @brief Declares an exact product shader; currently only the implemented Metal target is admitted.
+    /** @brief Declares the exact Vulkan manual scene/SDR route or the existing Metal product family.
      * @param stage Product operation. @param target Explicit target descriptor.
      * @return Logical recipe or typed unsupported/invalid input. No compilation or realization is implied.
      */
     [[nodiscard]] Result<ShaderManifest> MakeColorOutputShaderManifest(ColorOutputShaderStage stage, const ShaderTargetRequirement &target);
     /** @brief Describes the exact canonical symbols used to reconcile genuine native compiler evidence.
-     * @param stage Product operation. @return Names in logical binding order; empty for invalid stage.
+     * @param stage Product operation. @param backend Explicit compiled target; Vulkan uses the manual-only recipe.
+     * @return Names in logical binding order; empty for an unsupported operation or backend.
      */
-    [[nodiscard]] std::vector<ShaderReflectionBindingName> ColorOutputShaderReflectionNames(ColorOutputShaderStage stage);
+    [[nodiscard]] std::vector<ShaderReflectionBindingName> ColorOutputShaderReflectionNames(
+        ColorOutputShaderStage stage, ShaderTargetBackend backend = ShaderTargetBackend::Metal);
 }  // namespace Horo::Render

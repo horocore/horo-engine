@@ -2,11 +2,15 @@
 // The offline cooker prefixes the byte-exact pinned processor.hlsl before this file.
 // This stage excludes UI/selection and applies no output transfer encoding or dither.
 Texture2D<float4> SceneColor : register(t0, space0);
+#ifndef HORO_COLOR_OUTPUT_MANUAL_ONLY
 StructuredBuffer<uint> ExposureWords : register(t3, space0);
+#endif
 cbuffer ColorOutputParameters : register(b4, space0) {
     float4 SourceSize;        // width,height, reserved0, reserved0
     float4 ExposureSelection; // GPU0/1, finite manual scale, reserved0, reserved0
+#ifndef HORO_COLOR_OUTPUT_MANUAL_ONLY
     float4 ExposureIdentity;  // asfloat generationLo/Hi, producerSubmissionLo/Hi
+#endif
 };
 
 float4 VSMain(uint vertex : SV_VertexID) : SV_Position {
@@ -21,6 +25,10 @@ float InvalidExposureScale() {
 }
 
 float SelectedExposureScale() {
+#ifdef HORO_COLOR_OUTPUT_MANUAL_ONLY
+    const float scale = ExposureSelection.y;
+    return ExposureSelection.x == 0.0 && isfinite(scale) && scale > 0.0 ? scale : InvalidExposureScale();
+#else
     if (ExposureSelection.x == 0.0)
         return ExposureSelection.y;
     const uint4 observed = uint4(ExposureWords[4], ExposureWords[5], ExposureWords[6], ExposureWords[7]);
@@ -28,6 +36,7 @@ float SelectedExposureScale() {
         return InvalidExposureScale();
     const float scale = asfloat(ExposureWords[1]);
     return isfinite(scale) && scale > 0.0 ? scale : InvalidExposureScale();
+#endif
 }
 
 float4 PSMain(float4 position : SV_Position) : SV_Target0 {

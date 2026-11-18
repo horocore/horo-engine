@@ -22,7 +22,8 @@ target_link_libraries(HoroEditorNativeReconstructionReleaseCookInternal
 add_executable(HoroEditorVulkanShaderCook EXCLUDE_FROM_ALL HoroEditor/tools/VulkanViewportCook.cpp)
 target_compile_features(HoroEditorVulkanShaderCook PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorVulkanShaderCook PRIVATE HoroEditorVulkanShaderInternal
-    HoroEngine::ShaderCompilerToolchain HoroEngine::Platform HoroEditorNativeReconstructionReleaseCookInternal)
+    HoroEngine::ShaderCompilerToolchain HoroEngine::Platform HoroEditorNativeReconstructionReleaseCookInternal
+    HoroColorOutputCookInternal)
 
 include("${PROJECT_SOURCE_DIR}/cmake/HoroEditorClusteredLightingAssets.cmake")
 horo_add_editor_clustered_lighting_assets_target()

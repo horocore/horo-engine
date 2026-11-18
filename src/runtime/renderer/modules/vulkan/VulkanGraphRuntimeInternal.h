@@ -115,8 +115,8 @@ namespace Horo::Render::Detail {
             RenderGraphExecutionRange barriers;
         };
 
-        std::array<MaterialDraw, RenderMaterialPass::MaximumBatchDraws> materialDraws;
-        std::array<MaterialPass, RenderMaterialPass::MaximumPasses> materialPasses;
+        std::array<MaterialDraw, RenderGraphMaterialRaster::MaximumRetainedDraws> materialDraws;
+        std::array<MaterialPass, RenderGraphMaterialRaster::MaximumRetainedPasses> materialPasses;
         std::size_t materialPassCount{};
         std::size_t materialDrawCount{};
         std::array<VulkanGraphResourceState *, RenderGraphLimits::HardMaxResources> materialPassStates;

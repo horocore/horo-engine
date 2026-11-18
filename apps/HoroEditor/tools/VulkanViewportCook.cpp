@@ -1,5 +1,6 @@
 /** @file VulkanViewportCook.cpp
  * @brief Offline-only host wrapper consuming the canonical same-operation compiled/reflected shader artifact. */
+#include "ColorOutputCook.h"
 #include "EditorVulkanViewportShader.h"
 #include "Horo/Platform/ExternalProcess.h"
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
@@ -199,7 +200,7 @@ namespace {
         return Result<void>::Success();
     }
 
-    Result<void> Cook(char **argv, CookMode mode, std::optional<Release::ReleaseCandidateId> candidate) {
+    Result<void> Cook(char **argv, CookMode mode, std::optional<Release::ReleaseCandidateId> candidate, bool manualColorOutput) {
         auto configuration = Configuration(argv);
         if (configuration.HasError())
             return Result<void>::Failure(configuration.ErrorValue());
@@ -208,6 +209,11 @@ namespace {
             ExternalShaderCompilerAdapter::Create(std::move(configuration).Value(), std::make_shared<NativeExternalProcessRunner>());
         if (adapter.HasError())
             return Result<void>::Failure(adapter.ErrorValue());
+        if (manualColorOutput) {
+            const std::array identities{tools[0].identity, tools[1].identity, tools[2].identity};
+            return Editor::Offline::CookVulkanManualColorOutput(std::filesystem::absolute(argv[1]), std::filesystem::absolute(argv[8]),
+                                                                argv[2], std::filesystem::absolute(argv[3]), identities, adapter.Value());
+        }
         auto source = Read(argv[1], 16U * 1024U * 1024U);
         if (source.HasError())
             return Result<void>::Failure(source.ErrorValue());
@@ -287,15 +293,18 @@ int main(int argc, char **argv) {
     }
     const auto mode = ParseMode(argc, argv);
     const auto reconstruction = ParseReconstruction(argc, argv);
-    if (!mode && !reconstruction) {
+    const bool manualColorOutput = argc == 9 && std::string_view{argv[7]} == "--color-output-manual";
+    if (!mode && !reconstruction && !manualColorOutput) {
         std::cerr << "Usage: HoroEditorVulkanShaderCook source.hlsl output-prefix scratch-root dxc spirv-val spirv-cross "
                      "[--scene-linear|--multiview|--multiview-motion|--shadow]\n"
                      "       HoroEditorVulkanShaderCook source.hlsl absolute-new-stage scratch-root dxc spirv-val spirv-cross "
-                     "--native-reconstruction candidate-id\n";
+                     "--native-reconstruction candidate-id\n"
+                     "       HoroEditorVulkanShaderCook repository absolute-new-stage scratch-root dxc spirv-val spirv-cross "
+                     "--color-output-manual analytic-root\n";
         return 2;
     }
     try {
-        const auto cooked = Cook(argv, mode.value_or(CookMode::Viewport), reconstruction);
+        const auto cooked = Cook(argv, mode.value_or(CookMode::Viewport), reconstruction, manualColorOutput);
         if (cooked.HasError()) {
             std::cerr << cooked.ErrorValue().code.Value() << ": " << cooked.ErrorValue().message << '\n';
             return 1;

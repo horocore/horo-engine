@@ -4913,7 +4913,8 @@ target_compile_features(HoroShaderCompilerPipelineTests PRIVATE cxx_std_20)
 target_include_directories(HoroShaderCompilerPipelineTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroShaderCompilerPipelineTests PRIVATE HoroEngine::ShaderCompilerToolchain HoroEngine::ShaderBuild
     HoroEngine::Platform HoroEditorViewportShaderRecipeInternal HoroEditorNativeReconstructionReleaseCookInternal
-    HoroEditorNativeReconstructionReleaseLayoutInternal HoroEditorVulkanShaderInternal)
+    HoroEditorNativeReconstructionReleaseLayoutInternal HoroEditorVulkanShaderInternal HoroColorOutputCookInternal
+    HoroColorOutputShaderRecipeInternal)
 add_executable(HoroShaderReflectionCookTests unit/runtime/renderer/ShaderReflectionCookTests.cpp
     unit/runtime/renderer/RegisterRasterStorageNormalizationTests.cpp
     unit/runtime/renderer/LightCullingMetalReflectionTests.cpp

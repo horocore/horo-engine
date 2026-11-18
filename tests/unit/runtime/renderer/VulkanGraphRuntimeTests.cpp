@@ -53,6 +53,49 @@ namespace {
         CHECK(fixture.commandState.state.waitCalls == 0);
     }
 
+    TEST_CASE("Vulkan explicit graph admits the bounded scene and color material pass inventory",
+              "[renderer][vulkan][graph][color-output]") {
+        const bool beyondLimit = GENERATE(false, true);
+        NativeGraphFixture fixture;
+        const MaterialPacket packet(fixture);
+        const auto count = RenderGraphMaterialRaster::MaximumRetainedPasses + (beyondLimit ? 1 : 0);
+        auto builder = SubmissionTest::Take(RenderGraphBuilder::Create({count, 1, count, count}));
+        const auto color = SubmissionTest::Take(builder.ImportTexture({{1}, 3, 1}, RenderGraphResourceClass::Persistent));
+        std::vector<RenderGraphPassWorkload> workloads;
+        RenderGraphPassRef previous;
+        for (std::size_t index = 0; index < count; ++index) {
+            const auto pass = SubmissionTest::Take(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
+            REQUIRE(builder.AddUsage({pass, color, RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment}).HasValue());
+            if (previous.IsValid())
+                REQUIRE(builder.AddDependency({previous, pass, RenderGraphDependencyKind::ExecutionOrder}).HasValue());
+            previous = pass;
+            workloads.push_back(
+                {pass, RenderGraphMaterialRaster{.color = color, .colorView = {{1}, 4, 1}, .extent = {8, 8}, .depthClear = std::nullopt}});
+        }
+        const auto graph = SubmissionTest::Take(builder.Finalize());
+        const auto schedule = SubmissionTest::Take(CompileRenderGraph(graph));
+        const std::array queues{RenderQueueAssignment{RenderQueueRole::Graphics, {1}}};
+        const std::array initial{RenderGraphImportedState{color, {}, RenderGraphInitialContents::Discarded}};
+        const auto sync = SubmissionTest::Take(SynthesizeRenderGraphSynchronization(graph, schedule, queues, initial));
+        const auto compiled = SubmissionTest::Take(CompileRenderGraphExecution(graph, schedule, sync, queues));
+        const std::array instances{RenderGraphResourceInstance{color, packet.texture}};
+        const std::array views{RenderGraphTextureViewInstance{{{1}, 4, 1}, packet.view}};
+        const std::array submissions{RenderGraphQueueSubmission{RenderQueueSubmission{{1}, {1}, {}, {{1}, 1}}, {0, count}}};
+        RenderGraphLeaseTransfer transfer;
+        REQUIRE(fixture.graph.BeginFrame({1}).HasValue());
+        const auto execute =
+            fixture.graph.ExecuteGraph({{1}, compiled, workloads, instances, &fixture.lease, false, &transfer, submissions, {}, views});
+        if (beyondLimit) {
+            CHECK(execute.HasError());
+            CHECK(fixture.encoded.renderingBegins == 0);
+            fixture.graph.AbortFrame({1});
+            return;
+        }
+        REQUIRE(execute.HasValue());
+        CHECK(fixture.encoded.renderingBegins == count);
+        REQUIRE(fixture.graph.SubmitFrame({1}).HasValue());
+    }
+
     TEST_CASE("Vulkan VFX publication rejects active recording and closed admission without native writes or waits",
               "[unit][runtime][renderer][vulkan][vfx]") {
         NativeGraphFixture fixture;

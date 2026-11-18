@@ -364,6 +364,24 @@ and does not acquire an image, begin a frame, or wait on the GPU. This is the
 resource boundary needed by the viewport exposure and output color owner's
 existing pre-frame ring preparation.
 
+The same Vulkan offline host can prepare the manual-exposure ColorOutput
+generation with the pinned original analytic processor and SDR encoder:
+
+```bash
+HoroEditorVulkanShaderCook "$source_root" "$new_absolute_stage" \
+  "$existing_scratch" "$dxc" "$spirv_val" "$spirv_cross" \
+  --color-output-manual "$pinned_analytic_root"
+```
+
+The read-only package loader explicitly selects the Vulkan manual target. Its
+scene stage accepts a finite positive scalar exposure and shares the existing
+analytic color mapping, auxiliary tables and exact SDR encode source. This
+cook omits GPU exposure history and creative looks. The native Vulkan
+material graph admits the eight passes required for four shadow cascades,
+scene, analytic transform, overlay and final encode. The ordinary viewport
+still needs the signed spatial kernel, manual color owner and these graph
+resources connected for product activation.
+
 The release cook uses the existing locked Ubuntu 26.04 x86-64 shader host.
 Run `HoroEditorVulkanShaderCook --describe-tools` for the approved external
 tool identities and pass the release job's existing candidate ID:
