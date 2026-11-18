@@ -246,10 +246,13 @@ namespace Horo::Editor {
                 return;
             }
             frame.Caption(review->uses.empty() ? "usage_none" : "usage_found");
+            if (!review->schemaBindings.empty())
+                frame.Caption("usage_schema_bindings");
             if (!review->gaps.empty())
                 frame.Caption("usage_incomplete");
             constexpr std::size_t RowsPerPage = 12;
-            const auto count = review->uses.size() + review->gaps.size();
+            const auto bindingEnd = review->uses.size() + review->schemaBindings.size();
+            const auto count = bindingEnd + review->gaps.size();
             if (!count)
                 return;
             const auto lastPage = (count - 1) / RowsPerPage;
@@ -262,7 +265,15 @@ namespace Horo::Editor {
                     frame.Label(std::format("{} ({})", usage.sourcePath, usage.use.node.Value()));
                     continue;
                 }
-                const auto &gap = review->gaps[index - review->uses.size()];
+                if (index < bindingEnd) {
+                    const auto &binding = review->schemaBindings[index - review->uses.size()];
+                    const auto object = std::visit([](const auto &value) -> std::uint64_t {
+                        return value.value;
+                    }, binding.object);
+                    frame.Label(std::format("{} ({})", binding.sourcePath, object));
+                    continue;
+                }
+                const auto &gap = review->gaps[index - bindingEnd];
                 frame.Caption(UseGapLabel(gap.kind));
                 if (gap.asset)
                     frame.Label(gap.asset->ToString());

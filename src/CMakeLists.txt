@@ -1824,6 +1824,7 @@ target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::AI)
 
 add_library(HoroDecisionCookHost STATIC
         application/ai/BlackboardUsageReview.cpp
+        application/ai/BlackboardUsageSceneSources.cpp
         application/ai/DecisionAssetCookHost.cpp
         application/ai/DecisionCookCapture.cpp
         application/ai/DecisionCookCatalog.cpp
@@ -1832,7 +1833,10 @@ add_library(HoroDecisionCookHost STATIC
 )
 add_library(HoroEngine::DecisionCookHost ALIAS HoroDecisionCookHost)
 target_compile_features(HoroDecisionCookHost PUBLIC cxx_std_20)
-target_link_libraries(HoroDecisionCookHost PUBLIC HoroEngine::AI HoroEngine::Assets PRIVATE HoroEngine::ProjectMutationGuard)
+target_link_libraries(HoroDecisionCookHost
+        PUBLIC HoroEngine::AI HoroEngine::Assets HoroEngine::SceneSourceModel
+        PRIVATE HoroEngine::ProjectMutationGuard HoroEngine::SceneSource HoroEngine::SceneRuntimeConversion HoroEngine::PrefabAuthoring
+)
 
 add_library(HoroAISceneIntegration STATIC
         runtime/ai/integration/AIRuntimeCapability.cpp

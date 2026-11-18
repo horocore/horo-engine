@@ -886,6 +886,7 @@
     "workspace.blackboard.usage_perception": {"text": "Algı ilkesi"},
     "workspace.blackboard.usage_previous": {"text": "Önceki sonuçlar"},
     "workspace.blackboard.usage_next": {"text": "Sonraki sonuçlar"},
+    "workspace.blackboard.usage_schema_bindings": {"text": "Kaydedilmiş denetleyici şema bağlantıları"},
     "workspace.documents.close": { "text": "Kapat" },
     "workspace.documents.move_left": { "text": "Sola taşı" },
     "workspace.documents.move_right": { "text": "Sağa taşı" },

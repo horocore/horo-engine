@@ -886,6 +886,7 @@
     "workspace.blackboard.usage_perception": {"text": "Perception policy"},
     "workspace.blackboard.usage_previous": {"text": "Previous results"},
     "workspace.blackboard.usage_next": {"text": "Next results"},
+    "workspace.blackboard.usage_schema_bindings": {"text": "Saved controller schema bindings"},
     "workspace.documents.close": { "text": "Close" },
     "workspace.documents.move_left": { "text": "Move left" },
     "workspace.documents.move_right": { "text": "Move right" },

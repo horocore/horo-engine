@@ -699,9 +699,12 @@ gameplay image's declared Decision requirements through its existing metadata
 admission. The review job retains only copied declarations. It never starts a
 provider or extends executable module lifetime. A closed opening, newer document
 revision, replaced registry or different native declaration owner cannot publish
-an older worker result. Unavailable provider, Scene, Prefab, Query and Perception owners
-appear as incomplete coverage. The review grants no authority to change a
-durable key. An exact multi-document reference-resolution transaction remains
+an older worker result. The review also reports direct saved Scene and concrete
+Prefab controller bindings through the existing typed codecs and exact source
+registrations. These rows identify schema associations. Only Decision requirement
+rows identify individual keys. Unsupported component owners and unresolved
+placements, variants, overrides, Query and Perception remain incomplete coverage.
+The review grants no authority to change a durable key. An exact multi-document reference-resolution transaction remains
 required for that gesture.
 
 ## Cinematic Sequence Asset Documents

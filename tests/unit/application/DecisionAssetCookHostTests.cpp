@@ -2,10 +2,13 @@
 #include "Horo/Application/BlackboardUsageReview.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Editor/ProjectMutation.h"
+#include "Horo/Prefab/PrefabDocument.h"
+#include "Horo/Scene/SceneSource.h"
 #include "assets/AssetCookServiceFixture.h"
 
 #include <algorithm>
 #include <catch2/generators/catch_generators.hpp>
+#include <format>
 #include <ranges>
 
 namespace {
@@ -225,6 +228,121 @@ namespace {
             const auto duplicate = CaptureBlackboardUsageReview(fixture.source.path, fixture.registry, rebuild(), mutations, selection);
             REQUIRE(duplicate.HasError());
             CHECK(duplicate.ErrorValue().code.Value() == AIErrors::DecisionAssetSchemaAmbiguous.code.Value());
+        }
+    }
+
+    TEST_CASE("Project review reports saved controller schema bindings with separate unresolved owners",
+              "[native][decision-cook][blackboard][usage]") {
+        Fixture fixture{true};
+        const auto schemaAsset = AssetId::FromBytes({0xc1});
+        const auto sceneAsset = AssetId::FromBytes({0xc2});
+        const auto prefabAsset = AssetId::FromBytes({0xc3});
+        const auto unrelated = AssetId::FromBytes({0xc4});
+        const auto schemaBytes = BlackboardSchemaCodec::Encode(*fixture.ai.schema);
+        REQUIRE(schemaBytes.HasValue());
+        const auto writePair = [&](std::string_view name, AssetId id, std::string_view type, std::string_view bytes) {
+            Files::WriteFile(fixture.source.path / name, {reinterpret_cast<const std::uint8_t *>(bytes.data()), bytes.size()});
+            const auto sidecar = Files::SidecarJson(id.ToString(), type);
+            Files::WriteFile(fixture.source.path / (std::string{name} + ".horo"),
+                             {reinterpret_cast<const std::uint8_t *>(sidecar.data()), sidecar.size()});
+        };
+        writePair("assets/shared.horo_bb", schemaAsset, BlackboardSchemaAssetType,
+                  {reinterpret_cast<const char *>(schemaBytes.Value().data()), schemaBytes.Value().size()});
+
+        const AiControllerComponent controller{.controller = MakeIdentity<ControllerTypeId>(51),
+                                               .decisionAsset = Graph(1),
+                                               .blackboardSchema = fixture.ai.schema->Identity(),
+                                               .enabled = false};
+        SceneSource::SceneObjectSnapshot sceneObject{.id = {9},
+                                                     .name = "Admitted direct controller",
+                                                     .components = {.aiController = controller}};
+        const SceneSource::ScenePrefabInstance placement{Prefab::PrefabInstanceId::Create(13).Value(),
+                                                         Prefab::PrefabAssetReference::Create(prefabAsset).Value(),
+                                                         {},
+                                                         {}};
+        const std::array sceneObjects{sceneObject};
+        const std::array placements{placement};
+        const auto sceneText = SceneSource::EncodeSceneSource({sceneObjects, placements});
+        writePair("assets/level.horo", sceneAsset, "core.scene", sceneText);
+
+        sceneObject.components.aiController->blackboardSchema = MakeIdentity<BlackboardSchemaId>(901);
+        const std::array unrelatedObjects{sceneObject};
+        writePair("assets/other.horo", unrelated, "core.scene", SceneSource::EncodeSceneSource({unrelatedObjects, {}}));
+
+        const auto payload = std::format(
+            R"({{"controller":{},"decisionAsset":{},"blackboardSchema":{},"decisionKind":"behavior_tree","requiredCapabilities":0,"schemaVersion":1,"startupPolicy":"scene_activation","enabled":false}})",
+            controller.controller.Value(), controller.decisionAsset.Value(), controller.blackboardSchema.Value());
+        const auto bytes = std::as_bytes(std::span{payload});
+        const Prefab::RawComponentPayload component{.instance = Prefab::PrefabComponentInstanceId::Create(1).Value(),
+                                                    .component = {.typeId =
+                                                                      Gameplay::ComponentTypeId::Parse("game.horo.ai_controller").Value(),
+                                                                  .schemaVersion = 1,
+                                                                  .encoding = Gameplay::ComponentPayloadEncoding::CanonicalJson,
+                                                                  .payload = {bytes.begin(), bytes.end()}}};
+        const auto limits = Prefab::PrefabLimitProfile::Create({});
+        REQUIRE(limits.HasValue());
+        const auto prefab = Prefab::PrefabDocument::Create({.projectVersion = {0, 1, 0},
+                                                            .assetId = prefabAsset,
+                                                            .objects = {{.name = "Direct root", .components = {component}}}},
+                                                           limits.Value());
+        REQUIRE(prefab.HasValue());
+        const auto serialized = prefab.Value().SerializeCanonical();
+        REQUIRE(serialized.HasValue());
+        writePair("assets/unit.prefab", prefabAsset, "core.prefab", serialized.Value());
+
+        const auto rebuilt = RebuildAssetRegistry(fixture.registry, fixture.source.path, AssetRegistryOpenMode::ReadOnly);
+        REQUIRE(rebuilt.HasValue());
+        REQUIRE(rebuilt.Value().status == AssetRegistryBuildStatus::Complete);
+        NativeDurableFileSystem files;
+        Editor::ProjectMutationCoordinator mutations{files};
+        const BlackboardUsageSelection selection{schemaAsset, fixture.ai.schema->Identity(), fixture.ai.schema->Version(),
+                                                 fixture.ai.schema->Keys().front().key,
+                                                 ComputeSha256(std::as_bytes(std::span{schemaBytes.Value()}))};
+        const auto review = [&] {
+            return CaptureBlackboardUsageReview(fixture.source.path, fixture.registry, rebuilt.Value().publishedRevision, mutations,
+                                                selection);
+        };
+        const auto scanned = review();
+        REQUIRE(scanned.HasValue());
+        REQUIRE(scanned.Value().schemaBindings.size() == 2);
+        CHECK(scanned.Value().sources.size() == 6);
+        CHECK(scanned.Value().uses.size() == 1);  // Authored Decision key use remains a separate finding.
+        const auto scene = std::ranges::find(scanned.Value().schemaBindings, sceneAsset, &BlackboardSchemaBinding::asset);
+        REQUIRE(scene != scanned.Value().schemaBindings.end());
+        CHECK(scene->sourcePath == "assets/level.horo");
+        CHECK(std::get<SceneSource::SceneObjectId>(scene->object).value == 9);
+        CHECK(scene->controller == controller.controller);
+        CHECK(scene->decision == controller.decisionAsset);
+        const auto concrete = std::ranges::find(scanned.Value().schemaBindings, prefabAsset, &BlackboardSchemaBinding::asset);
+        REQUIRE(concrete != scanned.Value().schemaBindings.end());
+        CHECK(std::get<Prefab::LocalObjectId>(concrete->object).IsRoot());
+        CHECK(std::ranges::none_of(scanned.Value().gaps, [prefabAsset](const auto &gap) {
+            return gap.asset == prefabAsset;
+        }));
+        CHECK(std::ranges::any_of(scanned.Value().gaps, [sceneAsset](const auto &gap) {
+            return gap.kind == BlackboardUsageGapKind::SceneSource && gap.asset == sceneAsset;  // Unexpanded placement.
+        }));
+
+        SECTION("malformed serialized prefab reports a typed gap without losing unrelated evidence") {
+            writePair("assets/unit.prefab", prefabAsset, "core.prefab", "{}");
+            const auto rejected = review();
+            REQUIRE(rejected.HasValue());
+            CHECK(rejected.Value().schemaBindings.size() == 1);
+            CHECK(rejected.Value().uses.size() == 1);
+            CHECK(rejected.Value().closure != scanned.Value().closure);
+            CHECK(std::ranges::any_of(rejected.Value().gaps, [prefabAsset](const auto &gap) {
+                return gap.kind == BlackboardUsageGapKind::PrefabSource && gap.asset == prefabAsset && gap.diagnostic;
+            }));
+        }
+        SECTION("failed hierarchy source capture preserves Decision evidence and records unknown owners") {
+            REQUIRE(std::filesystem::remove(fixture.source.path / "assets/unit.prefab.horo"));
+            const auto partial = review();
+            REQUIRE(partial.HasValue());
+            CHECK(partial.Value().schemaBindings.empty());
+            CHECK(partial.Value().uses.size() == 1);
+            CHECK(std::ranges::any_of(partial.Value().gaps, [prefabAsset](const auto &gap) {
+                return gap.kind == BlackboardUsageGapKind::PrefabSource && gap.asset == prefabAsset && gap.diagnostic;
+            }));
         }
     }
 

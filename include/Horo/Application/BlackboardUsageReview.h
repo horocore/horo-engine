@@ -4,11 +4,13 @@
 
 #include "Horo/AI/BlackboardUsageInspection.h"
 #include "Horo/Assets/AssetCookInputSnapshot.h"
+#include "Horo/Scene/SceneSourceModel.h"
 
 #include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace Horo::Editor {
@@ -50,6 +52,18 @@ namespace Horo::Application {
         AI::DecisionBlackboardSourceUse use;
     };
 
+    /** @brief Exact authored Scene object or standalone Prefab-local object. */
+    using BlackboardSchemaBindingObject = std::variant<SceneSource::SceneObjectId, Prefab::LocalObjectId>;
+
+    /** @brief A controller's authored schema binding. These sources carry SchemaId and GraphId without a key or schema revision. */
+    struct BlackboardSchemaBinding final {
+        Assets::AssetId asset;
+        std::string sourcePath;
+        BlackboardSchemaBindingObject object;
+        AI::ControllerTypeId controller;
+        AI::DecisionGraphAssetId decision;
+    };
+
     /** @brief One exact durable schema key selected by the project document owner. */
     struct BlackboardUsageSelection final {
         Assets::AssetId schemaAsset;
@@ -70,6 +84,7 @@ namespace Horo::Application {
         std::weak_ptr<const AI::DecisionBlackboardProviderMetadata> providers;
         std::vector<BlackboardUsageSourceStamp> sources;
         std::vector<BlackboardDecisionUsage> uses;
+        std::vector<BlackboardSchemaBinding> schemaBindings;
         std::vector<BlackboardUsageGap> gaps;
     };
 

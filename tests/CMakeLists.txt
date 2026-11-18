@@ -2400,7 +2400,8 @@ target_compile_features(HoroDecisionAssetCookHostTests PRIVATE cxx_std_20)
 target_include_directories(HoroDecisionAssetCookHostTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support
     ${PROJECT_SOURCE_DIR}/src/runtime/assets/cooker/builtin)
 target_link_libraries(HoroDecisionAssetCookHostTests PRIVATE HoroEngine::DecisionCookHost
-    HoroEngine::Platform HoroEngine::PlatformImmutableFileStorage HoroEngine::ProjectMutationGuard)
+    HoroEngine::Platform HoroEngine::PlatformImmutableFileStorage HoroEngine::ProjectMutationGuard
+    HoroEngine::SceneSource HoroEngine::PrefabAuthoring)
 horo_register_catch_test(HoroDecisionAssetCookHostTests LABELS "unit;ai;assets;headless;native"
     PROPERTIES TIMEOUT 90)
 
