@@ -212,7 +212,8 @@ namespace Horo::XR::OpenXRInternal {
         const auto result = dispatch_.startScan(context_, &request, &future_);
         if (result != XR_SUCCESS) {
             const auto failure = CaptureError("xrCreateSpatialDiscoverySnapshotAsyncEXT", result);
-            if (failure.code == XRErrors::PermissionDenied.code || failure.code == XRErrors::IdentityStale.code)
+            if (failure.code.Value() == XRErrors::PermissionDenied.code.Value() ||
+                failure.code.Value() == XRErrors::IdentityStale.code.Value())
                 publication_.Revoke();
             return Result<bool>::Failure(failure);
         }
@@ -243,7 +244,8 @@ namespace Horo::XR::OpenXRInternal {
             return Outcome::Failure(destroyed.ErrorValue());
         if (batch.HasError()) {
             const auto &failure = batch.ErrorValue();
-            if (failure.code == XRErrors::PermissionDenied.code || failure.code == XRErrors::IdentityStale.code)
+            if (failure.code.Value() == XRErrors::PermissionDenied.code.Value() ||
+                failure.code.Value() == XRErrors::IdentityStale.code.Value())
                 publication_.Revoke();
             return Outcome::Failure(failure);
         }

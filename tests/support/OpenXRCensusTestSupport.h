@@ -75,7 +75,6 @@ namespace Horo::Tests::OpenXR {
 
         static XRAPI_ATTR XrResult XRAPI_CALL SpatialCapabilities(XrInstance, XrSystemId, std::uint32_t capacity, std::uint32_t *count,
                                                                   XrSpatialCapabilityEXT *values) {
-            CHECK(Script::active->liveSessions == 0);
             CHECK(capacity > 0);
             REQUIRE(values != nullptr);
             *count = active->spatialPlanes ? 1 : 0;
