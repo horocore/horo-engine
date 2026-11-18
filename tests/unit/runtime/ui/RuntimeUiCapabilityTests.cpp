@@ -229,6 +229,61 @@ namespace Horo::Tests::UiAccess {
         CHECK(Take(fixture.service.CanReclaim()));
     }
 
+    TEST_CASE("Scene-owned UI fences provider work and queued input before final shutdown", "[runtime-ui][scene][qualification]") {
+        Fixture fixture{true, true};
+        const auto canvas = Stable<UiCanvasId>(2);
+        const auto binding = Stable<UiBindingId>(30);
+        auto client = fixture.Client();
+        auto presentation = Take(fixture.service.Acquire(Instance()));
+
+        CancellationSource cancellation;
+        auto cancelled = Take(fixture.service.Issue(fixture.Grant(), cancellation.Token()));
+        Take(cancelled->Screen(UiRouteOperationRequest::Push(Stable<UiRouteId>(9))));
+        cancellation.RequestCancellation();
+        CHECK(Take(fixture.service.ApplyQueuedCommands(RuntimeUiCommandCutoff::OwnerCommands)) == 1);
+        CHECK(Take(client->ScreenGuard()).revision.Value() == 1);
+        const auto route = Take(client->Screen(UiRouteOperationRequest::Push(Stable<UiRouteId>(9))));
+        CHECK(Take(fixture.service.ApplyQueuedCommands(RuntimeUiCommandCutoff::OwnerCommands)) == 1);
+        const auto routeResult = Take(client->Poll(route));
+        REQUIRE(routeResult);
+        CHECK(std::get<UiRouteOperationResult>(*routeResult).outcome == UiRouteOperationOutcome::Committed);
+
+        const auto publish = Take(client->Publish({Fixture::Provider(),
+                                                   fixture.schema.Version(),
+                                                   Revision<UiBindingSnapshotRevision>(1),
+                                                   Revision<UiBindingSnapshotRevision>(2),
+                                                   {{0, std::string{"late"}}}}));
+        REQUIRE(fixture.service.WithdrawProvider(Instance(), canvas, Fixture::Provider(), RuntimeUiCommandCutoff::BeforeVariableUpdate)
+                    .HasValue());
+        CHECK(Take(fixture.service.ApplyQueuedCommands(RuntimeUiCommandCutoff::BeforeVariableUpdate)) == 1);
+        const auto refused = Take(client->Poll(publish));
+        REQUIRE(refused);
+        CHECK(std::holds_alternative<Error>(*refused));
+        CHECK(client->Read(binding).HasError());
+
+        const auto source = Take(client->Source(Take(client->Find(Stable<UiElementId>(11))), fixture.actionOwner.interaction));
+        Take(client->Action(source, UiGameplayActionCommand{Stable<UiActionId>(22), {}}));
+        CHECK(Take(fixture.service.ApplyQueuedCommands(RuntimeUiCommandCutoff::OwnerCommands)) == 1);
+        {
+            auto prepared = Take(fixture.service.PrepareTransition({Runtime::SceneRuntimeId{101}, {}}, {}));
+            const auto retired = Take(fixture.service.CommitTransition(prepared, Lifecycle));
+            CHECK(retired.retiredSceneInstances == 1);
+        }
+        Actions actions;
+        CHECK(fixture.service.DispatchActions(Instance(), canvas, actions).HasError());
+        CHECK(actions.calls == 0);
+        CHECK(client->Validate().HasError());
+        REQUIRE(presentation.Get() != nullptr);
+
+        fixture.service.Shutdown();
+        CHECK_FALSE(Take(fixture.service.CanReclaim()));
+        presentation = {};
+        client.reset();
+        cancelled.reset();
+        REQUIRE(fixture.service.CollectRetired().HasValue());
+        CHECK(Take(fixture.service.CanReclaim()));
+    }
+
     TEST_CASE("Runtime UI shutdown releases internal dispatch leases while external presentations still fence reclamation",
               "[runtime-ui][lifetime]") {
         Fixture fixture;
