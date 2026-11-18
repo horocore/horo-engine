@@ -2823,9 +2823,13 @@ verified committed generation when no in-memory schema catalog was supplied.
 The exact native provider generation still comes from the host.
 
 The configured headless authority can explicitly select committed decision assets
-for existing controller descriptors. Selection uses the full project AssetId,
-then verifies the cooked root graph identity, decision family, exact schema
-and provider generation against the captured compiler environment. The shared
+for controller identities. An authored initial Scene supplies the graph identity,
+decision family and stable schema identity when the host has no separate
+controller descriptor. All declarations of a selected controller must agree
+on those fields. Prefab-only controllers and optional Perception endpoint
+metadata still need an explicit project descriptor. Selection uses the full
+project AssetId and verifies the cooked plan against that declaration and the
+captured compiler environment. The shared
 initial and structural Scene owners retain the executable closure with its root
 bindings and recheck provider currentness at publication. A missing selected
 artifact rejects startup. An invalid authenticated payload preserves the codec

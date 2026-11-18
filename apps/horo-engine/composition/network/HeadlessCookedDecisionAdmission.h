@@ -6,6 +6,10 @@
 #include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/Assets/AssetId.h"
 
+namespace Horo::Runtime {
+    class RuntimeSceneDefinition;
+}
+
 namespace Horo::Application::Internal {
     class CommittedSceneAssets;
 
@@ -25,12 +29,13 @@ namespace Horo::Application::Internal {
     };
 
     /** @brief Builds an immutable staged descriptor catalog from authenticated plans and the exact compiler environment.
-     * @param catalog Existing controller registry, including each selected controller's declared root, kind and schema.
+     * @param catalog Optional existing controller declarations and provider metadata, including prefab-only bindings.
+     * @param scene Exact initial Scene supplying authored controller bindings for explicitly selected controllers.
      * @param input Owning application capture and typed selections. Unselected descriptors keep their existing bindings.
      * @param cancellation Exact startup/Scene owner ancestry sampled before and between decodes.
      * @return Owned descriptors for both initial and structural owners, or original typed admission failure.
      */
     [[nodiscard]] Result<std::vector<AI::AiControllerDescriptor>> AdmitHeadlessCookedControllers(
-        std::span<const AI::AiControllerDescriptor> catalog, const HeadlessCookedDecisionInput &input,
-        const CancellationToken &cancellation);
+        std::span<const AI::AiControllerDescriptor> catalog, const Runtime::RuntimeSceneDefinition &scene,
+        const HeadlessCookedDecisionInput &input, const CancellationToken &cancellation);
 }  // namespace Horo::Application::Internal

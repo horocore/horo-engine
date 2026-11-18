@@ -438,6 +438,11 @@ namespace Horo::Application::PrefabAtomicTest {
             bool schemaArtifactPresent = false;
             bool malformedSchema = false;
             bool staleProvider = false;
+            bool sceneDeclaresController = false;
+            bool conflictingSceneDeclaration = false;
+            bool wrongAuthoredSchema = false;
+            bool unknownController = false;
+            bool duplicateSelection = false;
             SECTION("exact cooked root") {}
             SECTION("owner runs opted-in decision through the product fixed tick") {
                 executionBudget = 64;
@@ -446,6 +451,31 @@ namespace Horo::Application::PrefabAtomicTest {
                 executionBudget = 64;
                 loadSchemaFromCook = true;
                 schemaArtifactPresent = true;
+            }
+            SECTION("authored Scene and explicit project asset select a runnable controller without a separate descriptor") {
+                executionBudget = 64;
+                loadSchemaFromCook = true;
+                schemaArtifactPresent = true;
+                sceneDeclaresController = true;
+            }
+            SECTION("selected authored controller cannot name two different decisions") {
+                sceneDeclaresController = true;
+                conflictingSceneDeclaration = true;
+                expected = &AI::AIErrors::DescriptorConflict;
+            }
+            SECTION("exact cooked schema must match the authored Scene binding") {
+                sceneDeclaresController = true;
+                wrongAuthoredSchema = true;
+                expected = &AI::AIErrors::ControllerDescriptorIncompatible;
+            }
+            SECTION("selection without either a descriptor or Scene declaration is refused") {
+                sceneDeclaresController = true;
+                unknownController = true;
+                expected = &AI::AIErrors::ControllerDescriptorMissing;
+            }
+            SECTION("duplicate explicit mappings are refused before any provider is created") {
+                duplicateSelection = true;
+                expected = &AI::AIErrors::DescriptorConflict;
             }
             SECTION("committed schema catalog refuses missing semantic definition") {
                 loadSchemaFromCook = true;
@@ -535,17 +565,28 @@ namespace Horo::Application::PrefabAtomicTest {
             controller.descriptor.cookedPlan.reset();
             if (loadSchemaFromCook)
                 controller.descriptor.blackboardSchema.reset();
+            if (wrongAuthoredSchema)
+                controller.agent.controller->blackboardSchema = Decisions::MakeIdentity<AI::BlackboardSchemaId>(903);
             Runtime::SceneDefinitionBuilder source{{7}, {1}};
             source.Add({.object = {1}, .components = {.aiAgent = controller.agent.agent, .aiController = controller.agent.controller}});
+            if (conflictingSceneDeclaration) {
+                auto conflicting = controller.agent;
+                conflicting.agent.agent = Decisions::MakeIdentity<AI::AgentId>(2);
+                conflicting.controller->decisionAsset = Decisions::Graph(55);
+                source.Add({.object = {2}, .components = {.aiAgent = conflicting.agent, .aiController = conflicting.controller}});
+            }
             auto definition = std::move(source).Build();
             REQUIRE(definition.HasValue());
             JobSystem jobs{{1, 8}};
             Assets::AssetLoadService loader{jobs, committed.Value()->SceneProvider()};
             const Internal::HeadlessSceneLoadBoundary load{{}, std::chrono::steady_clock::now() + std::chrono::seconds{5}};
             const std::array catalog{controller.descriptor};
-            auto selected = Internal::HeadlessCookedDecisionInput{*committed.Value(),
-                                                                  ai.Environment(),
-                                                                  {{controller.descriptor.controller, requestedId}}};
+            const auto selectedController =
+                unknownController ? Decisions::MakeIdentity<AI::ControllerTypeId>(999) : controller.descriptor.controller;
+            auto selected =
+                Internal::HeadlessCookedDecisionInput{*committed.Value(), ai.Environment(), {{selectedController, requestedId}}};
+            if (duplicateSelection)
+                selected.bindings.push_back({selectedController, requestedId});
             if (loadSchemaFromCook)
                 selected.environment.schemas.clear();
             if (executionBudget)
@@ -558,7 +599,8 @@ namespace Horo::Application::PrefabAtomicTest {
                                                                                  .registry = registry,
                                                                                  .loads = loader,
                                                                                  .load = load,
-                                                                                 .aiControllers = catalog,
+                                                                                 .aiControllers = std::span{catalog}.first(
+                                                                                     sceneDeclaresController ? 0 : catalog.size()),
                                                                                  .cookedDecisions = decisions});
             REQUIRE(composed.HasValue());
             const auto built = composed.Value().factories.services[static_cast<std::size_t>(NetworkModeServiceKind::Scene)](

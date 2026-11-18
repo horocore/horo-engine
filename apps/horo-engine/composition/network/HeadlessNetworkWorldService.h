@@ -285,7 +285,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             }
             std::span<const AI::AiControllerDescriptor> catalog = input.aiControllers;
             if (IsAuthoritativeWorld() && input.cookedDecisions) {
-                auto prepared = AdmitHeadlessCookedControllers(catalog, *input.cookedDecisions, record_->sceneCancellation);
+                auto prepared =
+                    AdmitHeadlessCookedControllers(catalog, *owners_->definition, *input.cookedDecisions, record_->sceneCancellation);
                 if (prepared.HasError())
                     return Result<void>::Failure(prepared.ErrorValue());
                 record_->cookedControllers = std::move(prepared).Value();
