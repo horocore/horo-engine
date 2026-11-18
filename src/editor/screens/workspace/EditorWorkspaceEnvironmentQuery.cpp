@@ -4,6 +4,7 @@
 #include "Horo/Assets/AssetCookInputSnapshot.h"
 #include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/Localization/ILocalizationService.h"
 #include "WorkspacePathText.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/EditorWorkspaceView.h"
