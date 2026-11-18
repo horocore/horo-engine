@@ -116,6 +116,8 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
         }
         input_.play = state;
+        if (state == Paused)
+            composition_.session.RequestHapticCancellation();
         if (state == Idle || state == Stopping || state == Failed)
             RevokeSource();
         return Result<void>::Success();
@@ -126,6 +128,7 @@ namespace Horo::Application::Internal {
         HORO_INVARIANT_MSG(std::this_thread::get_id() == lane_, "XR Play revocation requires its owner lane");
         input_.admitted = false;
         tracking_.Revoke();
+        composition_.session.RequestHapticCancellation();
         if (busy_) {
             if (scene_ && !scene_->activated)
                 scene_->preparationCancellation.RequestCancellation();
@@ -200,6 +203,16 @@ namespace Horo::Application::Internal {
             if (scene_)
                 scene_->Retire(*this);
             return Result<bool>::Success(false);
+        }
+        const auto state = sessions_.Snapshot();
+        const bool invalidateOutput = observed.actionsInterrupted || observed.bindingsChanged;
+        if (invalidateOutput)
+            composition_.session.RequestHapticCancellation();
+        if (invalidateOutput || state.admitsActions) {
+            if (auto stopped = composition_.session.ProgressHapticCancellation(state.session); stopped.HasError()) {
+                RevokeEventAdmission();
+                return Result<bool>::Failure(stopped.ErrorValue());
+            }
         }
         if (observed.bindingsChanged) {
             tracking_.Revoke();

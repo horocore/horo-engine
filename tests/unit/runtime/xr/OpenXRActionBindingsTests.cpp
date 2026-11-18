@@ -288,4 +288,52 @@ namespace {
         const auto &calls = fixture.session.script.calls;
         CHECK(std::ranges::find(calls, "stop-vibration") < std::ranges::find(calls, "destroy-action"));
     }
+
+    TEST_CASE("OpenXR cancellation retries when focus returns and does not admit replacement output before stop", "[xr][openxr][haptics]") {
+        ActionFixture fixture;
+        const std::array catalog{LeftVibration};
+        REQUIRE(fixture.Create(catalog).HasValue());
+        auto &native = fixture.script.haptic;
+        fixture.script.currentProfiles[0] = native.suggestedProfile;
+        native.boundCount = 1;
+        const auto session = fixture.session.Request().candidate;
+        REQUIRE(fixture.owner.ApplyHaptic(session, LeftVibration.role, Pulse).HasValue());
+
+        fixture.owner.RequestHapticCancellation(XRTrackedDeviceRole::RightController);
+        REQUIRE(fixture.owner.ProgressHapticCancellation(session).HasValue());
+        CHECK(native.stops == 0);
+
+        fixture.owner.RequestHapticCancellation(LeftVibration.role);
+        CHECK(native.stops == 0);
+        native.stopResult = XR_SESSION_NOT_FOCUSED;
+        REQUIRE(fixture.owner.ProgressHapticCancellation(session).HasValue());
+        CHECK(native.stops == 1);
+        CHECK(fixture.owner.ApplyHaptic(session, LeftVibration.role, Pulse).HasError());
+        CHECK(native.applies == 1);
+
+        native.stopResult = XR_SUCCESS;
+        REQUIRE(fixture.owner.ProgressHapticCancellation(session).HasValue());
+        CHECK(native.stops == 2);
+        REQUIRE(fixture.owner.ApplyHaptic(session, LeftVibration.role, Pulse).HasValue());
+        REQUIRE(fixture.owner.Close().HasValue());
+        CHECK(native.stops == 3);
+    }
+
+    TEST_CASE("OpenXR revocation inside native output cannot acknowledge an expired owner", "[xr][openxr][haptics]") {
+        ActionFixture fixture;
+        const std::array catalog{LeftVibration};
+        REQUIRE(fixture.Create(catalog).HasValue());
+        auto &native = fixture.script.haptic;
+        fixture.script.currentProfiles[0] = native.suggestedProfile;
+        native.boundCount = 1;
+        native.revokeOnApply = &fixture.owner;
+        const auto session = fixture.session.Request().candidate;
+        CHECK(fixture.owner.ApplyHaptic(session, LeftVibration.role, Pulse).HasError());
+        CHECK(native.applies == 1);
+        CHECK(native.stops == 0);
+        REQUIRE(fixture.owner.ProgressHapticCancellation(session).HasValue());
+        CHECK(native.stops == 1);
+        REQUIRE(fixture.owner.Close().HasValue());
+        CHECK(native.stops == 1);
+    }
 }  // namespace

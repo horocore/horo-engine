@@ -245,6 +245,15 @@ namespace Horo::Application::Internal {
          * returns an actionable failure for host-owned retirement and neutralization.
          */
         [[nodiscard]] Result<void> RefreshInputProfiles(const XR::XRSessionId &session, XR::XRInteractionProfileId fallback);
+        /** @brief Closes current native vibration admission without dispatching to the runtime.
+         * @param role Exact affected role, or no role to revoke the same Play owner's outputs.
+         * @pre Owner lane. Can be requested while a foreign runtime call is still on the stack.
+         */
+        void RequestHapticCancellation(std::optional<XR::XRTrackedDeviceRole> role = std::nullopt) noexcept;
+        /** @brief Progresses exact retained vibration stops from the existing Play event or Input phase.
+         * @param session Current canonical identity. @return Original native stop error or success (including no work).
+         */
+        [[nodiscard]] Result<void> ProgressHapticCancellation(const XR::XRSessionId &session);
         /** @brief Samples and appends the SAME prepared native source at the actual App collection cutoff.
          * @param sessions Sole canonical session authority, whose current focus gates scalar sampling.
          * @param coordinator SAME issued candidate's actual binding revision/plan owner.

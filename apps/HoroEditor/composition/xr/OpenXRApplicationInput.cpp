@@ -184,6 +184,20 @@ namespace Horo::Application::Internal {
         return Result<void>::Success();
     }
 
+    /** @copydoc OpenXRApplicationSession::RequestHapticCancellation */
+    void OpenXRApplicationSession::RequestHapticCancellation(const std::optional<XRTrackedDeviceRole> role) noexcept {
+        HORO_INVARIANT_MSG(std::this_thread::get_id() == lane_, "XR haptic revocation requires its owner lane");
+        if (input_.native)
+            input_.native->RequestHapticCancellation(role);
+    }
+
+    /** @copydoc OpenXRApplicationSession::ProgressHapticCancellation */
+    Result<void> OpenXRApplicationSession::ProgressHapticCancellation(const XRSessionId &session) {
+        if (std::this_thread::get_id() != lane_)
+            return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
+        return input_.native ? input_.native->ProgressHapticCancellation(session) : Result<void>::Success();
+    }
+
     /** @copydoc OpenXRApplicationSession::AppendInput */
     Result<void> OpenXRApplicationSession::AppendInput(const XRSessionLifecycle &sessions, const XRActionBindingCoordinator &coordinator,
                                                        RuntimeInternal::XRTrackingPublication &publication, const OpenXRInputClock &clock,
@@ -246,6 +260,20 @@ namespace Horo::Application::Internal {
             }
         if (auto observed = publication.ObserveSources(std::span{sources}.first(sourceCount)); observed.HasError())
             return observed;
+        bool controllerLost = false;
+        for (const auto &device : publication.Devices()) {
+            if (device.state == XRTrackedDeviceState::Tracked ||
+                (device.role != XRTrackedDeviceRole::LeftController && device.role != XRTrackedDeviceRole::RightController))
+                continue;
+            RequestHapticCancellation(device.role);
+            controllerLost = true;
+        }
+        if (controllerLost) {
+            if (auto stopped = ProgressHapticCancellation(state.session); stopped.HasError())
+                return stopped;
+            if (!bindingsCurrent())
+                return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
+        }
         const auto actions = input_.native->Sample(state.session, *coordinator.Current(), publication.Devices());
         if (actions.HasError())
             return Result<void>::Failure(actions.ErrorValue());
@@ -386,6 +414,7 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRApplicationSession::RevokeInput */
     void OpenXRApplicationSession::RevokeInput() noexcept {
         HORO_INVARIANT_MSG(std::this_thread::get_id() == lane_, "XR Input retirement requires its owner lane");
+        RequestHapticCancellation();
         input_.projection.reset();
         input_.gestures = {};
         input_.gestureRevision = {};

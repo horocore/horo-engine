@@ -45,6 +45,7 @@ namespace Horo::Tests::OpenXRAction {
             XrPath suggestedProfile{XR_NULL_PATH};
             XrHapticVibration vibration{};
             XrResult applyResult{XR_SUCCESS};
+            OpenXRActionBindings *revokeOnApply{};
             XrResult stopResult{XR_SUCCESS};
             XrResult boundResult{XR_SUCCESS};
             std::uint32_t boundCount{};
@@ -206,6 +207,8 @@ namespace Horo::Tests::OpenXRAction {
             ++active->haptic.applies;
             active->haptic.vibration = *reinterpret_cast<const XrHapticVibration *>(effect);
             (void)Script::Record("apply-vibration");
+            if (auto *owner = active->haptic.revokeOnApply)
+                owner->RequestHapticCancellation();
             return active->haptic.applyResult;
         }
 

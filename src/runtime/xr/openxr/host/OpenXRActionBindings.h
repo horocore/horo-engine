@@ -294,6 +294,17 @@ namespace Horo::XR::OpenXRInternal {
          * @pre Owner lane; the application has already closed affected command admission.
          */
         [[nodiscard]] Result<void> StopHaptic(const XRSessionId &session, XRTrackedDeviceRole role);
+        /** @brief Immediately closes affected output admission without calling native code.
+         * @param role Exact lost controller role, or no role to cancel all submitted output for this native owner.
+         * @pre Owner lane. The existing Play owner progresses the pending stops or retires this native parent.
+         */
+        void RequestHapticCancellation(std::optional<XRTrackedDeviceRole> role = std::nullopt) noexcept;
+        /** @brief Attempts the exact owned stops once at the Play event/Input cutoff.
+         * @param session Canonical session of this action owner.
+         * @return Success when no hard error occurred; runtime focus/loss refusals retain the request for retry or retirement.
+         * @pre Owner lane, before another output is admitted. No pending stop can submit a replacement effect.
+         */
+        [[nodiscard]] Result<void> ProgressHapticCancellation(const XRSessionId &session);
         /** @brief Quiescent idempotent reverse-order retirement; failed destruction retains exact handles for retry.
          * @return Success or native retirement failure. No further sync/profile query is admitted after Close begins.
          */
@@ -416,7 +427,9 @@ namespace Horo::XR::OpenXRInternal {
             XrPath source{XR_NULL_PATH};
             std::array<XRInteractionProfileId, XRActionBindingLimits::MaximumProfiles> profiles{};
             std::size_t profileCount{};
+            bool submitting{};
             bool submitted{};
+            bool stopRequested{};
         };
 
         struct PoseAction final {
@@ -550,8 +563,8 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<std::uint32_t> SuggestHaptics(const Profile &profile, std::span<XrActionSuggestedBinding> output) const;
         /** @brief Checks that the current registered profile and actual bound output source match the admitted baseline. */
         [[nodiscard]] Result<void> ValidateHapticSource(std::size_t hand) const;
-        /** @brief Dispatches stop for one submitted native action. On terminal session loss, Close retires the native parent. */
-        [[nodiscard]] Result<void> StopNativeHaptic(std::size_t hand, bool retiring);
+        /** @brief Stops one original action; expected focus/loss results retain native debt for the caller's lifecycle. */
+        [[nodiscard]] Result<XrResult> StopNativeHaptic(std::size_t hand);
         /** @brief Stops retained outputs before destroying their native actions. Failed destruction remains retryable. */
         [[nodiscard]] Result<void> CloseHaptics();
         /** @brief Attaches the validated native sets once, then prepares spaces under the same retained rollback owner.

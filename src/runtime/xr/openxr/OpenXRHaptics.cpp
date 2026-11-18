@@ -151,9 +151,14 @@ namespace Horo::XR::OpenXRInternal {
         if (!hand || !std::isfinite(vibration.amplitude) || vibration.amplitude < 0.0F || vibration.amplitude > 1.0F ||
             vibration.duration.ToNanoseconds() <= 0)
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
+        auto &action = haptics_[*hand];
+        if (action.stopRequested)
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable, "Previous vibration cancellation is pending."));
+        const Operation submission{action.submitting};
         if (auto available = ValidateHapticSource(*hand); available.HasError())
             return available;
-        auto &action = haptics_[*hand];
+        if (action.stopRequested)
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable, "Vibration admission was revoked."));
         const XrHapticActionInfo info{XR_TYPE_HAPTIC_ACTION_INFO, nullptr, action.native, hands_[*hand]};
         const XrHapticVibration effect{XR_TYPE_HAPTIC_VIBRATION, nullptr, vibration.duration.ToNanoseconds(), XR_FREQUENCY_UNSPECIFIED,
                                        vibration.amplitude};
@@ -162,20 +167,28 @@ namespace Horo::XR::OpenXRInternal {
             action.submitted = true;
         if (result != XR_SUCCESS)
             return Result<void>::Failure(HapticFailure("submit vibration", result));
+        if (action.stopRequested)
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable, "Vibration cancellation is pending."));
         return ValidateOwner();
     }
 
     /** @copydoc OpenXRActionBindings::StopNativeHaptic */
-    Result<void> OpenXRActionBindings::StopNativeHaptic(const std::size_t hand, const bool retiring) {
+    Result<XrResult> OpenXRActionBindings::StopNativeHaptic(const std::size_t hand) {
         auto &action = haptics_[hand];
-        if (!action.submitted)
-            return Result<void>::Success();
+        if (!action.submitted) {
+            action.stopRequested = false;
+            return Result<XrResult>::Success(XR_SUCCESS);
+        }
+        action.stopRequested = true;
         const XrHapticActionInfo info{XR_TYPE_HAPTIC_ACTION_INFO, nullptr, action.native, hands_[hand]};
         const auto result = dispatch_.stopHaptic(native_.session, &info);
-        if (result != XR_SUCCESS && !(retiring && OutputUnavailable(result)))
-            return Result<void>::Failure(HapticFailure("stop vibration", result));
-        action.submitted = false;
-        return Result<void>::Success();
+        if (result == XR_SUCCESS) {
+            action.submitted = false;
+            action.stopRequested = false;
+        } else if (!OutputUnavailable(result)) {
+            return Result<XrResult>::Failure(HapticFailure("stop vibration", result));
+        }
+        return Result<XrResult>::Success(result);
     }
 
     /** @copydoc OpenXRActionBindings::StopHaptic */
@@ -193,16 +206,55 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
         if (haptics_[*hand].native == XR_NULL_HANDLE)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
-        if (auto stopped = StopNativeHaptic(*hand, false); stopped.HasError())
-            return stopped;
+        const auto stopped = StopNativeHaptic(*hand);
+        if (stopped.HasError())
+            return Result<void>::Failure(stopped.ErrorValue());
+        if (stopped.Value() != XR_SUCCESS)
+            return Result<void>::Failure(HapticFailure("stop vibration", stopped.Value()));
         return ValidateOwner();
+    }
+
+    /** @copydoc OpenXRActionBindings::RequestHapticCancellation */
+    void OpenXRActionBindings::RequestHapticCancellation(const std::optional<XRTrackedDeviceRole> role) noexcept {
+        if (controlThread_ != std::this_thread::get_id())
+            return;
+        const auto request = [](HapticAction &action) {
+            action.stopRequested |= action.submitting || action.submitted;
+        };
+        if (!role)
+            std::ranges::for_each(haptics_, request);
+        else if (const auto hand = HapticHand(*role))
+            request(haptics_[*hand]);
+    }
+
+    /** @copydoc OpenXRActionBindings::ProgressHapticCancellation */
+    Result<void> OpenXRActionBindings::ProgressHapticCancellation(const XRSessionId &session) {
+        if (auto lane = ControlLane(); lane.HasError())
+            return lane;
+        if (std::ranges::none_of(haptics_, &HapticAction::stopRequested))
+            return Result<void>::Success();
+        if (sampling_)
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
+        const Operation operation{sampling_};
+        const auto current = Current(session);
+        if (current.HasError())
+            return Result<void>::Failure(current.ErrorValue());
+        for (std::size_t hand = 0; hand < haptics_.size(); ++hand) {
+            if (!haptics_[hand].stopRequested)
+                continue;
+            if (auto stopped = StopNativeHaptic(hand); stopped.HasError())
+                return Result<void>::Failure(stopped.ErrorValue());
+            if (auto stillCurrent = ValidateOwner(); stillCurrent.HasError())
+                return stillCurrent;
+        }
+        return Result<void>::Success();
     }
 
     /** @copydoc OpenXRActionBindings::CloseHaptics */
     Result<void> OpenXRActionBindings::CloseHaptics() {
         for (std::size_t hand = 0; hand < haptics_.size(); ++hand)
-            if (auto stopped = StopNativeHaptic(hand, true); stopped.HasError())
-                return stopped;
+            if (auto stopped = StopNativeHaptic(hand); stopped.HasError())
+                return Result<void>::Failure(stopped.ErrorValue());
         for (auto &action : haptics_) {
             if (action.native == XR_NULL_HANDLE)
                 continue;
