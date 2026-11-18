@@ -228,10 +228,12 @@ namespace Horo::Application::Internal {
         auto origin = XRWorldOriginRevision::Create(sceneIdentity.value);
         if (origin.HasError())
             return Output::Failure(origin.ErrorValue());
+
+        auto state = std::make_shared<SceneState>();
+        state->scene = sceneIdentity;
+        state->geometry = std::move(geometry).Value();
         owner.input_.origin = origin.Value();
-        owner.scene_ = std::make_shared<SceneState>();
-        owner.scene_->scene = sceneIdentity;
-        owner.scene_->geometry = std::move(geometry).Value();
+        owner.scene_ = state;
 
         struct PreparationScope final {
             PreparationScope(OpenXRPlayHost &owner, std::shared_ptr<SceneState> prepared) noexcept
@@ -250,18 +252,12 @@ namespace Horo::Application::Internal {
             }
         };
 
-        PreparationScope rollback{owner, owner.scene_};
-
-        const auto fail = [&owner](const Error &error) {
-            owner.scene_->Retire(owner);
-            return Output::Failure(error);
-        };
+        PreparationScope rollback{owner, state};
         // All Scene/view reads and geometry leases are captured before native/host preparation can call foreign code.
-        if (auto prepared = owner.scene_->PrepareResources(owner, {owner.input_.origin, XRSpaceKind::Local, root.Value()});
-            prepared.HasError())
-            return fail(prepared.ErrorValue());
+        if (auto prepared = state->PrepareResources(owner, {origin.Value(), XRSpaceKind::Local, root.Value()}); prepared.HasError())
+            return Output::Failure(prepared.ErrorValue());
         rollback.accepted = true;
-        return Output::Success(owner.scene_);
+        return Output::Success(std::move(state));
     }
 
     /** @copydoc OpenXRPlayHost::SceneParticipant::PrepareMounted */
