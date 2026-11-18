@@ -41,8 +41,10 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(Invalid("Imported state differs from the actual successfully submitted native state."));
         if (!states[index].hasNativeState && !states[index].contentsDefined)
             return Result<void>::Failure(Invalid("Undefined native storage cannot claim preserved contents."));
-        if (const auto translated = TranslateVulkanGraphBarrier(bindings[index], initial.state, initial.state,
-                                                                {.particleHandoff = vfxGpu.Owns(bindings[index].buffer)});
+        const auto *queue = Queue(initial.state.queue);
+        const VulkanGraphBarrierOptions options{.computeAvailable = queue != nullptr && queue->supportsCompute,
+                                                .particleHandoff = vfxGpu.Owns(bindings[index].buffer)};
+        if (const auto translated = TranslateVulkanGraphBarrier(bindings[index], initial.state, initial.state, options);
             translated.HasError())
             return Result<void>::Failure(translated.ErrorValue());
         states[index].logical = initial.state;
