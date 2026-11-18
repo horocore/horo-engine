@@ -342,6 +342,26 @@ shader entries. The editor logs readiness and the authenticated inventory
 digest during startup. This command performs inspection before provider
 initialization or scene work.
 
+The release cook uses the existing locked Ubuntu 26.04 x86-64 shader host.
+Run `HoroEditorVulkanShaderCook --describe-tools` for the approved external
+tool identities and pass the release job's existing candidate ID:
+
+```bash
+HoroEditorVulkanShaderCook assets/shaders/runtime/native_reconstruction.hlsl \
+  "$new_absolute_stage" "$existing_scratch" "$dxc" "$spirv_val" "$spirv_cross" \
+  --native-reconstruction "$release_candidate_id" > "$inventory_outside_stage"
+```
+
+The new stage contains the three canonical payload/reflection pairs. Standard
+output carries the canonical pre-sign inventory with a size and SHA-256 for
+each exact file. Release assembly includes those records alongside the other
+Editor product records and passes the complete stage through the existing
+release verification and signing boundary. The release host must provide
+the product identity, final manifest and detached signature. The current exact
+release tree verifier expects only `manifest.json` as metadata. A host that
+packages a detached envelope alongside it needs an envelope-aware final
+verification and publication policy.
+
 [ADR-040](../../adr/040-reconstruction-frame-generation-and-latency-providers.md)
 replaces the legacy single upscaler interface with four sealed frontend-owned
 registries:

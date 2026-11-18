@@ -1,5 +1,6 @@
 #include "EditorImageProviderHost.h"
 
+#include "EditorNativeReconstructionReleaseLayout.h"
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "HostSignatureDocument.h"
@@ -26,8 +27,6 @@ namespace Horo::Editor {
                                                    "A provider file differs from its signed inventory record.",
                                                    "Restore authentic product files before inspection."};
         constexpr std::size_t MaximumManifestBytes = 16U * 1024U * 1024U;
-        constexpr std::size_t MaximumPayloadBytes = 16U * 1024U * 1024U;
-        constexpr std::size_t MaximumReflectionBytes = 1024U * 1024U;
 
         /** @brief Accepts a normalized absolute host path, never a path provided by the signed document. */
         bool ValidHostPath(const std::filesystem::path &path) {
@@ -86,29 +85,23 @@ namespace Horo::Editor {
                                                                           std::span<const Release::ReleaseArtifactRecord> inventory,
                                                                           Entry entry) {
             using Outcome = Result<std::optional<CookedNativeReconstructionKernel>>;
-            const auto prefix =
-                std::string{"assets/shaders/runtime/native-reconstruction-vulkan/"} + std::string{NativeReconstructionEntryName(entry)};
+            const auto prefix = NativeReconstructionRelease::Prefix(entry);
+            if (prefix.empty())
+                return Outcome::Failure(MakeError(InvalidInventory));
             const auto payloadRecord = std::ranges::find(inventory, prefix + ".horoshdr", &Release::ReleaseArtifactRecord::path);
             const auto reflectionRecord = std::ranges::find(inventory, prefix + ".reflection.json", &Release::ReleaseArtifactRecord::path);
             if (payloadRecord == inventory.end() && reflectionRecord == inventory.end())
                 return Outcome::Success(std::nullopt);
             if (payloadRecord == inventory.end() || reflectionRecord == inventory.end())
                 return Outcome::Failure(MakeError(InvalidInventory));
-            auto payload = ReadArtifact(files, root, *payloadRecord, MaximumPayloadBytes);
+            auto payload = ReadArtifact(files, root, *payloadRecord, NativeReconstructionRelease::MaximumPayloadBytes);
             if (payload.HasError())
                 return Outcome::Failure(payload.ErrorValue());
-            const auto reflection = ReadArtifact(files, root, *reflectionRecord, MaximumReflectionBytes);
+            const auto reflection = ReadArtifact(files, root, *reflectionRecord, NativeReconstructionRelease::MaximumReflectionBytes);
             if (reflection.HasError())
                 return Outcome::Failure(reflection.ErrorValue());
 
-            const ShaderTargetRequirement target{.backend = ShaderTargetBackend::Vulkan,
-                                                 .payloadFormat = ShaderPayloadFormat::SpirV16,
-                                                 .descriptorVersion = 1,
-                                                 .interfaceSchemaVersion = 1,
-                                                 .maximumBindings = 16,
-                                                 .maximumInlineConstantBytes = 128,
-                                                 .supportsCompute = true,
-                                                 .supportsStorageResources = true};
+            constexpr auto target = NativeReconstructionRelease::Target;
             const auto expected = DescribeNativeReconstructionShader(entry, target);
             if (expected.HasError())
                 return Outcome::Failure(expected.ErrorValue());

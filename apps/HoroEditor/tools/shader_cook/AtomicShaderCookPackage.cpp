@@ -115,7 +115,17 @@ namespace Horo::Editor::Offline {
             return value;
         }
 
-        /** @brief Checks the complete bounded file inventory for path and parent-file collisions before writing anything. */
+        /** @brief Checks normalized paths for portable file and parent-file collisions. */
+        bool PathsUnique(std::span<std::string> names) {
+            std::ranges::sort(names);
+            for (std::size_t i = 1; i < names.size(); ++i)
+                for (std::size_t j = 0; j < i; ++j)
+                    if (names[i] == names[j] || names[i].starts_with(names[j] + "/"))
+                        return false;
+            return true;
+        }
+
+        /** @brief Checks the complete bounded file inventory before writing anything. */
         bool NamesUnique(const AtomicShaderCookPackage &family) {
             std::array<std::string, 35> names;
             std::size_t count{};
@@ -128,12 +138,7 @@ namespace Horo::Editor::Offline {
             }
             for (const auto &file : family.auxiliaryFiles)
                 names[count++] = PathKey(std::string{file.relativePath});
-            std::ranges::sort(std::span{names}.first(count));
-            for (std::size_t i = 1; i < count; ++i)
-                for (std::size_t j = 0; j < i; ++j)
-                    if (names[i] == names[j] || names[i].starts_with(names[j] + "/"))
-                        return false;
-            return true;
+            return PathsUnique(std::span{names}.first(count));
         }
 
         /** @brief Bounds auxiliary files before any publication can dereference borrowed payloads. */
@@ -149,10 +154,14 @@ namespace Horo::Editor::Offline {
             return bytes <= 64U * 1024U * 1024U;
         }
 
+        /** @brief Admits only a portable basename as the private candidate namespace. */
+        bool SafeCandidatePrefix(std::string_view prefix) {
+            return SafeRelative(prefix) && prefix.find('/') == std::string_view::npos;
+        }
+
         /** @brief Checks fixed private candidate and provenance names before creating a staging path. */
         bool PackageNamesValid(const AtomicShaderCookPackage &family) {
-            return SafeRelative(family.provenanceFilename) && SafeRelative(family.privateCandidatePrefix) &&
-                   family.privateCandidatePrefix.find('/') == std::string_view::npos;
+            return SafeRelative(family.provenanceFilename) && SafeCandidatePrefix(family.privateCandidatePrefix);
         }
 
         /** @brief Bounds the synchronous borrowed inventory before dereferencing compilation records. */
@@ -269,12 +278,18 @@ namespace Horo::Editor::Offline {
             return DestinationAbsent(root / relative);
         }
 
+        /** @brief Writes one admitted relative file beneath its claimed stage. */
+        Result<void> WritePackageFile(const std::filesystem::path &root, const std::filesystem::path &relative,
+                                      std::span<const std::uint8_t> bytes) {
+            if (auto parents = PrepareParents(root, relative); parents.HasError())
+                return parents;
+            return Write(root / relative, bytes);
+        }
+
         /** @brief Binds informational integrity rows to the actual bytes written. */
         Result<void> WriteRecorded(const std::filesystem::path &root, const std::filesystem::path &relative,
                                    std::span<const std::uint8_t> bytes, Json &files) {
-            if (auto parents = PrepareParents(root, relative); parents.HasError())
-                return parents;
-            if (auto written = Write(root / relative, bytes); written.HasError())
+            if (auto written = WritePackageFile(root, relative, bytes); written.HasError())
                 return written;
             files[relative.generic_string()] = FormatSha256(ComputeSha256(std::as_bytes(bytes)));
             return Result<void>::Success();
@@ -405,6 +420,29 @@ namespace Horo::Editor::Offline {
         return OutsideScratch(parent, existing.Value());
     }
 
+    /** @copydoc PublishAtomicShaderCookFiles */
+    Result<void> PublishAtomicShaderCookFiles(const std::filesystem::path &destination, std::string_view reservedPrefix,
+                                              std::span<const AtomicShaderCookAuxiliaryFile> files,
+                                              Result<void> (*verify)(const std::filesystem::path &, const void *), const void *context) {
+        if (files.empty() || !verify || !SafeCandidatePrefix(reservedPrefix) || !AuxiliaryValid(files))
+            return IoFailure();
+        std::array<std::string, 16> names;
+        for (std::size_t index = 0; index < files.size(); ++index)
+            names[index] = PathKey(std::string{files[index].relativePath});
+        if (!PathsUnique(std::span{names}.first(files.size())))
+            return IoFailure();
+        Candidate candidate;
+        if (auto claimed = candidate.Claim(destination, reservedPrefix); claimed.HasError())
+            return claimed;
+        for (const auto &file : files)
+            if (auto written = WritePackageFile(candidate.path, std::filesystem::path{file.relativePath}, file.bytes); written.HasError())
+                return written;
+        if (auto verified = verify(candidate.path, context); verified.HasError())
+            return verified;
+        return candidate.Publish(destination);
+    }
+
+    /** @copydoc PublishAtomicShaderCookPackage */
     Result<void> PublishAtomicShaderCookPackage(const std::filesystem::path &destination, const AtomicShaderCookPackage &family,
                                                 const Application::Internal::AuthenticatedShaderCookConfiguration &host) {
         if (!ValidInventory(family))

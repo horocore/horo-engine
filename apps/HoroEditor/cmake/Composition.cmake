@@ -2,12 +2,21 @@
 set(HORO_EDITOR_IMAGE_PROVIDER_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_image_provider_headers")
 file(MAKE_DIRECTORY "${HORO_EDITOR_IMAGE_PROVIDER_HEADERS}")
 configure_file("HoroEditor/app/EditorImageProviderHost.h" "${HORO_EDITOR_IMAGE_PROVIDER_HEADERS}/EditorImageProviderHost.h" COPYONLY)
+# Only the non-installed layout is shared by the offline tool and installed editor.
+set(HORO_EDITOR_RECONSTRUCTION_RELEASE_LAYOUT_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_reconstruction_release_layout_headers")
+file(MAKE_DIRECTORY "${HORO_EDITOR_RECONSTRUCTION_RELEASE_LAYOUT_HEADERS}")
+configure_file("HoroEditor/app/EditorNativeReconstructionReleaseLayout.h"
+    "${HORO_EDITOR_RECONSTRUCTION_RELEASE_LAYOUT_HEADERS}/EditorNativeReconstructionReleaseLayout.h" COPYONLY)
+add_library(HoroEditorNativeReconstructionReleaseLayoutInternal INTERFACE)
+target_include_directories(HoroEditorNativeReconstructionReleaseLayoutInternal
+    INTERFACE "${HORO_EDITOR_RECONSTRUCTION_RELEASE_LAYOUT_HEADERS}")
+target_link_libraries(HoroEditorNativeReconstructionReleaseLayoutInternal INTERFACE HoroEngine::RenderApi)
 add_library(HoroEditorImageProviderHostInternal STATIC HoroEditor/app/EditorImageProviderHost.cpp)
 target_compile_features(HoroEditorImageProviderHostInternal PUBLIC cxx_std_20)
 target_include_directories(HoroEditorImageProviderHostInternal PUBLIC "${HORO_EDITOR_IMAGE_PROVIDER_HEADERS}")
 target_link_libraries(HoroEditorImageProviderHostInternal
     PUBLIC HoroEngine::Application HoroEngine::RenderFrontend HoroEngine::Security
-    PRIVATE HoroEngine::Platform HoroHostSignatureDocuments)
+    PRIVATE HoroEngine::Platform HoroHostSignatureDocuments HoroEditorNativeReconstructionReleaseLayoutInternal)
 
 # Included from apps/CMakeLists.txt; source and binary directories remain scoped to apps/.
 # One non-installed host token boundary; headless tests use the same parser as the real graphical root.

@@ -4,10 +4,12 @@
 #include "Horo/Platform/ExternalProcess.h"
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
 #include "ShaderCompilerToolchain.h"
+#include "VulkanReconstructionReleaseCook.h"
 
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <charconv>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -173,7 +175,23 @@ namespace {
         return request;
     }
 
-    Result<void> Cook(char **argv, CookMode mode) {
+    /** @brief Delivers a canonical inventory for the caller's release job on stdout. */
+    Result<void> CookReconstruction(char **argv, Release::ReleaseCandidateId candidate, std::vector<std::uint8_t> source,
+                                    const std::vector<ShaderCompilerToolInstallation> &tools, const IShaderCompilerAdapter &adapter) {
+        const std::array identities{tools[0].identity, tools[1].identity, tools[2].identity};
+        const auto inventory = Editor::Offline::CookVulkanReconstructionRelease(argv[2], std::filesystem::absolute(argv[3]), candidate,
+                                                                                std::move(source), identities, adapter);
+        if (inventory.HasError())
+            return Result<void>::Failure(inventory.ErrorValue());
+        std::cout << inventory.Value().CanonicalJson();
+        std::cout.flush();
+        if (!std::cout)
+            return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ScratchIoFailed,
+                                                   "Stage was published but its canonical inventory could not be written to stdout."));
+        return Result<void>::Success();
+    }
+
+    Result<void> Cook(char **argv, CookMode mode, std::optional<Release::ReleaseCandidateId> candidate) {
         auto configuration = Configuration(argv);
         if (configuration.HasError())
             return Result<void>::Failure(configuration.ErrorValue());
@@ -185,6 +203,8 @@ namespace {
         auto source = Read(argv[1], 16U * 1024U * 1024U);
         if (source.HasError())
             return Result<void>::Failure(source.ErrorValue());
+        if (candidate)
+            return CookReconstruction(argv, *candidate, std::move(source).Value(), tools, adapter.Value());
         const auto request = Request(mode, std::move(source).Value(), tools);
         const auto compiled = CompileShaderTargets(request, adapter.Value(), {});
         if (compiled.HasError())
@@ -221,6 +241,19 @@ namespace {
                           << tool.executableSha256 << '\t' << tool.executableRelativePath << '\n';
     }
 
+    /** @brief Takes only the explicit release job's positive decimal identity. */
+    std::optional<Horo::Release::ReleaseCandidateId> ParseReconstruction(int argc, char **argv) {
+        if (argc != 9 || std::string_view{argv[7]} != "--native-reconstruction")
+            return std::nullopt;
+        const std::string_view token{argv[8]};
+        Horo::Release::ReleaseCandidateId id;
+        const auto end = token.data() + token.size();
+        const auto converted = std::from_chars(token.data(), end, id.value);
+        if (converted.ec != std::errc{} || converted.ptr != end || id.value == 0)
+            return std::nullopt;
+        return id;
+    }
+
     std::optional<CookMode> ParseMode(int argc, char **argv) {
         using enum CookMode;
         if (argc == 7)
@@ -243,19 +276,22 @@ int main(int argc, char **argv) {
         return 0;
     }
     const auto mode = ParseMode(argc, argv);
-    if (!mode) {
+    const auto reconstruction = ParseReconstruction(argc, argv);
+    if (!mode && !reconstruction) {
         std::cerr << "Usage: HoroEditorVulkanShaderCook source.hlsl output-prefix scratch-root dxc spirv-val spirv-cross "
-                     "[--multiview|--multiview-motion|--shadow]\n";
+                     "[--multiview|--multiview-motion|--shadow]\n"
+                     "       HoroEditorVulkanShaderCook source.hlsl absolute-new-stage scratch-root dxc spirv-val spirv-cross "
+                     "--native-reconstruction candidate-id\n";
         return 2;
     }
     try {
-        const auto cooked = Cook(argv, *mode);
+        const auto cooked = Cook(argv, mode.value_or(CookMode::Viewport), reconstruction);
         if (cooked.HasError()) {
             std::cerr << cooked.ErrorValue().code.Value() << ": " << cooked.ErrorValue().message << '\n';
             return 1;
         }
     } catch (const std::exception &error) {
-        std::cerr << "Viewport cook failed before publication: " << error.what() << '\n';
+        std::cerr << "Vulkan shader cook failed: " << error.what() << '\n';
         return 1;
     }
     return 0;
