@@ -76,6 +76,71 @@ namespace {
         }
     };
 
+    /** @brief Drives the production canvas through headless ImGui frames and its rendered viewport bounds. */
+    struct DecisionCanvasWorkspaceFrames final {
+        Horo::Editor::Tests::EditorGuiContextFixture gui{{1000, 740}};
+        DecisionGraphCanvas canvas;
+        ImVec2 viewportMin;
+        ImVec2 viewportMax;
+
+        DecisionCanvasWorkspaceFrames() {
+            ImGui::GetIO().IniFilename = nullptr;
+            ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
+            Theme::ApplyCurrentTheme();
+        }
+
+        DecisionCanvasInteraction Draw(const EditorWorkspaceController &controller, const DecisionGraphWorkspaceDocument &document) {
+            gui.imgui.BeginFrame();
+            ImGui::SetNextWindowPos({0, 0});
+            ImGui::SetNextWindowSize({920, 650});
+            ImGui::Begin("Decision gesture", nullptr, ImGuiWindowFlags_NoSavedSettings);
+            const auto gesture = canvas.Draw(document, gui.context, controller.ViewModel().decisionProviderMetadata);
+            viewportMin = ImGui::GetItemRectMin();
+            viewportMax = ImGui::GetItemRectMax();
+            ImGui::End();
+            gui.imgui.EndFrame();
+            return gesture;
+        }
+
+        /** @brief Captures the bounds and sample count of a native viewport's rendered color. */
+        struct ColorBounds final {
+            ImVec2 low;
+            ImVec2 high;
+            std::size_t samples{};
+        };
+
+        ColorBounds FindColor(ImU32 color) const {
+            const auto *draw = ImGui::GetDrawData();
+            REQUIRE(draw);
+            ColorBounds match{viewportMax, viewportMin};
+            for (int list = 0; list < draw->CmdListsCount; ++list) {
+                for (const auto &vertex : draw->CmdLists[list]->VtxBuffer) {
+                    const auto &pos = vertex.pos;
+                    if (vertex.col != color || pos.x <= viewportMin.x || pos.x >= viewportMax.x || pos.y <= viewportMin.y ||
+                        pos.y >= viewportMax.y)
+                        continue;
+                    match.low = {std::min(match.low.x, pos.x), std::min(match.low.y, pos.y)};
+                    match.high = {std::max(match.high.x, pos.x), std::max(match.high.y, pos.y)};
+                    ++match.samples;
+                }
+            }
+            return match;
+        }
+
+        /** @brief Locates one visible colored pin before a one-node fixture grows any edges or selection. */
+        ImVec2 PinCenter(ImU32 color) const {
+            const auto [low, high, samples] = FindColor(color);
+            REQUIRE(samples >= 4);
+            const auto width = high.x - low.x;
+            const auto height = high.y - low.y;
+            REQUIRE(width > 0.0F);
+            REQUIRE(height > 0.0F);
+            REQUIRE(width < height * 2.0F);
+            REQUIRE(height < width * 2.0F);
+            return {(low.x + high.x) * 0.5F, (low.y + high.y) * 0.5F};
+        }
+    };
+
     /** @brief Registered source and native publication for the actual workspace admission path. */
     struct BlackboardWorkspaceFixture final {
         static constexpr auto Path = "assets/guard.horo_bb";
@@ -658,28 +723,13 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
         const auto instance = view.identity.instance;
         const auto state = std::get<AI::StateMachineAssetDescriptor>(graph->body).initial;
 
-        Horo::Editor::Tests::EditorGuiContextFixture gui{{1000, 740}};
-        ImGui::GetIO().IniFilename = nullptr;
-        ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
-        Theme::ApplyCurrentTheme();
-        DecisionGraphCanvas canvas;
-        ImVec2 center;
+        DecisionCanvasWorkspaceFrames frames;
         const auto draw = [&] {
-            gui.imgui.BeginFrame();
-            ImGui::SetNextWindowPos({0, 0});
-            ImGui::SetNextWindowSize({920, 650});
-            ImGui::Begin("Decision drag", nullptr, ImGuiWindowFlags_NoSavedSettings);
-            const auto gesture = canvas.Draw(view, gui.context, controller.ViewModel().decisionProviderMetadata);
-            const auto low = ImGui::GetItemRectMin();
-            const auto high = ImGui::GetItemRectMax();
-            center = {(low.x + high.x) * 0.5F, (low.y + high.y) * 0.5F};
-            ImGui::End();
-            gui.imgui.EndFrame();
-            return gesture;
+            return frames.Draw(controller, view);
         };
         for (int frame = 0; frame < 2; ++frame)
             CHECK_FALSE(draw().layout);
-        canvas.RequestFocus({instance, view.revision}, state);
+        frames.canvas.RequestFocus({instance, view.revision}, state);
         std::optional<AI::DecisionNodeId> revealed;
         for (int frame = 0; frame < 5; ++frame) {
             const auto event = draw();
@@ -690,7 +740,7 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
         REQUIRE(revealed == state);
 
         auto &input = ImGui::GetIO();
-        const auto start = center;
+        const ImVec2 start{(frames.viewportMin.x + frames.viewportMax.x) * 0.5F, (frames.viewportMin.y + frames.viewportMax.y) * 0.5F};
         input.AddMousePosEvent(start.x, start.y);
         CHECK_FALSE(draw().layout);
         const auto pressed = view.revision;
@@ -753,6 +803,106 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
             controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Undo));
             REQUIRE_FALSE(view.diagnostic);
             CHECK(view.layout->empty());
+            CHECK_FALSE(view.canUndo);
+        }
+    }
+
+    SECTION("native pin drag admits valid connections and leaves rejected connections out of the graph") {
+        controller.ProcessCommand(*command);
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        const auto &documents = controller.ViewModel().decisionGraphDocuments;
+        REQUIRE(documents.size() == 1);
+        const auto &view = documents.front();
+        REQUIRE(view.editable);
+        const auto instance = view.identity.instance;
+        const auto machine = [&]() -> const AI::StateMachineAssetDescriptor & {
+            return std::get<AI::StateMachineAssetDescriptor>(view.graph->body);
+        };
+        const auto state = machine().initial;
+        bool allowed{};
+        SECTION("a terminal state cannot create an outgoing link") {}
+        SECTION("a running state can create a self-transition through shared history") {
+            controller.ProcessCommand(
+                {.command = EditorWorkspaceViewCommand::EditDecisionStateMachine,
+                 .stateMachineEdit = StateMachineEditRequest{instance, view.revision, StateMachineEditOperation::SetTerminal, state}});
+            REQUIRE_FALSE(view.diagnostic);
+            controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Save));
+            REQUIRE_FALSE(view.diagnostic);
+            REQUIRE(machine().states.front().terminal == AI::DecisionStateTerminal::None);
+            allowed = true;
+        }
+        REQUIRE(machine().transitions.empty());
+        REQUIRE_FALSE(view.dirty);
+        const auto before = view.graph;
+        const auto revision = view.revision;
+
+        DecisionCanvasWorkspaceFrames frames;
+        const auto draw = [&] {
+            return frames.Draw(controller, view);
+        };
+        for (int frame = 0; frame < 5; ++frame)
+            CHECK_FALSE(draw().edit);
+        const auto input = frames.PinCenter(Theme::U32(Theme::Muted()));
+        const auto output = frames.PinCenter(Theme::U32(Theme::Accent()));
+        const auto rejectionColor = ImGui::ColorConvertFloat4ToU32(Theme::Warn());
+        REQUIRE(frames.FindColor(rejectionColor).samples == 0);
+        REQUIRE(input.x < output.x);
+        REQUIRE(output.y - 24.0F > frames.viewportMin.y);
+        auto &mouse = ImGui::GetIO();
+        mouse.AddMousePosEvent(output.x, output.y);
+        CHECK_FALSE(draw().edit);
+        mouse.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        CHECK_FALSE(draw().edit);
+
+        mouse.AddMousePosEvent(output.x, output.y - 24);
+        CHECK_FALSE(draw().edit);
+        mouse.AddMousePosEvent(input.x, input.y);
+        bool rejected{};
+        for (int frame = 0; frame < 3; ++frame) {
+            CHECK_FALSE(draw().edit);
+            rejected = rejected || frames.FindColor(rejectionColor).samples > 0;
+        }
+        CHECK(rejected == !allowed);
+        mouse.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        std::optional<StateMachineEditRequest> requested;
+        for (int frame = 0; frame < 4; ++frame) {
+            const auto event = draw();
+            CHECK_FALSE(event.layout);
+            if (event.edit) {
+                REQUIRE_FALSE(requested);
+                requested = event.edit;
+            }
+        }
+        CHECK(view.revision == revision);
+        CHECK(view.graph == before);
+        CHECK_FALSE(view.dirty);
+
+        if (allowed) {
+            REQUIRE(requested);
+            CHECK(requested->instance == instance);
+            CHECK(requested->revision == revision);
+            CHECK(requested->operation == StateMachineEditOperation::Connect);
+            CHECK(requested->node == state);
+            CHECK(requested->target == state);
+            controller.ProcessCommand({.command = EditorWorkspaceViewCommand::EditDecisionStateMachine, .stateMachineEdit = requested});
+            REQUIRE_FALSE(view.diagnostic);
+            CHECK(view.revision == revision + 1);
+            CHECK(view.dirty);
+            REQUIRE(machine().transitions.size() == 1);
+            CHECK(machine().transitions.front().source == state);
+            CHECK(machine().transitions.front().target == state);
+            const auto connected = view.graph;
+            controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Undo));
+            REQUIRE_FALSE(view.diagnostic);
+            CHECK(view.graph == before);
+            CHECK_FALSE(view.dirty);
+            controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Redo));
+            REQUIRE_FALSE(view.diagnostic);
+            CHECK(view.graph == connected);
+            CHECK(view.dirty);
+        } else {
+            CHECK_FALSE(requested);
+            CHECK(machine().transitions.empty());
             CHECK_FALSE(view.canUndo);
         }
     }

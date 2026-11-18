@@ -230,7 +230,7 @@ namespace Horo::Editor {
                             ? ResolveDecisionCanvasEdit(graph, {fence, GraphConnectIntent{graph.pins[*from], graph.pins[*to]}})
                             : std::nullopt;
                     if (!request)
-                        Widget::RejectNewItem();
+                        Widget::RejectNewItem(Theme::Warn());
                     else if (Widget::AcceptNewItem())
                         out.edit = request;
                 }
