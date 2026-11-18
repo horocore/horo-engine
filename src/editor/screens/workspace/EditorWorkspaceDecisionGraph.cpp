@@ -187,6 +187,23 @@ namespace Horo::Editor {
             return AuthoredAiSources::Issue(used);
         }
 
+        /** @brief Adds an intrinsic edge in the same detached draft as its endpoints. */
+        Result<void> AppendMachineTransition(AI::StateMachineAssetDescriptor &machine, AI::DecisionNodeId source, AI::DecisionNodeId target,
+                                             const SourceLocation &location) {
+            const auto id = IssueMachineNode(machine);
+            if (id.HasError())
+                return Result<void>::Failure(id.ErrorValue());
+            machine.transitions.push_back({.id = id.Value(), .source = source, .target = target, .location = location});
+            return Result<void>::Success();
+        }
+
+        /** @brief Limits individual removal to non-initial leaves without changing hierarchy policy. */
+        bool CanRemoveMachineState(const AI::StateMachineAssetDescriptor &machine, AI::DecisionNodeId id) {
+            return id != machine.initial && std::ranges::none_of(machine.states, [id](const auto &state) {
+                return state.parent == id || state.initialChild == id;
+            });
+        }
+
         /** @brief Applies one typed topology command to a detached graph, deferring admission to the compiler. */
         Result<bool> EditStateMachineCandidate(AI::DecisionGraphSource &candidate, const StateMachineEditRequest &request) {
             using Edit = Result<bool>;
@@ -194,16 +211,21 @@ namespace Horo::Editor {
             const auto fail = [] {
                 return Edit::Failure(MakeError(Application::DecisionCookErrors::Invalid));
             };
-            auto state = std::ranges::find(machine.states, request.node, &AI::StateMachineState::id);
+            const auto state = std::ranges::find(machine.states, request.node, &AI::StateMachineState::id);
+            const bool canConnect = state != machine.states.end() && state->terminal == AI::DecisionStateTerminal::None &&
+                                    machine.transitions.size() < AI::StateMachineLimits::Transitions;
             using enum StateMachineEditOperation;
             switch (request.operation) {
                 case AddState: {
-                    if (machine.states.size() >= AI::StateMachineLimits::States || request.terminal >= AI::DecisionStateTerminal::Count)
+                    if (!canConnect || machine.states.size() >= AI::StateMachineLimits::States ||
+                        request.terminal >= AI::DecisionStateTerminal::Count)
                         return fail();
                     const auto id = IssueMachineNode(machine);
                     if (id.HasError())
                         return Edit::Failure(id.ErrorValue());
                     machine.states.push_back({.id = id.Value(), .terminal = request.terminal, .source = candidate.location});
+                    if (const auto edge = AppendMachineTransition(machine, request.node, id.Value(), candidate.location); edge.HasError())
+                        return Edit::Failure(edge.ErrorValue());
                     break;
                 }
                 case SetTerminal:
@@ -214,14 +236,12 @@ namespace Horo::Editor {
                     state->terminal = request.terminal;
                     break;
                 case Connect: {
-                    if (machine.transitions.size() >= AI::StateMachineLimits::Transitions || state == machine.states.end() ||
+                    if (!canConnect ||
                         std::ranges::find(machine.states, request.target, &AI::StateMachineState::id) == machine.states.end())
                         return fail();
-                    const auto id = IssueMachineNode(machine);
-                    if (id.HasError())
-                        return Edit::Failure(id.ErrorValue());
-                    machine.transitions.push_back(
-                        {.id = id.Value(), .source = request.node, .target = request.target, .location = candidate.location});
+                    if (const auto edge = AppendMachineTransition(machine, request.node, request.target, candidate.location);
+                        edge.HasError())
+                        return Edit::Failure(edge.ErrorValue());
                     break;
                 }
                 case RemoveTransition: {
@@ -232,9 +252,12 @@ namespace Horo::Editor {
                     break;
                 }
                 case RemoveState:
-                    if (state == machine.states.end())
+                    if (state == machine.states.end() || !CanRemoveMachineState(machine, request.node))
                         return fail();
                     machine.states.erase(state);
+                    std::erase_if(machine.transitions, [&](const auto &edge) {
+                        return edge.source == request.node || edge.target == request.node;
+                    });
                     break;
                 default:
                     return fail();
@@ -796,8 +819,6 @@ namespace Horo::Editor {
             emit(Undo);
         if (button("workspace.decision_graph.edit_redo", opened->canRedo))
             emit(Redo);
-        if (button("workspace.decision_graph.edit_add_state", machine.states.size() < AI::StateMachineLimits::States))
-            emit(AddState);
 
         const auto select = [&](const char *key, const auto &records, AI::DecisionNodeId &selected) {
             if (records.empty()) {
@@ -821,6 +842,8 @@ namespace Horo::Editor {
         };
         select("workspace.decision_graph.edit_state", machine.states, selection.state);
         const auto state = std::ranges::find(machine.states, selection.state, &AI::StateMachineState::id);
+        const bool canConnect = state != machine.states.end() && state->terminal == AI::DecisionStateTerminal::None &&
+                                machine.transitions.size() < AI::StateMachineLimits::Transitions;
         if (state != machine.states.end()) {
             constexpr std::array Keys{"workspace.decision_graph.edit_running", "workspace.decision_graph.succeeded",
                                       "workspace.decision_graph.failed"};
@@ -828,13 +851,15 @@ namespace Horo::Editor {
             int outcome = static_cast<int>(state->terminal);
             if (Ui::ComboControl("##DecisionStateOutcome", &outcome, labels.data(), static_cast<int>(labels.size()), m_context.theme.fonts))
                 emit(SetTerminal, state->id, {}, static_cast<AI::DecisionStateTerminal>(outcome));
-            if (button("workspace.decision_graph.edit_remove_state", state->id != machine.initial))
+            if (state->terminal != AI::DecisionStateTerminal::None)
+                label(text("workspace.decision_graph.edit_terminal_connection_hint"), Theme::Muted());
+            if (button("workspace.decision_graph.edit_add_state", canConnect && machine.states.size() < AI::StateMachineLimits::States))
+                emit(AddState, state->id);
+            if (button("workspace.decision_graph.edit_remove_state", CanRemoveMachineState(machine, state->id)))
                 emit(RemoveState, state->id);
         }
         select("workspace.decision_graph.edit_target", machine.states, selection.target);
-        if (button("workspace.decision_graph.edit_connect",
-                   state != machine.states.end() && state->terminal == AI::DecisionStateTerminal::None && selection.target.IsValid() &&
-                       machine.transitions.size() < AI::StateMachineLimits::Transitions))
+        if (button("workspace.decision_graph.edit_connect", canConnect && selection.target.IsValid()))
             emit(Connect, selection.state, selection.target);
 
         select("workspace.decision_graph.edit_transition", machine.transitions, selection.transition);

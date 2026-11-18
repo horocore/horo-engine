@@ -22,7 +22,9 @@ namespace Horo::Editor {
         std::uint64_t revision{};
     };
 
-    /** @brief Revision-correlated authoring intent. Operands are semantic identities. */
+    /** @brief Revision-correlated authoring intent. Operands are semantic identities.
+     * @details AddState takes an existing running source in node and atomically adds a state plus its incoming transition.
+     * RemoveState erases a non-initial leaf and its incident transitions, subject to compiler admission of the remaining graph. */
     struct StateMachineEditRequest final {
         DocumentInstanceId instance;
         std::uint64_t revision{};

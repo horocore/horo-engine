@@ -693,7 +693,10 @@ source publication belongs to the application document host.
 The intrinsic State Machine document route admits typed state and transition
 edits against the unique compatible saved Blackboard schema. The canonical
 Decision compiler runs before the workspace publishes an edit or history
-replay. The workspace uses bounded history and compares canonical source
+replay. Adding a state from a running source commits the new state and its
+incoming transition as one edit. Removing a non-initial leaf includes its
+incident transitions and must leave the remaining graph reachable. The
+workspace uses bounded history and compares canonical source
 digests for dirtiness. Save rechecks the registered source and sidecar under the
 owning Project and source leases before replacing the source. The shared close
 modal fences Save and Discard to the presented document revision. Gameplay

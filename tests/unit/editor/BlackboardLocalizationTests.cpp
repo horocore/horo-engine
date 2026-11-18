@@ -147,6 +147,7 @@ TEST_CASE("Decision graph workspace and initial state machine labels resolve in 
                               "edit_undo",
                               "edit_redo",
                               "edit_add_state",
+                              "edit_terminal_connection_hint",
                               "edit_state",
                               "edit_running",
                               "edit_target",
