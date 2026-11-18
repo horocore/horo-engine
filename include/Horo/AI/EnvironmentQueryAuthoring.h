@@ -24,6 +24,13 @@ namespace Horo::AI {
         bool preferNearer{};
     };
 
+    /** @brief Editable settings of the admitted native lattice and its optional existing distance stage. */
+    struct BuiltinPointQuerySettings final {
+        QueryPointLattice lattice;
+        std::uint32_t maximumResults{};
+        std::optional<QueryPointDistanceTest> distance;
+    };
+
     /** @brief Pure initial-source factory installed by the application with the matching provider registry. */
     using LatticeQueryAuthoringFactory = Result<EnvironmentQueryAsset> (*)(QueryId, QueryStageId, QueryResultSchemaId, std::string,
                                                                            const QueryPointLattice &, std::uint32_t);

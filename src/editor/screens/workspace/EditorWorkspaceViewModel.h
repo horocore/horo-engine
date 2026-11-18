@@ -28,6 +28,7 @@
 #include "editor/screens/workspace/ContentBrowserModel.h"
 #include "editor/screens/workspace/DecisionGraphLayout.h"
 #include "editor/screens/workspace/DecisionStateMachineAuthoring.h"
+#include "editor/screens/workspace/EnvironmentQueryDocumentFence.h"
 #include "editor/screens/workspace/GameplayBehaviorRequest.h"
 #include "editor/screens/workspace/InspectorExtensionEdit.h"
 #include "editor/screens/workspace/PCGWorkspace.h"
@@ -262,6 +263,7 @@ namespace Horo::Editor {
         OpenSourceFile,
         OpenRecentAiAsset,
         PreviewEnvironmentQuery,
+        EditEnvironmentQuery,
         EditDecisionStateMachine,
         EditDecisionBehaviorTree,
         EditDecisionUtilityGraph,
@@ -397,6 +399,21 @@ namespace Horo::Editor {
         EnvironmentQueryPreviewAction action{EnvironmentQueryPreviewAction::Run};
     };
 
+    /** @brief Ordinary semantic edit and history actions from the saved Query tab. */
+    enum class EnvironmentQueryEditAction : std::uint8_t {
+        Apply,
+        Undo,
+        Redo,
+        Save
+    };
+
+    /** @brief A typed transaction correlated to exactly one authoring revision. */
+    struct EnvironmentQueryEditRequest final {
+        EnvironmentQueryDocumentFence fence;
+        EnvironmentQueryEditAction action{EnvironmentQueryEditAction::Apply};
+        std::optional<AI::BuiltinPointQuerySettings> settings;
+    };
+
     /** @brief An immutable, registered Environment Query source in a normal workspace document. */
     struct EnvironmentQueryWorkspaceDocument final {
         DocumentIdentity identity;
@@ -405,6 +422,13 @@ namespace Horo::Editor {
         std::shared_ptr<const AI::EnvironmentQueryAsset> query;
         QueryDescriptorAvailability descriptors{QueryDescriptorAvailability::RegistryUnavailable};
         EnvironmentQueryPreviewView preview;
+        std::optional<AI::BuiltinPointQuerySettings> settings;
+        std::uint64_t revision{1};
+        bool dirty{};
+        bool canUndo{};
+        bool canRedo{};
+        bool conflict{};
+        std::optional<Error> diagnostic;
     };
 
     /** @brief Workspace-owned source lease and separate transient presentation state. */
@@ -677,6 +701,7 @@ namespace Horo::Editor {
         std::optional<SourceOpenRequest> sourceOpenRequest = std::nullopt;
         std::optional<Assets::AssetId> recentAiAsset = std::nullopt;
         std::optional<EnvironmentQueryPreviewRequest> environmentQueryPreview;
+        std::optional<EnvironmentQueryEditRequest> environmentQueryEdit;
         std::optional<StateMachineEditRequest> stateMachineEdit = std::nullopt;
         std::optional<BehaviorTreeEditRequest> behaviorTreeEdit = std::nullopt;
         std::optional<UtilityGraphEditRequest> utilityGraphEdit = std::nullopt;
@@ -718,6 +743,14 @@ namespace Horo::Editor {
         Assets::AssetId id;
         std::string name;
     };
+
+    /** @brief Makes an exact Query edit or history command for the active workspace document. */
+    inline EditorWorkspaceViewCommandData MakeEnvironmentQueryEditCommand(const EnvironmentQueryWorkspaceDocument &document,
+                                                                          EnvironmentQueryEditAction action,
+                                                                          std::optional<AI::BuiltinPointQuerySettings> settings = {}) {
+        return {.command = EditorWorkspaceViewCommand::EditEnvironmentQuery,
+                .environmentQueryEdit = EnvironmentQueryEditRequest{{document.identity.instance, document.revision}, action, settings}};
+    }
 
     /** @brief Routes the shared Decision save/undo/redo action to the focused family. */
     inline EditorWorkspaceViewCommandData MakeDecisionHistoryCommand(const DecisionGraphWorkspaceDocument &document,

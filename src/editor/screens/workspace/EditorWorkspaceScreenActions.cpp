@@ -327,6 +327,17 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                          BlackboardWorkspaceRequest{.fence = {snapshot.document.instance, snapshot.revision}, .operation = operation}});
                 return true;
             }
+            const auto query = std::ranges::find_if(model.environmentQueryDocuments, [&](const auto &entry) {
+                return entry.identity.instance == model.workspacePanelHost.ActiveDocument();
+            });
+            if (query != model.environmentQueryDocuments.end()) {
+                using enum EnvironmentQueryEditAction;
+                if (query->settings) {
+                    const auto operation = action == EditorMenuAction::Undo ? Undo : action == EditorMenuAction::Redo ? Redo : Save;
+                    controller->ProcessCommand(MakeEnvironmentQueryEditCommand(*query, operation));
+                }
+                return true;
+            }
             const auto graph = std::ranges::find_if(model.decisionGraphDocuments, [&](const auto &entry) {
                 return entry.identity.instance == model.workspacePanelHost.ActiveDocument();
             });
@@ -492,6 +503,17 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             static_cast<void>(
                 modalHost.OpenRoot(std::make_unique<SourceDocumentCloseModal>(context, controller, closeLifetime_, canvas->state,
                                                                               canvas->identity.key.source.Value())));
+            return true;
+        }
+        const auto &queries = controller.ViewModel().environmentQueryDocuments;
+        const auto query = std::ranges::find_if(queries, [&](const auto &entry) {
+            return entry.identity.instance == *command.documentInstance && entry.dirty;
+        });
+        if (query != queries.end()) {
+            static_cast<void>(modalHost.OpenRoot(
+                std::make_unique<SourceDocumentCloseModal>(context, controller, closeLifetime_,
+                                                           EnvironmentQueryDocumentFence{query->identity.instance, query->revision},
+                                                           query->identity.key.source.Value())));
             return true;
         }
         const auto &blackboards = controller.ViewModel().blackboardDocuments;

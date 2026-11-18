@@ -212,6 +212,70 @@ namespace Horo::AI {
                                                .stages = {generator, std::move(test)}});
     }
 
+    /** @copydoc ReadBuiltinPointQuerySettings */
+    Result<BuiltinPointQuerySettings> ReadBuiltinPointQuerySettings(const EnvironmentQueryAsset &asset,
+                                                                    const QuerySchemaRegistry &registry) {
+        using Settings = Result<BuiltinPointQuerySettings>;
+        const auto plan = EnvironmentQueryPlan::Compile(asset, registry);
+        if (plan.HasError())
+            return Settings::Failure(plan.ErrorValue());
+        const auto stages = plan.Value().Stages();
+        const auto *generator = registry.Find(stages.front().generator);
+        if (stages.size() > 2 || !generator || generator->origin != BuiltinOrigin() ||
+            generator->id != QueryGeneratorId::Create(LatticeGenerator).Value())
+            return Settings::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
+        const auto lattice = PlanLattice(stages.front());
+        if (!lattice || !ValidLattice(*lattice))
+            return Settings::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+        BuiltinPointQuerySettings settings{*lattice, asset.ResultSchema().maximumResults};
+        if (stages.size() == 2) {
+            const auto distance = BuiltinPointDistanceQuery::Capture(stages.back(), registry);
+            if (distance.HasError())
+                return Settings::Failure(distance.ErrorValue());
+            settings.distance = distance.Value().Settings();
+        }
+        return Settings::Success(settings);
+    }
+
+    /** @copydoc EditBuiltinPointQuerySettings */
+    Result<EnvironmentQueryAsset> EditBuiltinPointQuerySettings(const EnvironmentQueryAsset &asset, const QuerySchemaRegistry &registry,
+                                                                const BuiltinPointQuerySettings &settings) {
+        using Edited = Result<EnvironmentQueryAsset>;
+        const auto previous = ReadBuiltinPointQuerySettings(asset, registry);
+        if (previous.HasError())
+            return Edited::Failure(previous.ErrorValue());
+        if (previous.Value().distance.has_value() != settings.distance.has_value())
+            return Edited::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+
+        const auto generator = std::ranges::find(asset.Stages(), QueryStageKind::Generator, &QueryAssetStage::kind);
+        auto generated = CreateBuiltinLatticeQuery(asset.Id(), generator->id, asset.ResultSchema().id, asset.DisplayName(),
+                                                   settings.lattice, settings.maximumResults);
+        if (generated.HasError())
+            return generated;
+        if (settings.distance) {
+            const auto test = std::ranges::find(asset.Stages(), QueryStageKind::Test, &QueryAssetStage::kind);
+            auto withTest = AddBuiltinPointDistanceTest(generated.Value(), test->id, *settings.distance);
+            if (withTest.HasError())
+                return withTest;
+            generated = std::move(withTest);
+        }
+
+        QueryAssetSource edited{.id = asset.Id(),
+                                .displayName = asset.DisplayName(),
+                                .result = asset.ResultSchema(),
+                                .stages = {asset.Stages().begin(), asset.Stages().end()}};
+        edited.result.maximumResults = settings.maximumResults;
+        for (auto &stage : edited.stages) {
+            const auto values = std::ranges::find(generated.Value().Stages(), stage.id, &QueryAssetStage::id);
+            stage.properties = values->properties;
+        }
+        auto captured = EnvironmentQueryAsset::Capture(edited);
+        if (captured.HasError())
+            return captured;
+        const auto verified = ReadBuiltinPointQuerySettings(captured.Value(), registry);
+        return verified.HasError() ? Edited::Failure(verified.ErrorValue()) : std::move(captured);
+    }
+
     /** @copydoc BuiltinPointDistanceQuery::Capture */
     Result<BuiltinPointDistanceQuery> BuiltinPointDistanceQuery::Capture(const QueryPlanStage &stage, const QuerySchemaRegistry &registry) {
         using Captured = Result<BuiltinPointDistanceQuery>;

@@ -74,6 +74,23 @@ namespace Horo::Editor {
             }
             return;
         }
+        const auto query = std::ranges::find_if(model.environmentQueryDocuments, [&](const auto &entry) {
+            return entry.identity.instance == model.workspacePanelHost.ActiveDocument();
+        });
+        if (query != model.environmentQueryDocuments.end()) {
+            using enum EnvironmentQueryEditAction;
+            if (!query->settings)
+                return;
+            if (router.ReadAction(context, Input::ActionId{kActionSave}).pressed)
+                command = MakeEnvironmentQueryEditCommand(*query, Save);
+            else if (!command.sourceTextInputOwned && !capture.textInputRequested && !capture.popupOpen) {
+                if (router.ReadAction(context, Input::ActionId{kActionRedo}).pressed)
+                    command = MakeEnvironmentQueryEditCommand(*query, Redo);
+                else if (router.ReadAction(context, Input::ActionId{kActionUndo}).pressed)
+                    command = MakeEnvironmentQueryEditCommand(*query, Undo);
+            }
+            return;
+        }
         const auto decision = std::ranges::find_if(model.decisionGraphDocuments, [&](const auto &entry) {
             return entry.identity.instance == model.workspacePanelHost.ActiveDocument();
         });

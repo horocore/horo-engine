@@ -297,6 +297,10 @@ namespace Horo::Editor {
         [[nodiscard]] Result<bool> ResolveBlackboardClose(BlackboardDocumentFence fence, SourceCloseDecision decision);
         /** @brief Executes the explicit close decision only for its captured Decision document revision. */
         [[nodiscard]] Result<bool> ResolveDecisionGraphClose(DecisionGraphDocumentFence fence, SourceCloseDecision decision);
+        /** @brief Saves or discards one exact authored Query revision through the shared close modal. */
+        [[nodiscard]] Result<bool> ResolveEnvironmentQueryClose(EnvironmentQueryDocumentFence fence, SourceCloseDecision decision);
+        /** @brief Captures every editable Query revision for the shared workspace leave fence. */
+        [[nodiscard]] std::vector<EnvironmentQueryDocumentFence> EnvironmentQueryRevisions() const;
         /** @brief Captures the current canvas instances and their exact publication fences for leave consent. */
         [[nodiscard]] std::vector<UiCanvasDocumentStateId> UiCanvasStates() const;
         /** @brief Retires all canvases after durable recovery or explicit discard. */
@@ -735,6 +739,30 @@ namespace Horo::Editor {
         };
 
         std::optional<EnvironmentQueryPreviewWork> m_environmentQueryPreviewWork;
+
+        /** @brief Immutable semantic root retained by both history and the active Query draft. */
+        struct EnvironmentQueryState final {
+            std::shared_ptr<const AI::EnvironmentQueryAsset> source;
+            AI::BuiltinPointQuerySettings settings;
+            Sha256Digest digest;
+            std::size_t bytes{};
+        };
+
+        struct EnvironmentQueryHistoryEntry final {
+            EnvironmentQueryState before;
+            EnvironmentQueryState after;
+            std::size_t bytes{};
+        };
+
+        struct EnvironmentQueryDraft final {
+            EnvironmentQueryState current;
+            Sha256Digest saved;
+            Sha256Digest sidecar;
+            std::size_t acceptedBytes{};
+            SemanticDocumentHistory<EnvironmentQueryHistoryEntry> history{};
+        };
+
+        std::map<DocumentInstanceId, EnvironmentQueryDraft> m_environmentQueryDrafts;
         CollisionInventoryEvidence *m_collisionInventory{};
         CollisionActivationEvidence *m_collisionActivation{};
         const EditorPreviewCollisionReceiptSource *m_previewCollisionReceipt{};
@@ -1294,6 +1322,17 @@ namespace Horo::Editor {
         void OpenEmbeddedEnvironmentQuerySource(const SourceOpenResult &result);
         /** @brief Routes a Run or Cancel request for the currently active registered saved query. */
         bool ProcessEnvironmentQueryPreview(const EditorWorkspaceViewCommandData &command);
+        /** @brief Routes one revision-fenced Query edit or history command to the active document. */
+        bool ProcessEnvironmentQueryEdit(const EditorWorkspaceViewCommandData &command);
+        /** @brief Commits one detached typed Query edit or replays one shared history entry. */
+        Result<void> ApplyEnvironmentQueryEdit(EnvironmentQueryWorkspaceDocument &document, EnvironmentQueryDraft &draft,
+                                               const EnvironmentQueryEditRequest &request);
+        /** @brief Publishes canonical query bytes through the Project owner and tracked native receipt. */
+        Result<void> SaveEnvironmentQueryDraft(EnvironmentQueryWorkspaceDocument &document, EnvironmentQueryDraft &draft);
+        /** @brief Saves dirty Query documents through the shared workspace Save All route. */
+        Result<void> SaveEnvironmentQueryDocuments();
+        /** @brief Projects one accepted semantic root and retires any preview of its previous source. */
+        void ProjectEnvironmentQueryDraft(EnvironmentQueryWorkspaceDocument &document, const EnvironmentQueryDraft &draft);
         /** @brief Captures exact authoring inputs and submits pure bounded lattice evaluation. */
         Result<void> StartEnvironmentQueryPreview(EnvironmentQueryWorkspaceDocument &document,
                                                   const EnvironmentQueryPreviewRequest &request);

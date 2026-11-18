@@ -1,0 +1,375 @@
+#include "EnvironmentQueryWorkspaceSource.h"
+#include "Horo/AI/AIErrors.h"
+#include "Horo/AI/EnvironmentQueryGenerators.h"
+#include "Horo/AI/EnvironmentQuerySourceCodec.h"
+#include "Horo/Assets/AssetSourcePublication.h"
+#include "Horo/Foundation/PathUtils.h"
+#include "editor/screens/workspace/EditorWorkspaceController.h"
+
+#include <algorithm>
+#include <limits>
+#include <new>
+
+namespace Horo::Editor {
+    namespace EnvironmentQueryWorkspaceSource {
+        using AI::EnvironmentQuerySourceCodec;
+
+        /** @copydoc CaptureQuerySource */
+        Result<Assets::AssetCookInputSnapshot> CaptureQuerySource(const std::filesystem::path &root,
+                                                                  const Assets::AssetRegistrySnapshot &registry, Assets::AssetId source) {
+            const Assets::AssetCookLimits limits{.maximumSourceBytes = EnvironmentQuerySourceCodec::MaximumBytes, .maximumAssets = 1};
+            return Assets::AssetCookInputSnapshot::CaptureSelected(root, registry, std::span{&source, 1}, limits,
+                                                                   EnvironmentQuerySourceCodec::MaximumBytes);
+        }
+
+        /** @copydoc RegisteredQueryDocument */
+        bool RegisteredQueryDocument(const EnvironmentQueryWorkspaceDocument &document, const Assets::AssetRegistrySnapshot &registry) {
+            const auto *record = registry.Find(document.asset);
+            return record && record->type.Value() == AI::EnvironmentQuerySourceAssetType &&
+                   record->sourcePath.String() == document.identity.key.source.Value();
+        }
+
+        /** @copydoc DescriptorAvailability */
+        QueryDescriptorAvailability DescriptorAvailability(const AI::EnvironmentQueryAsset &query,
+                                                           const AI::QuerySchemaRegistry *registry) {
+            if (!registry)
+                return QueryDescriptorAvailability::RegistryUnavailable;
+            return AI::EnvironmentQueryPlan::Compile(query, *registry).HasValue() ? QueryDescriptorAvailability::Validated
+                                                                                  : QueryDescriptorAvailability::Incompatible;
+        }
+    }  // namespace EnvironmentQueryWorkspaceSource
+
+    namespace {
+        using AI::EnvironmentQuerySourceCodec;
+        using EnvironmentQueryWorkspaceSource::CaptureQuerySource;
+        using EnvironmentQueryWorkspaceSource::DescriptorAvailability;
+        using EnvironmentQueryWorkspaceSource::RegisteredQueryDocument;
+
+        /** @brief Captures raw registered sidecar bytes using the normal identity-sidecar ceiling. */
+        Result<Assets::AssetSourceIdentity> CaptureQuerySidecar(const std::filesystem::path &root, const Assets::AssetRecord &record) {
+            constexpr std::size_t MaximumIdentitySidecarBytes = 1U << 20U;
+            const auto captured =
+                Assets::CaptureAssetSource(root, Foundation::Paths::Resolve(root, record.metadataPath), MaximumIdentitySidecarBytes);
+            if (captured.HasError())
+                return Result<Assets::AssetSourceIdentity>::Failure(captured.ErrorValue());
+            return Result<Assets::AssetSourceIdentity>::Success(captured.Value().identity);
+        }
+    }  // namespace
+
+    /** @copydoc EditorWorkspaceController::OpenEmbeddedEnvironmentQuerySource */
+    void EditorWorkspaceController::OpenEmbeddedEnvironmentQuerySource(const SourceOpenResult &result) {
+        const auto &opened = *result.document;
+        const auto fail = [&](std::string_view key) {
+            if (opened.disposition == DocumentOpenDisposition::Opened)
+                static_cast<void>(m_documentRegistry.Close(opened.identity.instance));
+            m_viewModel.contentBrowserOperationError = key;
+        };
+        const auto *record = m_assetRegistry.FindByPath(opened.identity.key.source.Value());
+        if (!record || record->type.Value() != AI::EnvironmentQuerySourceAssetType) {
+            fail("workspace.environment_query.invalid");
+            return;
+        }
+        auto &documents = m_viewModel.environmentQueryDocuments;
+        constexpr std::size_t MaximumDocuments = 16;
+        if (documents.empty())
+            documents.reserve(MaximumDocuments);
+        const auto existing = std::ranges::find_if(documents, [&](const auto &document) {
+            return document.identity.instance == opened.identity.instance || document.asset == record->id;
+        });
+        if (existing == documents.end() && documents.size() >= MaximumDocuments) {
+            fail("workspace.environment_query.limit");
+            return;
+        }
+        const auto captured = CaptureQuerySource(ProjectRoot(), m_assetRegistry, record->id);
+        if (captured.HasError()) {
+            fail("workspace.environment_query.invalid");
+            return;
+        }
+        const auto &source = captured.Value().Sources().front();
+        if (existing != documents.end() && existing->dirty) {
+            if (existing->identity != opened.identity || existing->source != source.sourceDigest) {
+                existing->conflict = true;
+                existing->diagnostic = MakeError(Assets::AssetSourceErrors::Conflict);
+                if (existing->identity != opened.identity) {
+                    fail("workspace.source_open.unavailable");
+                    return;
+                }
+            }
+            static_cast<void>(m_viewModel.workspacePanelHost.FocusDocument(existing->identity.instance));
+            return;
+        }
+        if (existing != documents.end() && existing->identity == opened.identity && existing->asset == record->id &&
+            existing->source == source.sourceDigest) {
+            static_cast<void>(m_viewModel.workspacePanelHost.FocusDocument(opened.identity.instance));
+            return;
+        }
+        auto query = EnvironmentQuerySourceCodec::Decode(source.bytes);
+        if (query.HasError() || captured.Value().VerifyUnchanged().HasError()) {
+            fail("workspace.environment_query.invalid");
+            return;
+        }
+        EnvironmentQueryWorkspaceDocument candidate{opened.identity, record->id, source.sourceDigest,
+                                                    std::make_shared<const AI::EnvironmentQueryAsset>(std::move(query).Value())};
+        candidate.descriptors = DescriptorAvailability(*candidate.query, m_querySchema);
+        decltype(m_environmentQueryDrafts) prepared;
+        if (m_querySchema && m_mutations && m_durableFiles) {
+            const auto settings = AI::ReadBuiltinPointQuerySettings(*candidate.query, *m_querySchema);
+            const auto bytes = EnvironmentQuerySourceCodec::Encode(*candidate.query);
+            const auto sidecar = CaptureQuerySidecar(ProjectRoot(), *record);
+            if (settings.HasValue() && bytes.HasValue() && sidecar.HasValue() && sidecar.Value().exists &&
+                captured.Value().VerifyUnchanged().HasValue()) {
+                const auto digest = ComputeSha256(std::as_bytes(std::span{bytes.Value()}));
+                candidate.settings = settings.Value();
+                prepared.try_emplace(candidate.identity.instance,
+                                     EnvironmentQueryDraft{{candidate.query, settings.Value(), digest, bytes.Value().size()},
+                                                           digest,
+                                                           sidecar.Value().digest,
+                                                           source.bytes.size()});
+            }
+        }
+        if (existing != documents.end()) {
+            if (existing->revision == std::numeric_limits<std::uint64_t>::max()) {
+                fail("workspace.source_open.unavailable");
+                return;
+            }
+            candidate.revision = existing->revision + 1;
+        }
+        auto &host = m_viewModel.workspacePanelHost;
+        if (host.OpenDocument(opened.identity.key).HasError()) {
+            fail("workspace.source_open.unavailable");
+            return;
+        }
+        if (existing != documents.end())
+            m_environmentQueryDrafts.erase(existing->identity.instance);
+        m_environmentQueryDrafts.merge(prepared);
+        if (existing == documents.end()) {
+            documents.push_back(std::move(candidate));
+            return;
+        }
+        if (m_environmentQueryPreviewWork && m_environmentQueryPreviewWork->instance == existing->identity.instance)
+            StopEnvironmentQueryPreview();
+        // A source move preserves the durable AssetId. The new path owns a fresh tab key.
+        if (existing->identity.instance != opened.identity.instance)
+            static_cast<void>(host.CloseDocument(existing->identity.instance));
+        *existing = std::move(candidate);
+    }
+
+    /** @copydoc EditorWorkspaceController::CloseEnvironmentQuerySource */
+    bool EditorWorkspaceController::CloseEnvironmentQuerySource(DocumentInstanceId instance) {
+        auto &documents = m_viewModel.environmentQueryDocuments;
+        const auto opened = std::ranges::find_if(documents, [instance](const auto &document) {
+            return document.identity.instance == instance;
+        });
+        if (opened == documents.end())
+            return false;
+        if (m_viewModel.workspacePanelHost.CloseDocument(instance).HasValue()) {
+            if (m_environmentQueryPreviewWork && m_environmentQueryPreviewWork->instance == instance)
+                StopEnvironmentQueryPreview();
+            m_environmentQueryDrafts.erase(instance);
+            documents.erase(opened);
+        }
+        return true;
+    }
+
+    /** @copydoc EditorWorkspaceController::ResolveEnvironmentQueryClose */
+    Result<bool> EditorWorkspaceController::ResolveEnvironmentQueryClose(EnvironmentQueryDocumentFence fence,
+                                                                         SourceCloseDecision decision) {
+        using Closed = Result<bool>;
+        if (decision == SourceCloseDecision::Cancel)
+            return Closed::Success(true);
+        auto &documents = m_viewModel.environmentQueryDocuments;
+        const auto document = std::ranges::find_if(documents, [fence](const auto &entry) {
+            return entry.identity.instance == fence.instance && entry.revision == fence.revision;
+        });
+        const auto draft = m_environmentQueryDrafts.find(fence.instance);
+        if (document == documents.end() || draft == m_environmentQueryDrafts.end())
+            return Closed::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+        if (decision == SourceCloseDecision::Save) {
+            const auto saved = SaveEnvironmentQueryDraft(*document, draft->second);
+            if (saved.HasError()) {
+                document->diagnostic = saved.ErrorValue();
+                return Closed::Failure(saved.ErrorValue());
+            }
+        } else if (decision != SourceCloseDecision::Discard) {
+            return Closed::Failure(MakeError(AI::AIErrors::EnvironmentQuerySchemaInvalid));
+        }
+        const auto closed = m_viewModel.workspacePanelHost.CloseDocument(fence.instance, WorkspaceDocumentClosePolicy::DiscardChanges);
+        if (closed.HasError())
+            return Closed::Failure(closed.ErrorValue());
+        if (m_environmentQueryPreviewWork && m_environmentQueryPreviewWork->instance == fence.instance)
+            StopEnvironmentQueryPreview();
+        m_environmentQueryDrafts.erase(draft);
+        documents.erase(document);
+        return Closed::Success(true);
+    }
+
+    /** @copydoc EditorWorkspaceController::ProjectEnvironmentQueryDraft */
+    void EditorWorkspaceController::ProjectEnvironmentQueryDraft(EnvironmentQueryWorkspaceDocument &document,
+                                                                 const EnvironmentQueryDraft &draft) {
+        if (document.query != draft.current.source) {
+            if (m_environmentQueryPreviewWork && m_environmentQueryPreviewWork->instance == document.identity.instance)
+                StopEnvironmentQueryPreview();
+            document.preview = {};
+        }
+        document.query = draft.current.source;
+        document.settings = draft.current.settings;
+        document.dirty = draft.current.digest != draft.saved;
+        document.canUndo = draft.history.UndoCount() != 0;
+        document.canRedo = draft.history.RedoCount() != 0;
+        static_cast<void>(m_viewModel.workspacePanelHost.SetDocumentDirty(document.identity.instance, document.dirty));
+    }
+
+    /** @copydoc EditorWorkspaceController::ApplyEnvironmentQueryEdit */
+    Result<void> EditorWorkspaceController::ApplyEnvironmentQueryEdit(EnvironmentQueryWorkspaceDocument &document,
+                                                                      EnvironmentQueryDraft &draft,
+                                                                      const EnvironmentQueryEditRequest &request) {
+        using Edit = Result<void>;
+        if (request.fence.revision != document.revision || document.revision == std::numeric_limits<std::uint64_t>::max())
+            return Edit::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+        using enum EnvironmentQueryEditAction;
+        if (request.action == Save)
+            return SaveEnvironmentQueryDraft(document, draft);
+        if (request.action == Undo || request.action == Redo) {
+            const bool redo = request.action == Redo;
+            const auto *entry = draft.history.Next(redo);
+            if (!entry || draft.current.source != (redo ? entry->before.source : entry->after.source))
+                return Edit::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+            draft.current = redo ? entry->after : entry->before;
+            draft.history.DidReplay(redo);
+        } else {
+            if (request.action != Apply || !request.settings || !m_querySchema)
+                return Edit::Failure(MakeError(AI::AIErrors::EnvironmentQuerySchemaInvalid));
+            auto candidate = AI::EditBuiltinPointQuerySettings(*draft.current.source, *m_querySchema, *request.settings);
+            if (candidate.HasError())
+                return Edit::Failure(candidate.ErrorValue());
+            const auto bytes = EnvironmentQuerySourceCodec::Encode(candidate.Value());
+            if (bytes.HasError())
+                return Edit::Failure(bytes.ErrorValue());
+            const auto digest = ComputeSha256(std::as_bytes(std::span{bytes.Value()}));
+            if (digest == draft.current.digest)
+                return Edit::Success();
+            EnvironmentQueryState next{std::make_shared<const AI::EnvironmentQueryAsset>(std::move(candidate).Value()), *request.settings,
+                                       digest, bytes.Value().size()};
+            auto history = draft.history.Prepare({draft.current, next, draft.current.bytes + next.bytes});
+            if (!history)
+                return Edit::Failure(MakeError(Assets::AssetSourceErrors::Limit));
+            draft.history.Commit(*history);
+            draft.current = std::move(next);
+        }
+        ++document.revision;
+        ProjectEnvironmentQueryDraft(document, draft);
+        return Edit::Success();
+    }
+
+    /** @copydoc EditorWorkspaceController::SaveEnvironmentQueryDraft */
+    Result<void> EditorWorkspaceController::SaveEnvironmentQueryDraft(EnvironmentQueryWorkspaceDocument &document,
+                                                                      EnvironmentQueryDraft &draft) {
+        try {
+            using Saved = Result<void>;
+            const auto failed = [&](const Error &error) {
+                document.conflict = document.conflict || error.code.Value() == Assets::AssetSourceErrors::Conflict.code.Value();
+                return Saved::Failure(error);
+            };
+            if (!document.dirty)
+                return Saved::Success();
+            const auto root = ProjectRoot();
+            const auto project = m_mutations->TryAcquire({root, ProjectMutationOwner::Asset, "environment-query-source-save"});
+            if (project.HasError())
+                return failed(project.ErrorValue());
+            const auto registry = m_mutableAssetRegistry ? m_mutableAssetRegistry->Snapshot() : m_assetRegistry;
+            if (!RegisteredQueryDocument(document, registry))
+                return failed(MakeError(Assets::AssetSourceErrors::Conflict));
+            const auto path = Foundation::Paths::Resolve(root, registry.Find(document.asset)->sourcePath);
+            const auto lock = Assets::AssetSourcePublicationLockPath(root, path);
+            if (lock.HasError())
+                return failed(lock.ErrorValue());
+            const auto lease = m_durableFiles->TryAcquireExclusive(lock.Value(), "environment-query-source-save");
+            if (lease.HasError())
+                return failed(lease.ErrorValue());
+            const auto captured = CaptureQuerySource(root, registry, document.asset);
+            if (captured.HasError())
+                return failed(MakeError(Assets::AssetSourceErrors::Conflict));
+            const auto &actual = captured.Value().Sources().front();
+            const auto sidecar = CaptureQuerySidecar(root, actual.record);
+            if (actual.sourceDigest != document.source || actual.bytes.size() != draft.acceptedBytes || sidecar.HasError() ||
+                !sidecar.Value().exists || sidecar.Value().digest != draft.sidecar)
+                return failed(MakeError(Assets::AssetSourceErrors::Conflict));
+
+            const auto validated = AI::ReadBuiltinPointQuerySettings(*draft.current.source, *m_querySchema);
+            if (validated.HasError())
+                return failed(validated.ErrorValue());
+            const auto encoded = EnvironmentQuerySourceCodec::Encode(*draft.current.source);
+            if (encoded.HasError())
+                return failed(encoded.ErrorValue());
+            if (captured.Value().VerifyUnchanged().HasError())
+                return failed(MakeError(Assets::AssetSourceErrors::Conflict));
+            const Assets::AssetSourceIdentity accepted{true, draft.acceptedBytes, document.source};
+            const auto published =
+                Assets::PublishAssetSource(root, path, accepted, std::as_bytes(std::span{encoded.Value()}), lease.Value(), *m_durableFiles);
+            if (published.HasError())
+                return failed(published.ErrorValue());
+            const auto &receipt = published.Value();
+            if (receipt.status != Assets::AssetSourcePublicationStatus::Durable) {
+                document.conflict = true;
+                return failed(receipt.durabilityError.value_or(MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed)));
+            }
+            document.source = receipt.identity.digest;
+            draft.acceptedBytes = receipt.identity.bytes;
+            draft.saved = draft.current.digest;
+            document.conflict = false;
+            ProjectEnvironmentQueryDraft(document, draft);
+            return Saved::Success();
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Limit));
+        }
+    }
+
+    /** @copydoc EditorWorkspaceController::EnvironmentQueryRevisions */
+    std::vector<EnvironmentQueryDocumentFence> EditorWorkspaceController::EnvironmentQueryRevisions() const {
+        std::vector<EnvironmentQueryDocumentFence> revisions;
+        for (const auto &document : m_viewModel.environmentQueryDocuments) {
+            if (document.settings)
+                revisions.push_back({document.identity.instance, document.revision});
+        }
+        return revisions;
+    }
+
+    /** @copydoc EditorWorkspaceController::SaveEnvironmentQueryDocuments */
+    Result<void> EditorWorkspaceController::SaveEnvironmentQueryDocuments() {
+        for (auto &document : m_viewModel.environmentQueryDocuments) {
+            if (!document.dirty)
+                continue;
+            auto saved = SaveEnvironmentQueryDraft(document, m_environmentQueryDrafts.at(document.identity.instance));
+            document.diagnostic = saved.HasError() ? std::optional{saved.ErrorValue()} : std::nullopt;
+            if (saved.HasError())
+                return saved;
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorWorkspaceController::ProcessEnvironmentQueryEdit */
+    bool EditorWorkspaceController::ProcessEnvironmentQueryEdit(const EditorWorkspaceViewCommandData &command) {
+        if (command.command != EditorWorkspaceViewCommand::EditEnvironmentQuery)
+            return false;
+        if (!command.environmentQueryEdit)
+            return true;
+        const auto &request = *command.environmentQueryEdit;
+        if (m_viewModel.workspacePanelHost.ActiveDocument() != request.fence.instance)
+            return true;
+        const auto draft = m_environmentQueryDrafts.find(request.fence.instance);
+        auto &documents = m_viewModel.environmentQueryDocuments;
+        const auto document = std::ranges::find_if(documents, [&](const auto &entry) {
+            return entry.identity.instance == request.fence.instance;
+        });
+        if (draft == m_environmentQueryDrafts.end() || document == documents.end())
+            return true;
+        try {
+            const auto edited = ApplyEnvironmentQueryEdit(*document, draft->second, request);
+            document->diagnostic = edited.HasError() ? std::optional{edited.ErrorValue()} : std::nullopt;
+        } catch (const std::bad_alloc &) {
+            document->diagnostic = MakeError(Assets::AssetSourceErrors::Limit);
+        }
+        return true;
+    }
+
+}  // namespace Horo::Editor

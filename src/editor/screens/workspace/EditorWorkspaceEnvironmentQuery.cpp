@@ -1,4 +1,5 @@
 #include "AuthoredAiSourceInventory.h"
+#include "EnvironmentQueryWorkspaceSource.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/EnvironmentQueryExecution.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
@@ -14,26 +15,15 @@
 #include <algorithm>
 #include <array>
 #include <format>
+#include <limits>
 #include <set>
 
 namespace Horo::Editor {
     namespace {
         using AI::EnvironmentQuerySourceCodec;
-
-        /** @brief Captures a registered query and its ordinary sidecar through the existing bounded source reader. */
-        Result<Assets::AssetCookInputSnapshot> CaptureQuerySource(const std::filesystem::path &root,
-                                                                  const Assets::AssetRegistrySnapshot &registry, Assets::AssetId source) {
-            const Assets::AssetCookLimits limits{.maximumSourceBytes = EnvironmentQuerySourceCodec::MaximumBytes, .maximumAssets = 1};
-            return Assets::AssetCookInputSnapshot::CaptureSelected(root, registry, std::span{&source, 1}, limits,
-                                                                   EnvironmentQuerySourceCodec::MaximumBytes);
-        }
-
-        /** @brief Checks the durable asset ID and current path before reusing a saved query tab. */
-        bool RegisteredQueryDocument(const EnvironmentQueryWorkspaceDocument &document, const Assets::AssetRegistrySnapshot &registry) {
-            const auto *record = registry.Find(document.asset);
-            return record && record->type.Value() == AI::EnvironmentQuerySourceAssetType &&
-                   record->sourcePath.String() == document.identity.key.source.Value();
-        }
+        using EnvironmentQueryWorkspaceSource::CaptureQuerySource;
+        using EnvironmentQueryWorkspaceSource::DescriptorAvailability;
+        using EnvironmentQueryWorkspaceSource::RegisteredQueryDocument;
 
         /** @brief Pins the selected authored object in the existing editor preview Scene for a native lattice. */
         Result<std::shared_ptr<const AI::QueryContextSnapshot>> CaptureLatticePreviewContext(const AI::EnvironmentQueryPlan &plan,
@@ -187,15 +177,6 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
-        /** @brief Checks source descriptors without activating the plan or hiding unresolved authored stages. */
-        QueryDescriptorAvailability DescriptorAvailability(const AI::EnvironmentQueryAsset &query,
-                                                           const AI::QuerySchemaRegistry *registry) {
-            if (!registry)
-                return QueryDescriptorAvailability::RegistryUnavailable;
-            return AI::EnvironmentQueryPlan::Compile(query, *registry).HasValue() ? QueryDescriptorAvailability::Validated
-                                                                                  : QueryDescriptorAvailability::Incompatible;
-        }
-
         /** @brief Localizes the exact qualification state of this saved document. */
         std::string_view DescriptorLabel(QueryDescriptorAvailability availability) {
             using enum QueryDescriptorAvailability;
@@ -226,82 +207,6 @@ namespace Horo::Editor {
         }
     }  // namespace
 
-    /** @copydoc EditorWorkspaceController::OpenEmbeddedEnvironmentQuerySource */
-    void EditorWorkspaceController::OpenEmbeddedEnvironmentQuerySource(const SourceOpenResult &result) {
-        const auto &opened = *result.document;
-        const auto fail = [&](std::string_view key) {
-            if (opened.disposition == DocumentOpenDisposition::Opened)
-                static_cast<void>(m_documentRegistry.Close(opened.identity.instance));
-            m_viewModel.contentBrowserOperationError = key;
-        };
-        const auto *record = m_assetRegistry.FindByPath(opened.identity.key.source.Value());
-        if (!record || record->type.Value() != AI::EnvironmentQuerySourceAssetType) {
-            fail("workspace.environment_query.invalid");
-            return;
-        }
-        auto &documents = m_viewModel.environmentQueryDocuments;
-        constexpr std::size_t MaximumDocuments = 16;
-        if (documents.empty())
-            documents.reserve(MaximumDocuments);
-        const auto existing = std::ranges::find_if(documents, [&](const auto &document) {
-            return document.identity.instance == opened.identity.instance || document.asset == record->id;
-        });
-        if (existing == documents.end() && documents.size() >= MaximumDocuments) {
-            fail("workspace.environment_query.limit");
-            return;
-        }
-        const auto captured = CaptureQuerySource(ProjectRoot(), m_assetRegistry, record->id);
-        if (captured.HasError()) {
-            fail("workspace.environment_query.invalid");
-            return;
-        }
-        const auto &source = captured.Value().Sources().front();
-        if (existing != documents.end() && existing->identity == opened.identity && existing->asset == record->id &&
-            existing->source == source.sourceDigest) {
-            static_cast<void>(m_viewModel.workspacePanelHost.FocusDocument(opened.identity.instance));
-            return;
-        }
-        auto query = EnvironmentQuerySourceCodec::Decode(source.bytes);
-        if (query.HasError() || captured.Value().VerifyUnchanged().HasError()) {
-            fail("workspace.environment_query.invalid");
-            return;
-        }
-        EnvironmentQueryWorkspaceDocument candidate{opened.identity, record->id, source.sourceDigest,
-                                                    std::make_shared<const AI::EnvironmentQueryAsset>(std::move(query).Value())};
-        candidate.descriptors = DescriptorAvailability(*candidate.query, m_querySchema);
-        auto &host = m_viewModel.workspacePanelHost;
-        if (host.OpenDocument(opened.identity.key).HasError()) {
-            fail("workspace.source_open.unavailable");
-            return;
-        }
-        if (existing == documents.end()) {
-            documents.push_back(std::move(candidate));
-            return;
-        }
-        if (m_environmentQueryPreviewWork && m_environmentQueryPreviewWork->instance == existing->identity.instance)
-            StopEnvironmentQueryPreview();
-        // A source move preserves the durable AssetId. The new path owns a fresh tab key.
-        if (existing->identity.instance != opened.identity.instance)
-            static_cast<void>(host.CloseDocument(existing->identity.instance));
-        *existing = std::move(candidate);
-    }
-
-    /** @copydoc EditorWorkspaceController::CloseEnvironmentQuerySource */
-    bool EditorWorkspaceController::CloseEnvironmentQuerySource(DocumentInstanceId instance) {
-        auto &documents = m_viewModel.environmentQueryDocuments;
-        const auto opened = std::ranges::find_if(documents, [instance](const auto &document) {
-            return document.identity.instance == instance;
-        });
-        if (opened == documents.end())
-            return false;
-        if (m_viewModel.workspacePanelHost.CloseDocument(instance).HasValue()) {
-            if (m_environmentQueryPreviewWork && m_environmentQueryPreviewWork->instance == instance)
-                StopEnvironmentQueryPreview();
-            documents.erase(opened);
-        }
-        return true;
-    }
-
     /** @copydoc EditorWorkspaceController::IsEnvironmentQueryPreviewCurrent */
     bool EditorWorkspaceController::IsEnvironmentQueryPreviewCurrent(const EnvironmentQueryPreviewScene &pin,
                                                                      const std::optional<Runtime::RuntimeSceneView> &current) const {
@@ -315,6 +220,8 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::StartEnvironmentQueryPreview */
     Result<void> EditorWorkspaceController::StartEnvironmentQueryPreview(EnvironmentQueryWorkspaceDocument &document,
                                                                          const EnvironmentQueryPreviewRequest &request) {
+        if (document.dirty || document.conflict)
+            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
         if (!m_querySchema || !m_sourceRecoveryJobs)
             return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
         if (m_environmentQueryPreviewWork)
@@ -549,6 +456,70 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc EditorWorkspaceView::DrawEnvironmentQuerySettings */
+    void EditorWorkspaceView::DrawEnvironmentQuerySettings(const EnvironmentQueryWorkspaceDocument &document,
+                                                           EditorWorkspaceViewCommandData &outCommand) const {
+        using enum EnvironmentQueryEditAction;
+        const auto text = [&](std::string_view key) {
+            return m_context.localization.Get("editor", key);
+        };
+        const auto &fonts = m_context.theme.fonts;
+        const auto &current = *document.settings;
+        auto &fields = m_environmentQueryFields;
+        const EnvironmentQueryDocumentFence fence{document.identity.instance, document.revision};
+        if (fields.fence != fence) {
+            fields = {.fence = fence,
+                      .step = current.lattice.stepMillimeters,
+                      .outer = current.lattice.outerSteps,
+                      .inner = current.lattice.innerSteps.value_or(0),
+                      .maximum = current.maximumResults,
+                      .radius = current.distance ? current.distance->radiusMillimeters : 0,
+                      .annulus = current.lattice.innerSteps.has_value(),
+                      .preferNearer = current.distance && current.distance->preferNearer,
+                      .widgetId = std::format("##EqsSettings/{}/{}", fence.instance.Value(), fence.revision)};
+        }
+        ImGui::PushID(fields.widgetId.c_str());
+        const auto number = [&](std::string_view label, const char *id, std::uint64_t &value) {
+            static_cast<void>(Ui::DrawUnsignedPropRow(text(label).c_str(), id, value, fonts));
+        };
+        number("workspace.environment_query.create_step", "##step", fields.step);
+        number("workspace.environment_query.create_outer", "##outer", fields.outer);
+        static_cast<void>(Ui::CheckboxControl(text("workspace.environment_query.create_annulus").c_str(), &fields.annulus, fonts));
+        if (fields.annulus)
+            number("workspace.environment_query.create_inner", "##inner", fields.inner);
+        number("workspace.environment_query.create_limit", "##limit", fields.maximum);
+        if (current.distance) {
+            number("workspace.environment_query.create_radius", "##radius", fields.radius);
+            static_cast<void>(
+                Ui::CheckboxControl(text("workspace.environment_query.create_prefer_nearer").c_str(), &fields.preferNearer, fonts));
+        }
+
+        constexpr auto maximum = std::numeric_limits<std::uint32_t>::max();
+        const bool valid = fields.step > 0 && fields.step <= maximum && fields.outer <= AI::MaximumQueryLatticeOuterSteps &&
+                           (!fields.annulus || fields.inner <= fields.outer) && fields.maximum > 0 &&
+                           fields.maximum <= AI::EnvironmentQuerySchemaLimits::MaximumResults &&
+                           (!current.distance || (fields.radius > 0 && fields.radius <= maximum));
+        const auto button = [&](std::string_view key, bool enabled) {
+            return Ui::Button({.label = text(key).c_str(), .enabled = enabled, .font = fonts.sans});
+        };
+        if (button("workspace.environment_query.edit_apply", valid)) {
+            AI::BuiltinPointQuerySettings changed{{static_cast<std::uint32_t>(fields.step), static_cast<std::uint32_t>(fields.outer), {}},
+                                                  static_cast<std::uint32_t>(fields.maximum)};
+            if (fields.annulus)
+                changed.lattice.innerSteps = static_cast<std::uint32_t>(fields.inner);
+            if (current.distance)
+                changed.distance = AI::QueryPointDistanceTest{static_cast<std::uint32_t>(fields.radius), fields.preferNearer};
+            outCommand = MakeEnvironmentQueryEditCommand(document, Apply, changed);
+        }
+        if (button("workspace.decision_graph.edit_save", document.dirty))
+            outCommand = MakeEnvironmentQueryEditCommand(document, Save);
+        if (button("workspace.decision_graph.edit_undo", document.canUndo))
+            outCommand = MakeEnvironmentQueryEditCommand(document, Undo);
+        if (button("workspace.decision_graph.edit_redo", document.canRedo))
+            outCommand = MakeEnvironmentQueryEditCommand(document, Redo);
+        ImGui::PopID();
+    }
+
     /** @copydoc EditorWorkspaceView::DrawEnvironmentQueryDocument */
     bool EditorWorkspaceView::DrawEnvironmentQueryDocument(const EditorWorkspaceViewModel &viewModel,
                                                            EditorWorkspaceViewCommandData &outCommand) const {
@@ -566,7 +537,13 @@ namespace Horo::Editor {
         const auto &query = *opened->query;
         if (!query.DisplayName().empty())
             label(query.DisplayName(), Theme::Text());
-        label(text("workspace.environment_query.read_only"), Theme::Muted());
+        if (!opened->settings)
+            label(text("workspace.environment_query.read_only"), Theme::Muted());
+        else
+            DrawEnvironmentQuerySettings(*opened, outCommand);
+        if (opened->diagnostic)
+            label(text(opened->conflict ? "workspace.environment_query.edit_conflict" : "workspace.environment_query.edit_refused"),
+                  Theme::Warn());
         label(text(DescriptorLabel(opened->descriptors)), Theme::Muted());
         for (const auto &stage : query.Stages()) {
             const auto stageType = text(StageLabel(stage.kind));
@@ -580,7 +557,8 @@ namespace Horo::Editor {
                                     (viewModel.playState == EditorPlayState::Idle || viewModel.playState == EditorPlayState::Failed);
         const auto action = text(running ? "workspace.environment_query.preview_cancel" : "workspace.environment_query.preview_run");
         if (Ui::Button({.label = action.c_str(),
-                        .enabled = running || (sceneAvailable && opened->descriptors == QueryDescriptorAvailability::Validated),
+                        .enabled = running || (sceneAvailable && !opened->dirty && !opened->conflict &&
+                                               opened->descriptors == QueryDescriptorAvailability::Validated),
                         .font = m_context.theme.fonts.sans}))
             outCommand = {.command = EditorWorkspaceViewCommand::PreviewEnvironmentQuery,
                           .environmentQueryPreview = EnvironmentQueryPreviewRequest{opened->identity.instance, opened->source,

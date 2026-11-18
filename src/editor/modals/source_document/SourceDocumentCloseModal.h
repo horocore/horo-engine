@@ -9,6 +9,7 @@
 #include "Horo/Editor/SourceFileOpenService.h"
 #include "Horo/Editor/UiCanvasDocument.h"
 #include "editor/screens/workspace/DecisionStateMachineAuthoring.h"
+#include "editor/screens/workspace/EnvironmentQueryDocumentFence.h"
 
 namespace Horo::Editor {
     class EditorWorkspaceController;
@@ -35,6 +36,9 @@ namespace Horo::Editor {
         /** @brief Captures an exact Decision source revision for the shared close workflow. */
         SourceDocumentCloseModal(const EditorGuiContext &context, EditorWorkspaceController &controller, std::weak_ptr<const void> lifetime,
                                  DecisionGraphDocumentFence request, std::string source);
+        /** @brief Captures an exact authored Query revision for the shared close workflow. */
+        SourceDocumentCloseModal(const EditorGuiContext &context, EditorWorkspaceController &controller, std::weak_ptr<const void> lifetime,
+                                 EnvironmentQueryDocumentFence request, std::string source);
         [[nodiscard]] ModalId Id() const override;
         [[nodiscard]] ModalPresentation Presentation() const override;
         [[nodiscard]] ModalClosePolicy ClosePolicy() const override;
@@ -55,7 +59,9 @@ namespace Horo::Editor {
         const EditorGuiContext &context_;
         EditorWorkspaceController *controller_;
         std::weak_ptr<const void> lifetime_;
-        std::variant<SourceSaveRequest, UiCanvasDocumentStateId, BlackboardDocumentFence, DecisionGraphDocumentFence> request_;
+        std::variant<SourceSaveRequest, UiCanvasDocumentStateId, BlackboardDocumentFence, DecisionGraphDocumentFence,
+                     EnvironmentQueryDocumentFence>
+            request_;
         std::string source_;
         bool failed_{};
     };

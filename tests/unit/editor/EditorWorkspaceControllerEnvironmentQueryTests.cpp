@@ -1,6 +1,7 @@
 #include "Horo/AI/EnvironmentQueryExecution.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
+#include "Horo/Assets/AssetSourcePublication.h"
 #include "OwnedTestDirectory.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/WorkspacePathText.h"
@@ -336,6 +337,135 @@ TEST_CASE("Environment Query workspace previews the saved native lattice from an
     controller.UpdateEnvironmentQueryPreview();
     CHECK(document.preview.status == Stale);
     CHECK_FALSE(document.preview.snapshot);
+}
+
+TEST_CASE("Registered Query settings use shared history and tracked source publication", "[unit][editor][eqs][workspace]") {
+    Project project;
+    const auto registry = CaptureBuiltinQuerySchema();
+    REQUIRE(registry.HasValue());
+    const auto initial =
+        CreateBuiltinLatticeQuery(QueryId::Create(14).Value(), QueryStageId::Create(41).Value(), QueryResultSchemaId::Create(8).Value(),
+                                  "Editable points", {.stepMillimeters = 500, .outerSteps = 3}, 9);
+    REQUIRE(initial.HasValue());
+    const auto native = AddBuiltinPointDistanceTest(initial.Value(), QueryStageId::Create(52).Value(), {1500, true});
+    REQUIRE(native.HasValue());
+    project.WriteAsset(native.Value());
+    EditorWorkspaceController controller(project.root, project.runtime, project.registry.Snapshot(),
+                                         {.assets = {.mutableAssetRegistry = &project.registry},
+                                          .mutations = &project.mutations,
+                                          .durableFiles = &project.files,
+                                          .querySchema = &registry.Value()});
+    const auto disk = [&] {
+        return Assets::CaptureAssetSource(project.root, project.root / Project::Path, EnvironmentQuerySourceCodec::MaximumBytes);
+    };
+    const auto before = disk();
+    REQUIRE(before.HasValue());
+    Project::Open(controller, Project::Path);
+    const auto &documents = controller.ViewModel().environmentQueryDocuments;
+    REQUIRE(documents.size() == 1);
+    const auto &document = documents.front();
+    REQUIRE(document.settings && document.settings->distance);
+    const auto original = document.query;
+    const auto instance = document.identity.instance;
+    using enum EnvironmentQueryEditAction;
+
+    auto changed = *document.settings;
+    const auto issue = [&](EnvironmentQueryEditAction action, std::optional<BuiltinPointQuerySettings> values = {}) {
+        controller.ProcessCommand(MakeEnvironmentQueryEditCommand(document, action, values));
+    };
+    changed.lattice.stepMillimeters = 0;
+    issue(Apply, changed);
+    REQUIRE(document.diagnostic);
+    CHECK(document.query == original);
+    CHECK_FALSE(document.canUndo);
+    changed.lattice = {.stepMillimeters = 800, .outerSteps = 4, .innerSteps = 1};
+    changed.maximumResults = 7;
+    changed.distance = QueryPointDistanceTest{2400, false};
+    const auto oldRequest = MakeEnvironmentQueryEditCommand(document, Apply, changed);
+    controller.ProcessCommand(oldRequest);
+    REQUIRE_FALSE(document.diagnostic);
+    CHECK(document.query != original);
+    CHECK(controller.HasDirtySourceDocuments());
+    CHECK(document.canUndo);
+    REQUIRE(document.query->Stages().size() == original->Stages().size());
+    for (std::size_t index = 0; index < document.query->Stages().size(); ++index)
+        CHECK(document.query->Stages()[index].id == original->Stages()[index].id);
+    CHECK(document.query->Id() == original->Id());
+    CHECK(document.query->ResultSchema().id == original->ResultSchema().id);
+    const auto draft = document.query;
+    controller.ProcessCommand(oldRequest);
+    REQUIRE(document.diagnostic);
+    CHECK(document.query == draft);
+
+    SECTION("undo, redo, Save All and reopen retain exact identities and edited values") {
+        issue(Undo);
+        REQUIRE_FALSE(document.diagnostic);
+        CHECK(document.query == original);
+        CHECK_FALSE(document.dirty);
+        CHECK(document.canRedo);
+        issue(Redo);
+        REQUIRE_FALSE(document.diagnostic);
+        CHECK(document.query == draft);
+        const auto uncommitted = disk();
+        REQUIRE(uncommitted.HasValue());
+        CHECK(uncommitted.Value().identity == before.Value().identity);
+        REQUIRE(controller.SaveSourceDocuments().HasValue());
+        CHECK_FALSE(controller.HasDirtySourceDocuments());
+        const auto committed = disk();
+        REQUIRE(committed.HasValue());
+        CHECK(committed.Value().identity.digest == document.source);
+        CHECK(committed.Value().identity.digest != before.Value().identity.digest);
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = instance});
+        REQUIRE(documents.empty());
+        Project::Open(controller, Project::Path);
+        REQUIRE(documents.size() == 1);
+        const auto &reopened = documents.front();
+        REQUIRE(reopened.settings && reopened.settings->distance);
+        CHECK(reopened.identity.instance != instance);
+        CHECK(reopened.asset == project.asset);
+        CHECK(reopened.query->Id() == original->Id());
+        CHECK(reopened.query->Stages().back().id == native.Value().Stages().back().id);
+        CHECK(reopened.settings->lattice.stepMillimeters == 800);
+        CHECK(reopened.settings->lattice.innerSteps == 1);
+        CHECK(reopened.settings->maximumResults == 7);
+        CHECK(reopened.settings->distance->radiusMillimeters == 2400);
+        CHECK_FALSE(reopened.settings->distance->preferNearer);
+        CHECK_FALSE(reopened.canUndo);
+    }
+    SECTION("changing the sidecar bytes refuses the source write even when the stable ID still matches") {
+        const auto sidecar = project.root / (std::string{Project::Path} + ".horo");
+        {
+            std::ofstream output(sidecar, std::ios::binary | std::ios::app);
+            output << '\n';
+            REQUIRE(static_cast<bool>(output));
+        }
+        issue(Save);
+        CHECK(document.conflict);
+        CHECK(document.dirty);
+        CHECK(document.query == draft);
+        const auto unchanged = disk();
+        REQUIRE(unchanged.HasValue());
+        CHECK(unchanged.Value().identity == before.Value().identity);
+    }
+    SECTION("external bytes cannot displace the draft, and stale close cannot discard it") {
+        project.WriteQuery("External");
+        Project::Open(controller, Project::Path);
+        CHECK(document.query == draft);
+        CHECK(document.conflict);
+        issue(Save);
+        CHECK(document.dirty);
+        REQUIRE(document.diagnostic);
+        const auto denied = controller.ResolveEnvironmentQueryClose({instance, document.revision - 1}, SourceCloseDecision::Discard);
+        CHECK(denied.HasError());
+        REQUIRE(documents.size() == 1);
+        const auto closed = controller.ResolveEnvironmentQueryClose({instance, document.revision}, SourceCloseDecision::Discard);
+        REQUIRE(closed.HasValue());
+        CHECK(closed.Value());
+        Project::Open(controller, Project::Path);
+        REQUIRE(documents.size() == 1);
+        CHECK(documents.front().query->DisplayName() == "External");
+        CHECK_FALSE(documents.front().settings);
+    }
 }
 
 TEST_CASE("Environment Query New creates the first registered source from explicit native lattice settings",

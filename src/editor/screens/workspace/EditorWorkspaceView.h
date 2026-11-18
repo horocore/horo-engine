@@ -147,6 +147,24 @@ namespace Horo::Editor {
 
         /** @brief Renders an already admitted immutable Environment Query source. */
         bool DrawEnvironmentQueryDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
+
+        /** @brief Transient wide-value controls preserve invalid or as-yet-unapplied input. */
+        struct EnvironmentQueryFields final {
+            EnvironmentQueryDocumentFence fence;
+            std::uint64_t step{};
+            std::uint64_t outer{};
+            std::uint64_t inner{};
+            std::uint64_t maximum{};
+            std::uint64_t radius{};
+            bool annulus{};
+            bool preferNearer{};
+            std::string widgetId;
+        };
+
+        mutable EnvironmentQueryFields m_environmentQueryFields;
+        /** @brief Draws typed settings and emits a single revision-fenced edit/history action. */
+        void DrawEnvironmentQuerySettings(const EnvironmentQueryWorkspaceDocument &document,
+                                          EditorWorkspaceViewCommandData &outCommand) const;
         /** @brief Presents the admitted semantic source without retaining a runtime plan. */
         bool DrawDecisionGraphDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
 

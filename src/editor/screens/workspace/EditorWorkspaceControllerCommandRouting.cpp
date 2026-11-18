@@ -69,10 +69,10 @@ namespace Horo::Editor {
             return;
         if (ProcessWorldStreamingPreviewCommand(cmd) || ProcessWorldBakeCommand(cmd) || ProcessWorldCompositionCommand(cmd) ||
             ProcessWorldSourceCommand(cmd) || ProcessUiCanvasCommand(cmd) || ProcessBlackboardDocumentCommand(cmd) ||
-            ProcessEnvironmentQueryPreview(cmd) || ProcessDecisionGraphEdit(cmd) || ProcessPrefabDocumentCommand(cmd) ||
-            ProcessWorkspaceDocumentCommand(cmd) || ProcessSequenceDocumentCommand(cmd) || ProcessSourceDocumentCommand(cmd) ||
-            ProcessPCGDocumentCommand(cmd) || ProcessContentBrowserCommand(cmd) || ProcessActivePanelCommand(cmd) ||
-            ProcessLayoutCommand(cmd))
+            ProcessEnvironmentQueryPreview(cmd) || ProcessEnvironmentQueryEdit(cmd) || ProcessDecisionGraphEdit(cmd) ||
+            ProcessPrefabDocumentCommand(cmd) || ProcessWorkspaceDocumentCommand(cmd) || ProcessSequenceDocumentCommand(cmd) ||
+            ProcessSourceDocumentCommand(cmd) || ProcessPCGDocumentCommand(cmd) || ProcessContentBrowserCommand(cmd) ||
+            ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd))
             return;
         if (m_activeTerrainDocument) {
             ProcessFocusedTerrainCommand(cmd);

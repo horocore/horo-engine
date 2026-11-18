@@ -100,6 +100,22 @@ namespace Horo::AI {
     [[nodiscard]] Result<EnvironmentQueryAsset> AddBuiltinPointDistanceTest(const EnvironmentQueryAsset &lattice, QueryStageId stage,
                                                                             QueryPointDistanceTest settings);
 
+    /** @brief Decodes the exact supported native authored shape and settings.
+     * @param asset Saved or draft query. @param registry Exact installed descriptor catalog.
+     * @return The typed editable settings, or a refusal that preserves unsupported source bytes.
+     */
+    [[nodiscard]] Result<BuiltinPointQuerySettings> ReadBuiltinPointQuerySettings(const EnvironmentQueryAsset &asset,
+                                                                                  const QuerySchemaRegistry &registry);
+
+    /** @brief Updates values on the admitted native source while retaining every authored identity and stage order.
+     * @param asset Original typed source. @param registry Exact installed descriptor catalog.
+     * @param settings Replacement settings; distance stage presence must remain unchanged.
+     * @return Complete validated source or typed refusal without modifying the original.
+     */
+    [[nodiscard]] Result<EnvironmentQueryAsset> EditBuiltinPointQuerySettings(const EnvironmentQueryAsset &asset,
+                                                                              const QuerySchemaRegistry &registry,
+                                                                              const BuiltinPointQuerySettings &settings);
+
     /** @brief Prepares the exact installed point-distance test without invoking a provider callback. */
     class BuiltinPointDistanceQuery final {
     public:
@@ -110,6 +126,12 @@ namespace Horo::AI {
         [[nodiscard]] static Result<BuiltinPointDistanceQuery> Capture(const QueryPlanStage &stage, const QuerySchemaRegistry &registry);
         /** @brief Returns the canonical filter and optional scoring policy for this stage. @return Scoring rule. */
         [[nodiscard]] QueryScoreRule Rule() const;
+
+        /** @brief Returns the exact decoded authored policy. @return Immutable distance settings. */
+        [[nodiscard]] QueryPointDistanceTest Settings() const noexcept {
+            return settings_;
+        }
+
         /** @brief Runs the actual distance kernel on two captured canonical points.
          * @param center Querier position. @param point Candidate position. @return Typed filter and metric evidence.
          */
