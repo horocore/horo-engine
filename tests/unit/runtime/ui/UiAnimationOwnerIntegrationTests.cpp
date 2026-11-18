@@ -194,9 +194,11 @@ TEST_CASE("Actual presented control replacement preserves draft Cancel baseline 
 }
 
 TEST_CASE("Presented text commands preserve selection and history across interaction publication", "[runtime_ui][text_edit][integration]") {
+    const bool changeFontScale = GENERATE(false, true);
     HostFixture fixture;
     auto &participant = *fixture.participant;
-    REQUIRE(participant.Start(Stable<UiAnimationId>(1)).HasValue());
+    if (!changeFontScale)
+        REQUIRE(participant.Start(Stable<UiAnimationId>(1)).HasValue());
     REQUIRE(fixture.host->RunFrame().HasValue());
     auto first = Frame(participant);
     const auto source = first.Controls().front().source;
@@ -206,9 +208,15 @@ TEST_CASE("Presented text commands preserve selection and history across interac
     REQUIRE(participant.HandleControl(receipt.view, Edge(source, UiControlInputKind::FocusGained, 1)).HasValue());
     REQUIRE(participant.EditControlText(receipt.view, source, 2, {UiTextEditKind::Home}).HasValue());
     REQUIRE(participant.EditControlText(receipt.view, source, 3, {UiTextEditKind::Insert, Text("x")}).HasValue());
+    auto viewport = Config().viewport;
+    if (changeFontScale) {
+        viewport.fontScale = {3, 2};
+        REQUIRE(participant.SetViewport(viewport).HasValue());
+    }
     fixture.clock.Advance(Duration::FromMilliseconds(10));
     REQUIRE(fixture.host->RunFrame().HasValue());
     auto current = Frame(participant);
+    CHECK(current.Layout().Descriptor().fontScale == viewport.fontScale);
     const auto currentSource = current.Controls().front().source;
     REQUIRE(currentSource.owner != source.owner);
     CHECK(std::get<UiTextInputControlState>(current.Controls().front().state).text.View() == "xbase");
