@@ -455,7 +455,7 @@ horo_allow_target_dependencies(TARGET HoroEditor
         HoroEditorViewportMetal
         HoroEditorVulkanGuiInternal
         HoroEditorVulkanShaderInternal
-        HoroHostModuleComposition HoroColorOutputPackageInternal HoroEditorViewportColorInternal)
+        HoroHostModuleComposition HoroColorOutputPackageInternal HoroEditorViewportColorInternal HoroEditorImageProviderHostInternal)
 
 # These edges predate the target-level architecture. Each exception is tied to
 # an active roadmap owner and must disappear when that ticket resolves the
