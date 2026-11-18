@@ -16,6 +16,7 @@
 #include <charconv>
 #include <cmath>
 #include <format>
+#include <functional>
 #include <limits>
 #include <set>
 #include <type_traits>
@@ -319,7 +320,7 @@ namespace Horo::Editor {
         Result<Id> IssueTreeIdentity(const Records &records, Projection project) {
             std::set<Id> used;
             for (const auto &record : records)
-                used.insert(project(record));
+                used.insert(std::invoke(project, record));
             return AuthoredAiSources::Issue(used);
         }
 
