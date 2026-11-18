@@ -6,7 +6,8 @@ namespace Horo::XR {
 
     /** @copydoc XRFrameLifecycle::BindConfiguration */
     XRFrameStatus XRFrameLifecycle::BindConfiguration(const XRViewConfigurationId &configuration, const XRCapabilitySnapshot &capabilities,
-                                                      const XRFrameLimits limits) noexcept {
+                                                      const XRFrameLimits limits,
+                                                      const std::optional<XRReprojectionPolicy> reprojection) noexcept {
         if (!sessions_->IsOwnerThread())
             return XRFrameStatus::WrongThread;
         if (shutdown_)
@@ -24,6 +25,11 @@ namespace Horo::XR {
             limits.maximumLayers > XRFrameHardLimits::MaximumLayers)
             return XRFrameStatus::CapacityExceeded;
 
+        if (const auto status = ValidateReprojectionPolicy(reprojection, limits); status != XRFrameStatus::Ok)
+            return status;
+
+        previousProjection_.reset();
+        reprojection_ = reprojection;
         configuration_ = configuration;
         revision_ = capabilities.Revision();
         limits_ = limits;
@@ -137,6 +143,7 @@ namespace Horo::XR {
             return XRFrameStatus::CapacityExceeded;
 
         images_[current_.acquiredImages] = image;
+        reprojectionImages_[current_.acquiredImages].reset();
         released_[current_.acquiredImages] = false;
         ++current_.acquiredImages;
         current_.phase = XRFramePhase::ImagesAcquired;
@@ -209,6 +216,7 @@ namespace Horo::XR {
         if (const auto status = ValidateEnd(frame, layerCount); status != XRFrameStatus::Ok)
             return status;
         lastEnded_ = frame;
+        previousProjection_.reset();
         ClearFrame();
         return XRFrameStatus::Ok;
     }
@@ -260,6 +268,8 @@ namespace Horo::XR {
             return;
         ClearFrame();
         configuration_ = {};
+        previousProjection_.reset();
+        reprojection_.reset();
         revision_ = {};
         limits_ = {};
     }

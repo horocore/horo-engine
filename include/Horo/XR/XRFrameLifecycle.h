@@ -5,6 +5,7 @@
  * @brief Bounded, backend-neutral predicted-frame transaction owned by XRRuntime.
  */
 
+#include "Horo/XR/XRReprojection.h"
 #include "Horo/XR/XRSessionLifecycle.h"
 #include "Horo/XR/XRSpacePose.h"
 
@@ -17,7 +18,7 @@ namespace Horo::XR {
     /** @brief Fixed implementation ceilings, not an admitted product or runtime capability. */
     struct XRFrameHardLimits final {
         static constexpr std::uint32_t MaximumViews = XRHardLimits::MaximumViews;
-        static constexpr std::uint32_t MaximumImages = MaximumViews * 2U;
+        static constexpr std::uint32_t MaximumImages = MaximumViews * 4U;
         static constexpr std::uint32_t MaximumLayers = 16;
     };
 
@@ -132,10 +133,12 @@ namespace Horo::XR {
          * @param configuration Currently active configuration owned by the published session.
          * @param capabilities Exact accepted system capability publication; no reference is retained.
          * @param limits Finite runtime/product limits, no greater than the publication or XRFrameHardLimits.
+         * @param reprojection Exact provider/Renderer format agreement, required only for negotiated SpaceWarp.
          * @return Ok or typed invalid, stale, capacity, order, or shutdown status without partial mutation.
          */
         [[nodiscard]] XRFrameStatus BindConfiguration(const XRViewConfigurationId &configuration, const XRCapabilitySnapshot &capabilities,
-                                                      XRFrameLimits limits) noexcept;
+                                                      XRFrameLimits limits,
+                                                      std::optional<XRReprojectionPolicy> reprojection = std::nullopt) noexcept;
 
         /**
          * @brief Reserve one exact frame before invoking native wait; reject unavailable/stale/duplicate/exhausted work first.
@@ -178,6 +181,12 @@ namespace Horo::XR {
          */
         [[nodiscard]] XRFrameStatus Acquire(const XRFrameId &frame, const XRSwapchainImageId &image) noexcept;
 
+        /** @brief Records an auxiliary image acquired and ready from its exact runtime allocation owner.
+         * @param frame Exact current rendering frame. @param image Copied format, usage, sample and allocation evidence.
+         * @return Typed stale, unsupported, malformed or acquisition error without partial mutation.
+         */
+        [[nodiscard]] XRFrameStatus AcquireReprojectionImage(const XRFrameId &frame, const XRReprojectionImage &image) noexcept;
+
         /**
          * @brief Record complete Renderer submission after the bridge has proved use/completion for every image.
          * @param frame Exact rendering frame with at least one acquired image.
@@ -208,6 +217,26 @@ namespace Horo::XR {
          * @return Typed order, capacity, or unreleased-image result without partial close on failure.
          */
         [[nodiscard]] XRFrameStatus End(const XRFrameId &frame, std::uint32_t layerCount) noexcept;
+
+        /** @brief Preflights a complete ordinary projection plan against the exact released frame.
+         * @param frame Exact current frame. @param plan Complete baseline projection-layer intent.
+         * @return Typed frame/order or image failure, with no mutation.
+         */
+        [[nodiscard]] XRFrameStatus ValidateProjectionEnd(const XRFrameId &frame, const XRViewRenderPlan &plan) const noexcept;
+
+        /** @brief Records successfully completed native projection and advances the owned predecessor.
+         * @param frame Exact frame already submitted to the native compositor. @param plan Exact already validated complete layer.
+         * @return Same status as ValidateProjectionEnd; other End calls clear the predecessor.
+         */
+        [[nodiscard]] XRFrameStatus EndProjection(const XRFrameId &frame, const XRViewRenderPlan &plan) noexcept;
+
+        /** @brief Checks optional provider inputs at the runtime-owned submission cutoff.
+         * @param frame Exact begun/rendered frame. @param plan Independently valid baseline projection intent.
+         * @param inputs Exact released auxiliary subresources, preceding frame and app-space delta.
+         * @return Ready, baseline fallback, or a typed stale/incompatible input category. Performs no native work or mutation.
+         */
+        [[nodiscard]] XRReprojectionStatus ValidateReprojection(const XRFrameId &frame, const XRViewRenderPlan &plan,
+                                                                const XRReprojectionInputs &inputs) const noexcept;
 
         /**
          * @brief Fence an adapter against current session, plan and open frame identity without advancing a phase.
@@ -245,12 +274,22 @@ namespace Horo::XR {
         /** @brief Clear the current logical transaction without issuing native cleanup. */
         void ClearFrame() noexcept;
 
+        /** @brief Checks the exact current subresource against its acquired and native-released allocation. */
+        [[nodiscard]] bool MatchesReprojectionImage(const XRFrameId &frame, const XRReprojectionSubImage &input,
+                                                    XRReprojectionImageKind kind) const noexcept;
+        /** @brief Admits the declared format envelope for the exact negotiated current session. */
+        [[nodiscard]] XRFrameStatus ValidateReprojectionPolicy(const std::optional<XRReprojectionPolicy> &candidate,
+                                                               XRFrameLimits limits) const noexcept;
+
         XRSessionLifecycle *sessions_;
         XRViewConfigurationId configuration_{};
         XRCapabilityRevision revision_{};
         XRFrameLimits limits_{};
         XRFrameSnapshot current_{};
         XRFrameId lastEnded_{};
+        std::optional<XRViewRenderPlan> previousProjection_;
+        std::optional<XRReprojectionPolicy> reprojection_;
+        std::array<std::optional<XRReprojectionImage>, XRFrameHardLimits::MaximumImages> reprojectionImages_{};
         std::array<XRSwapchainImageId, XRFrameHardLimits::MaximumImages> images_{};
         std::array<bool, XRFrameHardLimits::MaximumImages> released_{};
         std::uint64_t nextSequence_{1};

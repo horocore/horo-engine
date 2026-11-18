@@ -240,11 +240,9 @@ namespace Horo::XR::OpenXRInternal {
             return valid;
         const auto &plan = encoding.plan;
         const auto targets = encoding.targets;
-        if (const auto snapshot = frames_->Snapshot();
-            !begun_ || frames_->ValidateEnd(frame, 1) != XRFrameStatus::Ok || plan.Configuration().id != frame.configuration ||
-            plan.Configuration().session != frame.session || plan.PredictedDisplayTime() != snapshot.predictedDisplayTime ||
-            plan.Views().size() != snapshot.locatedViews || targets.empty() || targets.size() != snapshot.acquiredImages ||
-            targets.size() > XRFrameHardLimits::MaximumImages)
+        if (const auto snapshot = frames_->Snapshot(); !begun_ || frames_->ValidateProjectionEnd(frame, plan) != XRFrameStatus::Ok ||
+                                                       targets.empty() || targets.size() != snapshot.acquiredImages ||
+                                                       targets.size() > XRFrameHardLimits::MaximumImages)
             return Result<void>::Failure(MakeError(XRErrors::ViewPlanInvalid));
         // First production profile admits complete primary opaque stereo; no silent truncation or blend fallback.
         if (plan.Configuration().type != XRViewConfigurationType::PrimaryStereo || plan.Views().size() != 2 ||
@@ -352,12 +350,12 @@ namespace Horo::XR::OpenXRInternal {
                                                  views.data()};
         // OpenXR defines this native base-header view for projection layer dispatch.
         static_assert(sizeof(const XrCompositionLayerBaseHeader *) == sizeof(&layer));
-        return EndNative(frame, XR_ENVIRONMENT_BLEND_MODE_OPAQUE, std::bit_cast<const XrCompositionLayerBaseHeader *>(&layer));
+        return EndNative(frame, XR_ENVIRONMENT_BLEND_MODE_OPAQUE, std::bit_cast<const XrCompositionLayerBaseHeader *>(&layer), &plan);
     }
 
     /** @copydoc OpenXRFrameCompositor::EndNative */
     Result<void> OpenXRFrameCompositor::EndNative(const XRFrameId &frame, XrEnvironmentBlendMode blend,
-                                                  const XrCompositionLayerBaseHeader *layer) {
+                                                  const XrCompositionLayerBaseHeader *layer, const XRViewRenderPlan *projection) {
         const auto native = Current();
         if (native.HasError())
             return Result<void>::Failure(native.ErrorValue());
@@ -368,7 +366,7 @@ namespace Horo::XR::OpenXRInternal {
             fault_ = NativeError("end frame", result);
             return Result<void>::Failure(*fault_);
         }
-        const auto ended = frames_->End(frame, layer ? 1U : 0U);
+        const auto ended = projection ? frames_->EndProjection(frame, *projection) : frames_->End(frame, 0);
         nativeFrame_ = {};
         begun_ = false;
         period_ = 0;
@@ -382,7 +380,7 @@ namespace Horo::XR::OpenXRInternal {
             return valid;
         if (!begun_ || frames_->ValidateEnd(frame, 0) != XRFrameStatus::Ok)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
-        return EndNative(frame, XR_ENVIRONMENT_BLEND_MODE_OPAQUE, nullptr);
+        return EndNative(frame, XR_ENVIRONMENT_BLEND_MODE_OPAQUE, nullptr, nullptr);
     }
 
     /** @copydoc OpenXRFrameCompositor::RetainedFault */

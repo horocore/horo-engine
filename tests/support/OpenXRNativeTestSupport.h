@@ -279,6 +279,7 @@ namespace Horo::Tests::OpenXR {
                        .revision = IdentityValue<XRCapabilityRevision>(1),
                        .limits = {.maximumViews = 2, .maximumSpaces = 8, .maximumActions = maximumActions, .maximumDevices = 4}};
         descriptor.states.fill(XRCapabilityState::Available);
+        descriptor.states[static_cast<std::size_t>(XRCapability::SpaceWarp)] = XRCapabilityState::Unsupported;
         const auto result = XRCapabilitySnapshot::Create(descriptor);
         REQUIRE(result.HasValue());
         return result.Value();

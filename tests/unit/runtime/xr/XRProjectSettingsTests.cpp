@@ -57,6 +57,7 @@ namespace Horo::XR {
                     .limits = {2, 8, 16, 4},
                 };
                 descriptor.states.fill(XRCapabilityState::Available);
+                descriptor.states[static_cast<std::size_t>(XRCapability::SpaceWarp)] = XRCapabilityState::Unsupported;
                 const auto result = XRCapabilitySnapshot::Create(descriptor);
                 REQUIRE(result.HasValue());
                 return result.Value();
@@ -82,7 +83,7 @@ namespace Horo::XR {
 
         TEST_CASE("XR settings defaults are inert and disabled", "[unit][xr][settings]") {
             const auto descriptors = XRProjectSettingDescriptors();
-            REQUIRE(descriptors.size() == 16);
+            REQUIRE(descriptors.size() == 17);
             for (const auto &descriptor : descriptors)
                 REQUIRE(descriptor.reloadPolicy == ReloadPolicy::ProjectReopen);
             const auto resolved = ResolveXRProjectSettings(Configuration());
@@ -148,6 +149,22 @@ namespace Horo::XR {
             Project(request, "xr.capability_profile", std::int64_t{1});
             Project(request, "xr.limits.devices", std::int64_t{1});
             REQUIRE(ResolveXRProjectSettings(Configuration(request)).HasError());
+        }
+
+        TEST_CASE("XR project space-warp requests resolve to ordinary projection without provider evidence", "[unit][xr][settings]") {
+            const Evidence evidence;
+            ConfigurationResolutionRequest request;
+            Project(request, "xr.features.space_warp", static_cast<std::int64_t>(XRProjectFeaturePolicy::OptionalProjection));
+            const auto settings = Enabled(request);
+            REQUIRE(settings.Features().size() == 1);
+            CHECK(settings.Features().front().capability == XRCapability::SpaceWarp);
+            const auto plan = AdmitXRProjectSettings(settings, evidence.Admission());
+            REQUIRE(plan.HasValue());
+            CHECK(plan.Value().Decision(XRCapability::SpaceWarp).state == XRFeatureDecisionState::BaselineProjection);
+            CHECK(plan.Value().Decision(XRCapability::Projection).state == XRFeatureDecisionState::Required);
+            ConfigurationResolutionRequest required;
+            Project(required, "xr.features.space_warp", static_cast<std::int64_t>(XRProjectFeaturePolicy::Required));
+            CHECK(ResolveXRProjectSettings(Configuration(required)).HasError());
         }
 
         TEST_CASE("XR settings admit exact runtime and independent capability profiles", "[unit][xr][settings]") {

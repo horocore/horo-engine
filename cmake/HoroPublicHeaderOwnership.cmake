@@ -1118,6 +1118,7 @@ horo_configure_target_header_boundary(HoroXRRuntime PUBLIC_HEADERS
     Horo/XR/XRFakeRuntime.h
     Horo/XR/XRFeatureNegotiation.h
     Horo/XR/XRFrameLifecycle.h
+    Horo/XR/XRReprojection.h
     Horo/XR/XRSessionErrors.h
     Horo/XR/XRSessionLifecycle.h
 )

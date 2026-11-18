@@ -131,7 +131,10 @@ namespace Horo::Tests::OpenXR {
         }
 
         TEST_CASE("Native XR compositor submits complete released array views and fences reacquisition", "[unit][xr][compositor]") {
-            CompositorFixture f;
+            const bool requestSpaceWarp = GENERATE(false, true);
+            CompositorFixture f{false, requestSpaceWarp};
+            if (requestSpaceWarp)
+                REQUIRE(f.native.plan.Decision(XRCapability::SpaceWarp).state == XRFeatureDecisionState::BaselineProjection);
             f.Bind();
             const auto frame = f.Begin();
             const auto image = f.Acquire(frame);
@@ -156,6 +159,8 @@ namespace Horo::Tests::OpenXR {
             REQUIRE(f.compositor.EndProjection(frame, plan, owners).HasValue());
             CHECK(f.script.layers == 1);
             CHECK(f.script.views == 2);
+            CHECK(f.script.encoded[0].next == nullptr);
+            CHECK(f.script.encoded[1].next == nullptr);
             CHECK(f.script.encoded[0].subImage.imageArrayIndex == 0);
             CHECK(f.script.encoded[1].subImage.imageArrayIndex == 1);
             CHECK(std::abs(f.script.encoded[0].fov.angleLeft + 0.78539816F) < 0.00001F);

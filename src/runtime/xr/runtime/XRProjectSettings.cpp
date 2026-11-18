@@ -20,6 +20,7 @@ namespace Horo::XR {
             FeatureSetting{"xr.features.visibility_mask", XRCapability::VisibilityMask},
             FeatureSetting{"xr.features.controller_presentation", XRCapability::ControllerPresentation},
             FeatureSetting{"xr.features.android_standalone", XRCapability::AndroidStandalone},
+            FeatureSetting{"xr.features.space_warp", XRCapability::SpaceWarp},
         };
 
         /** @brief Adds winning-source context while preserving the original typed error identity and cause. */
@@ -61,9 +62,12 @@ namespace Horo::XR {
                 return Result<std::optional<XRFeatureRequest>>::Success(std::nullopt);
             if (const bool projectionFallback =
                     feature.capability == XRCapability::DepthComposition || feature.capability == XRCapability::FixedFoveation ||
-                    feature.capability == XRCapability::RefreshRateSelection || feature.capability == XRCapability::VisibilityMask;
+                    feature.capability == XRCapability::RefreshRateSelection || feature.capability == XRCapability::VisibilityMask ||
+                    feature.capability == XRCapability::SpaceWarp;
                 (policy == XRProjectFeaturePolicy::OptionalProjection && !projectionFallback) ||
-                (feature.capability == XRCapability::ControllerPresentation && profile != XRFeatureProfile::TrackedInteraction1_0))
+                (feature.capability == XRCapability::ControllerPresentation && profile != XRFeatureProfile::TrackedInteraction1_0) ||
+                (feature.capability == XRCapability::SpaceWarp && policy != XRProjectFeaturePolicy::OptionalProjection &&
+                 policy != XRProjectFeaturePolicy::Disabled))
                 return Result<std::optional<XRFeatureRequest>>::Failure(
                     Failure(source, feature.key, XRErrors::OperationIncompatible,
                             "Select an extra-feature policy compatible with the exact product profile."));

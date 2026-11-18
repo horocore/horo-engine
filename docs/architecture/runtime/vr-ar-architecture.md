@@ -599,9 +599,27 @@ typed; a partial view set is never successful presentation.
 
 Dynamic resolution and fixed/gaze foveation use one immutable XR/Renderer plan that
 separates allocation extent, active render rectangle, scale, VRS/density mechanism,
-privacy state and fallback. Runtime space-warp depth/motion inputs remain post-1.0 until
-their exact semantics are admitted. Runtime asynchronous reprojection and guardian/
+privacy state and fallback. Runtime asynchronous reprojection and guardian/
 chaperone composition never become Horo passes.
+
+A project can request optional space warp through `xr.features.space_warp` with
+the ordinary projection fallback. The selected OpenXR Play composition publishes
+baseline projection. It has a color producer and omits the optional feature
+until the selected runtime and Renderer share a qualified auxiliary path.
+
+The XR frame owner fences that future handoff with a typed per-session
+contract. Motion uses signed current-minus-previous XYZ in normalized device
+coordinates. Device depth is normalized with explicit metric endpoints, and
+the application-space delta is independent of the runtime-tracked eye poses.
+The exact image owners record formats, extents, usage and array layers at
+acquisition. Evaluation requires completed Renderer submission and native release
+for those exact images. Only a successful native projection establishes
+history. Skipped frames, session or origin replacement and incompatible views,
+allocations, or prediction times break that history. Failed optional inputs
+leave a separately valid ordinary projection available.
+
+See the [Khronos space-warp layer contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrCompositionLayerSpaceWarpInfoFB.html)
+for the distinction between runtime motion inputs and internal Renderer UV history.
 
 ## Deterministic Headless Session Harness
 

@@ -42,20 +42,20 @@ namespace Horo::XR {
 
         [[nodiscard]] constexpr bool IsPostOne(const XRCapability capability) noexcept {
             using enum XRCapability;
-            return capability == Passthrough || capability == EyeGaze || capability == QuadViews || capability == SpaceWarp;
+            return capability == Passthrough || capability == EyeGaze || capability == QuadViews;
         }
 
         [[nodiscard]] constexpr bool AllowsProjectionFallback(const XRCapability capability) noexcept {
             using enum XRCapability;
             return capability == DepthComposition || capability == FixedFoveation || capability == RefreshRateSelection ||
-                   capability == VisibilityMask;
+                   capability == VisibilityMask || capability == SpaceWarp;
         }
 
         [[nodiscard]] constexpr bool IsOptionalOne(const XRFeatureProfile profile, const XRCapability capability) noexcept {
             using enum XRCapability;
             return capability == HandTracking || capability == StageSpace || capability == DepthComposition ||
                    capability == FixedFoveation || capability == RefreshRateSelection || capability == VisibilityMask ||
-                   capability == AndroidStandalone ||
+                   capability == AndroidStandalone || capability == SpaceWarp ||
                    (profile == XRFeatureProfile::TrackedInteraction1_0 && capability == ControllerPresentation);
         }
 
@@ -75,6 +75,9 @@ namespace Horo::XR {
                 IsProfileRequired(profile, feature.capability) || feature.kind >= XRFeatureRequirementKind::Count ||
                 feature.fallback >= XRFeatureFallback::Count)
                 return false;
+            if (feature.capability == XRCapability::SpaceWarp)
+                return (feature.kind == XRFeatureRequirementKind::Optional && feature.fallback == XRFeatureFallback::BaselineProjection) ||
+                       (feature.kind == XRFeatureRequirementKind::Disabled && feature.fallback == XRFeatureFallback::None);
             if (feature.kind == XRFeatureRequirementKind::Optional)
                 return feature.fallback == XRFeatureFallback::Disable ||
                        (feature.fallback == XRFeatureFallback::BaselineProjection && AllowsProjectionFallback(feature.capability));

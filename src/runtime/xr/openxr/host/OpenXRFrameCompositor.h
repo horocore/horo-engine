@@ -147,7 +147,7 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<NativeSessionBorrow> Current() const;
         [[nodiscard]] Result<void> ValidateFrame(const XRFrameId &frame) const;
         [[nodiscard]] Result<void> EndNative(const XRFrameId &frame, XrEnvironmentBlendMode blend,
-                                             const XrCompositionLayerBaseHeader *layer);
+                                             const XrCompositionLayerBaseHeader *layer, const XRViewRenderPlan *projection);
         [[nodiscard]] Result<XrSwapchainSubImage> SubImage(const XRExternalRenderTargetDescriptor &target,
                                                            std::span<const NativeProjectionTarget> owners) const;
 

@@ -1,0 +1,170 @@
+#include "Horo/XR/XRFrameLifecycle.h"
+
+#include <algorithm>
+#include <cmath>
+
+namespace Horo::XR {
+    namespace {
+        /** @brief This envelope is deliberately narrower than any one native extension's full formats. */
+        bool CompatiblePolicy(const XRReprojectionPolicy &policy) noexcept {
+            using enum Render::RenderTextureFormat;
+            return policy.extent.IsValid() && policy.maximumPredictionIntervalNanoseconds > 0 &&
+                   policy.motion == XRReprojectionMotionConvention::CurrentNdcMinusPreviousNdcXYZ &&
+                   (policy.motionFormat == Rgba16Float || policy.motionFormat == Rgba32Float) &&
+                   (policy.depthFormat == Depth16Unorm || policy.depthFormat == Depth32Float);
+        }
+
+        /** @brief Rejects invalid camera movement without silently substituting an identity delta. */
+        bool ValidApplicationDelta(const std::optional<XRReprojectionSpaceDelta> &delta) noexcept {
+            if (!delta || !Math::IsFinite(delta->translationMeters))
+                return false;
+            const auto &q = delta->rotation;
+            return Math::IsFinite(q) && std::abs((q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w) - 1.0F) < 0.001F;
+        }
+
+        /** @brief Validates normalized finite depth and metric endpoint semantics. */
+        bool ValidDepth(const XRReprojectionViewInput &input) noexcept {
+            return std::isfinite(input.minimumDepth) && std::isfinite(input.maximumDepth) && input.minimumDepth >= 0.0F &&
+                   input.minimumDepth < input.maximumDepth && input.maximumDepth <= 1.0F && std::isfinite(input.nearMeters) &&
+                   std::isfinite(input.farMeters) && input.nearMeters > 0.0F && input.farMeters > 0.0F &&
+                   input.nearMeters != input.farMeters;
+        }
+
+        /** @brief Compares layout/format independently of the necessarily different current and previous acquisitions. */
+        bool CompatibleProjectionTarget(const XRExternalRenderTargetDescriptor &a, const XRExternalRenderTargetDescriptor &b) noexcept {
+            return a.role == b.role && a.view == b.view && a.target == b.target && a.format == b.format && a.usage == b.usage &&
+                   a.allocationExtent == b.allocationExtent && a.renderRectangle == b.renderRectangle && a.arrayLayer == b.arrayLayer &&
+                   a.arrayLayerCount == b.arrayLayerCount && a.sampleCount == b.sampleCount;
+        }
+
+        /** @brief Fences projection layout, tracking reference and camera validity across the predecessor boundary. */
+        bool CompatibleHistory(const XRViewRenderPlan &current, const XRViewRenderPlan &previous) noexcept {
+            const auto &now = current.Configuration();
+            const auto &before = previous.Configuration();
+            if (now.id != before.id || now.revision != before.revision || now.type != before.type || now.blendMode != before.blendMode ||
+                current.Views().size() != previous.Views().size() || current.Targets().size() != previous.Targets().size())
+                return false;
+            if (!std::ranges::equal(current.Targets(), previous.Targets(), CompatibleProjectionTarget))
+                return false;
+            return std::ranges::equal(current.Views(), previous.Views(), [](const auto &a, const auto &b) {
+                return a.id == b.id && a.role == b.role && a.projection == b.projection && a.pose.source == b.pose.source &&
+                       a.pose.target == b.pose.target && a.pose.components.positionMeters.value && a.pose.components.orientation.value &&
+                       b.pose.components.positionMeters.value && b.pose.components.orientation.value;
+            });
+        }
+
+        /** @brief The same physical subresource must never provide two distinct eye observations. */
+        bool Aliases(const XRReprojectionSubImage &a, const XRReprojectionSubImage &b) noexcept {
+            return a.image == b.image && a.arrayLayer == b.arrayLayer;
+        }
+    }  // namespace
+
+    /** @copydoc XRFrameLifecycle::ValidateReprojectionPolicy */
+    XRFrameStatus XRFrameLifecycle::ValidateReprojectionPolicy(const std::optional<XRReprojectionPolicy> &candidate,
+                                                               const XRFrameLimits limits) const noexcept {
+        const auto plan = sessions_->AcceptedPlan();
+        const bool enabled = plan && plan->Decision(XRCapability::SpaceWarp).state == XRFeatureDecisionState::OptionalEnabled;
+        if (!enabled)
+            return candidate ? XRFrameStatus::Unsupported : XRFrameStatus::Ok;
+        if (!candidate || !CompatiblePolicy(*candidate))
+            return XRFrameStatus::InvalidInput;
+        return limits.maximumImages >= 3 ? XRFrameStatus::Ok : XRFrameStatus::CapacityExceeded;
+    }
+
+    /** @copydoc XRFrameLifecycle::AcquireReprojectionImage */
+    XRFrameStatus XRFrameLifecycle::AcquireReprojectionImage(const XRFrameId &frame, const XRReprojectionImage &image) noexcept {
+        if (const auto status = ValidateCurrent(frame); status != XRFrameStatus::Ok)
+            return status;
+        if (!reprojection_)
+            return XRFrameStatus::Unsupported;
+        const auto &allocation = image.allocation;
+        if (image.kind >= XRReprojectionImageKind::Count || !allocation.IsValid() ||
+            allocation.dimension != Render::RenderTextureDimension::TwoD || allocation.sampleCount != 1 || allocation.mipCount != 1 ||
+            allocation.layerCount > XRViewRenderHardLimits::MaximumArrayLayers)
+            return XRFrameStatus::InvalidInput;
+        const auto expected = image.kind == XRReprojectionImageKind::Motion ? reprojection_->motionFormat : reprojection_->depthFormat;
+        const auto required = Render::RenderTextureUsage::RenderAttachment | Render::RenderTextureUsage::Sampled;
+        if (allocation.format != expected || !Render::HasTextureUsage(allocation.usage, required) ||
+            allocation.extent.width < reprojection_->extent.width || allocation.extent.height < reprojection_->extent.height)
+            return XRFrameStatus::InvalidInput;
+        if (const auto status = Acquire(frame, image.image); status != XRFrameStatus::Ok)
+            return status;
+        reprojectionImages_[current_.acquiredImages - 1] = image;
+        return XRFrameStatus::Ok;
+    }
+
+    /** @copydoc XRFrameLifecycle::ValidateProjectionEnd */
+    XRFrameStatus XRFrameLifecycle::ValidateProjectionEnd(const XRFrameId &frame, const XRViewRenderPlan &plan) const noexcept {
+        if (const auto status = ValidateEnd(frame, 1); status != XRFrameStatus::Ok)
+            return status;
+        if (plan.Configuration().session != frame.session || plan.Configuration().id != frame.configuration ||
+            plan.PredictedDisplayTime() != current_.predictedDisplayTime || plan.Views().size() != current_.locatedViews)
+            return XRFrameStatus::StalePlan;
+        for (const auto &target : plan.Targets()) {
+            if (const auto status = ValidateReleasedImage(frame, target.image); status != XRFrameStatus::Ok)
+                return status;
+            if (reprojectionImages_[FindImage(target.image)])
+                return XRFrameStatus::IncompleteSubmission;
+        }
+        for (std::uint32_t index = 0; index < current_.acquiredImages; ++index) {
+            if (!reprojectionImages_[index] && std::ranges::none_of(plan.Targets(), [&](const auto &target) {
+                return target.image == images_[index];
+            }))
+                return XRFrameStatus::IncompleteSubmission;
+        }
+        return XRFrameStatus::Ok;
+    }
+
+    /** @copydoc XRFrameLifecycle::EndProjection */
+    XRFrameStatus XRFrameLifecycle::EndProjection(const XRFrameId &frame, const XRViewRenderPlan &plan) noexcept {
+        if (const auto status = ValidateProjectionEnd(frame, plan); status != XRFrameStatus::Ok)
+            return status;
+        if (reprojection_)
+            previousProjection_ = plan;
+        lastEnded_ = frame;
+        ClearFrame();
+        return XRFrameStatus::Ok;
+    }
+
+    /** @copydoc XRFrameLifecycle::MatchesReprojectionImage */
+    bool XRFrameLifecycle::MatchesReprojectionImage(const XRFrameId &frame, const XRReprojectionSubImage &input,
+                                                    const XRReprojectionImageKind kind) const noexcept {
+        if (ValidateReleasedImage(frame, input.image) != XRFrameStatus::Ok)
+            return false;
+        const auto &registered = reprojectionImages_[FindImage(input.image)];
+        return registered && registered->kind == kind && input.arrayLayer < registered->allocation.layerCount &&
+               input.rectangle.FitsWithin(registered->allocation.extent) && input.rectangle.width == reprojection_->extent.width &&
+               input.rectangle.height == reprojection_->extent.height;
+    }
+
+    /** @copydoc XRFrameLifecycle::ValidateReprojection */
+    XRReprojectionStatus XRFrameLifecycle::ValidateReprojection(const XRFrameId &frame, const XRViewRenderPlan &plan,
+                                                                const XRReprojectionInputs &inputs) const noexcept {
+        using enum XRReprojectionStatus;
+        if (ValidateProjectionEnd(frame, plan) != XRFrameStatus::Ok)
+            return ProjectionInvalid;
+        if (!reprojection_)
+            return BaselineProjection;
+        if (!previousProjection_ || frame.sequence <= 1 || lastEnded_.sequence != frame.sequence - 1 ||
+            inputs.previousFrameSequence != lastEnded_.sequence || inputs.previousPrediction != previousProjection_->PredictedDisplayTime())
+            return HistoryUnavailable;
+        const auto interval = plan.PredictedDisplayTime().Nanoseconds() - inputs.previousPrediction.Nanoseconds();
+        if (interval <= 0 || interval > reprojection_->maximumPredictionIntervalNanoseconds ||
+            !CompatibleHistory(plan, *previousProjection_))
+            return HistoryUnavailable;
+        if (!ValidApplicationDelta(inputs.applicationDelta) || inputs.views.size() != plan.Views().size())
+            return InputsInvalid;
+        for (std::size_t i = 0; i < inputs.views.size(); ++i) {
+            const auto &view = inputs.views[i];
+            if (view.view != plan.Views()[i].id || inputs.applicationDelta->reference != plan.Views()[i].pose.target || !ValidDepth(view) ||
+                !MatchesReprojectionImage(frame, view.motion, XRReprojectionImageKind::Motion) ||
+                !MatchesReprojectionImage(frame, view.depth, XRReprojectionImageKind::Depth))
+                return InputsInvalid;
+            if (std::ranges::any_of(inputs.views.first(i), [&](const auto &prior) {
+                return Aliases(view.motion, prior.motion) || Aliases(view.depth, prior.depth);
+            }))
+                return InputsInvalid;
+        }
+        return Ready;
+    }
+}  // namespace Horo::XR

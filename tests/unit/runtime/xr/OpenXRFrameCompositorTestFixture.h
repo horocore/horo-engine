@@ -83,7 +83,16 @@ namespace Horo::Tests::OpenXR {
             XRCoordinateSpace local;
             NativeSwapchainRequest allocation;
 
-            explicit CompositorFixture(bool enableDepth = false) {
+            explicit CompositorFixture(bool enableDepth = false, bool requestSpaceWarp = false) {
+                if (requestSpaceWarp) {
+                    constexpr std::array requested{XRFeatureRequest{XRCapability::SpaceWarp, XRFeatureRequirementKind::Optional,
+                                                                    XRFeatureFallback::BaselineProjection}};
+                    const auto planned =
+                        NegotiateXRFeatures(native.capabilities, native.capabilities.System(), native.capabilities.Revision(),
+                                            {native.plan.Profile(), native.plan.Limits(), requested});
+                    REQUIRE(planned.plan.has_value());
+                    native.plan = *planned.plan;
+                }
                 auto activated =
                     sessions.Activate(native.capabilities, native.capabilities.System(), native.capabilities.Revision(), native.plan);
                 REQUIRE(activated.HasValue());
