@@ -5,6 +5,7 @@
  */
 #include "Horo/Editor/UiCanvasDocument.h"
 #include "Horo/Editor/UiInspectorResources.h"
+#include "Horo/Runtime/Ui/UiDiagnostics.h"
 #include "Horo/Runtime/Ui/UiLayout.h"
 #include "Horo/Runtime/Ui/UiPresentationProfiles.h"
 
@@ -58,11 +59,14 @@ namespace Horo::Editor {
     /** @brief Resolve device evidence and run the Runtime UI layout authority outside draw work.
      * @param source Canonical immutable authored document. @param state Session preview values.
      * @param ownership Exact document workspace incarnation, isolated from game runtime ownership.
+     * @param resources Optional committed style resources.
+     * @param problem Optional retained diagnostic. Reset on every evaluation; filled only for a supported Runtime UI failure.
      * @return Evaluated boxes or the original typed resolution/layout failure.
      */
     [[nodiscard]] Result<UiCanvasPreview> BuildUiCanvasPreview(const Runtime::Ui::UiDocument &source, const UiCanvasPreviewState &state,
                                                                DocumentInstanceId ownership,
-                                                               const UiInspectorResourceSnapshot *resources = nullptr);
+                                                               const UiInspectorResourceSnapshot *resources = nullptr,
+                                                               std::optional<Runtime::Ui::UiDiagnosticRecord> *problem = nullptr);
 
     /** @brief Convert a completed logical drag into one canonical presentation transaction.
      * @param element Current authored element. @param box Actual preview box at gesture start.

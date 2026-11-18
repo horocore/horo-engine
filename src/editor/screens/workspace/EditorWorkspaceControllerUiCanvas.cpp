@@ -68,6 +68,14 @@ namespace Horo::Editor {
             }
         }
 
+        /** @brief Publish geometry and failure evidence from the same evaluation. */
+        void RefreshCanvasPreview(const UiCanvasDocument &owner, UiCanvasPreviewPresentation &preview,
+                                  const UiInspectorResourceSnapshot &resources) {
+            auto evaluated = BuildUiCanvasPreview(owner.Document(), preview.state, owner.Identity().instance, &resources, &preview.problem);
+            preview.diagnostic = evaluated.HasError() ? std::optional{evaluated.ErrorValue()} : std::nullopt;
+            preview.layout = evaluated.HasValue() ? std::optional{std::move(evaluated).Value()} : std::nullopt;
+        }
+
         /** @brief Refresh cached authored rows and selected values only after their canonical fences change. */
         void RefreshDocumentProjection(const UiCanvasDocument &owner, UiCanvasWorkspaceDocument &projection,
                                        const UiInspectorResourceSnapshot &resources) {
@@ -91,11 +99,8 @@ namespace Horo::Editor {
                 projection.state = owner.CurrentState();
             }
             if (sourceChanged || projection.inspectorResourcePublication != resources.publication ||
-                projection.inspectorStyles != resources.StyleGeneration() || projection.inspectorTheme != resources.theme) {
-                auto preview = BuildUiCanvasPreview(owner.Document(), projection.preview.state, owner.Identity().instance, &resources);
-                projection.preview.diagnostic = preview.HasError() ? std::optional{preview.ErrorValue()} : std::nullopt;
-                projection.preview.layout = preview.HasValue() ? std::optional{std::move(preview).Value()} : std::nullopt;
-            }
+                projection.inspectorStyles != resources.StyleGeneration() || projection.inspectorTheme != resources.theme)
+                RefreshCanvasPreview(owner, projection.preview, resources);
         }
 
         /** @brief Change only session device state, resolving actual source inputs when geometry changes. */
@@ -106,11 +111,8 @@ namespace Horo::Editor {
             const bool resolve = projection.preview.state.device != command.uiCanvasPreviewState->device ||
                                  projection.preview.state.rotated != command.uiCanvasPreviewState->rotated;
             projection.preview.state = *command.uiCanvasPreviewState;
-            if (resolve) {
-                auto preview = BuildUiCanvasPreview(owner.Document(), projection.preview.state, owner.Identity().instance, &resources);
-                projection.preview.diagnostic = preview.HasError() ? std::optional{preview.ErrorValue()} : std::nullopt;
-                projection.preview.layout = preview.HasValue() ? std::optional{std::move(preview).Value()} : std::nullopt;
-            }
+            if (resolve)
+                RefreshCanvasPreview(owner, projection.preview, resources);
             return Result<void>::Success();
         }
 

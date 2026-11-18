@@ -421,6 +421,20 @@ namespace Horo::Editor {
         }
         if (document.preview.diagnostic || !document.preview.layout) {
             Ui::ErrorText(label("workspace.ui_canvas.preview.unavailable"), m_context.theme.fonts);
+            if (const auto &problem = document.preview.problem) {
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, problem->code.Value().c_str(), Theme::Muted(), m_context.theme.fonts);
+                for (const auto &field : std::span{problem->correlation}.first(problem->correlationCount)) {
+                    const auto *element = std::get_if<Runtime::Ui::UiElementId>(&field.value);
+                    if (field.key != Runtime::Ui::UiDiagnosticCorrelationKey::Element || !element)
+                        continue;
+                    if (Ui::Button({.label = Text(m_context, "workspace.ui_canvas.preview.inspect_problem_element").c_str(),
+                                    .font = m_context.theme.fonts.sans})) {
+                        output.command = EditorWorkspaceViewCommand::UiCanvasSelect;
+                        output.uiCanvasElement = *element;
+                    }
+                    break;
+                }
+            }
             m_gesture.reset();
             return;
         }

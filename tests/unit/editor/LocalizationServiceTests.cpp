@@ -737,6 +737,7 @@ TEST_CASE("UI canvas hierarchy and catalog copy resolve in both shipped locales"
                                "redo",
                                "reload",
                                "command_failed",
+                               "preview.inspect_problem_element",
                                "search",
                                "create",
                                "move_up",

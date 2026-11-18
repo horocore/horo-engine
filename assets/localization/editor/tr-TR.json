@@ -4506,6 +4506,7 @@
     "workspace.ui_canvas.preview.zoom_out": {"text": "Uzaklaştır"},
     "workspace.ui_canvas.preview.zoom_in": {"text": "Yakınlaştır"},
     "workspace.ui_canvas.preview.unavailable": {"text": "Bu kaynak veya cihaz girdileri için yerleşim önizlemesi kullanılamıyor"},
+    "workspace.ui_canvas.preview.inspect_problem_element": {"text": "Etkilenen öğeyi incele"},
     "workspace.ui_canvas.preview.hint": {"text": "Yerleşim sınırları önizlemesi. Shift-tıklama dikey, Ctrl-Shift-tıklama yatay kılavuz ekler. Orta tuşla sürükleme kaydırır. Escape sürüklemeyi iptal eder."},
     "workspace.ui_canvas.undo": {
       "text": "Geri al"

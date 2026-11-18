@@ -314,6 +314,7 @@ namespace Horo::Editor {
         UiCanvasPreviewState state;
         std::optional<UiCanvasPreview> layout;
         std::optional<Error> diagnostic;
+        std::optional<Runtime::Ui::UiDiagnosticRecord> problem;
     };
 
     /** @brief Cached immutable hierarchy presentation; no source data is rebuilt during drawing. */
