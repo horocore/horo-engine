@@ -330,6 +330,18 @@ artifact or both temporal seed and accumulation artifacts before reporting
 readiness. Discovery reports the exact requested route without selecting a
 replacement or creating a provider.
 
+HoroEditor can inspect an explicit `spatial` or `taau` route against its
+selected renderer with `--inspect-image-provider=<mode>`, an absolute
+`--image-provider-root=<product-root>`, and an independent publisher policy
+passed as `--image-provider-trust=<trust.json>`. The product root supplies
+`manifest.json` and `manifest.signature.json` in the existing release
+inventory and detached envelope formats. The selected cook consists of the
+signed `.horoshdr` and `.reflection.json` records under
+`assets/shaders/runtime/native-reconstruction-vulkan/` named for the canonical
+shader entries. The editor logs readiness and the authenticated inventory
+digest during startup. This command performs inspection before provider
+initialization or scene work.
+
 [ADR-040](../../adr/040-reconstruction-frame-generation-and-latency-providers.md)
 replaces the legacy single upscaler interface with four sealed frontend-owned
 registries:

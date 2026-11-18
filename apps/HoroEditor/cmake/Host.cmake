@@ -159,6 +159,7 @@ if(HORO_BUILD_EDITOR_GUI)
     target_link_libraries(HoroEditor
         PRIVATE
             HoroPackageProjectHost
+            HoroEditorImageProviderHostInternal
             HoroRuntimeUiPaintHost
             HoroEditorUiStyleHostInternal
             HoroEditorTerrainHostInternal

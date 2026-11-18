@@ -1,3 +1,14 @@
+# Image provider inventory is a cold, app-owned data admission boundary.
+set(HORO_EDITOR_IMAGE_PROVIDER_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_image_provider_headers")
+file(MAKE_DIRECTORY "${HORO_EDITOR_IMAGE_PROVIDER_HEADERS}")
+configure_file("HoroEditor/app/EditorImageProviderHost.h" "${HORO_EDITOR_IMAGE_PROVIDER_HEADERS}/EditorImageProviderHost.h" COPYONLY)
+add_library(HoroEditorImageProviderHostInternal STATIC HoroEditor/app/EditorImageProviderHost.cpp)
+target_compile_features(HoroEditorImageProviderHostInternal PUBLIC cxx_std_20)
+target_include_directories(HoroEditorImageProviderHostInternal PUBLIC "${HORO_EDITOR_IMAGE_PROVIDER_HEADERS}")
+target_link_libraries(HoroEditorImageProviderHostInternal
+    PUBLIC HoroEngine::Application HoroEngine::RenderFrontend HoroEngine::Security
+    PRIVATE HoroEngine::Platform HoroHostSignatureDocuments)
+
 # Included from apps/CMakeLists.txt; source and binary directories remain scoped to apps/.
 # One non-installed host token boundary; headless tests use the same parser as the real graphical root.
 set(HORO_NETWORK_CONSOLE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/network_console_headers")

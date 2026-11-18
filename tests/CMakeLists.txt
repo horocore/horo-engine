@@ -7344,6 +7344,13 @@ target_sources(HoroEditorViewportSceneTests PRIVATE unit/editor/EditorViewportFo
 target_link_libraries(HoroEditorViewportSceneTests PRIVATE HoroEngine::EditorViewportLightingInternal)
 include("${PROJECT_SOURCE_DIR}/cmake/HoroEditorClusteredLightingAssets.cmake")
 horo_add_editor_clustered_lighting_assets_target()
+add_executable(HoroEditorImageProviderHostTests unit/editor/EditorImageProviderHostTests.cpp)
+target_compile_features(HoroEditorImageProviderHostTests PRIVATE cxx_std_20)
+target_include_directories(HoroEditorImageProviderHostTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(HoroEditorImageProviderHostTests PRIVATE HoroEditorImageProviderHostInternal
+    HoroHostSignatureDocuments HoroEngine::Platform HoroEngine::RenderNull MbedTLS::mbedcrypto)
+horo_register_catch_test(HoroEditorImageProviderHostTests LABELS "unit;renderer;headless")
+
 add_executable(HoroEditorClusteredLightingAssetsTests unit/editor/EditorClusteredLightingAssetsTests.cpp)
 add_executable(HoroEditorBaselineLightingAssetsTests unit/editor/EditorBaselineLightingAssetsTests.cpp)
 target_compile_features(HoroEditorBaselineLightingAssetsTests PRIVATE cxx_std_20)

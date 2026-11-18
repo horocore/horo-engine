@@ -4,6 +4,7 @@
 #include "EditorConsoleExecution.h"
 #include "EditorConsoleLaunch.h"
 #include "EditorDirectionalShadowOptions.h"
+#include "EditorImageProviderHost.h"
 #include "EditorLightingOptions.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
 #include "Horo/Accessibility/VisualSafety.h"
@@ -341,6 +342,7 @@ namespace Horo::Editor {
             std::uint64_t exitAfterFrames = 0;
             std::uint32_t frameRateLimit = 0;
             std::string rendererBackend;
+            std::optional<EditorImageProviderInspection> imageProviderInspection;
             std::string projectRoot;
             std::optional<Physics::PhysicsRuntimeMode> physicsMode{Physics::PhysicsRuntimeMode::Null};
             std::string cookedRoot;
@@ -1375,6 +1377,47 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
+        /** @brief Resolves detached installed-package evidence only when explicitly inspecting one selected renderer. */
+        Result<void> ReportEditorImageProvider(Render::RenderFrontend &frontend, const EditorImageProviderInspection &request) {
+            using enum Release::DistributionPlatform;
+            const auto platform = Application::Internal::NativePackagePlatform();
+            if (platform.HasError())
+                return Result<void>::Failure(platform.ErrorValue());
+            auto version = Release::ParseReleaseVersion(HORO_ENGINE_VERSION_STRING);
+            if (version.HasError())
+                return Result<void>::Failure(version.ErrorValue());
+            using PlatformName = std::pair<std::string_view, Release::DistributionPlatform>;
+            constexpr std::array systems{PlatformName{"windows", Windows}, PlatformName{"macos", MacOS}, PlatformName{"linux", Linux}};
+            using Architecture = Release::DistributionArchitecture;
+            using ArchitectureName = std::pair<std::string_view, Architecture>;
+            constexpr std::array architectures{ArchitectureName{"x64", Architecture::X64}, ArchitectureName{"arm64", Architecture::Arm64}};
+            const auto system = std::ranges::find(systems, platform.Value().operatingSystem, &PlatformName::first);
+            const auto architecture = std::ranges::find(architectures, platform.Value().architecture, &ArchitectureName::first);
+            if (system == systems.end() || architecture == architectures.end())
+                return Result<void>::Failure(MakeEditorRendererError("editor.image_provider.platform_unavailable",
+                                                                     "The host platform has no supported release identity."));
+            const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(SystemWallClock{}.UtcNow().time_since_epoch()).count();
+            if (now < 0)
+                return Result<void>::Failure(
+                    MakeEditorRendererError("editor.image_provider.clock_unavailable", "Publisher trust requires valid wall time."));
+            const NativeDurableFileSystem files;
+            const auto trust = ReadEditorImageProviderTrust(files, request.trustedPublishers, static_cast<std::uint64_t>(now));
+            if (trust.HasError())
+                return Result<void>::Failure(trust.ErrorValue());
+            const auto selected = InspectEditorImageProvider(frontend, request,
+                                                             {Release::EngineProductVersion{std::move(version).Value()}, system->second,
+                                                              architecture->second},
+                                                             files, trust.Value());
+            if (selected.HasError())
+                return Result<void>::Failure(selected.ErrorValue());
+            const auto &report = selected.Value();
+            const auto inventory = FormatSha256(report.inventory);
+            LOG_INFO("editor.renderer.image_provider", "Provider %s/%s on %s has readiness %s (inventory %s).",
+                     report.route.provider.c_str(), report.route.mode.c_str(), frontend.Capabilities().backend.Value().c_str(),
+                     EditorImageProviderReadinessName(report.support.readiness), inventory.c_str());
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> CreateEditorRenderComposition(SDL_Window &window, const EditorGuiOptions &options,
                                                                  EditorRenderComposition &composition) {
             Render::RenderBackendRegistry registry;
@@ -1389,14 +1432,23 @@ namespace Horo::Editor {
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
             immediateOutput = immediateOutput || composition.xrSession != nullptr;
 #endif
+            auto backendConfig =
+                Render::RenderBackendConfig{.requirePresentation = true,
+                                            .enableValidation = false,
+                                            .maxFramesInFlight = 2,
+                                            .presentMode = immediateOutput ? Render::PresentMode::Immediate : Render::PresentMode::Fifo};
+            if (options.imageProviderInspection && options.rendererBackend == "vulkan") {
+                using Render::RenderQueueRole;
+                const auto graphics =
+                    std::ranges::find(backendConfig.queueAssignments, RenderQueueRole::Graphics, &Render::RenderQueueAssignment::role);
+                if (graphics == backendConfig.queueAssignments.end())
+                    return Result<void>::Failure(MakeEditorRendererError("editor.image_provider.graphics_queue_unavailable",
+                                                                         "Provider inspection requires a selected graphics queue."));
+                backendConfig.queueAssignments.push_back({RenderQueueRole::Compute, graphics->queue});
+            }
             // Two frames of dedicated Vulkan draw/shadow buffers exceed 1024 blocks; match the finite allocation table.
             auto frontendResult =
-                Render::RenderFrontend::Create(registry, Render::RenderBackendId{options.rendererBackend},
-                                               Render::RenderBackendConfig{.requirePresentation = true,
-                                                                           .enableValidation = false,
-                                                                           .maxFramesInFlight = 2,
-                                                                           .presentMode = immediateOutput ? Render::PresentMode::Immediate
-                                                                                                          : Render::PresentMode::Fifo},
+                Render::RenderFrontend::Create(registry, Render::RenderBackendId{options.rendererBackend}, backendConfig,
                                                Render::RenderResourceUploadLimits{},
                                                Render::RenderFrontendMemoryConfig{.budget = {.hardCapBytes = 1024U * 1024U * 1024U,
                                                                                              .defaultBlockBytes = 16U * 1024U * 1024U,
@@ -1408,6 +1460,10 @@ namespace Horo::Editor {
                 return Result<void>::Failure(frontendResult.ErrorValue());
             }
             composition.frontend = std::move(frontendResult).Value();
+            if (options.imageProviderInspection) {
+                if (auto report = ReportEditorImageProvider(*composition.frontend, *options.imageProviderInspection); report.HasError())
+                    return report;
+            }
 
             if (const auto prepared = PrepareInitialEditorPresentation(window, *composition.frontend); prepared.HasError())
                 return prepared;
@@ -3851,6 +3907,12 @@ namespace Horo::Editor {
                                                                                    const Debug::ConsoleLaunchArguments &console) {
         if (!ValidateEditorStartupOptions(options))
             return std::nullopt;
+        auto imageProviderInspection = ParseEditorImageProviderInspection(arguments);
+        if (imageProviderInspection.HasError()) {
+            LOG_CRITICAL("editor.renderer.image_provider", "%s", imageProviderInspection.ErrorValue().message.c_str());
+            return std::nullopt;
+        }
+        options.imageProviderInspection = std::move(imageProviderInspection).Value();
         std::string projectName;
         if (!ConfigureStartupProject(options, projectName))
             return std::nullopt;
