@@ -68,11 +68,29 @@ namespace Horo::Editor {
             PrefabExpansionBudget work;
         };
 
+        /** @brief Complete stable targets selected for one owning source layer. */
+        struct LayerPromotion final {
+            std::vector<PrefabValueEdit> values;
+            std::vector<PrefabComponentOverrideRecord> components;
+
+            [[nodiscard]] bool Empty() const noexcept {
+                return values.empty() && components.empty();
+            }
+        };
+
+        /** @brief Projects a nested target into the exact owning occurrence's source-relative address space. */
+        Result<PrefabObjectAddress> RelativeObject(const PrefabObjectAddress &object) {
+            const auto scope = object.NestedInstanceScope();
+            if (scope.empty())
+                return Result<PrefabObjectAddress>::Failure(MakeError(PrefabErrors::AddressInvalid));
+            return PrefabObjectAddress::Create(scope.subspan(1), object.SourceObject());
+        }
+
         /** @brief Strips exactly the selected owning occurrence while preserving the typed component/property identity. */
         Result<PrefabValueOverrideTarget> RelativeTarget(const PrefabValueOverrideRecord &record) {
             using Return = Result<PrefabValueOverrideTarget>;
             const auto &object = ValueObject(record);
-            auto relative = PrefabObjectAddress::Create(object.NestedInstanceScope().subspan(1), object.SourceObject());
+            auto relative = RelativeObject(object);
             if (relative.HasError())
                 return Return::Failure(std::move(relative).ErrorValue());
             const auto *property = std::get_if<PrefabPropertyAddress>(&record.target);
@@ -83,16 +101,30 @@ namespace Horo::Editor {
             return target.HasError() ? Return::Failure(std::move(target).ErrorValue()) : Return::Success(std::move(target).Value());
         }
 
-        /** @brief Stages exact authored values relative to the actual immediate source of this layer. */
-        Result<void> PromoteValueLayer(LayerPreparation &context, const Assets::AssetId immediate, PrefabSourceRevision &authored,
-                                       std::optional<PrefabValueOverrideSet> &owned, std::span<const PrefabValueEdit> assignments) {
-            if (assignments.empty())
+        /** @brief Normalizes the object while retaining the exact occurrence ID, type and authored payload. */
+        Result<PrefabComponentOverrideRecord> RelativeComponent(const PrefabComponentOverrideRecord &record) {
+            using Return = Result<PrefabComponentOverrideRecord>;
+            auto relative = RelativeObject(ComponentObject(record));
+            if (relative.HasError())
+                return Return::Failure(std::move(relative).ErrorValue());
+            auto normalized = record;
+            if (auto *add = std::get_if<PrefabAddComponentOverride>(&normalized))
+                add->object = relative.Value();
+            else
+                std::get<PrefabRemoveComponentOverride>(normalized).target.object = relative.Value();
+            return Return::Success(std::move(normalized));
+        }
+
+        /** @brief Stages exact authored values and one final topology batch relative to the immediate source. */
+        Result<void> PromoteLayer(LayerPreparation &context, const Assets::AssetId immediate, PrefabSourceRevision &authored,
+                                  std::optional<PrefabValueOverrideSet> &owned, const LayerPromotion &promotion) {
+            if (promotion.Empty())
                 return Result<void>::Success();
             auto source = context.sources.Resolve(immediate, context.instance, context.limits, context.cancellation);
             if (source.HasError())
                 return Result<void>::Failure(std::move(source).ErrorValue());
             const auto objects = source.Value().Objects();
-            for (const auto &edit : assignments) {
+            for (const auto &edit : promotion.values) {
                 if (auto budget = context.work.Consume(objects.size()); budget.HasError())
                     return budget;
                 if (auto budget = context.work.Consume(owned ? owned->records.size() + owned->componentRecords.size() : 0);
@@ -109,28 +141,41 @@ namespace Horo::Editor {
                 else
                     owned = std::move(next);
             }
+            if (!promotion.components.empty()) {
+                const auto recordCount = owned ? owned->records.size() + owned->componentRecords.size() : 0;
+                const auto unitWork = objects.size() + recordCount + promotion.components.size();
+                if (promotion.components.size() > context.work.Remaining() / unitWork)
+                    return Result<void>::Failure(MakeError(PrefabErrors::WorkBudgetExceeded));
+                if (auto budget = context.work.Consume(unitWork * promotion.components.size()); budget.HasError())
+                    return budget;
+                auto prepared = PreparePrefabComponentPromotion(source.Value(), owned, promotion.components, context.schemas,
+                                                                context.limits, context.cancellation);
+                if (prepared.HasError())
+                    return Result<void>::Failure(std::move(prepared).ErrorValue());
+                auto next = std::move(prepared).Value().rebased;
+                if (next.IsEmpty())
+                    owned.reset();
+                else
+                    owned = std::move(next);
+            }
             authored = source.Value().Revision().rootSource;
             return Result<void>::Success();
         }
 
-        /** @brief Promotes simple values in the variant layer or the selected concrete occurrence, without editing any dependency. */
+        /** @brief Promotes selected values and topology in the owning layer without editing any dependency. */
         Result<PrefabDocument> PromoteSource(const PrefabDocument &source, const EffectivePrefabCandidate &applied,
                                              const PrefabValueOverrideSet &selected, LayerPreparation &context) {
             auto data = source.Data();
             auto *composition = data.composition ? &*data.composition : nullptr;
             const bool variant = composition && composition->variantParent.has_value();
-            if (std::ranges::any_of(selected.componentRecords, [variant](const auto &record) {
-                return variant || !ComponentObject(record).NestedInstanceScope().empty();
-            }))
-                return Result<PrefabDocument>::Failure(
-                    MakeError(PrefabErrors::OverrideInvalid, "Layered component topology requires an explicit owning-layer edit."));
             if (variant) {
-                std::vector<PrefabValueEdit> values;
-                values.reserve(selected.records.size());
+                LayerPromotion promotion;
+                promotion.values.reserve(selected.records.size());
+                promotion.components = selected.componentRecords;
                 for (const auto &record : selected.records)
-                    values.push_back({PrefabValueEditKind::Assign, record.target, record.value});
-                auto result = PromoteValueLayer(context, composition->variantParent->Asset(), *composition->variantAuthoredAgainst,
-                                                composition->variantOverrides, values);
+                    promotion.values.push_back({PrefabValueEditKind::Assign, record.target, record.value});
+                auto result = PromoteLayer(context, composition->variantParent->Asset(), *composition->variantAuthoredAgainst,
+                                           composition->variantOverrides, promotion);
                 if (result.HasError())
                     return Result<PrefabDocument>::Failure(std::move(result).ErrorValue());
                 return PrefabDocument::Create(std::move(data), context.limits);
@@ -138,7 +183,7 @@ namespace Horo::Editor {
 
             if (auto direct = PromoteConcreteObjects(data, applied); direct.HasError())
                 return Result<PrefabDocument>::Failure(std::move(direct).ErrorValue());
-            std::map<LocalObjectId, std::vector<PrefabValueEdit>> nested;
+            std::map<LocalObjectId, LayerPromotion> nested;
             for (const auto &record : selected.records) {
                 const auto scope = ValueObject(record).NestedInstanceScope();
                 if (scope.empty())
@@ -146,16 +191,25 @@ namespace Horo::Editor {
                 auto target = RelativeTarget(record);
                 if (target.HasError())
                     return Result<PrefabDocument>::Failure(std::move(target).ErrorValue());
-                nested[scope.front()].push_back({PrefabValueEditKind::Assign, std::move(target).Value(), record.value});
+                nested[scope.front()].values.push_back({PrefabValueEditKind::Assign, std::move(target).Value(), record.value});
             }
-            for (const auto &[slot, values] : nested) {
+            for (const auto &record : selected.componentRecords) {
+                const auto scope = ComponentObject(record).NestedInstanceScope();
+                if (scope.empty())
+                    continue;
+                auto normalized = RelativeComponent(record);
+                if (normalized.HasError())
+                    return Result<PrefabDocument>::Failure(std::move(normalized).ErrorValue());
+                nested[scope.front()].components.push_back(std::move(normalized).Value());
+            }
+            for (const auto &[slot, promotion] : nested) {
                 if (!composition)
                     return Result<PrefabDocument>::Failure(MakeError(PrefabErrors::AddressInvalid));
                 const auto placement = std::ranges::find(composition->nestedPlacements, slot, &NestedPrefabPlacement::placementLocalId);
                 if (placement == composition->nestedPlacements.end())
                     return Result<PrefabDocument>::Failure(MakeError(PrefabErrors::AddressInvalid));
-                auto result = PromoteValueLayer(context, placement->sourcePrefab.Asset(), placement->authoredAgainst,
-                                                placement->valueOverrides, values);
+                auto result = PromoteLayer(context, placement->sourcePrefab.Asset(), placement->authoredAgainst, placement->valueOverrides,
+                                           promotion);
                 if (result.HasError())
                     return Result<PrefabDocument>::Failure(std::move(result).ErrorValue());
             }

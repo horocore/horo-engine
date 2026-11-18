@@ -305,6 +305,79 @@ namespace Horo::Editor {
             CHECK(Speed(Take(sources.Resolve(nested ? parent : Id(7), instance, Limits())), {}) == (nested ? 2.0 : 4.0));
         }
 
+        TEST_CASE("Prefab apply promotes atomic singleton replacement in each owning topology layer", "[editor][prefab][apply][native]") {
+            using namespace Prefab::LayerTest;
+            Graph graph;
+            const auto parent = Asset();
+            const auto rootAsset = Id(8);
+            const auto instance = Take(Prefab::PrefabInstanceId::Create(1));
+            Gameplay::ComponentDescriptor descriptor{Type(),
+                                                     1,
+                                                     "Values",
+                                                     "Tests",
+                                                     {{Gameplay::ComponentPropertyId::Parse("speed").Value(), "Speed",
+                                                       Gameplay::ComponentPropertyKind::Number, true}},
+                                                     {}};
+            const auto valueSchemas = Schemas();
+            const auto captured = valueSchemas.Properties();
+            std::vector<Prefab::PrefabValuePropertySchema> properties{captured.begin(), captured.end()};
+            properties.front().required = true;
+            graph.schemas = std::make_shared<const Prefab::PrefabValueSchemaSnapshot>(
+                Take(Prefab::PrefabValueSchemaSnapshot::Create(std::move(properties), Limits(), {{std::move(descriptor), 1, true, true}})));
+            auto object = Object();
+            bool nested{};
+            SECTION("variant writes a remove precondition derived from its immediate parent") {
+                graph.AddVariant(8, parent.Bytes().back(), Revision(1), graph.Assign(parent, Property(), 4.0));
+            }
+            SECTION("a repeated nested asset replaces only the selected occurrence") {
+                nested = true;
+                const auto existing = graph.Assign(parent, Property(), 4.0);
+                graph.AddNested(8, parent.Bytes().back(), Revision(1));
+                auto owner = graph.sources.back().document.Data();
+                auto &placements = owner.composition->nestedPlacements;
+                auto sibling = placements.front();
+                sibling.placementLocalId = {9};
+                placements.front().valueOverrides = existing;
+                placements.push_back(std::move(sibling));
+                graph.sources.back().document = Take(Prefab::PrefabDocument::Create(std::move(owner), Limits()));
+                object = NestedProperty().Object();
+            }
+            const auto sources = graph.Snapshot();
+            const auto baseline = Take(sources.Resolve(rootAsset, instance, Limits()));
+            const auto occurrence = Take(Prefab::PrefabComponentInstanceId::Create(1));
+            Prefab::RawComponentPayload added{Take(Prefab::PrefabComponentInstanceId::Create(2)), {.typeId = Type()}};
+            const std::string_view payload{R"({"speed":7.0})"};
+            const auto bytes = std::as_bytes(std::span{payload});
+            added.component.payload.assign(bytes.begin(), bytes.end());
+            const auto sceneEdit = Take(
+                Prefab::PreparePrefabComponentEdit(baseline, {}, Prefab::PrefabReplaceComponentEdit{{object, Type(), occurrence}, added},
+                                                   graph.schemas.get(), Limits()));
+            const auto removal = [](const Prefab::PrefabValueOverrideSet &set) -> const Prefab::PrefabRemoveComponentOverride & {
+                const auto record = std::ranges::find_if(set.componentRecords, [](const auto &operation) {
+                    return std::holds_alternative<Prefab::PrefabRemoveComponentOverride>(operation);
+                });
+                REQUIRE(record != set.componentRecords.end());
+                return std::get<Prefab::PrefabRemoveComponentOverride>(*record);
+            };
+            const SceneDocumentSnapshot
+                scene{{4}, {6}, {}, {{instance, Take(Prefab::PrefabAssetReference::Create(rootAsset)), {}, {}, sceneEdit.rebased}}};
+            const auto applied =
+                Take(PreparePrefabApply(scene, {instance, scene.revision, baseline.Revision(), graph.schemas->Revision(), object, 1},
+                                        graph.registry.Snapshot(), sources, graph.schemas, Limits()));
+            CHECK_FALSE(applied.placements.front().valueOverrides);
+            const auto &composition = *applied.source.Data().composition;
+            const auto &owned = nested ? composition.nestedPlacements.front().valueOverrides : composition.variantOverrides;
+            REQUIRE(owned);
+            CHECK(owned->records.empty());
+            CHECK(owned->componentRecords.size() == 2);
+            CHECK(removal(*owned).target.object == Object());
+            CHECK(removal(*owned).target.instance == occurrence);
+            CHECK(removal(*owned).expectedSourceComponent != removal(sceneEdit.rebased).expectedSourceComponent);
+            if (nested)
+                CHECK_FALSE(composition.nestedPlacements.back().valueOverrides);
+            CHECK(Speed(Take(sources.Resolve(parent, instance, Limits())), Object()) == 2.0);
+        }
+
         TEST_CASE("Prefab apply compensates each owned write before reporting failure or recovery", "[editor][prefab][apply][native]") {
             ApplyFixture fixture;
             const auto source = fixture.source.document->Snapshot();
