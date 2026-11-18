@@ -9,6 +9,9 @@
 #include <vector>
 
 namespace Horo::Runtime {
+    namespace Detail {
+        class StreamedSceneInstanceAccess;
+    }
     /** @brief Separates child composition policies at the Scene ownership boundary. */
     enum class SceneInstanceMode : std::uint8_t {
         Embedded,  /**< Child entities share the parent's canonical runtime. */
@@ -45,6 +48,7 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> Cancel(RuntimeSceneService &service) const;
 
     private:
+        friend class Detail::StreamedSceneInstanceAccess;
         friend Result<SceneInstanceOperation> QueueEmbeddedSceneInstance(RuntimeSceneService &, const SceneInstanceAddress &,
                                                                          RuntimeSceneDefinition, std::vector<RuntimeGroupAssetLease>,
                                                                          const SceneStructuralAdmission &, SceneBaselineAttachmentLimits,

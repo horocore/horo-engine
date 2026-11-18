@@ -573,4 +573,117 @@ namespace Horo::Runtime {
         }
     }
 
+    TEST_CASE("Streamed instances publish and replace through the exact parent cell ownership", "[scene][cell_attachment][instances]") {
+        Counts counts;
+        RuntimeSceneService service;
+        Activate(service);
+        const auto first = Payload();
+        const auto request = Request(service, first);
+        const SceneInstanceAddress address{request.runtime, {2}, first.Identity().scene, SceneInstanceMode::Streamed};
+        const auto authority = Owner(first, request, counts);
+        const auto queued = QueueStreamedSceneInstance(service, address, first, request, {}, authority);
+        REQUIRE(queued.HasValue());
+        CHECK_FALSE(queued.Value().Receipt()->Complete());
+        CHECK_FALSE(CancelRuntimeSceneCellOperation(service, first.Identity(), request).HasValue());
+        CHECK_FALSE(FindStreamedSceneInstance(*service.ActiveScene(), address, first.Identity(), request.fence.epoch));
+        Commit(service);
+        REQUIRE(queued.Value().Receipt()->ResultValue());
+        const auto view = service.ActiveScene();
+        REQUIRE(FindStreamedSceneInstance(*view, address, first.Identity(), request.fence.epoch));
+        REQUIRE(FindRuntimeSceneCellAttachment(*view, first.Identity(), request.fence.epoch));
+        const auto child = view->Find({10});
+        REQUIRE(child);
+        CHECK(child->runtime == address.parent);
+
+        auto foreign = address;
+        foreign.instance = {3};
+        CHECK_FALSE(FindStreamedSceneInstance(*view, foreign, first.Identity(), request.fence.epoch));
+        CHECK_FALSE(FindStreamedSceneInstance(*view, address, first.Identity(), IdentityFrom<W::PartitionEpoch>(2)));
+        const auto second = Payload(0, 2);
+        auto next = Request(service, second);
+        next.expectedRevision = first.Identity().revision;
+        next.fence.generation = IdentityFrom<W::StreamingGeneration>(2);
+        const auto ready = Owner(second, next, counts);
+        CHECK(QueueStreamedSceneInstance(service, foreign, second, next, {}, ready, &queued.Value()).HasError());
+        CHECK(QueueStreamedSceneInstance(service, address, second, next, {}, ready).HasError());
+        const auto replacement = QueueStreamedSceneInstance(service, address, second, next, {}, ready, &queued.Value());
+        REQUIRE(replacement.HasValue());
+        Commit(service);
+        REQUIRE(replacement.Value().Receipt()->ResultValue());
+        CHECK_FALSE(service.ActiveScene()->Get(*child).HasValue());
+        CHECK_FALSE(FindStreamedSceneInstance(*service.ActiveScene(), address, first.Identity(), request.fence.epoch));
+        REQUIRE(FindStreamedSceneInstance(*service.ActiveScene(), address, second.Identity(), request.fence.epoch));
+        CHECK(QueueStreamedSceneRemoval(service, queued.Value(), request, authority).HasError());
+
+        REQUIRE(QueueRuntimeSceneCellDetachment(service, second.Identity(), next, ready).HasValue());
+        Commit(service);
+        REQUIRE(service.TakeOperationError());
+        REQUIRE(FindStreamedSceneInstance(*service.ActiveScene(), address, second.Identity(), request.fence.epoch));
+        const auto removal = QueueStreamedSceneRemoval(service, replacement.Value(), next, ready);
+        REQUIRE(removal.HasValue());
+        Commit(service);
+        REQUIRE(removal.Value().Receipt()->ResultValue());
+        CHECK_FALSE(service.ActiveScene()->Find({10}));
+        CHECK(service.ActiveScene()->Find({100}));
+    }
+
+    TEST_CASE("Streamed operations cannot outlive the parent or reuse a cancelled attempt", "[scene][cell_attachment][instances]") {
+        Counts counts;
+        RuntimeSceneService service;
+        Activate(service);
+        const auto payload = Payload();
+        auto request = Request(service, payload);
+        const SceneInstanceAddress address{request.runtime, {2}, payload.Identity().scene, SceneInstanceMode::Streamed};
+        const auto authority = Owner(payload, request, counts);
+        auto unsupported = address;
+        unsupported.mode = SceneInstanceMode::Activated;
+        CHECK(QueueStreamedSceneInstance(service, unsupported, payload, request, {}, authority).HasError());
+
+        auto tooSmall = request;
+        tooSmall.limits.maximumEntities = 1;
+        REQUIRE(QueueStreamedSceneInstance(service, address, payload, tooSmall, {}, authority).HasError());
+        const auto cancelled = QueueStreamedSceneInstance(service, address, payload, request, {}, authority);
+        REQUIRE(cancelled.HasValue());
+        REQUIRE(cancelled.Value().Cancel(service).HasValue());
+        CHECK(cancelled.Value().Receipt()->Failure());
+        const auto newer = QueueStreamedSceneInstance(service, address, payload, request, {}, authority);
+        REQUIRE(newer.HasValue());
+        CHECK(cancelled.Value().Cancel(service).HasError());
+        authority->ready = false;
+        Commit(service);
+        REQUIRE(newer.Value().Receipt()->Failure());
+        CHECK_FALSE(service.ActiveScene()->Find({10}));
+
+        authority->ready = true;
+        CancellationSource parentLifetime;
+        request.ownerCancellation = parentLifetime.Token();
+        const auto stopping = QueueStreamedSceneInstance(service, address, payload, request, {}, authority);
+        REQUIRE(stopping.HasValue());
+        parentLifetime.RequestCancellation();
+        Commit(service);
+        const auto *rejection = stopping.Value().Receipt()->Failure();
+        REQUIRE(rejection);
+        CHECK(rejection->code.Value() == SceneCellPayloadErrors::Cancelled.code.Value());
+        CHECK_FALSE(service.ActiveScene()->Find({10}));
+
+        request.ownerCancellation = {};
+        const auto published = QueueStreamedSceneInstance(service, address, payload, request, {}, authority);
+        REQUIRE(published.HasValue());
+        Commit(service);
+        REQUIRE(published.Value().Receipt()->ResultValue());
+        Activate(service);
+        CHECK(service.ActiveScene()->RuntimeId() != address.parent);
+        CHECK_FALSE(service.ActiveScene()->Find({10}));
+        CHECK(QueueStreamedSceneInstance(service, address, payload, request, {}, authority).HasError());
+        CHECK(QueueStreamedSceneRemoval(service, published.Value(), request, authority).HasError());
+
+        request = Request(service, payload);
+        auto successor = address;
+        successor.parent = request.runtime;
+        const auto pending = QueueStreamedSceneInstance(service, successor, payload, request, {}, authority);
+        REQUIRE(pending.HasValue());
+        service.Shutdown();
+        REQUIRE(pending.Value().Receipt()->Failure());
+        CHECK_FALSE(service.ActiveScene());
+    }
 }  // namespace Horo::Runtime

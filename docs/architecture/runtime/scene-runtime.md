@@ -757,6 +757,15 @@ embedded by another parent. Cancelling an operation resolves its receipt
 without affecting another attempt or a published child. Parent retirement
 removes the complete child attachment with the parent runtime.
 
+Streamed child instances use the same tracked Scene transaction for a cooked
+cell baseline. The host supplies the current streaming fence, verified artifact
+leases and required-provider authority. The attachment records the authored
+occurrence separately from the partition, cell and mounted epoch. Replacement
+or eviction requires the exact published occurrence and current streaming
+authority. Parent cancellation ends pending publication; replacing or retiring
+the parent discards all its attached children. Streamed admission neither
+selects residency nor mounts a partition.
+
 ## Editor Interaction
 
 The editor session owns `SceneDocument`, history, selection, and dirty state.

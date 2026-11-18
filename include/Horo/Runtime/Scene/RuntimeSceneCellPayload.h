@@ -3,7 +3,7 @@
 /** @file RuntimeSceneCellPayload.h
  * @brief Scene-owned immutable flattened cell baseline and fenced RuntimeScene admission.
  */
-#include "Horo/Runtime/Scene/RuntimeScene.h"
+#include "Horo/Runtime/Scene/SceneInstances.h"
 #include "Horo/WorldStreaming/WorldPartitionDescriptor.h"
 
 namespace Horo::Runtime {
@@ -157,6 +157,41 @@ namespace Horo::Runtime {
                                                                const SceneCellAttachmentRequest &request,
                                                                std::vector<RuntimeGroupAssetLease> resources,
                                                                std::shared_ptr<const SceneCellPayloadAuthority> authority);
+
+    /** @brief Queues a streamed child under one exact live parent using real cell residency authority.
+     * @param service Canonical parent Scene owner.
+     * @param address Exact Streamed mode, authored occurrence, parent runtime and prepared baseline definition.
+     * @param payload Complete immutable cooked cell baseline. @param request Current residency/catalog and bounds.
+     * @param resources Prepared verified dependency leases. @param authority Current shared streaming owner.
+     * @param replaces Exact currently published operation, or null to require absence.
+     * @return Exact cancellable receipt or typed failure. The canonical safe point owns publication.
+     * @details The parent admits one resident baseline per definition. Replacement must advance its content revision.
+     */
+    [[nodiscard]] Result<SceneInstanceOperation> QueueStreamedSceneInstance(
+        RuntimeSceneService &service, const SceneInstanceAddress &address, const RuntimeSceneCellPayload &payload,
+        const SceneCellAttachmentRequest &request, std::vector<RuntimeGroupAssetLease> resources,
+        std::shared_ptr<const SceneCellPayloadAuthority> authority, const SceneInstanceOperation *replaces = nullptr);
+
+    /** @brief Observes an exact current streamed instance through its parent's canonical cell attachment.
+     * @param parent Current parent view. @param address Expected Streamed occurrence.
+     * @param identity Exact committed cell content. @param epoch Exact mounted partition.
+     * @return Borrowed baseline evidence, or absence after parent retirement or mismatch.
+     */
+    [[nodiscard]] std::optional<SceneBaselineAttachmentView> FindStreamedSceneInstance(const RuntimeSceneView &parent,
+                                                                                       const SceneInstanceAddress &address,
+                                                                                       const SceneCellPayloadIdentity &identity,
+                                                                                       WorldStreaming::PartitionEpoch epoch) noexcept;
+
+    /** @brief Retires the exact streamed occurrence at the canonical Scene safe point.
+     * @param service Canonical parent Scene owner. @param current Exact committed operation.
+     * @param request Current exact eviction fence and parent/catalog/cancellation evidence.
+     * @param authority Retained streaming authority for eviction.
+     * @return Exact cancellable receipt or typed failure, preserving all unmatched resident instances.
+     */
+    [[nodiscard]] Result<SceneInstanceOperation> QueueStreamedSceneRemoval(RuntimeSceneService &service,
+                                                                           const SceneInstanceOperation &current,
+                                                                           const SceneCellAttachmentRequest &request,
+                                                                           std::shared_ptr<const SceneCellPayloadAuthority> authority);
 
     /** @brief Retires exactly one attached baseline at the canonical Scene safe point.
      * @param service Canonical Scene owner. @param identity Exact committed baseline identity and revision.
