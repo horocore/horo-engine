@@ -149,6 +149,42 @@ namespace Horo::Tests::OpenXRAction {
         CHECK(fixture.actions.owner.ObservePoses(session, fixture.Time(), fixture.origin).HasError());
     }
 
+    TEST_CASE("OpenXR scalar sampling withdraws pose-dependent controls until the current controller is tracked",
+              "[xr][native][poses][actions]") {
+        TrackingFixture fixture;
+        REQUIRE(fixture.Prepare().HasValue());
+        fixture.Activate();
+        const auto session = fixture.actions.session.Request().candidate;
+        const auto plan = fixture.actions.Plan();
+        std::array devices{fixture.actions.Device()};
+        const auto sample = [&] {
+            fixture.Sync();
+            return fixture.actions.owner.Sample(session, plan, devices);
+        };
+        devices.front().state = XRTrackedDeviceState::Tracked;
+        const auto original = sample();
+        REQUIRE(original.HasValue());
+        REQUIRE(original.Value().Actions().size() == 1);
+        CHECK(original.Value().Actions().front().active);
+
+        for (const auto unavailable : {XRTrackedDeviceState::TrackingLost, XRTrackedDeviceState::Disconnected}) {
+            devices.front().state = unavailable;
+            const auto nativeQueries = std::ranges::count(fixture.actions.session.script.calls, "sample-boolean");
+            const auto neutral = sample();
+            REQUIRE(neutral.HasValue());
+            CHECK(neutral.Value().Actions().empty());
+            CHECK(std::ranges::count(fixture.actions.session.script.calls, "sample-boolean") == nativeQueries);
+        }
+
+        ++devices.front().id.slot.generation;
+        devices.front().state = XRTrackedDeviceState::Tracked;
+        const auto replacement = sample();
+        REQUIRE(replacement.HasValue());
+        REQUIRE(replacement.Value().Actions().size() == 1);
+        CHECK(replacement.Value().Actions().front().device == devices.front().id);
+        CHECK(replacement.Value().Actions().front().device != original.Value().Actions().front().device);
+    }
+
     TEST_CASE("OpenXR native source loss retains invalid evidence without inferring connection from prepared bindings",
               "[xr][native][poses]") {
         TrackingFixture fixture;

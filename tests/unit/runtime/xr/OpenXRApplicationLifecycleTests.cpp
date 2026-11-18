@@ -932,6 +932,33 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(refreshed.sessionGeneration == generation);
         CHECK(refreshed.bindingRevision == initial.bindingRevision);
         CHECK(refreshed.trackingRevision > initial.trackingRevision);
+        REQUIRE(refreshed.actionCount == 1);
+        const auto controllerGeneration = refreshed.actions.front().deviceGeneration;
+
+        fixture.script.actions.tracking.poseActive = XR_FALSE;
+        const auto untracked = runCutoff();
+        CHECK_FALSE(untracked.down);
+        CHECK(untracked.released);
+        CHECK(fixture.play->ReadInspection().sessionGeneration == generation);
+        CHECK_FALSE(runCutoff().released);
+        fixture.script.actions.tracking.poseActive = XR_TRUE;
+        const auto trackedAgain = runCutoff();
+        CHECK(trackedAgain.pressed);
+        CHECK(trackedAgain.x == before.x);
+        CHECK(trackedAgain.y == before.y);
+        const auto resumed = fixture.play->ReadInspection();
+        REQUIRE(resumed.actionCount == 1);
+        CHECK(resumed.actions.front().deviceGeneration == controllerGeneration);
+
+        fixture.script.events.Push(XR_SESSION_STATE_VISIBLE);
+        fixture.script.events.Push(XR_SESSION_STATE_FOCUSED);
+        RequireValue(fixture.play->PollEvents());
+        CHECK(fixture.play->ReadInspection().trackingRevision == 0);
+        const auto neutral = runCutoff();
+        CHECK_FALSE(neutral.down);
+        CHECK(neutral.released);
+        CHECK(runCutoff().pressed);
+        CHECK(fixture.play->ReadInspection().sessionGeneration == generation);
 
         fixture.script.actions.currentProfiles[0] = XR_NULL_PATH;
         fixture.script.events.interactionProfileChanged = true;

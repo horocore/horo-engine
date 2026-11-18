@@ -60,6 +60,7 @@ namespace Horo::Tests::OpenXRAction {
             XrResult boundsResult{XR_SUCCESS};
             unsigned boundsReads{};
             bool enabled{};
+            std::optional<XrBool32> poseActive;
             XrTime locatedTime{};
             XrSpaceLocationFlags flags{XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT |
                                        XR_SPACE_LOCATION_POSITION_TRACKED_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT};
@@ -268,7 +269,7 @@ namespace Horo::Tests::OpenXRAction {
             REQUIRE(info->action != XR_NULL_HANDLE);
             REQUIRE(info->subactionPath != XR_NULL_PATH);
             const auto result = Script::Record("sample-pose");
-            state->isActive = active->sample.active;
+            state->isActive = active->tracking.poseActive.value_or(active->sample.active);
             return result;
         }
 

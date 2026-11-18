@@ -4,6 +4,8 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "OpenXRPlayFrameState.h"
 
+#include <utility>
+
 namespace Horo::Application::Internal {
     using namespace XR;
     using namespace XR::OpenXRInternal;
@@ -206,6 +208,10 @@ namespace Horo::Application::Internal {
             return Result<bool>::Success(false);
         }
         const auto state = sessions_.Snapshot();
+        if (observed.actionsInterrupted) {
+            tracking_.Revoke();
+            input_.neutralPending = true;
+        }
         const bool invalidateOutput = observed.actionsInterrupted || observed.bindingsChanged;
         if (invalidateOutput)
             composition_.session.RequestHapticCancellation();
@@ -299,6 +305,7 @@ namespace Horo::Application::Internal {
         if (!input_.router)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         const Operation operation{*this};
+        const bool neutral = std::exchange(input_.neutralPending, false);
         if (input_.port && !eventsPending_) {
             const auto refreshed = input_.router->RefreshPlayerActionCollection(*input_.port);
             if (refreshed.HasError()) {
@@ -321,7 +328,7 @@ namespace Horo::Application::Internal {
                 return Result<void>::Success();
             }
         }
-        if (!input_.port || !input_.admitted || eventsPending_ || input_.play != Editor::EditorPlayState::Playing ||
+        if (neutral || !input_.port || !input_.admitted || eventsPending_ || input_.play != Editor::EditorPlayState::Playing ||
             !composition_.session.HasInputProjection()) {
             tracking_.Revoke();
             input_.router->BeginFrame(raw);

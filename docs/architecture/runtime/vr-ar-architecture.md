@@ -705,6 +705,12 @@ OpenXR profile notifications also revoke the previous tracking sample. Confirmin
 the already selected startup fallback preserves the published controller bindings.
 Loss or replacement of a confirmed profile retires the selected input source
 through the Play lifecycle before another input cutoff can publish XR values.
+An observed interruption commits neutral XR actions before sampling can resume,
+including when focus is restored within the same native event batch. A controller
+with admitted grip or aim evidence and a matching native pose route withdraws its
+scalar actions when tracking is lost. A scalar-only attachment remains eligible
+on valid native action evidence. Pose recovery samples the same live controller
+again, while a disconnected controller requires fresh generation evidence.
 
 Rendering-time view/head poses are a distinct predicted-frame snapshot. They may reduce
 visual latency but cannot overwrite the Input snapshot, a tick-assigned gameplay frame,

@@ -72,6 +72,14 @@ namespace Horo::XR::OpenXRInternal {
             const auto device = std::ranges::find(devices, binding.role, &XRTrackedDeviceRecord::role);
             if (device == devices.end() || device->state == XRTrackedDeviceState::Disconnected)
                 continue;
+            using enum XRTrackedDeviceCapability;
+            const bool lostPose = device->state == XRTrackedDeviceState::TrackingLost &&
+                                  (device->capabilities.Has(GripPose) || device->capabilities.Has(AimPose)) &&
+                                  std::ranges::find(tracking_.actions, binding.role, &PoseAction::role) != tracking_.actions.end();
+            // An active native scalar may outlast the attachment's last known grip or aim. Omit
+            // that contribution before Input commits. Scalar-only attachments remain eligible.
+            if (lostPose)
+                continue;
             result.entries[result.count++] = {std::to_address(action), *device, static_cast<std::uint32_t>(index), binding.profile,
                                               binding.fallback};
         }
