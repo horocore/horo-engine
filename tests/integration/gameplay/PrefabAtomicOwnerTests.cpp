@@ -2,7 +2,6 @@
 #include "HeadlessCookedDecisionAdmission.h"
 #include "HeadlessNetworkServices.h"
 #include "HeadlessPerceptionPolicy.h"
-#include "OwnedTestDirectory.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/AIScenePerceptionSource.h"
 #include "Horo/AI/PerceptionSenseProvider.h"
@@ -14,6 +13,7 @@
 #include "Horo/Platform/NativeProjectReadFiles.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Scene/CookedSceneDefinition.h"
+#include "OwnedTestDirectory.h"
 #include "PrefabAtomicOwnerTestSupport.h"
 
 #include <cstring>
@@ -550,14 +550,14 @@ namespace Horo::Application::PrefabAtomicTest {
             auto files = Platform::CreateNativeProjectReadFiles(directory.Path(), "perception-test", 1);
             REQUIRE(files.HasValue());
             const Platform::ProjectReadContext context{.projectIdentity = "perception-test",
-                                                        .projectGeneration = 1,
-                                                        .deadline = std::chrono::steady_clock::now() + std::chrono::seconds{3}};
+                                                       .projectGeneration = 1,
+                                                       .deadline = std::chrono::steady_clock::now() + std::chrono::seconds{3}};
             return Internal::CaptureHeadlessPerceptionPolicy(*files.Value(), context, path, asset, definition);
         }
 
         /** @brief Populates explicit stable selectors and a nonzero origin without native provider defaults. */
         std::string ProjectPerceptionSource(const Assets::AssetId asset, const std::uint64_t revision,
-                                             const AI::AiControllerDescriptor &controller) {
+                                            const AI::AiControllerDescriptor &controller) {
             const auto &endpoints = *controller.perceptionEndpoints;
             return "{\"schema\":1,\"sceneAsset\":\"" + asset.ToString() + "\",\"sceneRevision\":" + std::to_string(revision) +
                    ",\"worldOriginMillimeters\":[100,200,-300],\"controllers\":[{\"controller\":" +
@@ -610,7 +610,8 @@ namespace Horo::Application::PrefabAtomicTest {
                 const auto source = ProjectPerceptionSource(asset, definition.Value().Revision().value, controller.descriptor);
                 auto policy = CaptureProjectPerception(definition.Value(), asset, source);
                 REQUIRE(policy.HasValue());
-                input.perceptionProject = Internal::HeadlessPerceptionProjectAdmission{std::move(policy).Value(), native.endpoints->registry};
+                input.perceptionProject =
+                    Internal::HeadlessPerceptionProjectAdmission{std::move(policy).Value(), native.endpoints->registry};
                 input.perceptionPositions = {};
                 catalog.front().perceptionEndpoints.reset();
                 usesAuthoredCoordinates = true;
