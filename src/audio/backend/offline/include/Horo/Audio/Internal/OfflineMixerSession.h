@@ -12,7 +12,7 @@ namespace Horo::Audio::Backend {
         AudioSampleClock initialClock; /**< Exact generation and discontinuity at the zero-frame export origin. */
         MixerGraphRuntime &mixer;
         const AudioCommandRecord &initialGraph;           /**< Initial graph swap consumed through ordinary staging. */
-        std::span<AudioVoiceRenderRuntime *const> voices; /**< Exclusively prepared, started voices in ascending slot order. */
+        std::span<AudioVoiceRenderRuntime *const> voices; /**< Exclusively prepared, started resident voices in ascending slot order. */
         AudioParameterAutomation *automation{};           /**< Optional sealed automation bound to the initial mixer plan and clock. */
     };
 
@@ -30,9 +30,9 @@ namespace Horo::Audio::Backend {
          * @param source Freshly prepared owners and immutable initial publication.
          * @return Ready adapter or typed argument/allocation failure.
          * @pre Owners belong exclusively to this export, are configured for the requested format/block,
-         *      and the caller retains them through all calls. Voice frames must be synchronously available.
-         *      The host supplies a declared bounded tail for the prepared graph. The caller completes
-         *      ordinary mixer/voice retirement after the synchronous driver returns.
+         *      and the caller retains them through all calls. Only resident voices are accepted; decode stream media to bounded resident
+         * PCM first. The host supplies a declared bounded tail for the prepared graph. The caller completes ordinary mixer/voice retirement
+         * after the synchronous driver returns.
          */
         [[nodiscard]] static Result<OfflineMixerSession> Prepare(const OfflineAudioRenderRequest &request,
                                                                  const OfflineMixerSource &source);

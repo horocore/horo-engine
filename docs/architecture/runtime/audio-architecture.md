@@ -159,8 +159,10 @@ deadlines/diagnostics and never schedules audible work directly.
 ### Offline PCM and WAVE export
 
 `HoroAudioOffline` is the synchronous headless processing adapter. The host
-prepares a separate Audio epoch with resident or otherwise synchronously
-available voices, one mixer publication and optional sealed sample automation.
+prepares a separate Audio epoch with resident voices, one mixer publication and optional sealed sample automation.
+Export callers decode admitted stream media to bounded resident PCM before
+creating their export voices. Live stream owners have latency-driven underrun
+behavior and the offline adapter rejects them before processing.
 The adapter advances that epoch by sample count and converts the mixer's
 planar output to an owned interleaved float buffer. The source cutoff splits
 the export block exactly. The mixer then receives silent input for the host's

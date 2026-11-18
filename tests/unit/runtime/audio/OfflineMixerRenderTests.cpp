@@ -1,3 +1,4 @@
+#include "AudioStreamingTestFixture.h"
 #include "Horo/Application/Internal/OfflineAudioExport.h"
 #include "Horo/Audio/CoreAudioDSPNode.h"
 #include "Horo/Platform/NativePublicationFileSystem.h"
@@ -149,6 +150,43 @@ namespace {
         REQUIRE(invalid.HasError());
         CHECK(invalid.ErrorValue().code.Value() == AudioErrors::CommandBufferInvalid.code.Value());
         CHECK(offline.voice->Cursor().frame == 0);
+        CHECK(RenderOfflineAudio(offline.Request(7), offline.Source()).HasValue());
+    }
+
+    TEST_CASE("Offline mixer rejects a real streamed voice before consuming prepared audio", "[audio][offline][mixer]") {
+        OfflineMixer offline;
+        JobSystem jobs{{.workerCount = 1}};
+        StreamingTests::PackageFixture package;
+        std::shared_ptr<AudioStreamingService> service{StreamingTests::Service(jobs, package)};
+        const auto stream = service->Admit(StreamingTests::Request());
+        REQUIRE(stream.HasValue());
+        auto registry = AudioVoiceStateMachine::Create({MF::Owner, 1});
+        REQUIRE(registry.HasValue());
+        auto created = AudioVoiceRenderRuntime::CreateStream(std::make_shared<AudioVoiceStateMachine>(std::move(registry).Value()), service,
+                                                             stream.Value(),
+                                                             {.quality = AudioResamplerQuality::Linear,
+                                                              .inputRate = 48'000,
+                                                              .outputRate = 48'000,
+                                                              .channels = 2,
+                                                              .maximumOutputFrames = MF::Profile().maximumFrames},
+                                                             16 * 1024,
+                                                             {MF::Scope, MF::IdOf<AudioMemoryPoolId>(61), MF::IdOf<AudioParameterId>(59),
+                                                              MF::Profile().maximumFrames});
+        REQUIRE(created.HasValue());
+        auto voice = std::move(created).Value();
+        const std::array streamed{voice.get()};
+        auto source = offline.Source();
+        source.voices = streamed;
+        const auto denied = RenderOfflineAudio(offline.Request(7), source);
+        CHECK(denied.HasError());
+        if (denied.HasError())
+            CHECK(denied.ErrorValue().code.Value() == AudioErrors::SourceUnsupported.code.Value());
+        CHECK(voice->Cursor().frame == 0);
+        CHECK(package.opens.load() == 0);
+        voice->Close();
+        REQUIRE(voice->CompleteShutdown(true));
+        REQUIRE(service->Retire(stream.Value()).HasValue());
+        REQUIRE(service->Shutdown().HasValue());
         CHECK(RenderOfflineAudio(offline.Request(7), offline.Source()).HasValue());
     }
 

@@ -7,7 +7,7 @@
 namespace Horo::Audio::Backend {
     namespace {
         /** @brief Admit only the exact fresh audio epoch, zero-frame clock and ordered prepared voice owners. */
-        bool MatchesSource(const OfflineAudioRenderRequest &request, const OfflineMixerSource &source) noexcept {
+        const ErrorCodeDescriptor *ValidateSource(const OfflineAudioRenderRequest &request, const OfflineMixerSource &source) noexcept {
             const auto &clock = source.initialClock;
             const auto &scope = source.scope;
             const auto &command = source.initialGraph;
@@ -18,18 +18,20 @@ namespace Horo::Audio::Backend {
                 request.clockDomain == 0 || clock.observedAt.clockDomain != request.clockDomain || clock.observedAt.nanoseconds != 0 ||
                 command.sequence == 0 || command.command.scope != scope ||
                 !std::holds_alternative<AudioSwapGraphCommand>(command.command.payload) || source.voices.size() > MaximumAudioVoiceSlots)
-                return false;
+                return &AudioErrors::CommandBufferInvalid;
 
             std::uint32_t previousSlot{};
             for (const auto *voice : source.voices) {
                 if (!voice)
-                    return false;
+                    return &AudioErrors::CommandBufferInvalid;
                 const auto handle = voice->Voice();
                 if (!handle.IsValid() || handle.owner != scope.owner || handle.slot <= previousSlot)
-                    return false;
+                    return &AudioErrors::CommandBufferInvalid;
+                if (!voice->HasResidentSource())
+                    return &AudioErrors::SourceUnsupported;
                 previousSlot = handle.slot;
             }
-            return true;
+            return nullptr;
         }
     }  // namespace
 
@@ -41,8 +43,8 @@ namespace Horo::Audio::Backend {
     Result<OfflineMixerSession> OfflineMixerSession::Prepare(const OfflineAudioRenderRequest &request, const OfflineMixerSource &source) {
         if (request.cancellation.stop_requested())
             return Result<OfflineMixerSession>::Failure(MakeError(AudioErrors::OperationCancelled));
-        if (!MatchesSource(request, source))
-            return Result<OfflineMixerSession>::Failure(MakeError(AudioErrors::CommandBufferInvalid));
+        if (const auto *error = ValidateSource(request, source))
+            return Result<OfflineMixerSession>::Failure(MakeError(*error));
         try {
             return Result<OfflineMixerSession>::Success(OfflineMixerSession{request, source});
         } catch (const std::bad_alloc &) {

@@ -131,6 +131,11 @@ namespace Horo::Audio {
         return state_->voice;
     }
 
+    /** @copydoc AudioVoiceRenderRuntime::HasResidentSource */
+    bool AudioVoiceRenderRuntime::HasResidentSource() const noexcept {
+        return state_->resident != nullptr;
+    }
+
     /** @copydoc AudioVoiceRenderRuntime::Cursor */
     AudioVoiceCursor AudioVoiceRenderRuntime::Cursor() const noexcept {
         if (state_->released)

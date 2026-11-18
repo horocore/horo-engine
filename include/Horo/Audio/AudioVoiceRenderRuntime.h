@@ -101,6 +101,8 @@ namespace Horo::Audio {
         AudioVoiceRenderRuntime &operator=(const AudioVoiceRenderRuntime &) = delete;
         /** @brief Read immutable admitted identity. @return Exact voice. */
         [[nodiscard]] AudioVoiceHandle Voice() const noexcept;
+        /** @brief Report whether the exclusive owner retains copied resident PCM. @return False for streamed or detached playback. */
+        [[nodiscard]] bool HasResidentSource() const noexcept;
         /** @brief Read the audible/logical cursor on the exclusive processing owner.
          * @return Source position excluding decoder look-ahead, or zero after detached release.
          */
