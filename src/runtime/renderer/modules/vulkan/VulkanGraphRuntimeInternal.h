@@ -46,6 +46,7 @@ namespace Horo::Render::Detail {
             VulkanMaterialTarget vfxTarget;
             RenderGraphExecutionRange vfxDraws;
             VulkanPreparedReconstruction reconstruction;
+            std::optional<std::size_t> materialRaster;
         };
 
         struct Update {
@@ -121,7 +122,6 @@ namespace Horo::Render::Detail {
         std::array<VulkanGraphResourceState *, RenderGraphLimits::HardMaxResources> materialPassStates;
         std::size_t materialPassStateCount{};
         VulkanMaterialTarget materialTarget;
-        bool materialDepthOnly{};
         std::vector<MaterialDraw> vfxDraws; /**< Cold-reserved against the canonical whole-scene draw ceiling. */
         std::uint64_t deviceIncarnation{};
         VulkanCommandRuntime commands;
@@ -284,8 +284,15 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> ValidateMaterialAdmission(const RenderMaterialExecutionRequest &request) const;
         [[nodiscard]] Result<void> RecordMaterial(const RenderMaterialExecutionRequest &request, VulkanCommandRetention &pins);
         [[nodiscard]] Result<void> PrepareMaterialTarget(const RenderMaterialExecutionRequest &request, VulkanCommandRetention &pins);
+        /** @brief Captures existing same-device material and mesh identities without graph state mutation. */
+        [[nodiscard]] Result<void> CaptureMaterialDraw(const RenderMaterialDrawInstance &, MaterialDraw &, const VulkanMaterialTarget &,
+                                                       bool depthOnly, VulkanCommandRetention &);
+        /** @brief Prepares a material raster pass using compiled graph barriers and resident resource provenance. */
+        [[nodiscard]] Result<void> PrepareGraphMaterial(const RenderGraphExecutionRequest &, std::size_t pass,
+                                                        const RenderGraphMaterialRaster &, VulkanCommandRetention &);
         [[nodiscard]] Result<void> PrepareMaterialDraw(const RenderMaterialDrawInstance &source, MaterialDraw &draw,
-                                                       const RenderQueueSubmission &submission, VulkanCommandRetention &pins);
+                                                       const RenderQueueSubmission &submission, bool depthOnly,
+                                                       VulkanCommandRetention &pins);
         [[nodiscard]] Result<void> PrepareMaterialResources(const VulkanPreparedMaterialBinding &material,
                                                             const RenderQueueSubmission &submission);
         [[nodiscard]] Result<void> PrepareMaterial(const RenderMaterialExecutionRequest &request, VulkanCommandRetention &pins);

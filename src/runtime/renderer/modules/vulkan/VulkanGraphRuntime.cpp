@@ -56,8 +56,9 @@ namespace Horo::Render::Detail {
             submissions.reserve(RenderGraphSubmissionLimits::MaximumSubmissions);
             retention.resize(frames);
             for (auto &pins : retention)
-                pins.resources.reserve(RenderGraphLimits::HardMaxResources + RenderGraphNativeReconstruction::MaximumPassesPerFrame +
-                                       (MultiviewExtractionLimits::HardMaximumInstances + MaximumVfxGraphDraws) * 3);
+                pins.resources.reserve(
+                    RenderGraphLimits::HardMaxResources + RenderGraphNativeReconstruction::MaximumPassesPerFrame +
+                    (MultiviewExtractionLimits::HardMaximumInstances + MaximumVfxGraphDraws + RenderMaterialPass::MaximumBatchDraws) * 3);
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(
                 MakeError(VulkanBackendErrors::ResourceCreationFailed, "Bounded graph storage allocation failed."));
@@ -156,6 +157,13 @@ namespace Horo::Render::Detail {
         if (impl_->lifecycle.frame.IsValid())
             return Outcome::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
         return impl_->reconstruction.Realize(kernel);
+    }
+
+    /** @copydoc VulkanGraphRuntime::SupportsGraphMaterialRaster */
+    bool VulkanGraphRuntime::SupportsGraphMaterialRaster() const noexcept {
+        const auto &native = impl_->native;
+        return impl_->resources && native.bindPipeline && native.bindSets && native.bindVertices && native.bindIndex && native.viewport &&
+               native.scissor && native.drawIndexed;
     }
 
     /** @copydoc VulkanGraphRuntime::SupportsNativeReconstruction */

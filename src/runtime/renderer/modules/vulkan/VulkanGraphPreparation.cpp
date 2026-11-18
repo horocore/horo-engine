@@ -55,6 +55,8 @@ namespace Horo::Render::Detail {
         updates.clear();
         materialPassStateCount = 0;
         reconstructionPassCount = 0;
+        materialPassCount = 0;
+        materialDrawCount = 0;
         submissions.clear();
         vfxDraws.clear();
         identities.clear();
@@ -267,6 +269,7 @@ namespace Horo::Render::Detail {
         auto &prepared = passes[index];
         prepared.vfxDraws = {};
         prepared.reconstruction = {};
+        prepared.materialRaster.reset();
         if (const auto valid = ValidatePassUses(request, index); valid.HasError())
             return valid;
         prepared.before.offset = barriers.size();
@@ -279,6 +282,9 @@ namespace Horo::Render::Detail {
         const auto &operation = request.workloads[index].workload;
         if (const auto *work = std::get_if<RenderGraphNativeReconstruction>(&operation)) {
             if (const auto result = PrepareReconstruction(request, index, *work, pins); result.HasError())
+                return result;
+        } else if (const auto *material = std::get_if<RenderGraphMaterialRaster>(&operation)) {
+            if (const auto result = PrepareGraphMaterial(request, index, *material, pins); result.HasError())
                 return result;
         } else if (const auto result = ValidateWorkload(operation, pass.queue); result.HasError()) {
             return result;

@@ -79,6 +79,8 @@ namespace Horo::Render::Detail {
             const CookedNativeReconstructionKernel &kernel);
         /** @brief Reports exact native dispatch and selected compute-queue support. */
         [[nodiscard]] bool SupportsNativeReconstruction() const noexcept;
+        /** @brief Reports available graph-owned material raster recording on this initialized device. */
+        [[nodiscard]] bool SupportsGraphMaterialRaster() const noexcept;
         [[nodiscard]] bool SupportsVfxGpu() const noexcept;
         /** @brief Reports the initialized indexed forward draw route without requiring GPU particle compute.
          * @return True only for the live resource owner and all required native raster entry points.

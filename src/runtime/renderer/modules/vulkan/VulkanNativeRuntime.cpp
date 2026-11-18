@@ -522,6 +522,10 @@ namespace Horo::Render {
                 return true;
             }
 
+            bool SupportsGraphMaterialRaster() const noexcept override {
+                return graph_.SupportsGraphMaterialRaster();
+            }
+
             Result<void> ExecuteMaterialPass(const RenderMaterialExecutionRequest &request) override {
                 return graph_.ExecuteMaterialPass(request);
             }

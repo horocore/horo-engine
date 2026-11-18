@@ -216,6 +216,11 @@ namespace Horo::Render {
             return false;
         }
 
+        /** @brief Reports exact graphics recording and graph attachment support. */
+        [[nodiscard]] virtual bool SupportsGraphMaterialRaster() const noexcept {
+            return false;
+        }
+
         /** @brief Records reflected draws through this same device command owner. */
         [[nodiscard]] virtual Result<void> ExecuteMaterialPass(const RenderMaterialExecutionRequest &) {
             return Result<void>::Failure(MakeError(MaterialBindingErrors::Unsupported));
