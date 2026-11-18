@@ -827,6 +827,14 @@ the exact deferred tokens from the Scene receipt. `ResolveMember` requires a
 current view of the same Scene incarnation and validates both the root and the
 requested entity generation.
 
+`IPrefabPersistenceOwner::Lookup` carries the same evidence across durable
+reconstruction. Host adapters supply verified recipe provenance parallel to the
+live members in cooked order, with the live root first. Omit tombstones from
+both vectors. Reacquisition validates complete, unique evidence against the
+current Scene before returning a new `PrefabInstance`. Host adapters rebuild
+against the revised lookup value layout and populate one provenance entry per
+returned member. Save storage and transport remain outside this interface.
+
 Commit and cancellation are serialized by the coordinator/owner-thread protocol: cancellation
 accepted before publication leaves no entities; cancellation after publication does not undo
 commit or change the successful spawn into a cancelled operation.

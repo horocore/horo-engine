@@ -183,6 +183,81 @@ namespace Horo::Prefab {
         CHECK(fixture.Count() == 3);
     }
 
+    TEST_CASE("Reacquiring a prefab validates all durable owner evidence before exposing members", "[prefab][spawn][persistence]") {
+        class Publication final : public IPrefabPersistencePublication {
+        public:
+            Runtime::SavePrefabInstanceId identity;
+
+            Runtime::SavePrefabInstanceId InstanceIdentity() const noexcept override {
+                return identity;
+            }
+
+            void PublishSpawn(std::span<const Runtime::EntityRef>) noexcept override {}
+
+            void PublishDespawn() noexcept override {}
+
+            void Cancel() noexcept override {}
+        };
+
+        class Inventory final : public IPrefabPersistenceOwner {
+        public:
+            PrefabPersistentLookup result;
+
+            Result<std::shared_ptr<IPrefabPersistencePublication>> PrepareSpawn(const PreparedPrefabSpawn &, const PrefabSpawnRequest &,
+                                                                                std::span<const Runtime::RuntimeComponentSet>,
+                                                                                std::span<const Assets::AssetId>,
+                                                                                std::string_view) override {
+                return Result<std::shared_ptr<IPrefabPersistencePublication>>::Failure(MakeError(PrefabErrors::AdmissionRejected));
+            }
+
+            Result<PrefabPersistentLookup> Lookup(Runtime::SavePrefabInstanceId, std::string_view) const override {
+                return Result<PrefabPersistentLookup>::Success(result);
+            }
+        };
+
+        Fixture fixture;
+        auto operation = fixture.context->Spawn(fixture.Request());
+        REQUIRE(operation.HasValue());
+        fixture.Drain(operation.Value());
+        const auto instance = operation.Value().Spawned().Value();
+        const auto scene = *fixture.scenes.ActiveScene();
+        const auto childAddress = PrefabObjectAddress::Create({}, {7}).Value();
+        const auto root = instance.ResolveMember({}, scene).Value();
+        const auto member = instance.ResolveMember(childAddress, scene).Value();
+        const auto inventory = std::make_shared<Inventory>();
+        const auto publication = std::make_shared<Publication>();
+        Runtime::SaveIdentityDetail::Bytes bytes{};
+        bytes.back() = 1;
+        const auto identity = Runtime::SavePrefabInstanceId::FromBytes(bytes).Value();
+        publication->identity = identity;
+        inventory->result = {{root.entity, member.entity}, publication, {root.provenance, member.provenance}};
+        PrefabSpawnService service{fixture.templates, fixture.scenes, nullptr, nullptr, inventory};
+        const auto context = service.Acquire({"game.test", scene.RuntimeId(), true, true}).Value();
+
+        const auto rebound = context->FindPersistent(identity);
+        REQUIRE(rebound.HasValue());
+        CHECK(rebound.Value().PersistentId() == identity);
+        CHECK(rebound.Value().ResolveMember(childAddress, scene).Value().entity == member.entity);
+        SECTION("missing immutable provenance") {
+            inventory->result.provenance.pop_back();
+        }
+        SECTION("duplicate local address") {
+            inventory->result.provenance[1] = root.provenance;
+        }
+        SECTION("duplicate live incarnation") {
+            inventory->result.entities[1] = root.entity;
+        }
+        SECTION("retired generation") {
+            ++inventory->result.entities[1].entity.generation;
+        }
+        SECTION("wrong published occurrence") {
+            bytes.back() = 2;
+            publication->identity = Runtime::SavePrefabInstanceId::FromBytes(bytes).Value();
+        }
+        CHECK(context->FindPersistent(identity).HasError());
+        CHECK(scene.Get(member.entity).HasValue());
+    }
+
     TEST_CASE("Prefab initialization coverage and constraints fail before structural mutation", "[prefab][spawn][malformed]") {
         Fixture fixture;
         auto request = fixture.Request();

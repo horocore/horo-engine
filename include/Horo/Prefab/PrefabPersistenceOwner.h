@@ -38,8 +38,9 @@ namespace Horo::Prefab {
 
     /** @brief Exact receipt-qualified lookup result from the same bounded Save inventory. */
     struct PrefabPersistentLookup final {
-        std::vector<Runtime::EntityRef> entities;
+        std::vector<Runtime::EntityRef> entities; /**< Live members in cooked order, starting with the live root. */
         std::shared_ptr<IPrefabPersistencePublication> publication;
+        std::vector<CookedPrefabProvenance> provenance; /**< Verified authored identity aligned with each live entity. */
     };
 
     /** @brief Existing host Save identity owner explicitly admitted to one Scene;
@@ -69,7 +70,8 @@ namespace Horo::Prefab {
             std::span<const Assets::AssetId> lineage, std::string_view creator) = 0;
         /** @brief Resolves one live occurrence only after exact stable creator authorization.
          * @param instance Durable occurrence. @param creator Actual current admitted module principal.
-         * @return Current exact member incarnations plus their original receipt publication lease, or typed denial/stale/tombstone failure.
+         * @return Current exact live member incarnations and matching immutable recipe provenance together with the original
+         * receipt publication lease, or typed denial/stale/tombstone failure.
          */
         [[nodiscard]] virtual Result<PrefabPersistentLookup> Lookup(Runtime::SavePrefabInstanceId instance,
                                                                     std::string_view creator) const = 0;

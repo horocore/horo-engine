@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <functional>
 #include <limits>
+#include <set>
 #include <thread>
 
 namespace Horo::Prefab::Detail {
@@ -27,7 +28,17 @@ namespace Horo::Prefab::Detail {
         struct SourceMember final {
             CookedPrefabProvenance provenance;
             std::size_t entitySlot{};
+
+            /** @brief Returns the full source address used for immutable lookup. */
+            [[nodiscard]] const PrefabObjectAddress &Address() const noexcept {
+                return provenance.sourceObject;
+            }
         };
+
+        /** @brief Canonicalizes the lookup table independently of cooked group order. */
+        void SortMembers() {
+            std::ranges::sort(members, {}, &SourceMember::Address);
+        }
 
         std::vector<SourceMember> members;
         std::shared_ptr<IPrefabPersistencePublication> persistence;
@@ -271,19 +282,57 @@ namespace Horo::Prefab::Detail {
                                       std::string_view creator) const {
             if (auto valid = Check(); valid.HasError())
                 return Result<PrefabInstance>::Failure(valid.ErrorValue());
-            if (revocation.IsCancellationRequested() || !persistence)
+            const auto inventory = persistence;
+            if (revocation.IsCancellationRequested() || !inventory)
                 return Result<PrefabInstance>::Failure(MakeError(PrefabErrors::AdmissionRejected));
-            auto found = persistence->Lookup(instance, creator);
+            auto found = inventory->Lookup(instance, creator);
             if (found.HasError())
                 return Result<PrefabInstance>::Failure(found.ErrorValue());
-            auto state = std::make_shared<PrefabInstanceState>();
-            state->identity = identity;
-            state->scope = scope;
-            state->entities = found.Value().entities;
-            state->persistence = found.Value().publication;
-            PrefabInstance handle;
-            handle.state_ = std::move(state);
-            return Result<PrefabInstance>::Success(std::move(handle));
+            if (auto valid = Check(); valid.HasError())
+                return Result<PrefabInstance>::Failure(valid.ErrorValue());
+            if (revocation.IsCancellationRequested())
+                return Result<PrefabInstance>::Failure(MakeError(PrefabErrors::Cancelled));
+            return RebindPersistent(std::move(found).Value(), instance, scope);
+        }
+
+        /** @brief Validates exact live entity and provenance evidence before exposing a reacquired group. */
+        Result<PrefabInstance> RebindPersistent(PrefabPersistentLookup lookup, const Runtime::SavePrefabInstanceId instance,
+                                                const std::uint64_t scope) const {
+            using Return = Result<PrefabInstance>;
+            const auto count = lookup.entities.size();
+            if (count == 0 || count != lookup.provenance.size() || count > provider->LimitProfile().Policy().maximumObjectCount ||
+                !lookup.publication || lookup.publication->InstanceIdentity() != instance)
+                return Return::Failure(MakeError(PrefabErrors::AdmissionRejected));
+            const auto view = scenes->ActiveScene();
+            if (!view || view->RuntimeId() != scene)
+                return Return::Failure(MakeError(PrefabErrors::SceneUnavailable));
+            try {
+                auto state = std::make_shared<PrefabInstanceState>();
+                state->identity = identity;
+                state->scope = scope;
+                state->ownerScene = *view;
+                state->entities = std::move(lookup.entities);
+                state->persistence = std::move(lookup.publication);
+                state->members.reserve(count);
+                std::set<Runtime::EntityRef> seen;
+                for (std::size_t slot = 0; slot < count; ++slot) {
+                    const auto &provenance = lookup.provenance[slot];
+                    const auto entity = state->entities[slot];
+                    if (!provenance.sourceAsset.IsValid() || provenance.sourceDigest == Sha256Digest{} || !seen.insert(entity).second)
+                        return Return::Failure(MakeError(PrefabErrors::CookArtifactInvalid));
+                    if (auto member = view->Get(entity); member.HasError())
+                        return Return::Failure(std::move(member).ErrorValue());
+                    state->members.push_back({provenance, slot});
+                }
+                state->SortMembers();
+                if (std::ranges::adjacent_find(state->members, {}, &PrefabInstanceState::SourceMember::Address) != state->members.end())
+                    return Return::Failure(MakeError(PrefabErrors::CookArtifactInvalid));
+                PrefabInstance handle;
+                handle.state_ = std::move(state);
+                return Return::Success(std::move(handle));
+            } catch (const std::bad_alloc &) {
+                return Return::Failure(MakeError(PrefabErrors::ExpansionCacheAllocationFailed));
+            }
         }
 
         /** @brief Retains the admitted request only after its real asynchronous load is accepted. */
@@ -418,9 +467,7 @@ namespace Horo::Prefab::Detail {
                 sourceMembers.reserve(entities.size());
                 for (std::size_t slot = 0; slot < entities.size(); ++slot)
                     sourceMembers.push_back({entities[slot].provenance, slot});
-                std::ranges::sort(sourceMembers, {}, [](const auto &member) -> const PrefabObjectAddress & {
-                    return member.provenance.sourceObject;
-                });
+                operation.prepared->SortMembers();
                 if (auto staged = StagePersistence(operation, projected.Value().components); staged.HasError())
                     return staged;
                 auto projection = std::move(projected).Value();

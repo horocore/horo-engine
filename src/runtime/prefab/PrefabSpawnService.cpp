@@ -136,9 +136,7 @@ namespace Horo::Prefab {
             return Return::Failure(MakeError(PrefabErrors::SceneUnavailable));
         if (const auto valid = scene.Get(root); valid.HasError())
             return Return::Failure(valid.ErrorValue());
-        const auto member = std::ranges::lower_bound(state_->members, address, {}, [](const auto &entry) -> const PrefabObjectAddress & {
-            return entry.provenance.sourceObject;
-        });
+        const auto member = std::ranges::lower_bound(state_->members, address, {}, &Detail::PrefabInstanceState::SourceMember::Address);
         if (member == state_->members.end() || member->provenance.sourceObject != address)
             return Return::Failure(MakeError(PrefabErrors::AddressInvalid));
         const auto entity = state_->entities[member->entitySlot];
