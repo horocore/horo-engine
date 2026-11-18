@@ -276,6 +276,18 @@ namespace Horo::Application::Internal {
         return world ? world->WorldOrigin() : std::nullopt;
     }
 
+    /** @copydoc CaptureHeadlessWorldRenderGeometry */
+    Result<HeadlessWorldRenderPacket> CaptureHeadlessWorldRenderGeometry(const Network::INetworkModeService &service,
+                                                                         const Runtime::SceneObjectId camera,
+                                                                         std::span<const Runtime::SceneObjectId> meshes,
+                                                                         Runtime::PrimitiveMeshCache &primitives,
+                                                                         Render::RenderOriginSceneAdapter &renderer) {
+        const auto *world = dynamic_cast<const WorldService *>(&service);
+        if (!world)
+            return Result<HeadlessWorldRenderPacket>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
+        return world->CaptureWorldRenderGeometry(camera, meshes, primitives, renderer);
+    }
+
     std::optional<Runtime::EntityRef> InspectHeadlessAnimationEntity(const Network::INetworkModeService &service,
                                                                      Runtime::SceneObjectId object) noexcept {
         const auto *world = dynamic_cast<const WorldService *>(&service);

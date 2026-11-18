@@ -307,6 +307,59 @@ namespace Horo::Application::Internal {
                                                    {MaximumCellBytes, MaximumCellBytes, {65536, MaximumCells, MaximumCellBytes}},
                                                    cancellation);
         }
+
+        struct AnchoredGeometryEntity final {
+            Runtime::RuntimeEntityView entity;
+            const Runtime::SceneCellWorldAnchor &anchor;
+        };
+
+        /** @brief Matches an actual baseline entity generation with its immutable, independently authored global position. */
+        Result<AnchoredGeometryEntity> FindAnchoredGeometryEntity(const Runtime::RuntimeSceneView &scene,
+                                                                  const Runtime::SceneBaselineAttachmentView &baseline,
+                                                                  std::span<const Runtime::SceneCellWorldAnchor> anchors,
+                                                                  std::span<const Math::Vec3> initialLocalPositions,
+                                                                  const Runtime::SceneObjectId object) {
+            using Output = Result<AnchoredGeometryEntity>;
+            const auto anchor = std::ranges::lower_bound(anchors, object, {}, &Runtime::SceneCellWorldAnchor::object);
+            const auto entity = scene.Find(object);
+            if (anchor == anchors.end() || anchor->object != object || !entity ||
+                std::ranges::find(baseline.entities, entity->entity) == baseline.entities.end())
+                return Output::Failure(
+                    MakeError(WS::WorldArtifactErrors::Unsupported, "The selected cell object has no exact mounted World anchor."));
+            const auto live = scene.Get(*entity);
+            if (live.HasError())
+                return Output::Failure(live.ErrorValue());
+            if (live.Value().parent)
+                return Output::Failure(MakeError(WS::WorldArtifactErrors::Unsupported, "Mounted geometry requires root transforms."));
+            if (live.Value().localTransform->translation != initialLocalPositions[static_cast<std::size_t>(anchor - anchors.begin())])
+                return Output::Failure(
+                    MakeError(WS::WorldArtifactErrors::Stale, "The live object moved without a new canonical World position."));
+            return Output::Success(AnchoredGeometryEntity{live.Value(), *anchor});
+        }
+
+        /** @brief Keeps conversion from wire representation to the canonical position explicit and exact. */
+        Math::WorldCoordinate64 Global(const std::array<std::int64_t, 3> &position) noexcept {
+            return Math::WorldCoordinate64::FromMillimeters(position[0], position[1], position[2]);
+        }
+
+        /** @brief Joins live camera optics and up orientation to independent exact global look endpoints. */
+        Result<Render::RenderOriginCamera> CameraFor(const AnchoredGeometryEntity &source) {
+            using Output = Result<Render::RenderOriginCamera>;
+            const auto &camera = source.entity.components->camera;
+            if (!camera || !camera->enabled || !source.anchor.cameraTargetMillimeters)
+                return Output::Failure(
+                    MakeError(WS::WorldArtifactErrors::Unsupported, "An enabled camera and exact World look target are required."));
+            auto up = source.entity.localTransform->rotation.TryRotate({0.0F, 1.0F, 0.0F});
+            if (up.HasError())
+                return Output::Failure(up.ErrorValue());
+            const auto kind = camera->projection == Runtime::CameraProjection::Perspective ? Render::RenderProjectionKind::Perspective
+                                                                                           : Render::RenderProjectionKind::Orthographic;
+            return Output::Success(
+                {Global(source.anchor.positionMillimeters),
+                 Global(*source.anchor.cameraTargetMillimeters),
+                 up.Value(),
+                 {kind, camera->verticalFieldOfViewRadians, camera->orthographicHeight, camera->nearPlane, camera->farPlane}});
+        }
     }  // namespace
 
     struct HeadlessWorldMount::State final {
@@ -327,6 +380,7 @@ namespace Horo::Application::Internal {
             Runtime::SceneInstanceAddress address;
             Runtime::SceneCellPayloadIdentity identity;
             std::vector<Runtime::SceneCellWorldAnchor> anchors;
+            std::vector<Math::Vec3> initialLocalPositions;
         };
 
         std::optional<ActiveCell> activeCell;
@@ -492,7 +546,12 @@ namespace Horo::Application::Internal {
         const Runtime::SceneInstanceAddress address{parent->RuntimeId(), selected.occurrence, selected.definition,
                                                     Runtime::SceneInstanceMode::Streamed};
         const auto authored = payload->WorldAnchors();
-        State::ActiveCell active{fence, address, identity, {authored.begin(), authored.end()}};
+        State::ActiveCell active{fence, address, identity, {authored.begin(), authored.end()}, std::vector<Math::Vec3>(authored.size())};
+        for (const auto &entity : payload->Definition().Entities()) {
+            const auto anchor = std::ranges::lower_bound(authored, entity.object, {}, &Runtime::SceneCellWorldAnchor::object);
+            if (anchor != authored.end() && anchor->object == entity.object)
+                active.initialLocalPositions[static_cast<std::size_t>(anchor - authored.begin())] = entity.localTransform.translation;
+        }
         const Runtime::SceneCellAttachmentRequest request{.runtime = address.parent,
                                                           .fence = fence,
                                                           .registry = parent->AssetRegistryRevision(),
@@ -544,7 +603,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc HeadlessWorldMount::Anchors */
     std::span<const Runtime::SceneCellWorldAnchor> HeadlessWorldMount::Anchors(const Runtime::RuntimeSceneView &parent) const noexcept {
-        if (!state_->activeCell || !parent.IsCurrent())
+        if (!parent.IsCurrent() || !state_->activeCell)
             return {};
         const auto current = state_->scene.ActiveScene();
         const auto &active = *state_->activeCell;
@@ -552,6 +611,96 @@ namespace Horo::Application::Internal {
             !Runtime::FindStreamedSceneInstance(parent, active.address, active.identity, active.fence.epoch))
             return {};
         return active.anchors;
+    }
+
+    /** @copydoc HeadlessWorldMount::CaptureGeometry */
+    Result<HeadlessWorldRenderPacket> HeadlessWorldMount::CaptureGeometry(const Runtime::RuntimeSceneView &parent,
+                                                                          const Runtime::SceneObjectId camera,
+                                                                          const std::span<const Runtime::SceneObjectId> meshes,
+                                                                          Runtime::PrimitiveMeshCache &primitives,
+                                                                          Render::RenderOriginSceneAdapter &renderer) const {
+        using Output = Result<HeadlessWorldRenderPacket>;
+        constexpr std::size_t MaximumSelectedMeshes = 64;
+        if (meshes.size() > MaximumSelectedMeshes)
+            return Output::Failure(MakeError(WS::WorldArtifactErrors::CapacityExceeded));
+        if (!camera.IsValid() || !std::ranges::is_sorted(meshes) || std::ranges::adjacent_find(meshes) != meshes.end())
+            return Output::Failure(
+                MakeError(WS::WorldArtifactErrors::Invalid, "World geometry requires explicit unique ordered object identities."));
+        if (!parent.IsCurrent())
+            return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale));
+        const auto current = state_->scene.ActiveScene();
+        if (!current || !parent.SameIncarnation(*current))
+            return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale));
+        const auto anchors = Anchors(parent);
+        if (anchors.empty())
+            return Output::Failure(
+                MakeError(WS::WorldArtifactErrors::Unsupported, "No canonical World positions are published for this selected cell."));
+        if (!renderer.UsesOrigin(Origin()))
+            return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale, "The renderer belongs to another World origin."));
+
+        const auto &active = *state_->activeCell;
+        const auto baseline = Runtime::FindStreamedSceneInstance(parent, active.address, active.identity, active.fence.epoch);
+        if (!baseline)
+            return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale));
+        const auto lookup = [&](const Runtime::SceneObjectId object) {
+            return FindAnchoredGeometryEntity(parent, *baseline, anchors, active.initialLocalPositions, object);
+        };
+        const auto cameraEntity = lookup(camera);
+        if (cameraEntity.HasError())
+            return Output::Failure(cameraEntity.ErrorValue());
+        const auto originCamera = CameraFor(cameraEntity.Value());
+        if (originCamera.HasError())
+            return Output::Failure(originCamera.ErrorValue());
+
+        std::vector<Runtime::PrimitiveMeshLease> leases;
+        std::vector<Render::RenderMeshResourceView> resources;
+        std::vector<Render::RenderOriginInstance> instances;
+        leases.reserve(meshes.size());
+        resources.reserve(meshes.size());
+        instances.reserve(meshes.size());
+        for (const auto object : meshes) {
+            const auto placed = lookup(object);
+            if (placed.HasError())
+                return Output::Failure(placed.ErrorValue());
+            const auto &entity = placed.Value().entity;
+            if (!*entity.primitiveMesh)
+                return Output::Failure(
+                    MakeError(WS::WorldArtifactErrors::Unsupported, "The selected World object has no admitted procedural mesh."));
+            auto acquired = primitives.Acquire(**entity.primitiveMesh);
+            if (acquired.HasError())
+                return Output::Failure(acquired.ErrorValue());
+            auto lease = std::move(acquired).Value();
+            const Render::RenderMeshSourceHandle handle{lease.Id(), 1};
+            const auto &resource = lease.Data();
+            if (std::ranges::find(resources, handle, &Render::RenderMeshResourceView::handle) == resources.end()) {
+                resources.emplace_back(handle, resource.vertices, resource.indices, resource.localBounds);
+                leases.push_back(std::move(lease));
+            }
+            auto transform = *entity.localTransform;
+            transform.translation = {};
+            auto basis = transform.TryToMatrix();
+            if (basis.HasError())
+                return Output::Failure(basis.ErrorValue());
+            instances.emplace_back(Global(placed.Value().anchor.positionMillimeters),
+                                   Render::RenderStaticMeshInstance{handle, basis.Value(), resource.localBounds});
+        }
+
+        auto frame = renderer.Capture({originCamera.Value(), instances, {}, parent.RuntimeId().value});
+        if (frame.HasError())
+            return Output::Failure(frame.ErrorValue());
+        return Output::Success(HeadlessWorldRenderPacket{parent, std::move(frame).Value(), std::move(leases), std::move(resources)});
+    }
+
+    HeadlessWorldRenderPacket::HeadlessWorldRenderPacket(Runtime::RuntimeSceneView parent, Render::RenderOriginFrame frame,
+                                                         std::vector<Runtime::PrimitiveMeshLease> leases,
+                                                         std::vector<Render::RenderMeshResourceView> resources) noexcept
+        : parent_(std::move(parent)), frame_(std::move(frame)), leases_(std::move(leases)), resources_(std::move(resources)) {}
+
+    /** @copydoc HeadlessWorldRenderPacket::Scene */
+    Result<Render::RenderSceneView> HeadlessWorldRenderPacket::Scene() const {
+        if (!parent_.IsCurrent())
+            return Result<Render::RenderSceneView>::Failure(MakeError(WS::WorldArtifactErrors::Stale));
+        return frame_.Scene(resources_);
     }
 
     HeadlessWorldMount::HeadlessWorldMount(std::unique_ptr<State> state) noexcept : state_(std::move(state)) {}

@@ -107,6 +107,12 @@ namespace Horo::Render {
         [[nodiscard]] Result<std::unique_ptr<WorldStreaming::IOriginRebasePreparedParticipant>> Prepare(
             const WorldStreaming::OriginRebaseEvent &event) noexcept override;
 
+        /** @brief Checks the mounted World producer before a host submits canonical positions.
+         * @param origin Owner that supplied the placements.
+         * @return True only for this adapter's current bound OriginFrameOwner.
+         */
+        [[nodiscard]] bool UsesOrigin(const WorldStreaming::OriginFrameOwner &origin) const noexcept;
+
         /** @brief Projects one complete camera/instance/light set from the same committed origin.
          * @param source Canonical immutable source and finite resource spans.
          * @return Owned frame or typed capacity, range, stale or malformed input failure.

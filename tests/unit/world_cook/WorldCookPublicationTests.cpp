@@ -249,7 +249,15 @@ namespace Horo::WorldCook {
         using namespace Application::Internal;
         const bool hasHardDependency = GENERATE(false, true);
         Fixture fixture{false, hasHardDependency};
-        const std::array anchors{S::SceneCellWorldAnchor{{11}, {9'007'199'254'740'993, -500, 180}, {}}};
+        constexpr std::array<std::int64_t, 3> cameraPosition{9'007'199'254'740'993, -500, 180};
+        constexpr std::array<std::int64_t, 3> cameraTarget{9'007'199'254'741'993, -500, 180};
+        const std::array anchors{S::SceneCellWorldAnchor{{11}, cameraPosition, cameraTarget}};
+        auto &cameraEntity = fixture.entities.front();
+        cameraEntity.components.camera = S::CameraComponent{};
+        cameraEntity.primitiveMesh = S::PrimitiveMeshDescriptor::Defaults(S::PrimitiveMeshType::Box);
+        cameraEntity.localTransform = {{100.0F, 200.0F, 300.0F},
+                                       Math::Quaternion::FromAxisAngle({0.0F, 1.0F, 0.0F}, 0.5F),
+                                       {2.0F, 3.0F, 4.0F}};
         fixture.inputs.front().source.worldAnchors = anchors;
         const auto published = fixture.Publish();
         REQUIRE(published.HasValue());
@@ -262,7 +270,8 @@ namespace Horo::WorldCook {
                                                published.Value().publication->manifestDigest,
                                                release.indexArtifact,
                                                release.dependencyArtifact,
-                                               {},
+                                               Math::WorldCoordinate64::FromMillimeters(cameraPosition[0], cameraPosition[1],
+                                                                                        cameraPosition[2]),
                                                request};
 
         S::RuntimeSceneService parent{S::SceneRuntimeId{101}};
@@ -308,10 +317,52 @@ namespace Horo::WorldCook {
             CHECK(mount->Anchors({}).empty());
             CHECK_FALSE(S::FindStreamedSceneInstance(*live, address, selected, IdentityFrom<W::PartitionEpoch>(6)));
             CHECK(mount->ActivateInitialCell(request, boundary).HasError());
+
+            const W::OriginRebaseParticipantRequirement participant{IdentityFrom<W::OriginRebaseParticipantId>(1),
+                                                                    IdentityFrom<W::OriginRebaseParticipantRevision>(1)};
+            S::PrimitiveMeshCache primitives;
+            auto foreign = W::OriginFrameOwner::Create(lease.Get().Value()).Value();
+            auto wrongRenderer = Render::RenderOriginSceneAdapter::Create(*foreign, {1}, participant, {2, 1, 1}).Value();
+            auto renderer = Render::RenderOriginSceneAdapter::Create(mount->Origin(), {2}, participant, {2, 1, 1}).Value();
+            const std::array drawObjects{cameraEntity.object};
+            W::TestSupport::RequireError(mount->CaptureGeometry(*live, cameraEntity.object, drawObjects, primitives, *wrongRenderer),
+                                         W::WorldArtifactErrors::Stale);
+            W::TestSupport::RequireError(mount->CaptureGeometry(*live, {88}, drawObjects, primitives, *renderer),
+                                         W::WorldArtifactErrors::Unsupported);
+            auto rendered = mount->CaptureGeometry(*live, cameraEntity.object, drawObjects, primitives, *renderer);
+            REQUIRE(rendered.HasValue());
+            auto gameFrame = std::move(rendered).Value();
+            const auto renderScene = gameFrame.Scene();
+            REQUIRE(renderScene.HasValue());
+            REQUIRE(renderScene.Value().IsValid());
+            CHECK(renderScene.Value().camera.position == Math::Vec3{});
+            CHECK(renderScene.Value().camera.target.x == 1.0F);
+            CHECK(renderScene.Value().camera.target.y == 0.0F);
+            REQUIRE(renderScene.Value().meshResources.size() == 1);
+            REQUIRE(renderScene.Value().instances.size() == 1);
+            auto expectedTransform = cameraEntity.localTransform;
+            expectedTransform.translation = {};
+            CHECK(renderScene.Value().instances.front().localToWorld == expectedTransform.ToMatrix());
+            CHECK_FALSE(renderScene.Value().meshResources.front().vertices.empty());
+
+            const auto liveEntity = live->Find(cameraEntity.object);
+            REQUIRE(liveEntity);
+            S::SceneCommandBuffer changed;
+            auto moved = cameraEntity.localTransform;
+            moved.translation.x += 1.0F;
+            changed.SetLocalTransform(*liveEntity, moved);
+            REQUIRE(parent.QueueStructuralCommands(std::move(changed)).HasValue());
+            REQUIRE(parent.OnPhase(S::RuntimePhase::CommitDeferredLifecycleChanges, {.frameNumber = 2}).HasValue());
+            REQUIRE(parent.ActiveScene());
+            W::TestSupport::RequireError(mount->CaptureGeometry(*parent.ActiveScene(), cameraEntity.object, drawObjects, primitives,
+                                                                *renderer),
+                                         W::WorldArtifactErrors::Stale);
+            renderer->Shutdown();
             mount.reset();
             CHECK_FALSE(parent.ActiveScene());
             CHECK_FALSE(live->IsCurrent());
             CHECK(lease.Get().HasError());
+            CHECK(gameFrame.Scene().HasError());
         }
     }
 

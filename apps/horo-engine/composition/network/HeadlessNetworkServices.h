@@ -16,6 +16,14 @@
 #include <functional>
 #include <memory>
 
+namespace Horo::Render {
+    class RenderOriginSceneAdapter;
+}
+
+namespace Horo::Runtime {
+    class PrimitiveMeshCache;
+}
+
 namespace Horo::Vfx {
     struct VfxExtractionOutcome;
 }
@@ -24,6 +32,7 @@ namespace Horo::Application::Internal {
     struct ProjectSceneNavigationSelection;
     struct HeadlessPerceptionPolicy;
     struct HeadlessWorldSelection;
+    class HeadlessWorldRenderPacket;
 
     /** @brief Selects the sole descriptor authority for an authored Perception policy. */
     enum class HeadlessPerceptionProvider {
@@ -137,6 +146,20 @@ namespace Horo::Application::Internal {
      * @param service Actual headless Scene owner. @return Generation lease when the selected mount is active.
      */
     [[nodiscard]] std::optional<WorldStreaming::OriginFrameLease> InspectHeadlessWorldOrigin(const Network::INetworkModeService &service);
+
+    /** @brief Captures an exact active World camera and procedural geometry on the standalone Scene owner lane.
+     * @param service Actual headless Scene service.
+     * @param camera Exact mounted object with an authored camera target.
+     * @param meshes Required mounted procedural object identities in ascending order.
+     * @param primitives Existing CPU primitive cache.
+     * @param renderer Exact mounted World's portable renderer adapter.
+     * @return Owned packet or typed failure. The private HeadlessWorldMount header defines the owning packet type.
+     */
+    [[nodiscard]] Result<HeadlessWorldRenderPacket> CaptureHeadlessWorldRenderGeometry(const Network::INetworkModeService &service,
+                                                                                       Runtime::SceneObjectId camera,
+                                                                                       std::span<const Runtime::SceneObjectId> meshes,
+                                                                                       Runtime::PrimitiveMeshCache &primitives,
+                                                                                       Render::RenderOriginSceneAdapter &renderer);
 
     /** @brief Reads the already-bound native path scope on its owner lane, when explicitly selected. */
     [[nodiscard]] std::shared_ptr<const Gameplay::GameplayNavigationContext> InspectHeadlessNavigationContext(

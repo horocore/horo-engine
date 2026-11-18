@@ -282,6 +282,17 @@ and commits only at the post-simulation safe point. Cancellation rolls back
 prepared receipts and expires leases before the host retires the registry.
 Compositions without a canonical runtime mount do not provide an origin.
 
+The standalone mounted Scene exposes a cold render capture for an explicit
+camera and a bounded ordered list of procedural draw objects from the same
+active baseline. The capture resolves current entity generations against the
+attached cell occurrence. It requires an authored camera target and exact
+global coordinates for every selected draw. The existing CPU primitive cache
+pins actual render resources. Local rotation and scale form the draw basis.
+A local translation change withdraws capture until a fresh World position
+publication exists. Renderer projection also requires the same mounted
+`OriginFrameOwner`. Prepared packet reads reject a retired Scene or old
+renderer origin.
+
 ### 2. Two-Phase Rebasing Execution Flow
 
 ```text

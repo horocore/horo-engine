@@ -214,6 +214,11 @@ namespace Horo::Render {
         }
     }
 
+    /** @copydoc RenderOriginSceneAdapter::UsesOrigin */
+    bool RenderOriginSceneAdapter::UsesOrigin(const WS::OriginFrameOwner &origin) const noexcept {
+        return state_->UsesOwnerLane() && state_->active && state_->source == &origin && origin.IsActive();
+    }
+
     /** @copydoc RenderOriginSceneAdapter::Capture */
     Result<RenderOriginFrame> RenderOriginSceneAdapter::Capture(const RenderOriginSceneSource &source) {
         if (!state_->UsesOwnerLane() || !state_->active)

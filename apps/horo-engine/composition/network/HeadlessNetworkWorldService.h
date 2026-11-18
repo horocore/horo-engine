@@ -7,6 +7,7 @@
 #include "HeadlessNetworkWorldOwners.h"
 #include "HeadlessPerceptionPolicy.h"
 #include "Horo/AI/AIErrors.h"
+#include "Horo/WorldStreaming/WorldArtifactErrors.h"
 
 namespace Horo::Application::Internal::HeadlessNetworkDetail {
     class WorldService final : public Network::INetworkModeService {
@@ -61,6 +62,17 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             if (lease.HasError())
                 return {};
             return std::move(lease).Value();
+        }
+
+        /** @brief Captures only geometry from the exact active mounted Scene service on this lane. */
+        Result<HeadlessWorldRenderPacket> CaptureWorldRenderGeometry(const Runtime::SceneObjectId camera,
+                                                                     std::span<const Runtime::SceneObjectId> meshes,
+                                                                     Runtime::PrimitiveMeshCache &primitives,
+                                                                     Render::RenderOriginSceneAdapter &renderer) const {
+            const auto scene = ActiveScene();
+            if (!scene || request_.service != Network::NetworkModeServiceKind::Scene || !record_->mountedWorld)
+                return Result<HeadlessWorldRenderPacket>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
+            return record_->mountedWorld->CaptureGeometry(*scene, camera, meshes, primitives, renderer);
         }
 
         std::optional<Runtime::EntityRef> AnimationEntity(Runtime::SceneObjectId object) const noexcept {
