@@ -342,6 +342,9 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
             if (observed.HasValue() && input_.gazeAllowed)
                 gaze = std::move(observed).Value();
+            else if (observed.HasError() &&
+                     ErrorChainContains(observed.ErrorValue(), XRErrors::PermissionDenied.domain, XRErrors::PermissionDenied.code))
+                RevokeEyeGaze();
         }
         const auto appended =
             AppendPreparedInput({poses.Value(), actions.Value(), state, time.Value(), origin, bindingRevision, handSample.Value()},

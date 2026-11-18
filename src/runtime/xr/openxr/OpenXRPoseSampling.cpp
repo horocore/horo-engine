@@ -12,6 +12,11 @@ namespace Horo::XR::OpenXRInternal {
                              std::format("OpenXR {} failed; native result={}", phase, static_cast<std::int32_t>(result)));
         }
 
+        /** @brief Projects explicit platform denial without admitting any gaze payload. */
+        Error GazeFailure(const char *phase, const XrResult result) {
+            return result == XR_ERROR_PERMISSION_INSUFFICIENT ? MakeError(XRErrors::PermissionDenied) : PoseFailure(phase, result);
+        }
+
         /** @brief Maps native validity independently; absent components are never replaced by default transforms. */
         XRPoseComponents Components(const XrSpaceLocation &location, const XrSpaceVelocity &velocity) {
             using enum Horo::XR::XRPoseComponentValidity;
@@ -155,7 +160,7 @@ namespace Horo::XR::OpenXRInternal {
         XrActionStatePose state{XR_TYPE_ACTION_STATE_POSE};
         const auto queried = dispatch_.poseState(native_.session, &info, &state);
         if (queried != XR_SUCCESS)
-            return Outcome::Failure(PoseFailure("query gaze activity", queried));
+            return Outcome::Failure(GazeFailure("query gaze activity", queried));
         if (state.type != XR_TYPE_ACTION_STATE_POSE || state.next || state.isActive > XR_TRUE)
             return Outcome::Failure(MakeError(XRErrors::TrackingSnapshotInvalid));
         if (state.isActive == XR_FALSE)
@@ -167,7 +172,7 @@ namespace Horo::XR::OpenXRInternal {
         XrSpaceLocation location{XR_TYPE_SPACE_LOCATION, &sampleTime};
         const auto located = dispatch_.locate(tracking_.gazeSpace, tracking_.base, cutoff.runtimeSample.Nanoseconds(), &location);
         if (located != XR_SUCCESS)
-            return Outcome::Failure(PoseFailure("locate gaze space", located));
+            return Outcome::Failure(GazeFailure("locate gaze space", located));
         if (sampleTime.type != XR_TYPE_EYE_GAZE_SAMPLE_TIME_EXT || sampleTime.next)
             return Outcome::Failure(MakeError(XRErrors::PoseInvalid));
         if (auto valid = ValidateLocation(location, &sampleTime); valid.HasError())

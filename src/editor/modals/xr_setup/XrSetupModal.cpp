@@ -176,6 +176,7 @@ namespace Horo::Editor {
     }
 
     Result<void> XrSetupModal::OnOpen(EditorModalContext &) {
+        gazeRejected_ = false;
         return Result<void>::Success();
     }
 

@@ -839,6 +839,9 @@ namespace Horo::Tests::OpenXRApplication {
         if (grant) {
             RequireValue(preview.ArmEyeGaze());
             CHECK(preview.ReadEyeGazeState() == Armed);
+            preview.RevokeEyeGaze();
+            CHECK(preview.ReadEyeGazeState() == Ready);
+            RequireValue(preview.ArmEyeGaze());
         }
         auto scene = ActivatePlay(fixture, std::nullopt);
         REQUIRE((fixture.script.actions.gaze.action != XR_NULL_HANDLE) == grant);
@@ -869,13 +872,23 @@ namespace Horo::Tests::OpenXRApplication {
             if (source.locationReads == 0)
                 FAIL("Consented gaze did not reach the native owner.");
             const auto reads = source.locationReads;
-            fixture.script.events.Push(XR_SESSION_STATE_VISIBLE);
-            fixture.script.events.Push(XR_SESSION_STATE_FOCUSED);
-            RequireValue(fixture.play->PollEvents());
-            CHECK_FALSE(fixture.play->ReadEyeGaze());
-            CHECK_FALSE(sample());
-            CHECK_FALSE(sample());
-            CHECK(source.locationReads == reads);
+            SECTION("focus interruption revokes even when the same event batch restores focus") {
+                fixture.script.events.Push(XR_SESSION_STATE_VISIBLE);
+                fixture.script.events.Push(XR_SESSION_STATE_FOCUSED);
+                RequireValue(fixture.play->PollEvents());
+                CHECK_FALSE(fixture.play->ReadEyeGaze());
+                CHECK_FALSE(sample());
+                CHECK_FALSE(sample());
+                CHECK(source.locationReads == reads);
+            }
+            SECTION("platform denial withdraws the grant for the remainder of Play") {
+                source.poseResult = XR_ERROR_PERMISSION_INSUFFICIENT;
+                CHECK_FALSE(sample());
+                CHECK(preview.ReadEyeGazeState() == Unavailable);
+                source.poseResult = XR_SUCCESS;
+                CHECK_FALSE(sample());
+                CHECK(source.locationReads == reads);
+            }
         } else {
             CHECK(source.locationReads == 0);
         }

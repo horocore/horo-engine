@@ -72,6 +72,7 @@ namespace Horo::Tests::OpenXRAction {
             XrSpace space{XR_NULL_HANDLE};
             XrTime sampleTime{};
             XrBool32 active{XR_TRUE};
+            XrResult poseResult{XR_SUCCESS};
             unsigned locationReads{};
         } gaze;
 
@@ -292,7 +293,8 @@ namespace Horo::Tests::OpenXRAction {
             if (info->action == active->gaze.action) {
                 REQUIRE(info->subactionPath == XR_NULL_PATH);
                 state->isActive = active->gaze.active;
-                return Script::Record("sample-gaze");
+                const auto result = Script::Record("sample-gaze");
+                return result == XR_SUCCESS ? active->gaze.poseResult : result;
             }
             REQUIRE(info->subactionPath != XR_NULL_PATH);
             const auto result = Script::Record("sample-pose");

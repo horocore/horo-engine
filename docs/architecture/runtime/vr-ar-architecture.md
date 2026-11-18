@@ -809,8 +809,9 @@ failure states.
   the dedicated gaze pose with the reported OpenXR sample time. The owner
   requires both components tracked and at most 50 ms old for pointing.
   It requests no velocity, retains one current pose privately, and projects
-  only redacted status to Setup. Pause, focus interruption, explicit
-  revocation and session retirement discard the grant and current pose.
+  only redacted status to Setup. Pause, focus interruption, platform
+  permission denial, explicit revocation and session retirement discard the
+  grant and current pose.
 - Persistent anchors identify localization state and failure; they do not imply
   that every runtime supports cross-session restore.
 - Renderer consumes admitted passthrough/composition descriptors without owning
