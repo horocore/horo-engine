@@ -906,7 +906,7 @@ namespace Horo::Tests::OpenXRApplication {
         const auto currentActions = fixture.router.Actions();
         const std::vector<Input::ActionDescriptor> original(currentActions.begin(), currentActions.end());
         auto mismatched = original;
-        mismatched.front().id = Input::ActionId{"other"};
+        mismatched.front().required = !mismatched.front().required;
         REQUIRE(fixture.router.SetActionMap(mismatched).HasValue());
         CHECK_FALSE(runCutoff().down);
         CHECK_FALSE(runCutoff().down);

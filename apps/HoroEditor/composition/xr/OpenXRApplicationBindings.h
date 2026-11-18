@@ -79,6 +79,11 @@ namespace Horo::Application::Internal {
 
         /** @brief Counts reserved scalar, pose and unique baseline vibration actions. @return Cold native preparation budget. */
         [[nodiscard]] std::size_t PreparedActionCount() const noexcept;
+        /** @brief Revalidates the unchanged signed requirements against a replacement canonical Input map.
+         * @param registeredActions Current host-owned Input registry.
+         * @return Original bounded declaration or compatibility error, without native calls or changing a binding revision.
+         */
+        [[nodiscard]] Result<void> ValidateRegisteredActions(std::span<const Input::ActionDescriptor> registeredActions) const;
 
         /** @brief Prepares real native actions on the exact unpublished session then resolves actual profile evidence.
          * @param native Same native action owner retained by the application across failure and cleanup debt.

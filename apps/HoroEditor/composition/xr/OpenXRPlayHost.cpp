@@ -314,7 +314,8 @@ namespace Horo::Application::Internal {
                     composition_.session.RetireInputProjection();
                 input_.router->BeginFrame(raw);
                 if (input_.admitted && input_.coordinator) {
-                    const auto rebound = composition_.session.RebuildInputProjection(*input_.port, *input_.coordinator);
+                    const auto rebound = composition_.session.RebuildInputProjection(*input_.port, *input_.coordinator,
+                                                                                     *composition_.bindings, input_.router->Actions());
                     if (rebound.HasError())
                         LOG_WARN("editor.xr", "Current action map cannot admit the signed XR input plan: %s",
                                  rebound.ErrorValue().code.Value().c_str());

@@ -429,12 +429,16 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRApplicationSession::RebuildInputProjection */
     Result<void> OpenXRApplicationSession::RebuildInputProjection(const Input::InputActionCollection &port,
-                                                                  const XRActionBindingCoordinator &coordinator) {
+                                                                  const XRActionBindingCoordinator &coordinator,
+                                                                  const OpenXRApplicationBindings &bindings,
+                                                                  const std::span<const Input::ActionDescriptor> registeredActions) {
         if (auto current = Current(); current.HasError())
             return current;
         if (!native_ || native_->Session() != coordinator.Session() || !input_.native || input_.projection || !input_.bindings ||
             !coordinator.Current() || *coordinator.Current() != *input_.bindings)
             return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
+        if (const auto valid = bindings.ValidateRegisteredActions(registeredActions); valid.HasError())
+            return valid;
         auto source = XRInputProjection::Create(port, coordinator.Session(), *coordinator.Current(), coordinator.Revision());
         if (source.HasError())
             return Result<void>::Failure(source.ErrorValue());

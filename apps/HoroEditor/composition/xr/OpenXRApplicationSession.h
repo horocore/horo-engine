@@ -315,10 +315,14 @@ namespace Horo::Application::Internal {
         /** @brief Rebinds the still-current signed plan to the refreshed Input port after a neutral commit.
          * @param port Refreshed context and player authority.
          * @param coordinator Exact active session binding publication.
+         * @param bindings Immutable signed product declaration used for initial admission.
+         * @param registeredActions Current canonical Input registry.
          * @return Success or a typed mismatch with the new action map.
          */
         [[nodiscard]] Result<void> RebuildInputProjection(const Input::InputActionCollection &port,
-                                                          const XR::XRActionBindingCoordinator &coordinator);
+                                                          const XR::XRActionBindingCoordinator &coordinator,
+                                                          const OpenXRApplicationBindings &bindings,
+                                                          std::span<const Input::ActionDescriptor> registeredActions);
         /** @brief Checks whether the current map admitted a semantic projection. */
         [[nodiscard]] bool HasInputProjection() const noexcept;
         /** @brief Abandons only the SAME unbound native attempt after failed pre-candidate Scene preparation.
