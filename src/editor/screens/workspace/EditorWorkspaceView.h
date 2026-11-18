@@ -144,6 +144,9 @@ namespace Horo::Editor {
         /** @brief Projects the active Blackboard schema and emits revision-fenced source commands. */
         bool DrawBlackboardDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
 
+        /** @brief Renders an already admitted immutable Environment Query source. */
+        bool DrawEnvironmentQueryDocument(const EditorWorkspaceViewModel &viewModel) const;
+
         struct BlackboardViewDraft final {
             BlackboardDocumentFence fence;
             AI::BlackboardKeyId selected;

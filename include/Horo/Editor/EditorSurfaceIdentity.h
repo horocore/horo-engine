@@ -70,6 +70,7 @@ namespace Horo::Editor {
         PCGGraph,
         Prefab,
         BlackboardSchema,
+        EnvironmentQuery,
     };
 
     /** @brief Returns the canonical persisted name of a document kind, or empty for None. */

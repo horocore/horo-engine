@@ -1,3 +1,4 @@
+#include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "WorkspacePathText.h"
 #include "editor/menu/EditorMenuPlatform.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
@@ -80,8 +81,11 @@ namespace Horo::Editor {
         if (!plan.has_value())
             return false;
 
-        auto sidecar = ReadSidecarJson(plan->sourceSidecar);
         const Assets::AssetId newId = GenerateRandomAssetId(m_assetRegistry);
+        const auto *source = m_assetRegistry.Find(plan->assetId);
+        if (source && source->type.Value() == AI::EnvironmentQuerySourceAssetType)
+            return CopyEnvironmentQuerySource(*plan, newId);
+        auto sidecar = ReadSidecarJson(plan->sourceSidecar);
         if (!sidecar.has_value() || !newId.IsValid()) {
             m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.copy_failed";
             return false;

@@ -1208,6 +1208,12 @@ namespace Horo::Editor {
         void OpenEmbeddedSequenceSource(const SourceOpenResult &result);
         /** @brief Loads or focuses an exact registry-backed Blackboard schema through the embedded workspace. */
         void OpenEmbeddedBlackboardSource(const SourceOpenResult &result);
+
+        /** @brief Opens one exact registered query source in the normal workspace. */
+        void OpenEmbeddedEnvironmentQuerySource(const SourceOpenResult &result);
+
+        /** @brief Closes the matching immutable query source tab if present. */
+        bool CloseEnvironmentQuerySource(DocumentInstanceId instance);
         /** @brief Dispatches a revision-fenced Blackboard document request. */
         bool ProcessBlackboardDocumentCommand(const EditorWorkspaceViewCommandData &cmd);
         /** @brief Submits one explicit review of a durable key without blocking the workspace draw path. */
@@ -1233,6 +1239,8 @@ namespace Horo::Editor {
         void OpenEmbeddedUiCanvasSource(const SourceOpenResult &result);
         void OpenSourceFile(const SourceOpenRequest &request);
         void OpenDiagnosticSource(const DiagnosticSourceRequest &source);
+        /** @brief Creates a registered EQS source from an explicitly selected existing query. */
+        [[nodiscard]] bool CopyEnvironmentQuerySource(const ContentBrowserAssetTransferPlan &plan, Assets::AssetId newId);
         [[nodiscard]] bool CopyContentBrowserAssetTo(const std::filesystem::path &absoluteSource,
                                                      const std::filesystem::path &absoluteDestinationDirectory);
         [[nodiscard]] std::optional<ContentBrowserAssetTransferPlan> PrepareContentBrowserAssetTransfer(

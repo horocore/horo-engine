@@ -41,6 +41,10 @@
 #include <unordered_map>
 #include <vector>
 
+namespace Horo::AI {
+    class EnvironmentQueryAsset;
+}
+
 namespace Horo::Application {
     struct TerrainAuthoringCookCompletion;
     struct TerrainAuthoringAssetCreated;
@@ -319,6 +323,14 @@ namespace Horo::Editor {
     };
 
     /** @brief Workspace-owned source lease and separate transient presentation state. */
+    /** @brief An immutable, registered Environment Query source in a normal workspace document. */
+    struct EnvironmentQueryWorkspaceDocument final {
+        DocumentIdentity identity;
+        Assets::AssetId asset;
+        Sha256Digest source;
+        std::shared_ptr<const AI::EnvironmentQueryAsset> query;
+    };
+
     struct SequenceWorkspaceDocument {
         std::shared_ptr<const SequenceDocument> source;
         SequenceTimelineState timeline;
@@ -646,6 +658,7 @@ namespace Horo::Editor {
         BottomDockMode bottomDockMode = BottomDockMode::Full;
         std::string activeDocumentPanelId = "horo.viewport";
         std::vector<SequenceWorkspaceDocument> sequenceDocuments;
+        std::vector<EnvironmentQueryWorkspaceDocument> environmentQueryDocuments;
         std::vector<BlackboardWorkspaceDocument> blackboardDocuments;
         std::vector<PCGWorkspaceDocument> pcgDocuments;
         std::vector<PCGPaletteEntry> pcgPalette;

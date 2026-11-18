@@ -4330,6 +4330,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserAssetOperations.cpp
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserSourceOperations.cpp
             editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
+            editor/screens/workspace/EditorWorkspaceEnvironmentQuery.cpp
             editor/screens/workspace/EditorWorkspaceControllerBlackboard.cpp
             editor/screens/workspace/EditorWorkspaceControllerPCG.cpp
             editor/screens/workspace/panels/inspector/UiInspectorWidgets.cpp

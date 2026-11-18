@@ -3850,6 +3850,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceControllerPrefabCreationTests.cpp
             unit/editor/EditorWorkspaceControllerSequenceTests.cpp
             unit/editor/EditorWorkspaceControllerBlackboardTests.cpp
+            unit/editor/EditorWorkspaceControllerEnvironmentQueryTests.cpp
             unit/editor/EditorWorkspaceControllerPCGTests.cpp
             unit/editor/EditorWorkspaceWorldBakeReplicationTests.cpp
             unit/editor/EditorWorkspaceWorldCompositionTests.cpp

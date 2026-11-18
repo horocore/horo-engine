@@ -35,6 +35,7 @@ namespace Horo::Editor {
         PCGGraph,
         Prefab,
         BlackboardSchema,
+        EnvironmentQuery,
     };
 
     /** @brief Caller that requested one source-open operation. */
@@ -75,6 +76,7 @@ namespace Horo::Editor {
 
         std::vector<std::string> prefabExtensions;           /**< Canonical prefab authored sources. */
         std::vector<std::string> blackboardSchemaExtensions; /**< Binary Blackboard schema source suffixes. */
+        std::vector<std::string> environmentQueryExtensions; /**< Typed Environment Query source suffixes. */
 
         /**
          * @brief Returns the default source and authored-document opening policy.

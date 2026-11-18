@@ -39,7 +39,8 @@ namespace Horo::Editor {
         if (area == WorkspaceDockArea::Document &&
             (m_uiCanvasView.Draw(viewModel, outCommand) || DrawPrefabDocument(viewModel, outCommand) ||
              DrawSourceDocument(viewModel, outCommand) || DrawNavigationDocument(viewModel) || DrawPCGDocument(viewModel, outCommand) ||
-             DrawSequenceDocument(viewModel, outCommand) || DrawBlackboardDocument(viewModel, outCommand))) {
+             DrawSequenceDocument(viewModel, outCommand) || DrawBlackboardDocument(viewModel, outCommand) ||
+             DrawEnvironmentQueryDocument(viewModel))) {
             if (panel)
                 panel->OnPresentationHidden(outCommand);
             return;
