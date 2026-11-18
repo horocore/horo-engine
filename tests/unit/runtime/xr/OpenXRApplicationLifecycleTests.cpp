@@ -1049,18 +1049,29 @@ namespace Horo::Tests::OpenXRApplication {
         auto &native = fixture.script.actions.haptic;
         native.boundCount = 1;
         REQUIRE(preview.CanPreviewHaptic(Left));
+        constexpr Editor::EditorXrHapticIntent valid{Left, 0.45F, Duration::FromMilliseconds(125)};
+        const auto requireDenial = [&](const Editor::EditorXrHapticIntent intent, const ErrorCodeDescriptor &expected) {
+            const auto denied = preview.QueueHapticPreview(intent);
+            REQUIRE(denied.HasError());
+            CHECK(denied.ErrorValue().domain.Value() == expected.domain.Value());
+            CHECK(denied.ErrorValue().code.Value() == expected.code.Value());
+        };
         CHECK_FALSE(preview.CanPreviewHaptic(Right));
-        CHECK(preview.QueueHapticPreview(Right).HasError());
-        const auto request = RequireValue(preview.QueueHapticPreview(Left));
+        requireDenial({Right, valid.amplitude, valid.duration}, XR::XRErrors::OperationUnsupported);
+        requireDenial({static_cast<Editor::EditorXrHapticHand>(255), valid.amplitude, valid.duration}, XR::XRErrors::OperationInvalid);
+        requireDenial({Left, -0.1F, valid.duration}, XR::XRErrors::OperationInvalid);
+        requireDenial({Left, valid.amplitude, Duration::FromMilliseconds(501)}, XR::XRErrors::OperationInvalid);
+        const auto request = RequireValue(preview.QueueHapticPreview(valid));
         CHECK(preview.ReadHapticPreview(request) == Queued);
-        CHECK(preview.QueueHapticPreview(Left).HasError());
+        requireDenial(valid, XR::XRErrors::CapacityExceeded);
         CHECK(native.applies == 0);
 
         SECTION("submission and cancellation retain the exact receipt") {
             fixture.play->PumpHapticPreview();
             REQUIRE(preview.ReadHapticPreview(request) == Submitted);
             CHECK(native.applies == 1);
-            CHECK(native.vibration.duration == 150'000'000);
+            CHECK(native.vibration.duration == valid.duration.ToNanoseconds());
+            CHECK(native.vibration.amplitude == valid.amplitude);
             CHECK(native.vibration.frequency == XR_FREQUENCY_UNSPECIFIED);
             preview.CancelHapticPreview({request.value + 1});
             fixture.play->PumpHapticPreview();
@@ -1082,6 +1093,7 @@ namespace Horo::Tests::OpenXRApplication {
             std::vector<Input::ActionDescriptor> replacement(registered.begin(), registered.end());
             replacement.front().required = !replacement.front().required;
             RequireValue(fixture.router.SetActionMap(replacement));
+            requireDenial(valid, XR::XRErrors::IdentityStale);
             fixture.play->PumpHapticPreview();
             CHECK(preview.ReadHapticPreview(request) == Cancelled);
             CHECK(native.applies == 0);
@@ -1098,6 +1110,14 @@ namespace Horo::Tests::OpenXRApplication {
             fixture.play->PumpHapticPreview();
             CHECK(preview.ReadHapticPreview(request) == Cancelled);
             CHECK(native.applies == 0);
+            requireDenial(valid, XR::XRErrors::OperationUnavailable);
+        }
+        SECTION("shutdown stops submitted output before releasing the native session") {
+            fixture.play->PumpHapticPreview();
+            REQUIRE(preview.ReadHapticPreview(request) == Submitted);
+            REQUIRE(RequireValue(fixture.ClosePlay()));
+            CHECK(native.stops == 1);
+            CHECK(fixture.script.native.liveSessions == 0);
         }
         fixture.scheduler->Shutdown();
         scene->Shutdown();

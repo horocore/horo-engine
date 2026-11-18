@@ -255,8 +255,16 @@ namespace Horo::Application::Internal {
          * @param session Current canonical identity. @return Original native stop error or success (including no work).
          */
         [[nodiscard]] Result<void> ProgressHapticCancellation(const XR::XRSessionId &session);
-        /** @brief Submits the app-admitted finite preview through the exact native action owner. */
-        [[nodiscard]] Result<void> SubmitHapticPreview(const XR::XRSessionId &session, XR::XRTrackedDeviceRole role, Duration duration);
+        /**
+         * @brief Submits the app-admitted finite preview through the exact native action owner.
+         * @param session Exact admitted Play session.
+         * @param role Exact admitted controller role.
+         * @param amplitude Finite normalized vibration amplitude.
+         * @param duration Positive bounded duration.
+         * @return Runtime submission evidence or the original typed failure.
+         */
+        [[nodiscard]] Result<void> SubmitHapticPreview(const XR::XRSessionId &session, XR::XRTrackedDeviceRole role, float amplitude,
+                                                       Duration duration);
         /** @brief Samples and appends the SAME prepared native source at the actual App collection cutoff.
          * @param sessions Sole canonical session authority, whose current focus gates scalar sampling.
          * @param coordinator SAME issued candidate's actual binding revision/plan owner.

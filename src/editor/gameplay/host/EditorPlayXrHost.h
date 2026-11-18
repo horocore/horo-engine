@@ -3,6 +3,7 @@
  * @brief Non-installed explicit application XR bridge for the existing workspace input and Play owners.
  */
 #include "EditorPlayState.h"
+#include "Horo/Foundation/Time.h"
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Runtime/InputCollection.h"
 
@@ -149,10 +150,19 @@ namespace Horo::Editor {
         std::array<EditorXrInspectionAction, MaximumDisplayedActions> actions{};
     };
 
-    /** @brief Owner-lane setup commands, independent of the Play adapter and of GUI or native API types. */
+    /** @brief Anatomical controller side for a scoped preview request. */
     enum class EditorXrHapticHand : std::uint8_t {
         Left,
         Right
+    };
+
+    /** @brief Bounded, backend-neutral vibration intent for the currently assigned Play controller. */
+    struct EditorXrHapticIntent final {
+        static constexpr auto MaximumDuration = Duration::FromMilliseconds(500);
+
+        EditorXrHapticHand hand;
+        float amplitude;   /**< Finite normalized amplitude in [0, 1]. */
+        Duration duration; /**< Positive and at most MaximumDuration. */
     };
 
     /** @brief Generation-safe receipt for a single operator-requested finite vibration preview. */
@@ -177,8 +187,12 @@ namespace Horo::Editor {
         virtual ~IEditorXrHapticPreview() = default;
         /** @return Whether the current player and hand have a target for the cold preview request. */
         [[nodiscard]] virtual bool CanPreviewHaptic(EditorXrHapticHand hand) const noexcept = 0;
-        /** @return The exact queued receipt or typed target, availability or capacity failure. */
-        [[nodiscard]] virtual Result<EditorXrHapticPreviewId> QueueHapticPreview(EditorXrHapticHand hand) = 0;
+        /**
+         * @brief Queues an exact target and effect for the cold application owner.
+         * @param intent Controller side and finite effect validated at admission.
+         * @return Exact receipt or a typed invalid, unsupported, unavailable, stale or capacity failure.
+         */
+        [[nodiscard]] virtual Result<EditorXrHapticPreviewId> QueueHapticPreview(EditorXrHapticIntent intent) = 0;
         /** @return Latest copied evidence for that exact receipt. */
         [[nodiscard]] virtual EditorXrHapticPreviewState ReadHapticPreview(EditorXrHapticPreviewId receipt) const noexcept = 0;
         /** @brief Revokes only the requested receipt. Native stop remains deferred to the app owner. */

@@ -284,6 +284,8 @@ namespace Horo::Editor {
         using enum EditorXrHapticHand;
         using enum EditorXrHapticPreviewState;
         const auto &fonts = context_.theme.fonts;
+        constexpr float PreviewAmplitude = 0.3F;
+        constexpr auto PreviewDuration = Duration::FromMilliseconds(150);
         for (const auto hand : {Left, Right}) {
             if (!Ui::Button({.label = Text(hand == Left ? "haptic_left" : "haptic_right").c_str(),
                              .variant = Ui::ButtonVariant::Secondary,
@@ -291,7 +293,7 @@ namespace Horo::Editor {
                              .font = fonts.sans,
                              .style = {.width = Ui::StyleWidth::FillAvailable}}))
                 continue;
-            const auto result = preview.QueueHapticPreview(hand);
+            const auto result = preview.QueueHapticPreview({hand, PreviewAmplitude, PreviewDuration});
             previewRejected_ = result.HasError();
             if (result.HasValue())
                 previewRequest_ = result.Value();

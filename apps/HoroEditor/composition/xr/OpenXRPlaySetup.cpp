@@ -2,11 +2,18 @@
 #include "OpenXRPlayHost.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 namespace Horo::Application::Internal {
     namespace {
-        constexpr std::chrono::milliseconds PreviewPulseDuration{150};
+        constexpr std::chrono::milliseconds PreviewQueueLifetime{500};
+
+        /** @brief Maps a validated controller hand into the canonical tracking role. */
+        XR::XRTrackedDeviceRole ControllerRole(Editor::EditorXrHapticHand hand) noexcept {
+            return hand == Editor::EditorXrHapticHand::Left ? XR::XRTrackedDeviceRole::LeftController
+                                                            : XR::XRTrackedDeviceRole::RightController;
+        }
 
         /** @brief Projects stable XR error identities without exposing native diagnostic text to a presentation caller. */
         Editor::EditorXrSetupIssue SetupIssue(const Error &error) noexcept {
@@ -161,7 +168,6 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRPlayHost::CaptureHapticTarget */
     std::optional<OpenXRPlayHost::HapticTarget> OpenXRPlayHost::CaptureHapticTarget(Editor::EditorXrHapticHand hand) const noexcept {
-        using XR::XRTrackedDeviceRole;
         using enum Editor::EditorXrHapticHand;
         if (std::this_thread::get_id() != lane_ || closing_ || busy_ || eventsPending_ || !input_.admitted ||
             input_.play != Editor::EditorPlayState::Playing || !input_.port || (hand != Left && hand != Right))
@@ -172,14 +178,20 @@ namespace Horo::Application::Internal {
         if (!player || !snapshot || !session.admitsActions || !scene_ || !scene_->published || scene_->retiring ||
             snapshot->Session() != session.session || snapshot->BindingRevision() == 0)
             return std::nullopt;
-        const auto role = hand == Left ? XRTrackedDeviceRole::LeftController : XRTrackedDeviceRole::RightController;
-        if (std::ranges::find(composition_.bindings->haptics, role, &OpenXRApplicationHaptic::role) == composition_.bindings->haptics.end())
+        const auto role = ControllerRole(hand);
+        if (!HasHapticRoute(role))
             return std::nullopt;
         const auto devices = snapshot->Devices();
         const auto found = std::ranges::find(devices, role, &XR::XRTrackedDeviceRecord::role);
         if (found == devices.end() || found->state != XR::XRTrackedDeviceState::Tracked)
             return std::nullopt;
         return HapticTarget{session.session, found->id, snapshot->BindingRevision(), *player, role};
+    }
+
+    /** @copydoc OpenXRPlayHost::HasHapticRoute */
+    bool OpenXRPlayHost::HasHapticRoute(const XR::XRTrackedDeviceRole role) const noexcept {
+        const auto &routes = composition_.bindings->haptics;
+        return std::ranges::find(routes, role, &OpenXRApplicationHaptic::role) != routes.end();
     }
 
     /** @copydoc OpenXRPlayHost::HasCurrentHapticInput */
@@ -199,20 +211,28 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc Editor::IEditorXrHapticPreview::QueueHapticPreview */
-    Result<Editor::EditorXrHapticPreviewId> OpenXRPlayHost::QueueHapticPreview(Editor::EditorXrHapticHand hand) {
+    Result<Editor::EditorXrHapticPreviewId> OpenXRPlayHost::QueueHapticPreview(const Editor::EditorXrHapticIntent intent) {
         using Reply = Result<Editor::EditorXrHapticPreviewId>;
         using namespace XR;
         if (const auto lane = Lane(); lane.HasError())
             return Reply::Failure(lane.ErrorValue());
         using enum Editor::EditorXrHapticPreviewState;
-        const auto target = CaptureHapticTarget(hand);
-        if (!target || !HasCurrentHapticInput())
+        using enum Editor::EditorXrHapticHand;
+        if ((intent.hand != Left && intent.hand != Right) || !std::isfinite(intent.amplitude) || intent.amplitude < 0.0F ||
+            intent.amplitude > 1.0F || intent.duration <= Duration{} || intent.duration > Editor::EditorXrHapticIntent::MaximumDuration)
+            return Reply::Failure(MakeError(XRErrors::OperationInvalid));
+        if (!HasHapticRoute(ControllerRole(intent.hand)))
             return Reply::Failure(MakeError(XRErrors::OperationUnsupported));
+        const auto target = CaptureHapticTarget(intent.hand);
+        if (!target)
+            return Reply::Failure(MakeError(XRErrors::OperationUnavailable));
+        if (!HasCurrentHapticInput())
+            return Reply::Failure(MakeError(XRErrors::IdentityStale));
         if ((hapticPreview_ && (hapticPreview_->state == Queued || hapticPreview_->mayNeedStop)) ||
             nextHapticPreview_ == std::numeric_limits<std::uint64_t>::max())
             return Reply::Failure(MakeError(XRErrors::CapacityExceeded));
         const Editor::EditorXrHapticPreviewId receipt{++nextHapticPreview_};
-        hapticPreview_ = HapticPreviewRecord{receipt, *target, std::chrono::steady_clock::now() + std::chrono::milliseconds{500}};
+        hapticPreview_ = HapticPreviewRecord{receipt, *target, intent, std::chrono::steady_clock::now() + PreviewQueueLifetime};
         return Reply::Success(receipt);
     }
 
@@ -239,9 +259,7 @@ namespace Horo::Application::Internal {
             return;
         const auto now = std::chrono::steady_clock::now();
         const bool expired = now >= preview.until;
-        const auto hand = preview.target.role == XR::XRTrackedDeviceRole::LeftController ? Editor::EditorXrHapticHand::Left
-                                                                                         : Editor::EditorXrHapticHand::Right;
-        const auto target = CaptureHapticTarget(hand);
+        const auto target = CaptureHapticTarget(preview.intent.hand);
         const bool revoked = preview.cancelRequested || target != preview.target || !HasCurrentHapticInput();
         if (expired || revoked) {
             if (preview.mayNeedStop && sessions_.Snapshot().session == preview.target.session)
@@ -256,7 +274,7 @@ namespace Horo::Application::Internal {
 
         const Operation operation{*this};
         const auto submitted = composition_.session.SubmitHapticPreview(preview.target.session, preview.target.role,
-                                                                        Duration::FromMilliseconds(PreviewPulseDuration.count()));
+                                                                        preview.intent.amplitude, preview.intent.duration);
         if (submitted.HasError()) {
             const auto &error = submitted.ErrorValue();
             const auto &unsupported = XR::XRErrors::OperationUnsupported;
@@ -267,7 +285,7 @@ namespace Horo::Application::Internal {
             return;
         }
         preview.mayNeedStop = true;
-        preview.until = std::chrono::steady_clock::now() + PreviewPulseDuration;
+        preview.until = std::chrono::steady_clock::now() + std::chrono::nanoseconds{preview.intent.duration.ToNanoseconds()};
         preview.state = Submitted;
         if (preview.cancelRequested || pendingRevoke_) {
             composition_.session.RequestHapticCancellation(preview.target.role);

@@ -103,7 +103,7 @@ namespace Horo::Application::Internal {
         }
 
         [[nodiscard]] bool CanPreviewHaptic(Editor::EditorXrHapticHand hand) const noexcept override;
-        [[nodiscard]] Result<Editor::EditorXrHapticPreviewId> QueueHapticPreview(Editor::EditorXrHapticHand hand) override;
+        [[nodiscard]] Result<Editor::EditorXrHapticPreviewId> QueueHapticPreview(Editor::EditorXrHapticIntent intent) override;
         [[nodiscard]] Editor::EditorXrHapticPreviewState ReadHapticPreview(Editor::EditorXrHapticPreviewId receipt) const noexcept override;
         void CancelHapticPreview(Editor::EditorXrHapticPreviewId receipt) noexcept override;
         /** @brief Runs one admitted preview between RuntimeHost frames and progresses its scoped cancellation. */
@@ -312,6 +312,7 @@ namespace Horo::Application::Internal {
         struct HapticPreviewRecord final {
             Editor::EditorXrHapticPreviewId receipt;
             HapticTarget target;
+            Editor::EditorXrHapticIntent intent;
             std::chrono::steady_clock::time_point until;
             Editor::EditorXrHapticPreviewState state{Editor::EditorXrHapticPreviewState::Queued};
             bool cancelRequested{};
@@ -320,6 +321,8 @@ namespace Horo::Application::Internal {
 
         /** @brief Copies current player, controller and binding identity when the preview scope is available. */
         [[nodiscard]] std::optional<HapticTarget> CaptureHapticTarget(Editor::EditorXrHapticHand hand) const noexcept;
+        /** @brief Reports whether the signed binding plan declares an output for this exact controller role. */
+        [[nodiscard]] bool HasHapticRoute(XR::XRTrackedDeviceRole role) const noexcept;
         /** @brief Validates that no canonical Input rebind or context retirement is pending before cold submission. */
         [[nodiscard]] bool HasCurrentHapticInput() const;
         std::optional<HapticPreviewRecord> hapticPreview_;
