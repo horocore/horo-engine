@@ -2,7 +2,10 @@
 #include "HeadlessCookedDecisionAdmission.h"
 #include "HeadlessNetworkServices.h"
 #include "Horo/AI/AIErrors.h"
+#include "Horo/AI/AIScenePerceptionSource.h"
 #include "Horo/AI/PerceptionSpatialBroadphase.h"
+#include "Horo/AI/PerceptionSenseProvider.h"
+#include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Platform/DynamicLibrary.h"
 #include "Horo/Platform/ExternalProcess.h"
@@ -478,6 +481,140 @@ namespace Horo::Application::PrefabAtomicTest {
             void (*observeFactories_)(std::uint32_t *) noexcept {};
             void (*observeModule_)(std::uint32_t *, bool) noexcept {};
         };
+
+        /** @brief Loads the real generated native producer and captures its exact immutable executable generation. */
+        class NativePerceptionFixture final {
+        public:
+            NativePerceptionFixture() {
+                const Gameplay::GameModuleLoadExpectation expected{
+                    "game.ai.tests", Gameplay::CurrentGameplayBuildFingerprint(),
+                    Tests::ReadDescriptorRevision(HORO_TEST_AI_MODULE_REVISION_PATH)};
+                auto candidate = Gameplay::GameModuleHost{}.Load(HORO_TEST_AI_MODULE_PATH, expected);
+                REQUIRE(candidate.HasValue());
+                REQUIRE_FALSE(candidate.Value().diagnostic);
+                module_ = std::move(candidate).Value().owner;
+                auto captured = module_->AcquirePerceptionSenses();
+                REQUIRE(captured.HasValue());
+                execution.generation = std::move(captured).Value();
+                REQUIRE(execution.generation->Contracts().size() == 1);
+                const auto &contract = execution.generation->Contracts().front();
+                execution.capabilities = AI::PerceptionCapabilitySet::Of(AI::PerceptionCapability::SpatialCandidateQuery);
+                execution.radiusMillimeters = 4000;
+                execution.visibleLayers = 1;
+                execution.workUnitsPerTick = RequiredUnits() * 3;
+                const auto listener = AI::TestSupport::MakeIdentity<AI::PerceptionListenerTypeId>(91);
+                const std::array listeners{AI::PerceptionListenerDescriptor{.identity = listener,
+                                                                            .origin = contract.sense.origin,
+                                                                            .displayName = "Fixture spatial listener",
+                                                                            .sense = contract.sense.identity,
+                                                                            .stimuli = {{contract.stimulus.identity}},
+                                                                            .stimulusCount = 1}};
+                auto registry = AI::PerceptionDescriptorRegistry::Capture(
+                    {std::span<const AI::SenseTypeDescriptor>{&contract.sense, 1},
+                     std::span<const AI::StimulusTypeDescriptor>{&contract.stimulus, 1}, listeners}, execution.capabilities);
+                REQUIRE(registry.HasValue());
+                endpoints = std::make_shared<const AI::AiControllerPerceptionEndpoints>(AI::AiControllerPerceptionEndpoints{
+                    .registry = std::make_shared<const AI::PerceptionDescriptorRegistry>(std::move(registry).Value()),
+                    .listeners = {listener}, .sources = {contract.sense.identity}});
+            }
+
+            [[nodiscard]] std::size_t RequiredUnits() const {
+                return execution.generation->Contracts().front().workUnits + AI::PerceptionSenseGeneration::ValidationWorkUnits + 1;
+            }
+
+            NativeCookedDecisionProbe probe;
+        private:
+            std::unique_ptr<Gameplay::LoadedGameModule> module_;
+        public:
+            AI::AiScenePerceptionExecution execution;
+            std::shared_ptr<const AI::AiControllerPerceptionEndpoints> endpoints;
+        };
+
+        TEST_CASE("Configured authoritative headless ticks poll the admitted native producer over its actual Scene",
+                  "[prefab][integration][ai][perception][host]") {
+            using namespace Network;
+            NativePerceptionFixture native;
+            auto controller = AI::TestSupport::MakeFixture(1, 11, 1, 0);
+            controller.agent.controller->requiredCapabilities = AI::AiCapabilitySet::Of(AI::AiCapability::Perception);
+            controller.descriptor.perceptionEndpoints = native.endpoints;
+            Runtime::SceneDefinitionBuilder builder{{7}, {1}};
+            builder.Add({.object = {1}, .components = {.aiAgent = controller.agent.agent, .aiController = controller.agent.controller}});
+            controller.agent.agent.agent = AI::TestSupport::MakeIdentity<AI::AgentId>(2);
+            builder.Add({.object = {2}, .components = {.aiAgent = controller.agent.agent, .aiController = controller.agent.controller}});
+            auto definition = std::move(builder).Build();
+            REQUIRE(definition.HasValue());
+            JobSystem jobs{{1, 8}};
+            Assets::MemoryAssetProvider bytes;
+            Assets::AssetLoadService loader{jobs, bytes};
+            Assets::AssetRegistry registry;
+            CancellationSource cancellation;
+            const Internal::HeadlessSceneLoadBoundary load{cancellation.Token(),
+                                                           std::chrono::steady_clock::now() + std::chrono::seconds{3}};
+            const std::array catalog{controller.descriptor};
+            Internal::HeadlessSceneActivationInput input{Physics::PhysicsRuntimeMode::Canonical,
+                                                         Physics::Settings(), registry, loader, load, catalog};
+            input.perceptionPositions = PerceptionPositions;
+            input.perceptionExecution = native.execution;
+            auto role = NetworkProjectRole::Standalone;
+            auto world = NetworkModeWorldKind::Standalone;
+            bool seatsAdmitted = true;
+            SECTION("bounded fixed dispatch and paired shutdown") {}
+            SECTION("the declared work budget refuses startup before invoking a sense") {
+                input.perceptionExecution->workUnitsPerTick = native.RequiredUnits() - 1;
+                seatsAdmitted = false;
+            }
+            SECTION("the connected client inherits no native Perception authority") {
+                role = NetworkProjectRole::ListenServer;
+                world = NetworkModeWorldKind::Client;
+            }
+            auto composed = Internal::ComposeHeadlessSceneNetworkServices(
+                std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(definition).Value()), std::move(input));
+            REQUIRE(composed.HasValue());
+            const auto service = [&](const NetworkModeServiceKind kind) {
+                return composed.Value().factories.services[static_cast<std::size_t>(kind)]({kind, role, {}, world, {7}});
+            };
+            auto sceneService = service(NetworkModeServiceKind::Scene);
+            REQUIRE(sceneService.HasValue());
+            const auto prepared = sceneService.Value()->Prepare();
+            if (!seatsAdmitted) {
+                REQUIRE(prepared.HasError());
+                CHECK(prepared.ErrorValue().code.Value() == AI::AIErrors::SchedulerBudgetExhausted.code.Value());
+                CHECK_FALSE(Internal::InspectHeadlessScene(*sceneService.Value()));
+                CHECK(native.probe.module[0] == 0);
+                return;
+            }
+            REQUIRE(prepared.HasValue());
+            REQUIRE(sceneService.Value()->Activate().HasValue());
+            const auto scene = Internal::InspectHeadlessScene(*sceneService.Value());
+            REQUIRE(scene);
+            const auto observer = scene->Find({1});
+            const auto source = scene->Find({2});
+            REQUIRE(observer);
+            REQUIRE(source);
+            CHECK(native.probe.module[1] == 0);
+            if (world == NetworkModeWorldKind::Client) {
+                CHECK(native.probe.module[0] == 0);
+                CHECK(Internal::InspectHeadlessPerceptionMemory(*sceneService.Value(), *observer).HasError());
+                return;
+            }
+            CHECK(native.probe.module[0] == 2);
+            auto physics = service(NetworkModeServiceKind::Physics);
+            REQUIRE(physics.HasValue());
+            REQUIRE(physics.Value()->Prepare().HasValue());
+            REQUIRE(physics.Value()->Activate().HasValue());
+            const auto quantum = Duration::FromNanoseconds(native.execution.memory.fixedStep.count());
+            REQUIRE(physics.Value()->RunFixedTick({1, quantum, cancellation.Token()}).HasValue());
+            CHECK(native.probe.module[1] == 2);
+            const auto memory = Internal::InspectHeadlessPerceptionMemory(*physics.Value(), *observer);
+            REQUIRE(memory.HasValue());
+            REQUIRE(memory.Value().count == 1);
+            CHECK(memory.Value().entries.front().key.source == AI::ProjectPerceptionSource(*source));
+            CHECK(memory.Value().entries.front().lastSensedTick == 1);
+            sceneService.Value()->Shutdown();
+            CHECK(Internal::InspectHeadlessPerceptionMemory(*physics.Value(), *observer).HasError());
+            CHECK(native.probe.module[2] == 2);
+            physics.Value()->Shutdown();
+        }
 
         /** @brief Returns a well-formed authored controller for which the captured catalog has no descriptor. */
         AI::AiControllerComponent UnavailableController(AI::AiControllerComponent component) {
@@ -1165,6 +1302,68 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(spatial.Current()->SourceCount() == 1);
             CHECK(spatial.Current()->Revision() == 3);
             CHECK_FALSE(spawned->ReadAuthorization()->IsCurrent());
+        }
+
+        TEST_CASE("Native Perception instances roll back and retire with actual cooked prefab aggregate owners",
+                  "[prefab][integration][atomic][ai][perception][native]") {
+            AI::PerceptionSpatialBroadphase spatial;
+            NativePerceptionFixture native;
+            const AI::AiScenePerceptionActivationInput initial{spatial, {}, PerceptionPositions, native.execution};
+            bool reject = false;
+            SECTION("published agents lose exact source memory and release their providers at despawn") {}
+            SECTION("a later Gameplay owner rejects the aggregate and destroys only detached candidate providers") {
+                reject = true;
+            }
+            const AI::AiScenePerceptionGroupInput group{
+                spatial, {}, [](const Runtime::RuntimeSceneView &, const std::span<const Runtime::RuntimeEntityView> prospective) {
+                    std::vector<AI::AiScenePerceptionPosition> positions;
+                    for (const auto &entity : prospective)
+                        positions.push_back({entity.entity, Math::WorldCoordinate64::FromMillimeters(entity.entity.entity.index * 1000, 0, 0)});
+                    return Result<std::vector<AI::AiScenePerceptionPosition>>::Success(std::move(positions));
+                }};
+            Fixture fixture{true, reject ? Fault::GameplayDescriptor : Fault::None, {.requirePerceptionEndpoints = true},
+                            native.endpoints, group, nullptr, {}, initial};
+            const auto baseline = *fixture.scenes.ActiveScene();
+            const auto resident = *baseline.Find({1});
+            const auto quantum = Duration::FromNanoseconds(native.execution.memory.fixedStep.count());
+            CHECK(native.probe.module[0] == 1);
+            fixture.Tick(1);
+            if (reject) {
+                REQUIRE(fixture.AwaitRejection().Failure());
+                CHECK(baseline.IsCurrent());
+                CHECK(native.probe.module[0] == 3);
+                CHECK(native.probe.module[1] == 0);
+                CHECK(native.probe.module[2] == 2);
+                REQUIRE(fixture.ai.PollPerceptionAtSensePoll(baseline, spatial, 1, quantum).HasValue());
+                CHECK(native.probe.module[1] == 1);
+                return;
+            }
+            fixture.Reach(3);
+            const auto spawned = *fixture.scenes.ActiveScene();
+            CHECK(native.probe.module[0] == 3);
+            REQUIRE(fixture.ai.PollPerceptionAtSensePoll(spawned, spatial, 1, quantum).HasValue());
+            REQUIRE(fixture.ai.PollPerceptionAtSensePoll(spawned, spatial, 1, quantum).HasValue());
+            CHECK(native.probe.module[1] == 3);
+            const auto observed = fixture.ai.ReadPerceptionAtSafePoint(spawned, resident);
+            REQUIRE(observed.HasValue());
+            REQUIRE(observed.Value().count == 1);
+            const auto source = observed.Value().entries.front().key.source;
+            const Runtime::EntityRef former{spawned.RuntimeId(), {source.slot, source.generation}};
+            const auto prefabMemory = fixture.ai.ReadPerceptionAtSafePoint(spawned, former);
+            REQUIRE(prefabMemory.HasValue());
+            CHECK(prefabMemory.Value().count == 1);
+            fixture.Tick(2);
+            fixture.Reach(1);
+            const auto retired = *fixture.scenes.ActiveScene();
+            CHECK(native.probe.module[2] == 2);
+            CHECK(fixture.ai.ReadPerceptionAtSafePoint(retired, former).HasError());
+            const auto survivor = fixture.ai.ReadPerceptionAtSafePoint(retired, resident);
+            REQUIRE(survivor.HasValue());
+            CHECK(survivor.Value().count == 0);
+            REQUIRE(fixture.ai.PollPerceptionAtSensePoll(retired, spatial, 2, quantum).HasValue());
+            CHECK(native.probe.module[1] == 4);
+            fixture.scenes.Shutdown();
+            CHECK(native.probe.module[2] == 3);
         }
 
         /** @brief Observes whether aggregate retirement revokes the actual owner token before scheduler callbacks. */

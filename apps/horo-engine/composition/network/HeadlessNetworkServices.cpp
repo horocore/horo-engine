@@ -141,6 +141,9 @@ namespace Horo::Application::Internal {
             if (!definition || input.load.deadline == std::chrono::steady_clock::time_point{} ||
                 input.load.deadline == std::chrono::steady_clock::time_point::max())
                 return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
+            if (input.perceptionExecution && (!input.perceptionPositions || !input.perceptionExecution->generation))
+                return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid,
+                                                       "Native Perception requires a selected producer and Scene positions."));
             const auto &decisions = input.cookedDecisions;
             if (decisions && decisions->provider == HeadlessDecisionProvider::SelectedNativeGameplay &&
                 (!decisions->execution || decisions->environment.nodes || !gameplay || !gameplay->enabled ||
@@ -216,6 +219,15 @@ namespace Horo::Application::Internal {
     std::shared_ptr<const AI::PerceptionSpatialSnapshot> InspectHeadlessPerception(const Network::INetworkModeService &service) noexcept {
         const auto *world = dynamic_cast<const WorldService *>(&service);
         return world ? world->PerceptionSnapshot() : nullptr;
+    }
+
+    /** @copydoc InspectHeadlessPerceptionMemory */
+    Result<AI::PerceptionMemorySnapshot> InspectHeadlessPerceptionMemory(const Network::INetworkModeService &service,
+                                                                         const Runtime::EntityRef recipient) {
+        const auto *world = dynamic_cast<const WorldService *>(&service);
+        if (!world)
+            return Result<AI::PerceptionMemorySnapshot>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+        return world->PerceptionMemory(recipient);
     }
 
     /** @copydoc InspectHeadlessScene */

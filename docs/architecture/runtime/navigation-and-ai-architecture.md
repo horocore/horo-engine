@@ -1286,6 +1286,19 @@ are unknown evidence, not sensing loss. Blackboard projection remains a separate
 This adapter is a composition seam; a host must explicitly dispatch it at the
 named phase. Native/package registration alone does not prove product dispatch.
 
+The configured headless authority can opt in with an already admitted native
+generation, explicit spatial positions and layer/radius policy, and bounded
+memory and work policy. Initial Scene and prefab admission stage the instances
+against the same spatial publication before making either owner visible. The
+fixed host polls the current publication before decisions and gameplay. Retrying
+the same tick preserves the first result without replaying native callbacks.
+Aggregate rejection discards detached instances. Despawn revokes the retired
+agent before destroying its instances, and memory reads discard weak references
+to retired Scene entities. This scope covers custom spatial observations and
+keeps Gameplay-event admission and blackboard projection in their existing
+owners. Canonical AI restore is unavailable for this opt-in until the restore
+transaction can stage fresh sensing instances and the paired endpoint publication.
+
 The native public capture path rejects Script origins. The private VM admission
 path is available only to `Gameplay::LuaPerceptionSenseProgram`, which uses the
 existing Lua sandbox and allocator with a bounded instruction hook. Its callback

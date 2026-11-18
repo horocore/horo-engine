@@ -1,12 +1,26 @@
 #pragma once
 
 #include "Horo/AI/AISceneActivation.h"
+#include "Horo/AI/PerceptionSenseScene.h"
 
 #include <functional>
 #include <thread>
 #include <unordered_map>
 
 namespace Horo::AI::Detail {
+    /** @brief One listener implementation and the exact query envelope admitted before factory construction. */
+    struct ScenePerceptionSense final {
+        std::unique_ptr<PerceptionSenseInstance> instance;
+        PerceptionSpatialQuery query;
+    };
+
+    /** @brief One agent's owned native runtime, discarded before releasing any executable lease. */
+    struct SceneAgentPerception final {
+        AIPerceptionMemory memory;
+        std::vector<ScenePerceptionSense> senses;
+        std::size_t workUnits{};
+    };
+
     /** @brief Scene-owner storage; transient work is deliberately outside canonical snapshots. */
     struct AgentRuntimeState final {
         AiAgentRuntimeRecord record;
@@ -16,6 +30,7 @@ namespace Horo::AI::Detail {
         BlackboardInstanceBinding blackboardBinding;
         std::unique_ptr<BlackboardInstance> blackboard;
         std::unique_ptr<AiTaskLifecycle> task;
+        std::unique_ptr<SceneAgentPerception> sensing;
         CancellationSource cancellation;
         bool retired{};
     };
@@ -69,6 +84,10 @@ namespace Horo::AI::Detail {
         std::uint64_t revision{1};
         std::uint64_t lastAgentIdentity{}; /**< Owner-issued prefab identity high-water; advanced only with aggregate publication. */
         std::unique_ptr<AiTaskScheduler> scheduler;
+        std::optional<AiScenePerceptionExecution> perceptionExecution;
+        const PerceptionSpatialBroadphase *perceptionSpatial{}; /**< Exact publisher borrowed for the same activation lifetime. */
+        std::uint64_t lastPerceptionTick{};
+        std::optional<Error> perceptionPollFailure; /**< Same-tick retries cannot replay native callbacks. */
         bool closed{};
     };
 
@@ -85,6 +104,12 @@ namespace Horo::AI::Detail {
     [[nodiscard]] Result<void> ValidateCurrentCookedDecisions(std::span<const AgentRuntimeState> agents);
     /** @brief Tears down every owned agent. @param state Detached or active population. */
     void ShutdownStateContents(AiSceneRuntimeState &state) noexcept;
+
+    /** @brief Stages native factories and aggregate maximum work for exactly the next resident population. */
+    [[nodiscard]] Result<void> PreparePerceptionSenses(const AiScenePerceptionExecution &policy,
+                                                        std::span<const AgentRuntimeState> residents,
+                                                        std::span<AgentRuntimeState> additions,
+                                                        std::span<const std::size_t> removals = {});
 
     /** @brief Rejects a staged registration set that would exceed the canonical spatial owner's bounds. */
     [[nodiscard]] Result<void> ValidatePerceptionCapacity(std::span<const AgentRuntimeState> residents,

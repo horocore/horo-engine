@@ -57,6 +57,8 @@ namespace Horo::AI::Detail {
                     return Failure<void>("The staged AI group lost its decision scheduler.");
                 if (perception && !perception->IsCurrent())
                     return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
+                if (!additions.empty() && state->perceptionExecution && !state->perceptionExecution->generation->CanAdmit())
+                    return Result<void>::Failure(MakeError(AIErrors::RuntimeUnavailable));
                 if (auto current = ValidateCurrentCookedDecisions(additions); current.HasError())
                     return current;
                 return decisions ? decisions->ValidatePublication() : Result<void>::Success();
@@ -187,6 +189,14 @@ namespace Horo::AI::Detail {
                 if (preparedPerception.HasError())
                     return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(preparedPerception.ErrorValue());
                 candidate->perception = std::move(preparedPerception).Value();
+            }
+            if (state.perceptionExecution && !candidate->additions.empty()) {
+                if (!perception_ || &perception_->spatial != state.perceptionSpatial)
+                    return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
+                        MakeError(AIErrors::PerceptionDependencyMissing));
+                auto senses = PreparePerceptionSenses(*state.perceptionExecution, state.agents, candidate->additions, candidate->removals);
+                if (senses.HasError())
+                    return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(senses.ErrorValue());
             }
             if (auto staged = PrepareDecisionPopulation(*candidate); staged.HasError())
                 return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(staged.ErrorValue());

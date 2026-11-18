@@ -11,6 +11,9 @@
 #include "Horo/AI/AITaskScheduler.h"
 #include "Horo/AI/AiDecisionTaskReservation.h"
 #include "Horo/AI/BlackboardInstance.h"
+#include "Horo/AI/PerceptionDescriptorRegistry.h"
+#include "Horo/AI/PerceptionMemory.h"
+#include "Horo/Foundation/Time.h"
 #include "Horo/Math/WorldCoordinate64.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
@@ -27,6 +30,7 @@ namespace Horo::AI {
     class AiSceneRuntime;
     class PerceptionSpatialBroadphase;
     class PerceptionSpatialSnapshot;
+    class PerceptionSenseGeneration;
 
     /** @brief Host-captured absolute position of an exact live Perception endpoint. */
     struct AiScenePerceptionPosition final {
@@ -38,11 +42,22 @@ namespace Horo::AI {
     using AiScenePerceptionPositionSource =
         std::function<Result<std::vector<AiScenePerceptionPosition>>(const Runtime::RuntimeSceneView &)>;
 
+    /** @brief Explicit execution policy for a Scene's already selected frozen native producer generation. */
+    struct AiScenePerceptionExecution final {
+        std::shared_ptr<const PerceptionSenseGeneration> generation;
+        PerceptionCapabilitySet capabilities;
+        PerceptionMemoryPolicy memory;
+        std::uint64_t radiusMillimeters{};
+        std::uint64_t visibleLayers{};
+        std::size_t workUnitsPerTick{};
+    };
+
     /** @brief Explicit perception publication owned by an AI Scene activation candidate. */
     struct AiScenePerceptionActivationInput final {
         PerceptionSpatialBroadphase &spatial; /**< Outlives the Scene participant and all its candidates. */
         PerceptionFilteringPolicy filtering;
         AiScenePerceptionPositionSource positions; /**< Captures the actual candidate Scene's global positions. */
+        std::optional<AiScenePerceptionExecution> execution; /**< Explicit producer grant over the same published endpoints. */
     };
 
     /** @brief Captures absolute positions for each exact prospective Perception endpoint in ascending entity order. */
@@ -315,6 +330,22 @@ namespace Horo::AI {
          * @post Success cancels old tasks and observers before releasing their storage; asynchronous work restarts separately.
          */
         [[nodiscard]] Result<void> CommitRestoreAtSafePoint(std::unique_ptr<AiSceneRestoreCandidate> candidate);
+
+        /** @brief Advances admitted native senses on the exact committed owner lane.
+         * @param scene Current Scene and endpoint lifetime fence. @param spatial Current Scene's admitted spatial owner.
+         * @param tick Authoritative simulation tick. @param fixedStep Exact host quantum.
+         * @return Success or original scene, provider, or policy error. Repeated calls never replay the same tick.
+         */
+        [[nodiscard]] Result<void> PollPerceptionAtSensePoll(const Runtime::RuntimeSceneView &scene,
+                                                             const PerceptionSpatialBroadphase &spatial, std::uint64_t tick,
+                                                             Duration fixedStep);
+
+        /** @brief Reads owned memory for one exact existing recipient, filtering stale subjects and emitters.
+         * @param scene Current Scene publication. @param recipient Exact recipient entity generation.
+         * @return Bounded snapshot or a typed unavailable/stale error.
+         */
+        [[nodiscard]] Result<PerceptionMemorySnapshot> ReadPerceptionAtSafePoint(const Runtime::RuntimeSceneView &scene,
+                                                                                Runtime::EntityRef recipient);
 
         /** @brief Activates cooked decisions once on an exact already-staged Scene before host publication.
          * @param execution Deterministic owner policy with live process jobs and callable provider generation.

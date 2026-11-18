@@ -82,6 +82,7 @@ namespace Horo::AI {
         /** @copydoc CancelOwnedWork */
         void CancelOwnedWork(AgentRuntimeState &agent) noexcept {
             agent.cancellation.RequestCancellation();
+            agent.sensing.reset();
             if (agent.task) {
                 (void)agent.task->RequestCancellation(AiTaskCancellationReason::OwnerShutdown);
                 (void)agent.task->RetireAgentGeneration();
@@ -127,6 +128,8 @@ namespace Horo::AI {
                 CancelOwnedWork(agent);
             state.agents.clear();
             state.agentsByOwner.clear();
+            state.perceptionExecution.reset();
+            state.perceptionSpatial = nullptr;
         }
     }  // namespace Detail
 
@@ -348,6 +351,13 @@ namespace Horo::AI {
                                                                              state_->agents);
             if (prepared.HasError())
                 return Result<void>::Failure(prepared.ErrorValue());
+            if (input.execution) {
+                auto admitted = Detail::PreparePerceptionSenses(*input.execution, {}, state_->agents);
+                if (admitted.HasError())
+                    return admitted;
+                state_->perceptionExecution = input.execution;
+                state_->perceptionSpatial = &input.spatial;
+            }
             perception_ = std::make_unique<Detail::PerceptionGroupPublication>(std::move(prepared).Value());
             return Result<void>::Success();
         } catch (const std::bad_alloc &) {
@@ -365,6 +375,8 @@ namespace Horo::AI {
             return valid;
         if (perception_ && !perception_->IsCurrent())
             return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
+        if (state_->perceptionExecution && !state_->perceptionExecution->generation->CanAdmit())
+            return Result<void>::Failure(MakeError(AIErrors::RuntimeUnavailable));
         return Detail::ValidateCurrentCookedDecisions(state_->agents);
     }
 

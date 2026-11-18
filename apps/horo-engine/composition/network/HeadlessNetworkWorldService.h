@@ -37,6 +37,14 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             return record_->perception.Current();
         }
 
+        /** @brief Reads one agent's owned native observations from the exact currently committed Scene. */
+        Result<AI::PerceptionMemorySnapshot> PerceptionMemory(const Runtime::EntityRef recipient) const {
+            const auto scene = ActiveScene();
+            if (!scene || !record_->ai)
+                return Result<AI::PerceptionMemorySnapshot>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+            return record_->ai->ReadPerceptionAtSafePoint(*scene, recipient);
+        }
+
         /** @brief Borrows the committed configured Scene on the current owner lane. */
         std::optional<Runtime::RuntimeSceneView> ActiveScene() const noexcept {
             if (std::this_thread::get_id() != owners_->owner || !record_ || record_->closeRequested || !record_->scenes)
@@ -313,8 +321,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             std::optional<AI::AiScenePerceptionActivationInput> activation;
             std::optional<AI::AiScenePerceptionGroupInput> structural;
             if (OwnsPerception()) {
-                activation.emplace(
-                    AI::AiScenePerceptionActivationInput{record_->perception, input.perceptionFiltering, input.perceptionPositions});
+                activation.emplace(AI::AiScenePerceptionActivationInput{record_->perception, input.perceptionFiltering,
+                                                                          input.perceptionPositions, input.perceptionExecution});
                 structural.emplace(
                     AI::AiScenePerceptionGroupInput{record_->perception, input.perceptionFiltering, input.perceptionGroupPositions});
             }
@@ -518,6 +526,18 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             return Result<void>::Success();
         }
 
+        /** @brief Polls native observations once on the configured authority's exact fixed tick and Scene. */
+        Result<void> RunConfiguredPerception(const Runtime::FixedStepContext &context) const {
+            if (!OwnsPerception() || !owners_->configured->perceptionExecution)
+                return Result<void>::Success();
+            if (context.cancellation.IsCancellationRequested())
+                return JobCancelled();
+            const auto scene = record_->scenes->ActiveScene();
+            if (!scene)
+                return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionSpatialStale));
+            return record_->ai->PollPerceptionAtSensePoll(*scene, record_->perception, context.simulationTick, context.fixedDelta);
+        }
+
         /** @brief Uses ordinary fixed stages only after readiness; load progress never dispatches a tick. */
         Result<void> RunConfiguredTick(const Runtime::FixedStepContext &context) {
             if (!configuredActivated_ || !record_ || record_->closeRequested)
@@ -528,6 +548,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 if (const auto committed = record_->navigationPath->CommitAtFixedTick(context.simulationTick); committed.HasError())
                     return committed;
             }
+            if (const auto perception = RunConfiguredPerception(context); perception.HasError())
+                return perception;
             if (const auto decisions = RunConfiguredDecisions(context); decisions.HasError())
                 return decisions;
             if (const auto gameplay = RunConfiguredGameplay(context); gameplay.HasError())

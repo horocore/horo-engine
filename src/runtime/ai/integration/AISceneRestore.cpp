@@ -242,6 +242,8 @@ namespace Horo::AI {
             return RestoreResult::Failure(valid.ErrorValue());
         if (expectedBinding != active_->binding || active_->revision == std::numeric_limits<std::uint64_t>::max())
             return RestoreResult::Failure(MakeError(AIErrors::CanonicalRestoreStale));
+        if (active_->perceptionExecution)
+            return RestoreResult::Failure(MakeError(AIErrors::RuntimeUnavailable, "Native Perception execution cannot be restored."));
         if (migrations.size() > MaximumAiSchemaMigrations)
             return RestoreResult::Failure(MakeError(AIErrors::CanonicalStateInvalid));
         if (const auto valid = ValidatePopulation(state, *active_, settings_.maximumAgents); valid.HasError())

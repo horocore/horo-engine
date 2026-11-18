@@ -219,7 +219,8 @@ namespace Horo::Application::PrefabAtomicTest {
                          std::shared_ptr<const AI::AiControllerPerceptionEndpoints> endpoints = {},
                          std::optional<AI::AiScenePerceptionGroupInput> perception = std::nullopt,
                          const AI::TestSupport::ActivationFixture *cookedController = nullptr,
-                         const AI::AiTaskSchedulerSettings &schedulerSettings = {})
+                         const AI::AiTaskSchedulerSettings &schedulerSettings = {},
+                         std::optional<AI::AiScenePerceptionActivationInput> perceptionActivation = std::nullopt)
             : ai(std::move(cookedController
                                ? AI::AiSceneRuntime::Create(aiSettings, AI::AiSceneCookedDecisionExecution{jobs, schedulerSettings, {}})
                                : AI::AiSceneRuntime::Create(aiSettings))
@@ -238,7 +239,7 @@ namespace Horo::Application::PrefabAtomicTest {
             PublishMaterial(fault);
             artifact = PublishTemplate(fault);
             CaptureCommittedGeneration();
-            RegisterOwners(aiFirst, fault, perception);
+            RegisterOwners(aiFirst, fault, perception, std::move(perceptionActivation));
             REQUIRE(scenes.Startup(cancellation.Token()).HasValue());
             REQUIRE(scenes.QueuePreparation(InitialScene()).HasValue());
             Pump();
@@ -399,11 +400,14 @@ namespace Horo::Application::PrefabAtomicTest {
             return owner;
         }
 
-        void RegisterOwners(bool aiFirst, Fault fault, const std::optional<AI::AiScenePerceptionGroupInput> &perception) {
+        void RegisterOwners(bool aiFirst, Fault fault, const std::optional<AI::AiScenePerceptionGroupInput> &perception,
+                            std::optional<AI::AiScenePerceptionActivationInput> perceptionActivation) {
             auto initial = native.MakeParticipant(*physics, authority, Physics::Settings());
             REQUIRE(initial.HasValue());
             REQUIRE(scenes.AddActivationParticipant(std::move(initial).Value()).HasValue());
-            REQUIRE(scenes.AddActivationParticipant(std::make_unique<AI::AiSceneActivationParticipant>(ai, catalog)).HasValue());
+            REQUIRE(scenes.AddActivationParticipant(
+                               std::make_unique<AI::AiSceneActivationParticipant>(ai, catalog, std::move(perceptionActivation)))
+                        .HasValue());
             if (aiFirst)
                 REQUIRE(scenes.AddStructuralParticipant(AiOwner(catalog, fault, perception)).HasValue());
             auto structural = native.MakeStructuralParticipant();

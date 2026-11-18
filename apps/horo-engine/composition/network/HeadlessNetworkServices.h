@@ -73,6 +73,8 @@ namespace Horo::Application::Internal {
             cookedDecisions; /**< Optional explicit authoritative controller/asset catalog. */
         std::optional<HeadlessNavigationPathPolicy>
             navigationPath; /**< Explicit native scope for the installed immutable Navigation world. */
+        std::optional<AI::AiScenePerceptionExecution>
+            perceptionExecution; /**< Frozen native producer and explicit authoritative spatial execution policy. */
     };
 
     /** @brief Composes actual project Scene services and their sole aggregate-owned Physics/Character pair.
@@ -97,6 +99,13 @@ namespace Horo::Application::Internal {
     /** @brief Reads the authoritative world's last complete spatial publication on its owner lane. */
     [[nodiscard]] std::shared_ptr<const AI::PerceptionSpatialSnapshot> InspectHeadlessPerception(
         const Network::INetworkModeService &service) noexcept;
+    /** @brief Reads bounded memory for a recipient from the configured authoritative world's owner lane.
+     * @param service Actual retained Scene/Physics service facade. @param recipient Exact live entity generation.
+     * @return Owned report or typed unavailable/stale failure.
+     */
+    [[nodiscard]] Result<AI::PerceptionMemorySnapshot> InspectHeadlessPerceptionMemory(const Network::INetworkModeService &service,
+                                                                                       Runtime::EntityRef recipient);
+
     /** @brief Borrows the committed configured Scene for read-only diagnostics on its owner lane.
      * @param service Actual retained Scene/Physics service facade.
      * @return View until the next lifecycle mutation, or no view when absent, closing, or called off-lane.

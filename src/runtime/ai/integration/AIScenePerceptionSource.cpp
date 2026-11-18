@@ -15,6 +15,57 @@ namespace Horo::AI {
             return !agent.retired && agent.record.state == AiAgentActivationState::Active && agent.perceptionEndpoints;
         }
 
+        /** @brief Creates one exact active recipient's native instances under the complete Scene budget. */
+        [[nodiscard]] Result<void> PrepareRecipient(const AiScenePerceptionExecution &policy, Detail::AgentRuntimeState &agent,
+                                                    std::size_t &remaining) {
+            if (!HasActiveEndpoints(agent) || agent.perceptionEndpoints->listeners.empty())
+                return Result<void>::Success();
+            auto memory = AIPerceptionMemory::Create(agent.record.owner.runtime.value, agent.record.handle, policy.memory);
+            if (memory.HasError())
+                return Result<void>::Failure(memory.ErrorValue());
+            auto recipient = std::make_unique<Detail::SceneAgentPerception>(Detail::SceneAgentPerception{std::move(memory).Value()});
+            const auto &endpoints = *agent.perceptionEndpoints;
+            const auto listeners = endpoints.registry->Listeners();
+            const auto contracts = policy.generation->Contracts();
+            recipient->senses.reserve(endpoints.listeners.size());
+            for (const auto identity : endpoints.listeners) {
+                const auto listener = std::ranges::lower_bound(listeners, identity, {}, [](const auto &entry) {
+                    return entry.descriptor.identity;
+                });
+                const auto sense = listener->descriptor.sense;
+                const auto contract = std::ranges::lower_bound(contracts, sense, {}, [](const PerceptionSenseContract &entry) {
+                    return entry.sense.identity;
+                });
+                if (contract == contracts.end() || contract->sense.identity != sense)
+                    return Result<void>::Failure(MakeError(AIErrors::PerceptionDependencyMissing, "No admitted native producer owns this listener."));
+                const auto units = contract->workUnits + PerceptionSenseGeneration::ValidationWorkUnits + 1;
+                if (units > remaining)
+                    return Result<void>::Failure(MakeError(AIErrors::SchedulerBudgetExhausted));
+                auto instance = policy.generation->Create(policy.generation, sense, *endpoints.registry, policy.capabilities,
+                                                          {agent.record.handle, ProjectPerceptionSource(agent.record.owner),
+                                                           identity, agent.cancellation.Token()});
+                if (instance.HasError())
+                    return Result<void>::Failure(instance.ErrorValue());
+                recipient->senses.push_back({std::move(instance).Value(),
+                                             {.listener = agent.record.owner,
+                                              .sense = sense,
+                                              .radiusMillimeters = policy.radiusMillimeters,
+                                              .visibleLayers = policy.visibleLayers,
+                                              .maximumCandidates = contract->maximumCandidates}});
+                recipient->workUnits += units;
+                remaining -= units;
+            }
+            agent.sensing = std::move(recipient);
+            return Result<void>::Success();
+        }
+
+        /** @brief Checks a weak observation source with the exact current scene generation. */
+        [[nodiscard]] bool ViewSourceAlive(void *context, const PerceptionSourceRef &source) {
+            const auto &view = *static_cast<const Runtime::RuntimeSceneView *>(context);
+            return source.IsValid() && view.IsCurrent() && view.RuntimeId().value == source.sceneIncarnation &&
+                   view.Get({view.RuntimeId(), {source.slot, source.generation}}).HasValue();
+        }
+
         /** @brief Appends one fully admitted endpoint using exact host-captured coordinates. */
         void AppendEndpoints(const Detail::AgentRuntimeState &agent, const Math::WorldCoordinate64 position,
                              std::vector<PerceptionSpatialListener> &listeners, std::vector<PerceptionSpatialSource> &sources) {
@@ -52,12 +103,8 @@ namespace Horo::AI {
         /** @brief Checks the current structural revision rather than trusting a retained entity slot. */
         [[nodiscard]] bool SceneSourceAlive(void *context, const PerceptionSourceRef &source) {
             const auto &scene = *static_cast<Runtime::RuntimeScene *>(context);
-            const auto view = scene.View();
-            if (!source.IsValid() || view.RuntimeId().value != source.sceneIncarnation)
-                return false;
-            const Runtime::EntityRef entity{.runtime = view.RuntimeId(),
-                                            .entity = Runtime::EntityId{.index = source.slot, .generation = source.generation}};
-            return view.Get(entity).HasValue();
+            auto view = scene.View();
+            return ViewSourceAlive(&view, source);
         }
 
         /** @brief Owns the matching debug and paired blackboard values before any publication. */
@@ -225,6 +272,35 @@ namespace Horo::AI {
             owner->PublishPrepared({});
     }
 
+    /** @copydoc Detail::PreparePerceptionSenses */
+    Result<void> Detail::PreparePerceptionSenses(const AiScenePerceptionExecution &policy,
+                                                  const std::span<const AgentRuntimeState> residents,
+                                                  const std::span<AgentRuntimeState> additions,
+                                                  const std::span<const std::size_t> removals) {
+        constexpr auto allCapabilityBits = (std::uint32_t{1} << static_cast<unsigned>(PerceptionCapability::Count)) - 1;
+        if (!policy.generation || !policy.generation->CanAdmit())
+            return Result<void>::Failure(MakeError(AIErrors::RuntimeUnavailable));
+        if (policy.memory.fixedStep.count() <= 0)
+            return Result<void>::Failure(MakeError(AIErrors::PerceptionMemoryInvalid));
+        if (policy.radiusMillimeters > PerceptionSpatialLimits::RadiusMillimeters || policy.visibleLayers == 0 ||
+            policy.workUnitsPerTick == 0 || policy.workUnitsPerTick > AiTaskSchedulerSettings::HardWorkUnits ||
+            (policy.capabilities.bits & ~allCapabilityBits) != 0)
+            return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialInvalid));
+        auto remaining = policy.workUnitsPerTick;
+        for (std::size_t index = 0; index < residents.size(); ++index) {
+            const auto &agent = residents[index];
+            if (!agent.sensing || std::ranges::binary_search(removals, index))
+                continue;
+            if (agent.sensing->workUnits > remaining)
+                return Result<void>::Failure(MakeError(AIErrors::SchedulerBudgetExhausted));
+            remaining -= agent.sensing->workUnits;
+        }
+        for (auto &agent : additions)
+            if (auto prepared = PrepareRecipient(policy, agent, remaining); prepared.HasError())
+                return prepared;
+        return Result<void>::Success();
+    }
+
     /** @copydoc Detail::ValidatePerceptionCapacity */
     Result<void> Detail::ValidatePerceptionCapacity(const std::span<const AgentRuntimeState> residents,
                                                     const std::span<const AgentRuntimeState> additions,
@@ -262,6 +338,67 @@ namespace Horo::AI {
         auto candidate = std::move(prepared).Value();
         candidate.Publish();
         return Publication::Success(spatial.Current());
+    }
+
+    /** @copydoc AiSceneRuntime::PollPerceptionAtSensePoll */
+    Result<void> AiSceneRuntime::PollPerceptionAtSensePoll(const Runtime::RuntimeSceneView &scene,
+                                                           const PerceptionSpatialBroadphase &spatial, const std::uint64_t tick,
+                                                           const Duration fixedStep) {
+        if (auto owner = CapabilityAtSafePoint().ValidateAtSafePoint(); owner.HasError())
+            return owner;
+        const auto &policy = active_->perceptionExecution;
+        if (!policy || !policy->generation->CanAdmit())
+            return Result<void>::Failure(MakeError(AIErrors::RuntimeUnavailable));
+        if (!scene.IsCurrent() || active_->binding.scene != scene.RuntimeId() || active_->perceptionSpatial != &spatial)
+            return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
+        if (tick == 0 || tick < active_->lastPerceptionTick || fixedStep.ToNanoseconds() != policy->memory.fixedStep.count())
+            return Result<void>::Failure(MakeError(AIErrors::PerceptionMemoryInvalid));
+        if (tick == active_->lastPerceptionTick)
+            return active_->perceptionPollFailure ? Result<void>::Failure(*active_->perceptionPollFailure) : Result<void>::Success();
+        active_->lastPerceptionTick = tick;
+        active_->perceptionPollFailure.reset();
+        AiWorkBudget global{policy->workUnitsPerTick};
+        for (auto &agent : active_->agents) {
+            if (!agent.sensing)
+                continue;
+            auto &sensing = *agent.sensing;
+            AiWorkBudget budget{sensing.workUnits};
+            for (auto &sense : sensing.senses) {
+                if (const auto polled = RunPerceptionSenseAtSensePoll(scene, spatial, *sense.instance, sense.query, tick,
+                                                                      sensing.memory, budget, global);
+                    polled.HasError()) {
+                    active_->perceptionPollFailure = polled.ErrorValue();
+                    return Result<void>::Failure(*active_->perceptionPollFailure);
+                }
+            }
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc AiSceneRuntime::ReadPerceptionAtSafePoint */
+    Result<PerceptionMemorySnapshot> AiSceneRuntime::ReadPerceptionAtSafePoint(const Runtime::RuntimeSceneView &scene,
+                                                                                const Runtime::EntityRef recipient) {
+        using Snapshot = Result<PerceptionMemorySnapshot>;
+        if (auto owner = CapabilityAtSafePoint().ValidateAtSafePoint(); owner.HasError())
+            return Snapshot::Failure(owner.ErrorValue());
+        if (!scene.IsCurrent() || scene.RuntimeId() != active_->binding.scene || !scene.Get(recipient).HasValue())
+            return Snapshot::Failure(MakeError(AIErrors::PerceptionSpatialStale));
+        if (active_->perceptionPollFailure)
+            return Snapshot::Failure(*active_->perceptionPollFailure);
+        Detail::SceneAgentPerception *sensing = nullptr;
+        const auto [first, last] = active_->agentsByOwner.equal_range(recipient);
+        for (auto owner = first; owner != last; ++owner) {
+            const auto &agent = active_->agents[owner->second];
+            if (!agent.sensing)
+                continue;
+            if (sensing)
+                return Snapshot::Failure(MakeError(AIErrors::HandleInvalid));
+            sensing = agent.sensing.get();
+        }
+        if (!sensing)
+            return Snapshot::Failure(MakeError(AIErrors::RuntimeUnavailable));
+        auto current = scene;
+        return sensing->memory.Snapshot(active_->lastPerceptionTick, {&current, ViewSourceAlive});
     }
 
     /** @copydoc ProjectPerceptionSource */
