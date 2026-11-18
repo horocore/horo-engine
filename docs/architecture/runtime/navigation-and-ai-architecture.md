@@ -2307,6 +2307,13 @@ explicit asset-document routes. Decision/EQS graph tabs reuse the shared Horo
 controllers own semantic validation, history, save/conflict and compilation.
 Cooked plans and live Scene-owned instances never become editor document state.
 
+The HoroEditor executable composition captures the built-in EQS descriptor registry
+from AI Scene Integration and publishes a read-only schema view to the workspace.
+The native point-lattice descriptor, initial source construction and candidate
+generation share the same typed identifiers and bounds. A source tab may validate
+against that schema without retaining an execution plan, acquiring a Scene
+capability or starting a provider. Unknown authored stages remain inspectable.
+
 1. **Pure Semantic Graph Assets**:
    - Persisted graph identity is established by typed assets: `BehaviorTreeAsset` (`.horo_bt`), `StateMachineAsset` (`.horo_sm`), and `UtilityAiAsset` (`.horo_utility`).
    - Assets contain only semantic topology: stable `GraphId`, `NodeId`, `PinId`, `PropertyId`, schema versions, node type identifiers, property bindings, and blackboard key bindings.

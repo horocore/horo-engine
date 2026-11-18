@@ -427,6 +427,7 @@ horo_allow_target_dependencies(TARGET HoroEditor
         HoroNativeNavigationBakeHost
         HoroPlatformProjectIo
         HoroEditorSceneProductHost
+        HoroAISceneIntegration
         HoroEditorPlaySceneHostInternal
         HoroScenePhysicsHost
         HoroAudioFrontendComposition HoroAudioImport HoroAudioSdl3 HoroAudioNull
