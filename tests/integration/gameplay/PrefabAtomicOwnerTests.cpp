@@ -844,8 +844,8 @@ namespace Horo::Application::PrefabAtomicTest {
                 REQUIRE((revision >> gameplay->descriptorRevision));
                 nativeProbe.emplace();
                 auto image = Gameplay::GameModuleHost::PrepareImage(gameplay->nativeArtifact,
-                                                                          {gameplay->moduleId, Gameplay::CurrentGameplayBuildFingerprint(),
-                                                                           gameplay->descriptorRevision});
+                                                                    {gameplay->moduleId, Gameplay::CurrentGameplayBuildFingerprint(),
+                                                                     gameplay->descriptorRevision});
                 REQUIRE(image.HasValue());
                 auto nodes = image.Value()->AcquireDecisionNodes();
                 REQUIRE(nodes.HasValue());
@@ -1019,8 +1019,9 @@ namespace Horo::Application::PrefabAtomicTest {
                                                                                 : AI::AiMissingControllerPolicy::Reject},
                                                          .prefabLoads = prefabOnly ? &prefabLoader : nullptr,
                                                          .cookedDecisions = decisions};
-            const auto composed = Internal::ComposeHeadlessSceneNetworkServices(
-                std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(definition).Value()), std::move(input), {}, gameplay);
+            const auto composed = Internal::ComposeHeadlessSceneNetworkServices(std::make_shared<const Runtime::RuntimeSceneDefinition>(
+                                                                                    std::move(definition).Value()),
+                                                                                std::move(input), {}, gameplay);
             REQUIRE(composed.HasValue());
             const auto built = composed.Value().factories.services[static_cast<std::size_t>(NetworkModeServiceKind::Scene)](
                 {NetworkModeServiceKind::Scene, NetworkProjectRole::Standalone, {}, NetworkModeWorldKind::Standalone, {7}});

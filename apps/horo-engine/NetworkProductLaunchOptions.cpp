@@ -280,9 +280,9 @@ namespace Horo::Application::Internal {
             if (!launch.cookedDecisionBindings.empty() &&
                 (launch.role != Net::NetworkProjectRole::Standalone || !launch.gameplay || launch.gameplay->nativeArtifact.empty() ||
                  !launch.sceneInput.scene.starts_with("cooked:") || launch.sceneInput.cookedRoot.empty()))
-                return Result<void>::Failure(
-                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "AI decisions require standalone mode, a native gameplay module, a "
-                                                                      "cooked Scene and its committed generation."));
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                                       "AI decisions require standalone mode, a native gameplay module, a "
+                                                       "cooked Scene and its committed generation."));
             if (launch.gameplay && launch.gameplay->prefabPermission != GameplayPrefabPermission::Granted &&
                 std::ranges::any_of(launch.cookedDecisionBindings, [](const auto &binding) {
                 return binding.prefab.has_value();
