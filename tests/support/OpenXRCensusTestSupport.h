@@ -14,6 +14,7 @@ namespace Horo::Tests::OpenXR {
         bool duplicateSpaces{};
         bool invalidView{};
         bool handsSupported{};
+        bool invalidReprojectionExtent{};
         std::string_view fail;
         std::vector<std::string_view> calls;
 
@@ -43,9 +44,16 @@ namespace Horo::Tests::OpenXR {
             value->graphicsProperties = {2048, 2048, 16};
             value->trackingProperties = {XR_TRUE, XR_TRUE};
             if (value->next) {
-                auto &hands = *static_cast<XrSystemHandTrackingPropertiesEXT *>(value->next);
-                REQUIRE(hands.type == XR_TYPE_SYSTEM_HAND_TRACKING_PROPERTIES_EXT);
-                hands.supportsHandTracking = active->handsSupported ? XR_TRUE : XR_FALSE;
+                const auto *header = static_cast<const XrBaseOutStructure *>(value->next);
+                if (header->type == XR_TYPE_SYSTEM_SPACE_WARP_PROPERTIES_FB) {
+                    auto &warp = *static_cast<XrSystemSpaceWarpPropertiesFB *>(value->next);
+                    warp.recommendedMotionVectorImageRectWidth = active->invalidReprojectionExtent ? 4096 : 640;
+                    warp.recommendedMotionVectorImageRectHeight = 512;
+                } else {
+                    auto &hands = *static_cast<XrSystemHandTrackingPropertiesEXT *>(value->next);
+                    REQUIRE(hands.type == XR_TYPE_SYSTEM_HAND_TRACKING_PROPERTIES_EXT);
+                    hands.supportsHandTracking = active->handsSupported ? XR_TRUE : XR_FALSE;
+                }
             }
             return Record("system-properties");
         }
@@ -71,6 +79,12 @@ namespace Horo::Tests::OpenXR {
                     values[index].maxImageRectHeight = 2048;
                     values[index].recommendedSwapchainSampleCount = 1;
                     values[index].maxSwapchainSampleCount = 4;
+                    if (values[index].next) {
+                        auto &synthesis = *static_cast<XrFrameSynthesisConfigViewEXT *>(values[index].next);
+                        REQUIRE(synthesis.type == XR_TYPE_FRAME_SYNTHESIS_CONFIG_VIEW_EXT);
+                        synthesis.recommendedMotionVectorImageRectWidth = active->invalidReprojectionExtent ? 4096 : 640 + index * 160;
+                        synthesis.recommendedMotionVectorImageRectHeight = 512;
+                    }
                 }
             return Record("views");
         }

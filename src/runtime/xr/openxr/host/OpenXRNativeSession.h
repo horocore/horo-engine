@@ -256,6 +256,11 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] XRSessionId Session() const noexcept;
         /** @brief Returns whether negotiation enabled an exact extension; false while unpublished. */
         [[nodiscard]] bool HasExtension(std::string_view name) const noexcept;
+        /** @brief Inspects actual native synthesis offers without enabling them or claiming a Renderer producer.
+         * @param attempt Exact retained discovery attempt.
+         * @return Bounded native-only evidence or the original stale/owner error. Optional query errors become offer state.
+         */
+        [[nodiscard]] Result<NativeReprojectionOffer> DiscoverReprojection(XRLoaderPreflightAttempt attempt) const;
         /** @brief Copies extension evidence while the exact discovered owner is current on the control thread.
          * @param attempt Exact discovery attempt. @param name Known extension policy name or advertised native name.
          * @return Owned observation or typed invalid, stale or wrong-thread failure.

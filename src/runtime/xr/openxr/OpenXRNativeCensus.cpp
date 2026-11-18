@@ -148,6 +148,113 @@ namespace Horo::XR::OpenXRInternal {
             return Outcome::Success(census);
         }
 
+        struct ReprojectionRoute final {
+            NativeReprojectionRoute kind;
+            std::string_view extension;
+            std::uint32_t minimumVersion;
+        };
+
+        constexpr std::array ReprojectionRoutes{
+            ReprojectionRoute{NativeReprojectionRoute::FrameSynthesisExt, XR_EXT_FRAME_SYNTHESIS_EXTENSION_NAME, 1},
+            ReprojectionRoute{NativeReprojectionRoute::SpaceWarpFb, XR_FB_SPACE_WARP_EXTENSION_NAME, 1},
+        };
+
+        enum class OfferPriority : std::uint8_t {
+            Absent,
+            Rejected,
+            Advertised,
+            Enabled
+        };
+
+        /** @brief Keeps explicit enabled policy above advertisement. Equal offers keep the registered route order. */
+        OfferPriority Priority(const ReprojectionRoute &route, const NativeExtensionAdmission &evidence) noexcept {
+            if (evidence.state == NativeExtensionState::Enabled && evidence.discoveredVersion >= route.minimumVersion)
+                return OfferPriority::Enabled;
+            if (evidence.state == NativeExtensionState::Discovered && evidence.discoveredVersion >= route.minimumVersion)
+                return OfferPriority::Advertised;
+            return evidence.state != NativeExtensionState::Absent ? OfferPriority::Rejected : OfferPriority::Absent;
+        }
+
+        /** @brief Maps a rejected route without treating an advertised or enabled extension as a complete producer. */
+        XRCapabilityState OfferState(const OfferPriority priority, const NativeExtensionAdmission &evidence) noexcept {
+            if (priority >= OfferPriority::Advertised)
+                return XRCapabilityState::DependencyMissing;
+            switch (evidence.state) {
+                case NativeExtensionState::Denied:
+                    return XRCapabilityState::Denied;
+                case NativeExtensionState::Unsupported:
+                    return XRCapabilityState::Unsupported;
+                case NativeExtensionState::DependencyMissing:
+                    return XRCapabilityState::DependencyMissing;
+                case NativeExtensionState::ProviderFailed:
+                    return XRCapabilityState::TemporarilyUnavailable;
+                default:
+                    return XRCapabilityState::Incompatible;
+            }
+        }
+
+        /** @brief Checks the native graphics range before an optional stereo configuration can use the dimensions. */
+        bool FitsSwapchains(const Render::FramebufferExtent extent, const XrSystemGraphicsProperties &limits) noexcept {
+            return extent.IsValid() && extent.width <= limits.maxSwapchainImageWidth && extent.height <= limits.maxSwapchainImageHeight;
+        }
+
+        /** @brief Queries enabled EXT sizing on each exact primary stereo view, preserving its native record order. */
+        XRCapabilityState ReadExtentsExt(const NativeDiscoveryBorrow &owner, const XrSystemGraphicsProperties &limits,
+                                         NativeReprojectionOffer &offer) {
+            const auto enumerate = Resolve<PFN_xrEnumerateViewConfigurationViews>(owner, "xrEnumerateViewConfigurationViews");
+            if (enumerate.HasError())
+                return XRCapabilityState::TemporarilyUnavailable;
+            std::array<XrViewConfigurationView, 2> views{};
+            std::array<XrFrameSynthesisConfigViewEXT, views.size()> synthesis{};
+            for (std::size_t index = 0; index < views.size(); ++index) {
+                synthesis[index].type = XR_TYPE_FRAME_SYNTHESIS_CONFIG_VIEW_EXT;
+                views[index] = {XR_TYPE_VIEW_CONFIGURATION_VIEW, &synthesis[index]};
+            }
+            std::uint32_t count{};
+            const auto result = enumerate.Value()(owner.instance, owner.system, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
+                                                  static_cast<std::uint32_t>(views.size()), &count, views.data());
+            if (XR_FAILED(result))
+                return result == XR_ERROR_SIZE_INSUFFICIENT ? XRCapabilityState::Incompatible : XRCapabilityState::TemporarilyUnavailable;
+            if (count != views.size())
+                return XRCapabilityState::Incompatible;
+            std::array<Render::FramebufferExtent, views.size()> extents{};
+            for (std::size_t index = 0; index < views.size(); ++index) {
+                const auto &native = synthesis[index];
+                extents[index] = {native.recommendedMotionVectorImageRectWidth, native.recommendedMotionVectorImageRectHeight};
+                if (views[index].type != XR_TYPE_VIEW_CONFIGURATION_VIEW || views[index].next != &native ||
+                    native.type != XR_TYPE_FRAME_SYNTHESIS_CONFIG_VIEW_EXT || native.next || !FitsSwapchains(extents[index], limits))
+                    return XRCapabilityState::Incompatible;
+            }
+            offer.extents = extents;
+            return XRCapabilityState::DependencyMissing;
+        }
+
+        /** @brief Queries sizing only for a route actually enabled on this instance. Neither route grants a writer. */
+        XRCapabilityState ReadReprojectionExtents(const NativeDiscoveryBorrow &owner, NativeReprojectionOffer &offer) {
+            const auto get = Resolve<PFN_xrGetSystemProperties>(owner, "xrGetSystemProperties");
+            if (get.HasError())
+                return XRCapabilityState::TemporarilyUnavailable;
+            const bool legacy = offer.route == NativeReprojectionRoute::SpaceWarpFb;
+            XrSystemSpaceWarpPropertiesFB spaceWarp{XR_TYPE_SYSTEM_SPACE_WARP_PROPERTIES_FB};
+            XrSystemProperties system{XR_TYPE_SYSTEM_PROPERTIES, legacy ? &spaceWarp : nullptr};
+            const auto result = get.Value()(owner.instance, owner.system, &system);
+            if (XR_FAILED(result))
+                return XRCapabilityState::TemporarilyUnavailable;
+            if (system.type != XR_TYPE_SYSTEM_PROPERTIES || system.systemId != owner.system ||
+                system.next != (legacy ? &spaceWarp : nullptr) || !system.graphicsProperties.maxSwapchainImageWidth ||
+                !system.graphicsProperties.maxSwapchainImageHeight)
+                return XRCapabilityState::Incompatible;
+            if (!legacy)
+                return ReadExtentsExt(owner, system.graphicsProperties, offer);
+            const Render::FramebufferExtent extent{spaceWarp.recommendedMotionVectorImageRectWidth,
+                                                   spaceWarp.recommendedMotionVectorImageRectHeight};
+            if (spaceWarp.type != XR_TYPE_SYSTEM_SPACE_WARP_PROPERTIES_FB || spaceWarp.next ||
+                !FitsSwapchains(extent, system.graphicsProperties))
+                return XRCapabilityState::Incompatible;
+            offer.extents.fill(extent);
+            return XRCapabilityState::DependencyMissing;
+        }
+
         /** @brief Reads only session-dependent publications from the exact existing unpublished native session. */
         Result<NativeSessionCensus> ReadSession(const NativeDiscoveryBorrow &owner, const XrSession session) {
             using Outcome = Result<NativeSessionCensus>;
@@ -181,6 +288,34 @@ namespace Horo::XR::OpenXRInternal {
         if (const auto current = BorrowDiscovery(attempt); current.HasError())
             return Result<NativeSystemCensus>::Failure(current.ErrorValue());
         return census;
+    }
+
+    /** @copydoc OpenXRNativeSession::DiscoverReprojection */
+    Result<NativeReprojectionOffer> OpenXRNativeSession::DiscoverReprojection(const XRLoaderPreflightAttempt attempt) const {
+        using Outcome = Result<NativeReprojectionOffer>;
+        const auto owner = BorrowDiscovery(attempt);
+        if (owner.HasError())
+            return Outcome::Failure(owner.ErrorValue());
+        NativeReprojectionOffer offer;
+        auto priority = OfferPriority::Absent;
+        for (const auto &route : ReprojectionRoutes) {
+            const auto admission = ReadExtensionAdmission(attempt, route.extension);
+            if (admission.HasError())
+                return Outcome::Failure(admission.ErrorValue());
+            const auto &evidence = admission.Value();
+            const auto next = Priority(route, evidence);
+            if (next <= priority)
+                continue;
+            priority = next;
+            offer.route = route.kind;
+            offer.version = evidence.discoveredVersion;
+            offer.availabilityWithoutProducer = OfferState(next, evidence);
+        }
+        if (priority == OfferPriority::Enabled)
+            offer.availabilityWithoutProducer = ReadReprojectionExtents(owner.Value(), offer);
+        if (const auto current = BorrowDiscovery(attempt); current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        return Outcome::Success(offer);
     }
 
     /** @copydoc OpenXRNativeSession::DiscoverSession */

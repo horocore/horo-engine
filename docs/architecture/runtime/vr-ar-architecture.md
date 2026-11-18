@@ -607,6 +607,15 @@ the ordinary projection fallback. The selected OpenXR Play composition publishes
 baseline projection. It has a color producer and omits the optional feature
 until the selected runtime and Renderer share a qualified auxiliary path.
 
+For that optional request, selected OpenXR discovery reports a compatible
+advertised frame-synthesis route as a missing producer dependency. The
+instance remains on its ordinary projection extensions. An explicitly enabled
+route can publish its native motion/depth extent offer to the owning
+composition. The EXT route supplies one recommendation per stereo eye. The
+legacy FB route supplies one system recommendation. Invalid, unavailable and
+stale offers carry separate evidence, and native sizing alone does not grant a
+provider or admit GPU work.
+
 The XR frame owner fences that future handoff with a typed per-session
 contract. Motion uses signed current-minus-previous XYZ in normalized device
 coordinates. Device depth is normalized with explicit metric endpoints, and
@@ -620,6 +629,9 @@ leave a separately valid ordinary projection available.
 
 See the [Khronos space-warp layer contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrCompositionLayerSpaceWarpInfoFB.html)
 for the distinction between runtime motion inputs and internal Renderer UV history.
+The [EXT per-view](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrFrameSynthesisConfigViewEXT.html)
+and [FB system](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrSystemSpaceWarpPropertiesFB.html)
+contracts require the respective extension to be enabled before issuing the size query.
 
 ## Deterministic Headless Session Harness
 
