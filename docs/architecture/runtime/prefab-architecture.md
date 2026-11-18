@@ -614,6 +614,13 @@ provenance. Static-only prefab content appears only in the cooked scene. A
 dynamic-spawn root. Developer source profiles may include sources explicitly, but
 they never become runtime parsing authority.
 
+The release Package stage uses `PreparePrefabReleaseContent` with the exact Cook
+receipt and the frozen chunk plan. It verifies the expanded Scene and runtime
+template envelopes against that generation, then writes their digests into the
+bounded `horo.prefab.content` manifest extension alongside the archive digest.
+The release publisher verifies and promotes the staged bytes using the final
+manifest.
+
 Source `.prefab` files share `ProjectVersion` and its migration pipeline. Cooked blobs do **not**.
 The header carries a distinct `cookedFormatVersion`. Runtime never migrates cooked bytes.
 Prefab cooking preserves the Asset Pipeline's complete canonical versioned cache-key inputs:

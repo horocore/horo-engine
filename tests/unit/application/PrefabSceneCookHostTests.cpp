@@ -52,15 +52,20 @@ namespace {
 
         Result<Release::ReleaseStagedPayload> Package(const Release::ReleaseStageContext &, const Release::ReleaseBuiltPayload &,
                                                       const Release::ReleaseCookedPayload &cooked) override {
-            const auto active = ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, fixture_.cooked.path);
-            if (active.HasError() || active.Value().generationRoot != cooked.root || active.Value().manifestDigest != cooked.bytesDigest)
-                return Result<Release::ReleaseStagedPayload>::Failure(MakeError(PrefabSceneCookErrors::Stale));
-            const auto inventory = ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, active.Value(), 1024U * 1024U);
-            if (inventory.HasError())
-                return Result<Release::ReleaseStagedPayload>::Failure(inventory.ErrorValue());
-            packagedPinnedGeneration_ =
-                inventory.Value().entries.size() == 2 + fixture_.request.runtimePrefabRoots.size() && cooked.root != fixture_.cache.path;
-            return Result<Release::ReleaseStagedPayload>::Success({cooked.root, cooked.bytesDigest});
+            AssetChunkDefinition base{.id = AssetChunkId::Parse("base").Value(),
+                                      .kind = AssetChunkKind::Base,
+                                      .assets = {fixture_.sceneId, TestMeshRecord().id}};
+            base.assets.insert(base.assets.end(), fixture_.request.runtimePrefabRoots.begin(), fixture_.request.runtimePrefabRoots.end());
+            const auto chunks = AssetChunkPlan::Create(std::span{&base, 1});
+            if (chunks.HasError())
+                return Result<Release::ReleaseStagedPayload>::Failure(chunks.ErrorValue());
+            const auto content = PreparePrefabReleaseContent(fixture_.files, cooked, fixture_.request.assets.target, chunks.Value(),
+                                                             fixture_.request.runtimePrefabRoots);
+            if (content.HasError())
+                return Result<Release::ReleaseStagedPayload>::Failure(content.ErrorValue());
+            packagedPinnedGeneration_ = !content.Value().archive.empty() && cooked.root != fixture_.cache.path;
+            return Result<Release::ReleaseStagedPayload>::Success(
+                {cooked.root, ComputeSha256(std::as_bytes(std::span{content.Value().archive}))});
         }
 
         Result<void> PreSignVerify(const Release::ReleaseStageContext &, const Release::ReleaseStagedPayload &) override {
@@ -421,11 +426,19 @@ TEST_CASE("Player release verifies prefab archive digests and promotes only the 
     std::erase(incompleteChunk.assets, fixture.prefabId);
     const auto incomplete = AssetChunkPlan::Create(std::span{&incompleteChunk, 1});
     REQUIRE(incomplete.HasValue());
-    CHECK(BuildAssetArchive(fixture.files, incomplete.Value(), frozen.Value()).HasError());
+    const auto prepare = [&](const AssetChunkPlan &selected, std::span<const AssetId> roots, const CancellationToken &cancellation = {}) {
+        return PreparePrefabReleaseContent(fixture.files, cooked.Value(), frozen.Value().target, selected, roots, {}, cancellation);
+    };
+    CHECK(prepare(incomplete.Value(), fixture.request.runtimePrefabRoots).HasError());
+    CHECK(prepare(chunks.Value(), {}).HasError());
+    CancellationSource stop;
+    stop.RequestCancellation();
+    CHECK(prepare(chunks.Value(), fixture.request.runtimePrefabRoots, stop.Token()).HasError());
 
-    const auto archive = BuildAssetArchive(fixture.files, chunks.Value(), frozen.Value());
-    REQUIRE(archive.HasValue());
-    const auto player = AssetArchiveProvider::Open(archive.Value(), frozen.Value().target);
+    const auto prepared = prepare(chunks.Value(), fixture.request.runtimePrefabRoots);
+    REQUIRE(prepared.HasValue());
+    const auto &archive = prepared.Value().archive;
+    const auto player = AssetArchiveProvider::Open(archive, frozen.Value().target);
     REQUIRE(player.HasValue());
     REQUIRE(player.Value().Members().size() == chunk.assets.size());
     CHECK_FALSE(player.Value().Exists(sourceOnly, {}).Value());
@@ -452,9 +465,9 @@ TEST_CASE("Player release verifies prefab archive digests and promotes only the 
     const auto stage = publisher.Begin(plan, ReleaseCandidateId{42});
     REQUIRE(stage.HasValue());
     const auto stagedArchive = stage.Value().StageRoot() / PlayerArchivePath;
-    REQUIRE(fixture.files.WriteDurable(stagedArchive, std::as_bytes(std::span{archive.Value()})).HasValue());
-    const ReleaseArtifactRecord content{std::string{PlayerArchivePath}, ReleaseArtifactRole::AssetArchive, archive.Value().size(),
-                                        ComputeSha256(std::as_bytes(std::span{archive.Value()}))};
+    REQUIRE(fixture.files.WriteDurable(stagedArchive, std::as_bytes(std::span{archive})).HasValue());
+    const ReleaseArtifactRecord content{std::string{PlayerArchivePath}, ReleaseArtifactRole::AssetArchive, archive.size(),
+                                        ComputeSha256(std::as_bytes(std::span{archive}))};
     const auto stagedInventory = ReleasePreSignInventory::Create(stage.Value().Candidate(), {content});
     REQUIRE(stagedInventory.HasValue());
     REQUIRE(VerifyReleaseStagedTree(stage.Value().StageRoot(), stagedInventory.Value()).HasValue());
@@ -470,10 +483,29 @@ TEST_CASE("Player release verifies prefab archive digests and promotes only the 
                                                            .build = {"prefab_release"},
                                                            .toolchainId = request.toolchainId,
                                                            .frozen = plan.Identities(),
-                                                           .artifacts = {content}});
+                                                           .artifacts = {content},
+                                                           .extensions = {prepared.Value().extension}});
     REQUIRE(manifest.HasValue());
     REQUIRE(manifest.Value().Artifacts().size() == 1);
     CHECK(manifest.Value().Artifacts().front().digest == content.digest);
+    REQUIRE(manifest.Value().Data().extensions.size() == 1);
+    const auto &extension = manifest.Value().Data().extensions.front();
+    CHECK(extension.name == "horo.prefab.content");
+    const auto evidence = nlohmann::json::parse(extension.canonicalJson);
+    CHECK(evidence.at("archive") == FormatSha256(content.digest));
+    CHECK(evidence.at("cookManifest") == FormatSha256(cooked.Value().bytesDigest));
+    REQUIRE(evidence.at("assets").size() == 2);
+    for (const auto &entry : inventory.Value().entries) {
+        if (entry.assetId == dependency)
+            continue;
+        const auto &records = evidence.at("assets");
+        const auto record = std::ranges::find_if(records, [&](const auto &item) {
+            return item.at("id") == entry.assetId.ToString();
+        });
+        REQUIRE(record != records.end());
+        CHECK(record->at("type") == entry.assetType.Value());
+        CHECK(record->at("envelope") == FormatSha256(entry.artifactHash));
+    }
 
     SECTION("promotion consumes the verified bytes after the cook selector and source change") {
         fixture.WritePrefab(99, {dependency});
@@ -481,6 +513,10 @@ TEST_CASE("Player release verifies prefab archive digests and promotes only the 
         REQUIRE(replacement.HasValue());
         REQUIRE(replacement.Value().generation.manifestDigest != frozen.Value().manifestDigest);
         fixture.WriteText("assets/hierarchy.prefab", "source is intentionally unavailable for recook");
+        const auto stillPinned = prepare(chunks.Value(), fixture.request.runtimePrefabRoots);
+        REQUIRE(stillPinned.HasValue());
+        CHECK(stillPinned.Value().archive == archive);
+        CHECK(stillPinned.Value().extension == prepared.Value().extension);
         REQUIRE(publisher.Promote(plan, stage.Value(), manifest.Value()).HasValue());
         CHECK_FALSE(std::filesystem::exists(stage.Value().StageRoot()));
         PlayerArchiveSmoke smoke{fixture.files, frozen.Value().target};
@@ -489,14 +525,14 @@ TEST_CASE("Player release verifies prefab archive digests and promotes only the 
         const auto verified = VerifyReleaseCandidate(stage.Value().FinalRoot(), manifest.Value(), smokeKinds, nullptr, probes);
         REQUIRE(verified.HasValue());
         CHECK(verified.Value().ManifestDigest() == manifest.Value().Digest());
-        const auto promoted = fixture.files.ReadFileBounded(stage.Value().FinalRoot() / PlayerArchivePath, archive.Value().size());
+        const auto promoted = fixture.files.ReadFileBounded(stage.Value().FinalRoot() / PlayerArchivePath, archive.size());
         REQUIRE(promoted.HasValue());
-        CHECK(promoted.Value() == archive.Value());
+        CHECK(promoted.Value() == archive);
         REQUIRE(publisher.Promote(plan, stage.Value(), manifest.Value()).HasValue());
         fixture.AssertRetained(replacement.Value().generation);
     }
     SECTION("changed staged bytes are rejected even after pre-sign verification") {
-        auto changed = archive.Value();
+        auto changed = archive;
         changed.back() ^= 1;
         REQUIRE(fixture.files.WriteDurable(stagedArchive, std::as_bytes(std::span{changed})).HasValue());
         CHECK(publisher.Promote(plan, stage.Value(), manifest.Value()).HasError());

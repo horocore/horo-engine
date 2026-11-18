@@ -4609,6 +4609,7 @@ add_library(HoroPrefabCookHost STATIC
         application/assets/PrefabCookSchemaContext.cpp
         application/assets/PrefabCookSemanticInputs.cpp
         application/assets/PrefabSceneCookHost.cpp
+        application/assets/PrefabReleaseContent.cpp
         application/assets/PrefabSceneCookCapture.cpp
         application/assets/PrefabSceneCookCatalog.cpp
         application/assets/PrefabTemplateCookCatalog.cpp
