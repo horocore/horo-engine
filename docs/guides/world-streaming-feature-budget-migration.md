@@ -45,3 +45,33 @@ both have drained. Policy or partition replacement creates a new owner lifetime;
 keep old authorities and borrowed services alive until their exact tokens drain.
 Moved-from coordinators support destruction only. Successful commands use preallocated
 bounded metadata; typed error diagnostics use the existing Foundation allocation model.
+
+## Scheduler owner timing
+
+Build the opt-in target in separate headless Debug and Release trees with the
+same compiler and platform. For a single-config Ninja build, use the following
+commands for Debug and repeat them with a different build directory and
+`-DCMAKE_BUILD_TYPE=Release`.
+
+```sh
+cmake -S . -B build/scheduler-debug -G Ninja -DBUILD_TESTING=ON -DHORO_BUILD_EDITOR_GUI=OFF -DCMAKE_BUILD_TYPE=Debug
+cmake --build build/scheduler-debug --target HoroStreamingSchedulerBenchmark
+build/scheduler-debug/tests/HoroStreamingSchedulerBenchmark 512
+```
+
+Keep the work count identical between configurations. The optional argument
+accepts 16 to 4096 measured owner quanta per queue depth, following 32 warmup
+quanta. Both runs sustain a preallocated queue with mixed eligibility and
+urgent arrivals. Every eighth quantum holds the only capacity unit and checks
+that the fully deferred queue and denied reservation preserve ownership.
+Successful dispatches exercise priority and oldest-admissible selection
+followed by success, cancellation or failure retirement.
+
+The executable writes JSON Lines with the build configuration, compiler,
+platform, queue occupancy, admission counts and raw p50, p95, p99 and maximum
+nanoseconds by phase. The timer-only sample shows the cost of reading the
+clock. Timing covers synchronous owner operations. Eligibility construction,
+benchmark validation and fixture setup happen outside the measured intervals.
+Use these measurements for scheduler overhead. Frame impact requires a host
+running streaming in its normal frame loop, including provider and native
+retirement work.

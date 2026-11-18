@@ -2564,6 +2564,14 @@ target_include_directories(HoroStreamingSourcePlannerBenchmark PRIVATE ${PROJECT
 target_link_libraries(HoroStreamingSourcePlannerBenchmark PRIVATE HoroEngine::WorldStreaming)
 add_test(NAME HoroStreamingSourcePlannerQualification COMMAND HoroStreamingSourcePlannerBenchmark 256)
 set_tests_properties(HoroStreamingSourcePlannerQualification PROPERTIES LABELS "unit;world_streaming;headless;qualification;ci-windows" TIMEOUT 90)
+add_executable(HoroStreamingSchedulerBenchmark EXCLUDE_FROM_ALL benchmarks/world_streaming/SchedulerBenchmark.cpp)
+target_compile_features(HoroStreamingSchedulerBenchmark PRIVATE cxx_std_20)
+target_compile_definitions(HoroStreamingSchedulerBenchmark PRIVATE
+    HORO_BENCHMARK_BUILD_MODE="$<CONFIG>"
+    HORO_BENCHMARK_COMPILER="${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}"
+    HORO_BENCHMARK_PLATFORM="${CMAKE_SYSTEM_NAME} ${CMAKE_SYSTEM_PROCESSOR}"
+)
+target_link_libraries(HoroStreamingSchedulerBenchmark PRIVATE HoroEngine::WorldStreaming)
 target_compile_features(HoroWorldStreamingTests PRIVATE cxx_std_20)
 target_link_libraries(HoroWorldStreamingTests PRIVATE HoroEngine::WorldStreaming)
 horo_register_catch_test(HoroWorldStreamingTests LABELS "unit;world_streaming;headless")
