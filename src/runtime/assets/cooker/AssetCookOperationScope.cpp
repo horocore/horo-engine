@@ -9,6 +9,7 @@
 #include "Horo/Foundation/ImmutableFileStorage.h"
 #include "Horo/Foundation/JobSystem.h"
 
+#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <string_view>
@@ -19,7 +20,7 @@ namespace Horo::Assets::Detail {
     /** @copydoc CookOperationScope::CookOperationScope */
     CookOperationScope::CookOperationScope(OperationStore *store, BuildOutputStore *output, const CancellationToken &cancellation,
                                            const BuildOutputSessionId sessionId, const std::optional<OperationId> id)
-        : store_(store), output_(output), cancellation_(&cancellation), sessionId_(sessionId), id_(id) {}
+        : store_(store), output_(output), cancellation_(cancellation), sessionId_(sessionId), id_(id) {}
 
     /** @copydoc CookOperationScope::~CookOperationScope */
     CookOperationScope::~CookOperationScope() noexcept {
@@ -31,6 +32,45 @@ namespace Horo::Assets::Detail {
         } catch (...) {
             // Foreign history sinks can throw nonstandard exceptions; retain the same cleanup guarantee.
             return;
+        }
+    }
+
+    /** @copydoc CookOperationScope::SetIdentities */
+    void CookOperationScope::SetIdentities(const BuildOutputSessionId sessionId, const std::optional<OperationId> id) noexcept {
+        sessionId_ = sessionId;
+        id_ = id;
+    }
+
+    /** @copydoc CookOperationScope::CanCook */
+    bool CookOperationScope::CanCook(OperationStore *store, BuildOutputStore *output) const noexcept {
+        return !completed_ && store_ == store && output_ == output;
+    }
+
+    /** @copydoc CookOperationScope::Cancellation */
+    const CancellationToken &CookOperationScope::Cancellation() const noexcept {
+        return cancellation_;
+    }
+
+    /** @copydoc CookOperationScope::FailPreparation */
+    void CookOperationScope::FailPreparation(Error error, BuildOutputRecord record) noexcept {
+        if (completed_)
+            return;
+        completed_ = true;
+        const bool cancelled = record.result == BuildOutputResult::Cancelled;
+        record.result = cancelled ? BuildOutputResult::Cancelled : BuildOutputResult::Failed;
+        try {
+            Publish(record);
+        } catch (...) {
+            // The optional output sink cannot suppress the terminal operation state.
+        }
+        try {
+            if (id_)
+                static_cast<void>(store_->Update(*id_, {.state = cancelled ? OperationState::Cancelled : OperationState::Failed,
+                                                       .phase = std::move(record.stage),
+                                                       .message = error.message,
+                                                       .error = std::move(error)}));
+        } catch (...) {
+            // The host still returns the authoritative preparation failure.
         }
     }
 
@@ -55,11 +95,14 @@ namespace Horo::Assets::Detail {
 
     /** @copydoc CookOperationScope::Update */
     void CookOperationScope::Update(std::string phase, std::string message, const float progress) {
+        if (completed_)
+            return;
+        progress_ = std::max(progress_, progress);
         if (store_ != nullptr && id_.has_value())
             static_cast<void>(store_->Update(*id_, OperationUpdate{.state = OperationState::Running,
                                                                    .phase = std::move(phase),
                                                                    .message = std::move(message),
-                                                                   .progress = progress}));
+                                                                   .progress = progress_}));
     }
 
     /** @copydoc CookOperationScope::Succeed */
@@ -102,7 +145,7 @@ namespace Horo::Assets::Detail {
 
     /** @copydoc CookOperationScope::Publish */
     void CookOperationScope::Publish(BuildOutputRecord record) const {
-        if (output_ == nullptr)
+        if (output_ == nullptr || !sessionId_.IsValid())
             return;
         record.sessionId = sessionId_;
         record.operationId = id_;
@@ -111,7 +154,7 @@ namespace Horo::Assets::Detail {
 
     /** @copydoc CookOperationScope::FinalizeProjection */
     void CookOperationScope::FinalizeProjection() {
-        if (completed_)
+        if (completed_ || (!id_ && !sessionId_.IsValid()))
             return;
         if (committed_) {
             Succeed("Cooked generation committed");
@@ -122,7 +165,7 @@ namespace Horo::Assets::Detail {
 
     /** @copydoc CookOperationScope::PublishUncommittedOutcome */
     void CookOperationScope::PublishUncommittedOutcome() {
-        const bool cancelled = cancelledResult_.value_or(cancellation_->IsCancellationRequested());
+        const bool cancelled = cancelledResult_.value_or(cancellation_.IsCancellationRequested());
         Publish(BuildOutputRecord{.timestampUtc = std::chrono::system_clock::now(),
                                   .severity = cancelled ? DiagnosticSeverity::Warning : DiagnosticSeverity::Error,
                                   .result = cancelled ? BuildOutputResult::Cancelled : BuildOutputResult::Failed,

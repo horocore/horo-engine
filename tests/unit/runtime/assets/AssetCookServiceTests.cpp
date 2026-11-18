@@ -6,6 +6,40 @@ using namespace Horo;
 using namespace Horo::Assets;
 using namespace Horo::Assets::ServiceTestSupport;
 
+TEST_CASE("AssetCook prepared activity rejects other stores and retains its original cancellation", "[native]") {
+    OperationStore owner{1, 2};
+    OperationStore other{1, 2};
+    BuildOutputStore output{4};
+    JobSystem jobs;
+    AssetCookService service{jobs, {}};
+    AssetCookRequest request{.buildOutputStore = &output, .operationStore = &owner};
+    CancellationSource cancellation;
+    auto activity = AssetCookActivity::Begin(request, cancellation.Token(), "Cook project", "capture");
+    REQUIRE(activity.HasValue());
+
+    SECTION("Cancellation before prepared inputs are admitted terminates the same operation") {
+        cancellation.RequestCancellation();
+        const auto cooked = service.CookPrepared(request, std::move(activity).Value());
+        REQUIRE(cooked.HasError());
+        CHECK(cooked.ErrorValue().code.Value() == CookErrors::Cancelled.code.Value());
+        const auto snapshot = owner.SnapshotIfChanged(0);
+        REQUIRE(snapshot);
+        REQUIRE(snapshot->operations.size() == 1);
+        CHECK(snapshot->operations.front().state == OperationState::Cancelled);
+    }
+    SECTION("An activity never projects into a different operation store") {
+        request.operationStore = &other;
+        const auto cooked = service.CookPrepared(request, std::move(activity).Value());
+        REQUIRE(cooked.HasError());
+        CHECK(cooked.ErrorValue().code.Value() == CookErrors::OperationAdmissionFailed.code.Value());
+        const auto snapshot = owner.SnapshotIfChanged(0);
+        REQUIRE(snapshot);
+        REQUIRE(snapshot->operations.size() == 1);
+        CHECK(snapshot->operations.front().state == OperationState::Failed);
+        CHECK_FALSE(other.SnapshotIfChanged(0).has_value());
+    }
+}
+
 TEST_CASE("AssetCookService publishes cache hits as cached scoped results", "[native]") {
     TestProject project;
     TempDir cacheDir;

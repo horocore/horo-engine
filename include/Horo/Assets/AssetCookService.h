@@ -88,6 +88,49 @@ namespace Horo::Assets {
         std::size_t cacheHits{};        /**< Assets served from cache. */
     };
 
+    namespace Detail {
+        class CookOperationScope;
+    }
+
+    /** @brief One admitted operation and output session shared by host preparation and AssetCook publication.
+     * @details The control thread owns this move-only activity. Borrowed stores outlive it; the cancellation token is retained.
+     * Dropping an unfinished activity terminates its admission. Only AssetCook can report authoritative publication success.
+     */
+    class AssetCookActivity final {
+    public:
+        /** @brief Admits one cook activity before the host begins fallible preparation.
+         * @param request Source of the optional stores and cooperative cancellation request.
+         * @param cancellation Token observed by both preparation and publication.
+         * @param title User-facing operation title.
+         * @param phase Initial stable preparation stage identifier.
+         * @return Owned activity, or a typed projection admission failure before any host preparation.
+         */
+        [[nodiscard]] static Result<AssetCookActivity> Begin(const AssetCookRequest &request, const CancellationToken &cancellation,
+                                                             std::string title, std::string phase);
+        /** @brief Transfers the single terminal projection authority to another control scope. */
+        AssetCookActivity(AssetCookActivity &&other) noexcept;
+        /** @brief Releases an unfinished admission as a terminal operation. */
+        ~AssetCookActivity();
+
+        /** @brief Updates the active preparation stage and progress fraction.
+         * @param phase Stable preparation stage.
+         * @param message User-facing progress text.
+         * @param progress Completion fraction between 0 and 1.
+         */
+        void Update(std::string phase, std::string message, float progress);
+        /** @brief Completes a failed preparation with safe display text and an already redacted diagnostic.
+         * @param error Typed redacted error copied into operation history.
+         * @param record Failed or cancelled output evidence. Session and operation identities are assigned by the activity.
+         */
+        void FailPreparation(Error error, BuildOutputRecord record) noexcept;
+
+    private:
+        friend class AssetCookService;
+        /** @brief Takes the privately admitted projection scope. */
+        explicit AssetCookActivity(std::unique_ptr<Detail::CookOperationScope> scope) noexcept;
+        std::unique_ptr<Detail::CookOperationScope> scope_;
+    };
+
     /**
      * @brief Bounded structured cook orchestrator.
      * @details Pins one immutable cooker catalog snapshot and one registry snapshot,
@@ -114,6 +157,13 @@ namespace Horo::Assets {
          * @post Cancellation before pointer replacement preserves the old generation; committed output remains successful.
          */
         [[nodiscard]] Result<AssetCookReport> Cook(const AssetCookRequest &request, const CancellationToken &cancellation);
+
+        /** @brief Publishes through the ordinary cook pipeline using an already admitted preparation activity.
+         * @param request Fully prepared cook inputs using the same projection stores.
+         * @param activity Sole operation/session authority and the original cancellation token.
+         * @return Published generation or typed failure. The activity terminates by return, including when validation fails.
+         */
+        [[nodiscard]] Result<AssetCookReport> CookPrepared(const AssetCookRequest &request, AssetCookActivity activity);
 
     private:
         JobSystem &jobs_;

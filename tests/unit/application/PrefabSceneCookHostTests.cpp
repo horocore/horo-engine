@@ -140,8 +140,48 @@ TEST_CASE("Host prefab cook exposes redacted preparation failures before AssetCo
     REQUIRE(fixture.Cook().HasValue());
     const auto recovered = operations.SnapshotIfChanged(progress->revision);
     REQUIRE(recovered);
-    REQUIRE(recovered->operations.size() == 3);
-    CHECK(std::ranges::count(recovered->operations, OperationState::Succeeded, &OperationRecord::state) == 2);
+    REQUIRE(recovered->operations.size() == 2);
+    CHECK(std::ranges::count(recovered->operations, OperationState::Succeeded, &OperationRecord::state) == 1);
+}
+
+TEST_CASE("Host prefab preparation and generation publication share one operation and output session", "[native][prefab-cook][host]") {
+    HostFixture fixture;
+    BuildOutputStore output{16};
+    OperationStore operations{1, 4};
+    fixture.request.assets.buildOutputStore = &output;
+    fixture.request.assets.operationStore = &operations;
+    std::optional<OperationId> initial;
+    const auto nextPublication = fixture.request.assets.newPublicationOperationId;
+    fixture.request.assets.newPublicationOperationId = [&] {
+        const auto snapshot = operations.SnapshotIfChanged(0);
+        REQUIRE(snapshot);
+        REQUIRE(snapshot->operations.size() == 1);
+        if (!initial) {
+            CHECK(snapshot->operations.front().phase == "prefab.preflight");
+            initial = snapshot->operations.front().id;
+        }
+        CHECK(snapshot->operations.front().id == initial);
+        return nextPublication();
+    };
+
+    REQUIRE(fixture.Cook().HasValue());
+    REQUIRE(initial);
+    const auto progress = operations.SnapshotIfChanged(0);
+    REQUIRE(progress);
+    REQUIRE(progress->operations.size() == 1);
+    CHECK(progress->operations.front().id == *initial);
+    CHECK(progress->operations.front().state == OperationState::Succeeded);
+    CHECK(progress->operations.front().progress == 1.0F);
+    const auto records = output.SnapshotIfChanged(0);
+    REQUIRE(records);
+    REQUIRE(records->records.size() > 1);
+    const auto session = records->records.front().sessionId;
+    REQUIRE(session);
+    for (const auto &entry : records->records) {
+        CHECK(entry.operationId == initial);
+        CHECK(entry.sessionId == session);
+    }
+    CHECK(records->records.back().result == BuildOutputResult::Succeeded);
 }
 
 TEST_CASE("Host prefab cook handles an operation-store cancellation before source capture", "[native][prefab-cook][host]") {

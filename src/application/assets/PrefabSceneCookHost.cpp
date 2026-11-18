@@ -36,95 +36,53 @@ namespace Horo::Application {
         }
     }  // namespace
 
-    /** @brief Projects the host preflight until ownership passes to AssetCook's publication operation. */
+    /** @brief Owns redacted prefab preparation evidence until the same activity transfers to AssetCook. */
     class PrefabSceneCookHost::PreparationDiagnostics final {
     public:
-        explicit PreparationDiagnostics(const Assets::AssetCookRequest &request)
-            : operations_(request.operationStore), output_(request.buildOutputStore) {
-            if (operations_) {
-                id_ = operations_->Begin({.kind = OperationKind::Cook,
-                                          .title = "Prepare prefab cook",
-                                          .phase = std::string{phase_},
-                                          .progress = 0.0F,
-                                          .cancellable = static_cast<bool>(request.requestCancel),
-                                          .requestCancel = request.requestCancel});
-            }
-        }
-
-        ~PreparationDiagnostics() {
-            if (!finished_)
-                Finish(&abandoned_);
-        }
-
-        [[nodiscard]] bool Admitted() const noexcept {
-            return !operations_ || id_.has_value();
-        }
+        explicit PreparationDiagnostics(Assets::AssetCookActivity activity) : activity_(std::move(activity)) {}
 
         void Stage(const std::string_view phase, const float progress) {
             phase_ = phase;
-            if (id_)
-                static_cast<void>(operations_->Update(*id_, {.phase = std::string{phase_}, .progress = progress}));
+            activity_.Update(std::string{phase}, {}, progress);
         }
 
-        void Finish(const Error *error = nullptr) noexcept {
-            if (finished_)
+        void Fail(const Error &error) noexcept {
+            if (transferred_)
                 return;
-            finished_ = true;
             const bool cancelled =
-                error && (IsJobCancelled(*error) ||
-                          ErrorChainContains(*error, Assets::CookErrors::Cancelled.domain, Assets::CookErrors::Cancelled.code) ||
-                          ErrorChainContains(*error, PrefabSceneCookErrors::Cancelled.domain, PrefabSceneCookErrors::Cancelled.code) ||
-                          ErrorChainContains(*error, Prefab::PrefabErrors::Cancelled.domain, Prefab::PrefabErrors::Cancelled.code) ||
-                          ErrorChainContains(*error, FileStorageErrors::Cancelled.domain, FileStorageErrors::Cancelled.code));
-            const std::string_view summary = cancelled ? "Prefab cook preparation cancelled"
-                                                       : (error ? "Prefab cook preparation failed" : "Prefab cook inputs prepared");
+                IsJobCancelled(error) ||
+                ErrorChainContains(error, Assets::CookErrors::Cancelled.domain, Assets::CookErrors::Cancelled.code) ||
+                ErrorChainContains(error, PrefabSceneCookErrors::Cancelled.domain, PrefabSceneCookErrors::Cancelled.code) ||
+                ErrorChainContains(error, Prefab::PrefabErrors::Cancelled.domain, Prefab::PrefabErrors::Cancelled.code) ||
+                ErrorChainContains(error, FileStorageErrors::Cancelled.domain, FileStorageErrors::Cancelled.code);
+            const std::string_view summary = cancelled ? "Prefab cook preparation cancelled" : "Prefab cook preparation failed";
             try {
-                if (id_) {
-                    const std::optional<Error> safeError = error ? std::optional<Error>{{.code = error->code,
-                                                                                         .domain = error->domain,
-                                                                                         .severity = error->severity,
-                                                                                         .message = std::string{summary}}}
-                                                                 : std::nullopt;
-                    static_cast<void>(
-                        operations_->Update(*id_, {.state = cancelled ? OperationState::Cancelled
-                                                                      : (error ? OperationState::Failed : OperationState::Succeeded),
-                                                   .phase = std::string{phase_},
-                                                   .message = std::string{summary},
-                                                   .progress = error ? std::nullopt : std::optional<float>{1.0F},
-                                                   .error = safeError}));
-                }
+                // Producer messages and native paths may include machine-local data. Project-relative registry identity is safe.
+                activity_.FailPreparation(
+                    {.code = error.code, .domain = error.domain, .severity = error.severity, .message = std::string{summary}},
+                    {.timestampUtc = std::chrono::system_clock::now(),
+                     .severity = cancelled ? DiagnosticSeverity::Warning : DiagnosticSeverity::Error,
+                     .result = cancelled ? BuildOutputResult::Cancelled : BuildOutputResult::Failed,
+                     .stage = std::string{phase_},
+                     .code = DiagnosticCode{error.code.Value()},
+                     .message = failedSource ? std::format("{} [{}] {}", summary, failedSource->id.ToString(), failedSource->sourcePath.String())
+                                             : std::string{summary}});
             } catch (...) {
-                // Optional history sinks cannot change the cook result.
+                // The activity's destructor still releases the admission after projection allocation failure.
             }
-            try {
-                if (output_ && error) {
-                    // Producer messages and native paths can include machine-local data. Only registry-relative identity is shared.
-                    const auto session = output_->BeginSession();
-                    output_->Append({.timestampUtc = std::chrono::system_clock::now(),
-                                     .sessionId = session,
-                                     .operationId = id_,
-                                     .severity = cancelled ? DiagnosticSeverity::Warning : DiagnosticSeverity::Error,
-                                     .result = cancelled ? BuildOutputResult::Cancelled : BuildOutputResult::Failed,
-                                     .stage = std::string{phase_},
-                                     .code = DiagnosticCode{error->code.Value()},
-                                     .message = failedSource ? std::format("{} [{}] {}", summary, failedSource->id.ToString(),
-                                                                           failedSource->sourcePath.String())
-                                                             : std::string{summary}});
-                }
-            } catch (...) {
-                // Optional diagnostic history cannot replace the authoritative typed failure.
-            }
+        }
+
+        Assets::AssetCookActivity Transfer() noexcept {
+            transferred_ = true;
+            return std::move(activity_);
         }
 
         std::optional<Assets::AssetRecord> failedSource;
 
     private:
-        OperationStore *operations_;
-        BuildOutputStore *output_;
-        std::optional<OperationId> id_;
+        Assets::AssetCookActivity activity_;
         std::string_view phase_{"prefab.preflight"};
-        const Error abandoned_ = MakeError(PrefabSceneCookErrors::Invalid);
-        bool finished_{};
+        bool transferred_{};
     };
 
     /** @copydoc PrefabSceneCookHost::PrefabSceneCookHost */
@@ -162,12 +120,10 @@ namespace Horo::Application {
     Result<Assets::AssetCookReport> PrefabSceneCookHost::CookImpl(const PrefabSceneCookRequest &request,
                                                                   const CancellationToken &cancellation,
                                                                   const Release::ReleaseExecutionPlan *releasePlan) {
-        PreparationDiagnostics diagnostics{request.assets};
-        if (!diagnostics.Admitted()) {
-            const auto error = MakeError(Assets::CookErrors::OperationAdmissionFailed);
-            diagnostics.Finish(&error);
-            return Result<Assets::AssetCookReport>::Failure(error);
-        }
+        auto activity = Assets::AssetCookActivity::Begin(request.assets, cancellation, "Cook prefabs and scenes", "prefab.preflight");
+        if (activity.HasError())
+            return Result<Assets::AssetCookReport>::Failure(activity.ErrorValue());
+        PreparationDiagnostics diagnostics{std::move(activity).Value()};
         auto result = [&]() -> Result<Assets::AssetCookReport> {
             if (cancellation.IsCancellationRequested())
                 return Result<Assets::AssetCookReport>::Failure(MakeError(PrefabSceneCookErrors::Cancelled));
@@ -197,25 +153,28 @@ namespace Horo::Application {
                 auto effective = request;
                 effective.prefabPolicy = validated.profile->Policy();
                 return CookWithProjectLease(effective, *validated.profile, cancellation, releasePlan, diagnostics,
-                                            std::move(projectLease).Value());
+                                                std::move(projectLease).Value());
             }
         }();
         if (result.HasError())
-            diagnostics.Finish(&result.ErrorValue());
+            diagnostics.Fail(result.ErrorValue());
         return result;
     }
 
     /** @copydoc PrefabSceneCookHost::CookWithProjectLease */
-    Result<Assets::AssetCookReport> PrefabSceneCookHost::CookWithProjectLease(
-        const PrefabSceneCookRequest &request, const Prefab::PrefabLimitProfile &limits, const CancellationToken &cancellation,
-        const Release::ReleaseExecutionPlan *releasePlan, PreparationDiagnostics &diagnostics, Editor::ProjectMutationLease) {
+    Result<Assets::AssetCookReport> PrefabSceneCookHost::CookWithProjectLease(const PrefabSceneCookRequest &request,
+                                                                              const Prefab::PrefabLimitProfile &limits,
+                                                                              const CancellationToken &cancellation,
+                                                                              const Release::ReleaseExecutionPlan *releasePlan,
+                                                                              PreparationDiagnostics &diagnostics,
+                                                                              Editor::ProjectMutationLease) {
         if (const auto recovery = migrations_.InspectPendingRecovery(request.assets.sourceRoot);
             recovery.action != Editor::MigrationRecoveryAction::None)
             return Result<Assets::AssetCookReport>::Failure(recovery.diagnostic.value_or(MakeError(PrefabSceneCookErrors::Invalid)));
         auto host = PrefabCookDetail::CaptureHost(request, compatibility_, releasePlan);
         if (host.HasError())
             return Result<Assets::AssetCookReport>::Failure(host.ErrorValue());
-        diagnostics.Stage("prefab.capture_sources", 0.25F);
+        diagnostics.Stage("prefab.capture_sources", 0.05F);
         auto captured = Assets::AssetCookInputSnapshot::Capture(request.assets.sourceRoot, registry_.Snapshot(), request.assets.limits,
                                                                 request.maximumCapturedBytes, cancellation);
         if (captured.HasError())
@@ -227,9 +186,9 @@ namespace Horo::Application {
         const JoinOptions sourceJoin{WaitPolicy::MainThreadPumpAllowed, Duration::FromMilliseconds(30'000)};
         if (auto replaced = expansion_.ReplaceScene(sourceJoin); replaced.HasError())
             return Result<Assets::AssetCookReport>::Failure(replaced.ErrorValue());
-        diagnostics.Stage("prefab.validate_sources", 0.5F);
+        diagnostics.Stage("prefab.validate_sources", 0.1F);
         auto composed = PrefabCookDetail::PrepareCatalog(request, host.Value(), *inputs, limits, *catalog_, cancellation, expansion_,
-                                                         diagnostics.failedSource);
+                                                          diagnostics.failedSource);
         if (auto closed = expansion_.CloseDocument(sourceJoin); closed.HasError())
             return Result<Assets::AssetCookReport>::Failure(closed.ErrorValue());
         if (composed.HasError())
@@ -246,9 +205,8 @@ namespace Horo::Application {
         cook.validateHostInputs = [this, &request, &host, &cancellation, releasePlan, capturedRevision] {
             return ValidateCurrentHost(request, registry_, compatibility_, host.Value(), cancellation, releasePlan, capturedRevision);
         };
-        diagnostics.Finish();
         Assets::AssetCookService operation{jobs_, composed.Value().catalog};
-        return operation.Cook(cook, cancellation);
+        return operation.CookPrepared(cook, diagnostics.Transfer());
     }
 
     /** @copydoc PrefabSceneCookHost::CookForRelease */

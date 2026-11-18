@@ -403,6 +403,14 @@ public:
 };
 ```
 
+An application host that prepares a candidate before publication can admit an
+`AssetCookActivity` first. Preparation and `CookPrepared` share one operation,
+one Build Output session and one cancellation token. The host reports its typed,
+redacted preparation failures through that activity and transfers the activity
+only after its candidate is ready. AssetCook remains the authority for the final
+publication outcome. Direct `Cook` callers keep their existing admission path.
+
+
 The cook report contains per-asset success/failure, timing, cache hits, and
 invalidated dependencies.
 

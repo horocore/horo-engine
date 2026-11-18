@@ -15,8 +15,8 @@ namespace Horo::Assets::Detail {
 
     /**
      * @brief Owns one admitted cook operation's terminal projection until its scope ends.
-     * @details The cook control thread exclusively owns this scope. Borrowed stores and
-     *          cancellation must outlive it; accepted cook jobs drain before it is destroyed.
+     * @details The cook control thread exclusively owns this scope. Borrowed stores
+     *          outlive it; accepted cook jobs drain before it is destroyed.
      *          An irreversible publication takes precedence over later cancellation or
      *          optional history failures. Destruction contains standard and foreign exceptions.
      */
@@ -26,18 +26,27 @@ namespace Horo::Assets::Detail {
          * @brief Borrows projection authorities for an already admitted cook operation.
          * @param store Optional operation authority that outlives this scope.
          * @param output Optional build-output authority that outlives this scope.
-         * @param cancellation Cancellation token that outlives this scope.
+         * @param cancellation Cancellation token retained through preparation and cook.
          * @param sessionId Previously allocated output identity, or invalid when output is absent.
          * @param id Previously admitted operation identity, or no value when store is absent.
          */
         CookOperationScope(OperationStore *store, BuildOutputStore *output, const CancellationToken &cancellation,
-                           BuildOutputSessionId sessionId, std::optional<OperationId> id);
+                           BuildOutputSessionId sessionId = {}, std::optional<OperationId> id = std::nullopt);
 
         /** @brief Attempts the remaining terminal projection without allowing notification exceptions to escape. */
         ~CookOperationScope() noexcept;
 
         CookOperationScope(const CookOperationScope &) = delete;
         CookOperationScope &operator=(const CookOperationScope &) = delete;
+
+        /** @brief Records the previously admitted identities without allocating. */
+        void SetIdentities(BuildOutputSessionId sessionId, std::optional<OperationId> id) noexcept;
+        /** @brief Tests whether the prepared activity can own the supplied stores' single cook lifecycle. */
+        [[nodiscard]] bool CanCook(OperationStore *store, BuildOutputStore *output) const noexcept;
+        /** @brief Returns the activity's original cooperative cancellation observer. */
+        [[nodiscard]] const CancellationToken &Cancellation() const noexcept;
+        /** @brief Finalizes a typed preparation failure without attempting a second terminal projection. */
+        void FailPreparation(Error error, BuildOutputRecord record) noexcept;
 
         /**
          * @brief Records the precommit terminal classification for cleanup.
@@ -95,9 +104,10 @@ namespace Horo::Assets::Detail {
 
         OperationStore *store_{};
         BuildOutputStore *output_{};
-        const CancellationToken *cancellation_{};
+        CancellationToken cancellation_;
         BuildOutputSessionId sessionId_;
         std::optional<OperationId> id_;
+        float progress_{};
         bool completed_{false};
         bool committed_{false};
         std::optional<bool> cancelledResult_;
