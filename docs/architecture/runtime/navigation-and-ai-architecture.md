@@ -2804,6 +2804,14 @@ exact active agents with `RegisterDecisionAtSafePoint`, and calls
 and shutdown fence retained decisions and intents and cancel their workers.
 The process JobSystem and worker-owned image pins must drain before code unload.
 
+Structural callers can stage a complete scheduler population change at the owner
+safe point. Admission checks the population that would remain after exact
+generation retirements and reserves the final deterministic allowances before
+publishing any registration. Publication removes retired handles and signals
+their worker cancellation before Scene commit. Evaluator cancellation runs
+only after all Scene owners have published. Abandoning the staged candidate
+keeps existing handles, budgets and callbacks intact.
+
 Each registration owns one coalesced wake slot. Existing `DecisionWakePolicy`
 requests can be forwarded as typed `DecisionWakeReasons`; activation, blackboard,
 perception, task completion and explicit requests bypass cadence. Fixed-tick

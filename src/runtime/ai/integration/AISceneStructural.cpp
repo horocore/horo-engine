@@ -33,6 +33,8 @@ namespace Horo::AI::Detail {
             std::vector<AgentRuntimeState> tombstones;
             decltype(AiSceneRuntimeState::agentsByOwner) owners;
             std::optional<PerceptionGroupPublication> perception;
+            AiTaskScheduler *scheduler{};
+            std::unique_ptr<AiTaskScheduler::PopulationChange> decisions;
             bool published{};
 
             ~StructuralCandidate() override {
@@ -50,9 +52,11 @@ namespace Horo::AI::Detail {
                 if (!state || state->closed || state->revision != revision || !scene.IsCurrent() ||
                     state->binding.scene != scene.RuntimeId())
                     return Failure<void>("The staged AI group lost its exact owner or Scene publication.");
+                if (state->scheduler.get() != scheduler)
+                    return Failure<void>("The staged AI group lost its decision scheduler.");
                 if (perception && !perception->IsCurrent())
                     return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
-                return Result<void>::Success();
+                return decisions ? decisions->ValidatePublication() : Result<void>::Success();
             }
 
             void Publish() noexcept override {
@@ -75,6 +79,8 @@ namespace Horo::AI::Detail {
                 }
                 additions.clear();
                 state->agentsByOwner.swap(owners);
+                if (decisions)
+                    decisions->Publish();
                 state->lastAgentIdentity = lastAgentIdentity;
                 ++state->revision;
                 if (perception)
@@ -84,11 +90,10 @@ namespace Horo::AI::Detail {
 
             Result<void> AfterPublication() override {
                 // Cancellation/blackboard observer teardown is deferred until every owner and Scene is visible.
-                for (auto &agent : retired) {
-                    if (state->scheduler)
-                        static_cast<void>(state->scheduler->Unregister(agent.record.handle));
+                if (decisions)
+                    decisions->FinishRetirements();
+                for (auto &agent : retired)
                     CancelOwnedWork(agent);
-                }
                 retired.clear();
                 return Result<void>::Success();
             }
@@ -179,8 +184,27 @@ namespace Horo::AI::Detail {
                     return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(preparedPerception.ErrorValue());
                 candidate->perception = std::move(preparedPerception).Value();
             }
+            if (auto staged = PrepareDecisionPopulation(*candidate); staged.HasError())
+                return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(staged.ErrorValue());
             PreparePublicationStorage(*candidate, agents, appended);
             return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Success(std::move(candidate));
+        }
+
+        /** @brief Stages retirement of registered decisions without arming callbacks before the aggregate fence. */
+        static Result<void> PrepareDecisionPopulation(StructuralCandidate &candidate) {
+            const auto &state = *candidate.state;
+            candidate.scheduler = state.scheduler.get();
+            if (!candidate.scheduler || candidate.removals.empty())
+                return Result<void>::Success();
+            std::vector<AgentHandle> removals;
+            removals.reserve(candidate.removals.size());
+            for (const auto index : candidate.removals)
+                removals.push_back(state.agents[index].record.handle);
+            auto staged = candidate.scheduler->PreparePopulationChange({}, removals);
+            if (staged.HasError())
+                return Result<void>::Failure(staged.ErrorValue());
+            candidate.decisions = std::move(staged).Value();
+            return Result<void>::Success();
         }
 
         /** @brief Recognizes exact new prefab admission without rewriting ordinary authored Scene identities. */

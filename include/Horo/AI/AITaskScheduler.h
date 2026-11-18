@@ -6,6 +6,8 @@
 #include "Horo/AI/AITaskJobService.h"
 #include "Horo/AI/DecisionWakePolicy.h"
 
+#include <span>
+
 namespace Horo::AI {
     /** @brief Authored priority; starvation promotion precedes ordinary priority. */
     enum class AiTaskPriority : std::uint8_t {
@@ -161,6 +163,16 @@ namespace Horo::AI {
         std::size_t pendingWorkers{1};
     };
 
+    /** @brief Bounded scheduler inputs for one exact admitted agent generation. */
+    struct AiScheduledDecisionRegistration final {
+        AgentHandle agent;
+        AgentId identity;
+        AiAgentSchedulePolicy policy;
+        std::shared_ptr<const void> image; /**< Pins executor code through destruction. */
+        std::shared_ptr<IAiScheduledDecision> executor;
+        CancellationToken cancellation;
+    };
+
     /** @brief Finite scene-wide limits, independent of renderer, wall clock and worker count. */
     struct AiTaskSchedulerSettings final {
         static constexpr std::size_t HardAgents = 65'536;
@@ -200,6 +212,34 @@ namespace Horo::AI {
         };
 
     public:
+        /** @brief Detached population change for one scheduler safe point.
+         * @details The scheduler must outlive validation and publication. Dropping an unpublished candidate
+         * releases detached inputs without changing live registrations or invoking cancellation.
+         */
+        class PopulationChange final {
+        public:
+            PopulationChange(const PopulationChange &) = delete;
+            PopulationChange &operator=(const PopulationChange &) = delete;
+            /** @brief Releases detached inputs or completes any published retirements. */
+            ~PopulationChange();
+            /** @brief Revalidates the exact population, tick and addition lifetimes. @return Success or typed stale error. */
+            [[nodiscard]] Result<void> ValidatePublication() const;
+            /** @brief Commits reserved additions and fences retiring worker work; invokes no evaluator callbacks.
+             * @pre ValidatePublication succeeds immediately before the owning aggregate publication. */
+            void Publish() noexcept;
+            /** @brief Cancels retired evaluators after the owning aggregate is visible; safe to repeat. */
+            void FinishRetirements() noexcept;
+
+        private:
+            friend class AiTaskScheduler;
+            struct Storage;
+            explicit PopulationChange(AiTaskScheduler &scheduler);
+            AiTaskScheduler *scheduler_;
+            std::unique_ptr<Storage> storage_;
+            std::uint64_t revision_;
+            std::uint64_t tick_;
+        };
+
         /** @brief Allocates validated finite storage. @param key Factory authority. @param jobs Borrowed process jobs.
          * @param incarnation Exact scene incarnation. @param settings Validated project limits. */
         AiTaskScheduler(ConstructionKey, JobSystem &jobs, AiRuntimeIncarnation incarnation, const AiTaskSchedulerSettings &settings);
@@ -217,6 +257,14 @@ namespace Horo::AI {
         [[nodiscard]] Result<void> Register(AgentHandle agent, AgentId identity, const AiAgentSchedulePolicy &policy,
                                             std::shared_ptr<const void> image, std::shared_ptr<IAiScheduledDecision> executor,
                                             CancellationToken cancellation = {});
+        /** @brief Stages all population changes and checks the final deterministic allowances without touching live entries.
+         * @param additions Exact new generation bindings; resources are retained by the candidate.
+         * @param removals Exact Scene agent generations; valid agents without a scheduler registration require no work.
+         * @return Detached change or typed validation, capacity or storage failure.
+         * @pre Before the first decision phase or after intent dispatch.
+         */
+        [[nodiscard]] Result<std::unique_ptr<PopulationChange>> PreparePopulationChange(
+            std::span<const AiScheduledDecisionRegistration> additions, std::span<const AgentHandle> removals);
         /** @brief Coalesces causes without queue growth. @param agent Exact registered handle. @param reasons Nonempty causes.
          * @return Success or typed stale/lifecycle failure. */
         [[nodiscard]] Result<void> Wake(AgentHandle agent, DecisionWakeReasons reasons);
@@ -264,6 +312,14 @@ namespace Horo::AI {
         /** @brief Validates phase and full-rate tick progression without mutation. @param tick Requested simulation tick.
          * @return Success or typed phase/backlog failure. */
         [[nodiscard]] Result<void> ValidateDecisionTick(std::uint64_t tick) const;
+        /** @brief Allows new population admission only at the scheduler owner boundary. */
+        [[nodiscard]] bool CanChangePopulation() const noexcept;
+        /** @brief Validates one exact live registration and its lowerable agent limits. */
+        [[nodiscard]] bool ValidRegistration(const AiScheduledDecisionRegistration &registration) const noexcept;
+        /** @brief Installs one admission into previously reserved scheduler storage. */
+        void Install(std::size_t slot, Entry entry) noexcept;
+        /** @brief Revokes a live registration, returning its callback pin for retirement. */
+        [[nodiscard]] Entry Detach(Entry &entry) noexcept;
         /** @brief Checks aggregate full-rate admission. @param policy New registration limits. @return Whether all agents fit. */
         [[nodiscard]] bool FitsDeterministic(const AiAgentSchedulePolicy &policy) const noexcept;
         /** @brief Compares stable priority, age and persistent identity. @param a Left slot. @param b Right slot.
@@ -288,6 +344,7 @@ namespace Horo::AI {
         std::vector<std::size_t> activeByHandle_; /**< Exact handle lookup for high-frequency relevance publications. */
         std::vector<std::size_t> order_;
         AiSchedulingReport report_;
+        std::uint64_t populationRevision_{};
         Entry *evaluating_{};
         AiWorkBudget *evaluatingBudget_{};
         bool inPhase_{}, committed_{}, closed_{}, retired_{};

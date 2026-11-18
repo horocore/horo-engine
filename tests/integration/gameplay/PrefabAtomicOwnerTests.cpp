@@ -477,7 +477,10 @@ namespace Horo::Application::PrefabAtomicTest {
         /** @brief Observes whether aggregate retirement revokes the actual owner token before scheduler callbacks. */
         struct RetirementProbe final : AI::IAiScheduledDecision {
             CancellationToken owner;
+            const Runtime::RuntimeSceneService *scenes{};
+            Runtime::EntityRef entity;
             bool revokedOnCancel{};
+            bool removedOnCancel{};
             std::size_t cancellations{};
 
             Result<AI::AiSliceOutcome> Evaluate(const AI::AiDecisionSliceContext &, AI::AiWorkBudget &) noexcept override {
@@ -490,13 +493,20 @@ namespace Horo::Application::PrefabAtomicTest {
 
             void Cancel() noexcept override {
                 revokedOnCancel = owner.IsCancellationRequested();
+                const auto scene = scenes->ActiveScene();
+                removedOnCancel = scene && scene->Get(entity).HasError();
                 ++cancellations;
             }
         };
 
         TEST_CASE("Cooked prefab despawn fences live AI work and frozen blackboards before a replacement spawn",
                   "[prefab][integration][atomic][ai][retirement]") {
-            Fixture fixture;
+            Fault fault = Fault::None;
+            SECTION("published retirement") {}
+            SECTION("operation cancelled during aggregate validation") {
+                fault = Fault::CancelRetirement;
+            }
+            Fixture fixture{false, fault};
             REQUIRE(fixture.ai.ConfigureTaskSchedulerAtSafePoint(fixture.jobs).HasValue());
             const auto scheduler = fixture.ai.TaskSchedulerAtSafePoint();
             REQUIRE(scheduler.HasValue());
@@ -522,14 +532,30 @@ namespace Horo::Application::PrefabAtomicTest {
             REQUIRE(retainedCapability.InspectTask(agent->handle, task.Value()).HasValue());
             auto probe = std::make_shared<RetirementProbe>();
             probe->owner = reserved.Value().Cancellation();
+            probe->scenes = &fixture.scenes;
+            probe->entity = agent->owner;
             REQUIRE(fixture.ai.RegisterDecisionAtSafePoint(agent->handle, {}, std::make_shared<int>(1), probe).HasValue());
             REQUIRE(scheduler.Value()->EvaluateAtDecision(1).HasValue());
             REQUIRE(scheduler.Value()->CommitAtIntentDispatch(1).HasValue());
 
             fixture.Tick(2);
+            if (fault == Fault::CancelRetirement) {
+                const auto priorRevision = fixture.scenes.ActiveScene()->StructuralRevision();
+                fixture.retirementToCancel = fixture.DespawnOperation();
+                REQUIRE(fixture.retirementToCancel.State() == Prefab::PrefabSpawnState::Pending);
+                fixture.AwaitState(fixture.retirementToCancel, Prefab::PrefabSpawnState::Cancelled);
+                CHECK(fixture.scenes.ActiveScene()->StructuralRevision() == priorRevision);
+                CHECK(fixture.scenes.ActiveScene()->Get(agent->owner).HasValue());
+                CHECK(probe->cancellations == 0);
+                REQUIRE(scheduler.Value()->Wake(agent->handle, {.perception = true}).HasValue());
+                REQUIRE(retained.Value().Revision().HasValue());
+                REQUIRE(retainedCapability.InspectTask(agent->handle, task.Value()).HasValue());
+                return;
+            }
             fixture.Reach(1);
             CHECK(probe->cancellations == 1);
             CHECK(probe->revokedOnCancel);
+            CHECK(probe->removedOnCancel);
             CHECK_FALSE(reserved.Value().CanAdmit());
             CHECK(retained.Value().Revision().HasError());
             CHECK(retainedCapability.InspectTask(agent->handle, task.Value()).HasError());

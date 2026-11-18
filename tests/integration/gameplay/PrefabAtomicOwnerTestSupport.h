@@ -92,16 +92,21 @@ namespace Horo::Application::PrefabAtomicTest {
         ForeignFacts,
         MissingFacts,
         DuplicateProducer,
+        CancelRetirement,
         RootPhysicsEndpoints  // Positive codec-domain scenario, not an injected failure.
     };
 
-    /** @brief Deliberately corrupts facts around a real AI candidate to test Scene's independent host-authority fence. */
-    class InvalidIdentityCandidate final : public Runtime::SceneStructuralCandidate {
+    /** @brief Injects a failure around a real AI candidate while keeping production staging intact. */
+    class FaultInjectingAiCandidate final : public Runtime::SceneStructuralCandidate {
     public:
-        InvalidIdentityCandidate(std::unique_ptr<Runtime::SceneStructuralCandidate> owner, Fault fault) : owner_(std::move(owner)) {
+        FaultInjectingAiCandidate(std::unique_ptr<Runtime::SceneStructuralCandidate> owner, Fault fault,
+                                  const Prefab::PrefabOperation *retirementToCancel)
+            : owner_(std::move(owner)), retirementToCancel_(retirementToCancel) {
             using enum Fault;
             const auto original = owner_->AgentIdentities();
             facts_.assign(original.begin(), original.end());
+            if (fault == CancelRetirement)
+                return;
             REQUIRE_FALSE(facts_.empty());
             if (fault == DuplicateFacts)
                 facts_.push_back(facts_.front());
@@ -116,7 +121,10 @@ namespace Horo::Application::PrefabAtomicTest {
         }
 
         Result<void> ValidatePublication() const override {
-            return owner_->ValidatePublication();
+            auto valid = owner_->ValidatePublication();
+            if (valid.HasValue() && retirementToCancel_)
+                retirementToCancel_->Cancel();
+            return valid;
         }
 
         void Publish() noexcept override {
@@ -130,12 +138,14 @@ namespace Horo::Application::PrefabAtomicTest {
     private:
         std::unique_ptr<Runtime::SceneStructuralCandidate> owner_;
         std::vector<Runtime::SceneAgentIdentityProjection> facts_;
+        const Prefab::PrefabOperation *retirementToCancel_;
     };
 
-    class InvalidIdentityParticipant final : public Runtime::SceneStructuralParticipant {
+    class FaultInjectingAiParticipant final : public Runtime::SceneStructuralParticipant {
     public:
-        InvalidIdentityParticipant(std::unique_ptr<Runtime::SceneStructuralParticipant> owner, Fault fault)
-            : owner_(std::move(owner)), fault_(fault) {}
+        FaultInjectingAiParticipant(std::unique_ptr<Runtime::SceneStructuralParticipant> owner, Fault fault,
+                                    const Prefab::PrefabOperation &retirementToCancel)
+            : owner_(std::move(owner)), fault_(fault), retirementToCancel_(&retirementToCancel) {}
 
         Runtime::SceneStructuralOwner Owner() const noexcept override {
             return owner_->Owner();
@@ -152,12 +162,15 @@ namespace Horo::Application::PrefabAtomicTest {
             if (prepared.HasError())
                 return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(prepared.ErrorValue());
             return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Success(
-                std::make_unique<InvalidIdentityCandidate>(std::move(prepared).Value(), fault_));
+                std::make_unique<FaultInjectingAiCandidate>(std::move(prepared).Value(), fault_,
+                                                            fault_ == Fault::CancelRetirement && !destroyed.empty() ? retirementToCancel_
+                                                                                                                    : nullptr));
         }
 
     private:
         std::unique_ptr<Runtime::SceneStructuralParticipant> owner_;
         Fault fault_;
+        const Prefab::PrefabOperation *retirementToCancel_;
     };
 
     /** @brief Borrows only the immutable app capture; no worker is submitted before capture admission. */
@@ -191,6 +204,7 @@ namespace Horo::Application::PrefabAtomicTest {
         AI::AiSceneRuntime ai;
         Physics::PhysicsSceneActivationAuthority authority;
         ScenePhysicsHost native;
+        Prefab::PrefabOperation retirementToCancel;
         Runtime::RuntimeSceneService scenes{registry, loads};
         Prefab::PrefabTemplateProvider templates{registry, loads, scenes, Prefab::PrefabLimitProfile::Create({}).Value()};
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> retirements{std::make_shared<Gameplay::GameModuleRetirementQueue>()};
@@ -371,8 +385,8 @@ namespace Horo::Application::PrefabAtomicTest {
                                                                      const std::optional<AI::AiScenePerceptionGroupInput> &perception) {
             using enum Fault;
             auto owner = ai.MakeStructuralParticipant(descriptors, perception);
-            if (fault == DuplicateFacts || fault == ForeignFacts || fault == MissingFacts)
-                return std::make_unique<InvalidIdentityParticipant>(std::move(owner), fault);
+            if (fault == DuplicateFacts || fault == ForeignFacts || fault == MissingFacts || fault == CancelRetirement)
+                return std::make_unique<FaultInjectingAiParticipant>(std::move(owner), fault, retirementToCancel);
             return owner;
         }
 
@@ -451,6 +465,16 @@ namespace Horo::Application::PrefabAtomicTest {
 
         /** @brief Copies the actual native module's existing operation observation while its image is pinned. */
         Prefab::PrefabOperation SpawnOperation() const {
+            return ReadNativeOperations().first;
+        }
+
+        /** @brief Observes the actual module's latest native despawn operation. */
+        Prefab::PrefabOperation DespawnOperation() const {
+            return ReadNativeOperations().second;
+        }
+
+        /** @brief Copies both native operation handles before the image borrow ends. */
+        std::pair<Prefab::PrefabOperation, Prefab::PrefabOperation> ReadNativeOperations() const {
             auto image = Platform::LoadDynamicLibrary(HORO_TEST_GAME_MODULE_PATH);
             REQUIRE(image.HasValue());
             void *symbol = image.Value()->GetSymbol("HoroTestCopyPrefabOperations");
@@ -462,7 +486,7 @@ namespace Horo::Application::PrefabAtomicTest {
             Prefab::PrefabOperation despawn;
             Prefab::PrefabInstance instance;
             copy(&spawn, &despawn, &instance);
-            return spawn;
+            return {std::move(spawn), std::move(despawn)};
         }
 
         Prefab::PrefabOperation AwaitRejection() {

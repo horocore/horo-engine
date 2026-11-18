@@ -59,6 +59,71 @@ namespace Horo::AI {
             }
         }
 
+        TEST_CASE("AI staged scheduler population reuses exact retired capacity and defers evaluator cancellation",
+                  "[unit][ai][scheduler][lifetime]") {
+            Harness h({.maximumAgents = 1, .evaluationsPerTick = 1, .workUnitsPerTick = 1, .commandsPerTick = 1});
+            const AiAgentSchedulePolicy policy{.workUnitsPerTick = 1, .commandsPerTick = 1};
+            auto resident = h.Register(0, policy);
+            auto replacement = std::make_shared<Probe>();
+            const std::array retire{h.Handle(0)};
+            const AgentHandle next{h.incarnation, {0, 2}};
+            const std::array add{AiScheduledDecisionRegistration{next, MakeIdentity<AgentId>(1), policy, h.image, replacement}};
+            {
+                auto rolledBack = h.scheduler->PreparePopulationChange(add, retire);
+                REQUIRE(rolledBack.HasValue());
+                REQUIRE(rolledBack.Value()->ValidatePublication().HasValue());
+            }
+            CHECK(resident->cancelled == 0);
+            REQUIRE(h.scheduler->EvaluateAtDecision(1).HasValue());
+            REQUIRE(h.scheduler->CommitAtIntentDispatch(1).HasValue());
+            CHECK(resident->evaluations == 1);
+            CHECK(replacement->evaluations == 0);
+
+            auto staged = h.scheduler->PreparePopulationChange(add, retire);
+            REQUIRE(staged.HasValue());
+            REQUIRE(staged.Value()->ValidatePublication().HasValue());
+            staged.Value()->Publish();
+            CHECK(resident->cancelled == 0);
+            CHECK(h.scheduler->Wake(h.Handle(0), {.explicitRequest = true}).HasError());
+            REQUIRE(h.scheduler->Wake(next, {.explicitRequest = true}).HasValue());
+            staged.Value()->FinishRetirements();
+            staged.Value()->FinishRetirements();
+            CHECK(resident->cancelled == 1);
+            REQUIRE(h.scheduler->EvaluateAtDecision(2).HasValue());
+            REQUIRE(h.scheduler->CommitAtIntentDispatch(2).HasValue());
+            CHECK(resident->evaluations == 1);
+            CHECK(replacement->evaluations == 1);
+        }
+
+        TEST_CASE("AI staged scheduler population preserves residents on rejection and rejects stale publication",
+                  "[unit][ai][scheduler][lifetime]") {
+            Harness h({.maximumAgents = 3, .evaluationsPerTick = 3, .workUnitsPerTick = 2, .commandsPerTick = 2});
+            const AiAgentSchedulePolicy policy{.workUnitsPerTick = 1, .commandsPerTick = 1};
+            auto resident = h.Register(0, policy);
+            auto stagedExecutor = std::make_shared<Probe>();
+            CancellationSource cancellation;
+            const std::array add{AiScheduledDecisionRegistration{h.Handle(1), MakeIdentity<AgentId>(2), policy, h.image, stagedExecutor,
+                                                                 cancellation.Token()},
+                                 AiScheduledDecisionRegistration{h.Handle(2), MakeIdentity<AgentId>(3), policy, h.image,
+                                                                 std::make_shared<Probe>()}};
+            ExpectError(h.scheduler->PreparePopulationChange(add, {}), AIErrors::SchedulerBudgetExhausted);
+            CHECK(h.scheduler->Wake(h.Handle(1), {.explicitRequest = true}).HasError());
+            auto retiredBeforePublish = h.scheduler->PreparePopulationChange(std::span{add}.first(1), {});
+            REQUIRE(retiredBeforePublish.HasValue());
+            cancellation.RequestCancellation();
+            ExpectError(retiredBeforePublish.Value()->ValidatePublication(), AIErrors::SchedulerPolicyInvalid);
+            auto stale = h.scheduler->PreparePopulationChange(std::span{add}.last(1), {});
+            REQUIRE(stale.HasValue());
+            auto other = h.Register(1, policy);
+            ExpectError(stale.Value()->ValidatePublication(), AIErrors::SchedulerPhaseInvalid);
+            REQUIRE(h.scheduler->EvaluateAtDecision(1).HasValue());
+            REQUIRE(h.scheduler->CommitAtIntentDispatch(1).HasValue());
+            CHECK(resident->evaluations == 1);
+            CHECK(other->evaluations == 1);
+            CHECK(stagedExecutor->evaluations == 0);
+            CHECK(stagedExecutor->cancelled == 0);
+        }
+
         TEST_CASE("AI declared modes preserve stable identity or authored priority independent of registration order",
                   "[unit][ai][scheduler]") {
             for (const auto mode : {AiSchedulingMode::Deterministic, AiSchedulingMode::BestEffort}) {
