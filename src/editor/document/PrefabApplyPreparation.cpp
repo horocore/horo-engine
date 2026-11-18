@@ -3,6 +3,7 @@
 #include "Horo/Prefab/PrefabErrors.h"
 
 #include <algorithm>
+#include <map>
 #include <new>
 
 namespace Horo::Editor {
@@ -23,7 +24,7 @@ namespace Horo::Editor {
             return std::get<PrefabRemoveComponentOverride>(record).target.object;
         }
 
-        /** @brief Rejects an incomplete or inherited selection before invoking the ordinary override algebra. */
+        /** @brief Rejects an incomplete selection before invoking the ordinary override algebra. */
         Result<PrefabValueOverrideSet> SelectedOverrides(const PrefabValueOverrideSet &set, const ScenePrefabRevertTarget &scope) {
             using Return = Result<PrefabValueOverrideSet>;
             const auto selectedOriginal = [&scope](const auto &entry) {
@@ -39,28 +40,134 @@ namespace Horo::Editor {
             };
             std::ranges::copy_if(set.records, std::back_inserter(selected.records), select);
             std::ranges::copy_if(set.componentRecords, std::back_inserter(selected.componentRecords), select);
-            const auto nested = [](const PrefabObjectAddress &address) {
-                return !address.NestedInstanceScope().empty();
-            };
-            if (selected.IsEmpty() || std::ranges::any_of(selected.records, nested, ValueObject) ||
-                std::ranges::any_of(selected.componentRecords, nested, ComponentObject))
+            if (selected.IsEmpty())
                 return Return::Failure(MakeError(PrefabErrors::OverrideInvalid));
             return Return::Success(std::move(selected));
         }
 
         /** @brief Replaces only the concrete owner's authored object records from the fully resolved selection. */
-        Result<PrefabDocument> PromoteConcreteSource(const PrefabDocument &source, const EffectivePrefabCandidate &applied,
-                                                     const PrefabLimitProfile &limits) {
-            auto data = source.Data();
+        Result<void> PromoteConcreteObjects(PrefabDocumentData &data, const EffectivePrefabCandidate &applied) {
             for (const auto &object : applied.Objects()) {
                 if (!object.key.object.NestedInstanceScope().empty())
                     continue;
                 const auto found = std::ranges::find(data.objects, object.key.object.SourceObject(), &PrefabObjectNode::localId);
                 if (object.sourcePrefab != data.assetId || found == data.objects.end())
-                    return Result<PrefabDocument>::Failure(MakeError(PrefabErrors::AddressInvalid));
+                    return Result<void>::Failure(MakeError(PrefabErrors::AddressInvalid));
                 *found = object.object;
             }
-            return PrefabDocument::Create(std::move(data), limits);
+            return Result<void>::Success();
+        }
+
+        /** @brief Immutable source authority and one shared work budget across all affected owning layers. */
+        struct LayerPreparation final {
+            const PrefabSourceResolverSnapshot &sources;
+            const PrefabValueSchemaSnapshot *schemas;
+            const PrefabLimitProfile &limits;
+            const CancellationToken &cancellation;
+            PrefabInstanceId instance;
+            PrefabExpansionBudget work;
+        };
+
+        /** @brief Strips exactly the selected owning occurrence while preserving the typed component/property identity. */
+        Result<PrefabValueOverrideTarget> RelativeTarget(const PrefabValueOverrideRecord &record) {
+            using Return = Result<PrefabValueOverrideTarget>;
+            const auto &object = ValueObject(record);
+            auto relative = PrefabObjectAddress::Create(object.NestedInstanceScope().subspan(1), object.SourceObject());
+            if (relative.HasError())
+                return Return::Failure(std::move(relative).ErrorValue());
+            const auto *property = std::get_if<PrefabPropertyAddress>(&record.target);
+            if (!property)
+                return Return::Success(std::move(relative).Value());
+            auto target = PrefabPropertyAddress::Create(std::move(relative).Value(), property->ComponentType(),
+                                                        property->ComponentInstance(), property->Property());
+            return target.HasError() ? Return::Failure(std::move(target).ErrorValue()) : Return::Success(std::move(target).Value());
+        }
+
+        /** @brief Stages exact authored values relative to the actual immediate source of this layer. */
+        Result<void> PromoteValueLayer(LayerPreparation &context, const Assets::AssetId immediate, PrefabSourceRevision &authored,
+                                       std::optional<PrefabValueOverrideSet> &owned, std::span<const PrefabValueEdit> assignments) {
+            if (assignments.empty())
+                return Result<void>::Success();
+            auto source = context.sources.Resolve(immediate, context.instance, context.limits, context.cancellation);
+            if (source.HasError())
+                return Result<void>::Failure(std::move(source).ErrorValue());
+            const auto objects = source.Value().Objects();
+            for (const auto &edit : assignments) {
+                if (auto budget = context.work.Consume(objects.size()); budget.HasError())
+                    return budget;
+                if (auto budget = context.work.Consume(owned ? owned->records.size() + owned->componentRecords.size() : 0);
+                    budget.HasError())
+                    return budget;
+                auto prepared = PreparePrefabValueEdit(source.Value(), owned, edit, context.schemas, context.limits, context.cancellation);
+                if (prepared.HasError())
+                    return Result<void>::Failure(std::move(prepared).ErrorValue());
+                if (!prepared.Value().effective)
+                    return Result<void>::Failure(MakeError(PrefabErrors::OverrideConflict));
+                auto next = std::move(prepared).Value().rebased;
+                if (next.IsEmpty())
+                    owned.reset();
+                else
+                    owned = std::move(next);
+            }
+            authored = source.Value().Revision().rootSource;
+            return Result<void>::Success();
+        }
+
+        /** @brief Promotes simple values in the variant layer or the selected concrete occurrence, without editing any dependency. */
+        Result<PrefabDocument> PromoteSource(const PrefabDocument &source, const EffectivePrefabCandidate &applied,
+                                             const PrefabValueOverrideSet &selected, LayerPreparation &context) {
+            auto data = source.Data();
+            auto *composition = data.composition ? &*data.composition : nullptr;
+            const bool variant = composition && composition->variantParent.has_value();
+            if (std::ranges::any_of(selected.componentRecords, [variant](const auto &record) {
+                return variant || !ComponentObject(record).NestedInstanceScope().empty();
+            }))
+                return Result<PrefabDocument>::Failure(
+                    MakeError(PrefabErrors::OverrideInvalid, "Layered component topology requires an explicit owning-layer edit."));
+            if (variant) {
+                std::vector<PrefabValueEdit> values;
+                values.reserve(selected.records.size());
+                for (const auto &record : selected.records)
+                    values.push_back({PrefabValueEditKind::Assign, record.target, record.value});
+                auto result = PromoteValueLayer(context, composition->variantParent->Asset(), *composition->variantAuthoredAgainst,
+                                                composition->variantOverrides, values);
+                if (result.HasError())
+                    return Result<PrefabDocument>::Failure(std::move(result).ErrorValue());
+                return PrefabDocument::Create(std::move(data), context.limits);
+            }
+
+            if (auto direct = PromoteConcreteObjects(data, applied); direct.HasError())
+                return Result<PrefabDocument>::Failure(std::move(direct).ErrorValue());
+            std::map<LocalObjectId, std::vector<PrefabValueEdit>> nested;
+            for (const auto &record : selected.records) {
+                const auto scope = ValueObject(record).NestedInstanceScope();
+                if (scope.empty())
+                    continue;
+                auto target = RelativeTarget(record);
+                if (target.HasError())
+                    return Result<PrefabDocument>::Failure(std::move(target).ErrorValue());
+                nested[scope.front()].push_back({PrefabValueEditKind::Assign, std::move(target).Value(), record.value});
+            }
+            for (const auto &[slot, values] : nested) {
+                if (!composition)
+                    return Result<PrefabDocument>::Failure(MakeError(PrefabErrors::AddressInvalid));
+                const auto placement = std::ranges::find(composition->nestedPlacements, slot, &NestedPrefabPlacement::placementLocalId);
+                if (placement == composition->nestedPlacements.end())
+                    return Result<PrefabDocument>::Failure(MakeError(PrefabErrors::AddressInvalid));
+                auto result = PromoteValueLayer(context, placement->sourcePrefab.Asset(), placement->authoredAgainst,
+                                                placement->valueOverrides, values);
+                if (result.HasError())
+                    return Result<PrefabDocument>::Failure(std::move(result).ErrorValue());
+            }
+            return PrefabDocument::Create(std::move(data), context.limits);
+        }
+
+        /** @brief Proves that source promotion reproduces the selected ordinary and placement-adjusted values. */
+        bool SameSourceEffect(const EffectivePrefabCandidate &expected, const EffectivePrefabCandidate &rebuilt) {
+            return std::ranges::equal(expected.Objects(), rebuilt.Objects(), [](const auto &left, const auto &right) {
+                return left.key == right.key && left.parent == right.parent && left.object == right.object &&
+                       left.effectiveLocalTransform == right.effectiveLocalTransform;
+            });
         }
 
         /** @brief Applies ordinary rebase to a complete detached instance envelope without guessing any dropped identity. */
@@ -85,12 +192,18 @@ namespace Horo::Editor {
 
         /** @brief Rebuilds the exact captured resolver, then rebases the changed source's active Scene placements. */
         Result<void> RebasePlacements(PreparedPrefabApply &prepared, const RevertScenePrefabOverridesCommand &command,
-                                      const Assets::AssetRegistrySnapshot &registry, std::vector<PrefabDependencySource> sources,
-                                      std::shared_ptr<const PrefabValueSchemaSnapshot> schemas, const PrefabLimitProfile &limits,
-                                      const CancellationToken &cancellation) {
+                                      const EffectivePrefabCandidate &expected, const Assets::AssetRegistrySnapshot &registry,
+                                      std::vector<PrefabDependencySource> sources, std::shared_ptr<const PrefabValueSchemaSnapshot> schemas,
+                                      const PrefabLimitProfile &limits, const CancellationToken &cancellation) {
             auto next = BuildPrefabSourceResolverSnapshot(registry, std::move(sources), limits, {}, schemas);
             if (next.HasError())
                 return Result<void>::Failure(std::move(next).ErrorValue());
+            const auto rebuilt = next.Value().Resolve(prepared.source.Data().assetId, command.instance, limits, cancellation);
+            if (rebuilt.HasError())
+                return Result<void>::Failure(rebuilt.ErrorValue());
+            if (!SameSourceEffect(expected, rebuilt.Value()))
+                return Result<void>::Failure(
+                    MakeError(PrefabErrors::OverrideConflict, "The owning source cannot preserve the selected effective values."));
             for (auto &placement : prepared.placements) {
                 if (placement.sourcePrefab.Asset() != prepared.source.Data().assetId || !placement.valueOverrides)
                     continue;
@@ -132,16 +245,15 @@ namespace Horo::Editor {
             const auto source = std::ranges::find_if(sources.Sources(), [asset](const auto &candidate) {
                 return candidate.document.Data().assetId == asset;
             });
-            if (source == sources.Sources().end() ||
-                (source->document.Data().composition && source->document.Data().composition->variantParent))
-                return Return::Failure(
-                    MakeError(PrefabErrors::OverrideInvalid, "Apply requires the selected values to belong to the concrete source."));
+            if (source == sources.Sources().end())
+                return Return::Failure(MakeError(PrefabErrors::DependencyUnavailable));
             auto selected = ResolvePrefabValueOverrides(original.Value(), chosen.Value(), schemas.get(), limits, cancellation);
             if (selected.HasError())
                 return Return::Failure(std::move(selected).ErrorValue());
             if (!selected.Value().effective)
                 return Return::Failure(MakeError(PrefabErrors::OverrideConflict));
-            auto updated = PromoteConcreteSource(source->document, *selected.Value().effective, limits);
+            LayerPreparation layers{sources, schemas.get(), limits, cancellation, command.instance, PrefabExpansionBudget{limits}};
+            auto updated = PromoteSource(source->document, *selected.Value().effective, selected.Value().rebased, layers);
             if (updated.HasError())
                 return Return::Failure(std::move(updated).ErrorValue());
             auto bytes = updated.Value().SerializeCanonical();
@@ -153,8 +265,8 @@ namespace Horo::Editor {
             const auto sourceIndex = static_cast<std::size_t>(source - sources.Sources().begin());
             updatedSources[sourceIndex] = {updated.Value(), revision};
             PreparedPrefabApply prepared{std::move(updated).Value(), scene.prefabInstances};
-            if (auto result =
-                    RebasePlacements(prepared, command, registry, std::move(updatedSources), std::move(schemas), limits, cancellation);
+            if (auto result = RebasePlacements(prepared, command, *selected.Value().effective, registry, std::move(updatedSources),
+                                               std::move(schemas), limits, cancellation);
                 result.HasError())
                 return Return::Failure(std::move(result).ErrorValue());
             return Return::Success(std::move(prepared));

@@ -1,3 +1,4 @@
+#include "../runtime/prefab/PrefabLayerOverrideTestSupport.h"
 #include "Horo/Scene/SceneSource.h"
 #include "NativePublicationFiles.h"
 #include "PrefabDocumentSessionTestSupport.h"
@@ -232,6 +233,76 @@ namespace Horo::Editor {
                 CHECK_FALSE(fixture.source.document->Snapshot().canRedo);
                 CHECK(fixture.history.CanUndo());
             }
+        }
+
+        TEST_CASE("Prefab apply promotes values into the owning variant or exact repeated occurrence", "[editor][prefab][apply][native]") {
+            using namespace Prefab::LayerTest;
+            Graph graph;
+            const auto parent = Asset();
+            const auto owner = Id(8);
+            const auto instance = Take(Prefab::PrefabInstanceId::Create(1));
+            Prefab::PrefabObjectAddress object;
+            auto property = Property();
+            bool nested{};
+            SECTION("a variant of a variant writes only its own layer") {
+                graph.AddVariant(7, parent.Bytes().back(), Revision(1), graph.Assign(parent, property, 4.0));
+                graph.AddParent(8, 7, Revision(7));
+            }
+            SECTION("two occurrences of the same asset retain their independent values and mounting") {
+                nested = true;
+                graph.AddNested(8, parent.Bytes().back(), Revision(1));
+                auto data = graph.sources.back().document.Data();
+                auto &placements = data.composition->nestedPlacements;
+                placements.front().localRootTransform = Math::Transform{{10, 0, 0}};
+                auto sibling = placements.front();
+                sibling.placementLocalId = {9};
+                placements.push_back(std::move(sibling));
+                graph.sources.back().document = Take(Prefab::PrefabDocument::Create(std::move(data), Limits()));
+                property = NestedProperty();
+                object = property.Object();
+            }
+            const auto sources = graph.Snapshot();
+            const auto baseline = Take(sources.Resolve(owner, instance, Limits()));
+            const auto edit = [&](const auto &existing, auto target, auto value) {
+                return Take(Prefab::PreparePrefabValueEdit(baseline, existing, {Prefab::PrefabValueEditKind::Assign, target, value},
+                                                           graph.schemas.get(), Limits()))
+                    .rebased;
+            };
+            const auto transform = Math::Transform{{1, 2, 3}};
+            const auto values = edit(edit(std::nullopt, property, 9.0), object, transform);
+            const SceneDocumentSnapshot scene{{4},
+                                              {6},
+                                              {},
+                                              {{instance, Take(Prefab::PrefabAssetReference::Create(owner)), {}, {}, values}}};
+            const auto oneValue = Take(PreparePrefabApply(scene,
+                                                          {instance, scene.revision, baseline.Revision(), graph.schemas->Revision(),
+                                                           Prefab::PrefabValueOverrideTarget{property}, 1},
+                                                          graph.registry.Snapshot(), sources, graph.schemas, Limits()));
+            REQUIRE(oneValue.placements.front().valueOverrides);
+            const auto &remaining = oneValue.placements.front().valueOverrides->records;
+            REQUIRE(remaining.size() == 1);
+            CHECK(remaining.front().target == Prefab::PrefabValueOverrideTarget{object});
+            const auto result =
+                Take(PreparePrefabApply(scene, {instance, scene.revision, baseline.Revision(), graph.schemas->Revision(), object, 1},
+                                        graph.registry.Snapshot(), sources, graph.schemas, Limits()));
+            REQUIRE_FALSE(result.placements.front().valueOverrides);
+            const auto &composition = *result.source.Data().composition;
+            const auto &owned = nested ? composition.nestedPlacements.front().valueOverrides : composition.variantOverrides;
+            REQUIRE(owned);
+            REQUIRE(owned->records.size() == 2);
+            CHECK(owned->sourcePrefab == (nested ? parent : Id(7)));
+            CHECK(owned->authoredAgainst == (nested ? Revision(1) : Revision(7)));
+            CHECK(std::ranges::all_of(owned->records, [](const auto &entry) {
+                if (const auto *target = std::get_if<Prefab::PrefabPropertyAddress>(&entry.target))
+                    return *target == Property();
+                return std::get<Prefab::PrefabObjectAddress>(entry.target) == Prefab::PrefabObjectAddress{};
+            }));
+            if (nested) {
+                REQUIRE(composition.nestedPlacements.size() == 2);
+                CHECK_FALSE(composition.nestedPlacements.back().valueOverrides);
+                CHECK(composition.nestedPlacements.front().localRootTransform == Math::Transform{{10, 0, 0}});
+            }
+            CHECK(Speed(Take(sources.Resolve(nested ? parent : Id(7), instance, Limits())), {}) == (nested ? 2.0 : 4.0));
         }
 
         TEST_CASE("Prefab apply compensates each owned write before reporting failure or recovery", "[editor][prefab][apply][native]") {

@@ -16,8 +16,8 @@ namespace Horo::Editor {
      * @param schemas Captured value and topology registry.
      * @param limits Captured canonical bounds. @param cancellation Cooperative stop during detached preparation.
      * @return Both complete immutable-source and owned Scene candidates or typed rejection with no observable mutation.
-     * @details This operation promotes direct concrete-source values and components. An inherited or nested selected
-     * edit requires the owning variant/placement layer workflow. Older dependent source revisions remain fenced.
+     * @details Values are authored in the immediate variant or exact nested occurrence when inherited. Component topology
+     * is supported for direct owned objects. Older dependent source revisions remain fenced.
      */
     [[nodiscard]] Result<PreparedPrefabApply> PreparePrefabApply(
         const SceneDocumentSnapshot &scene, const RevertScenePrefabOverridesCommand &command, const Assets::AssetRegistrySnapshot &registry,

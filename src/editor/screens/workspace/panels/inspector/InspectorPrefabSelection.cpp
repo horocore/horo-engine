@@ -84,8 +84,7 @@ namespace Horo::Editor {
         const bool canApply = canRevert && viewModel.prefabApplyAvailable && !viewModel.recoveryAvailable && root &&
                               std::ranges::any_of(viewModel.prefabDocuments, [root](const auto &candidate) {
             const auto &source = candidate.source->Data();
-            return source.assetId == root->source && !candidate.dirty && !candidate.externalConflict &&
-                   !(source.composition && source.composition->variantParent);
+            return source.assetId == root->source && !candidate.dirty && !candidate.externalConflict;
         });
         if (viewModel.prefabOverrideError)
             Ui::ErrorText(viewModel.prefabOverrideError->message.c_str(), context.theme.fonts);
