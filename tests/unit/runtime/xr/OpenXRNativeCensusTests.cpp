@@ -90,8 +90,8 @@ namespace Horo::Tests::OpenXR {
 
         struct SpatialCaptureScript final {
             static inline SpatialCaptureScript *current{};
-            static constexpr XrFutureEXT ContextFuture = 9;
-            static constexpr XrFutureEXT ScanFuture = 17;
+            static inline const auto ContextFuture = NativeHandle<XrFutureEXT>(9);
+            static inline const auto ScanFuture = NativeHandle<XrFutureEXT>(17);
             bool ready{};
             bool failDestroy{};
             XrResult completeResult{XR_SUCCESS};
