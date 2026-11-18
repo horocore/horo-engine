@@ -32,6 +32,10 @@ namespace Horo::Runtime {
     class SceneCommandBuffer;
     class IStagedRestoreAggregatePublication;
 
+    namespace Detail {
+        class ActivatedSceneInstances;
+    }
+
     /** @brief Exact durable member inventory for one private structural partition; entity is a dense command index. */
     struct SceneRestorePartitionMember final {
         std::size_t entity{};
@@ -326,6 +330,7 @@ namespace Horo::Runtime {
 
     private:
         friend class RuntimeSceneService;
+        friend class Detail::ActivatedSceneInstances;
 
         explicit ScenePublicationReceipt(std::shared_ptr<ScenePublicationDetail::State> state) noexcept : state_(std::move(state)) {}
 
@@ -1185,6 +1190,7 @@ namespace Horo::Runtime {
         void Shutdown() noexcept override;
 
     private:
+        friend class Detail::ActivatedSceneInstances;
         enum class TransitionKind : std::uint8_t {
             None,
             Activate,
@@ -1252,6 +1258,12 @@ namespace Horo::Runtime {
         void RejectPendingPublication(Error error);
         /** @brief Retires only an unpublished queue receipt; already published identities remain immutable. */
         void RetirePublicationReceipt(ScenePublicationStatus status) noexcept;
+        /** @brief Advances pending Activated children only on this service's canonical lifecycle cutoff. */
+        void ProgressActivatedInstances(const FrameContext &context);
+        /** @brief Checks the exact owning parent again at the child aggregate transfer boundary. */
+        [[nodiscard]] Result<void> ValidateActivatedParentPublication() const;
+        /** @brief Closes every child of the retiring aggregate before its subsystem owners are released. */
+        void RetireActivatedInstances() noexcept;
 
         [[nodiscard]] Result<bool> RetirePublishedRestorePreparationInternal();
         static std::optional<Error> MakeRestoreRetirementFallback();
@@ -1259,6 +1271,8 @@ namespace Horo::Runtime {
         std::thread::id restoreRetirementOwner_{std::this_thread::get_id()};
         SceneAggregate active_;
         Vfx::VfxExtractionOutcome vfxFrame_;
+        std::unique_ptr<Detail::ActivatedSceneInstances> activatedInstances_;
+        const RuntimeSceneService *activationParent_{}; /**< Private one-use Activated child publication fence. */
         SceneAggregate pending_;
         std::vector<std::unique_ptr<SceneActivationParticipant>> participants_;
         std::vector<std::unique_ptr<SceneStructuralParticipant>> structuralParticipants_;

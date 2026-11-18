@@ -1,3 +1,4 @@
+#include "ActivatedSceneInstancesInternal.h"
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 #include "RuntimeSceneErrors.h"
@@ -134,26 +135,6 @@ namespace Horo::Runtime {
         std::size_t activeLoads{};
         std::size_t residentBytes{};
         std::size_t discoveredReferences{};
-    };
-
-    /** @brief Keeps observer-triggered shutdown outside preparation, rollback, publication and retirement stacks. */
-    struct RuntimeSceneService::LifecycleMutation final {
-        explicit LifecycleMutation(RuntimeSceneService &service) noexcept
-            : service(service), outer(!std::exchange(service.mutatingLifecycle_, true)) {}
-
-        ~LifecycleMutation() {
-            if (!outer)
-                return;
-            service.mutatingLifecycle_ = false;
-            if (std::exchange(service.shutdownDeferred_, false) && !service.shutdown_)
-                service.Shutdown();
-        }
-
-        LifecycleMutation(const LifecycleMutation &) = delete;
-        LifecycleMutation &operator=(const LifecycleMutation &) = delete;
-
-        RuntimeSceneService &service;
-        bool outer{};
     };
 
     /** @copydoc RuntimeSceneService::RetirePublishedRestorePreparation */
@@ -470,7 +451,10 @@ namespace Horo::Runtime {
                 }
             }
             AdvancePreparation(context.cancellation);
-            return CommitDeferredChanges(context.cancellation);
+            auto committed = CommitDeferredChanges(context.cancellation);
+            if (committed.HasValue() && !shutdownDeferred_)
+                ProgressActivatedInstances(context);
+            return committed;
         }
         return Result<void>::Success();
     }
@@ -501,6 +485,7 @@ namespace Horo::Runtime {
         pending_.scene.reset();
         RetirePublicationReceipt(ScenePublicationStatus::Cancelled);
         publicationCheck_.reset();
+        RetireActivatedInstances();
         ScenePublicationDetail::ShutdownCandidates(active_.candidates);
         active_.restore.reset();
         vfxFrame_ = {};

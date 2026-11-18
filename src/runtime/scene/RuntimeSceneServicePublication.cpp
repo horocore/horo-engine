@@ -79,6 +79,7 @@ namespace Horo::Runtime {
         }
         RetirePublicationReceipt(ScenePublicationStatus::Rejected);
         publicationCheck_.reset();
+        RetireActivatedInstances();
         ScenePublicationDetail::ShutdownCandidates(transfer.retired.candidates);
         transfer.retired.restore.reset();
         transfer.retired.scene.reset();
@@ -148,6 +149,10 @@ namespace Horo::Runtime {
             }
             if (!prepared.Value())
                 return Result<void>::Success();
+            if (const auto valid = ValidateActivatedParentPublication(); valid.HasError()) {
+                RejectPendingPublication(valid.ErrorValue());
+                return Result<void>::Success();
+            }
             if (const auto published = PublishPendingAggregate(); published.HasError()) {
                 RejectPendingPublication(published.ErrorValue());
                 return Result<void>::Success();

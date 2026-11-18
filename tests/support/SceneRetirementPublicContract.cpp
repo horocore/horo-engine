@@ -21,3 +21,9 @@ static_assert(std::is_same_v<decltype(&StructuralParticipant::Prepare), Structur
 using InstanceOperation = Horo::Runtime::SceneInstanceOperation;
 static_assert(!std::is_default_constructible_v<InstanceOperation>);
 static_assert(std::is_copy_constructible_v<InstanceOperation>);
+
+using ActivatedOperation = Horo::Runtime::ActivatedSceneInstanceOperation;
+static_assert(!std::is_default_constructible_v<ActivatedOperation>);
+static_assert(std::is_copy_constructible_v<ActivatedOperation>);
+static_assert(std::is_same_v<decltype(&ActivatedOperation::Snapshot),
+                             Horo::Result<Horo::Runtime::ScenePublicationSnapshot> (ActivatedOperation::*)() const>);

@@ -60,6 +60,7 @@ namespace Horo::Runtime {
         for (const auto &candidate : prepared.candidates)
             candidate->Publish();
         SceneAggregate retired = std::move(active_);
+        RetireActivatedInstances();
         ScenePublicationDetail::ShutdownCandidates(retired.candidates);
         retired.restore.reset();
         retired.scene.reset();

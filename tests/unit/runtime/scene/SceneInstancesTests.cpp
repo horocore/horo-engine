@@ -208,4 +208,194 @@ namespace {
         }
         CHECK(f.scene.ActiveScene()->BaselineCount() == 0);
     }
+
+    struct ActivatedProbe final {
+        SceneRuntimeId runtime;
+        CancellationSource *cancelOnValidation{};
+        bool rejectRemoval{};
+        unsigned publishes{};
+        unsigned shutdowns{};
+    };
+
+    /** @brief Tests the genuine child-owned participant callbacks, independent of its parent aggregate. */
+    class ActivatedCandidate final : public SceneActivationCandidate {
+    public:
+        explicit ActivatedCandidate(ActivatedProbe &probe) : probe_(probe) {}
+
+        Result<void> ValidatePublication() const override {
+            if (probe_.cancelOnValidation)
+                probe_.cancelOnValidation->RequestCancellation();
+            return Result<void>::Success();
+        }
+
+        void Publish() noexcept override {
+            ++probe_.publishes;
+        }
+
+        void Shutdown() noexcept override {
+            ++probe_.shutdowns;
+        }
+
+    private:
+        ActivatedProbe &probe_;
+    };
+
+    class ActivatedParticipant final : public SceneActivationParticipant {
+    public:
+        explicit ActivatedParticipant(ActivatedProbe &probe) : probe_(probe) {}
+
+        Result<std::unique_ptr<SceneActivationCandidate>> Prepare(const RuntimeSceneDefinition &, const RuntimeSceneView &scene) override {
+            probe_.runtime = scene.RuntimeId();
+            return Result<std::unique_ptr<SceneActivationCandidate>>::Success(std::make_unique<ActivatedCandidate>(probe_));
+        }
+
+        Result<std::unique_ptr<SceneActivationCandidate>> PrepareRetirement(const RuntimeSceneView &scene) override {
+            CHECK(scene.RuntimeId() == probe_.runtime);
+            if (probe_.rejectRemoval)
+                return Result<std::unique_ptr<SceneActivationCandidate>>::Failure(Error{ErrorCode{"test.child.retirement"}});
+            return Result<std::unique_ptr<SceneActivationCandidate>>::Success({});
+        }
+
+    private:
+        ActivatedProbe &probe_;
+    };
+
+    ActivatedSceneInstanceRequest ActivatedRequest(const Fixture &fixture) {
+        return {{fixture.address.parent, fixture.address.instance, fixture.address.definition, SceneInstanceMode::Activated},
+                2,
+                fixture.parentLifetime.Token()};
+    }
+
+    Result<ActivatedSceneInstanceOperation> QueueActivated(Fixture &fixture, const ActivatedSceneInstanceRequest &request,
+                                                           ActivatedProbe &probe,
+                                                           const ActivatedSceneInstanceOperation *replaces = nullptr) {
+        std::vector<std::unique_ptr<SceneActivationParticipant>> childOwners;
+        childOwners.push_back(std::make_unique<ActivatedParticipant>(probe));
+        return QueueActivatedSceneInstance(fixture.scene, Fixture::MakeChild(*fixture.source), request,
+                                           std::make_unique<ChildPublication>(fixture.source, *fixture.source), std::move(childOwners),
+                                           replaces);
+    }
+
+    TEST_CASE("Activated child publishes its own runtime through the exact parent's lifecycle", "[unit][scene][instances][activated]") {
+        ActivatedProbe firstProbe;
+        ActivatedProbe incomingProbe;
+        Fixture f;
+        const auto request = ActivatedRequest(f);
+        const auto parentEntity = f.scene.ActiveScene()->Find({1});
+        REQUIRE(parentEntity);
+        const auto next = f.scene.NextRuntimeId();
+        const auto first = QueueActivated(f, request, firstProbe);
+        REQUIRE(first.HasValue());
+        REQUIRE(firstProbe.runtime == next);
+        CHECK(firstProbe.publishes == 0);
+        CHECK(first.Value().Snapshot().Value().status == ScenePublicationStatus::Pending);
+        CHECK_FALSE(FindActivatedSceneInstance(f.scene, first.Value()));
+        f.Commit();
+        REQUIRE(first.Value().Snapshot().Value().status == ScenePublicationStatus::Published);
+        const auto child = FindActivatedSceneInstance(f.scene, first.Value());
+        REQUIRE(child);
+        const auto childEntity = child->Find({10});
+        REQUIRE(childEntity);
+        CHECK(childEntity->runtime != parentEntity->runtime);
+        CHECK(child->Get(*parentEntity).HasError());
+        CHECK_FALSE(f.scene.ActiveScene()->Find({10}));
+        CHECK(firstProbe.publishes == 1);
+
+        *f.source = {2};
+        const auto replacement = QueueActivated(f, request, incomingProbe, &first.Value());
+        REQUIRE(replacement.HasValue());
+        REQUIRE(FindActivatedSceneInstance(f.scene, first.Value()));
+        CHECK_FALSE(FindActivatedSceneInstance(f.scene, replacement.Value()));
+        f.Commit();
+        REQUIRE(replacement.Value().Snapshot().Value().status == ScenePublicationStatus::Published);
+        CHECK(firstProbe.shutdowns == 1);
+        CHECK_FALSE(child->IsCurrent());
+        CHECK_FALSE(FindActivatedSceneInstance(f.scene, first.Value()));
+        CHECK(QueueActivatedSceneRemoval(f.scene, first.Value()).HasError());
+        CHECK(incomingProbe.runtime != childEntity->runtime);
+
+        incomingProbe.rejectRemoval = true;
+        REQUIRE(QueueActivatedSceneRemoval(f.scene, replacement.Value()).HasValue());
+        f.Commit();
+        const auto rejected = f.scene.TakeOperationError();
+        REQUIRE(rejected);
+        CHECK(rejected->code.Value() == "test.child.retirement");
+        CHECK(FindActivatedSceneInstance(f.scene, replacement.Value()));
+        CHECK(incomingProbe.shutdowns == 0);
+
+        incomingProbe.rejectRemoval = false;
+        REQUIRE(QueueActivatedSceneRemoval(f.scene, replacement.Value()).HasValue());
+        f.Commit();
+        CHECK_FALSE(FindActivatedSceneInstance(f.scene, replacement.Value()));
+        CHECK(incomingProbe.shutdowns == 1);
+        CHECK(f.scene.ActiveScene()->Find({1}) == parentEntity);
+    }
+
+    TEST_CASE("Activated scene ownership cancels exact attempts and retires with the parent", "[unit][scene][instances][activated]") {
+        ActivatedProbe residentProbe;
+        ActivatedProbe attemptProbe;
+        Fixture f;
+        auto request = ActivatedRequest(f);
+        const auto first = QueueActivated(f, request, residentProbe);
+        REQUIRE(first.HasValue());
+        f.Commit();
+        const auto old = FindActivatedSceneInstance(f.scene, first.Value());
+        REQUIRE(old);
+
+        auto tooSmall = request;
+        tooSmall.maximumInstances = 1;
+        tooSmall.address.instance = {5};
+        const auto rejectedIdentity = f.scene.NextRuntimeId();
+        CHECK(QueueActivated(f, tooSmall, attemptProbe).HasError());
+        CHECK(f.scene.NextRuntimeId() == rejectedIdentity);
+
+        *f.source = {2};
+        const auto cancelled = QueueActivated(f, request, attemptProbe, &first.Value());
+        REQUIRE(cancelled.HasValue());
+        REQUIRE(cancelled.Value().Cancel(f.scene).HasValue());
+        CHECK(cancelled.Value().Snapshot().Value().status == ScenePublicationStatus::Cancelled);
+        REQUIRE(FindActivatedSceneInstance(f.scene, first.Value()));
+
+        CancellationSource inFlight;
+        request.cancellation = inFlight.Token();
+        attemptProbe.cancelOnValidation = &inFlight;
+        const auto replacement = QueueActivated(f, request, attemptProbe, &first.Value());
+        REQUIRE(replacement.HasValue());
+        CHECK(cancelled.Value().Cancel(f.scene).HasError());
+        f.Commit();
+        CHECK(replacement.Value().Snapshot().Value().status == ScenePublicationStatus::Rejected);
+        CHECK_FALSE(FindActivatedSceneInstance(f.scene, replacement.Value()));
+        CHECK(FindActivatedSceneInstance(f.scene, first.Value()));
+        CHECK(attemptProbe.publishes == 0);
+
+        attemptProbe.cancelOnValidation = nullptr;
+        request.cancellation = {};
+        const auto pending = QueueActivated(f, request, attemptProbe, &first.Value());
+        REQUIRE(pending.HasValue());
+        SECTION("parent cancellation withdraws both resident and queued ownership") {
+            f.parentLifetime.RequestCancellation();
+            CHECK_FALSE(FindActivatedSceneInstance(f.scene, first.Value()));
+            f.Commit();
+            CHECK(f.scene.ActiveScene());
+        }
+        SECTION("parent replacement cancels the exact outgoing generation") {
+            const auto next = f.scene.NextRuntimeId();
+            f.ActivateParent();
+            CHECK(f.scene.ActiveScene()->RuntimeId() == next);
+        }
+        SECTION("parent unload removes the child with the parent") {
+            REQUIRE(f.scene.QueueUnload().HasValue());
+            f.Commit();
+            CHECK_FALSE(f.scene.ActiveScene());
+        }
+        SECTION("parent shutdown retires outstanding child work") {
+            f.scene.Shutdown();
+            CHECK_FALSE(f.scene.ActiveScene());
+        }
+        CHECK_FALSE(old->IsCurrent());
+        CHECK(residentProbe.shutdowns == 1);
+        CHECK_FALSE(FindActivatedSceneInstance(f.scene, pending.Value()));
+        CHECK(pending.Value().Snapshot().Value().status == ScenePublicationStatus::Cancelled);
+        CHECK(attemptProbe.publishes == 0);
+    }
 }  // namespace

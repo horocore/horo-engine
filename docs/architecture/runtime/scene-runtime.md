@@ -766,6 +766,20 @@ authority. Parent cancellation ends pending publication; replacing or retiring
 the parent discards all its attached children. Streamed admission neither
 selects residency nor mounts a partition.
 
+Activated instances use a separate, one-use RuntimeSceneService and entity
+domain. The canonical parent reserves the child's runtime identity from its
+monotonic cursor and supplies the existing asset authorities. An explicitly
+composed host supplies the immutable child definition, its current publication
+check, and any independent subsystem adapters. One pending operation advances
+at the parent's normal lifecycle safe point. Replacement publishes the validated
+new child before retiring the old one. Parent cancellation closes discovery of
+the child immediately and retires it at the safe point. Parent replacement,
+unload and shutdown cancel pending children and shut down resident children
+before the retiring parent's subsystem owners. This boundary currently admits
+direct children only. Authoring, nested dependency loading, and aggregation
+into a parent's renderer or subsystem simulation require explicit host
+composition.
+
 ## Editor Interaction
 
 The editor session owns `SceneDocument`, history, selection, and dirty state.

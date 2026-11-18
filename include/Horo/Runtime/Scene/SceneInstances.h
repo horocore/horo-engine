@@ -100,4 +100,59 @@ namespace Horo::Runtime {
      */
     [[nodiscard]] std::optional<SceneBaselineAttachmentView> FindEmbeddedSceneInstance(const RuntimeSceneView &parent,
                                                                                        const SceneInstanceAddress &address) noexcept;
+    /** @brief Absolute concurrent Activated child ceiling for one live parent. */
+    inline constexpr std::size_t MaximumActivatedSceneInstances = 32;
+
+    /** @brief Scope and explicit budget for a separate runtime activated under this parent. */
+    struct ActivatedSceneInstanceRequest final {
+        SceneInstanceAddress address;
+        std::size_t maximumInstances{};       /**< Positive resident limit also bounded by MaximumActivatedSceneInstances. */
+        CancellationToken parentCancellation; /**< Cancels pending preparation and withdraws resident visibility. */
+        CancellationToken cancellation;       /**< Cancels only the pending operation. */
+        RuntimeSceneConfig config;
+    };
+
+    /** @brief Opaque exact child operation and canonical Scene publication receipt. */
+    class ActivatedSceneInstanceOperation final {
+    public:
+        /** @brief Reads the actual child aggregate publication outcome on its owner lane. */
+        [[nodiscard]] Result<ScenePublicationSnapshot> Snapshot() const;
+
+        /** @brief Cancels only this still-pending attempt, preserving any current child. */
+        [[nodiscard]] Result<void> Cancel(RuntimeSceneService &parent) const;
+
+    private:
+        friend class Detail::ActivatedSceneInstances;
+        ActivatedSceneInstanceOperation(SceneInstanceAddress address, SceneRuntimeId child, ScenePublicationReceipt receipt) noexcept;
+        SceneInstanceAddress address_;
+        SceneRuntimeId child_;
+        ScenePublicationReceipt receipt_;
+    };
+
+    /** @brief Queues one independent child aggregate under the existing parent lifecycle and asset owners.
+     * @param parent Canonical existing parent owner and issuer of disjoint runtime identities.
+     * @param definition Prepared immutable child source; different from the parent definition.
+     * @param request Exact Activated occurrence, current parent cancellation and explicit limits.
+     * @param source Retained pure source publication predicate.
+     * @param participants Exact independent child host adapters, consumed on entry; may be empty for CoreEcs-only.
+     * @param replaces Exact resident operation for the same occurrence, or null to require absence.
+     * @return Cancellable child publication receipt or a typed rejection. At most one pending operation is admitted.
+     */
+    [[nodiscard]] Result<ActivatedSceneInstanceOperation> QueueActivatedSceneInstance(
+        RuntimeSceneService &parent, const RuntimeSceneDefinition &definition, const ActivatedSceneInstanceRequest &request,
+        std::unique_ptr<ScenePublicationCheck> source, std::vector<std::unique_ptr<SceneActivationParticipant>> participants,
+        const ActivatedSceneInstanceOperation *replaces = nullptr);
+
+    /** @brief Borrows only the exact published child runtime from the current parent owner lane.
+     * @param parent Canonical parent service. @param current Exact published child operation.
+     * @return Child view or absence after replacement, cancellation, retirement or wrong owner.
+     */
+    [[nodiscard]] std::optional<RuntimeSceneView> FindActivatedSceneInstance(const RuntimeSceneService &parent,
+                                                                             const ActivatedSceneInstanceOperation &current) noexcept;
+
+    /** @brief Queues normal retirement of one exact resident Activated child.
+     * @param parent Canonical parent service. @param current Exact published child operation.
+     * @return Admission or typed stale/lifecycle failure. Deferred failures reach the parent's TakeOperationError.
+     */
+    [[nodiscard]] Result<void> QueueActivatedSceneRemoval(RuntimeSceneService &parent, const ActivatedSceneInstanceOperation &current);
 }  // namespace Horo::Runtime
