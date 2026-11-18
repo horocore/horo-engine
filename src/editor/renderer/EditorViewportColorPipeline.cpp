@@ -12,9 +12,9 @@ namespace Horo::Editor {
     }  // namespace
 
     /** @copydoc EditorViewportColorPipeline::EditorViewportColorPipeline */
-    EditorViewportColorPipeline::EditorViewportColorPipeline(Render::RenderFrontend &frontend,
-                                                             EditorViewportColorResourcePort port) noexcept
-        : frontend_(&frontend), port_(port) {}
+    EditorViewportColorPipeline::EditorViewportColorPipeline(Render::RenderFrontend &frontend, EditorViewportColorResourcePort port,
+                                                             std::size_t frameSlots) noexcept
+        : frontend_(&frontend), port_(port), activeSlots_(frameSlots) {}
 
     /** @copydoc EditorViewportColorPipeline::~EditorViewportColorPipeline */
     EditorViewportColorPipeline::~EditorViewportColorPipeline() {

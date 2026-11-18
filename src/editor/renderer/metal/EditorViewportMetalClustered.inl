@@ -47,7 +47,8 @@ Result<void> EditorViewportRendererMetal::PrepareColorPipeline(const EditorViewp
         const std::array updates{MetalViewportBufferUpdate{buffer, bytes, 0}};
         return MetalViewportResourceBridge::UpdateBuffers(*owner.frontend, *owner.graphicsBridge, updates);
     }};
-    impl_->colorCandidate = std::make_unique<EditorViewportColorPipeline>(*impl_->frontend, port);
+    const auto slots = impl_->frontend->Capabilities().support.limits.maxFramesInFlight;
+    impl_->colorCandidate = std::make_unique<EditorViewportColorPipeline>(*impl_->frontend, port, slots);
     if (const auto ready = impl_->colorCandidate->Initialize(inputs); ready.HasError())
         return ready;
     if (const auto resources = impl_->resources.EnableColorPipeline(); resources.HasError())

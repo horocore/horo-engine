@@ -67,7 +67,7 @@ namespace Horo::Editor {
         if (output.HasError())
             return Outcome::Failure(output.ErrorValue());
         const auto resources = EditorViewportColorResourcePort{this, &ObserveColorBuffer, &WriteColorBuffer};
-        auto candidate = std::make_unique<EditorViewportColorPipeline>(frontend_, resources);
+        auto candidate = std::make_unique<EditorViewportColorPipeline>(frontend_, resources, device_.frames);
         if (const auto prepared = candidate->Initialize(inputs); prepared.HasError())
             return Outcome::Failure(prepared.ErrorValue());
         if (const auto requested = candidate->RequestSettings(settings); requested.HasError())

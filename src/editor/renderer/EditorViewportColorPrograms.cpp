@@ -210,10 +210,9 @@ namespace Horo::Editor {
     Result<void> EditorViewportColorPipeline::ValidateInitialization() {
         if (status_ != EditorViewportColorStatus::Unavailable || kernel_ || !port_.bufferReadiness || !port_.writeUniform)
             return Result<void>::Failure(MakeError(ExposureGpuErrors::InvalidInput));
-        const auto frames = frontend_->Capabilities().support.limits.maxFramesInFlight;
-        if (frames < 2 || frames > SlotCount)
-            return Result<void>::Failure(MakeError(ExposureGpuErrors::Unsupported));
-        activeSlots_ = frames;
+        if (activeSlots_ < 2 || activeSlots_ > SlotCount)
+            return Result<void>::Failure(
+                MakeError(ExposureGpuErrors::Unsupported, "The selected color pipeline requires two to four frame slots."));
         return Result<void>::Success();
     }
 

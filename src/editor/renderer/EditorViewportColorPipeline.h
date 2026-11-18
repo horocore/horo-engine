@@ -23,8 +23,9 @@ namespace Horo::Editor {
     public:
         static constexpr std::size_t SlotCount = 4;
         /** @brief Owns frontend-issued handles only. @param frontend Existing selected renderer. @param port Actual private
-         * completion/writes. */
-        EditorViewportColorPipeline(Render::RenderFrontend &frontend, EditorViewportColorResourcePort port) noexcept;
+         * completion/writes. @param frameSlots Number of slots provided by the selected render owner. */
+        EditorViewportColorPipeline(Render::RenderFrontend &frontend, EditorViewportColorResourcePort port,
+                                    std::size_t frameSlots) noexcept;
         /** @brief Releases owned resources through ordinary deferred frontend retirement. */
         ~EditorViewportColorPipeline();
         EditorViewportColorPipeline(const EditorViewportColorPipeline &) = delete;
@@ -232,7 +233,7 @@ namespace Horo::Editor {
         std::uint64_t acceptedSubmission_{};
         std::size_t candidateSlot_{};
         std::size_t nextSlot_{};
-        std::size_t activeSlots_{SlotCount};
+        std::size_t activeSlots_;
         bool manualOnly_{};
         bool candidate_{};
         bool encoded_{};
