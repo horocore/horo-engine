@@ -6,6 +6,7 @@
 #include "Horo/Editor/EditorSurfaceIdentity.h"
 #include "Horo/Foundation/Sha256.h"
 
+#include <cstdint>
 #include <optional>
 
 namespace Horo::Editor {
@@ -14,6 +15,7 @@ namespace Horo::Editor {
         AddState,
         SetTerminal,
         Connect,
+        SetTransitionPriority,
         RemoveTransition,
         RemoveState,
         Undo,
@@ -123,13 +125,15 @@ namespace Horo::Editor {
 
     /** @brief Revision-correlated authoring intent. Operands are semantic identities.
      * @details AddState takes an existing running source in node and atomically adds a state plus its incoming transition.
+     * SetTransitionPriority takes an existing transition in node and an explicit signed priority.
      * RemoveState erases a non-initial leaf and its incident transitions, subject to compiler admission of the remaining graph. */
     struct StateMachineEditRequest final {
         DocumentInstanceId instance;
         std::uint64_t revision{};
         StateMachineEditOperation operation{StateMachineEditOperation::AddState};
-        AI::DecisionNodeId node;   /**< Source state, edited state, or removed transition depending on operation. */
+        AI::DecisionNodeId node;   /**< Source state, edited state, or edited transition depending on operation. */
         AI::DecisionNodeId target; /**< Target of a connection. */
         AI::DecisionStateTerminal terminal{AI::DecisionStateTerminal::None};
+        std::optional<std::int32_t> priority{}; /**< Required signed authored value for SetTransitionPriority. */
     };
 }  // namespace Horo::Editor

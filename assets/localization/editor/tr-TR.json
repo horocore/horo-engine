@@ -925,6 +925,7 @@
     "workspace.decision_graph.edit_remove_state": {"text": "Durumu ve Geçişlerini Kaldır"},
     "workspace.decision_graph.edit_transition": {"text": "Geçiş"},
     "workspace.decision_graph.transition_priority": {"text": "Tanımlanan öncelik"},
+    "workspace.decision_graph.transition_apply_priority": {"text": "Geçiş Önceliğini Uygula"},
     "workspace.decision_graph.transition_order": {"text": "Kaynak durumdaki sıra"},
     "workspace.decision_graph.transition_precedence": {"text": "Etkin yaprak durumdaki koşulları sağlanan geçişler, üst durumlardaki geçişlerden önce gelir. Aynı durumda önce daha yüksek öncelik değerlendirilir. Öncelik eşitse geçiş kimliği küçükten büyüğe sıralanır."},
     "workspace.decision_graph.edit_remove_transition": {"text": "Geçişi Kaldır"},

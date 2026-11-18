@@ -192,6 +192,7 @@ TEST_CASE("Decision graph workspace and initial state machine labels resolve in 
                               "edit_remove_state",
                               "edit_transition",
                               "transition_priority",
+                              "transition_apply_priority",
                               "transition_order",
                               "transition_precedence",
                               "edit_remove_transition",

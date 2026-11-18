@@ -335,11 +335,20 @@ namespace Horo::Editor {
                         return Edit::Failure(edge.ErrorValue());
                     break;
                 }
+                case SetTransitionPriority:
                 case RemoveTransition: {
-                    const auto removed = std::ranges::find(machine.transitions, request.node, &AI::StateMachineTransition::id);
-                    if (removed == machine.transitions.end())
+                    const auto transition = std::ranges::find(machine.transitions, request.node, &AI::StateMachineTransition::id);
+                    if (transition == machine.transitions.end())
                         return fail();
-                    machine.transitions.erase(removed);
+                    if (request.operation == RemoveTransition) {
+                        machine.transitions.erase(transition);
+                        break;
+                    }
+                    if (!request.priority)
+                        return fail();
+                    if (transition->priority == *request.priority)
+                        return Edit::Success(false);
+                    transition->priority = *request.priority;
                     break;
                 }
                 case RemoveState:
@@ -1626,7 +1635,8 @@ namespace Horo::Editor {
         const auto drawTransitionOrder = [&](const AI::StateMachineAssetDescriptor &machine, const AI::StateMachineTransition &transition) {
             const auto order = ProjectStateMachineTransitionOrder(machine, transition);
             label(std::format("{} → {}", transition.source.Value(), transition.target.Value()), Theme::Text());
-            label(std::format("{} {}", text("workspace.decision_graph.transition_priority"), order.priority), Theme::Text());
+            if (!opened->editable)
+                label(std::format("{} {}", text("workspace.decision_graph.transition_priority"), order.priority), Theme::Text());
             label(std::format("{} {}", text("workspace.decision_graph.transition_order"), order.rank), Theme::Text());
             label(text("workspace.decision_graph.transition_precedence"), Theme::Muted());
         };
@@ -1740,8 +1750,24 @@ namespace Horo::Editor {
         const auto transition = std::ranges::find(machine.transitions, selection.transition, &AI::StateMachineTransition::id);
         if (transition != machine.transitions.end()) {
             drawTransitionOrder(machine, *transition);
+            if (!selection.priority || selection.priority->transition != transition->id || selection.priority->revision != opened->revision)
+                selection.priority = StateMachinePriorityDraft{transition->id, opened->revision, transition->priority,
+                                                               std::format("##DecisionTransitionPriority/{}/{}/{}", instance.Value(),
+                                                                           transition->id.Value(), opened->revision)};
+            auto &draft = *selection.priority;
+            static_cast<void>(Ui::DrawIntegerPropRow(text("workspace.decision_graph.transition_priority").c_str(), draft.widgetId.c_str(),
+                                                     draft.value, m_context.theme.fonts));
+            if (button("workspace.decision_graph.transition_apply_priority", draft.value != transition->priority))
+                outCommand = {.command = EditorWorkspaceViewCommand::EditDecisionStateMachine,
+                              .stateMachineEdit = StateMachineEditRequest{.instance = instance,
+                                                                          .revision = draft.revision,
+                                                                          .operation = SetTransitionPriority,
+                                                                          .node = draft.transition,
+                                                                          .priority = draft.value}};
             if (button("workspace.decision_graph.edit_remove_transition", true))
                 emit(RemoveTransition, transition->id);
+        } else {
+            selection.priority.reset();
         }
         return true;
     }

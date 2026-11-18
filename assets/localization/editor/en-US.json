@@ -925,6 +925,7 @@
     "workspace.decision_graph.edit_remove_state": {"text": "Remove State and Its Transitions"},
     "workspace.decision_graph.edit_transition": {"text": "Transition"},
     "workspace.decision_graph.transition_priority": {"text": "Authored priority"},
+    "workspace.decision_graph.transition_apply_priority": {"text": "Apply Transition Priority"},
     "workspace.decision_graph.transition_order": {"text": "Order from source state"},
     "workspace.decision_graph.transition_precedence": {"text": "Enabled transitions from the active leaf take precedence over those from its ancestors. From the same state, higher priority goes first. Ties use ascending transition ID."},
     "workspace.decision_graph.edit_remove_transition": {"text": "Remove Transition"},

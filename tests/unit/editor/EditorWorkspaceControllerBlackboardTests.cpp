@@ -531,6 +531,120 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
         CHECK_FALSE(documents.front().canUndo);
     }
 
+    SECTION("signed transition priority uses canonical history and survives an exact durable save") {
+        controller.ProcessCommand(*command);
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        const auto &documents = controller.ViewModel().decisionGraphDocuments;
+        REQUIRE(documents.size() == 1);
+        const auto &view = documents.front();
+        REQUIRE(view.editable);
+        const auto instance = view.identity.instance;
+        const auto machine = [](const auto &document) -> const AI::StateMachineAssetDescriptor & {
+            return std::get<AI::StateMachineAssetDescriptor>(document.graph->body);
+        };
+        const auto initial = machine(view).initial;
+        using enum StateMachineEditOperation;
+        const auto topology = [&](StateMachineEditOperation operation, AI::DecisionStateTerminal terminal) {
+            controller.ProcessCommand(
+                {.command = EditorWorkspaceViewCommand::EditDecisionStateMachine,
+                 .stateMachineEdit = StateMachineEditRequest{instance, view.revision, operation, initial, {}, terminal}});
+            REQUIRE_FALSE(view.diagnostic);
+        };
+        const auto history = [&](DecisionHistoryAction action) {
+            controller.ProcessCommand(MakeDecisionHistoryCommand(view, action));
+            REQUIRE_FALSE(view.diagnostic);
+        };
+        topology(SetTerminal, AI::DecisionStateTerminal::None);
+        topology(AddState, AI::DecisionStateTerminal::Succeeded);
+        topology(AddState, AI::DecisionStateTerminal::Failed);
+        history(DecisionHistoryAction::Save);
+        REQUIRE_FALSE(view.dirty);
+        REQUIRE(machine(view).transitions.size() == 2);
+        const auto edge = std::ranges::min_element(machine(view).transitions, {}, &AI::StateMachineTransition::id)->id;
+        const auto other = std::ranges::max_element(machine(view).transitions, {}, &AI::StateMachineTransition::id)->id;
+        REQUIRE(edge != other);
+        const auto transition = [&](const auto &document, AI::DecisionNodeId id) -> const AI::StateMachineTransition & {
+            const auto &transitions = machine(document).transitions;
+            const auto found = std::ranges::find(transitions, id, &AI::StateMachineTransition::id);
+            REQUIRE(found != transitions.end());
+            return *found;
+        };
+
+        const auto baseline = view.graph;
+        const auto layout = view.layout;
+        const auto revision = view.revision;
+        const auto disk = [&] {
+            return Assets::CaptureAssetSource(project.root, project.root / path, AI::DecisionCodecLimits{}.maximumBytes);
+        };
+        const auto before = disk();
+        REQUIRE(before.HasValue());
+        const auto setPriority = [&](AI::DecisionNodeId id, std::optional<std::int32_t> value, std::uint64_t requestedRevision) {
+            controller.ProcessCommand({.command = EditorWorkspaceViewCommand::EditDecisionStateMachine,
+                                       .stateMachineEdit = StateMachineEditRequest{.instance = instance,
+                                                                                   .revision = requestedRevision,
+                                                                                   .operation = SetTransitionPriority,
+                                                                                   .node = id,
+                                                                                   .priority = value}});
+        };
+        constexpr auto minimum = std::numeric_limits<std::int32_t>::min();
+        setPriority(edge, minimum, revision - 1);
+        REQUIRE(view.diagnostic);
+        CHECK(view.diagnostic->code.Value() == Application::DecisionCookErrors::Stale.code.Value());
+        for (const auto invalid : {initial, AI::DecisionNodeId{}}) {
+            setPriority(invalid, minimum, revision);
+            REQUIRE(view.diagnostic);
+            CHECK(view.diagnostic->code.Value() == Application::DecisionCookErrors::Invalid.code.Value());
+        }
+        setPriority(edge, std::nullopt, revision);
+        REQUIRE(view.diagnostic);
+        CHECK(view.diagnostic->code.Value() == Application::DecisionCookErrors::Invalid.code.Value());
+        setPriority(edge, 0, revision);
+        CHECK_FALSE(view.diagnostic);
+        CHECK(view.revision == revision);
+        CHECK(view.graph == baseline);
+        CHECK_FALSE(view.dirty);
+
+        const auto previous = transition(view, edge);
+        REQUIRE(ProjectStateMachineTransitionOrder(machine(view), previous).rank == 1);
+        setPriority(edge, minimum, revision);
+        REQUIRE_FALSE(view.diagnostic);
+        CHECK(view.revision == revision + 1);
+        CHECK(view.graph != baseline);
+        CHECK(view.layout == layout);
+        CHECK(view.dirty);
+        CHECK(transition(view, edge).priority == minimum);
+        CHECK(transition(view, edge).source == previous.source);
+        CHECK(transition(view, edge).target == previous.target);
+        CHECK(transition(view, other).priority == 0);
+        CHECK(ProjectStateMachineTransitionOrder(machine(view), transition(view, edge)).rank == 2);
+        const auto uncommitted = disk();
+        REQUIRE(uncommitted.HasValue());
+        CHECK(uncommitted.Value().identity == before.Value().identity);
+
+        history(DecisionHistoryAction::Undo);
+        CHECK(view.graph == baseline);
+        CHECK_FALSE(view.dirty);
+        CHECK(view.canRedo);
+        history(DecisionHistoryAction::Redo);
+        CHECK(transition(view, edge).priority == minimum);
+        CHECK(view.dirty);
+        history(DecisionHistoryAction::Save);
+        CHECK_FALSE(view.dirty);
+        const auto saved = disk();
+        REQUIRE(saved.HasValue());
+        CHECK(saved.Value().identity.digest == view.source);
+        CHECK(saved.Value().identity != before.Value().identity);
+
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = instance});
+        REQUIRE(documents.empty());
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::OpenSourceFile,
+                                   .sourceOpenRequest = SourceOpenRequest{.path = path, .origin = SourceOpenOrigin::AssetActivation}});
+        REQUIRE(documents.size() == 1);
+        CHECK(documents.front().identity.instance != instance);
+        CHECK(transition(documents.front(), edge).priority == minimum);
+        CHECK(transition(documents.front(), other).priority == 0);
+    }
+
     SECTION("canvas layout shares document history and saves separately across paired rename") {
         controller.ProcessCommand(*command);
         REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());

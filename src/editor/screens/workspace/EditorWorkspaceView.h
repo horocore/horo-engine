@@ -161,12 +161,21 @@ namespace Horo::Editor {
 
         mutable BlackboardViewDraft m_blackboardDraft;
 
+        /** @brief Uncommitted signed priority tied to one transition and document revision. */
+        struct StateMachinePriorityDraft final {
+            AI::DecisionNodeId transition;
+            std::uint64_t revision{};
+            std::int32_t value{};
+            std::string widgetId;
+        };
+
         /** @brief Transient selection by semantic identity, scoped to one open graph instance. */
         struct StateMachineSelection final {
             DocumentInstanceId instance;
             AI::DecisionNodeId state;
             AI::DecisionNodeId target;
             AI::DecisionNodeId transition;
+            std::optional<StateMachinePriorityDraft> priority{};
         };
 
         mutable StateMachineSelection m_stateMachineSelection;
