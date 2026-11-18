@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <new>
 #include <nlohmann/json.hpp>
+#include <set>
 
 namespace Horo::Application {
     namespace {
@@ -19,10 +20,39 @@ namespace Horo::Application {
                                                                                                                             : nullptr;
         }
 
+        /** @brief Verifies exact v6 child revisions in the same bounded release generation. */
+        Result<void> VerifySceneChildren(const Runtime::RuntimeSceneDefinition &scene,
+                                         const Assets::AssetCookGenerationContents &generation, const Assets::AssetCookLimits &limits,
+                                         const CancellationToken &cancellation) {
+            if (scene.ChildScenes().empty())
+                return Result<void>::Success();
+            const auto type = Assets::AssetTypeId::Parse("core.scene").Value();
+            std::set<Assets::AssetId> verified;
+            const std::span inventory{generation.entries};
+            for (const auto &child : scene.ChildScenes()) {
+                if (cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(PrefabSceneCookErrors::Cancelled));
+                if (!verified.insert(child.asset).second)
+                    continue;
+                const auto *entry = ResolveDependency(inventory, {child.asset, type});
+                if (!entry)
+                    return Result<void>::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
+                const auto index = static_cast<std::size_t>(entry - inventory.data());
+                const auto envelope = Assets::DecodeCookedArtifact(generation.artifacts[index], limits);
+                if (envelope.HasError())
+                    return Result<void>::Failure(envelope.ErrorValue());
+                const auto decoded = SceneCook::DecodeCookedChildScene(envelope.Value().payload, child);
+                if (decoded.HasError())
+                    return Result<void>::Failure(decoded.ErrorValue());
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Checks typed prefab and Scene closure against the exact envelope digests packaged here. */
         Result<void> VerifyRuntimeArtifact(const Assets::AssetCookManifestEntry &entry, const std::span<const std::uint8_t> bytes,
-                                           const Assets::AssetCookLimits &limits,
-                                           std::span<const Assets::AssetCookManifestEntry> inventory) {
+                                           const Assets::AssetCookLimits &limits, const Assets::AssetCookGenerationContents &generation,
+                                           const CancellationToken &cancellation) {
+            const std::span inventory{generation.entries};
             const auto envelope = Assets::DecodeCookedArtifact(bytes, limits);
             if (envelope.HasError())
                 return Result<void>::Failure(envelope.ErrorValue());
@@ -45,6 +75,7 @@ namespace Horo::Application {
                     if (!ResolveDependency(inventory, dependency))
                         return Result<void>::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
                 }
+                return VerifySceneChildren(scene.Value(), generation, limits, cancellation);
             }
             return Result<void>::Success();
         }
@@ -70,7 +101,7 @@ namespace Horo::Application {
                 constexpr std::size_t MinimumRecordBytes = EmptyRecord.size() + 36 + 71 + std::string_view{"core.scene"}.size();
                 if (records.size() >= MaximumExtensionBytes / MinimumRecordBytes)
                     return Result<Json>::Failure(MakeError(Prefab::PrefabErrors::PayloadTooLarge));
-                if (const auto checked = VerifyRuntimeArtifact(entry, generation.artifacts[index], limits, generation.entries);
+                if (const auto checked = VerifyRuntimeArtifact(entry, generation.artifacts[index], limits, generation, cancellation);
                     checked.HasError())
                     return Result<Json>::Failure(checked.ErrorValue());
                 records.push_back({{"id", entry.assetId.ToString()}, {"type", type}, {"envelope", FormatSha256(entry.artifactHash)}});

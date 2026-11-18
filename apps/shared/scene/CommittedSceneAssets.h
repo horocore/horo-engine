@@ -47,8 +47,15 @@ namespace Horo::Application::Internal {
         [[nodiscard]] std::span<const Assets::AssetCookArtifact> Artifacts() const noexcept;
         /** @brief Decodes one verified Scene payload with its canonical embedded nonzero revision.
          * @param id Stable Scene asset identity. @return Fully validated definition bound to its derived stable Scene ID.
+         * @details Parent v6 references must resolve to exact leaf payloads in the same captured generation.
          */
         [[nodiscard]] Result<Runtime::RuntimeSceneDefinition> DecodeScene(Assets::AssetId id) const;
+        /** @brief Reads the exact leaf child payload from the same captured generation.
+         * @param reference Immutable child occurrence captured through the validated parent definition.
+         * @return Exact child or typed missing, foreign, stale or unsupported failure.
+         */
+        [[nodiscard]] Result<Runtime::RuntimeSceneDefinition> DecodeChildScene(
+            const Runtime::SceneChildDefinitionReference &reference) const;
 
     private:
         std::vector<Assets::AssetCookArtifact> artifacts_;

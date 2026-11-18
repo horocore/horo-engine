@@ -20,6 +20,60 @@ namespace {
     }
 }  // namespace
 
+TEST_CASE("Cooked Scene v6 preserves canonical direct child identity and rejects forged evidence",
+          "[native][prefab-cook][scene-instances]") {
+    const auto asset = Assets::AssetId::Parse("00112233-4455-6677-8899-aabbccddeeff").Value();
+    const auto childId = SceneDefinitionIdForAsset(asset);
+    const auto source = Runtime::SceneDefinitionBuilder{childId, {12}}.Build();
+    REQUIRE(source.HasValue());
+    const auto payload = EncodeCookedSceneDefinition(source.Value());
+    REQUIRE(payload.HasValue());
+    const Runtime::SceneChildDefinitionReference reference{{3},
+                                                           asset,
+                                                           childId,
+                                                           {12},
+                                                           ComputeSha256(std::as_bytes(std::span{payload.Value()}))};
+    CHECK(DecodeCookedChildScene(payload.Value(), reference).HasValue());
+    const auto other = Runtime::SceneDefinitionBuilder{childId, {13}}.Build();
+    REQUIRE(other.HasValue());
+    const auto stalePayload = EncodeCookedSceneDefinition(other.Value());
+    REQUIRE(stalePayload.HasValue());
+    CHECK(DecodeCookedChildScene(stalePayload.Value(), reference).HasError());
+    Runtime::SceneDefinitionBuilder parent{{1}, {2}};
+    REQUIRE(parent.RequireChildScene(reference).HasValue());
+    CHECK(parent.RequireChildScene(reference).HasError());
+    auto mismatched = reference;
+    mismatched.occurrence = {7};
+    mismatched.revision = {13};
+    CHECK(parent.RequireChildScene(mismatched).HasError());
+    const auto definition = std::move(parent).Build();
+    REQUIRE(definition.HasValue());
+    const auto encoded = EncodeCookedSceneDefinition(definition.Value());
+    REQUIRE(encoded.HasValue());
+    const auto decoded = DecodeCookedSceneDefinition(encoded.Value(), {1}, {2});
+    REQUIRE(decoded.HasValue());
+    REQUIRE(decoded.Value().ChildScenes().size() == 1);
+    CHECK(decoded.Value().ChildScenes().front() == reference);
+    CHECK(EncodeCookedSceneDefinition(decoded.Value()).Value() == encoded.Value());
+
+    const auto reject = [](const nlohmann::json &document) {
+        const auto invalid = document.dump() + '\n';
+        CHECK(DecodeCookedSceneDefinition(std::span{reinterpret_cast<const std::uint8_t *>(invalid.data()), invalid.size()}, {1}, {2})
+                  .HasError());
+    };
+    const auto wire = nlohmann::json::parse(encoded.Value());
+    CHECK(wire["format"] == ChildSceneCookedSceneFormat);
+    auto impossible = wire;
+    impossible["childScenes"][0]["scene"] = 4;
+    reject(impossible);
+    auto missingRevision = wire;
+    missingRevision["childScenes"][0].erase("revision");
+    reject(missingRevision);
+    auto downgrade = wire;
+    downgrade["format"] = CookedSceneFormat;
+    reject(downgrade);
+}
+
 TEST_CASE("Cooked scene payload is canonical source-free and round trips typed runtime content", "[native][prefab-cook]") {
     const auto scene = Scene();
     const auto encoded = EncodeCookedSceneDefinition(scene);

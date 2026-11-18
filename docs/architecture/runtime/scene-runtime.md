@@ -785,10 +785,19 @@ Scene source schema 6 represents a direct Activated occurrence as
 `"mode": "activated"`. Each parent document has unique occurrence IDs. Two
 occurrences may select the same asset. Documents without children retain their
 existing encoding. The opt-in child-aware decoder preserves the whole list
-and rejects other modes. Existing readers reject these references until a
-project composition can resolve the exact committed child asset revision,
-validate the cross-file graph, and retain the child readiness gate through
-Play activation.
+and rejects other modes. Canonical cook resolves each child from the same
+pinned Scene asset inventory and prepares leaf output before its callers.
+The current direct-child contract rejects missing assets, wrong types,
+self references, nested references and cycles before cook publication.
+Each cooked v6 occurrence stores its exact stable child definition, revision
+and full payload digest in canonical occurrence order. Child input commitments
+enter the parent's cook key and output dependency inventory. Legacy cooked
+formats retain their existing bytes. The installed and release catalogs
+require the exact child leaf bytes in the captured generation.
+
+Legacy Editor source readers still reject authored child references. The
+runtime refuses to instantiate a cooked v6 parent until its host can carry
+the child readiness gate through Play activation.
 
 ## Editor Interaction
 

@@ -637,6 +637,9 @@ namespace Horo::Runtime {
         for (const auto &entry : prep.entries)
             if (auto required = builder.RequireAsset(entry.dependency); required.HasError())
                 return required;
+        for (const auto &child : prep.definition.ChildScenes())
+            if (auto admitted = builder.RequireChildScene(child); admitted.HasError())
+                return admitted;
         for (const auto &evidence : prep.definition.TriggerVolumeEvidence())
             if (auto required = builder.RequireTriggerVolume(evidence); required.HasError())
                 return required;

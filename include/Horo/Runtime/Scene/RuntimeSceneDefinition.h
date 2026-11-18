@@ -91,6 +91,17 @@ namespace Horo::Runtime {
         [[nodiscard]] bool operator==(const TriggerVolumeMigrationEvidence &) const noexcept = default;
     };
 
+    /** @brief Exact cooked child artifact and authored occurrence; grants no live activation authority. */
+    struct SceneChildDefinitionReference final {
+        SceneInstanceId occurrence;
+        Assets::AssetId asset;
+        SceneDefinitionId definition;
+        SceneDefinitionRevision revision;
+        Sha256Digest payloadDigest; /**< Full hash of the child's exact source-free payload. */
+        SceneInstanceMode mode{SceneInstanceMode::Activated};
+        [[nodiscard]] bool operator==(const SceneChildDefinitionReference &) const noexcept = default;
+    };
+
     /** @brief Validated immutable runtime-scene construction input. */
     class RuntimeSceneDefinition final {
     public:
@@ -117,6 +128,8 @@ namespace Horo::Runtime {
         [[nodiscard]] std::span<const SceneAssetDependency> AssetDependencies() const noexcept;
         /** @brief Returns canonical object-ordered legacy migration constraints retained through cook and load. */
         [[nodiscard]] std::span<const TriggerVolumeMigrationEvidence> TriggerVolumeEvidence() const noexcept;
+        /** @brief Borrows exact child artifact references in ascending authored occurrence order. */
+        [[nodiscard]] std::span<const SceneChildDefinitionReference> ChildScenes() const noexcept;
 
     private:
         friend class SceneDefinitionBuilder;
@@ -158,6 +171,11 @@ namespace Horo::Runtime {
          * @return Success or InvalidDefinition; Build verifies component correspondence and requires the material asset.
          */
         [[nodiscard]] Result<void> RequireTriggerVolume(const TriggerVolumeMigrationEvidence &evidence);
+        /** @brief Adds one exact Activated child; duplicate occurrence, self reference or conflicting target fails.
+         * @param child Exact verified child asset, stable definition, durable revision and authored occurrence.
+         * @return Success or typed invalid/capacity rejection without mutating the admitted child list.
+         */
+        [[nodiscard]] Result<void> RequireChildScene(const SceneChildDefinitionReference &child);
         /** @brief Validates authored values and projects enabled navigation surface AssetIds as core.navmesh requirements.
          * @return Immutable definition
          * or the first typed validation error. */

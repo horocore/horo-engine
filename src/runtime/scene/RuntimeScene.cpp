@@ -315,6 +315,9 @@ namespace Horo::Runtime {
         if (!runtimeId.IsValid() || config.maximumGeneration == 0)
             return Failure<std::unique_ptr<RuntimeScene>>(SceneErrors::InvalidCandidate,
                                                           "Runtime identity and maximum generation must be non-zero.");
+        if (!definition.ChildScenes().empty())
+            return Failure<std::unique_ptr<RuntimeScene>>(SceneErrors::BaselineUnsupported,
+                                                          "Cooked Scene children require an explicit host activation owner.");
         if (assets.size() != definition.AssetDependencies().size())
             return Failure<std::unique_ptr<RuntimeScene>>(SceneErrors::InvalidCandidate,
                                                           "Resolved asset set does not match the definition.");

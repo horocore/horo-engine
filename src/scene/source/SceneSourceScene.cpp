@@ -12,8 +12,6 @@
 
 namespace Horo::SceneSource::Detail {
     namespace {
-        constexpr std::string_view ActivatedSceneMode = "activated";
-
         /** @brief Empties the depth-admitted DOM before flattening destruction; checked-iterator proxy allocations remain STL-specific. */
         void ClearSceneJson(Json &value) noexcept {
             if (value.is_structured())
@@ -79,7 +77,7 @@ namespace Horo::SceneSource::Detail {
             for (const auto &child : children)
                 value.push_back(WireJson{{"instanceId", child.occurrence.value},
                                          {"sourceAsset", child.asset.ToString()},
-                                         {"mode", ActivatedSceneMode}});
+                                         {"mode", kActivatedSceneMode}});
             return value;
         }
     }  // namespace
@@ -298,7 +296,7 @@ namespace Horo::SceneSource::Detail {
                 if (!child.is_object() || child.size() != 3 || !HasFields(child, {"instanceId", "sourceAsset", "mode"}) ||
                     !child["instanceId"].is_number_unsigned() || !child["sourceAsset"].is_string() || !child["mode"].is_string())
                     return Result<void>::Failure(PersistenceError(SceneInvalid, "Scene child reference fields are invalid."));
-                if (child["mode"].get_ref<const std::string &>() != ActivatedSceneMode)
+                if (child["mode"].get_ref<const std::string &>() != kActivatedSceneMode)
                     return Result<void>::Failure(
                         PersistenceError(SceneChildReferencesUnsupported, "Only direct Activated children are supported in Scene source."));
                 const auto asset = Assets::AssetId::Parse(child["sourceAsset"].get_ref<const std::string &>());

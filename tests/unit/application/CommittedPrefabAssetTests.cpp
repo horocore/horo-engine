@@ -1,5 +1,6 @@
 #include "CommittedSceneAssets.h"
 #include "Horo/Assets/NavMeshAssetType.h"
+#include "Horo/Runtime/Scene/RuntimeScene.h"
 #include "PrefabSceneCookHostFixture.h"
 
 #include <algorithm>
@@ -80,6 +81,91 @@ namespace Horo::Application::PrefabCookTestSupport {
             return std::move(captured).Value();
         }
     }  // namespace
+
+    TEST_CASE("The project cook pins direct child Scenes and committed lookup rejects mixed revisions",
+              "[native][prefab-cook][host][scene-instances]") {
+        HostFixture fixture;
+        const auto child = Id("00000000-0000-0000-0000-0000000000c2");
+        const auto childPath = ProjectPath::Parse("assets/child.scene").Value();
+        const auto metadataPath = ProjectPath::Parse("assets/child.scene.horo").Value();
+        const auto original = fixture.registry.Snapshot();
+        const auto existing = original.Records();
+        std::vector<AssetRecord> registered(existing.begin(), existing.end());
+        registered.push_back({.id = child, .type = Type("core.scene"), .sourcePath = childPath, .metadataPath = metadataPath});
+        REQUIRE(fixture.registry.Publish(std::move(registered)).status == AssetRegistryBuildStatus::Complete);
+        fixture.WriteText(metadataPath.String(), SidecarJson(child.ToString(), "core.scene"));
+        const auto writeChild = [&](float offset, std::span<const SceneSource::SceneChildReference> children = {}) {
+            const std::array objects{
+                SceneSource::SceneObjectSnapshot{.id = {700}, .name = "Child", .localTransform = {.translation = {offset, 0, 0}}}};
+            fixture.WriteText(childPath.String(), SceneSource::EncodeSceneSource({objects, {}, children}));
+        };
+        const auto writeParent = [&](std::span<const SceneSource::SceneChildReference> children) {
+            const std::array objects{SceneSource::SceneObjectSnapshot{.id = {900}, .name = "Parent"}};
+            fixture.WriteText("assets/level.scene", SceneSource::EncodeSceneSource({objects, {}, children}));
+        };
+        writeChild(2.0F);
+        const std::array children{SceneSource::SceneChildReference{{27}, child}, SceneSource::SceneChildReference{{4}, child}};
+        writeParent(children);
+
+        const auto first = fixture.Cook();
+        REQUIRE(first.HasValue());
+        const auto old = Capture(fixture);
+        const auto parent = old->DecodeScene(fixture.sceneId);
+        REQUIRE(parent.HasValue());
+        REQUIRE(parent.Value().ChildScenes().size() == 2);
+        CHECK(parent.Value().ChildScenes().front().occurrence == Runtime::SceneInstanceId{4});
+        CHECK(parent.Value().ChildScenes().back().occurrence == Runtime::SceneInstanceId{27});
+        const auto oldChild = parent.Value().ChildScenes().front();
+        CHECK(oldChild.asset == child);
+        CHECK(oldChild.definition == SceneCook::SceneDefinitionIdForAsset(child));
+        const auto leaf = old->DecodeChildScene(oldChild);
+        REQUIRE(leaf.HasValue());
+        CHECK(leaf.Value().Revision() == oldChild.revision);
+        REQUIRE(leaf.Value().Entities().size() == 1);
+        CHECK(leaf.Value().Entities().front().localTransform.translation.x == 2.0F);
+        CHECK(parent.Value().AssetDependencies().empty());
+        CHECK(Runtime::RuntimeScene::Create(parent.Value(), {9}).HasError());
+
+        const auto cached = fixture.Cook();
+        REQUIRE(cached.HasValue());
+        CHECK(cached.Value().generation.manifestDigest == first.Value().generation.manifestDigest);
+        writeChild(6.0F);
+        const auto next = fixture.Cook();
+        REQUIRE(next.HasValue());
+        const auto current = Capture(fixture);
+        const auto recooked = current->DecodeScene(fixture.sceneId);
+        REQUIRE(recooked.HasValue());
+        CHECK(recooked.Value().Revision() != parent.Value().Revision());
+        REQUIRE(recooked.Value().ChildScenes().size() == 2);
+        const auto newChild = recooked.Value().ChildScenes().front();
+        CHECK(newChild.revision != oldChild.revision);
+        CHECK(newChild.payloadDigest != oldChild.payloadDigest);
+        CHECK(current->DecodeChildScene(oldChild).HasError());
+        CHECK(old->DecodeChildScene(newChild).HasError());
+        const auto updated = current->DecodeChildScene(newChild);
+        REQUIRE(updated.HasValue());
+        REQUIRE(updated.Value().Entities().size() == 1);
+        CHECK(updated.Value().Entities().front().localTransform.translation.x == 6.0F);
+
+        SECTION("missing child") {
+            const std::array missing{SceneSource::SceneChildReference{{4}, Id("00000000-0000-0000-0000-0000000000c3")}};
+            writeParent(missing);
+        }
+        SECTION("wrong child asset type") {
+            const std::array wrong{SceneSource::SceneChildReference{{4}, fixture.prefabId}};
+            writeParent(wrong);
+        }
+        SECTION("self reference") {
+            const std::array self{SceneSource::SceneChildReference{{4}, fixture.sceneId}};
+            writeParent(self);
+        }
+        SECTION("cycle between authored Scenes") {
+            const std::array back{SceneSource::SceneChildReference{{4}, fixture.sceneId}};
+            writeChild(6.0F, back);
+        }
+        REQUIRE(fixture.Cook().HasError());
+        fixture.AssertRetained(next.Value().generation);
+    }
 
     TEST_CASE("Committed Scene view retains exact Animation and NavMesh envelopes for their canonical decoders",
               "[animation][navigation][host][committed][provider]") {

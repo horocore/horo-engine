@@ -3,6 +3,7 @@
 #include "Horo/Assets/NavMeshAssetType.h"
 
 #include <algorithm>
+#include <set>
 #include <utility>
 
 namespace Horo::Application::Internal {
@@ -127,6 +128,23 @@ namespace Horo::Application::Internal {
         const auto *artifact = Find(id);
         if (!artifact || artifact->type.Value() != "core.scene")
             return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(InvalidCook));
-        return SceneCook::DecodeCookedSceneWithEmbeddedRevision(artifact->payload, SceneCook::SceneDefinitionIdForAsset(id));
+        auto definition = SceneCook::DecodeCookedSceneWithEmbeddedRevision(artifact->payload, SceneCook::SceneDefinitionIdForAsset(id));
+        if (definition.HasError())
+            return definition;
+        std::set<Assets::AssetId> verified;
+        for (const auto &child : definition.Value().ChildScenes())
+            if (verified.insert(child.asset).second)
+                if (const auto checked = DecodeChildScene(child); checked.HasError())
+                    return checked;
+        return definition;
+    }
+
+    /** @copydoc CommittedSceneAssets::DecodeChildScene */
+    Result<Runtime::RuntimeSceneDefinition> CommittedSceneAssets::DecodeChildScene(
+        const Runtime::SceneChildDefinitionReference &reference) const {
+        const auto *artifact = Find(reference.asset);
+        if (!artifact || artifact->type.Value() != "core.scene")
+            return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(InvalidCook, "The exact child Scene artifact is missing."));
+        return SceneCook::DecodeCookedChildScene(artifact->payload, reference);
     }
 }  // namespace Horo::Application::Internal

@@ -96,8 +96,8 @@ namespace Horo::Application::PrefabCookDetail {
                 if (source.record.id != root)
                     return Return::Failure(MakeError(PrefabSceneCookErrors::Invalid,
                                                      "A resource producer cannot consume an undeclared Scene conversion context."));
-                const auto parsed =
-                    SceneSource::DecodeSceneSource({reinterpret_cast<const char *>(source.bytes.data()), source.bytes.size()});
+                const auto parsed = SceneSource::DecodeSceneSourceWithChildReferences(
+                    {reinterpret_cast<const char *>(source.bytes.data()), source.bytes.size()});
                 if (parsed.HasError())
                     return Return::Failure(parsed.ErrorValue());
                 nativeScene = true;

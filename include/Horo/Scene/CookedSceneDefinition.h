@@ -18,6 +18,9 @@ namespace Horo::SceneCook {
     /** @brief Required wire version for Scenes containing typed Runtime UI canvas references. */
     inline constexpr std::string_view UiCanvasCookedSceneFormat = "horo.scene.runtime.v5";
 
+    /** @brief Required wire version for Scenes carrying exact Activated child artifact references. */
+    inline constexpr std::string_view ChildSceneCookedSceneFormat = "horo.scene.runtime.v6";
+
     /** @brief Derives the canonical stable Scene definition identity from its owning asset.
      * @param asset Stable nonzero Scene asset identity verified by the host's asset authority.
      * @return Low eight SHA-256 digest bytes in little-endian order, with zero mapped to one.
@@ -49,7 +52,8 @@ namespace Horo::SceneCook {
      * @param limits Captured positive entity, dependency and payload-byte bounds.
      * @return Canonical owned bytes or typed capacity/unsupported-schema failure.
      * @details No prefab references, names, editor state, source paths or registry lookups enter the payload.
-     * Core component scalar codecs are shared with Scene source; the outer runtime wire contract is separate.
+     * Child references contain the authoring occurrence and exact verified asset, definition, revision and payload digest; they are not
+     * runtime ownership. Core component scalar codecs are shared with Scene source; the outer runtime wire contract is separate.
      * Unsupported required modes fail rather than dropping data. Asset envelope integrity is a separate required layer.
      */
     [[nodiscard]] Result<std::vector<std::uint8_t>> EncodeCookedSceneDefinition(const Runtime::RuntimeSceneDefinition &definition,
@@ -82,4 +86,14 @@ namespace Horo::SceneCook {
     [[nodiscard]] Result<Runtime::RuntimeSceneDefinition> DecodeCookedSceneWithEmbeddedRevision(std::span<const std::uint8_t> bytes,
                                                                                                 Runtime::SceneDefinitionId expectedScene,
                                                                                                 const CookedSceneLimits &limits = {});
+    /** @brief Verifies one source-free child payload selected by an exact parent occurrence.
+     * @param bytes Child bytes from the same verified committed generation as the parent.
+     * @param reference Parent's exact child asset, canonical definition, recorded revision and payload digest.
+     * @param limits Positive decode policy.
+     * @return A complete matching leaf definition or typed invalid/unsupported/capacity failure.
+     * @pre The host verified the child envelope against its exact asset identity, type and target.
+     */
+    [[nodiscard]] Result<Runtime::RuntimeSceneDefinition> DecodeCookedChildScene(std::span<const std::uint8_t> bytes,
+                                                                                 const Runtime::SceneChildDefinitionReference &reference,
+                                                                                 const CookedSceneLimits &limits = {});
 }  // namespace Horo::SceneCook
