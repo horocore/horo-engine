@@ -87,7 +87,7 @@ namespace Horo::Editor {
                 return Result<ProjectSceneRecoveryRecord>::Failure(
                     PersistenceError(SceneInvalid, "Recovery scene checksum does not match its payload."));
 
-            auto scene = SceneSource::DecodeSceneSource(record["scene"].dump());
+            auto scene = SceneSource::DecodeSceneSourceWithChildReferences(record["scene"].dump());
             if (scene.HasError())
                 return Result<ProjectSceneRecoveryRecord>::Failure(scene.ErrorValue());
             ParsedScene parsed = std::move(scene).Value();
@@ -99,6 +99,7 @@ namespace Horo::Editor {
                 .recoveredState = DocumentStateId{record["recoveredState"].get<std::uint64_t>()},
                 .objects = std::move(parsed.objects),
                 .prefabInstances = std::move(parsed.prefabInstances),
+                .childScenes = std::move(parsed.childScenes),
             };
             if (!result.savedState.IsValid() || !result.recoveredState.IsValid() || result.recoveredRevision < result.savedRevision)
                 return Result<ProjectSceneRecoveryRecord>::Failure(
@@ -230,14 +231,14 @@ namespace Horo::Editor {
         if (sceneBytes.HasError()) {
             return Result<LoadedProjectScene>::Failure(sceneBytes.ErrorValue());
         }
-        auto scene = SceneSource::DecodeSceneSource(sceneBytes.Value());
+        auto scene = SceneSource::DecodeSceneSourceWithChildReferences(sceneBytes.Value());
         if (scene.HasError()) {
             return Result<LoadedProjectScene>::Failure(scene.ErrorValue());
         }
         ParsedScene parsed = std::move(scene).Value();
         return Result<LoadedProjectScene>::Success(LoadedProjectScene{absoluteScenePath, std::move(parsed.objects),
                                                                       std::move(parsed.prefabInstances), true,
-                                                                      Fingerprint(sceneBytes.Value())});
+                                                                      Fingerprint(sceneBytes.Value()), std::move(parsed.childScenes)});
     }
 
     /** @copydoc InspectProjectSceneFingerprint */
@@ -294,6 +295,8 @@ namespace Horo::Editor {
             });
         }
 
+        if (const auto children = SceneSource::ValidateSceneChildReferences(snapshot.childScenes); children.HasError())
+            return Result<ProjectSceneSaveResult>::Failure(children.ErrorValue());
         const std::string serialized = SceneJson(snapshot).dump(2) + '\n';
         return ReplaceSerializedScene(absoluteProjectRoot, absoluteScenePath, serialized, expectedFingerprint, overwriteConflict, files);
     }
@@ -405,6 +408,8 @@ namespace Horo::Editor {
         }
         const auto heldLease = std::move(lease).Value();
 
+        if (const auto children = SceneSource::ValidateSceneChildReferences(snapshot.childScenes); children.HasError())
+            return children;
         const std::string serialized = SerializeRecoveryRecord(absoluteScenePath, snapshot, savedRevision, savedState);
         if (serialized.size() > kMaximumRecoveryBytes) {
             return Result<void>::Failure(PersistenceError(SceneInvalid, "Recovery record exceeds the supported size limit."));

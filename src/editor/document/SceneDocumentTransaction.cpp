@@ -141,14 +141,18 @@ namespace Horo::Editor {
             limits.maximumPreparedBytes > 64 * 1024 * 1024 ||
             !ChargeObjects(state_->document->Objects(), limits.maximumPreparedBytes, bytes))
             return Result<SceneTransactionSnapshot>::Failure(Rejected(SceneTransactionFailure::Capacity));
-        if (const auto &instances = state_->document->m_prefabInstances;
-            instances.size() > limits.maximumSnapshotObjects - state_->document->Objects().size() ||
-            instances.size() > (limits.maximumPreparedBytes - bytes) / sizeof(ScenePrefabInstance))
+        const auto prefabCount = state_->document->m_prefabInstances.size();
+        const auto childCount = state_->document->m_childScenes.size();
+        const auto available = limits.maximumSnapshotObjects - state_->document->Objects().size();
+        if (prefabCount > available || prefabCount > (limits.maximumPreparedBytes - bytes) / sizeof(ScenePrefabInstance))
+            return Result<SceneTransactionSnapshot>::Failure(Rejected(SceneTransactionFailure::Capacity));
+        bytes += prefabCount * sizeof(ScenePrefabInstance);
+        if (childCount > available - prefabCount || childCount > (limits.maximumPreparedBytes - bytes) / sizeof(SceneChildReference))
             return Result<SceneTransactionSnapshot>::Failure(Rejected(SceneTransactionFailure::Capacity));
         auto value = state_->document->Snapshot();
         return Result<SceneTransactionSnapshot>::Success({state_->session, value.revision.value, value.state.value,
                                                           state_->document->IsDirty(), std::move(value.objects),
-                                                          std::move(value.prefabInstances)});
+                                                          std::move(value.prefabInstances), std::move(value.childScenes)});
     }
 
     /** @copydoc SceneDocumentTransactions::PreparationBudget */

@@ -795,9 +795,10 @@ enter the parent's cook key and output dependency inventory. Legacy cooked
 formats retain their existing bytes. The installed and release catalogs
 require the exact child leaf bytes in the captured generation.
 
-Legacy Editor source readers still reject authored child references. The
-runtime refuses to instantiate a cooked v6 parent until its host can carry
-the child readiness gate through Play activation.
+The Editor preserves authoring references in the document, external reload,
+save and autosave recovery. The old source reader still rejects child-bearing
+documents. The workspace previews the parent entities, and Play requires a
+host that completes child readiness before publishing the parent aggregate.
 
 ## Editor Interaction
 

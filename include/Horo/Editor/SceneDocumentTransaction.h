@@ -46,6 +46,7 @@ namespace Horo::Editor {
         bool dirty{};
         std::vector<SceneSource::SceneObjectSnapshot> objects;
         std::vector<SceneSource::ScenePrefabInstance> prefabInstances;
+        std::vector<SceneSource::SceneChildReference> childScenes{};
     };
 
     /** @brief Explicit owner-phase permission and revision fence; default admission is denied. */

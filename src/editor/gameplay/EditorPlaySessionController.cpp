@@ -201,6 +201,11 @@ namespace Horo::Editor {
             Fail(error);
             return Result<void>::Failure(error);
         }
+        if (!authoring.childScenes.empty()) {
+            const auto error = InvalidTransition("Play requires an installed child Scene readiness owner for this document.");
+            Fail(error);
+            return Result<void>::Failure(error);
+        }
         prefabComponents_ = components;
         auto converted = ConvertSceneDocumentToRuntime(authoring, Runtime::SceneDefinitionId{2}, triggerBinding);
         if (converted.HasError()) {

@@ -77,7 +77,8 @@ namespace Horo::Editor {
         if (!loaded.Value().existed)
             return Result<LoadedProjectScene>::Failure(MakeError(ExternalSceneUnavailable));
         SceneDocument validated;
-        if (const auto result = validated.LoadSaved(loaded.Value().objects, loaded.Value().prefabInstances); result.HasError())
+        if (const auto result = validated.LoadSaved(loaded.Value().objects, loaded.Value().prefabInstances, loaded.Value().childScenes);
+            result.HasError())
             return Result<LoadedProjectScene>::Failure(result.ErrorValue());
         return loaded;
     }
@@ -92,7 +93,9 @@ namespace Horo::Editor {
             return false;
         if (auto closed = ShutdownCollisionSettings(); closed.HasError())
             return false;
-        if (const auto installed = m_document.LoadSaved(std::move(scene.objects), std::move(scene.prefabInstances)); installed.HasError()) {
+        if (const auto installed =
+                m_document.LoadSaved(std::move(scene.objects), std::move(scene.prefabInstances), std::move(scene.childScenes));
+            installed.HasError()) {
             LOG_ERROR("editor.scene_document", "External scene validation failed: %s", installed.ErrorValue().message.c_str());
             return false;
         }
@@ -163,7 +166,8 @@ namespace Horo::Editor {
         }
         std::optional<ProjectSceneRecoveryRecord> recoveryRecord = std::move(recovery).Value();
         SceneDocument validatedRecovery;
-        if (auto validated = validatedRecovery.LoadRecovered(recoveryRecord->objects, recoveryRecord->prefabInstances);
+        if (auto validated =
+                validatedRecovery.LoadRecovered(recoveryRecord->objects, recoveryRecord->prefabInstances, recoveryRecord->childScenes);
             validated.HasError())
             return;
         if (auto closed = ShutdownCollisionSettings(); closed.HasError()) {
@@ -171,7 +175,8 @@ namespace Horo::Editor {
             return;
         }
         if (const Result<void> restored =
-                m_document.LoadRecovered(std::move(recoveryRecord->objects), std::move(recoveryRecord->prefabInstances));
+                m_document.LoadRecovered(std::move(recoveryRecord->objects), std::move(recoveryRecord->prefabInstances),
+                                         std::move(recoveryRecord->childScenes));
             restored.HasError()) {
             LOG_ERROR("editor.scene_recovery", "Recovery restore validation failed: %s", restored.ErrorValue().message.c_str());
             return;

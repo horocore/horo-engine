@@ -265,7 +265,8 @@ namespace Horo::Editor {
                 return Result<void>::Failure(
                     OpenError(ProjectOpenErrors::ScenePreflightFailed, "The configured project default scene does not exist."));
             SceneDocument validation;
-            if (auto valid = validation.LoadSaved(scene.Value()->objects, scene.Value()->prefabInstances); valid.HasError())
+            if (auto valid = validation.LoadSaved(scene.Value()->objects, scene.Value()->prefabInstances, scene.Value()->childScenes);
+                valid.HasError())
                 return Result<void>::Failure(OpenError(ProjectOpenErrors::ScenePreflightFailed, valid.ErrorValue().message));
             return Result<void>::Success();
         }

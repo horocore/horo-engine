@@ -76,10 +76,11 @@ namespace Horo::Editor {
         std::size_t prefabInstancesAddedOnDisk{};
         std::size_t prefabInstancesRemovedFromDisk{};
         std::size_t prefabInstancesModified{};
+        bool childScenesChanged{};
 
         /** @brief Reports whether the authored snapshots differ semantically. */
         [[nodiscard]] bool HasDifferences() const noexcept {
-            return !objects.empty() || !prefabInstances.empty();
+            return !objects.empty() || !prefabInstances.empty() || childScenesChanged;
         }
     };
 

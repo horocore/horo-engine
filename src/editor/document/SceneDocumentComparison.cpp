@@ -46,6 +46,7 @@ namespace Horo::Editor {
             diskObjects.emplace(object.id.value, &object);
 
         SceneDocumentComparison comparison;
+        comparison.childScenesChanged = document.childScenes != disk.childScenes;
         comparison.objects.reserve(document.objects.size() + disk.objects.size());
         for (const SceneObjectSnapshot &documentObject : document.objects) {
             const auto diskObject = diskObjects.find(documentObject.id.value);
@@ -144,6 +145,7 @@ namespace Horo::Editor {
         SceneDocumentSnapshot disk{
             .objects = std::move(diskScene.objects),
             .prefabInstances = std::move(diskScene.prefabInstances),
+            .childScenes = std::move(diskScene.childScenes),
         };
         SceneDocumentComparison comparison = CompareSceneDocuments(request.document, disk);
         comparison.absoluteScenePath = request.absoluteScenePath.string();

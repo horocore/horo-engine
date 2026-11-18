@@ -30,6 +30,12 @@ namespace Horo::SceneSource {
         std::vector<SceneChildReference> childScenes{}; /**< Typed source references, present only in admitted child-aware schema. */
     };
 
+    /** @brief Validates the bounded inventory before a child-aware document adopts or writes it.
+     * @param references Complete authored child occurrences.
+     * @return Success or typed invalid/unsupported data. Asset and graph admission still belongs to the project.
+     */
+    [[nodiscard]] Result<void> ValidateSceneChildReferences(std::span<const SceneChildReference> references);
+
     /** @brief Borrowed coherent authored values for canonical encoding; the caller owns their lifetime. */
     struct SceneSourceView final {
         std::span<const SceneObjectSnapshot> objects;

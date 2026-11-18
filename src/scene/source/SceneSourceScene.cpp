@@ -71,8 +71,8 @@ namespace Horo::SceneSource::Detail {
 
         /** @brief Projects complete typed references without changing authored order. */
         WireJson ChildReferencesJson(const std::span<const SceneChildReference> children) {
-            if (!ValidChildReferences(children))
-                throw std::invalid_argument("Scene contains invalid child references.");
+            if (const auto admitted = ValidateSceneChildReferences(children); admitted.HasError())
+                throw std::invalid_argument(admitted.ErrorValue().message);
             WireJson value = WireJson::array();
             for (const auto &child : children)
                 value.push_back(WireJson{{"instanceId", child.occurrence.value},
@@ -305,10 +305,7 @@ namespace Horo::SceneSource::Detail {
                 scene.childScenes.push_back(
                     {{child["instanceId"].get<std::uint64_t>()}, asset.Value(), Runtime::SceneInstanceMode::Activated});
             }
-            if (!ValidChildReferences(scene.childScenes))
-                return Result<void>::Failure(
-                    PersistenceError(SceneInvalid, "Scene child references must have distinct nonzero occurrences and valid assets."));
-            return Result<void>::Success();
+            return ValidateSceneChildReferences(scene.childScenes);
         }
     }  // namespace
 
@@ -359,3 +356,17 @@ namespace Horo::SceneSource::Detail {
     }
 
 }  // namespace Horo::SceneSource::Detail
+
+namespace Horo::SceneSource {
+    /** @copydoc ValidateSceneChildReferences */
+    Result<void> ValidateSceneChildReferences(const std::span<const SceneChildReference> references) {
+        if (std::ranges::any_of(references, [](const auto &child) {
+            return child.mode != Runtime::SceneInstanceMode::Activated;
+        }))
+            return Result<void>::Failure(MakeError(Detail::SceneChildReferencesUnsupported));
+        if (!Detail::ValidChildReferences(references))
+            return Result<void>::Failure(
+                MakeError(Detail::SceneInvalid, "Scene child occurrences must be bounded, unique and nonzero with valid asset IDs."));
+        return Result<void>::Success();
+    }
+}  // namespace Horo::SceneSource

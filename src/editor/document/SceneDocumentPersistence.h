@@ -30,6 +30,7 @@ namespace Horo::Editor {
         std::vector<ScenePrefabInstance> prefabInstances;
         bool existed{};
         SceneFileFingerprint fingerprint;
+        std::vector<SceneChildReference> childScenes{};
     };
 
     /** @brief Conflict-aware outcome of one canonical scene save attempt. */
@@ -66,6 +67,7 @@ namespace Horo::Editor {
         DocumentStateId recoveredState;
         std::vector<SceneObjectSnapshot> objects;
         std::vector<ScenePrefabInstance> prefabInstances;
+        std::vector<SceneChildReference> childScenes{};
     };
 
     /**

@@ -214,7 +214,8 @@ namespace Horo::Editor {
         if (!loaded.Value().has_value())
             return false;
         LoadedProjectScene projectScene = *loaded.Value();
-        if (const Result<void> installed = m_document.LoadSaved(std::move(projectScene.objects), std::move(projectScene.prefabInstances));
+        if (const Result<void> installed = m_document.LoadSaved(std::move(projectScene.objects), std::move(projectScene.prefabInstances),
+                                                                std::move(projectScene.childScenes));
             installed.HasError()) {
             m_initializationError = installed.ErrorValue();
             LOG_ERROR("editor.scene_document", "Default scene validation failed: %s", installed.ErrorValue().message.c_str());

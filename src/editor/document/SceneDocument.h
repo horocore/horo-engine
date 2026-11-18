@@ -96,6 +96,7 @@ namespace Horo::Editor {
     using SceneObjectComponentSet = SceneSource::SceneObjectComponentSet;
     using SceneObjectSnapshot = SceneSource::SceneObjectSnapshot;
     using ScenePrefabInstance = SceneSource::ScenePrefabInstance;
+    using SceneChildReference = SceneSource::SceneChildReference;
 
     /**
      * @brief Resolves local and inherited editor visibility/lock state.
@@ -112,6 +113,7 @@ namespace Horo::Editor {
         DocumentStateId state;
         std::vector<SceneObjectSnapshot> objects;
         std::vector<ScenePrefabInstance> prefabInstances;
+        std::vector<SceneChildReference> childScenes{};
     };
 
     /** @brief One authored gameplay component that cannot be activated by the current project generation. */
@@ -559,22 +561,26 @@ namespace Horo::Editor {
          * @brief Replaces the document at an explicit durable-load boundary.
          * @param objects Fully parsed object values from one validated scene document.
          * @param prefabInstances Fully parsed prefab-instance references from that document.
+         * @param childScenes Fully parsed direct child reference inventory.
          * @return Success after installing a clean baseline, or a typed validation error.
          *
          * This operation clears the current authored state but does not own editor history;
          * the document-session owner must clear its history at the same load boundary.
          */
         [[nodiscard]] Result<void> LoadSaved(std::vector<SceneObjectSnapshot> objects,
-                                             std::vector<ScenePrefabInstance> prefabInstances = {});
+                                             std::vector<ScenePrefabInstance> prefabInstances = {},
+                                             std::vector<SceneChildReference> childScenes = {});
 
         /**
          * @brief Installs validated recovery content as a new dirty editor session.
          * @param objects Fully parsed object values from a trusted recovery-service result.
          * @param prefabInstances Fully parsed prefab-instance references from that recovery result.
+         * @param childScenes Fully parsed direct child reference inventory.
          * @return Success with recovered content dirty relative to the saved baseline, or a typed validation error.
          */
         [[nodiscard]] Result<void> LoadRecovered(std::vector<SceneObjectSnapshot> objects,
-                                                 std::vector<ScenePrefabInstance> prefabInstances = {});
+                                                 std::vector<ScenePrefabInstance> prefabInstances = {},
+                                                 std::vector<SceneChildReference> childScenes = {});
 
     private:
         friend class SceneDocumentCommandExecutor;
@@ -584,6 +590,7 @@ namespace Horo::Editor {
 
         std::vector<SceneObjectSnapshot> m_objects;
         std::vector<ScenePrefabInstance> m_prefabInstances;
+        std::vector<SceneChildReference> m_childScenes;
         std::uint64_t m_replacementEpoch{1};
         DocumentRevision m_revision{};
         DocumentRevision m_savedRevision{};
