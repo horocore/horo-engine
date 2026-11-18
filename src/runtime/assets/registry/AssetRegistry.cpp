@@ -81,11 +81,12 @@ namespace Horo::Assets {
             std::ranges::transform(extension, extension.begin(), [](const unsigned char value) {
                 return static_cast<char>(std::tolower(value));
             });
-            constexpr std::array<std::string_view, 21> extensions{".fbx",        ".obj",    ".gltf",      ".glb",     ".png",
-                                                                  ".jpg",        ".tga",    ".exr",       ".hdr",     ".horomat",
-                                                                  ".vert",       ".frag",   ".comp",      ".hlsl",    ".horoshadergraph",
-                                                                  ".horo",       ".prefab", ".horoasset", ".uistyle", ".terrainlayers",
-                                                                  ".foliagetype"};
+            using namespace std::string_view_literals;
+            constexpr std::array extensions{".fbx"sv,         ".obj"sv,     ".gltf"sv,      ".glb"sv,     ".png"sv,
+                                            ".jpg"sv,         ".tga"sv,     ".exr"sv,       ".hdr"sv,     ".horomat"sv,
+                                            ".vert"sv,        ".frag"sv,    ".comp"sv,      ".hlsl"sv,    ".horoshadergraph"sv,
+                                            ".horo"sv,        ".prefab"sv,  ".horoasset"sv, ".uistyle"sv, ".terrainlayers"sv,
+                                            ".foliagetype"sv, ".horo_bb"sv, ".horo_bt"sv,   ".horo_sm"sv, ".horo_utility"sv};
             return std::ranges::find(extensions, extension) != extensions.end() || extension == ".wav" || extension == ".ogg";
         }
 

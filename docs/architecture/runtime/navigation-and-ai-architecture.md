@@ -2812,6 +2812,16 @@ their worker cancellation before Scene commit. Evaluator cancellation runs
 only after all Scene owners have published. Abandoning the staged candidate
 keeps existing handles, budgets and callbacks intact.
 
+Blackboard schema assets use the versioned semantic .horo_bb payload and
+project asset type core.blackboard_schema. Their immutable cooked schema
+retains stable key IDs, types, defaults, access, and version policy. Decision
+cooking captures authored schemas from the pinned registry and records the
+selected schema asset dependencies. Duplicate semantic schema versions reject
+the capture. The cooker and runtime fingerprint the same canonical schema
+fields. Configured headless admission can therefore resolve schemas from the
+verified committed generation when no in-memory schema catalog was supplied.
+The exact native provider generation still comes from the host.
+
 The configured headless authority can explicitly select committed decision assets
 for existing controller descriptors. Selection uses the full project AssetId,
 then verifies the cooked root graph identity, decision family, exact schema

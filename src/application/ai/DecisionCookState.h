@@ -18,13 +18,22 @@ namespace Horo::Application::DecisionCookDetail {
         std::vector<Assets::AssetId> dependencies;
     };
 
+    /** @brief Associates a semantic schema version with the real project artifact providing it. */
+    struct SchemaArtifact final {
+        AI::BlackboardSchemaId identity;
+        std::uint32_t version{};
+        Assets::AssetId asset;
+    };
+
     struct State final {
         std::shared_ptr<const Assets::AssetCookInputSnapshot> files;
         AI::DecisionCompilationEnvironment environment;
         AI::DecisionCompilationLimits limits;
         AssetCookTargetId target;
         std::uint64_t maximumPreparedBytes{};
+        std::uint64_t preparedSchemaBytes{};
         std::vector<Input> inputs;
+        std::vector<SchemaArtifact> schemas;
         std::vector<Prepared> prepared;
         Sha256Digest settings;
     };

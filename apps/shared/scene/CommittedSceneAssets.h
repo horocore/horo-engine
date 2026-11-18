@@ -8,6 +8,7 @@
 #include "Horo/Scene/CookedSceneDefinition.h"
 
 #include <memory>
+#include <span>
 
 namespace Horo::Application::Internal {
     /** @brief Explicit host cook selector; neither collision settings nor source-file presence chooses it. */
@@ -42,6 +43,8 @@ namespace Horo::Application::Internal {
          * @return Borrowed artifact or absence; no fallback to source or another generation.
          */
         [[nodiscard]] const Assets::AssetCookArtifact *Find(Assets::AssetId id) const noexcept;
+        /** @brief Borrows the complete verified generation for typed catalog admission. */
+        [[nodiscard]] std::span<const Assets::AssetCookArtifact> Artifacts() const noexcept;
         /** @brief Decodes one verified Scene payload with its canonical embedded nonzero revision.
          * @param id Stable Scene asset identity. @return Fully validated definition bound to its derived stable Scene ID.
          */

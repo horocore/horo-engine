@@ -1,7 +1,9 @@
 #include "DecisionSourceWire.h"
+#include "Horo/AI/DecisionPlanCodec.h"
 
 #include <bit>
 #include <cmath>
+#include <new>
 
 namespace Horo::AI::Detail {
     namespace {
@@ -245,6 +247,94 @@ namespace Horo::AI::Detail {
         }
     }
 
+    namespace {
+        void WriteValue(DecisionWriter &writer, const BlackboardValue &value) {
+            writer.Unsigned(value.index(), 1);
+            std::visit([&]<typename VisitedValue>(const VisitedValue &item) {
+                using T = std::decay_t<decltype(item)>;
+                if constexpr (std::is_same_v<T, BlackboardScalarValue>)
+                    WriteScalar(writer, item);
+                else if constexpr (std::is_same_v<T, BlackboardCollectionValue>) {
+                    writer.Enumeration(item.elementKind);
+                    if (!writer.Count(item.count, MaximumBlackboardCollectionElements))
+                        return;
+                    for (std::size_t index = 0; index < item.count; ++index)
+                        WriteScalar(writer, item.elements[index]);
+                } else {
+                    writer.Unsigned(item.schemaVersion, 4);
+                    writer.Unsigned(item.serializedType, 4);
+                    if (!writer.Count(item.size, MaximumBlackboardOpaqueBytes))
+                        return;
+                    writer.Bytes({reinterpret_cast<const std::uint8_t *>(item.bytes.data()), item.size});
+                }
+            }, value);
+        }
+
+        void WriteKey(DecisionWriter &writer, const BlackboardKeyDescriptor &key) {
+            writer.IdentityValue(key.key);
+            writer.Enumeration(key.kind);
+            writer.Enumeration(key.cardinality);
+            writer.Unsigned(key.maximumCollectionElements, 4);
+            writer.Enumeration(key.presence);
+            writer.Enumeration(key.access);
+            writer.Unsigned(key.defaultValue.has_value(), 1);
+            if (key.defaultValue)
+                WriteValue(writer, *key.defaultValue);
+        }
+
+        /** @brief Reads the bounded default of one exact schema key. */
+        BlackboardValue ReadBlackboardDefault(DecisionReader &reader) {
+            switch (reader.Unsigned(1)) {
+                case 0:
+                    return ReadScalar(reader);
+                case 1: {
+                    BlackboardCollectionValue value;
+                    value.elementKind = reader.Enumeration(BlackboardValueKind::Count);
+                    value.count = reader.Count(MaximumBlackboardCollectionElements);
+                    for (std::size_t index = 0; index < value.count && reader.Valid(); ++index)
+                        value.elements[index] = ReadScalar(reader);
+                    return value;
+                }
+                case 2: {
+                    BlackboardOpaqueValue value;
+                    value.schemaVersion = static_cast<std::uint32_t>(reader.Unsigned(4));
+                    value.serializedType = static_cast<std::uint32_t>(reader.Unsigned(4));
+                    value.size = reader.Count(MaximumBlackboardOpaqueBytes);
+                    const auto bytes = reader.Bytes(value.size);
+                    std::ranges::transform(bytes, value.bytes.begin(), [](std::uint8_t byte) {
+                        return static_cast<std::byte>(byte);
+                    });
+                    return value;
+                }
+                default:
+                    reader.Reject();
+                    return BlackboardScalarValue{false};
+            }
+        }
+
+        /** @brief Reads one key without bypassing BlackboardSchema::Capture's semantic checks. */
+        BlackboardKeyDescriptor ReadBlackboardKey(DecisionReader &reader) {
+            BlackboardKeyDescriptor key;
+            key.key = reader.IdentityValue<BlackboardKeyId>();
+            key.kind = reader.Enumeration(BlackboardValueKind::Count);
+            key.cardinality = reader.Enumeration(BlackboardValueCardinality::Count);
+            key.maximumCollectionElements = static_cast<std::size_t>(reader.Unsigned(4));
+            key.presence = reader.Enumeration(BlackboardKeyPresence::Count);
+            key.access = reader.Enumeration(BlackboardKeyAccess::Count);
+            if (reader.Boolean())
+                key.defaultValue = ReadBlackboardDefault(reader);
+            return key;
+        }
+    }  // namespace
+
+    /** @copydoc WriteBlackboardSchema */
+    void WriteBlackboardSchema(DecisionWriter &writer, const BlackboardSchema &schema) {
+        writer.IdentityValue(schema.Identity());
+        writer.Unsigned(schema.Version(), 4);
+        writer.Enumeration(schema.UnknownValuePolicy());
+        WriteSequence<BlackboardKeyDescriptor>(writer, schema.Keys(), MaximumBlackboardKeys, WriteKey);
+    }
+
     void WriteCall(DecisionWriter &writer, const std::optional<DecisionSubplanCall> &value) {
         writer.Unsigned(value.has_value(), 1);
         if (!value)
@@ -267,3 +357,47 @@ namespace Horo::AI::Detail {
         return value;
     }
 }  // namespace Horo::AI::Detail
+
+namespace Horo::AI {
+    namespace {
+        constexpr std::uint64_t SchemaMagic = 0x314142424f524f48ULL;  // HOROBBA1
+    }
+
+    /** @copydoc BlackboardSchemaCodec::Encode */
+    Result<std::vector<std::uint8_t>> BlackboardSchemaCodec::Encode(const BlackboardSchema &schema) {
+        using Encoded = Result<std::vector<std::uint8_t>>;
+        if (schema.Keys().empty())
+            return Encoded::Failure(MakeError(AIErrors::BlackboardSchemaInvalid));
+        try {
+            Detail::DecisionWriter writer(MaximumBytes);
+            writer.Unsigned(SchemaMagic);
+            writer.Unsigned(Version, 4);
+            Detail::WriteBlackboardSchema(writer, schema);
+            if (!writer.Valid())
+                return Encoded::Failure(MakeError(AIErrors::BlackboardLimitExceeded));
+            return Encoded::Success(std::move(writer).Take());
+        } catch (const std::bad_alloc &) {
+            return Encoded::Failure(MakeError(AIErrors::BlackboardStorageUnavailable));
+        }
+    }
+
+    /** @copydoc BlackboardSchemaCodec::Decode */
+    Result<BlackboardSchema> BlackboardSchemaCodec::Decode(const std::span<const std::uint8_t> bytes) {
+        if (bytes.size() > MaximumBytes)
+            return Result<BlackboardSchema>::Failure(MakeError(AIErrors::BlackboardLimitExceeded));
+        try {
+            Detail::DecisionReader reader(bytes);
+            if (reader.Unsigned() != SchemaMagic || reader.Unsigned(4) != Version)
+                return Result<BlackboardSchema>::Failure(MakeError(AIErrors::BlackboardSchemaInvalid));
+            const auto identity = reader.IdentityValue<BlackboardSchemaId>();
+            const auto version = static_cast<std::uint32_t>(reader.Unsigned(4));
+            const auto policy = reader.Enumeration(BlackboardUnknownValuePolicy::Count);
+            const auto keys = Detail::ReadSequence<BlackboardKeyDescriptor>(reader, MaximumBlackboardKeys, Detail::ReadBlackboardKey);
+            if (!reader.Complete())
+                return Result<BlackboardSchema>::Failure(MakeError(AIErrors::BlackboardSchemaInvalid));
+            return BlackboardSchema::Capture({identity, version, policy, keys});
+        } catch (const std::bad_alloc &) {
+            return Result<BlackboardSchema>::Failure(MakeError(AIErrors::BlackboardStorageUnavailable));
+        }
+    }
+}  // namespace Horo::AI

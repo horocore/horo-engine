@@ -117,6 +117,11 @@ namespace Horo::Application::Internal {
         return found == artifacts_.end() ? nullptr : std::to_address(found);
     }
 
+    /** @copydoc CommittedSceneAssets::Artifacts */
+    std::span<const Assets::AssetCookArtifact> CommittedSceneAssets::Artifacts() const noexcept {
+        return artifacts_;
+    }
+
     /** @copydoc CommittedSceneAssets::DecodeScene */
     Result<Runtime::RuntimeSceneDefinition> CommittedSceneAssets::DecodeScene(const Assets::AssetId id) const {
         const auto *artifact = Find(id);

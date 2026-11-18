@@ -14,9 +14,41 @@ namespace Horo::Application::Internal {
         using Catalog = std::vector<AI::AiControllerDescriptor>;
         using Plan = std::shared_ptr<const AI::CookedDecisionPlan>;
 
+        /** @brief Materializes typed schema definitions from the exact committed generation when none were supplied explicitly. */
+        Result<AI::DecisionCompilationEnvironment> ResolveEnvironment(const HeadlessCookedDecisionInput &input,
+                                                                      const CancellationToken &cancellation) {
+            using Environment = Result<AI::DecisionCompilationEnvironment>;
+            auto environment = input.environment;
+            if (!environment.schemas.empty() || input.bindings.empty())
+                return Environment::Success(std::move(environment));
+
+            for (const auto &artifact : input.committed.Artifacts()) {
+                if (cancellation.IsCancellationRequested())
+                    return Environment::Failure(JobCancelled().ErrorValue());
+                if (artifact.type.Value() != AI::BlackboardSchemaAssetType)
+                    continue;
+                if (environment.schemas.size() >= AI::DecisionAssetValidationHardLimits::Schemas)
+                    return Environment::Failure(MakeError(AI::AIErrors::DecisionAssetLimitExceeded));
+                auto schema = AI::BlackboardSchemaCodec::Decode(artifact.payload);
+                if (schema.HasError())
+                    return Environment::Failure(schema.ErrorValue());
+                environment.schemas.emplace_back(std::make_shared<const AI::BlackboardSchema>(std::move(schema).Value()));
+            }
+            if (environment.schemas.empty())
+                return Environment::Failure(MakeError(AI::AIErrors::DecisionAssetSchemaMissing));
+            const auto identity = [](const auto &schema) {
+                return std::pair{schema->Identity(), schema->Version()};
+            };
+            std::ranges::sort(environment.schemas, {}, identity);
+            if (std::ranges::adjacent_find(environment.schemas, {}, identity) != environment.schemas.end())
+                return Environment::Failure(MakeError(AI::AIErrors::DecisionAssetSchemaAmbiguous));
+            return Environment::Success(std::move(environment));
+        }
+
         /** @brief Decodes a previously authenticated artifact against the live captured registry and exact declared family. */
-        [[nodiscard]] Result<Plan> DecodePlan(const HeadlessCookedDecisionInput &input, const Assets::AssetCookArtifact &artifact) {
-            auto compiled = AI::DecisionPlanCodec::DecodeCooked(artifact.payload, input.environment, input.limits);
+        [[nodiscard]] Result<Plan> DecodePlan(const AI::DecisionCompilationEnvironment &environment, AI::DecisionCodecLimits limits,
+                                              const Assets::AssetCookArtifact &artifact) {
+            auto compiled = AI::DecisionPlanCodec::DecodeCooked(artifact.payload, environment, limits);
             if (compiled.HasError())
                 return Result<Plan>::Failure(compiled.ErrorValue());
             if (!compiled.Value().plan) {
@@ -30,11 +62,12 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Retains one plan per full artifact identity and bounds aggregate compiled storage. */
-        [[nodiscard]] Result<Plan> AcquirePlan(const HeadlessCookedDecisionInput &input, const Assets::AssetCookArtifact &artifact,
-                                               std::map<Assets::AssetId, Plan> &plans, std::uint64_t &remaining) {
+        [[nodiscard]] Result<Plan> AcquirePlan(const AI::DecisionCompilationEnvironment &environment, AI::DecisionCodecLimits limits,
+                                               const Assets::AssetCookArtifact &artifact, std::map<Assets::AssetId, Plan> &plans,
+                                               std::uint64_t &remaining) {
             if (const auto found = plans.find(artifact.id); found != plans.end())
                 return Result<Plan>::Success(found->second);
-            auto decoded = DecodePlan(input, artifact);
+            auto decoded = DecodePlan(environment, limits, artifact);
             if (decoded.HasError())
                 return decoded;
             const auto bytes = decoded.Value()->Storage().compiledBytes;
@@ -51,9 +84,11 @@ namespace Horo::Application::Internal {
             const auto graphs = plan->Graphs();
             const auto root = std::ranges::find(graphs, plan->Root(), &AI::DecisionCompiledGraph::asset);
             if (plan->Root() != descriptor.decisionAsset || root == graphs.end() || !root->bindings ||
-                root->bindings->BlackboardSchema() != descriptor.blackboardSchema || root->bindings->Kind() != descriptor.decisionKind)
+                (descriptor.blackboardSchema && root->bindings->BlackboardSchema() != descriptor.blackboardSchema) ||
+                root->bindings->Kind() != descriptor.decisionKind)
                 return Result<void>::Failure(MakeError(AI::AIErrors::ControllerDescriptorIncompatible,
                                                        "Cooked AI artifact does not match the declared root, family, or schema."));
+            descriptor.blackboardSchema = root->bindings->BlackboardSchema();
             descriptor.decisionPlan = root->bindings;
             descriptor.cookedPlan = std::move(plan);
             return AI::ValidateAiControllerDescriptor(descriptor);
@@ -67,6 +102,9 @@ namespace Horo::Application::Internal {
             if (std::ranges::adjacent_find(admitted, {}, &AI::AiControllerDescriptor::controller) != admitted.end())
                 return Result<Catalog>::Failure(MakeError(AI::AIErrors::DescriptorConflict));
 
+            auto environment = ResolveEnvironment(input, cancellation);
+            if (environment.HasError())
+                return Result<Catalog>::Failure(environment.ErrorValue());
             std::map<Assets::AssetId, Plan> plans;
             auto remaining = input.limits.compilation.maximumCoreBytes;
             for (const auto &binding : input.bindings) {
@@ -84,7 +122,7 @@ namespace Horo::Application::Internal {
                 if (artifact->type.Value() != AI::DecisionAssetType(descriptor->decisionKind))
                     return Result<Catalog>::Failure(
                         MakeError(AI::AIErrors::ControllerDescriptorIncompatible, "Selected cooked AI artifact has the wrong family."));
-                auto plan = AcquirePlan(input, *artifact, plans, remaining);
+                auto plan = AcquirePlan(environment.Value(), input.limits, *artifact, plans, remaining);
                 if (plan.HasError())
                     return Result<Catalog>::Failure(plan.ErrorValue());
                 if (auto bound = BindPlan(*descriptor, std::move(plan).Value()); bound.HasError())

@@ -116,6 +116,56 @@ namespace {
         }
     };
 
+    TEST_CASE("Project registry discovers and cooks authored blackboard schemas for the exact decision environment",
+              "[native][decision-cook][blackboard]") {
+        Fixture fixture;
+        const auto schemaId = Files::Id("00000000-0000-0000-0000-0000000000ca");
+        const auto encoded = BlackboardSchemaCodec::Encode(*fixture.ai.schema);
+        REQUIRE(encoded.HasValue());
+        const auto file = fixture.source.path / "assets/guard.horo_bb";
+        Files::WriteFile(file, encoded.Value());
+        const auto sidecar = Files::SidecarJson(schemaId.ToString(), BlackboardSchemaAssetType);
+        Files::WriteFile(fixture.source.path / "assets/guard.horo_bb.horo",
+                         {reinterpret_cast<const std::uint8_t *>(sidecar.data()), sidecar.size()});
+        auto rebuilt = RebuildAssetRegistry(fixture.registry, fixture.source.path, AssetRegistryOpenMode::ReadOnly);
+        REQUIRE(rebuilt.HasValue());
+        REQUIRE(rebuilt.Value().status == AssetRegistryBuildStatus::Complete);
+        fixture.request.assets.registry = fixture.registry.Snapshot();
+        REQUIRE(fixture.request.assets.registry.Records().size() == 3);
+        REQUIRE(fixture.request.assets.registry.Find(schemaId));
+        fixture.Capture();
+        SECTION("asset-only schemas produce and recover an executable plan") {
+            fixture.request.environment.schemas.clear();
+            auto cooked = fixture.Cook();
+            REQUIRE(cooked.HasValue());
+            CHECK(cooked.Value().cookedAssets == 3);
+            const auto artifacts = fixture.Read();
+            const auto schema = std::ranges::find(artifacts, schemaId, &AssetCookArtifact::id);
+            const auto root = std::ranges::find(artifacts, fixture.root, &AssetCookArtifact::id);
+            REQUIRE(schema != artifacts.end());
+            REQUIRE(root != artifacts.end());
+            CHECK(schema->type.Value() == BlackboardSchemaAssetType);
+            auto recovered = BlackboardSchemaCodec::Decode(schema->payload);
+            REQUIRE(recovered.HasValue());
+            auto runtime = fixture.request.environment;
+            runtime.schemas.push_back(std::make_shared<const BlackboardSchema>(std::move(recovered).Value()));
+            const auto plan = DecisionPlanCodec::DecodeCooked(root->payload, runtime);
+            REQUIRE(plan.HasValue());
+            REQUIRE(plan.Value().plan);
+            CHECK(plan.Value().plan->Root() == Graph(1));
+
+            const auto reused = fixture.Cook();
+            REQUIRE(reused.HasValue());
+            CHECK(reused.Value().cacheHits == 3);
+        }
+        SECTION("duplicate exact schema versions from two authorities reject the cook") {
+            const auto failed = fixture.Cook();
+            REQUIRE(failed.HasError());
+            CHECK(failed.ErrorValue().code.Value() == AIErrors::DecisionAssetSchemaAmbiguous.code.Value());
+            CHECK(ResolveCurrentCookGeneration(NativeDurableFileSystem{}, fixture.cooked.path).HasError());
+        }
+    }
+
     TEST_CASE("Actual decision source pairs cook through AssetCookService and load into the real composed headless runner",
               "[native][decision-cook]") {
         Fixture fixture;

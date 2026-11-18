@@ -82,7 +82,17 @@ namespace Horo::Application::DecisionCookDetail {
             auto payload = AI::DecisionPlanCodec::EncodeCooked(*compiled.Value().plan, {.compilation = state.limits});
             if (payload.HasError())
                 return Result<Prepared>::Failure(payload.ErrorValue());
+            for (const auto &graph : compiled.Value().plan->Graphs()) {
+                const auto schema = graph.bindings->BlackboardSchema();
+                const auto found = std::ranges::find_if(state.schemas, [&schema](const auto &record) {
+                    return record.identity == schema->Identity() && record.version == schema->Version();
+                });
+                if (found != state.schemas.end())
+                    dependencies.push_back(found->asset);
+            }
             std::ranges::sort(dependencies);
+            const auto duplicates = std::ranges::unique(dependencies);
+            dependencies.erase(duplicates.begin(), duplicates.end());
             return Result<Prepared>::Success(
                 {input.asset, input.type, input.sourceDigest, std::move(payload).Value(), std::move(dependencies)});
         }
@@ -113,7 +123,7 @@ namespace Horo::Application::DecisionCookDetail {
     }  // namespace
 
     Result<void> PrepareRoots(State &state, const CancellationToken &cancellation) {
-        std::uint64_t bytes{};
+        auto bytes = state.preparedSchemaBytes;
         for (std::size_t index = 0; index < state.inputs.size(); ++index) {
             if (cancellation.IsCancellationRequested())
                 return Invalid<void>(DecisionCookErrors::Cancelled);

@@ -4,6 +4,42 @@
 
 namespace Horo::AI {
     namespace {
+        TEST_CASE("Blackboard schema wire round-trips exact typed defaults and rejects invalid framing", "[unit][ai][codec]") {
+            using DecisionGraphTestSupport::MakeIdentity;
+            BlackboardCollectionValue scores{.elementKind = BlackboardValueKind::SignedInteger, .count = 2};
+            scores.elements[0] = std::int64_t{-17};
+            scores.elements[1] = std::int64_t{91};
+            const std::array keys{BlackboardKeyDescriptor{.key = MakeIdentity<BlackboardKeyId>(7),
+                                                          .kind = BlackboardValueKind::SignedInteger,
+                                                          .cardinality = BlackboardValueCardinality::Collection,
+                                                          .maximumCollectionElements = 3,
+                                                          .access = BlackboardKeyAccess::ReadOnly,
+                                                          .defaultValue = BlackboardValue{scores}},
+                                  BlackboardKeyDescriptor{.key = MakeIdentity<BlackboardKeyId>(3),
+                                                          .kind = BlackboardValueKind::WorldCoordinate,
+                                                          .defaultValue = BlackboardValue{BlackboardScalarValue{
+                                                              Math::WorldCoordinate64::FromMillimeters(-1, 2, 49)}}},
+                                  BlackboardKeyDescriptor{.key = MakeIdentity<BlackboardKeyId>(6),
+                                                          .presence = BlackboardKeyPresence::Optional}};
+            auto schema =
+                BlackboardSchema::Capture({MakeIdentity<BlackboardSchemaId>(501), 9, BlackboardUnknownValuePolicy::PreserveOpaque, keys});
+            REQUIRE(schema.HasValue());
+            const auto encoded = BlackboardSchemaCodec::Encode(schema.Value());
+            REQUIRE(encoded.HasValue());
+            const auto decoded = BlackboardSchemaCodec::Decode(encoded.Value());
+            REQUIRE(decoded.HasValue());
+            CHECK(decoded.Value().Identity() == schema.Value().Identity());
+            CHECK(decoded.Value().Version() == 9);
+            CHECK(decoded.Value().UnknownValuePolicy() == BlackboardUnknownValuePolicy::PreserveOpaque);
+            CHECK(std::ranges::equal(decoded.Value().Keys(), schema.Value().Keys()));
+            CHECK(BlackboardSchemaCodec::Encode(decoded.Value()).Value() == encoded.Value());
+            for (std::size_t n = 0; n < encoded.Value().size(); ++n)
+                CHECK(BlackboardSchemaCodec::Decode(std::span{encoded.Value()}.first(n)).HasError());
+            auto extra = encoded.Value();
+            extra.push_back(0);
+            CHECK(BlackboardSchemaCodec::Decode(extra).HasError());
+        }
+
         using namespace DecisionGraphTestSupport;
 
         TEST_CASE("Decision source and cooked codecs canonicalize actual graph order and reproduce executable identity",

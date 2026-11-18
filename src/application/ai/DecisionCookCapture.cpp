@@ -96,12 +96,42 @@ namespace Horo::Application::DecisionCookDetail {
             state.inputs.emplace_back(record.id, record.type, file->sourceDigest, std::move(source).Value());
             return Result<void>::Success();
         }
+
+        /** @brief Captures a real registry-backed schema and stages its canonical immutable cooked payload. */
+        Result<void> CaptureSchema(State &state, const Assets::AssetRecord &record, const CancellationToken &cancellation) {
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(DecisionCookErrors::Cancelled));
+            if (state.environment.schemas.size() >= AI::DecisionAssetValidationHardLimits::Schemas)
+                return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetLimitExceeded));
+            const auto *file = state.files->Find(record.id);
+            if (!file || !SameRecord(record, file->record))
+                return Result<void>::Failure(MakeError(DecisionCookErrors::Stale));
+            auto decoded = AI::BlackboardSchemaCodec::Decode(file->bytes);
+            if (decoded.HasError())
+                return Result<void>::Failure(decoded.ErrorValue());
+            auto schema = std::make_shared<const AI::BlackboardSchema>(std::move(decoded).Value());
+            if (std::ranges::any_of(state.environment.schemas, [&schema](const auto &existing) {
+                return existing && existing->Identity() == schema->Identity() && existing->Version() == schema->Version();
+            }))
+                return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetSchemaAmbiguous));
+            auto payload = AI::BlackboardSchemaCodec::Encode(*schema);
+            if (payload.HasError())
+                return Result<void>::Failure(payload.ErrorValue());
+            if (payload.Value().size() > state.maximumPreparedBytes - state.preparedSchemaBytes)
+                return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetLimitExceeded));
+            state.preparedSchemaBytes += payload.Value().size();
+            state.schemas.push_back({schema->Identity(), schema->Version(), record.id});
+            state.environment.schemas.push_back(std::move(schema));
+            state.prepared.push_back({record.id, record.type, file->sourceDigest, std::move(payload).Value(), {}});
+            return Result<void>::Success();
+        }
+
     }  // namespace
 
     Result<void> Verify(const State &state, const CancellationToken &cancellation) {
         if (cancellation.IsCancellationRequested())
             return Result<void>::Failure(MakeError(DecisionCookErrors::Cancelled));
-        if (!state.environment.nodes || !state.environment.nodes->CanUse())
+        if (!state.inputs.empty() && (!state.environment.nodes || !state.environment.nodes->CanUse()))
             return Result<void>::Failure(MakeError(DecisionCookErrors::Stale));
         return state.files->VerifyUnchanged(cancellation);
     }
@@ -110,13 +140,18 @@ namespace Horo::Application::DecisionCookDetail {
         if (registry.Records().size() > 16384)
             return Result<void>::Failure(MakeError(DecisionCookErrors::Invalid));
         for (const auto &record : registry.Records()) {
+            if (record.type.Value() == AI::BlackboardSchemaAssetType) {
+                if (auto captured = CaptureSchema(state, record, cancellation); captured.HasError())
+                    return captured;
+                continue;
+            }
             if (record.type.Value() != DecisionBehaviorTreeSourceType && record.type.Value() != DecisionStateMachineSourceType &&
                 record.type.Value() != DecisionUtilitySourceType)
                 continue;
             if (auto captured = CaptureRecord(state, record, cancellation); captured.HasError())
                 return captured;
         }
-        if (state.inputs.empty())
+        if (state.inputs.empty() && state.schemas.empty())
             return Result<void>::Failure(MakeError(DecisionCookErrors::Invalid));
         std::ranges::sort(state.inputs, {}, [](const auto &input) {
             return input.graph.asset;

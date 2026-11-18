@@ -27,6 +27,8 @@ namespace Horo::AI::Detail {
     [[nodiscard]] DecisionBlackboardRequirement ReadRequirement(DecisionReader &reader);
     void WriteProperty(DecisionWriter &writer, const BehaviorTreeProperty &value);
     [[nodiscard]] BehaviorTreeProperty ReadProperty(DecisionReader &reader);
+    /** @brief Writes the canonical schema fields used by both standalone assets and environment fingerprints. */
+    void WriteBlackboardSchema(DecisionWriter &writer, const BlackboardSchema &schema);
     void WriteScalar(DecisionWriter &writer, const BlackboardScalarValue &value);
     [[nodiscard]] BlackboardScalarValue ReadScalar(DecisionReader &reader);
     void WriteCall(DecisionWriter &writer, const std::optional<DecisionSubplanCall> &value);

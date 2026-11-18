@@ -434,10 +434,28 @@ namespace Horo::Application::PrefabAtomicTest {
             const ErrorCodeDescriptor *expected = nullptr;
             std::optional<std::size_t> executionBudget;
             bool malformed = false;
+            bool loadSchemaFromCook = false;
+            bool schemaArtifactPresent = false;
+            bool malformedSchema = false;
             bool staleProvider = false;
             SECTION("exact cooked root") {}
             SECTION("owner runs opted-in decision through the product fixed tick") {
                 executionBudget = 64;
+            }
+            SECTION("owner resolves schema from authenticated cooked catalog and runs provider") {
+                executionBudget = 64;
+                loadSchemaFromCook = true;
+                schemaArtifactPresent = true;
+            }
+            SECTION("committed schema catalog refuses missing semantic definition") {
+                loadSchemaFromCook = true;
+                expected = &AI::AIErrors::DecisionAssetSchemaMissing;
+            }
+            SECTION("authenticated but malformed schema payload refuses admission") {
+                loadSchemaFromCook = true;
+                schemaArtifactPresent = true;
+                malformedSchema = true;
+                expected = &AI::AIErrors::BlackboardSchemaInvalid;
             }
             SECTION("missing authored parent task") {
                 executionBudget = 64;
@@ -482,15 +500,30 @@ namespace Horo::Application::PrefabAtomicTest {
             const auto digest = Put(raw, artifactId, artifactType, target, std::move(payload));
             auto envelope = raw.Load(artifactId, {});
             REQUIRE(envelope.HasValue());
-            const std::array artifacts{std::move(envelope).Value()};
-            const std::array manifest{Assets::AssetCookManifestEntry{artifactId, artifactType, artifactId.ToString() + ".cooked", digest}};
+            std::vector<std::vector<std::uint8_t>> artifacts{std::move(envelope).Value()};
+            std::vector manifest{Assets::AssetCookManifestEntry{artifactId, artifactType, artifactId.ToString() + ".cooked", digest}};
+            std::vector records{Assets::AssetRecord{artifactId, artifactType, ProjectPath::Parse("assets/guard.horo_bt").Value(),
+                                                    ProjectPath::Parse("assets/guard.horo_bt.horo").Value()}};
+            if (schemaArtifactPresent) {
+                const auto schemaId = Assets::AssetId::Parse("e5881920-450f-4ca7-b938-d151696ea419").Value();
+                const auto schemaType = Output::Type(AI::BlackboardSchemaAssetType);
+                auto schema = AI::BlackboardSchemaCodec::Encode(*ai.schema);
+                REQUIRE(schema.HasValue());
+                auto schemaBytes = std::move(schema).Value();
+                if (malformedSchema)
+                    schemaBytes.resize(3);
+                const auto schemaDigest = Put(raw, schemaId, schemaType, target, std::move(schemaBytes));
+                auto schemaEnvelope = raw.Load(schemaId, {});
+                REQUIRE(schemaEnvelope.HasValue());
+                artifacts.push_back(std::move(schemaEnvelope).Value());
+                manifest.push_back({schemaId, schemaType, schemaId.ToString() + ".cooked", schemaDigest});
+                records.push_back({schemaId, schemaType, ProjectPath::Parse("assets/guard.horo_bb").Value(),
+                                   ProjectPath::Parse("assets/guard.horo_bb.horo").Value()});
+            }
             Output::TempDir directory;
             REQUIRE(Output::PublishFixture(directory.path, target, manifest, artifacts).HasValue());
             Assets::AssetRegistry registry;
-            REQUIRE(registry
-                        .Publish({{artifactId, artifactType, ProjectPath::Parse("assets/guard.horo_bt").Value(),
-                                   ProjectPath::Parse("assets/guard.horo_bt.horo").Value()}})
-                        .status == Assets::AssetRegistryBuildStatus::Complete);
+            REQUIRE(registry.Publish(std::move(records)).status == Assets::AssetRegistryBuildStatus::Complete);
             auto committed =
                 Internal::CommittedSceneAssets::Capture(NativeDurableFileSystem{}, {directory.path, target}, registry.Snapshot());
             REQUIRE(committed.HasValue());
@@ -500,6 +533,8 @@ namespace Horo::Application::PrefabAtomicTest {
             controller.descriptor.decisionAsset = declaredRoot;
             controller.descriptor.decisionPlan.reset();
             controller.descriptor.cookedPlan.reset();
+            if (loadSchemaFromCook)
+                controller.descriptor.blackboardSchema.reset();
             Runtime::SceneDefinitionBuilder source{{7}, {1}};
             source.Add({.object = {1}, .components = {.aiAgent = controller.agent.agent, .aiController = controller.agent.controller}});
             auto definition = std::move(source).Build();
@@ -511,6 +546,8 @@ namespace Horo::Application::PrefabAtomicTest {
             auto selected = Internal::HeadlessCookedDecisionInput{*committed.Value(),
                                                                   ai.Environment(),
                                                                   {{controller.descriptor.controller, requestedId}}};
+            if (loadSchemaFromCook)
+                selected.environment.schemas.clear();
             if (executionBudget)
                 selected.execution.emplace(AI::AiSceneCookedDecisionExecution{jobs, {}, {.workUnitsPerTick = *executionBudget}});
             const auto decisions = std::make_shared<const Internal::HeadlessCookedDecisionInput>(std::move(selected));

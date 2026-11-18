@@ -17,8 +17,8 @@ namespace Horo::Application::Internal {
 
     /** @brief Authoritative scene opt-in, captured from the actual project asset and provider registries. */
     struct HeadlessCookedDecisionInput final {
-        const CommittedSceneAssets &committed; /**< Exact immutable generation; outlives this input and all worlds using it. */
-        AI::DecisionCompilationEnvironment environment;
+        const CommittedSceneAssets &committed;          /**< Exact immutable generation; outlives this input and all worlds using it. */
+        AI::DecisionCompilationEnvironment environment; /**< Empty schema input takes the immutable committed schema catalog. */
         std::vector<HeadlessCookedDecisionBinding> bindings;
         AI::DecisionCodecLimits limits; /**< Per-plan codec limits; compiled bytes also bound total retained unique plans. */
         std::optional<AI::AiSceneCookedDecisionExecution> execution; /**< Explicit authority scheduler; empty only admits assets. */
