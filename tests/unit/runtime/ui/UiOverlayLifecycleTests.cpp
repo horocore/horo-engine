@@ -155,6 +155,43 @@ namespace Horo::Runtime::Ui::ReloadTests {
             CHECK(rig.owner.InputStatus(first) == UiOverlayInputStatus::Eligible);
         }
 
+        TEST_CASE("Split-screen player scopes restore independently under local and shared overlays",
+                  "[runtime_ui][overlay][split_screen]") {
+            OverlayRig rig;
+            const auto left = Options(1);
+            auto right = Options(2);
+            right.player = UiFocusPlayerId{Owner(), 99, 1};
+            right.view = {Owner(), 99, 1};
+            const auto first = rig.Show(left);
+            const auto second = rig.Show(right, UiModalExclusivity::None, {Owner(), 501, 1});
+            rig.Present(first, left);
+            rig.Present(second, right);
+            auto leftCapture = rig.Capture(first, left);
+            auto rightCapture = rig.Capture(second, right);
+            REQUIRE(leftCapture.IsActive());
+            REQUIRE(rightCapture.IsActive());
+
+            const auto localOptions = Options(3, UiPresentationBand::Modal);
+            const auto local = rig.Show(localOptions, UiModalExclusivity::Viewport);
+            CHECK_FALSE(leftCapture.IsActive());
+            CHECK(rightCapture.IsActive());
+            CHECK(rig.owner.InputStatus(first) == UiOverlayInputStatus::Blocked);
+            rig.ExpectEligibleDefault(second);
+
+            const auto global = rig.Show(Options(4, UiPresentationBand::Modal), UiModalExclusivity::GameInstance);
+            CHECK_FALSE(rightCapture.IsActive());
+            CHECK(rig.owner.InputStatus(first) == UiOverlayInputStatus::Blocked);
+            CHECK(rig.owner.InputStatus(second) == UiOverlayInputStatus::Blocked);
+            CHECK_FALSE(rig.Layer(second).focus->CurrentFocus().Value());
+            REQUIRE(rig.owner.Dismiss(global).HasValue());
+            CHECK(rig.owner.InputStatus(first) == UiOverlayInputStatus::Blocked);
+            CHECK_FALSE(rig.Layer(first).focus->CurrentFocus().Value());
+            rig.ExpectEligibleDefault(second);
+            REQUIRE(rig.owner.Dismiss(local).HasValue());
+            rig.ExpectEligibleDefault(first);
+            rig.ExpectEligibleDefault(second);
+        }
+
         TEST_CASE("Noninteractive overlay leaves lower context focus and input authoritative", "[runtime_ui][overlay]") {
             OverlayRig rig;
             auto screenOptions = Options(1);

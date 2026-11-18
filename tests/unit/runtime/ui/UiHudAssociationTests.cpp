@@ -122,7 +122,12 @@ namespace Horo::Runtime::Ui::ReloadTests {
             CHECK(authority->abandons == 1);
         }
 
-        TEST_CASE("Two players share a logical viewport without sharing HUD view input or lifetime", "[runtime_ui][hud][players]") {
+        TEST_CASE("Two players retain independent HUD metrics, input and lifetime", "[runtime_ui][hud][players]") {
+            bool splitViewport{};
+            SECTION("shared viewport") {}
+            SECTION("split views with distinct safe area") {
+                splitViewport = true;
+            }
             Rig rig;
             auto second = Binding();
             second.id.slot += 10;
@@ -130,14 +135,21 @@ namespace Horo::Runtime::Ui::ReloadTests {
             second.context.slot += 10;
             second.view.slot += 10;
             second.providers[0].instance.slot += 10;
+            if (splitViewport) {
+                ++second.viewport.slot;
+                second.viewportEvidence.safeAreaInsets = {12, 7, 9, 5};
+            }
             auto publisher = Publish(HudGeneration(rig.allocator, 1, Authored(), second, {Owner(), 5, 1}));
             auto hud = Take(UiHudAssociation::Create(second, publisher));
             auto firstFrame = rig.Frame();
             auto secondFrame = Take(hud.PrepareFrame(publisher, Revision<UiRenderSnapshotRevision>(1)));
             REQUIRE(rig.hud.ApplyPresentation(rig.publisher, firstFrame, rig.Receipt(firstFrame)).HasValue());
             REQUIRE(hud.ApplyPresentation(publisher, secondFrame, rig.Receipt(secondFrame)).HasValue());
-            CHECK(hud.Descriptor().viewport == rig.hud.Descriptor().viewport);
+            CHECK((hud.Descriptor().viewport != rig.hud.Descriptor().viewport) == splitViewport);
             CHECK(hud.Descriptor().player != rig.hud.Descriptor().player);
+            CHECK(secondFrame.Metrics().safeAreaInsets == second.viewportEvidence.safeAreaInsets);
+            if (splitViewport)
+                CHECK(secondFrame.Metrics().ContentPixelRect() != firstFrame.Metrics().ContentPixelRect());
             CHECK(hud.ApplyPresentation(publisher, firstFrame, rig.Receipt(firstFrame)).HasError());
             REQUIRE(hud.Shutdown(publisher).HasValue());
             CHECK_FALSE(hud.InputEligible(publisher));
