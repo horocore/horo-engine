@@ -8,6 +8,17 @@ Owns XR capabilities, session and frame lifecycle, tracking and interaction cont
 - [`openxr/`](openxr/) — Native discovery, spaces, actions, swapchains and compositor. The optional passthrough provider lives in [`openxr/modules/meta_quest/`](openxr/modules/meta_quest/).
 - [`simulator/`](simulator/) — Simulated XR input and tracking for development and tests.
 
-The [Editor XR host](../../../apps/HoroEditor/composition/xr/) owns Play composition. Native handles stay inside the OpenXR adapter. `HORO_BUILD_XR_META_QUEST` includes a provider. Headset qualification also requires an admitted runtime, graphics backend and device.
+## Where to start
+
+| If you are changing | Start here |
+| --- | --- |
+| Session state, shutdown or frame ordering | [Session lifecycle](runtime/XRSessionLifecycle.cpp), [frame lifecycle](runtime/XRFrameLifecycle.cpp) |
+| Controller actions or tracking delivery to the engine | [Action bindings](input/XRActionBindings.cpp), [tracking publication](runtime/XRTrackingPublication.cpp) |
+| Native views, swapchains or composition | [OpenXR frame compositor](openxr/OpenXRFrameCompositor.cpp), [Vulkan adapter](openxr/vulkan/) |
+| Quest passthrough | [Meta Quest provider](openxr/modules/meta_quest/README.md) |
+| Reproducing input with the simulator | [Simulator runtime](simulator/XRSimulatorRuntime.cpp), [simulator tests](../../../tests/unit/runtime/xr/XRSimulatorRuntimeTests.cpp) |
+| Backend selection and the Editor Play lifecycle | [Editor Play host](../../../apps/HoroEditor/composition/xr/OpenXRPlayHost.cpp), [host composition guide](../../../docs/guides/openxr-native-session-composition.md) |
+
+Keep native handles in the OpenXR adapter. Keep host selection and Play composition in the application. Use the [Editor XR tools](../../editor/xr/) for simulator UI and editor-side authoring.
 
 [Public headers](../../../include/Horo/XR/) · [Tests](../../../tests/unit/runtime/xr/) · [Architecture](../../../docs/architecture/runtime/vr-ar-architecture.md)
