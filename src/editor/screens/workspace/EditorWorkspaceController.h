@@ -566,9 +566,12 @@ namespace Horo::Editor {
         std::map<DocumentInstanceId, DecisionGraphDraft> m_decisionGraphDrafts;
         /** @brief Validates the latest schema and publishes the canonical registered source under its native lease. */
         Result<void> SaveDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft);
-        /** @brief Executes and commits one fully validated intrinsic editable candidate. */
-        Result<void> ApplyDecisionGraphEdit(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
-                                            const StateMachineEditRequest &request);
+        /** @brief Obtains the project metadata generation for the supported authoring family. */
+        [[nodiscard]] Result<std::shared_ptr<const AI::DecisionNodeGeneration>> AcquireDecisionDraftProviders(
+            const AI::DecisionGraphSource &source) const;
+        /** @brief Executes and commits one fully validated editable candidate. */
+        template <typename Request>
+        Result<void> ApplyDecisionGraphEdit(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft, const Request &request);
         /** @brief Publishes the semantic draft flags to shared tab lifecycle. */
         void ProjectDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, const DecisionGraphDraft &draft);
 

@@ -659,6 +659,138 @@ TEST_CASE("Behavior Tree and Utility New use the current registered native task 
         }
         CHECK_FALSE(FindAiAssetPresentation("game.custom_source"));
     }
+    SECTION("Behavior Tree edits preserve reachability, installed identity, sibling order and durable history") {
+        controller.ProcessCommand(make(AI::DecisionPlanKind::BehaviorTree, "Working tree"));
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        const auto &documents = controller.ViewModel().decisionGraphDocuments;
+        REQUIRE(documents.size() == 1);
+        const auto &view = documents.front();
+        REQUIRE(view.editableBehaviorTree);
+        const auto original = view.graph;
+        const auto asset = view.asset;
+        const auto instance = view.identity.instance;
+        const auto &start = *std::get<std::shared_ptr<const AI::BehaviorTreeAsset>>(original->body);
+        REQUIRE(start.Edges().size() == 1);
+        const auto originalEdge = start.Edges().front();
+        const auto originalTask = originalEdge.targetNode;
+        const DecisionTaskSelection installed{provider->type, provider->provider, provider->version,
+                                              controller.ViewModel().availableBehaviorsRevision};
+        const auto edit = [&](BehaviorTreeEditOperation operation, AI::BehaviorTreeNodeId node,
+                              std::optional<DecisionTaskSelection> task = {}) {
+            controller.ProcessCommand(
+                {.command = EditorWorkspaceViewCommand::EditDecisionBehaviorTree,
+                 .behaviorTreeEdit =
+                     BehaviorTreeEditRequest{instance, view.revision, operation, AI::DecisionNodeId::Create(node.Value()).Value(), task}});
+        };
+        const auto graph = [&]() -> const AI::BehaviorTreeAsset & {
+            return *std::get<std::shared_ptr<const AI::BehaviorTreeAsset>>(view.graph->body);
+        };
+        using enum BehaviorTreeEditOperation;
+        edit(WrapSelector, start.Root());
+        CHECK(view.diagnostic.has_value());
+        edit(DeleteTask, originalTask);
+        CHECK(view.diagnostic.has_value());
+        CHECK(view.graph == original);
+        CHECK_FALSE(view.canUndo);
+
+        edit(WrapSelector, originalTask);
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        REQUIRE(graph().Nodes().size() == 3);
+        CHECK(std::ranges::any_of(graph().Nodes(), [](const auto &node) {
+            return node.control.kind == AI::DecisionControlKind::Selector;
+        }));
+        controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Undo));
+        CHECK(view.graph == original);
+        CHECK_FALSE(view.dirty);
+
+        edit(WrapSequence, originalTask);
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        const auto wrapped = view.graph;
+        REQUIRE(graph().Nodes().size() == 3);
+        const auto inbound = std::ranges::find(graph().Edges(), originalEdge.id, &AI::BehaviorTreeEdge::id);
+        REQUIRE(inbound != graph().Edges().end());
+        CHECK(inbound->order == originalEdge.order);
+        const auto sequence = inbound->targetNode;
+        REQUIRE(graph().FindNode(sequence));
+        CHECK(graph().FindNode(sequence)->control.kind == AI::DecisionControlKind::Sequence);
+
+        auto stale = installed;
+        ++stale.catalogRevision;
+        edit(AppendTask, sequence, stale);
+        CHECK(view.diagnostic.has_value());
+        CHECK(view.graph == wrapped);
+        stale = installed;
+        stale.provider = AI::DecisionProviderId::Create(987).Value();
+        edit(AppendTask, sequence, stale);
+        CHECK(view.diagnostic.has_value());
+        CHECK(view.graph == wrapped);
+        edit(AppendTask, sequence, installed);
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        const auto appended = view.graph;
+        REQUIRE(graph().Nodes().size() == 4);
+        const auto extra = std::ranges::find_if(graph().Edges(), [&](const auto &edge) {
+            return edge.sourceNode == sequence && edge.targetNode != originalTask;
+        });
+        REQUIRE(extra != graph().Edges().end());
+        const auto task = extra->targetNode;
+        const auto extraEdge = extra->id;
+        REQUIRE(graph().FindNode(task));
+        CHECK(graph().FindNode(task)->type.Value() == installed.type.Value());
+        CHECK(graph().FindNode(task)->typeVersion.major == installed.version);
+        CHECK(graph().FindNode(task)->task != graph().FindNode(originalTask)->task);
+        CHECK(extra->order == 1);
+
+        edit(MoveEarlier, task);
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        const auto moved = view.graph;
+        const auto first = std::ranges::find(graph().Edges(), sequence, &AI::BehaviorTreeEdge::sourceNode);
+        REQUIRE(first != graph().Edges().end());
+        CHECK(first->id == extraEdge);
+        const auto beforeNoop = view.revision;
+        edit(MoveEarlier, task);
+        CHECK(view.graph == moved);
+        CHECK(view.revision == beforeNoop);
+        controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Undo));
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        CHECK(view.graph == appended);
+        controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Redo));
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        CHECK(view.graph == moved);
+
+        edit(DeleteTask, originalTask);
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        CHECK_FALSE(graph().FindNode(originalTask));
+        edit(UnwrapComposite, sequence);
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        REQUIRE(graph().Edges().size() == 1);
+        CHECK(graph().Edges().front().id == originalEdge.id);
+        CHECK(graph().Edges().front().targetNode == task);
+        controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Undo));
+        controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Undo));
+        CHECK(view.graph == moved);
+        REQUIRE(controller.HasDirtySourceDocuments());
+        controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Save));
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        CHECK_FALSE(controller.HasDirtySourceDocuments());
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = instance});
+        REQUIRE(documents.empty());
+
+        controller.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::OpenSourceFile,
+             .sourceOpenRequest = SourceOpenRequest{.path = "assets/Working tree.horo_bt", .origin = SourceOpenOrigin::AssetActivation}});
+        REQUIRE(documents.size() == 1);
+        CHECK(documents.front().asset == asset);
+        REQUIRE(documents.front().editableBehaviorTree);
+        const auto &reopened = *std::get<std::shared_ptr<const AI::BehaviorTreeAsset>>(documents.front().graph->body);
+        REQUIRE(reopened.FindNode(sequence));
+        REQUIRE(reopened.FindNode(task));
+        CHECK(reopened.FindNode(sequence)->control.kind == AI::DecisionControlKind::Sequence);
+        const auto ordered = std::ranges::find(reopened.Edges(), sequence, &AI::BehaviorTreeEdge::sourceNode);
+        REQUIRE(ordered != reopened.Edges().end());
+        CHECK(ordered->id == extraEdge);
+        CHECK(ordered->targetNode == task);
+        CHECK_FALSE(documents.front().canUndo);
+    }
     SECTION("wrong native generation and provider identity are refused before publishing") {
         auto command = make(AI::DecisionPlanKind::BehaviorTree, "First tree");
         ++command.newTaskDecision->catalogRevision;

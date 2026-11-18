@@ -78,21 +78,18 @@ namespace Horo::Editor {
             return entry.identity.instance == model.workspacePanelHost.ActiveDocument();
         });
         if (decision != model.decisionGraphDocuments.end()) {
-            const auto route = [&](const StateMachineEditOperation operation) {
-                command.command = EditorWorkspaceViewCommand::EditDecisionStateMachine;
-                command.stateMachineEdit = StateMachineEditRequest{.instance = decision->identity.instance,
-                                                                   .revision = decision->revision,
-                                                                   .operation = operation};
+            const auto route = [&](const DecisionHistoryAction operation) {
+                command = MakeDecisionHistoryCommand(*decision, operation);
             };
             if (!decision->editable)
                 return;
             if (router.ReadAction(context, Input::ActionId{kActionSave}).pressed)
-                route(StateMachineEditOperation::Save);
+                route(DecisionHistoryAction::Save);
             else if (!command.sourceTextInputOwned && !capture.textInputRequested && !capture.popupOpen) {
                 if (router.ReadAction(context, Input::ActionId{kActionRedo}).pressed)
-                    route(StateMachineEditOperation::Redo);
+                    route(DecisionHistoryAction::Redo);
                 else if (router.ReadAction(context, Input::ActionId{kActionUndo}).pressed)
-                    route(StateMachineEditOperation::Undo);
+                    route(DecisionHistoryAction::Undo);
             }
             return;
         }

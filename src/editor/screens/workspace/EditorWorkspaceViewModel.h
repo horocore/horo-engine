@@ -259,6 +259,7 @@ namespace Horo::Editor {
         OpenSourceFile,
         OpenRecentAiAsset,
         EditDecisionStateMachine,
+        EditDecisionBehaviorTree,
         OpenDiagnosticSource,
         ChangeActivePanel,
         CloseWorkspacePanel,
@@ -496,6 +497,7 @@ namespace Horo::Editor {
         std::shared_ptr<const AI::DecisionGraphSource> graph;
         std::uint64_t revision{};
         bool editable{};
+        bool editableBehaviorTree{};
         bool dirty{};
         bool canUndo{};
         bool canRedo{};
@@ -623,6 +625,7 @@ namespace Horo::Editor {
         std::optional<SourceOpenRequest> sourceOpenRequest = std::nullopt;
         std::optional<Assets::AssetId> recentAiAsset = std::nullopt;
         std::optional<StateMachineEditRequest> stateMachineEdit = std::nullopt;
+        std::optional<BehaviorTreeEditRequest> behaviorTreeEdit = std::nullopt;
         std::optional<DiagnosticSourceRequest> diagnosticSource = std::nullopt;
         std::optional<CreateGameplayBehaviorRequest> gameplayBehaviorRequest = std::nullopt;
         std::optional<AssetSceneDropRequest> assetSceneDrop = std::nullopt;
@@ -660,6 +663,30 @@ namespace Horo::Editor {
         Assets::AssetId id;
         std::string name;
     };
+
+    /** @brief Routes the shared Decision save/undo/redo action to the focused family. */
+    inline EditorWorkspaceViewCommandData MakeDecisionHistoryCommand(const DecisionGraphWorkspaceDocument &document,
+                                                                     DecisionHistoryAction action) {
+        if (document.editableBehaviorTree) {
+            auto operation = BehaviorTreeEditOperation::Save;
+            if (action == DecisionHistoryAction::Undo)
+                operation = BehaviorTreeEditOperation::Undo;
+            if (action == DecisionHistoryAction::Redo)
+                operation = BehaviorTreeEditOperation::Redo;
+            return {.command = EditorWorkspaceViewCommand::EditDecisionBehaviorTree,
+                    .behaviorTreeEdit = BehaviorTreeEditRequest{.instance = document.identity.instance,
+                                                                .revision = document.revision,
+                                                                .operation = operation}};
+        }
+        auto operation = StateMachineEditOperation::Save;
+        if (action == DecisionHistoryAction::Undo)
+            operation = StateMachineEditOperation::Undo;
+        if (action == DecisionHistoryAction::Redo)
+            operation = StateMachineEditOperation::Redo;
+        return {.command = EditorWorkspaceViewCommand::EditDecisionStateMachine,
+                .stateMachineEdit =
+                    StateMachineEditRequest{.instance = document.identity.instance, .revision = document.revision, .operation = operation}};
+    }
 
     /** @brief Project-workspace recency keyed by a registered asset identity and type. */
     struct RecentAiAsset final {

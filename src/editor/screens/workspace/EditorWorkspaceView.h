@@ -169,6 +169,18 @@ namespace Horo::Editor {
         };
 
         mutable StateMachineSelection m_stateMachineSelection;
+
+        /** @brief Remembers the selected authored node and exact installed Task in one open tree. */
+        struct BehaviorTreeSelection final {
+            DocumentInstanceId instance;
+            AI::DecisionNodeId node;
+            AI::DecisionNodeTypeId task;
+        };
+
+        mutable BehaviorTreeSelection m_behaviorTreeSelection;
+        /** @brief Projects supported tree topology and emits stable revision-fenced edits. */
+        void DrawBehaviorTreeTopology(const EditorWorkspaceViewModel &viewModel, const DecisionGraphWorkspaceDocument &document,
+                                      EditorWorkspaceViewCommandData &outCommand) const;
         /** @brief Projects the active immutable sequence through the shared timeline control. */
         bool DrawSequenceDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
         /** @brief Draws source-only controls and the isolated stage using shared themed components. */

@@ -332,15 +332,12 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             });
             if (graph != model.decisionGraphDocuments.end()) {
                 if (graph->editable) {
-                    auto operation = StateMachineEditOperation::Save;
+                    auto operation = DecisionHistoryAction::Save;
                     if (action == EditorMenuAction::Undo)
-                        operation = StateMachineEditOperation::Undo;
+                        operation = DecisionHistoryAction::Undo;
                     if (action == EditorMenuAction::Redo)
-                        operation = StateMachineEditOperation::Redo;
-                    controller->ProcessCommand({.command = EditorWorkspaceViewCommand::EditDecisionStateMachine,
-                                                .stateMachineEdit = StateMachineEditRequest{.instance = graph->identity.instance,
-                                                                                            .revision = graph->revision,
-                                                                                            .operation = operation}});
+                        operation = DecisionHistoryAction::Redo;
+                    controller->ProcessCommand(MakeDecisionHistoryCommand(*graph, operation));
                 }
                 return true;
             }

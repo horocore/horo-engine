@@ -703,6 +703,14 @@ modal fences Save and Discard to the presented document revision. Gameplay
 provider actions and calls remain inspectable until their editing and
 validation authority is available.
 
+The Behavior Tree document route edits the supported Root, Sequence, Selector
+and installed Task topology. Wrapping, unwrapping, attaching a Task, sibling
+reordering and leaf removal publish a complete captured candidate. The same
+history and source lifecycle revalidate each candidate against the current
+project provider generation and saved Blackboard schema. Provider factories
+remain inactive. Other Behavior Tree shapes keep their inspectable source
+without entering this authoring path.
+
 The workspace usage review submits one bounded Project-owned read of the exact
 durable schema bytes and registered Decision sources. The application holds the
 project mutation lease through source verification, uses the same typed source
