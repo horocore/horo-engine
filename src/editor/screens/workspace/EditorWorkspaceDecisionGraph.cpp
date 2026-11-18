@@ -4,6 +4,7 @@
 #include "Horo/Application/ProjectAssetImportCommitter.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "Horo/Foundation/PathUtils.h"
 #include "WorkspacePathText.h"
 #include "editor/gameplay/ProjectGameplayRegistry.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
@@ -12,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <charconv>
 #include <cmath>
 #include <format>
 #include <limits>
@@ -128,6 +130,116 @@ namespace Horo::Editor {
                     return Result<void>::Failure(MakeError(Application::DecisionCookErrors::Stale));
                 return AdmitDecisionNamespace(root, schemaAsset, schema.digest, source);
             });
+        }
+
+        /** @brief Identifies the intrinsic subset that needs no provider generation or Subplan grants. */
+        const AI::StateMachineAssetDescriptor *EditableMachine(const AI::DecisionGraphSource &source) {
+            const auto *machine = std::get_if<AI::StateMachineAssetDescriptor>(&source.body);
+            if (!machine || std::ranges::any_of(machine->states, [](const auto &state) {
+                return state.call || state.entry || state.update || state.exit || state.entryProvider || state.updateProvider ||
+                       state.exitProvider;
+            }))
+                return nullptr;
+            return machine;
+        }
+
+        /** @brief Compiles an intrinsic draft against its unique saved schema with no provider activation. */
+        Result<void> ValidateStateMachineDraft(const std::filesystem::path &root, const Assets::AssetRegistrySnapshot &registry,
+                                               const AI::DecisionGraphSource &candidate) {
+            using ResultType = Result<void>;
+            if (!EditableMachine(candidate))
+                return ResultType::Failure(MakeError(Application::DecisionCookErrors::Invalid));
+            const auto schemas =
+                AuthoredAiSources::Capture(root, registry, AI::BlackboardSchemaAssetType, AI::BlackboardSchemaSourceCodec::MaximumBytes);
+            if (schemas.HasError())
+                return ResultType::Failure(schemas.ErrorValue());
+            std::shared_ptr<const AI::BlackboardSchema> schema;
+            for (const auto &file : schemas.Value().Sources()) {
+                auto decoded = AI::BlackboardSchemaSourceCodec::Decode(file.bytes);
+                if (decoded.HasError())
+                    return ResultType::Failure(decoded.ErrorValue());
+                if (decoded.Value().schema.Identity() != candidate.blackboard ||
+                    !candidate.blackboardVersion.Contains(decoded.Value().schema.Version()))
+                    continue;
+                if (schema)
+                    return ResultType::Failure(MakeError(AI::AIErrors::DescriptorConflict));
+                schema = std::make_shared<const AI::BlackboardSchema>(std::move(decoded).Value().schema);
+            }
+            const auto providers = AI::DecisionNodeGeneration::Capture({}, std::make_shared<const std::atomic_bool>(true));
+            if (!schema || providers.HasError())
+                return ResultType::Failure(MakeError(Application::DecisionCookErrors::Invalid));
+            const auto compiled = AI::DecisionGraphCompiler::Compile(candidate.asset, std::span{&candidate, 1},
+                                                                     {.nodes = providers.Value(), .schemas = {std::move(schema)}});
+            if (compiled.HasError())
+                return ResultType::Failure(compiled.ErrorValue());
+            if (!compiled.Value().validation.Empty() || !compiled.Value().plan)
+                return ResultType::Failure(MakeError(Application::DecisionCookErrors::Invalid));
+            return schemas.Value().VerifyUnchanged();
+        }
+
+        /** @brief Uses the existing authored identity issuer for the shared node and transition namespace. */
+        Result<AI::DecisionNodeId> IssueMachineNode(const AI::StateMachineAssetDescriptor &machine) {
+            std::set<AI::DecisionNodeId> used;
+            for (const auto &state : machine.states)
+                used.insert(state.id);
+            for (const auto &transition : machine.transitions)
+                used.insert(transition.id);
+            return AuthoredAiSources::Issue(used);
+        }
+
+        /** @brief Applies one typed topology command to a detached graph, deferring admission to the compiler. */
+        Result<bool> EditStateMachineCandidate(AI::DecisionGraphSource &candidate, const StateMachineEditRequest &request) {
+            using Edit = Result<bool>;
+            auto &machine = std::get<AI::StateMachineAssetDescriptor>(candidate.body);
+            const auto fail = [] {
+                return Edit::Failure(MakeError(Application::DecisionCookErrors::Invalid));
+            };
+            auto state = std::ranges::find(machine.states, request.node, &AI::StateMachineState::id);
+            using enum StateMachineEditOperation;
+            switch (request.operation) {
+                case AddState: {
+                    if (machine.states.size() >= AI::StateMachineLimits::States || request.terminal >= AI::DecisionStateTerminal::Count)
+                        return fail();
+                    const auto id = IssueMachineNode(machine);
+                    if (id.HasError())
+                        return Edit::Failure(id.ErrorValue());
+                    machine.states.push_back({.id = id.Value(), .terminal = request.terminal, .source = candidate.location});
+                    break;
+                }
+                case SetTerminal:
+                    if (state == machine.states.end() || request.terminal >= AI::DecisionStateTerminal::Count)
+                        return fail();
+                    if (state->terminal == request.terminal)
+                        return Edit::Success(false);
+                    state->terminal = request.terminal;
+                    break;
+                case Connect: {
+                    if (machine.transitions.size() >= AI::StateMachineLimits::Transitions || state == machine.states.end() ||
+                        std::ranges::find(machine.states, request.target, &AI::StateMachineState::id) == machine.states.end())
+                        return fail();
+                    const auto id = IssueMachineNode(machine);
+                    if (id.HasError())
+                        return Edit::Failure(id.ErrorValue());
+                    machine.transitions.push_back(
+                        {.id = id.Value(), .source = request.node, .target = request.target, .location = candidate.location});
+                    break;
+                }
+                case RemoveTransition: {
+                    const auto removed = std::ranges::find(machine.transitions, request.node, &AI::StateMachineTransition::id);
+                    if (removed == machine.transitions.end())
+                        return fail();
+                    machine.transitions.erase(removed);
+                    break;
+                }
+                case RemoveState:
+                    if (state == machine.states.end())
+                        return fail();
+                    machine.states.erase(state);
+                    break;
+                default:
+                    return fail();
+            }
+            return Edit::Success(true);
         }
 
         /** @brief Identifies native Tasks that can be authored without granting missing capabilities or inventing port wiring. */
@@ -362,6 +474,18 @@ namespace Horo::Editor {
         }
         const auto &source = captured.Value().Sources().front();
         auto &host = m_viewModel.workspacePanelHost;
+        if (existing != documents.end() && existing->dirty) {
+            if (existing->identity != opened.identity || existing->source != source.sourceDigest) {
+                existing->conflict = true;
+                existing->diagnostic = MakeError(Assets::AssetSourceErrors::Conflict);
+                if (existing->identity != opened.identity) {
+                    fail("workspace.source_open.unavailable");
+                    return;
+                }
+            }
+            static_cast<void>(host.FocusDocument(existing->identity.instance));
+            return;
+        }
         if (existing != documents.end() && existing->identity == opened.identity && existing->asset == record->id &&
             existing->source == source.sourceDigest) {
             static_cast<void>(host.FocusDocument(opened.identity.instance));
@@ -372,12 +496,31 @@ namespace Horo::Editor {
             fail("workspace.decision_graph.invalid");
             return;
         }
+        if (existing != documents.end() && existing->revision == std::numeric_limits<std::uint64_t>::max()) {
+            fail("workspace.source_open.unavailable");
+            return;
+        }
         DecisionGraphWorkspaceDocument candidate{opened.identity, record->id, source.sourceDigest,
                                                  std::make_shared<const AI::DecisionGraphSource>(std::move(graph).Value())};
+        decltype(m_decisionGraphDrafts) prepared;
+        if (m_mutations && m_durableFiles && EditableMachine(*candidate.graph)) {
+            const auto encoded = AI::DecisionPlanCodec::EncodeSource(std::span{candidate.graph.get(), 1}, candidate.graph->asset);
+            if (encoded.HasValue()) {
+                const auto digest = ComputeSha256(std::as_bytes(std::span{encoded.Value()}));
+                prepared.try_emplace(candidate.identity.instance, DecisionGraphDraft{.savedDigest = digest,
+                                                                                     .currentDigest = digest,
+                                                                                     .acceptedBytes = source.bytes.size()});
+            }
+        }
+        candidate.editable = !prepared.empty();
+        candidate.revision = existing == documents.end() ? 1 : existing->revision + 1;
         if (host.OpenDocument(opened.identity.key).HasError()) {
             fail("workspace.source_open.unavailable");
             return;
         }
+        if (existing != documents.end())
+            m_decisionGraphDrafts.erase(existing->identity.instance);
+        m_decisionGraphDrafts.merge(prepared);
         if (existing == documents.end()) {
             documents.push_back(std::move(candidate));
             return;
@@ -395,30 +538,312 @@ namespace Horo::Editor {
         });
         if (opened == documents.end())
             return false;
-        if (m_viewModel.workspacePanelHost.CloseDocument(instance).HasValue())
+        if (const auto closed = m_viewModel.workspacePanelHost.CloseDocument(instance); closed.HasValue()) {
+            m_decisionGraphDrafts.erase(instance);
             documents.erase(opened);
+        } else {
+            opened->diagnostic = closed.ErrorValue();
+        }
         return true;
     }
 
+    /** @copydoc EditorWorkspaceController::ResolveDecisionGraphClose */
+    Result<bool> EditorWorkspaceController::ResolveDecisionGraphClose(const DecisionGraphDocumentFence fence,
+                                                                      const SourceCloseDecision decision) {
+        using Closed = Result<bool>;
+        if (decision == SourceCloseDecision::Cancel)
+            return Closed::Success(true);
+        if (decision != SourceCloseDecision::Save && decision != SourceCloseDecision::Discard)
+            return Closed::Failure(MakeError(Application::DecisionCookErrors::Invalid));
+        auto &documents = m_viewModel.decisionGraphDocuments;
+        const auto document = std::ranges::find_if(documents, [fence](const auto &entry) {
+            return entry.identity.instance == fence.instance && entry.revision == fence.revision;
+        });
+        const auto draft = m_decisionGraphDrafts.find(fence.instance);
+        if (document == documents.end() || draft == m_decisionGraphDrafts.end())
+            return Closed::Failure(MakeError(Application::DecisionCookErrors::Stale));
+        if (decision == SourceCloseDecision::Save) {
+            const auto saved = SaveDecisionGraphDraft(*document, draft->second);
+            if (saved.HasError()) {
+                document->diagnostic = saved.ErrorValue();
+                return Closed::Failure(saved.ErrorValue());
+            }
+        }
+        const auto closed = m_viewModel.workspacePanelHost.CloseDocument(fence.instance, WorkspaceDocumentClosePolicy::DiscardChanges);
+        if (closed.HasError())
+            return Closed::Failure(closed.ErrorValue());
+        m_decisionGraphDrafts.erase(draft);
+        documents.erase(document);
+        return Closed::Success(true);
+    }
+
+    /** @copydoc EditorWorkspaceController::ProjectDecisionGraphDraft */
+    void EditorWorkspaceController::ProjectDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, const DecisionGraphDraft &draft) {
+        document.dirty = draft.currentDigest != draft.savedDigest;
+        document.canUndo = draft.history.UndoCount() != 0;
+        document.canRedo = draft.history.RedoCount() != 0;
+        static_cast<void>(m_viewModel.workspacePanelHost.SetDocumentDirty(document.identity.instance, document.dirty));
+    }
+
+    /** @copydoc EditorWorkspaceController::ApplyDecisionGraphEdit */
+    Result<void> EditorWorkspaceController::ApplyDecisionGraphEdit(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
+                                                                   const StateMachineEditRequest &request) {
+        using Edit = Result<void>;
+        if (request.revision != document.revision || document.revision == std::numeric_limits<std::uint64_t>::max())
+            return Edit::Failure(MakeError(Application::DecisionCookErrors::Stale));
+        if (request.operation == StateMachineEditOperation::Save)
+            return SaveDecisionGraphDraft(document, draft);
+
+        const auto root = ProjectRoot();
+        const auto project = m_mutations->TryAcquire({root, ProjectMutationOwner::Asset, "decision-source-edit"});
+        if (project.HasError())
+            return Edit::Failure(project.ErrorValue());
+        const auto registry = m_mutableAssetRegistry ? m_mutableAssetRegistry->Snapshot() : m_assetRegistry;
+        const auto validate = [&](const AI::DecisionGraphSource &candidate) {
+            return ValidateStateMachineDraft(root, registry, candidate);
+        };
+        if (request.operation == StateMachineEditOperation::Undo || request.operation == StateMachineEditOperation::Redo) {
+            const bool redo = request.operation == StateMachineEditOperation::Redo;
+            const auto *entry = draft.history.Next(redo);
+            if (!entry || document.graph != (redo ? entry->before : entry->after))
+                return Edit::Failure(MakeError(Application::DecisionCookErrors::Stale));
+            const auto &candidate = redo ? entry->after : entry->before;
+            if (const auto verified = validate(*candidate); verified.HasError())
+                return verified;
+            document.graph = candidate;
+            draft.currentDigest = redo ? entry->afterDigest : entry->beforeDigest;
+            draft.history.DidReplay(redo);
+        } else {
+            auto candidate = std::make_shared<AI::DecisionGraphSource>(*document.graph);
+            const auto edited = EditStateMachineCandidate(*candidate, request);
+            if (edited.HasError())
+                return Edit::Failure(edited.ErrorValue());
+            if (!edited.Value())
+                return Edit::Success();
+            if (const auto verified = validate(*candidate); verified.HasError())
+                return verified;
+            const auto before = AI::DecisionPlanCodec::EncodeSource(std::span{document.graph.get(), 1}, document.graph->asset);
+            const auto after =
+                AI::DecisionPlanCodec::EncodeSource(std::span<const AI::DecisionGraphSource>{candidate.get(), 1}, candidate->asset);
+            if (before.HasError() || after.HasError())
+                return Edit::Failure(MakeError(Application::DecisionCookErrors::Invalid));
+            const auto candidateDigest = ComputeSha256(std::as_bytes(std::span{after.Value()}));
+            auto prepared = draft.history.Prepare(
+                {document.graph, candidate, draft.currentDigest, candidateDigest, before.Value().size() + after.Value().size()});
+            if (!prepared)
+                return Edit::Failure(MakeError(Assets::AssetSourceErrors::Limit));
+            draft.history.Commit(*prepared);
+            draft.currentDigest = candidateDigest;
+            document.graph = std::move(candidate);
+        }
+        ++document.revision;
+        ProjectDecisionGraphDraft(document, draft);
+        return Edit::Success();
+    }
+
+    /** @copydoc EditorWorkspaceController::SaveDecisionGraphDraft */
+    Result<void> EditorWorkspaceController::SaveDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft) {
+        try {
+            using Saved = Result<void>;
+            const auto fail = [&](const Error &error) {
+                document.conflict = document.conflict || error.code.Value() == Assets::AssetSourceErrors::Conflict.code.Value();
+                return Saved::Failure(error);
+            };
+            if (!document.dirty)
+                return Saved::Success();
+            const auto root = ProjectRoot();
+            const auto project = m_mutations->TryAcquire({root, ProjectMutationOwner::Asset, "decision-source-save"});
+            if (project.HasError())
+                return fail(project.ErrorValue());
+            const auto registry = m_mutableAssetRegistry ? m_mutableAssetRegistry->Snapshot() : m_assetRegistry;
+            const auto *record = registry.Find(document.asset);
+            if (!record || record->sourcePath.String() != document.identity.key.source.Value() ||
+                record->type.Value() != Application::DecisionStateMachineSourceType)
+                return fail(MakeError(Assets::AssetSourceErrors::Conflict));
+            const auto path = Foundation::Paths::Resolve(root, record->sourcePath);
+            const auto lock = Assets::AssetSourcePublicationLockPath(root, path);
+            if (lock.HasError())
+                return fail(lock.ErrorValue());
+            const auto lease = m_durableFiles->TryAcquireExclusive(lock.Value(), "decision-source-save");
+            if (lease.HasError())
+                return fail(lease.ErrorValue());
+
+            const auto captured = CaptureGraphInput(root, registry, record->id, AI::DecisionCodecLimits{}.maximumBytes);
+            const Assets::AssetSourceIdentity accepted{true, draft.acceptedBytes, document.source};
+            if (captured.HasError() || captured.Value().Sources().front().sourceDigest != accepted.digest ||
+                captured.Value().Sources().front().bytes.size() != accepted.bytes)
+                return fail(MakeError(Assets::AssetSourceErrors::Conflict));
+            const auto validated = ValidateStateMachineDraft(root, registry, *document.graph);
+            if (validated.HasError())
+                return fail(validated.ErrorValue());
+            const auto encoded = AI::DecisionPlanCodec::EncodeSource(std::span{document.graph.get(), 1}, document.graph->asset);
+            if (encoded.HasError())
+                return fail(encoded.ErrorValue());
+            if (auto unchanged = captured.Value().VerifyUnchanged(); unchanged.HasError())
+                return fail(MakeError(Assets::AssetSourceErrors::Conflict));
+            const auto published =
+                Assets::PublishAssetSource(root, path, accepted, std::as_bytes(std::span{encoded.Value()}), lease.Value(), *m_durableFiles);
+            if (published.HasError())
+                return fail(published.ErrorValue());
+            if (published.Value().status != Assets::AssetSourcePublicationStatus::Durable) {
+                document.conflict = true;
+                return fail(published.Value().durabilityError.value_or(MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed)));
+            }
+            document.source = published.Value().identity.digest;
+            draft.acceptedBytes = published.Value().identity.bytes;
+            draft.savedDigest = draft.currentDigest;
+            document.conflict = false;
+            ProjectDecisionGraphDraft(document, draft);
+            return Saved::Success();
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Limit));
+        }
+    }
+
+    /** @copydoc EditorWorkspaceController::ProcessDecisionGraphEdit */
+    bool EditorWorkspaceController::ProcessDecisionGraphEdit(const EditorWorkspaceViewCommandData &cmd) {
+        if (cmd.command != EditorWorkspaceViewCommand::EditDecisionStateMachine)
+            return false;
+        if (!cmd.stateMachineEdit || m_viewModel.workspacePanelHost.ActiveDocument() != cmd.stateMachineEdit->instance)
+            return true;
+        const auto &request = *cmd.stateMachineEdit;
+        const auto draft = m_decisionGraphDrafts.find(request.instance);
+        if (draft == m_decisionGraphDrafts.end())
+            return true;
+        auto &documents = m_viewModel.decisionGraphDocuments;
+        const auto document = std::ranges::find_if(documents, [&](const auto &entry) {
+            return entry.identity.instance == request.instance;
+        });
+        if (document == documents.end())
+            return true;
+        try {
+            const auto result = ApplyDecisionGraphEdit(*document, draft->second, request);
+            document->diagnostic = result.HasError() ? std::optional{result.ErrorValue()} : std::nullopt;
+        } catch (const std::bad_alloc &) {
+            document->diagnostic = MakeError(Assets::AssetSourceErrors::Limit);
+        }
+        return true;
+    }
+
+    /** @copydoc EditorWorkspaceController::DecisionGraphRevisions */
+    std::vector<std::pair<DocumentInstanceId, std::uint64_t>> EditorWorkspaceController::DecisionGraphRevisions() const {
+        std::vector<std::pair<DocumentInstanceId, std::uint64_t>> revisions;
+        for (const auto &document : m_viewModel.decisionGraphDocuments)
+            if (document.editable)
+                revisions.emplace_back(document.identity.instance, document.revision);
+        return revisions;
+    }
+
+    /** @copydoc EditorWorkspaceController::SaveDecisionGraphDocuments */
+    Result<void> EditorWorkspaceController::SaveDecisionGraphDocuments() {
+        for (auto &document : m_viewModel.decisionGraphDocuments) {
+            if (!document.dirty)
+                continue;
+            auto &draft = m_decisionGraphDrafts.at(document.identity.instance);
+            auto saved = SaveDecisionGraphDraft(document, draft);
+            document.diagnostic = saved.HasError() ? std::optional{saved.ErrorValue()} : std::nullopt;
+            if (saved.HasError())
+                return saved;
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc EditorWorkspaceView::DrawDecisionGraphDocument */
-    bool EditorWorkspaceView::DrawDecisionGraphDocument(const EditorWorkspaceViewModel &viewModel) const {
+    bool EditorWorkspaceView::DrawDecisionGraphDocument(const EditorWorkspaceViewModel &viewModel,
+                                                        EditorWorkspaceViewCommandData &outCommand) const {
         const auto opened = std::ranges::find_if(viewModel.decisionGraphDocuments, [&](const auto &document) {
             return document.identity.instance == viewModel.workspacePanelHost.ActiveDocument();
         });
         if (opened == viewModel.decisionGraphDocuments.end())
             return false;
         const auto summary = Summarize(*opened->graph);
-        const auto text = [&](std::string_view key) {
+        const auto text = [&](std::string_view key) -> const std::string & {
             return m_context.localization.Get("editor", key);
         };
         const auto label = [&](std::string_view value, ImVec4 color) {
             Ui::WrappedText(ImGui::GetContentRegionAvail().x, value, color, m_context.theme.fonts);
         };
         label(text(summary.familyLabel), Theme::Text());
-        label(text("workspace.decision_graph.read_only"), Theme::Muted());
         label(std::format("{} {}", text("workspace.decision_graph.nodes"), summary.nodes), Theme::Text());
         if (summary.unknown)
             label(std::format("{} {}", text("workspace.decision_graph.unknown"), summary.unknown), Theme::Muted());
+        if (!opened->editable) {
+            label(text("workspace.decision_graph.read_only"), Theme::Muted());
+            return true;
+        }
+        if (opened->diagnostic)
+            label(text(opened->conflict ? "workspace.decision_graph.edit_conflict" : "workspace.decision_graph.edit_refused"),
+                  Theme::Warn());
+
+        const auto &machine = std::get<AI::StateMachineAssetDescriptor>(opened->graph->body);
+        auto &selection = m_stateMachineSelection;
+        if (selection.instance != opened->identity.instance)
+            selection = {.instance = opened->identity.instance};
+        const auto emit = [&](StateMachineEditOperation operation, AI::DecisionNodeId node = {}, AI::DecisionNodeId target = {},
+                              AI::DecisionStateTerminal terminal = AI::DecisionStateTerminal::None) {
+            outCommand = {.command = EditorWorkspaceViewCommand::EditDecisionStateMachine,
+                          .stateMachineEdit =
+                              StateMachineEditRequest{opened->identity.instance, opened->revision, operation, node, target, terminal}};
+        };
+        const auto button = [&](std::string_view key, bool enabled) {
+            const auto &caption = text(key);
+            return Ui::Button({.label = caption.c_str(), .enabled = enabled, .font = m_context.theme.fonts.sans});
+        };
+        using enum StateMachineEditOperation;
+        if (button("workspace.decision_graph.edit_save", opened->dirty))
+            emit(Save);
+        if (button("workspace.decision_graph.edit_undo", opened->canUndo))
+            emit(Undo);
+        if (button("workspace.decision_graph.edit_redo", opened->canRedo))
+            emit(Redo);
+        if (button("workspace.decision_graph.edit_add_state", machine.states.size() < AI::StateMachineLimits::States))
+            emit(AddState);
+
+        const auto select = [&](const char *key, const auto &records, AI::DecisionNodeId &selected) {
+            if (records.empty()) {
+                selected = {};
+                return;
+            }
+            label(text(key), Theme::Text());
+            const auto found = std::ranges::find_if(records, [&](const auto &record) {
+                return record.id == selected;
+            });
+            auto index = found == records.end() ? 0 : static_cast<int>(std::distance(records.begin(), found));
+            std::array<char, 24> storage{};
+            const Ui::ComboItemSource items{.label = [&](const int slot) -> const char * {
+                const auto &record = records[static_cast<std::size_t>(slot)];
+                const auto converted = std::to_chars(storage.data(), storage.data() + storage.size() - 1, record.id.Value());
+                *converted.ptr = '\0';
+                return storage.data();
+            }};
+            static_cast<void>(Ui::ComboControl(key, &index, static_cast<int>(records.size()), items, m_context.theme.fonts));
+            selected = records[static_cast<std::size_t>(index)].id;
+        };
+        select("workspace.decision_graph.edit_state", machine.states, selection.state);
+        const auto state = std::ranges::find(machine.states, selection.state, &AI::StateMachineState::id);
+        if (state != machine.states.end()) {
+            constexpr std::array Keys{"workspace.decision_graph.edit_running", "workspace.decision_graph.succeeded",
+                                      "workspace.decision_graph.failed"};
+            const std::array labels{text(Keys[0]).c_str(), text(Keys[1]).c_str(), text(Keys[2]).c_str()};
+            int outcome = static_cast<int>(state->terminal);
+            if (Ui::ComboControl("##DecisionStateOutcome", &outcome, labels.data(), static_cast<int>(labels.size()), m_context.theme.fonts))
+                emit(SetTerminal, state->id, {}, static_cast<AI::DecisionStateTerminal>(outcome));
+            if (button("workspace.decision_graph.edit_remove_state", state->id != machine.initial))
+                emit(RemoveState, state->id);
+        }
+        select("workspace.decision_graph.edit_target", machine.states, selection.target);
+        if (button("workspace.decision_graph.edit_connect",
+                   state != machine.states.end() && state->terminal == AI::DecisionStateTerminal::None && selection.target.IsValid() &&
+                       machine.transitions.size() < AI::StateMachineLimits::Transitions))
+            emit(Connect, selection.state, selection.target);
+
+        select("workspace.decision_graph.edit_transition", machine.transitions, selection.transition);
+        const auto transition = std::ranges::find(machine.transitions, selection.transition, &AI::StateMachineTransition::id);
+        if (transition != machine.transitions.end()) {
+            label(std::format("{} → {}", transition->source.Value(), transition->target.Value()), Theme::Text());
+            if (button("workspace.decision_graph.edit_remove_transition", true))
+                emit(RemoveTransition, transition->id);
+        }
         return true;
     }
 }  // namespace Horo::Editor

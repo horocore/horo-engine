@@ -26,6 +26,13 @@ namespace Horo::Editor {
         : EditorModal(kTextScope), context_(context), controller_(&controller), lifetime_(std::move(lifetime)), request_(request),
           source_(std::move(source)) {}
 
+    /** @copydoc SourceDocumentCloseModal::SourceDocumentCloseModal */
+    SourceDocumentCloseModal::SourceDocumentCloseModal(const EditorGuiContext &context, EditorWorkspaceController &controller,
+                                                       std::weak_ptr<const void> lifetime, DecisionGraphDocumentFence request,
+                                                       std::string source)
+        : EditorModal(kTextScope), context_(context), controller_(&controller), lifetime_(std::move(lifetime)), request_(request),
+          source_(std::move(source)) {}
+
     /** @copydoc SourceDocumentCloseModal::Id */
     ModalId SourceDocumentCloseModal::Id() const {
         return ModalId{0x534F55524345434CULL};
@@ -66,6 +73,11 @@ namespace Horo::Editor {
         }
         if (const auto *blackboard = std::get_if<BlackboardDocumentFence>(&request_)) {
             auto outcome = controller_->ResolveBlackboardClose(*blackboard, decision);
+            failed_ = outcome.HasError() || !outcome.Value();
+            return outcome;
+        }
+        if (const auto *graph = std::get_if<DecisionGraphDocumentFence>(&request_)) {
+            auto outcome = controller_->ResolveDecisionGraphClose(*graph, decision);
             failed_ = outcome.HasError() || !outcome.Value();
             return outcome;
         }

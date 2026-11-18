@@ -119,6 +119,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         std::optional<WorldDocumentFence> worldFence;
         std::uint64_t prefabSettingsRevision{};
         std::vector<std::pair<DocumentInstanceId, std::uint64_t>> terrainRevisions;
+        std::vector<std::pair<DocumentInstanceId, std::uint64_t>> decisionGraphRevisions;
     };
 
     /** @brief Routes source document commands while fencing delayed close decisions to the workspace session. */

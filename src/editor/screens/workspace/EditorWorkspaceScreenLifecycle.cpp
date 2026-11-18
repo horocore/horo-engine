@@ -16,6 +16,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             leaveCapture_.sourceDocuments = controller_->ViewModel().sourceDocuments;
             leaveCapture_.uiCanvasStates = controller_->UiCanvasStates();
             leaveCapture_.terrainRevisions = controller_->TerrainDocumentRevisions();
+            leaveCapture_.decisionGraphRevisions = controller_->DecisionGraphRevisions();
             leaveCapture_.prefabDocuments = controller_->ViewModel().prefabDocuments;
             auto graphs = controller_->PCGDocuments().Snapshots();
             if (graphs.HasError())
@@ -105,7 +106,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (resolution.subject != 1 || resolution.revision != 1)
             return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
         if (controller_ && resolution.action != Stay) {
-            if (controller_->TerrainDocumentRevisions() != leaveCapture_.terrainRevisions)
+            if (controller_->TerrainDocumentRevisions() != leaveCapture_.terrainRevisions ||
+                controller_->DecisionGraphRevisions() != leaveCapture_.decisionGraphRevisions)
                 return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
             if (controller_->PrefabSettingsRevision() != leaveCapture_.prefabSettingsRevision)
                 return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));

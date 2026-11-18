@@ -30,7 +30,8 @@ namespace Horo::Editor {
         }
         return std::ranges::any_of(m_viewModel.workspacePanelHost.DocumentTabs(), [](const WorkspaceDocumentTab &tab) {
             const auto kind = tab.identity.key.kind;
-            return tab.dirty && (kind == DocumentKind::Source || kind == DocumentKind::UiCanvas || kind == DocumentKind::BlackboardSchema);
+            return tab.dirty && (kind == DocumentKind::Source || kind == DocumentKind::UiCanvas || kind == DocumentKind::BlackboardSchema ||
+                                 kind == DocumentKind::DecisionGraph);
         });
     }
 
@@ -69,6 +70,8 @@ namespace Horo::Editor {
             if (saved.HasError())
                 return saved;
         }
+        if (auto saved = SaveDecisionGraphDocuments(); saved.HasError())
+            return saved;
         return SaveTerrainDocuments();
     }
 

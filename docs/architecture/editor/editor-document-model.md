@@ -690,6 +690,16 @@ labels and row order. Legacy semantic-only assets open with unlabeled rows in
 stable key order. Cooking publishes the same semantic schema bytes. Durable
 source publication belongs to the application document host.
 
+The intrinsic State Machine document route admits typed state and transition
+edits against the unique compatible saved Blackboard schema. The canonical
+Decision compiler runs before the workspace publishes an edit or history
+replay. The workspace uses bounded history and compares canonical source
+digests for dirtiness. Save rechecks the registered source and sidecar under the
+owning Project and source leases before replacing the source. The shared close
+modal fences Save and Discard to the presented document revision. Gameplay
+provider actions and calls remain inspectable until their editing and
+validation authority is available.
+
 The workspace usage review submits one bounded Project-owned read of the exact
 durable schema bytes and registered Decision sources. The application holds the
 project mutation lease through source verification, uses the same typed source

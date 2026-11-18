@@ -147,7 +147,7 @@ namespace Horo::Editor {
         /** @brief Renders an already admitted immutable Environment Query source. */
         bool DrawEnvironmentQueryDocument(const EditorWorkspaceViewModel &viewModel) const;
         /** @brief Presents the admitted semantic source without retaining a runtime plan. */
-        bool DrawDecisionGraphDocument(const EditorWorkspaceViewModel &viewModel) const;
+        bool DrawDecisionGraphDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
 
         struct BlackboardViewDraft final {
             BlackboardDocumentFence fence;
@@ -159,6 +159,16 @@ namespace Horo::Editor {
         };
 
         mutable BlackboardViewDraft m_blackboardDraft;
+
+        /** @brief Transient selection by semantic identity, scoped to one open graph instance. */
+        struct StateMachineSelection final {
+            DocumentInstanceId instance;
+            AI::DecisionNodeId state;
+            AI::DecisionNodeId target;
+            AI::DecisionNodeId transition;
+        };
+
+        mutable StateMachineSelection m_stateMachineSelection;
         /** @brief Projects the active immutable sequence through the shared timeline control. */
         bool DrawSequenceDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
         /** @brief Draws source-only controls and the isolated stage using shared themed components. */

@@ -326,6 +326,112 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
     REQUIRE(command.has_value());
     constexpr auto path = "assets/Terminal state.horo_sm";
 
+    SECTION("intrinsic topology commands validate complete drafts before undo, redo or durable save") {
+        controller.ProcessCommand(*command);
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        const auto &documents = controller.ViewModel().decisionGraphDocuments;
+        REQUIRE(documents.size() == 1);
+        REQUIRE(documents.front().editable);
+        const auto instance = documents.front().identity.instance;
+        const auto asset = documents.front().asset;
+        const auto original = documents.front().graph;
+        const auto initial = std::get<AI::StateMachineAssetDescriptor>(original->body).initial;
+        const auto edit = [&](StateMachineEditOperation operation, AI::DecisionNodeId node = {}, AI::DecisionNodeId target = {},
+                              AI::DecisionStateTerminal terminal = AI::DecisionStateTerminal::None,
+                              std::optional<std::uint64_t> revision = {}) {
+            controller.ProcessCommand({
+                .command = EditorWorkspaceViewCommand::EditDecisionStateMachine,
+                .stateMachineEdit =
+                    StateMachineEditRequest{instance, revision.value_or(documents.front().revision), operation, node, target, terminal},
+            });
+        };
+        const auto &view = documents.front();
+        using enum StateMachineEditOperation;
+        constexpr auto bound = AI::DecisionCodecLimits{}.maximumBytes;
+        const auto initialDisk = Assets::CaptureAssetSource(project.root, project.root / path, bound);
+        REQUIRE(initialDisk.HasValue());
+        edit(AddState, {}, {}, AI::DecisionStateTerminal::Succeeded, view.revision + 1);
+        CHECK(view.diagnostic.has_value());
+        CHECK(view.graph == original);
+        CHECK_FALSE(view.canUndo);
+
+        edit(AddState, {}, {}, AI::DecisionStateTerminal::Succeeded);
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        const auto &added = std::get<AI::StateMachineAssetDescriptor>(view.graph->body);
+        REQUIRE(added.states.size() == 2);
+        const auto addedId = added.states.back().id;
+        const auto beforeRejected = view.graph;
+        const auto revision = view.revision;
+        edit(Connect, initial, addedId);
+        CHECK(view.diagnostic.has_value());
+        CHECK(view.revision == revision);
+        CHECK(view.graph == beforeRejected);
+
+        edit(SetTerminal, initial);
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        edit(Connect, initial, addedId);
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        const auto connected = view.graph;
+        const auto &withEdge = std::get<AI::StateMachineAssetDescriptor>(connected->body);
+        REQUIRE(withEdge.transitions.size() == 1);
+        const auto edge = withEdge.transitions.front().id;
+        CHECK(withEdge.transitions.front().target == addedId);
+        edit(RemoveState, addedId);
+        CHECK(view.diagnostic.has_value());
+        CHECK(view.graph == connected);
+        edit(RemoveTransition, edge);
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        edit(Undo);
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        CHECK(view.graph == connected);
+        CHECK(view.canRedo);
+        edit(Redo);
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        CHECK(std::get<AI::StateMachineAssetDescriptor>(view.graph->body).transitions.empty());
+        edit(Undo);
+        CHECK(view.graph == connected);
+        CHECK(controller.HasDirtySourceDocuments());
+
+        const auto unchanged = Assets::CaptureAssetSource(project.root, project.root / path, bound);
+        REQUIRE(unchanged.HasValue());
+        CHECK(unchanged.Value().identity == initialDisk.Value().identity);
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = instance});
+        REQUIRE(documents.size() == 1);
+        REQUIRE(view.diagnostic.has_value());
+        CHECK(view.graph == connected);
+        const auto staleClose = controller.ResolveDecisionGraphClose({instance, revision}, SourceCloseDecision::Discard);
+        CHECK(staleClose.HasError());
+        CHECK(documents.size() == 1);
+
+        project.WriteSidecar(path, Assets::AssetId::FromBytes({9}), Application::DecisionStateMachineSourceType);
+        const auto conflicted = controller.ResolveDecisionGraphClose({instance, view.revision}, SourceCloseDecision::Save);
+        CHECK(conflicted.HasError());
+        REQUIRE(documents.size() == 1);
+        CHECK(view.conflict);
+        CHECK(view.graph == connected);
+        CHECK(view.dirty);
+        project.WriteSidecar(path, asset, Application::DecisionStateMachineSourceType);
+
+        const auto save = controller.SaveSourceDocuments();
+        REQUIRE(save.HasValue());
+        CHECK_FALSE(controller.HasDirtySourceDocuments());
+        CHECK(view.canUndo);
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = instance});
+        REQUIRE(documents.empty());
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::OpenSourceFile,
+                                   .sourceOpenRequest = SourceOpenRequest{.path = path, .origin = SourceOpenOrigin::AssetActivation}});
+        REQUIRE(documents.size() == 1);
+        CHECK(documents.front().asset == asset);
+        CHECK(documents.front().graph->asset == original->asset);
+        const auto &saved = std::get<AI::StateMachineAssetDescriptor>(documents.front().graph->body);
+        REQUIRE(saved.states.size() == 2);
+        REQUIRE(saved.transitions.size() == 1);
+        CHECK(saved.transitions.front().id == edge);
+        CHECK(saved.transitions.front().source == initial);
+        CHECK(saved.transitions.front().target == addedId);
+        CHECK_FALSE(documents.front().canUndo);
+    }
+
     SECTION("the durable source and sidecar open the same stable Decision document") {
         controller.ProcessCommand(BlackboardWorkspaceFixture::Open());
         REQUIRE(controller.ViewModel().blackboardDocuments.size() == 1);

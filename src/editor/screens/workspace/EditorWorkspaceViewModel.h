@@ -26,6 +26,7 @@
 #include "editor/project_model/EditorViewportModel.h"
 #include "editor/screens/workspace/AssetSceneDrop.h"
 #include "editor/screens/workspace/ContentBrowserModel.h"
+#include "editor/screens/workspace/DecisionStateMachineAuthoring.h"
 #include "editor/screens/workspace/GameplayBehaviorRequest.h"
 #include "editor/screens/workspace/InspectorExtensionEdit.h"
 #include "editor/screens/workspace/PCGWorkspace.h"
@@ -257,6 +258,7 @@ namespace Horo::Editor {
         RevealContentBrowserEntry,
         OpenSourceFile,
         OpenRecentAiAsset,
+        EditDecisionStateMachine,
         OpenDiagnosticSource,
         ChangeActivePanel,
         CloseWorkspacePanel,
@@ -486,12 +488,19 @@ namespace Horo::Editor {
         std::optional<InitialUtilityScore> score;
     };
 
-    /** @brief Registered immutable source displayed independently from runtime graphs. */
+    /** @brief Immutable authored source projection independently of runtime graphs. */
     struct DecisionGraphWorkspaceDocument final {
         DocumentIdentity identity;
         Assets::AssetId asset;
         Sha256Digest source;
         std::shared_ptr<const AI::DecisionGraphSource> graph;
+        std::uint64_t revision{};
+        bool editable{};
+        bool dirty{};
+        bool canUndo{};
+        bool canRedo{};
+        std::optional<Error> diagnostic;
+        bool conflict{};
     };
 
     /** @brief Confirmed first Blackboard asset and an explicitly authored initial key. */
@@ -613,6 +622,7 @@ namespace Horo::Editor {
         std::optional<ContentBrowserAssetTransferRequest> contentBrowserTransfer = std::nullopt;
         std::optional<SourceOpenRequest> sourceOpenRequest = std::nullopt;
         std::optional<Assets::AssetId> recentAiAsset = std::nullopt;
+        std::optional<StateMachineEditRequest> stateMachineEdit = std::nullopt;
         std::optional<DiagnosticSourceRequest> diagnosticSource = std::nullopt;
         std::optional<CreateGameplayBehaviorRequest> gameplayBehaviorRequest = std::nullopt;
         std::optional<AssetSceneDropRequest> assetSceneDrop = std::nullopt;

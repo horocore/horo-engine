@@ -1,4 +1,5 @@
 #pragma once
+
 #include "EditorWorkspaceHostServices.h"
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Application/TerrainAuthoringAssets.h"
@@ -15,6 +16,7 @@
 #include "Horo/Editor/PCGGraphDocumentService.h"
 #include "Horo/Editor/PrefabProjectSettingsSession.h"
 #include "Horo/Editor/ProjectMutation.h"
+#include "Horo/Editor/SemanticDocumentHistory.h"
 #include "Horo/Editor/UiCanvasDocument.h"
 #include "Horo/Editor/UiInspectorResources.h"
 #include "Horo/Editor/WorldStreamingPreviewRuntime.h"
@@ -40,6 +42,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <span>
@@ -255,6 +258,8 @@ namespace Horo::Editor {
         /** @brief Saves all dirty sources through their owner; uncertain durability keeps navigation blocked.
          * @return Success only after every source is durably clean. */
         [[nodiscard]] Result<void> SaveSourceDocuments();
+        /** @brief Captures authored decision revisions to fence delayed workspace departure. */
+        [[nodiscard]] std::vector<std::pair<DocumentInstanceId, std::uint64_t>> DecisionGraphRevisions() const;
         /** @brief Capture terrain instances/revisions for exact delayed workspace leave decisions. */
         [[nodiscard]] std::vector<std::pair<DocumentInstanceId, std::uint64_t>> TerrainDocumentRevisions() const;
         /** @brief Settle asset-rooted terrain owners after explicit save/discard navigation. */
@@ -283,6 +288,8 @@ namespace Horo::Editor {
         [[nodiscard]] Result<bool> ResolveUiCanvasClose(UiCanvasDocumentStateId state, SourceCloseDecision decision);
         /** @brief Handles the shared close dialog's exact Blackboard revision choice. */
         [[nodiscard]] Result<bool> ResolveBlackboardClose(BlackboardDocumentFence fence, SourceCloseDecision decision);
+        /** @brief Executes the explicit close decision only for its captured Decision document revision. */
+        [[nodiscard]] Result<bool> ResolveDecisionGraphClose(DecisionGraphDocumentFence fence, SourceCloseDecision decision);
         /** @brief Captures the current canvas instances and their exact publication fences for leave consent. */
         [[nodiscard]] std::vector<UiCanvasDocumentStateId> UiCanvasStates() const;
         /** @brief Retires all canvases after durable recovery or explicit discard. */
@@ -538,6 +545,33 @@ namespace Horo::Editor {
         Runtime::RuntimeSceneService &m_runtimeScene;
         std::optional<SceneSource::TriggerVolumeConversionContext> m_triggerBinding;
         EditorPlaySceneFactory m_playSceneFactory;
+
+        /** @brief Shared semantic roots and charged encoded bytes retained by decision document history. */
+        struct DecisionGraphHistoryEntry final {
+            std::shared_ptr<const AI::DecisionGraphSource> before;
+            std::shared_ptr<const AI::DecisionGraphSource> after;
+            Sha256Digest beforeDigest;
+            Sha256Digest afterDigest;
+            std::size_t bytes{};
+        };
+
+        /** @brief Accepted disk identity and bounded authoring state for a single Decision session. */
+        struct DecisionGraphDraft final {
+            Sha256Digest savedDigest;
+            Sha256Digest currentDigest;
+            std::size_t acceptedBytes{};
+            SemanticDocumentHistory<DecisionGraphHistoryEntry> history{};
+        };
+
+        std::map<DocumentInstanceId, DecisionGraphDraft> m_decisionGraphDrafts;
+        /** @brief Validates the latest schema and publishes the canonical registered source under its native lease. */
+        Result<void> SaveDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft);
+        /** @brief Executes and commits one fully validated intrinsic editable candidate. */
+        Result<void> ApplyDecisionGraphEdit(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
+                                            const StateMachineEditRequest &request);
+        /** @brief Publishes the semantic draft flags to shared tab lifecycle. */
+        void ProjectDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, const DecisionGraphDraft &draft);
+
         Assets::AssetRegistrySnapshot m_assetRegistry;
         DocumentIdentityRegistry m_documentRegistry;
         std::optional<Result<SourceSaveResult>> m_sourceSaveOutcome;
@@ -1250,6 +1284,10 @@ namespace Horo::Editor {
         /** @brief Loads and focuses one validated embedded UI Canvas source result. */
         void OpenEmbeddedUiCanvasSource(const SourceOpenResult &result);
         void OpenSourceFile(const SourceOpenRequest &request);
+        /** @brief Executes typed state-machine authoring against the active document revision. */
+        bool ProcessDecisionGraphEdit(const EditorWorkspaceViewCommandData &cmd);
+        /** @brief Saves all dirty intrinsic decision documents through the registered source owner. */
+        Result<void> SaveDecisionGraphDocuments();
         /** @brief Records an admitted AI source by its registered identity. */
         void RememberRecentAiAsset(const SourceOpenResult &result);
         /** @brief Reprojects recent identities against the current project registry publication. */

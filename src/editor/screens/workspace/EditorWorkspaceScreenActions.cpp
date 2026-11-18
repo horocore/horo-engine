@@ -327,6 +327,23 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                          BlackboardWorkspaceRequest{.fence = {snapshot.document.instance, snapshot.revision}, .operation = operation}});
                 return true;
             }
+            const auto graph = std::ranges::find_if(model.decisionGraphDocuments, [&](const auto &entry) {
+                return entry.identity.instance == model.workspacePanelHost.ActiveDocument();
+            });
+            if (graph != model.decisionGraphDocuments.end()) {
+                if (graph->editable) {
+                    auto operation = StateMachineEditOperation::Save;
+                    if (action == EditorMenuAction::Undo)
+                        operation = StateMachineEditOperation::Undo;
+                    if (action == EditorMenuAction::Redo)
+                        operation = StateMachineEditOperation::Redo;
+                    controller->ProcessCommand({.command = EditorWorkspaceViewCommand::EditDecisionStateMachine,
+                                                .stateMachineEdit = StateMachineEditRequest{.instance = graph->identity.instance,
+                                                                                            .revision = graph->revision,
+                                                                                            .operation = operation}});
+                }
+                return true;
+            }
         }
         return false;
     }
@@ -484,8 +501,19 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         const auto blackboard = std::ranges::find_if(blackboards, [&](const auto &document) {
             return document.snapshot.document.instance == *command.documentInstance && document.snapshot.dirty;
         });
-        if (blackboard == blackboards.end())
-            return false;
+        if (blackboard == blackboards.end()) {
+            const auto &graphs = controller.ViewModel().decisionGraphDocuments;
+            const auto graph = std::ranges::find_if(graphs, [&](const auto &document) {
+                return document.identity.instance == *command.documentInstance && document.dirty;
+            });
+            if (graph == graphs.end())
+                return false;
+            static_cast<void>(modalHost.OpenRoot(
+                std::make_unique<SourceDocumentCloseModal>(context, controller, closeLifetime_,
+                                                           DecisionGraphDocumentFence{graph->identity.instance, graph->revision},
+                                                           graph->identity.key.source.Value())));
+            return true;
+        }
         const auto &schema = blackboard->snapshot;
         static_cast<void>(modalHost.OpenRoot(
             std::make_unique<SourceDocumentCloseModal>(context, controller, closeLifetime_,

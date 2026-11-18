@@ -74,6 +74,28 @@ namespace Horo::Editor {
             }
             return;
         }
+        const auto decision = std::ranges::find_if(model.decisionGraphDocuments, [&](const auto &entry) {
+            return entry.identity.instance == model.workspacePanelHost.ActiveDocument();
+        });
+        if (decision != model.decisionGraphDocuments.end()) {
+            const auto route = [&](const StateMachineEditOperation operation) {
+                command.command = EditorWorkspaceViewCommand::EditDecisionStateMachine;
+                command.stateMachineEdit = StateMachineEditRequest{.instance = decision->identity.instance,
+                                                                   .revision = decision->revision,
+                                                                   .operation = operation};
+            };
+            if (!decision->editable)
+                return;
+            if (router.ReadAction(context, Input::ActionId{kActionSave}).pressed)
+                route(StateMachineEditOperation::Save);
+            else if (!command.sourceTextInputOwned && !capture.textInputRequested && !capture.popupOpen) {
+                if (router.ReadAction(context, Input::ActionId{kActionRedo}).pressed)
+                    route(StateMachineEditOperation::Redo);
+                else if (router.ReadAction(context, Input::ActionId{kActionUndo}).pressed)
+                    route(StateMachineEditOperation::Undo);
+            }
+            return;
+        }
         if (router.ReadAction(context, Input::ActionId{kActionSave}).pressed) {
             command.command = EditorWorkspaceViewCommand::SaveScene;
             for (const auto &source : model.sourceDocuments) {
