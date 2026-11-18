@@ -256,6 +256,7 @@ namespace Horo::Editor {
         ReimportContentBrowserAsset,
         RevealContentBrowserEntry,
         OpenSourceFile,
+        OpenRecentAiAsset,
         OpenDiagnosticSource,
         ChangeActivePanel,
         CloseWorkspacePanel,
@@ -611,6 +612,7 @@ namespace Horo::Editor {
         std::optional<WorkspacePanelDropTarget> workspaceDropTarget = std::nullopt;
         std::optional<ContentBrowserAssetTransferRequest> contentBrowserTransfer = std::nullopt;
         std::optional<SourceOpenRequest> sourceOpenRequest = std::nullopt;
+        std::optional<Assets::AssetId> recentAiAsset = std::nullopt;
         std::optional<DiagnosticSourceRequest> diagnosticSource = std::nullopt;
         std::optional<CreateGameplayBehaviorRequest> gameplayBehaviorRequest = std::nullopt;
         std::optional<AssetSceneDropRequest> assetSceneDrop = std::nullopt;
@@ -649,6 +651,14 @@ namespace Horo::Editor {
         std::string name;
     };
 
+    /** @brief Project-workspace recency keyed by a registered asset identity and type. */
+    struct RecentAiAsset final {
+        Assets::AssetId asset;
+        Assets::AssetTypeId type;
+        std::string path;
+        bool available{true};
+    };
+
     struct EditorWorkspaceViewModel {  // NOSONAR(cpp:S1820) Comprehensive workspace presentation model
         WorldViewportBinding worldViewport;
         std::shared_ptr<const WorldStreamingPreviewGeometry> worldStreamingPreview;
@@ -676,6 +686,7 @@ namespace Horo::Editor {
         std::filesystem::path navigationScenePath; /**< Exact project-relative Scene namespace for saved navigation overlays. */
         Assets::AssetRegistryRevision assetRegistryRevision{};
         ContentBrowserDirectory contentBrowser;
+        std::vector<RecentAiAsset> recentAiAssets;
         std::string contentBrowserOperationError;
         ContentBrowserClipboardState contentBrowserClipboard;
         bool contentBrowserCanNavigateBack{false};

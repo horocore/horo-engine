@@ -3,6 +3,7 @@
 #include "Horo/Editor/EditorIcons.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "editor/renderer/EditorGuiRenderer.h"
+#include "editor/screens/workspace/AiAssetPresentation.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserPaneLayout.h"
 
@@ -51,6 +52,10 @@ namespace Horo::Editor {
                     return TintedPresentation(entry.displayName, Theme::Warn(), 0.11F, Ui::UiIcon::Folder);
                 }
                 return TintedPresentation(entry.displayName, Theme::Accent(), 0.08F, Ui::UiIcon::Folder);
+            }
+            if (entry.registeredType) {
+                if (const auto *presentation = FindAiAssetPresentation(entry.registeredType->Value()))
+                    return TintedPresentation(entry.displayName, Theme::Accent(), 0.09F, presentation->icon);
             }
             if (entry.previewFallback == Assets::AssetPreviewFallback::Image) {
                 return TintedPresentation(entry.displayName, Theme::Err(), 0.09F, Ui::UiIcon::Image);

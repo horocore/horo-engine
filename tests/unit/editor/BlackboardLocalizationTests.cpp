@@ -83,6 +83,7 @@ TEST_CASE("Blackboard workspace controls resolve in both shipped locales", "[uni
         REQUIRE(service.Prepare({locale}));
         REQUIRE(service.ActivatePrepared());
         CHECK_FALSE(service.Get("editor", "workspace.content_browser.action.create_blackboard").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.content_browser.action.recent_ai").starts_with("[missing:"));
         for (const auto key : Keys) {
             INFO(locale);
             INFO(key);

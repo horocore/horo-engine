@@ -1250,6 +1250,12 @@ namespace Horo::Editor {
         /** @brief Loads and focuses one validated embedded UI Canvas source result. */
         void OpenEmbeddedUiCanvasSource(const SourceOpenResult &result);
         void OpenSourceFile(const SourceOpenRequest &request);
+        /** @brief Records an admitted AI source by its registered identity. */
+        void RememberRecentAiAsset(const SourceOpenResult &result);
+        /** @brief Reprojects recent identities against the current project registry publication. */
+        void RefreshRecentAiAssets();
+        /** @brief Resolves a recent registered identity and opens its current validated source. */
+        void OpenRecentAiAsset(Assets::AssetId asset);
         void OpenDiagnosticSource(const DiagnosticSourceRequest &source);
         /** @brief Creates a registered EQS source from an explicitly selected existing query. */
         [[nodiscard]] bool CopyEnvironmentQuerySource(const ContentBrowserAssetTransferPlan &plan, Assets::AssetId newId);

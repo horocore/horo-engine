@@ -3295,6 +3295,7 @@
     "workspace.content_browser.action.cut": {"text": "Cut / Move"},
     "workspace.content_browser.action.paste_here": {"text": "Paste Here"},
     "workspace.content_browser.action.move_here": {"text": "Move Here"},
+    "workspace.content_browser.action.recent_ai": {"text": "Recent AI Assets"},
     "workspace.content_browser.action.create_blackboard": {"text": "Create Blackboard Schema"},
     "workspace.content_browser.action.create_behavior_tree": {"text": "Create Behavior Tree"},
     "workspace.content_browser.action.create_utility": {"text": "Create Utility Graph"},

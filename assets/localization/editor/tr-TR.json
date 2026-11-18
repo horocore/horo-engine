@@ -3295,6 +3295,7 @@
     "workspace.content_browser.action.cut": {"text": "Kes / Taşı"},
     "workspace.content_browser.action.paste_here": {"text": "Buraya Yapıştır"},
     "workspace.content_browser.action.move_here": {"text": "Buraya Taşı"},
+    "workspace.content_browser.action.recent_ai": {"text": "Son Kullanılan AI Varlıkları"},
     "workspace.content_browser.action.create_blackboard": {"text": "Blackboard Şeması Oluştur"},
     "workspace.content_browser.action.create_behavior_tree": {"text": "Davranış Ağacı Oluştur"},
     "workspace.content_browser.action.create_utility": {"text": "Utility Grafiği Oluştur"},

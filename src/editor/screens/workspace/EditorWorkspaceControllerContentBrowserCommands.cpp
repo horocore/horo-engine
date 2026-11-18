@@ -100,6 +100,10 @@ namespace Horo::Editor {
                 if (cmd.sourceOpenRequest.has_value())
                     OpenSourceFile(*cmd.sourceOpenRequest);
                 break;
+            case EditorWorkspaceViewCommand::OpenRecentAiAsset:
+                if (cmd.recentAiAsset.has_value())
+                    OpenRecentAiAsset(*cmd.recentAiAsset);
+                break;
             case EditorWorkspaceViewCommand::OpenDiagnosticSource:
                 if (cmd.diagnosticSource.has_value())
                     OpenDiagnosticSource(*cmd.diagnosticSource);

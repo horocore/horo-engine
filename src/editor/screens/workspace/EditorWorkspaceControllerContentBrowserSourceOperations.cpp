@@ -1,5 +1,8 @@
+#include "Horo/Assets/AssetSourcePublication.h"
+#include "Horo/Foundation/PathUtils.h"
 #include "WorkspacePathText.h"
 #include "editor/menu/EditorMenuPlatform.h"
+#include "editor/screens/workspace/AiAssetPresentation.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/EditorWorkspaceControllerContentBrowserInternal.h"
 
@@ -91,8 +94,10 @@ namespace Horo::Editor {
         }
 
         const SourceOpenResult &result = opened.Value();
-        if (OpenEmbeddedAuthoredDocument(result))
+        if (OpenEmbeddedAuthoredDocument(result)) {
+            RememberRecentAiAsset(result);
             return;
+        }
         bool navigated = false;
         if (m_sourceOpenNavigator) {
             navigated = m_sourceOpenNavigator(result);
@@ -117,6 +122,63 @@ namespace Horo::Editor {
                 static_cast<void>(m_sourceOpenService.CloseDocument(result.document->identity.instance));
             m_viewModel.contentBrowserOperationError = "workspace.source_open.unavailable";
         }
+    }
+
+    /** @copydoc EditorWorkspaceController::RememberRecentAiAsset */
+    void EditorWorkspaceController::RememberRecentAiAsset(const SourceOpenResult &result) {
+        if (!m_viewModel.contentBrowserOperationError.empty() || !result.document ||
+            m_viewModel.workspacePanelHost.ActiveDocument() != result.document->identity.instance)
+            return;
+        const auto *record = m_assetRegistry.FindByPath(result.document->identity.key.source.Value());
+        const auto *presentation = record ? FindAiAssetPresentation(record->type.Value()) : nullptr;
+        if (!presentation || presentation->route != result.document->identity.key.kind)
+            return;
+
+        constexpr std::size_t MaximumRecentAiAssets = 12;
+        auto &recent = m_viewModel.recentAiAssets;
+        std::erase_if(recent, [&](const RecentAiAsset &entry) {
+            return entry.asset == record->id;
+        });
+        if (recent.size() == MaximumRecentAiAssets)
+            recent.pop_back();
+        recent.insert(recent.begin(), {record->id, record->type, std::string{record->sourcePath.String()}});
+    }
+
+    /** @copydoc EditorWorkspaceController::RefreshRecentAiAssets */
+    void EditorWorkspaceController::RefreshRecentAiAssets() {
+        for (auto &entry : m_viewModel.recentAiAssets) {
+            const auto *record = m_assetRegistry.Find(entry.asset);
+            entry.available = record && record->type == entry.type;
+            if (entry.available)
+                entry.path = record->sourcePath.String();
+        }
+    }
+
+    /** @copydoc EditorWorkspaceController::OpenRecentAiAsset */
+    void EditorWorkspaceController::OpenRecentAiAsset(const Assets::AssetId asset) {
+        if (m_mutableAssetRegistry)
+            RefreshAssets(m_mutableAssetRegistry->Snapshot());
+        m_viewModel.contentBrowserOperationError = "workspace.source_open.unavailable";
+        const auto entry = std::ranges::find(m_viewModel.recentAiAssets, asset, &RecentAiAsset::asset);
+        const auto *record = m_assetRegistry.Find(asset);
+        if (entry == m_viewModel.recentAiAssets.end() || !record || record->type != entry->type)
+            return;
+
+        const auto &root = ProjectRoot();
+        constexpr std::size_t MaximumIdentityBytes = 1024U * 1024U;
+        const auto metadata =
+            Assets::CaptureAssetSource(root, Foundation::Paths::Resolve(root, record->metadataPath), MaximumIdentityBytes);
+        if (metadata.HasError() || !metadata.Value().identity.exists || metadata.Value().bytes.empty())
+            return;
+        const auto &bytes = metadata.Value().bytes;
+        const auto identity =
+            Assets::DecodeAssetIdentitySidecar(record->sourcePath.String(), {reinterpret_cast<const char *>(bytes.data()), bytes.size()});
+        if (identity.HasError() || identity.Value().id != asset || identity.Value().type != record->type)
+            return;
+
+        OpenSourceFile({.path = Foundation::Paths::Resolve(root, record->sourcePath),
+                        .origin = SourceOpenOrigin::Command,
+                        .mode = SourceOpenMode::EmbeddedOnly});
     }
 
     void EditorWorkspaceController::OpenDiagnosticSource(const DiagnosticSourceRequest &source) {

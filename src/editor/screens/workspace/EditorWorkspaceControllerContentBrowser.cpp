@@ -31,6 +31,7 @@ namespace Horo::Editor {
     void EditorWorkspaceController::RebuildContentBrowserProjection(const std::filesystem::path &projectRoot,
                                                                     const std::filesystem::path &requestedDirectory) {
         RefreshPhysicsMaterials();
+        RefreshRecentAiAssets();
         m_viewModel.contentBrowser = BuildContentBrowserDirectory(projectRoot, requestedDirectory, m_assetRegistry, m_importerCatalog);
         auto &schemas = m_viewModel.decisionSchemaChoices;
         schemas.clear();

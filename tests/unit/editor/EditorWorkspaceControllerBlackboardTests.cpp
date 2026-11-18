@@ -7,6 +7,7 @@
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Gameplay/GameModule.h"
 #include "ProjectReplicationTestSupport.h"
+#include "editor/screens/workspace/AiAssetPresentation.h"
 #include "editor/screens/workspace/BlackboardScalarInput.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/WorkspacePathText.h"
@@ -192,6 +193,91 @@ TEST_CASE("Blackboard New atomically creates and opens a schema with an authored
     }
 }
 
+TEST_CASE("Recent AI assets resolve current registered identity after an ordinary paired rename and move",
+          "[unit][editor][blackboard][workspace]") {
+    BlackboardWorkspaceFixture project;
+    EditorWorkspaceController controller(project.root, project.runtime, project.registry.Snapshot(),
+                                         {.assets = {.mutableAssetRegistry = &project.registry},
+                                          .mutations = &project.mutations,
+                                          .durableFiles = &project.files});
+    const EditorWorkspaceViewCommandData recent{
+        .command = EditorWorkspaceViewCommand::OpenRecentAiAsset,
+        .recentAiAsset = project.asset,
+    };
+    controller.ProcessCommand(recent);
+    CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.source_open.unavailable");
+    REQUIRE(controller.ViewModel().blackboardDocuments.empty());
+    controller.ProcessCommand(project.Open());
+    auto &history = controller.ViewModel().recentAiAssets;
+    REQUIRE(history.size() == 1);
+    CHECK(history.front().asset == project.asset);
+    CHECK(history.front().path == project.Path);
+    const auto instance = project.Current(controller).instance;
+
+    SECTION("an open entry focuses its existing instance and does not duplicate history") {
+        controller.ProcessCommand(recent);
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        CHECK(controller.ViewModel().workspacePanelHost.ActiveDocument() == instance);
+        CHECK(history.size() == 1);
+        CHECK(controller.ViewModel().workspacePanelHost.DocumentTabs().size() == 1);
+    }
+
+    controller.ProcessCommand({.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = instance});
+    REQUIRE(controller.ViewModel().blackboardDocuments.empty());
+    SECTION("moving the pair reopens its current path and the same typed source") {
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::RenameContentBrowserEntry,
+                                   .stringPayload = WorkspacePathText(project.root / project.Path),
+                                   .secondaryStringPayload = "renamed.horo_bb"});
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        REQUIRE(history.front().path == "assets/renamed.horo_bb");
+        const auto target = project.root / "assets/moved";
+        REQUIRE(std::filesystem::create_directories(target));
+        controller.ProcessCommand({
+            .command = EditorWorkspaceViewCommand::TransferContentBrowserAsset,
+            .contentBrowserTransfer =
+                ContentBrowserAssetTransferRequest{
+                    .absoluteSourcePath = WorkspacePathText(project.root / "assets/renamed.horo_bb"),
+                    .absoluteDestinationDirectory = WorkspacePathText(target),
+                    .mode = ContentBrowserTransferMode::Move,
+                },
+        });
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        REQUIRE(history.size() == 1);
+        CHECK(history.front().path == "assets/moved/renamed.horo_bb");
+        CHECK(history.front().available);
+        CHECK_FALSE(std::filesystem::exists(project.root / "assets/renamed.horo_bb.horo"));
+        REQUIRE(std::filesystem::is_regular_file(target / "renamed.horo_bb.horo"));
+        controller.ProcessCommand(recent);
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        const auto &reopened = project.Snapshot(controller);
+        CHECK(reopened.document.key.source.Value() == "assets/moved/renamed.horo_bb");
+        CHECK(reopened.source->asset == project.asset);
+        CHECK(reopened.source->schema == project.schema);
+        CHECK(reopened.source->rows.front().descriptor.key == project.key);
+        CHECK(history.size() == 1);
+    }
+    SECTION("the registry cache cannot authorize a replaced live identity sidecar") {
+        project.WriteSidecar(project.Path, Assets::AssetId::FromBytes({9}), AI::BlackboardSchemaAssetType);
+        REQUIRE(project.registry.Snapshot().Find(project.asset));
+        controller.ProcessCommand(recent);
+        CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.source_open.unavailable");
+        CHECK(controller.ViewModel().workspacePanelHost.DocumentTabs().empty());
+        CHECK(controller.ViewModel().blackboardDocuments.empty());
+    }
+    SECTION("the registry cache cannot authorize a removed live identity sidecar") {
+        REQUIRE(std::filesystem::remove(project.root / (std::string{project.Path} + ".horo")));
+        REQUIRE(project.registry.Snapshot().Find(project.asset));
+        controller.ProcessCommand(recent);
+        CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.source_open.unavailable");
+        CHECK(controller.ViewModel().blackboardDocuments.empty());
+        const auto rebuilt = Assets::RebuildAssetRegistry(project.registry, project.root, Assets::AssetRegistryOpenMode::ReadOnly);
+        REQUIRE(rebuilt.HasValue());
+        REQUIRE(rebuilt.Value().status == Assets::AssetRegistryBuildStatus::Degraded);
+        controller.RefreshAssets(project.registry.Snapshot());
+        CHECK_FALSE(history.front().available);
+    }
+}
+
 TEST_CASE("State Machine New publishes a canonical Decision source bound to the selected saved Blackboard",
           "[unit][editor][decision][workspace]") {
     BlackboardWorkspaceFixture project;
@@ -344,6 +430,76 @@ TEST_CASE("Behavior Tree and Utility New use the current registered native task 
         REQUIRE(live.FindByPath("assets/First utility.horo_utility"));
         CHECK(std::filesystem::is_regular_file(project.root / "assets/First tree.horo_bt.horo"));
         CHECK(std::filesystem::is_regular_file(project.root / "assets/First utility.horo_utility.horo"));
+    }
+    SECTION("all five AI families share workspace tabs with Viewport and Game") {
+        constexpr auto queryPath = "assets/Cover.horo_eqs";
+        const auto queryAsset = Assets::AssetId::FromBytes({8});
+        const auto query = AI::EnvironmentQueryAsset::Capture({
+            .id = AI::QueryId::Create(2).Value(),
+            .displayName = "Cover",
+            .result = {.id = AI::QueryResultSchemaId::Create(3).Value(), .itemType = AI::QueryItemTypeId::Create(4).Value()},
+            .stages = {{.id = AI::QueryStageId::Create(5).Value(),
+                        .kind = AI::QueryStageKind::Unknown,
+                        .displayName = "Contributed stage",
+                        .descriptorVersion = {2, 3},
+                        .unknownTypeId = 13,
+                        .opaquePayload = {std::byte{0x27}}}},
+        });
+        REQUIRE(query.HasValue());
+        const auto encoded = AI::EnvironmentQuerySourceCodec::Encode(query.Value());
+        REQUIRE(encoded.HasValue());
+        {
+            std::ofstream source(project.root / queryPath, std::ios::binary);
+            source.write(reinterpret_cast<const char *>(encoded.Value().data()), static_cast<std::streamsize>(encoded.Value().size()));
+            REQUIRE(static_cast<bool>(source));
+        }
+        project.WriteSidecar(queryPath, queryAsset, AI::EnvironmentQuerySourceAssetType);
+        project.RebuildRegistry();
+        controller.RefreshAssets(project.registry.Snapshot());
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::ChangeActivePanel,
+                                   .targetIndex = static_cast<int>(WorkspaceDockArea::Document),
+                                   .stringPayload = "horo.game"});
+        controller.ProcessCommand(make(AI::DecisionPlanKind::BehaviorTree, "First tree"));
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        controller.ProcessCommand(make(AI::DecisionPlanKind::Utility, "First utility"));
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        browser.OpenCreateStateMachine(WorkspacePathText(project.root / "assets"));
+        auto &stateMachine = browser.State().createStateMachine;
+        stateMachine.name = "First machine";
+        stateMachine.schema = project.asset;
+        stateMachine.outcome = AI::DecisionStateTerminal::Succeeded;
+        const auto newMachine = AssetBrowserInteractionSession::ConfirmStateMachine(stateMachine);
+        REQUIRE(newMachine.has_value());
+        controller.ProcessCommand(*newMachine);
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::OpenSourceFile,
+                                   .sourceOpenRequest = SourceOpenRequest{.path = queryPath, .origin = SourceOpenOrigin::AssetActivation}});
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+
+        const auto &view = controller.ViewModel();
+        CHECK(view.workspacePanelHost.DocumentTabs().size() == 5);
+        CHECK(view.blackboardDocuments.size() == 1);
+        CHECK(view.decisionGraphDocuments.size() == 3);
+        REQUIRE(view.environmentQueryDocuments.size() == 1);
+        CHECK(view.environmentQueryDocuments.front().asset == queryAsset);
+        const auto *central = view.workspacePanelHost.Layout().FindTabStack("workspace.document");
+        REQUIRE(central);
+        CHECK(std::ranges::find(central->tabs, "horo.viewport") != central->tabs.end());
+        CHECK(std::ranges::find(central->tabs, "horo.game") != central->tabs.end());
+
+        const std::array expectedIcons{Ui::UiIcon::AiEnvironmentQuery, Ui::UiIcon::AiStateMachine, Ui::UiIcon::AiUtility,
+                                       Ui::UiIcon::AiBehaviorTree, Ui::UiIcon::AiBlackboard};
+        REQUIRE(view.recentAiAssets.size() == expectedIcons.size());
+        for (std::size_t index = 0; index < expectedIcons.size(); ++index) {
+            const auto *presentation = FindAiAssetPresentation(view.recentAiAssets[index].type.Value());
+            REQUIRE(presentation);
+            const auto icon = presentation->icon;
+            CHECK(icon == expectedIcons[index]);
+            const auto token = Ui::UiIconRegistry::Token(icon);
+            CHECK(token.starts_with("asset.ai_"));
+            CHECK(Ui::UiIconRegistry::Resolve(token) == icon);
+        }
+        CHECK_FALSE(FindAiAssetPresentation("game.custom_source"));
     }
     SECTION("wrong native generation and provider identity are refused before publishing") {
         auto command = make(AI::DecisionPlanKind::BehaviorTree, "First tree");
