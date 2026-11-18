@@ -64,6 +64,7 @@ namespace {
     Prefab::PrefabOperation retainedSpawn;
     Prefab::PrefabOperation retainedDespawn;
     Prefab::PrefabInstance retainedInstance;
+    std::weak_ptr<const GameplayPrefabContext> prefabCapabilityProbe;
 }  // namespace
 
 /** @brief Copies real module-created operation ownership into the host before native image retirement. */
@@ -72,6 +73,11 @@ extern "C" HORO_GAME_EXPORT void HoroTestCopyPrefabOperations(Prefab::PrefabOper
     *spawn = retainedSpawn;
     *despawn = retainedDespawn;
     *instance = retainedInstance;
+}
+
+/** @brief Copies the precise owner-issued grant observed by the headless qualification behavior. */
+extern "C" HORO_GAME_EXPORT void HoroTestCopyPrefabCapability(std::shared_ptr<const GameplayPrefabContext> *destination) {
+    *destination = prefabCapabilityProbe.lock();
 }
 
 #if defined(HORO_TEST_GAMEPLAY_PHYSICS) && HORO_TEST_GAMEPLAY_PHYSICS
@@ -292,6 +298,23 @@ private:
 };
 
 HORO_BEHAVIOR(PrefabSpawnerBehavior, "game.tests.prefab_spawner")
+
+/** @brief Exposes the actual native module capability without performing spawn work inside a callback. */
+class PrefabCapabilityProbeBehavior final : public IBehaviorInstance {
+public:
+    static BehaviorDescriptor DescribeBehavior() {
+        BehaviorDescriptor descriptor;
+        descriptor.displayName = "Prefab Capability Probe";
+        descriptor.phases.push_back({BehaviorPhase::Gameplay, "game.tests.prefab_capability_probe", {}, {}, {}});
+        return descriptor;
+    }
+
+    void OnFixedUpdate(BehaviorContext &context, FixedDeltaTime) override {
+        prefabCapabilityProbe = context.PrefabContext();
+    }
+};
+
+HORO_BEHAVIOR(PrefabCapabilityProbeBehavior, "game.tests.prefab_capability_probe")
 
 namespace {
     class DurableCandidate final : public IPreparedPersistenceState, public IPublishedGameplayPreparationRetirement {
