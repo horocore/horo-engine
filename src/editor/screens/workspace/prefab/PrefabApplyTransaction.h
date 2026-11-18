@@ -27,12 +27,23 @@ namespace Horo::Editor {
         std::optional<Error> error;
         std::array<std::optional<PrefabApplyRecovery>, 2> recovery;
         std::optional<Error> recoveryPersistenceError;
+        bool pendingRecovery{};
     };
 
-    /** @brief Exact original identity of one reviewed canonical destination. */
+    /** @brief The explicit resolution allowed by the reviewed durable boundary. */
+    enum class PrefabApplyRecoveryAction : std::uint8_t {
+        RestoreOriginals,
+        KeepPublished,
+    };
+
+    /** @brief The exact planned, original, and last reviewed byte identities of one destination. */
     struct PrefabApplyRecoveryFile final {
         std::filesystem::path path;
         Assets::AssetSourceIdentity original;
+        Assets::AssetSourceIdentity planned;
+        Assets::AssetSourceIdentity observed;
+
+        bool operator==(const PrefabApplyRecoveryFile &) const = default;
     };
 
     /** @brief Immutable recovery evidence for a review of the two guarded canonical files. */
@@ -40,6 +51,9 @@ namespace Horo::Editor {
         Assets::AssetSourceIdentity capsule;
         PrefabApplyRecoveryFile prefab;
         PrefabApplyRecoveryFile scene;
+        PrefabApplyRecoveryAction action;
+
+        bool operator==(const PrefabApplyRecoveryCandidate &) const = default;
     };
 
     /** @brief Exact matching owner and disk evidence for one paired undo or redo. */
@@ -62,8 +76,8 @@ namespace Horo::Editor {
     };
 
     /** @brief Coordinates the real source and Scene owners under one project mutation lease.
-     * @details Both semantic histories and encoded candidates are staged before writing. Ordinary failures
-     * compensate owned replacements in reverse order. An unprovable or failed compensation retains evidence.
+     * @details The planned pair and exact originals are recorded before either canonical file changes.
+     * Committed bytes remain authoritative across restart. Incomplete operations can compensate only their own writes.
      */
     class PrefabApplyTransaction final {
     public:
@@ -75,15 +89,15 @@ namespace Horo::Editor {
                                                         std::shared_ptr<const Prefab::PrefabValueSchemaSnapshot> schemas,
                                                         const Prefab::PrefabLimitProfile &limits,
                                                         const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
-        /** @brief Inspects the exact durable compensation capsule without changing either source. */
+        /** @brief Reviews durable intent and both current source identities without making any changes. */
         [[nodiscard]] static Result<std::optional<PrefabApplyRecoveryCandidate>> InspectPendingRecovery(const std::filesystem::path &root);
-        /** @brief Explicitly retries pending compensation against the inspected capsule in a fresh project session.
-         * @param root Canonical project root. @param expected Exact inspected capsule identity.
+        /** @brief Rechecks reviewed evidence before restoring an incomplete pair or retaining a fully published pair.
+         * @param root Canonical project root. @param expected Exact reviewed capsule and source identities.
          * @param mutations Shared writer authority. @param files Durable native source owner.
-         * @return Success after both originals are durable, or a typed failure preserving the capsule and foreign edits.
+         * @return Success once the selected pair is durable and the journal is retired, or a typed failure.
          */
-        [[nodiscard]] static Result<void> RestorePendingRecovery(const std::filesystem::path &root,
-                                                                 const Assets::AssetSourceIdentity &expected,
+        [[nodiscard]] static Result<void> ResolvePendingRecovery(const std::filesystem::path &root,
+                                                                 const PrefabApplyRecoveryCandidate &expected,
                                                                  const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
 
         /** @brief Returns the next exact coordinated Prefab group from Scene history, if one is at its head. */

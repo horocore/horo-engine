@@ -192,8 +192,11 @@ namespace Horo::Editor {
             workspace.project.WriteSource("Foreign source");
             const auto foreign = read(faultFiles.prefab);
             reopened.ProcessCommand(confirmed);
-            CHECK(model.prefabApplyRecovery == evidence);
+            REQUIRE(model.prefabApplyRecovery);
+            CHECK(model.prefabApplyRecovery->capsule == evidence->capsule);
+            CHECK(model.prefabApplyRecovery->prefab.observed == foreign);
             CHECK(model.prefabApplyRecoveryNotice == PrefabApplyRecoveryNotice::Failed);
+            reopened.ProcessCommand(confirmed);
             CHECK(read(faultFiles.prefab) == foreign);
             CHECK(read(faultFiles.scene) == installedScene);
         }

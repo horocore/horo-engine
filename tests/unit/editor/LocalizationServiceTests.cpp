@@ -127,10 +127,20 @@ namespace {
         "workspace.content_browser.prefab.migration_required",
     };
     constexpr std::array recoveryKeys{
-        "workspace.paired_recovery.available", "workspace.paired_recovery.reopen", "workspace.paired_recovery.invalid",
-        "workspace.paired_recovery.review",    "workspace.paired_recovery.title",  "workspace.paired_recovery.description",
-        "workspace.paired_recovery.restore",   "workspace.paired_recovery.cancel", "workspace.paired_recovery.blocked",
-        "workspace.paired_recovery.failed",    "workspace.recovery.available",     "workspace.recovery.restore",
+        "workspace.paired_recovery.keep_description",
+        "workspace.paired_recovery.keep",
+        "workspace.paired_recovery.available",
+        "workspace.paired_recovery.reopen",
+        "workspace.paired_recovery.invalid",
+        "workspace.paired_recovery.review",
+        "workspace.paired_recovery.title",
+        "workspace.paired_recovery.description",
+        "workspace.paired_recovery.restore",
+        "workspace.paired_recovery.cancel",
+        "workspace.paired_recovery.blocked",
+        "workspace.paired_recovery.failed",
+        "workspace.recovery.available",
+        "workspace.recovery.restore",
         "workspace.recovery.discard",
     };
     constexpr std::array prefabOverrideKeys{

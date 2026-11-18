@@ -117,11 +117,13 @@ namespace Horo::Editor {
             m_viewModel.prefabApplyRecoveryNotice = PrefabApplyRecoveryNotice::Blocked;
             return;
         }
-        if (const auto restored =
-                PrefabApplyTransaction::RestorePendingRecovery(ProjectRoot(), accepted->capsule, *m_mutations, *m_durableFiles);
-            restored.HasError()) {
+        if (const auto resolved = PrefabApplyTransaction::ResolvePendingRecovery(ProjectRoot(), *accepted, *m_mutations, *m_durableFiles);
+            resolved.HasError()) {
             m_viewModel.prefabApplyRecoveryNotice = PrefabApplyRecoveryNotice::Failed;
-            LOG_WARN("editor.prefab", "Paired Prefab reconciliation failed: %s", restored.ErrorValue().message.c_str());
+            LOG_WARN("editor.prefab", "Paired Prefab reconciliation failed: %s", resolved.ErrorValue().message.c_str());
+            auto current = PrefabApplyTransaction::InspectPendingRecovery(ProjectRoot());
+            if (current.HasValue() && current.Value() && *current.Value() != *accepted)
+                m_viewModel.prefabApplyRecovery = std::make_shared<const PrefabApplyRecoveryCandidate>(*current.Value());
             return;
         }
 
@@ -130,8 +132,9 @@ namespace Horo::Editor {
         m_prefabApplyRecoveryPendingOnDisk = false;
         RetirePrefabHierarchy();
         if (activeScene) {
-            const auto &original = accepted->scene.original;
-            const SceneFileFingerprint wanted{true, original.bytes, FormatSha256(original.digest)};
+            const auto &selected =
+                accepted->action == PrefabApplyRecoveryAction::KeepPublished ? accepted->scene.planned : accepted->scene.original;
+            const SceneFileFingerprint wanted{true, selected.bytes, FormatSha256(selected.digest)};
             if (m_sceneFingerprint != wanted) {
                 auto scene = ReadExternalSceneForReplacement();
                 if (scene.HasValue() && scene.Value().fingerprint == wanted && InstallExternalScene(std::move(scene).Value(), true)) {

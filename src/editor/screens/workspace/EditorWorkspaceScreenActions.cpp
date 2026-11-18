@@ -27,9 +27,9 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         class PrefabApplyRecoveryModal final : public EditorModal {
         public:
             PrefabApplyRecoveryModal(const EditorGuiContext &context, std::array<std::string, 2> paths,
-                                     std::function<PrefabApplyRecoveryNotice()> confirm)
+                                     const PrefabApplyRecoveryAction action, std::function<PrefabApplyRecoveryNotice()> confirm)
                 : EditorModal(GuiLocalizationScope{"workspace.paired_recovery"}), context_(context), paths_(std::move(paths)),
-                  confirm_(std::move(confirm)) {}
+                  action_(action), confirm_(std::move(confirm)) {}
 
             ModalId Id() const override {
                 return ModalId{0x5046424150524356ULL};
@@ -63,8 +63,9 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                             .minimumHeight = 280.0F,
                                             .footerHeight = footerHeight},
                                            fonts);
+                const bool keep = action_ == PrefabApplyRecoveryAction::KeepPublished;
                 ImGui::BeginChild("##PrefabApplyRecoveryReview", {0, modal.BodyHeight()});
-                Ui::WrappedText(ImGui::GetContentRegionAvail().x, Text("description"), Theme::Text(), fonts);
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, Text(keep ? "keep_description" : "description"), Theme::Text(), fonts);
                 for (const auto &path : paths_)
                     Ui::WrappedText(ImGui::GetContentRegionAvail().x, path, Theme::Muted(), fonts);
                 if (notice_ != PrefabApplyRecoveryNotice::None)
@@ -73,7 +74,9 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                 ImGui::EndChild();
                 modal.BeginFooter({16, 12});
                 bool restored = false;
-                if (Ui::Button({.label = Text("restore").c_str(), .font = fonts.sans, .style = {.width = Ui::StyleWidth::FillAvailable}})) {
+                if (Ui::Button({.label = Text(keep ? "keep" : "restore").c_str(),
+                                .font = fonts.sans,
+                                .style = {.width = Ui::StyleWidth::FillAvailable}})) {
                     notice_ = confirm_();
                     restored = notice_ == PrefabApplyRecoveryNotice::None;
                 }
@@ -95,6 +98,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
 
             const EditorGuiContext &context_;
             std::array<std::string, 2> paths_;
+            PrefabApplyRecoveryAction action_;
             std::function<PrefabApplyRecoveryNotice()> confirm_;
             PrefabApplyRecoveryNotice notice_{};
         };
@@ -518,7 +522,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                 {.command = EditorWorkspaceViewCommand::RestorePrefabApplyRecovery, .prefabApplyRecovery = candidate});
             return controller_->ViewModel().prefabApplyRecoveryNotice;
         };
-        const auto opened = modalHost_.OpenRoot(std::make_unique<PrefabApplyRecoveryModal>(context_, std::move(paths), std::move(confirm)));
+        const auto opened = modalHost_.OpenRoot(
+            std::make_unique<PrefabApplyRecoveryModal>(context_, std::move(paths), candidate->action, std::move(confirm)));
         if (opened.HasError())
             LOG_WARN("editor.prefab", "Paired Prefab recovery review could not open: %s", opened.ErrorValue().message.c_str());
     }

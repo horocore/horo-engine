@@ -36,11 +36,27 @@ namespace Horo::Editor {
             std::string replacement;
             std::optional<ExclusiveFileLock> lock;
             Assets::AssetSourceCapture original;
+            Assets::AssetSourceIdentity planned;
             std::optional<Assets::AssetSourceIdentity> installed;
         };
 
         constexpr std::size_t MaximumCapsuleBytes = 64U * 1024U * 1024U;
-        constexpr std::string_view CapsuleMagic = "HoroPrefabApplyRecoveryV1";
+        constexpr std::string_view LegacyCapsuleMagic = "HoroPrefabApplyRecoveryV1";
+        constexpr std::string_view CapsuleMagic = "HoroPrefabApplyRecoveryV2";
+
+        /** @brief Durable publication state, relative to the two identities in the operation. */
+        enum class JournalDisposition : std::uint8_t {
+            Prepared = 1,
+            RollbackRequired = 2,
+            Committed = 3,
+        };
+
+        /** @brief Owns exact capsule bytes and the latest native tracked publication receipt. */
+        struct ApplyJournal final {
+            std::vector<std::byte> bytes;
+            Assets::AssetSourceIdentity identity;
+            JournalDisposition disposition{JournalDisposition::Prepared};
+        };
         constexpr std::size_t MaximumRecoveryPathBytes = 4096;
 
         /** @brief Stable private recovery namespace for one unresolved paired operation per project. */
@@ -113,33 +129,31 @@ namespace Horo::Editor {
             }
         };
 
-        /** @brief The recovery payload keeps exact original bytes and only identity of the installed pair. */
-        Result<std::vector<std::byte>> EncodeRecovery(const std::filesystem::path &root, const std::array<ApplyFile, 2> &files,
-                                                      const PrefabApplyOutcome &outcome) {
+        /** @brief Saves exact original bytes and identities of the already prepared canonical pair. */
+        Result<std::vector<std::byte>> EncodeRecovery(const std::filesystem::path &root, const std::array<ApplyFile, 2> &files) {
             using Return = Result<std::vector<std::byte>>;
             std::vector<std::byte> encoded;
             Append(encoded, CapsuleMagic);
+            encoded.push_back(static_cast<std::byte>(JournalDisposition::Prepared));
             for (std::size_t index = 0; index < files.size(); ++index) {
                 const auto &file = files[index];
-                const auto &pending = outcome.recovery[index];
-                const auto &original = pending ? pending->original : file.original;
-                const auto &path = pending ? pending->path : file.path;
-                const auto name = path.lexically_relative(root).generic_u8string();
+                const auto &original = file.original;
+                const auto name = file.path.lexically_relative(root).generic_u8string();
                 const std::string relative{name.begin(), name.end()};
                 if (!original.identity.exists || !ValidRecoveryPath(relative, index))
                     return Return::Failure(MakeError(Assets::AssetSourceErrors::InvalidPath));
-                const auto &installed = pending ? pending->installed : original.identity;
-                const auto payloadSize = installed != original.identity ? original.bytes.size() : 0;
+                const auto &planned = file.planned;
+                const auto payloadSize = planned != original.identity ? original.bytes.size() : 0;
                 const auto overhead = 32U + 12U + 64U + relative.size();
                 if (overhead > MaximumCapsuleBytes - encoded.size() || payloadSize > MaximumCapsuleBytes - encoded.size() - overhead)
                     return Return::Failure(MakeError(Assets::AssetSourceErrors::Limit));
                 AppendSize(encoded, relative.size());
                 AppendSize(encoded, original.identity.bytes);
-                AppendSize(encoded, installed.bytes);
+                AppendSize(encoded, planned.bytes);
                 Append(encoded, original.identity.digest.bytes);
-                Append(encoded, installed.digest.bytes);
+                Append(encoded, planned.digest.bytes);
                 Append(encoded, relative);
-                if (installed != original.identity)
+                if (planned != original.identity)
                     Append(encoded, original.bytes);
             }
             Append(encoded, ComputeSha256(encoded).bytes);
@@ -151,14 +165,20 @@ namespace Horo::Editor {
             std::filesystem::path path;
             std::span<const std::byte> originalBytes;
             Assets::AssetSourceIdentity original;
-            Assets::AssetSourceIdentity installed;
+            Assets::AssetSourceIdentity planned;
+            Assets::AssetSourceIdentity observed;
             std::optional<ExclusiveFileLock> lock;
-            bool needsRestore{};
+        };
+
+        /** @brief Validated journal header and targets, borrowing original bytes from the bounded capture. */
+        struct RecoveryRecord final {
+            JournalDisposition disposition{JournalDisposition::RollbackRequired};
+            std::array<RecoveryTarget, 2> targets;
         };
 
         /** @brief Validates wire shape, stable ownership paths and byte identities before any source admission. */
-        Result<std::array<RecoveryTarget, 2>> DecodeRecovery(const std::filesystem::path &root, std::span<const std::byte> bytes) {
-            using Return = Result<std::array<RecoveryTarget, 2>>;
+        Result<RecoveryRecord> DecodeRecovery(const std::filesystem::path &root, std::span<const std::byte> bytes) {
+            using Return = Result<RecoveryRecord>;
             const auto invalid = [] {
                 return Return::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed));
             };
@@ -169,19 +189,29 @@ namespace Horo::Editor {
             if (ComputeSha256(content) != tail.Digest())
                 return invalid();
             RecoveryReader reader{content};
-            if (!std::ranges::equal(reader.Take(CapsuleMagic.size()), std::as_bytes(std::span{CapsuleMagic})))
+            const auto version = reader.Take(CapsuleMagic.size());
+            RecoveryRecord record;
+            if (std::ranges::equal(version, std::as_bytes(std::span{CapsuleMagic}))) {
+                const auto disposition = reader.Take(1);
+                if (disposition.empty())
+                    return invalid();
+                record.disposition = static_cast<JournalDisposition>(disposition.front());
+                if (record.disposition != JournalDisposition::Prepared && record.disposition != JournalDisposition::RollbackRequired &&
+                    record.disposition != JournalDisposition::Committed)
+                    return invalid();
+            } else if (!std::ranges::equal(version, std::as_bytes(std::span{LegacyCapsuleMagic})))
                 return invalid();
-            std::array<RecoveryTarget, 2> targets;
+            auto &targets = record.targets;
             for (std::size_t index = 0; index < targets.size(); ++index) {
                 const auto nameSize = reader.Size();
                 const auto originalSize = reader.Size();
-                const auto installedSize = reader.Size();
+                const auto plannedSize = reader.Size();
                 const Assets::AssetSourceIdentity originalIdentity{true, originalSize, reader.Digest()};
-                const Assets::AssetSourceIdentity installed{true, installedSize, reader.Digest()};
+                const Assets::AssetSourceIdentity planned{true, plannedSize, reader.Digest()};
                 const auto name = reader.Take(nameSize);
-                const auto original = reader.Take(originalIdentity == installed ? 0 : originalSize);
-                if (!reader.valid || name.empty() || originalSize > MaximumCapsuleBytes || installedSize > MaximumCapsuleBytes ||
-                    (originalIdentity != installed && ComputeSha256(original) != originalIdentity.digest))
+                const auto original = reader.Take(originalIdentity == planned ? 0 : originalSize);
+                if (!reader.valid || name.empty() || originalSize > MaximumCapsuleBytes || plannedSize > MaximumCapsuleBytes ||
+                    (originalIdentity != planned && ComputeSha256(original) != originalIdentity.digest))
                     return invalid();
                 const std::string_view relative{reinterpret_cast<const char *>(name.data()), name.size()};
                 if (!ValidRecoveryPath(relative, index))
@@ -189,26 +219,108 @@ namespace Horo::Editor {
                 targets[index] = {.path = root / std::filesystem::path{std::u8string(relative.begin(), relative.end())},
                                   .originalBytes = original,
                                   .original = originalIdentity,
-                                  .installed = installed};
+                                  .planned = planned};
             }
             if (!reader.remaining.empty() || targets.front().path == targets.back().path)
                 return invalid();
-            return Return::Success(std::move(targets));
+            return Return::Success(std::move(record));
         }
 
-        /** @brief Publishes the existing unresolved compensation through the shared project-local recovery writer. */
-        Result<void> PersistRecovery(const std::filesystem::path &root, const std::array<ApplyFile, 2> &files,
-                                     const PrefabApplyOutcome &outcome, DurableFileSystem &storage) {
-            const auto encoded = EncodeRecovery(root, files, outcome);
-            if (encoded.HasError())
-                return Result<void>::Failure(encoded.ErrorValue());
-            auto publication = PublishDocumentRecovery(root, RecoveryPath(root), encoded.Value(), {}, storage,
+        /** @brief Replaces the typed disposition using the latest exact durable-recovery receipt. */
+        Result<void> PublishJournal(const std::filesystem::path &root, ApplyJournal &journal, const JournalDisposition disposition,
+                                    DurableFileSystem &storage) {
+            auto &bytes = journal.bytes;
+            auto &tag = bytes[CapsuleMagic.size()];
+            const auto encoded = static_cast<std::byte>(disposition);
+            if (tag != encoded) {
+                tag = encoded;
+                const auto digest = ComputeSha256(std::span{bytes}.first(bytes.size() - Sha256Digest{}.bytes.size()));
+                std::ranges::copy(std::as_bytes(std::span{digest.bytes}), bytes.end() - digest.bytes.size());
+            }
+            auto publication = PublishDocumentRecovery(root, RecoveryPath(root), bytes, journal.identity, storage,
                                                        {.maximumRecordBytes = MaximumCapsuleBytes});
             if (publication.HasError())
-                return Result<void>::Failure(publication.ErrorValue());
+                return Result<void>::Failure(std::move(publication).ErrorValue());
+            journal.identity = publication.Value().identity;
+            journal.disposition = disposition;
+            if (publication.Value().durabilityError)
+                return Result<void>::Failure(std::move(*publication.Value().durabilityError));
             if (publication.Value().status != Assets::AssetSourcePublicationStatus::Durable)
                 return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed));
             return Result<void>::Success();
+        }
+
+        /** @brief Makes first-use journal directories reachable after a filesystem interruption. */
+        Result<void> SyncJournalAncestors(const std::filesystem::path &root, DurableFileSystem &storage) {
+            auto directory = RecoveryPath(root).parent_path();
+            while (directory != root) {
+                directory = directory.parent_path();
+                if (auto synced = storage.SyncDirectory(directory); synced.HasError())
+                    return synced;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Retires only the exact capsule while its own publication lock is held. */
+        Result<void> ClearJournal(const std::filesystem::path &root, const Assets::AssetSourceIdentity &expected,
+                                  DurableFileSystem &storage) {
+            const auto path = RecoveryPath(root);
+            const auto lockPath = Assets::AssetSourcePublicationLockPath(root, path);
+            if (lockPath.HasError())
+                return Result<void>::Failure(lockPath.ErrorValue());
+            auto held = storage.TryAcquireExclusive(lockPath.Value(), "prefab.apply.clear");
+            if (held.HasError())
+                return Result<void>::Failure(held.ErrorValue());
+            const auto capsule = Assets::CaptureAssetSource(root, path, MaximumCapsuleBytes);
+            if (capsule.HasError())
+                return Result<void>::Failure(capsule.ErrorValue());
+            if (capsule.Value().identity != expected)
+                return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+            return storage.RemoveDurable(path);
+        }
+
+        /** @brief Refuses new paired operations while restart evidence exists, even if it is unreadable. */
+        Result<void> AdmitNewJournal(const std::filesystem::path &root) {
+            const auto pending = Assets::CaptureAssetSource(root, RecoveryPath(root), MaximumCapsuleBytes);
+            if (pending.HasError())
+                return Result<void>::Failure(pending.ErrorValue());
+            if (pending.Value().identity.exists)
+                return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed));
+            return Result<void>::Success();
+        }
+
+        /** @brief Observes both current identities, using source locks when resolving a reviewed capsule. */
+        Result<void> ObserveRecovery(const std::filesystem::path &root, RecoveryRecord &record, DurableFileSystem *storage) {
+            for (auto &target : record.targets) {
+                if (storage) {
+                    const auto path = Assets::AssetSourcePublicationLockPath(root, target.path);
+                    if (path.HasError())
+                        return Result<void>::Failure(path.ErrorValue());
+                    auto lock = storage->TryAcquireExclusive(path.Value(), "prefab.apply.resolve");
+                    if (lock.HasError())
+                        return Result<void>::Failure(lock.ErrorValue());
+                    target.lock.emplace(std::move(lock).Value());
+                }
+                const auto current = Assets::CaptureAssetSource(root, target.path, MaximumCapsuleBytes);
+                if (current.HasError())
+                    return Result<void>::Failure(current.ErrorValue());
+                target.observed = current.Value().identity;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief A coherent planned pair survives interrupted commit-marker installation. */
+        PrefabApplyRecoveryCandidate ReviewRecovery(const Assets::AssetSourceIdentity &identity, const RecoveryRecord &record) {
+            const auto &targets = record.targets;
+            const bool fullyPublished = std::ranges::all_of(targets, [](const auto &target) {
+                return target.observed == target.planned;
+            });
+            const bool keep = record.disposition == JournalDisposition::Committed ||
+                              (record.disposition == JournalDisposition::Prepared && fullyPublished);
+            return {identity,
+                    {targets[0].path, targets[0].original, targets[0].planned, targets[0].observed},
+                    {targets[1].path, targets[1].original, targets[1].planned, targets[1].observed},
+                    keep ? PrefabApplyRecoveryAction::KeepPublished : PrefabApplyRecoveryAction::RestoreOriginals};
         }
 
         /** @brief Admits both canonical file destinations before either is changed. */
@@ -228,6 +340,9 @@ namespace Horo::Editor {
                 if (!file.expected.exists || current.Value().identity != file.expected)
                     return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
                 file.original = std::move(current).Value();
+                if (file.replacement.size() > MaximumCapsuleBytes)
+                    return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Limit));
+                file.planned = {true, file.replacement.size(), ComputeSha256(std::as_bytes(std::span{file.replacement}))};
             }
             return Result<void>::Success();
         }
@@ -254,7 +369,7 @@ namespace Horo::Editor {
                 auto current = Assets::CaptureAssetSource(root, file.path, 64U * 1024U * 1024U, cancellation);
                 if (current.HasError())
                     return Result<void>::Failure(std::move(current).ErrorValue());
-                if (current.Value().identity != *file.installed)
+                if (!file.installed || *file.installed != file.planned || current.Value().identity != file.planned)
                     return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
             }
             return Result<void>::Success();
@@ -298,69 +413,66 @@ namespace Horo::Editor {
         const auto &identity = capsule.Value().identity;
         if (!identity.exists)
             return Return::Success(std::nullopt);
-        const auto decoded = DecodeRecovery(root, capsule.Value().bytes);
+        auto decoded = DecodeRecovery(root, capsule.Value().bytes);
         if (decoded.HasError())
             return Return::Failure(decoded.ErrorValue());
-        const auto &targets = decoded.Value();
-        return Return::Success(
-            PrefabApplyRecoveryCandidate{identity, {targets[0].path, targets[0].original}, {targets[1].path, targets[1].original}});
+        auto record = std::move(decoded).Value();
+        if (auto observed = ObserveRecovery(root, record, nullptr); observed.HasError())
+            return Return::Failure(observed.ErrorValue());
+        return Return::Success(ReviewRecovery(identity, record));
     }
 
-    /** @copydoc PrefabApplyTransaction::RestorePendingRecovery */
-    Result<void> PrefabApplyTransaction::RestorePendingRecovery(const std::filesystem::path &root,
-                                                                const Assets::AssetSourceIdentity &expected,
+    /** @copydoc PrefabApplyTransaction::ResolvePendingRecovery */
+    Result<void> PrefabApplyTransaction::ResolvePendingRecovery(const std::filesystem::path &root,
+                                                                const PrefabApplyRecoveryCandidate &expected,
                                                                 const ProjectMutationCoordinator &mutations, DurableFileSystem &storage) {
         using Return = Result<void>;
         const auto conflict = [] {
             return Return::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
         };
-        if (!expected.exists)
+        if (!expected.capsule.exists)
             return conflict();
-        auto project = mutations.TryAcquire({root, ProjectMutationOwner::Save, "prefab.apply.restore"});
+        auto project = mutations.TryAcquire({root, ProjectMutationOwner::Save, "prefab.apply.resolve"});
         if (project.HasError())
             return Return::Failure(project.ErrorValue());
         const auto path = RecoveryPath(root);
         const auto lockPath = Assets::AssetSourcePublicationLockPath(root, path);
         if (lockPath.HasError())
             return Return::Failure(lockPath.ErrorValue());
-        auto capsuleLock = storage.TryAcquireExclusive(lockPath.Value(), "prefab.apply.restore");
+        auto capsuleLock = storage.TryAcquireExclusive(lockPath.Value(), "prefab.apply.resolve");
         if (capsuleLock.HasError())
             return Return::Failure(capsuleLock.ErrorValue());
-        auto capsule = Assets::CaptureAssetSource(root, path, MaximumCapsuleBytes);
+        const auto capsule = Assets::CaptureAssetSource(root, path, MaximumCapsuleBytes);
         if (capsule.HasError())
             return Return::Failure(capsule.ErrorValue());
-        if (capsule.Value().identity != expected)
+        if (capsule.Value().identity != expected.capsule)
             return conflict();
         auto decoded = DecodeRecovery(root, capsule.Value().bytes);
         if (decoded.HasError())
             return Return::Failure(decoded.ErrorValue());
-        auto targets = std::move(decoded).Value();
-        for (auto &target : targets) {
-            const auto lock = Assets::AssetSourcePublicationLockPath(root, target.path);
-            if (lock.HasError())
-                return Return::Failure(lock.ErrorValue());
-            auto held = storage.TryAcquireExclusive(lock.Value(), "prefab.apply.restore");
-            if (held.HasError())
-                return Return::Failure(held.ErrorValue());
-            target.lock.emplace(std::move(held).Value());
-            const auto current = Assets::CaptureAssetSource(root, target.path, MaximumCapsuleBytes);
-            if (current.HasError())
-                return Return::Failure(current.ErrorValue());
-            if (current.Value().identity == target.original)
-                continue;
-            if (current.Value().identity != target.installed)
+        auto record = std::move(decoded).Value();
+        if (auto observed = ObserveRecovery(root, record, &storage); observed.HasError())
+            return observed;
+        if (ReviewRecovery(expected.capsule, record) != expected)
+            return conflict();
+
+        const bool keep = expected.action == PrefabApplyRecoveryAction::KeepPublished;
+        const auto selected = [keep](const auto &target) -> const Assets::AssetSourceIdentity & {
+            return keep ? target.planned : target.original;
+        };
+        const auto &targets = record.targets;
+        for (const auto &target : targets) {
+            if (target.observed != selected(target) && (keep || target.observed != target.planned))
                 return conflict();
-            target.needsRestore = true;
         }
-        // Match the normal compensation order and leave the capsule retryable after either publication.
+        // Compensate owned replacements in reverse order. Keeping a pair never writes either source.
         for (auto target = targets.rbegin(); target != targets.rend(); ++target) {
-            if (!target->needsRestore) {
+            if (target->observed == selected(*target)) {
                 if (auto synced = storage.SyncDirectory(target->path.parent_path()); synced.HasError())
                     return synced;
                 continue;
             }
-            auto restored =
-                Assets::PublishAssetSource(root, target->path, target->installed, target->originalBytes, *target->lock, storage);
+            auto restored = Assets::PublishAssetSource(root, target->path, target->planned, target->originalBytes, *target->lock, storage);
             if (restored.HasError())
                 return Return::Failure(restored.ErrorValue());
             if (restored.Value().durabilityError)
@@ -372,13 +484,13 @@ namespace Horo::Editor {
             const auto current = Assets::CaptureAssetSource(root, target.path, MaximumCapsuleBytes);
             if (current.HasError())
                 return Return::Failure(current.ErrorValue());
-            if (current.Value().identity != target.original)
+            if (current.Value().identity != selected(target))
                 return conflict();
         }
         const auto current = Assets::CaptureAssetSource(root, path, MaximumCapsuleBytes);
         if (current.HasError())
             return Return::Failure(current.ErrorValue());
-        if (current.Value().identity != expected)
+        if (current.Value().identity != expected.capsule)
             return conflict();
         return storage.RemoveDurable(path);
     }
@@ -397,11 +509,8 @@ namespace Horo::Editor {
         if (project.HasError())
             return {.error = std::move(project).ErrorValue()};
         try {
-            const auto pending = InspectPendingRecovery(prefab.root_);
-            if (pending.HasError())
-                return {.error = pending.ErrorValue()};
-            if (pending.Value())
-                return {.error = MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed)};
+            if (const auto admittedJournal = AdmitNewJournal(prefab.root_); admittedJournal.HasError())
+                return {.error = admittedJournal.ErrorValue()};
             if (auto current = sources.inputs.VerifyUnchanged(request.scene.cancellation); current.HasError())
                 return {.error = std::move(current).ErrorValue()};
             const auto commitments = sources.resolver.CanonicalSourceCommitments();
@@ -498,11 +607,8 @@ namespace Horo::Editor {
         if (project.HasError())
             return {.error = std::move(project).ErrorValue()};
         try {
-            const auto pending = InspectPendingRecovery(prefab.root_);
-            if (pending.HasError())
-                return {.error = pending.ErrorValue()};
-            if (pending.Value())
-                return {.error = MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed)};
+            if (const auto admittedJournal = AdmitNewJournal(prefab.root_); admittedJournal.HasError())
+                return {.error = admittedJournal.ErrorValue()};
             const auto group = NextSceneGroup(scene, request.scene, request.redo);
             if (group.HasError())
                 return {.error = group.ErrorValue()};
@@ -534,6 +640,7 @@ namespace Horo::Editor {
         auto exception = MakeError(Assets::AssetSourceErrors::ReadFailed, "Prefab apply publication failed.");
         auto recoveryException = MakeError(Assets::AssetSourceErrors::ReadFailed, "Prefab apply recovery publication failed.");
         std::array<ApplyFile, 2> files{{{prefab.path_, prefab.accepted_}, {request.scenePath, request.sceneIdentity}}};
+        ApplyJournal journal;
         try {
             const auto run = [&]() -> Result<void> {
                 auto sourceBytes = preparedSource.source->SerializeCanonical();
@@ -541,10 +648,25 @@ namespace Horo::Editor {
                     return Result<void>::Failure(std::move(sourceBytes).ErrorValue());
                 files[0].replacement = std::move(sourceBytes).Value();
                 files[1].replacement = scene.EncodePreparedScene(preparedScene);
+                if (auto valid = scene.ValidatePrepared(preparedScene); valid.HasError())
+                    return valid;
+                auto resultingScene = scene.PreparedContext(preparedScene);
+                auto completingScene = request.scene;
+                completingScene.cancellation = {};
+                resultingScene.cancellation = {};
                 {
                     const SourceWriteGuard guard(prefab.busy_);
                     if (auto captured = CaptureFiles(files, prefab.root_, storage, request.scene.cancellation); captured.HasError())
                         return captured;
+                    outcome.sceneChecksum = FormatSha256(files[1].planned.digest);
+                    auto encoded = EncodeRecovery(prefab.root_, files);
+                    if (encoded.HasError())
+                        return Result<void>::Failure(std::move(encoded).ErrorValue());
+                    journal.bytes = std::move(encoded).Value();
+                    if (auto prepared = PublishJournal(prefab.root_, journal, JournalDisposition::Prepared, storage); prepared.HasError())
+                        return prepared;
+                    if (auto anchored = SyncJournalAncestors(prefab.root_, storage); anchored.HasError())
+                        return anchored;
                     for (auto &file : files)
                         if (auto published = PublishFile(file, prefab.root_, storage, request.scene.cancellation); published.HasError())
                             return published;
@@ -555,13 +677,26 @@ namespace Horo::Editor {
                     return valid;
                 if (auto valid = prefab.Admit(request.source); valid.HasError())
                     return valid;
-                outcome.sceneChecksum = FormatSha256(files[1].installed->digest);
-                auto resultingScene = scene.PreparedContext(preparedScene);
-                resultingScene.cancellation = {};
-                prefab.PublishApply(preparedSource, *files[0].installed);
+                {
+                    const SourceWriteGuard guard(prefab.busy_);
+                    auto decision = PublishJournal(prefab.root_, journal, JournalDisposition::Committed, storage);
+                    if (decision.HasError()) {
+                        if (journal.disposition != JournalDisposition::Committed)
+                            return decision;
+                        outcome.recoveryPersistenceError = std::move(decision).ErrorValue();
+                    }
+                    // Once the commit decision is visible, rollback could contradict crash recovery.
+                    if (auto current = VerifyInstalledFiles(files, prefab.root_, {}); current.HasError())
+                        return current;
+                }
+                if (auto valid = scene.Admit(completingScene); valid.HasError())
+                    return valid;
+                if (auto valid = prefab.Admit(request.source); valid.HasError())
+                    return valid;
+                prefab.PublishApply(preparedSource, files[0].planned);
                 outcome.committed = scene.PublishPrepared(preparedScene);
                 outcome.group = request.group;
-                outcome.sceneIdentity = *files[1].installed;
+                outcome.sceneIdentity = files[1].planned;
                 return scene.MarkSaved(resultingScene);
             };
             if (auto applied = run(); applied.HasError())
@@ -569,20 +704,40 @@ namespace Horo::Editor {
         } catch (...) {
             outcome.error = std::move(exception);
         }
-        if (!outcome.committed) {
-            const SourceWriteGuard guard(prefab.busy_);
-            Compensate(files, prefab.root_, storage, outcome, rollbackFailure);
-            if (std::ranges::any_of(outcome.recovery, [](const auto &item) {
-                return item.has_value();
+
+        const SourceWriteGuard guard(prefab.busy_);
+        if (!outcome.committed && journal.disposition != JournalDisposition::Committed) {
+            if (std::ranges::any_of(files, [](const auto &file) {
+                return file.installed.has_value();
             })) {
                 try {
-                    if (auto recovery = PersistRecovery(prefab.root_, files, outcome, storage); recovery.HasError())
-                        outcome.recoveryPersistenceError = std::move(recovery).ErrorValue();
+                    if (auto recorded = PublishJournal(prefab.root_, journal, JournalDisposition::RollbackRequired, storage);
+                        recorded.HasError())
+                        outcome.recoveryPersistenceError = std::move(recorded).ErrorValue();
                 } catch (...) {
                     outcome.recoveryPersistenceError = std::move(recoveryException);
                 }
+                Compensate(files, prefab.root_, storage, outcome, rollbackFailure);
             }
-        } else
+        }
+        const bool incomplete = outcome.committed ? outcome.recoveryPersistenceError.has_value()
+                                                  : journal.disposition == JournalDisposition::Committed ||
+                                                        std::ranges::any_of(outcome.recovery, [](const auto &item) {
+            return item.has_value();
+        });
+        if (journal.identity.exists && !incomplete) {
+            try {
+                if (auto cleared = ClearJournal(prefab.root_, journal.identity, storage); cleared.HasValue())
+                    journal.identity = {};
+                else
+                    outcome.recoveryPersistenceError = std::move(cleared).ErrorValue();
+            } catch (...) {
+                if (!outcome.recoveryPersistenceError)
+                    outcome.recoveryPersistenceError = std::move(recoveryException);
+            }
+        }
+        outcome.pendingRecovery = journal.identity.exists;
+        if (outcome.committed)
             prefab.ReleaseStage();
         return outcome;
     }

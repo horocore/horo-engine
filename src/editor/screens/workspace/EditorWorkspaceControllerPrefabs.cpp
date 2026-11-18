@@ -504,19 +504,18 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::CompletePrefabApply */
     Result<void> EditorWorkspaceController::CompletePrefabApply(PrefabApplyOutcome outcome, const DocumentChangeKind kind) {
+        if (outcome.recoveryPersistenceError)
+            LOG_ERROR("editor.prefab", "Paired Prefab journal needs attention: %s", outcome.recoveryPersistenceError->message.c_str());
+        if (outcome.pendingRecovery) {
+            m_prefabApplyRecoveryPendingOnDisk = true;
+            m_viewModel.prefabApplyRecoveryNotice = PrefabApplyRecoveryNotice::Reopen;
+            m_viewModel.prefabApplyAvailable = false;
+        }
         if (!outcome.committed) {
-            if (std::ranges::any_of(outcome.recovery, [](const auto &item) {
+            if (outcome.pendingRecovery || std::ranges::any_of(outcome.recovery, [](const auto &item) {
                 return item.has_value();
             })) {
                 m_prefabApplyRecovery = std::move(outcome.recovery);
-                if (outcome.recoveryPersistenceError)
-                    LOG_ERROR("editor.prefab", "Paired Prefab recovery could not be persisted: %s",
-                              outcome.recoveryPersistenceError->message.c_str());
-                else {
-                    m_prefabApplyRecoveryPendingOnDisk = true;
-                    m_viewModel.prefabApplyRecoveryNotice = PrefabApplyRecoveryNotice::Reopen;
-                }
-                m_viewModel.prefabApplyAvailable = false;
                 m_viewModel.sceneExternalConflict = true;
                 return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed));
             }

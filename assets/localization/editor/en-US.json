@@ -1408,6 +1408,8 @@
     "workspace.paired_recovery.review": { "text": "Review recovery" },
     "workspace.paired_recovery.title": { "text": "Recover Prefab Apply" },
     "workspace.paired_recovery.description": { "text": "Restore the previous saved bytes for these two files. Recovery proceeds only if both files still match the interrupted operation." },
+    "workspace.paired_recovery.keep_description": { "text": "Prefab Apply published both files. Verify that both files still match the operation and keep the published changes." },
+    "workspace.paired_recovery.keep": { "text": "Keep published changes" },
     "workspace.paired_recovery.restore": { "text": "Restore both files" },
     "workspace.paired_recovery.cancel": { "text": "Cancel" },
     "workspace.paired_recovery.blocked": { "text": "Close the affected Prefab, stop Play, and resolve unsaved Scene or project settings before restoring." },

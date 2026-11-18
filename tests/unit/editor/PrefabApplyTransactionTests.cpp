@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <fstream>
+#include <functional>
 
 namespace Horo::Editor {
     namespace {
@@ -18,6 +19,10 @@ namespace Horo::Editor {
             bool failAfterSceneRename{};
             bool failRollback{};
             std::size_t failReplacement{};
+            std::size_t journalReplacements{};
+            std::size_t failJournalReplacement{};
+            std::size_t failAfterJournalRename{};
+            std::function<void(const std::filesystem::path &)> afterPublication;
 
             Result<void> WritePrivateDurable(const std::filesystem::path &path, const std::span<const std::byte> bytes, bool &created,
                                              const std::filesystem::perms mode) override {
@@ -26,11 +31,19 @@ namespace Horo::Editor {
 
             Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
                                               AtomicFileReplacementReceipt &receipt) override {
-                ++replacements;
-                if ((failScene && replacements == 2) || (failRollback && replacements == 3) || replacements == failReplacement)
+                const bool journal = destination.filename() == "prefab-apply-pending.bin";
+                if (journal) {
+                    if (++journalReplacements == failJournalReplacement)
+                        return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed));
+                } else if (++replacements == failReplacement || (failScene && replacements == 2) || (failRollback && replacements == 3)) {
                     return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed));
+                }
                 auto replaced = native.AtomicReplaceTracked(prepared, destination, receipt);
-                if (replaced.HasValue() && failAfterSceneRename && replacements == 2)
+                if (replaced.HasValue() && afterPublication)
+                    afterPublication(destination);
+                const bool unconfirmed =
+                    journal ? journalReplacements == failAfterJournalRename : failAfterSceneRename && replacements == 2;
+                if (replaced.HasValue() && unconfirmed)
                     return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed));
                 return replaced;
             }
@@ -480,6 +493,12 @@ namespace Horo::Editor {
             const auto source = fixture.source.document->Snapshot();
             const auto scene = fixture.document.Snapshot();
             std::optional<Assets::AssetSourceIdentity> external;
+            SECTION("journal preparation fails before any canonical write") {
+                fixture.files.failJournalReplacement = 1;
+            }
+            SECTION("committed disposition cannot be published") {
+                fixture.files.failJournalReplacement = 2;
+            }
             SECTION("scene write fails before replacement") {
                 fixture.files.failScene = true;
             }
@@ -507,6 +526,8 @@ namespace Horo::Editor {
             CHECK(currentSource.source == source.source);
             const auto diskSource = fixture.Read(fixture.source.project.source);
             CHECK_FALSE(outcome.recovery[1]);
+            if (fixture.files.failJournalReplacement == 1)
+                CHECK(fixture.files.replacements == 0);
             if (fixture.files.failRollback) {
                 REQUIRE(outcome.recovery[0]);
                 CHECK(outcome.recovery[0]->original.bytes == fixture.sourceBefore.bytes);
@@ -541,15 +562,16 @@ namespace Horo::Editor {
 
             NativeDurableFileSystem restartedFiles;
             const ProjectMutationCoordinator restartedMutations{restartedFiles};
-            const auto restore = [&](const Assets::AssetSourceIdentity &identity) {
-                return PrefabApplyTransaction::RestorePendingRecovery(root, identity, restartedMutations, restartedFiles);
+            const auto resolve = [&](const PrefabApplyRecoveryCandidate &candidate) {
+                return PrefabApplyTransaction::ResolvePendingRecovery(root, candidate, restartedMutations, restartedFiles);
             };
-            const auto expected = inspected.Value()->capsule;
+            const auto expected = *inspected.Value();
+            REQUIRE(expected.action == PrefabApplyRecoveryAction::RestoreOriginals);
             SECTION("unresolved paired apply is fenced and a confirmed restore removes the record") {
                 const auto attempt = fixture.Execute();
                 REQUIRE(attempt.error);
                 CHECK(attempt.error->code.Value() == Assets::AssetSourceErrors::DurabilityUnconfirmed.code.Value());
-                REQUIRE(restore(expected).HasValue());
+                REQUIRE(resolve(expected).HasValue());
                 CHECK(fixture.Read(sourcePath).bytes == fixture.sourceBefore.bytes);
                 CHECK(fixture.Read(fixture.scenePath).bytes == fixture.sceneBefore.bytes);
                 const auto cleared = PrefabApplyTransaction::InspectPendingRecovery(root);
@@ -559,7 +581,7 @@ namespace Horo::Editor {
             SECTION("an external Scene edit prevents even the otherwise owned Prefab rollback") {
                 std::ofstream(fixture.scenePath, std::ios::binary | std::ios::app) << '\n';
                 const auto external = fixture.Read(fixture.scenePath);
-                const auto recovered = restore(expected);
+                const auto recovered = resolve(expected);
                 REQUIRE(recovered.HasError());
                 CHECK(recovered.ErrorValue().code.Value() == Assets::AssetSourceErrors::Conflict.code.Value());
                 CHECK(fixture.Read(fixture.scenePath).identity == external.identity);
@@ -567,16 +589,16 @@ namespace Horo::Editor {
                 const auto pending = PrefabApplyTransaction::InspectPendingRecovery(root);
                 REQUIRE(pending.HasValue());
                 REQUIRE(pending.Value());
-                CHECK(pending.Value()->capsule == expected);
+                CHECK(pending.Value()->capsule == expected.capsule);
             }
             SECTION("old or corrupted capsule identity cannot authorize a retry") {
                 auto stale = expected;
-                ++stale.bytes;
-                REQUIRE(restore(stale).HasError());
+                ++stale.capsule.bytes;
+                REQUIRE(resolve(stale).HasError());
                 auto record = root / ".horo/local/recovery/prefab-apply-pending.bin";
                 std::ofstream(record, std::ios::binary | std::ios::app) << '\n';
                 CHECK(PrefabApplyTransaction::InspectPendingRecovery(root).HasError());
-                REQUIRE(restore(expected).HasError());
+                REQUIRE(resolve(expected).HasError());
                 CHECK(fixture.Read(sourcePath).identity == installed.identity);
                 CHECK(fixture.Read(fixture.scenePath).identity == fixture.sceneBefore.identity);
             }
@@ -585,7 +607,11 @@ namespace Horo::Editor {
                 output.write(reinterpret_cast<const char *>(fixture.sourceBefore.bytes.data()),
                              static_cast<std::streamsize>(fixture.sourceBefore.bytes.size()));
                 output.close();
-                REQUIRE(restore(expected).HasValue());
+                CHECK(resolve(expected).HasError());
+                const auto refreshed = PrefabApplyTransaction::InspectPendingRecovery(root);
+                REQUIRE(refreshed.HasValue());
+                REQUIRE(refreshed.Value());
+                REQUIRE(resolve(*refreshed.Value()).HasValue());
                 CHECK(fixture.Read(sourcePath).bytes == fixture.sourceBefore.bytes);
                 const auto cleared = PrefabApplyTransaction::InspectPendingRecovery(root);
                 REQUIRE(cleared.HasValue());
@@ -607,28 +633,134 @@ namespace Horo::Editor {
             auto inspected = PrefabApplyTransaction::InspectPendingRecovery(root);
             REQUIRE(inspected.HasValue());
             REQUIRE(inspected.Value());
-            const auto expected = inspected.Value()->capsule;
+            const auto expected = *inspected.Value();
+            REQUIRE(expected.action == PrefabApplyRecoveryAction::RestoreOriginals);
 
             ApplyFiles firstRetry;
             firstRetry.failReplacement = 2;
             const ProjectMutationCoordinator firstMutations{firstRetry};
-            const auto failed = PrefabApplyTransaction::RestorePendingRecovery(root, expected, firstMutations, firstRetry);
+            const auto failed = PrefabApplyTransaction::ResolvePendingRecovery(root, expected, firstMutations, firstRetry);
             REQUIRE(failed.HasError());
             CHECK(fixture.Read(fixture.scenePath).identity == fixture.sceneBefore.identity);
             CHECK(fixture.Read(fixture.source.project.source).identity == outcome.recovery[0]->installed);
             inspected = PrefabApplyTransaction::InspectPendingRecovery(root);
             REQUIRE(inspected.HasValue());
             REQUIRE(inspected.Value());
-            CHECK(inspected.Value()->capsule == expected);
+            CHECK(inspected.Value()->capsule == expected.capsule);
 
             NativeDurableFileSystem restartedFiles;
             const ProjectMutationCoordinator restartedMutations{restartedFiles};
-            REQUIRE(PrefabApplyTransaction::RestorePendingRecovery(root, expected, restartedMutations, restartedFiles).HasValue());
+            CHECK(PrefabApplyTransaction::ResolvePendingRecovery(root, expected, restartedMutations, restartedFiles).HasError());
+            REQUIRE(
+                PrefabApplyTransaction::ResolvePendingRecovery(root, *inspected.Value(), restartedMutations, restartedFiles).HasValue());
             CHECK(fixture.Read(fixture.scenePath).bytes == fixture.sceneBefore.bytes);
             CHECK(fixture.Read(fixture.source.project.source).bytes == fixture.sourceBefore.bytes);
             const auto cleared = PrefabApplyTransaction::InspectPendingRecovery(root);
             REQUIRE(cleared.HasValue());
             CHECK_FALSE(cleared.Value());
+        }
+
+        TEST_CASE("Prefab apply retains a committed decision with unconfirmed journal durability", "[editor][prefab][apply][native]") {
+            ApplyFixture fixture;
+            const auto &root = fixture.source.project.directory.path;
+            fixture.files.failAfterJournalRename = 2;
+            const auto outcome = fixture.Execute();
+            REQUIRE(outcome.committed);
+            REQUIRE(outcome.pendingRecovery);
+            REQUIRE(outcome.recoveryPersistenceError);
+            CHECK(fixture.files.replacements == 2);
+            const auto publishedPrefab = fixture.Read(fixture.source.project.source).identity;
+            const auto publishedScene = fixture.Read(fixture.scenePath).identity;
+            auto review = PrefabApplyTransaction::InspectPendingRecovery(root);
+            REQUIRE(review.HasValue());
+            REQUIRE(review.Value());
+            const auto candidate = *review.Value();
+            REQUIRE(candidate.action == PrefabApplyRecoveryAction::KeepPublished);
+
+            NativeDurableFileSystem restartedFiles;
+            const ProjectMutationCoordinator restartedMutations{restartedFiles};
+            SECTION("a fresh owner can keep the exact already-published pair") {
+                REQUIRE(PrefabApplyTransaction::ResolvePendingRecovery(root, candidate, restartedMutations, restartedFiles).HasValue());
+                CHECK(fixture.Read(fixture.source.project.source).identity == publishedPrefab);
+                CHECK(fixture.Read(fixture.scenePath).identity == publishedScene);
+            }
+            SECTION("a committed decision cannot be reclassified after a source is externally restored") {
+                std::ofstream original(fixture.source.project.source, std::ios::binary | std::ios::trunc);
+                original.write(reinterpret_cast<const char *>(fixture.sourceBefore.bytes.data()),
+                               static_cast<std::streamsize>(fixture.sourceBefore.bytes.size()));
+                original.close();
+                CHECK(PrefabApplyTransaction::ResolvePendingRecovery(root, candidate, restartedMutations, restartedFiles).HasError());
+                review = PrefabApplyTransaction::InspectPendingRecovery(root);
+                REQUIRE(review.HasValue());
+                REQUIRE(review.Value());
+                CHECK(review.Value()->capsule == candidate.capsule);
+                CHECK(review.Value()->action == PrefabApplyRecoveryAction::KeepPublished);
+                REQUIRE(
+                    PrefabApplyTransaction::ResolvePendingRecovery(root, *review.Value(), restartedMutations, restartedFiles).HasError());
+                CHECK(fixture.Read(fixture.source.project.source).identity == fixture.sourceBefore.identity);
+                CHECK(fixture.Read(fixture.scenePath).identity == publishedScene);
+            }
+        }
+
+        TEST_CASE("Prefab apply restart distinguishes exact durable publication boundaries", "[editor][prefab][apply][native]") {
+            ApplyFixture fixture;
+            const auto &live = fixture.source.project.directory.path;
+            const auto prefabName = fixture.source.project.source.lexically_relative(live);
+            const auto sceneName = fixture.scenePath.lexically_relative(live);
+            const std::filesystem::path journalName = ".horo/local/recovery/prefab-apply-pending.bin";
+            const std::array files{prefabName, sceneName, journalName};
+            const std::array order{journalName, prefabName, sceneName, journalName};
+            std::array<PrefabHierarchyTestSupport::ProjectDirectory, 4> restarts;
+            std::size_t checkpoint{};
+            fixture.files.afterPublication = [&](const std::filesystem::path &path) {
+                REQUIRE(checkpoint < restarts.size());
+                REQUIRE(path.lexically_relative(live) == order[checkpoint]);
+                const auto &restartRoot = restarts[checkpoint++].path;
+                for (const auto &file : files) {
+                    const auto destination = restartRoot / file;
+                    std::filesystem::create_directories(destination.parent_path());
+                    std::filesystem::copy_file(live / file, destination);
+                }
+            };
+            const auto outcome = fixture.Execute();
+            REQUIRE(outcome.committed);
+            CHECK_FALSE(outcome.pendingRecovery);
+            REQUIRE(checkpoint == restarts.size());
+            const auto finalPrefab = fixture.Read(live / prefabName).identity;
+            const auto finalScene = fixture.Read(live / sceneName).identity;
+            REQUIRE(finalPrefab != fixture.sourceBefore.identity);
+            REQUIRE(finalScene != fixture.sceneBefore.identity);
+
+            for (std::size_t index = 0; index < restarts.size(); ++index) {
+                CAPTURE(index);
+                const auto &root = restarts[index].path;
+                ApplyFiles restartedFiles;
+                const ProjectMutationCoordinator restartedMutations{restartedFiles};
+                const auto inspected = PrefabApplyTransaction::InspectPendingRecovery(root);
+                REQUIRE(inspected.HasValue());
+                REQUIRE(inspected.Value());
+                const auto &candidate = *inspected.Value();
+                const bool publishedPair = index >= 2;
+                CHECK(candidate.prefab.planned == finalPrefab);
+                CHECK(candidate.prefab.original == fixture.sourceBefore.identity);
+                CHECK(candidate.prefab.observed == (index >= 1 ? finalPrefab : fixture.sourceBefore.identity));
+                CHECK(candidate.scene.planned == finalScene);
+                CHECK(candidate.scene.original == fixture.sceneBefore.identity);
+                CHECK(candidate.scene.observed == (publishedPair ? finalScene : fixture.sceneBefore.identity));
+                CHECK(candidate.action ==
+                      (publishedPair ? PrefabApplyRecoveryAction::KeepPublished : PrefabApplyRecoveryAction::RestoreOriginals));
+
+                REQUIRE(PrefabApplyTransaction::ResolvePendingRecovery(root, candidate, restartedMutations, restartedFiles).HasValue());
+                CHECK(restartedFiles.replacements == (index == 1 ? 1 : 0));
+                const auto prefab = Assets::CaptureAssetSource(root, root / prefabName, Prefab::PrefabHardLimits::SourceDocumentBytes);
+                const auto scene = Assets::CaptureAssetSource(root, root / sceneName, Prefab::PrefabHardLimits::SourceDocumentBytes);
+                REQUIRE(prefab.HasValue());
+                REQUIRE(scene.HasValue());
+                CHECK(prefab.Value().identity == (publishedPair ? finalPrefab : fixture.sourceBefore.identity));
+                CHECK(scene.Value().identity == (publishedPair ? finalScene : fixture.sceneBefore.identity));
+                CHECK_FALSE(std::filesystem::exists(root / journalName));
+            }
+            CHECK_FALSE(std::filesystem::exists(live / journalName));
         }
     }  // namespace
 }  // namespace Horo::Editor
