@@ -47,4 +47,14 @@ namespace Horo::Editor {
      */
     [[nodiscard]] Result<EditorVulkanMultiviewCook> LoadEditorVulkanMultiviewCook(std::span<const std::uint8_t> payload,
                                                                                   std::span<const std::uint8_t> metadata);
+    /** @brief Distinct offline-compiled shader interface for the optional one-color motion plus depth pass. */
+    [[nodiscard]] Render::ShaderManifest EditorVulkanMultiviewMotionShaderManifest();
+    /** @brief Exact compiler-reflected block/member names for motion input. */
+    [[nodiscard]] std::vector<Render::ShaderReflectionBindingName> EditorVulkanMultiviewMotionReflectionNames();
+    /** @brief Admits authenticated float4 motion output and both historic/current clip-transform arrays.
+     * @param payload Same-operation SPIR-V package. @param metadata Exact reflected sidecar bytes.
+     * @return Owned cook or a typed target/interface/packing failure. Performs no device work.
+     */
+    [[nodiscard]] Result<EditorVulkanMultiviewCook> LoadEditorVulkanMultiviewMotionCook(std::span<const std::uint8_t> payload,
+                                                                                        std::span<const std::uint8_t> metadata);
 }  // namespace Horo::Editor

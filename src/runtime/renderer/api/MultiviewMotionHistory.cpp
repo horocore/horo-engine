@@ -24,6 +24,7 @@ namespace Horo::Render {
         for (std::size_t index = 0; index < objects.size(); ++index) {
             if (!objects[index].IsValid())
                 return false;
+            candidate.instanceIds[index] = objects[index];
             const auto &instance = snapshot.Instances()[index];
             candidate.objects[index] = {objects[index], instance.mesh, instance.localToWorld, 0};
         }
@@ -72,6 +73,31 @@ namespace Horo::Render {
         if ((currentObject->visibleViews & previousObject->visibleViews & visible) == 0)
             return std::nullopt;
         return MultiviewMotionPredecessor{previous.views[view], previousObject->localToWorld};
+    }
+
+    /** @copydoc MultiviewMotionHistory::ReadDraw */
+    std::optional<MultiviewMotionDraw> MultiviewMotionHistory::ReadDraw(const MultiviewMotionFrame &frame,
+                                                                        const std::uint32_t instanceIndex) const noexcept {
+        const auto &current = slots_[writable_];
+        if (!staged_ || !published_ || current.frame != frame || instanceIndex >= current.objectCount || !Adjacent())
+            return std::nullopt;
+        const auto id = current.instanceIds[instanceIndex];
+        const auto *object = Find(current, id);
+        if (!object || object->visibleViews == 0)
+            return std::nullopt;
+        MultiviewMotionDraw draw{.viewCount = current.viewCount};
+        for (std::uint32_t view = 0; view < current.viewCount; ++view) {
+            if ((object->visibleViews & (std::uint32_t{1} << view)) == 0)
+                continue;
+            const auto previous = Previous(frame, id, view);
+            if (!previous)
+                return std::nullopt;
+            draw.currentLocalToClip[view] = Math::Multiply(current.views[view], object->localToWorld);
+            draw.previousLocalToClip[view] = Math::Multiply(previous->worldToClip, previous->localToWorld);
+            if (!Math::IsFinite(draw.currentLocalToClip[view]) || !Math::IsFinite(draw.previousLocalToClip[view]))
+                return std::nullopt;
+        }
+        return draw;
     }
 
     /** @copydoc MultiviewMotionHistory::Publish */

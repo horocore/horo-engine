@@ -164,4 +164,62 @@ namespace Horo::Editor {
             return Outcome::Failure(MakeError(Render::ShaderReflectionErrors::LayoutMismatch));
         return Outcome::Success({{payload.begin(), payload.end()}, std::move(reflection).Value()});
     }
+
+    /** @copydoc EditorVulkanMultiviewMotionShaderManifest */
+    Render::ShaderManifest EditorVulkanMultiviewMotionShaderManifest() {
+        using namespace Render;
+        using namespace Render::MultiviewShaderParameterIds;
+        return {.schemaVersion = 1,
+                .sourceIdentity = "assets/shaders/runtime/multiview_motion.hlsl",
+                .sourceRevision = 1,
+                .entryPoints = {{ShaderStage::Vertex, "VSMain"}, {ShaderStage::Fragment, "PSMain"}},
+                .bindings = {{Buffer, ShaderResourceKind::UniformBuffer, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Vertex}},
+                .parameters = {{CurrentLocalToClip, Buffer, ShaderValueType::Float32, 4, 4, MultiviewExtractionLimits::HardMaximumViews},
+                               {PreviousLocalToClip, Buffer, ShaderValueType::Float32, 4, 4, MultiviewExtractionLimits::HardMaximumViews}},
+                .targets = {EditorVulkanViewportShaderTarget()}};
+    }
+
+    /** @copydoc EditorVulkanMultiviewMotionReflectionNames */
+    std::vector<Render::ShaderReflectionBindingName> EditorVulkanMultiviewMotionReflectionNames() {
+        using namespace Render::MultiviewShaderParameterIds;
+        return {{Buffer,
+                 "type.MultiviewMotionParameters",
+                 {{CurrentLocalToClip, "CurrentLocalToClip"}, {PreviousLocalToClip, "PreviousLocalToClip"}}}};
+    }
+
+    /** @copydoc LoadEditorVulkanMultiviewMotionCook */
+    Result<EditorVulkanMultiviewCook> LoadEditorVulkanMultiviewMotionCook(const std::span<const std::uint8_t> payload,
+                                                                          const std::span<const std::uint8_t> metadata) {
+        using namespace Render;
+        using Outcome = Result<EditorVulkanMultiviewCook>;
+        auto reflected = DecodeReflectedShaderArtifact(EditorVulkanMultiviewMotionShaderManifest(), EditorVulkanViewportShaderTarget(),
+                                                       payload, metadata);
+        if (reflected.HasError())
+            return Outcome::Failure(reflected.ErrorValue());
+        const auto &reflection = reflected.Value().reflection;
+        const auto matches = [&reflection](const ShaderStage stage, const ShaderInterfaceDirection direction, const std::uint32_t location,
+                                           const std::uint32_t columns) {
+            const auto found = std::ranges::find_if(reflection.stageInterface, [=](const auto &attribute) {
+                return attribute.stage == stage && attribute.direction == direction && attribute.location == location;
+            });
+            return found != reflection.stageInterface.end() && found->type == ShaderValueType::Float32 && found->rows == 1 &&
+                   found->columns == columns && found->arrayCount == 1;
+        };
+        using enum ShaderInterfaceDirection;
+        if (reflection.stageInterface.size() != 6 || !matches(ShaderStage::Vertex, Input, 0, 3) ||
+            !matches(ShaderStage::Vertex, Output, 0, 4) || !matches(ShaderStage::Vertex, Output, 1, 4) ||
+            !matches(ShaderStage::Fragment, Input, 0, 4) || !matches(ShaderStage::Fragment, Input, 1, 4) ||
+            !matches(ShaderStage::Fragment, Output, 0, 4))
+            return Outcome::Failure(MakeError(ShaderReflectionErrors::StageInterfaceMismatch));
+        const auto layout = PrepareMaterialBindingLayout(reflection);
+        if (layout.HasError())
+            return Outcome::Failure(layout.ErrorValue());
+        const auto bytes = MultiviewMotionParameterBytes(layout.Value(), MultiviewExtractionLimits::HardMaximumViews);
+        if (bytes.HasError())
+            return Outcome::Failure(bytes.ErrorValue());
+        constexpr auto blockBytes = MultiviewExtractionLimits::HardMaximumViews * 2 * sizeof(Math::Mat4);
+        if (bytes.Value() != blockBytes)
+            return Outcome::Failure(MakeError(ShaderReflectionErrors::LayoutMismatch));
+        return Outcome::Success({{payload.begin(), payload.end()}, std::move(reflected).Value()});
+    }
 }  // namespace Horo::Editor

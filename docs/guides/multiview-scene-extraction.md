@@ -123,11 +123,20 @@ evidence is incompatible. Bounded storage retains only one candidate and one
 successful projection. The app commits the candidate only after native
 compositor projection succeeds.
 
-These values establish the source for a later motion pass. Vulkan's selected
-frame currently uses a color shader and internal depth allocation. A motion
-and depth producer still needs cooked shader variants, matching external
-attachments, disocclusion policy, and native submission and completion
-qualification.
+The Vulkan motion cook and multiview graph admit a separate multipass shader
+with one signed floating-point color attachment and sampled hardware depth.
+Uniform packing requires a genuine predecessor for each eye that draws the
+object. The shader projects the same local geometry through each eye's current
+and previous transforms and computes signed XYZ displacement in target-image
+NDC. Current position drives fixed-function depth in the same pass. Invalid
+previous samples keep current depth and write alpha zero so foreground geometry
+still occludes farther geometry. This alpha is an engine validity marker.
+
+The selected Play frame currently uses a color shader and internal depth.
+Activation requires negotiated external motion and depth imports, completion
+and release through the exact native frame owner, and a disocclusion policy for
+the native provider's format. EXT ignores the engine validity alpha.
+[OpenXR frame synthesis contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrFrameSynthesisInfoEXT.html)
 
 ## Public contract migration and evidence
 

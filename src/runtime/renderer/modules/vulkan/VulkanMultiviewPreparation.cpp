@@ -63,6 +63,12 @@ namespace Horo::Render::Detail {
                 input.rectangle.x > static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()) ||
                 input.rectangle.y > static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()))
                 return Invalid<void>("Multiview color image, active rectangle, sample count or array layer is invalid.");
+            if (workload.output == MultiviewOutput::MotionDepth &&
+                (!input.depth.IsValid() ||
+                 (color->textureDescriptor.format != RenderTextureFormat::Rgba16Float &&
+                  color->textureDescriptor.format != RenderTextureFormat::Rgba32Float) ||
+                 !HasTextureUsage(color->textureDescriptor.usage, RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment)))
+                return Unsupported("Motion targets require sampled floating RGB and matching depth attachments.");
             const auto colorView = Attachment(request, registry, *color, input.colorView, input.arrayLayer, RenderTextureAspect::Color);
             if (colorView.HasError())
                 return Result<void>::Failure(colorView.ErrorValue());
@@ -82,6 +88,9 @@ namespace Horo::Render::Detail {
                     (depth->textureDescriptor.format != RenderTextureFormat::Depth16Unorm &&
                      depth->textureDescriptor.format != RenderTextureFormat::Depth32Float))
                     return Unsupported("Multiview depth requires matching single-sample extent/layers and an admitted depth-only format.");
+                if (workload.output == MultiviewOutput::MotionDepth &&
+                    !HasTextureUsage(depth->textureDescriptor.usage, RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment))
+                    return Unsupported("Motion depth requires matching sampled device depth.");
                 const auto depthView =
                     Attachment(request, registry, *depth, input.depthView, input.depthArrayLayer, RenderTextureAspect::Depth);
                 if (depthView.HasError())
@@ -141,7 +150,8 @@ namespace Horo::Render::Detail {
     }
 
     /** @copydoc VulkanMultiviewRecorder::PrepareMaterial */
-    Result<void> VulkanMultiviewRecorder::PrepareMaterial(Draw &draw, const MultiviewGraphGeometry &input) const {
+    Result<void> VulkanMultiviewRecorder::PrepareMaterial(Draw &draw, const MultiviewGraphGeometry &input,
+                                                          const MultiviewOutput output) const {
         if (!input.material)
             return Invalid<void>("Exact multiview material generation is missing.");
         const auto *material = dynamic_cast<const VulkanPreparedMaterialBinding *>(&input.material->BackendBinding().NativeBinding());
@@ -156,6 +166,10 @@ namespace Horo::Render::Detail {
                 mode_ == MultiviewExecutionMode::Instanced ? RenderViewRouting::VertexLayer : RenderViewRouting::SingleView;
             draw.state.viewRouting != required || draw.state.sampleCount != 1)
             return Unsupported("Cooked shader routing or samples differ from the admitted multiview execution mode.");
+        if (output == MultiviewOutput::MotionDepth &&
+            (draw.state.blend != RenderBlendMode::Disabled || !draw.state.depthTest || !draw.state.depthWrite ||
+             draw.state.depthCompare != RenderCompareFunction::LessEqual || draw.state.depthOnly))
+            return Unsupported("Motion requires unblended coverage and matching forward hardware depth.");
         for (std::uint32_t view = 0; view < targetCount_; ++view) {
             const auto &target = targets_[view];
             const auto depth = target.depth ? std::optional{target.depthDescriptor.format} : std::nullopt;
@@ -183,7 +197,7 @@ namespace Horo::Render::Detail {
             draw = {};
             draw.mesh = actual.Value();
             draw.views = workload.scene->Draws()[index].visibleViews;
-            if (const auto material = PrepareMaterial(draw, input); material.HasError())
+            if (const auto material = PrepareMaterial(draw, input, workload.output); material.HasError())
                 return material;
             const auto expanded = static_cast<std::uint64_t>(std::popcount(draw.views));
             const auto count = static_cast<std::uint64_t>(draw.mesh.descriptor.indexCount);

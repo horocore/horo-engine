@@ -76,7 +76,7 @@ namespace Horo::Render::Detail {
                                                           RenderMeshHandle, std::span<const VulkanGraphResource>,
                                                           const VulkanResourceRuntime &, VulkanCommandRetention &) const;
         /** @brief Admits the existing native material lease against device, shader routing and every target tuple. */
-        [[nodiscard]] Result<void> PrepareMaterial(Draw &, const MultiviewGraphGeometry &) const;
+        [[nodiscard]] Result<void> PrepareMaterial(Draw &, const MultiviewGraphGeometry &, MultiviewOutput) const;
         [[nodiscard]] Result<void> PrepareDraws(const RenderGraphExecutionRequest &, const RenderGraphMultiview &,
                                                 std::span<const VulkanGraphResource>, VulkanResourceRuntime &, VulkanCommandRetention &);
         [[nodiscard]] bool CanRouteLayers() const noexcept;

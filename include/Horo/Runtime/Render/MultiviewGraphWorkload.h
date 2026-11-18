@@ -56,6 +56,12 @@ namespace Horo::Render {
         }
     };
 
+    /** @brief Explicit color/depth layout and reflected shader contract for a multiview pass. */
+    enum class MultiviewOutput : std::uint8_t {
+        ProjectionColor,
+        MotionDepth /**< Separate multipass signed XYZ motion and matching hardware forward depth. */
+    };
+
     /** @brief One atomic bounded whole-frame scene workload; all admission precedes encoding any view.
      * @details All spans are borrowed only for synchronous graph admission. The canonical frontend completion lease
      * retains the exact meshes/materials; native command retention uses HORO-326's existing ownership and timelines.
@@ -69,6 +75,7 @@ namespace Horo::Render {
         ClearColor clearColor{0.035F, 0.045F, 0.070F, 1.0F};
         float depthClear{1.0F};
         MultiviewNativeWorkLimits limits;
+        MultiviewOutput output{MultiviewOutput::ProjectionColor};
     };
 
     /** @brief Exact frontend-resolved resident mesh generation, additional to the graph's typed buffer bindings. */

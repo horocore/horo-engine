@@ -61,7 +61,7 @@ namespace Horo::Render {
         [[nodiscard]] bool AddTargets(const RenderGraphExecutionRequest &request, const RenderGraphMultiview &workload, Uses &uses) {
             for (std::size_t index = 0; index < workload.targets.size(); ++index) {
                 const auto &target = workload.targets[index];
-                if (!target.depth.IsValid() && target.depth != RenderGraphResourceId{})
+                if (!target.depth.IsValid() && (target.depth != RenderGraphResourceId{} || workload.output == MultiviewOutput::MotionDepth))
                     return false;
                 if (const auto colorView = std::ranges::find(request.views, target.colorView, &RenderGraphTextureViewInstance::view);
                     !target.colorView.IsValid() || colorView == request.views.end() || colorView->instance == 0 ||
@@ -88,9 +88,11 @@ namespace Horo::Render {
 
         /** @brief Matches the explicit uniform dependency to the material's actual logical buffer generation. */
         [[nodiscard]] bool ParameterBindingMatches(const CompiledRenderGraphExecution &graph, const MultiviewGraphGeometry &geometry,
-                                                   const std::size_t viewCount) {
+                                                   const std::size_t viewCount, const MultiviewOutput output) {
             const auto &descriptor = geometry.material->Descriptor();
-            if (descriptor.resources.size() != 1 || MultiviewShaderParameterBytes(descriptor.layout, viewCount).HasError())
+            const auto size = output == MultiviewOutput::MotionDepth ? MultiviewMotionParameterBytes(descriptor.layout, viewCount)
+                                                                     : MultiviewShaderParameterBytes(descriptor.layout, viewCount);
+            if (descriptor.resources.size() != 1 || size.HasError())
                 return false;
             const auto &resource = descriptor.resources.front();
             const auto *uniform = std::get_if<MaterialBufferBinding>(&resource.value);
@@ -113,7 +115,7 @@ namespace Horo::Render {
                     return false;
                 const auto &source = workload.scene->Instances()[geometry.instanceIndex];
                 if (geometry.material->Id() != source.material ||
-                    !ParameterBindingMatches(request.graph, geometry, workload.targets.size()))
+                    !ParameterBindingMatches(request.graph, geometry, workload.targets.size(), workload.output))
                     return false;
                 const auto resolved = std::ranges::find(request.meshes, source.mesh, &RenderGraphMeshInstance::mesh);
                 if (resolved == request.meshes.end() || resolved->instance == 0)
@@ -138,6 +140,12 @@ namespace Horo::Render {
             request.graph.Resources().size() > RenderGraphLimits::HardMaxResources ||
             request.meshes.size() > MultiviewExtractionLimits::HardMaximumInstances ||
             request.views.size() > MultiviewExtractionLimits::HardMaximumViews * 2 || !workload.limits.IsValid())
+            return Invalid();
+        if (workload.output > MultiviewOutput::MotionDepth ||
+            (workload.output == MultiviewOutput::MotionDepth &&
+             (workload.scene->Mode() != MultiviewExecutionMode::Multipass || workload.depthClear != 1.0F ||
+              workload.clearColor.red != 0.0F || workload.clearColor.green != 0.0F || workload.clearColor.blue != 0.0F ||
+              workload.clearColor.alpha != 0.0F)))
             return Invalid();
         if (const auto live = workload.scene->Validate(workload.active); live.HasError())
             return live;

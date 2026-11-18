@@ -20,6 +20,13 @@ namespace Horo::Render {
         Math::Mat4 localToWorld;
     };
 
+    /** @brief Exact per-eye clip matrices for one admitted current draw. Culled eyes are not invoked. */
+    struct MultiviewMotionDraw final {
+        std::array<Math::Mat4, MultiviewExtractionLimits::HardMaximumViews> currentLocalToClip{};
+        std::array<Math::Mat4, MultiviewExtractionLimits::HardMaximumViews> previousLocalToClip{};
+        std::size_t viewCount{};
+    };
+
     /** @brief One owner-lane history, without native resource or submission authority.
      * @details Stage copies the actual render extraction after candidate validation. Publish is called only for the
      * matching successful native projection completion. No heap allocation or pixel generation is performed here.
@@ -46,6 +53,13 @@ namespace Horo::Render {
         [[nodiscard]] std::optional<MultiviewMotionPredecessor> Previous(const MultiviewMotionFrame &frame, RenderMotionObjectId object,
                                                                          std::uint32_t view) const noexcept;
 
+        /** @brief Reads every visible eye's exact current and previous geometry for the canonical instance index.
+         * @param frame Exact staged frame. @param instanceIndex Index of the corresponding staged scene instance.
+         * @return Copied transforms or absence if any visible eye lacks a genuine predecessor.
+         */
+        [[nodiscard]] std::optional<MultiviewMotionDraw> ReadDraw(const MultiviewMotionFrame &frame,
+                                                                  std::uint32_t instanceIndex) const noexcept;
+
         /** @brief Advances history after actual successful compositor projection.
          * @param frame Exact staged and submitted candidate. @return True once for a matching staged completion.
          * @pre Caller observed successful native submission of that exact frame; no GPU receipts are manufactured here.
@@ -67,6 +81,7 @@ namespace Horo::Render {
             MultiviewMotionFrame frame;
             std::array<Math::Mat4, MultiviewExtractionLimits::HardMaximumViews> views{};
             std::array<Object, MultiviewExtractionLimits::HardMaximumInstances> objects{};
+            std::array<RenderMotionObjectId, MultiviewExtractionLimits::HardMaximumInstances> instanceIds{};
             std::size_t viewCount{};
             std::size_t objectCount{};
         };

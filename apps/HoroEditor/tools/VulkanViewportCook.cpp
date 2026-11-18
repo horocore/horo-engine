@@ -20,7 +20,8 @@ namespace {
     enum class CookMode {
         Viewport,
         Multiview,
-        Shadow
+        Shadow,
+        MultiviewMotion
     };
 
     ShaderManifest Manifest(CookMode mode) {
@@ -32,6 +33,8 @@ namespace {
                 return Editor::EditorVulkanMultiviewShaderManifest();
             case Shadow:
                 return Editor::EditorVulkanShadowShaderManifest();
+            case MultiviewMotion:
+                return Editor::EditorVulkanMultiviewMotionShaderManifest();
         }
         return {};
     }
@@ -45,6 +48,8 @@ namespace {
                 return Editor::EditorVulkanMultiviewReflectionNames();
             case Shadow:
                 return Editor::EditorVulkanShadowReflectionNames();
+            case MultiviewMotion:
+                return Editor::EditorVulkanMultiviewMotionReflectionNames();
         }
         return {};
     }
@@ -58,6 +63,8 @@ namespace {
                 return "multiview";
             case Shadow:
                 return "shadow";
+            case MultiviewMotion:
+                return "multiview-motion";
         }
         return "invalid";
     }
@@ -144,6 +151,8 @@ namespace {
                 return Admit(Editor::LoadEditorVulkanMultiviewCook(artifact.payload, metadata));
             case Shadow:
                 return Admit(Editor::LoadEditorVulkanShadowCook(artifact.payload, metadata));
+            case MultiviewMotion:
+                return Admit(Editor::LoadEditorVulkanMultiviewMotionCook(artifact.payload, metadata));
         }
         return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::InvalidRequest));
     }
@@ -222,6 +231,8 @@ namespace {
             return Multiview;
         if (std::string_view{argv[7]} == "--shadow")
             return Shadow;
+        if (std::string_view{argv[7]} == "--multiview-motion")
+            return MultiviewMotion;
         return std::nullopt;
     }
 }  // namespace
@@ -234,7 +245,7 @@ int main(int argc, char **argv) {
     const auto mode = ParseMode(argc, argv);
     if (!mode) {
         std::cerr << "Usage: HoroEditorVulkanShaderCook source.hlsl output-prefix scratch-root dxc spirv-val spirv-cross "
-                     "[--multiview|--shadow]\n";
+                     "[--multiview|--multiview-motion|--shadow]\n";
         return 2;
     }
     try {

@@ -3,7 +3,7 @@
  * @brief Reflected view-indexed shader parameter admission and allocation-free matrix packing.
  */
 #include "Horo/Runtime/Render/MaterialBinding.h"
-#include "Horo/Runtime/Render/MultiviewSceneExtraction.h"
+#include "Horo/Runtime/Render/MultiviewMotionHistory.h"
 
 namespace Horo::Render {
 
@@ -13,6 +13,8 @@ namespace Horo::Render {
         inline constexpr ShaderParameterId WorldToClip{1};
         inline constexpr ShaderParameterId LocalToWorld{2};
         inline constexpr ShaderParameterId ViewLayers{3};
+        inline constexpr ShaderParameterId CurrentLocalToClip{4};
+        inline constexpr ShaderParameterId PreviousLocalToClip{5};
     }  // namespace MultiviewShaderParameterIds
 
     /** @brief Writes actual view/object/routing parameters into an owner-retained frame slot without allocation.
@@ -33,6 +35,23 @@ namespace Horo::Render {
      * @param viewCount Complete active runtime view count.
      * @return Required uniform bytes including tail alignment, or typed invalid/unsupported/capacity failure. */
     [[nodiscard]] Result<std::size_t> MultiviewShaderParameterBytes(const MaterialBindingLayout &layout, std::size_t viewCount);
+
+    /** @brief Checks reflected layout of the distinct multipass motion program.
+     * @param layout Exact program layout. @param viewCount Active ordered view count.
+     * @return Required bytes or typed invalid/unsupported layout.
+     */
+    [[nodiscard]] Result<std::size_t> MultiviewMotionParameterBytes(const MaterialBindingLayout &layout, std::size_t viewCount);
+
+    /** @brief Packs only owner-validated exact current and previous clip transforms.
+     * @param layout Final motion shader layout. @param history Selected existing render history owner.
+     * @param frame Exact staged frame. @param instanceIndex Exact index in the staged scene.
+     * @param destination Bounded upload buffer scratch.
+     * @return Written prefix or a typed failure that leaves destination untouched when any visible eye lacks real history.
+     */
+    [[nodiscard]] Result<std::size_t> PackMultiviewMotionShaderParameters(const MaterialBindingLayout &layout,
+                                                                          const MultiviewMotionHistory &history,
+                                                                          const MultiviewMotionFrame &frame, std::uint32_t instanceIndex,
+                                                                          std::span<std::byte> destination);
 
     /** @brief Adapts immutable multiview values to the canonical material parameter packer.
      * @param layout Exact final-artifact layout admitted for the selected pipeline.

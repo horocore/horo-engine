@@ -6,9 +6,9 @@ struct MultiviewPacket {
     std::shared_ptr<const ResidentMaterialBinding> material;
     std::shared_ptr<const MultiviewSceneSnapshot> scene;
     std::optional<CompiledRenderGraphExecution> graph;
-    std::array<RenderGraphResourceInstance, 4> resources{};
+    std::vector<RenderGraphResourceInstance> resources;
     std::array<RenderGraphMeshInstance, 1> meshes{};
-    std::array<RenderGraphTextureViewInstance, 2> views{};
+    std::vector<RenderGraphTextureViewInstance> views;
     std::array<MultiviewGraphTarget, 2> targets{};
     std::array<MultiviewGraphGeometry, 1> geometry{};
     std::array<RenderGraphPassWorkload, 1> workloads{};
@@ -16,7 +16,23 @@ struct MultiviewPacket {
     std::uint64_t parameters{}, secondView{};
     MultiviewPublication publication{1, 1, 1, 1, 11, 1};
 
-    MultiviewPacket(NativeGraphFixture &fixture, const bool instanced) : native(fixture, true) {
+    MultiviewPacket(NativeGraphFixture &fixture, const bool instanced, const bool motion = false,
+                    const RenderTextureFormat motionFormat = RenderTextureFormat::Rgba16Float)
+        : native(fixture, true, motion ? motionFormat : RenderTextureFormat::Rgba8Unorm,
+                 motion ? RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment : RenderTextureUsage::RenderAttachment) {
+        if (motion)
+            ++publication.frame;
+        const std::size_t parameterBytes = motion ? 256 : 224;
+        auto layout = MultiviewTest::Layout();
+        if (motion) {
+            using namespace MultiviewShaderParameterIds;
+            layout.parameters = {{CurrentLocalToClip, Buffer, ShaderValueType::Float32, 4, 4, 2, 0, 64, 16, true, true},
+                                 {PreviousLocalToClip, Buffer, ShaderValueType::Float32, 4, 4, 2, 128, 64, 16, true, true}};
+            native.material.state.depthFormat = RenderTextureFormat::Depth32Float;
+            native.material.state.depthTest = true;
+            native.material.state.depthWrite = true;
+            native.material.state.depthCompare = RenderCompareFunction::LessEqual;
+        }
         native.material.device = NativeHandle<VkDevice>(1);
         native.material.state.viewRouting = instanced ? RenderViewRouting::VertexLayer : RenderViewRouting::SingleView;
         backend.native = &native.material;
@@ -26,8 +42,8 @@ struct MultiviewPacket {
         MaterialBindingDescriptor descriptor{.material = {1},
                                              .revision = 1,
                                              .pipeline = {{1}, 10, 1},
-                                             .layout = MultiviewTest::Layout(),
-                                             .resources = {{{1}, 0, MaterialBufferBinding{{{1}, 5, 1}, 0, 224}}}};
+                                             .layout = std::move(layout),
+                                             .resources = {{{1}, 0, MaterialBufferBinding{{{1}, 5, 1}, 0, parameterBytes}}}};
         const auto published = table->Publish(descriptor);
         REQUIRE(published.HasValue());
         material = SubmissionTest::Take(table->Acquire(published.Value().binding));
@@ -42,22 +58,67 @@ struct MultiviewPacket {
                                             instanced ? MultiviewExecutionPolicy::RequireInstanced : MultiviewExecutionPolicy::Multipass);
         REQUIRE(snapshot.HasValue());
         scene = std::make_shared<const MultiviewSceneSnapshot>(snapshot.Value());
-        std::array<std::byte, 224> data{};
-        const RenderBufferDescriptor buffer{224, RenderBufferUsage::Uniform, RenderBufferAccess::HostVisible};
+        std::vector<std::byte> data(parameterBytes);
+        if (motion) {
+            auto priorPublication = publication;
+            --priorPublication.frame;
+            auto priorInstances = instances;
+            priorInstances.front().localToWorld.values[12] = 0.125F;
+            const auto prior = MultiviewSceneSnapshot::Extract(priorPublication, priorPublication, sourceViews, priorInstances,
+                                                               {32, true, true, false}, MultiviewExecutionPolicy::Multipass);
+            REQUIRE(prior.HasValue());
+            const std::array ids{RenderMotionObjectId{1}};
+            const MultiviewMotionFrame priorFrame{priorPublication, 1, 1000}, currentFrame{publication, 2, 2000};
+            MultiviewMotionHistory history;
+            REQUIRE(history.Stage(priorFrame, prior.Value(), ids));
+            REQUIRE(history.Publish(priorFrame));
+            REQUIRE(history.Stage(currentFrame, *scene, ids));
+            REQUIRE(PackMultiviewMotionShaderParameters(material->Descriptor().layout, history, currentFrame, 0, data).HasValue());
+        }
+        const RenderBufferDescriptor buffer{parameterBytes, RenderBufferUsage::Uniform, RenderBufferAccess::HostVisible};
         const auto cost = fixture.resources.QueryBufferMemoryCost(buffer);
         REQUIRE(cost.HasValue());
         parameters = SubmissionTest::Take(fixture.resources.CreateBuffer(buffer, data, TestSupport::PlacementFor(cost.Value(), 8)));
-        secondView = SubmissionTest::Take(fixture.resources.CreateTextureView({.texture = {{1}, 3, 1}, .baseLayer = 1}, native.texture));
-        auto prepared = MultiviewTest::Graph({{1}, 3, 1}, {{1}, 1, 1}, {{1}, 2, 1}, {{1}, 5, 1});
+        secondView = SubmissionTest::Take(
+            fixture.resources.CreateTextureView({.texture = {{1}, 3, 1}, .format = native.material.state.colorFormat, .baseLayer = 1},
+                                                native.texture));
+        const RenderTextureHandle depthHandle = motion ? RenderTextureHandle{{1}, 7, 1} : RenderTextureHandle{};
+        auto prepared = MultiviewTest::Graph({{1}, 3, 1}, {{1}, 1, 1}, {{1}, 2, 1}, {{1}, 5, 1}, depthHandle);
+        const auto depth = prepared.depth;
         const auto color = prepared.color, vertex = prepared.vertex, index = prepared.index, uniform = prepared.uniform;
         graph.emplace(std::move(prepared.graph));
         const auto pass = graph->Passes().front().pass;
-        resources = {{{color, native.texture}, {vertex, native.vertex}, {index, native.index}, {uniform, parameters}}};
+        resources = {{color, native.texture}, {vertex, native.vertex}, {index, native.index}, {uniform, parameters}};
         meshes = {{{{{1}, 2, 1}, native.mesh}}};
-        views = {{{{{1}, 4, 1}, native.view}, {{{1}, 6, 1}, secondView}}};
+        views = {{{{1}, 4, 1}, native.view}, {{{1}, 6, 1}, secondView}};
         targets = {{{color, {}, {{1}, 4, 1}, {}, {0, 0, 8, 8}, 0}, {color, {}, {{1}, 6, 1}, {}, {0, 0, 8, 8}, 1}}};
+        if (motion) {
+            const RenderTextureDescriptor descriptor{.extent = {8, 8},
+                                                     .format = RenderTextureFormat::Depth32Float,
+                                                     .layerCount = 2,
+                                                     .usage = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment};
+            const auto cost = SubmissionTest::Take(fixture.resources.QueryTextureMemoryCost(descriptor));
+            const auto texture = SubmissionTest::Take(fixture.resources.CreateTexture(descriptor, {}, TestSupport::PlacementFor(cost, 9)));
+            resources.push_back({depth, texture});
+            for (std::uint32_t eye = 0; eye < targets.size(); ++eye) {
+                const RenderTextureViewHandle handle{{1}, 8 + eye, 1};
+                const auto nativeView = SubmissionTest::Take(fixture.resources.CreateTextureView({.texture = depthHandle,
+                                                                                                  .format = descriptor.format,
+                                                                                                  .aspect = RenderTextureAspect::Depth,
+                                                                                                  .baseLayer = eye},
+                                                                                                 texture));
+                views.push_back({handle, nativeView});
+                targets[eye].depth = depth;
+                targets[eye].depthView = handle;
+                targets[eye].depthArrayLayer = eye;
+            }
+        }
         geometry = {{{0, vertex, index, uniform, material}}};
         workloads = {{{pass, RenderGraphMultiview{scene, publication, targets, geometry}}}};
+        if (motion) {
+            Workload().output = MultiviewOutput::MotionDepth;
+            Workload().clearColor = {0, 0, 0, 0};
+        }
     }
 
     RenderGraphMultiview &Workload() {
@@ -99,6 +160,44 @@ TEST_CASE("Vulkan multiview emits real indexed multipass and instanced view indi
     fixture.commandState.state.Complete();
     CHECK(fixture.graph.PollDrain().Value() == RenderBackendDrainProgress::Drained);
     CHECK(fixture.lease.releases == 1);
+}
+
+TEST_CASE("Vulkan motion graph records paired floating and depth attachments only with exact forward state",
+          "[vulkan][multiview][motion][command]") {
+    auto format = RenderTextureFormat::Rgba16Float;
+    bool admitted = true;
+    bool changeClear = false;
+    bool changeWrite = false;
+    SECTION("motion plus matching depth") {}
+    SECTION("ordinary color format") {
+        format = RenderTextureFormat::Rgba8Unorm;
+        admitted = false;
+    }
+    SECTION("clear cannot imply valid motion") {
+        changeClear = true;
+        admitted = false;
+    }
+    SECTION("pipeline must write matching depth") {
+        changeWrite = true;
+        admitted = false;
+    }
+    NativeGraphFixture fixture;
+    MultiviewPacket packet(fixture, false, true, format);
+    if (changeClear)
+        packet.Workload().clearColor.alpha = 1.0F;
+    if (changeWrite)
+        packet.native.material.state.depthWrite = false;
+    RenderGraphLeaseTransfer transfer;
+    REQUIRE(fixture.graph.BeginFrame({1}).HasValue());
+    const auto recorded = fixture.graph.ExecuteGraph(packet.Request(fixture, transfer));
+    INFO((recorded.HasError() ? recorded.ErrorValue().message : "motion recorded"));
+    CHECK(recorded.HasValue() == admitted);
+    CHECK(fixture.encoded.drawCalls.size() == (admitted ? 2 : 0));
+    CHECK(fixture.encoded.renderingBegins == (admitted ? 2 : 0));
+    if (admitted)
+        REQUIRE(fixture.graph.SubmitFrame({1}).HasValue());
+    else
+        fixture.graph.AbortFrame({1});
 }
 
 TEST_CASE("Vulkan multiview rejects late invalid views materials work bounds and stale owners before any native recording",

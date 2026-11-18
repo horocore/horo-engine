@@ -1,9 +1,11 @@
 #include "Horo/Runtime/Render/MultiviewExtractionErrors.h"
 #include "Horo/Runtime/Render/MultiviewMotionHistory.h"
 #include "support/AllocationProbe.h"
+#include "support/renderer/MultiviewTestSupport.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <cstring>
 #include <limits>
 #include <optional>
 
@@ -71,6 +73,29 @@ namespace Horo::Render {
             CHECK(right->worldToClip == firstViews[1].worldToClip);
             CHECK_FALSE(history.Previous(initial, keys[0], 0));
             CHECK_FALSE(history.Previous(next, keys[0], 2));
+
+            using namespace MultiviewShaderParameterIds;
+            auto layout = MultiviewTest::Layout();
+            layout.parameters = {{CurrentLocalToClip, Buffer, ShaderValueType::Float32, 4, 4, 2, 0, 64, 16, true, true},
+                                 {PreviousLocalToClip, Buffer, ShaderValueType::Float32, 4, 4, 2, 128, 64, 16, true, true}};
+            std::array<std::byte, 256> bytes{};
+            const auto before = Horo::Tests::AllocationProbe::Count();
+            const auto packed = PackMultiviewMotionShaderParameters(layout, history, next, 1, bytes);
+            const auto after = Horo::Tests::AllocationProbe::Count();
+            REQUIRE(packed.HasValue());
+            CHECK(packed.Value() == bytes.size());
+            CHECK(after == before);
+            std::array<float, 64> values{};
+            std::memcpy(values.data(), bytes.data(), bytes.size());
+            CHECK(values[12] == 0.2F);
+            CHECK(values[28] == 0.4F + 0.2F);
+            CHECK(values[44] == 0.2F + 0.1F);
+            CHECK(values[60] == 0.0F);
+            const auto packedBytes = bytes;
+            CHECK(PackMultiviewMotionShaderParameters(layout, history, initial, 1, bytes).HasError());
+            CHECK(PackMultiviewMotionShaderParameters(layout, history, next, 2, bytes).HasError());
+            CHECK(PackMultiviewMotionShaderParameters(layout, history, next, 1, std::span{bytes}.first(64)).HasError());
+            CHECK(bytes == packedBytes);
         }
 
         TEST_CASE("Multiview motion omits culled replaced and discontinuous predecessors", "[renderer][multiview][motion]") {
@@ -118,6 +143,7 @@ namespace Horo::Render {
             REQUIRE(history.Stage(now, extracted.Value(), keys));
             CHECK(history.Previous(now, keys[0], 0).has_value() == ready);
             CHECK_FALSE(history.Previous(now, keys[0], 1));
+            CHECK_FALSE(history.ReadDraw(now, 0));
             history.Reset();
             CHECK_FALSE(history.Publish(now));
             CHECK_FALSE(history.Previous(now, keys[0], 0));

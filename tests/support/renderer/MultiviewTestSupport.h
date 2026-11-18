@@ -37,18 +37,25 @@ namespace Horo::Render::MultiviewTest {
 
     struct GraphPacket {
         CompiledRenderGraphExecution graph;
-        RenderGraphResourceId color, vertex, index, uniform;
+        RenderGraphResourceId color, vertex, index, uniform, depth;
     };
 
     /** @brief Uses real portable authoring/synchronization for both injected and native GPU qualification. */
     inline GraphPacket Graph(const RenderTextureHandle colorHandle, const RenderBufferHandle vertexHandle,
-                             const RenderBufferHandle indexHandle, const RenderBufferHandle uniformHandle) {
+                             const RenderBufferHandle indexHandle, const RenderBufferHandle uniformHandle,
+                             const RenderTextureHandle depthHandle = {}) {
         auto builder = SubmissionTest::Take(RenderGraphBuilder::Create());
         const auto pass = SubmissionTest::Take(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
         const auto color = SubmissionTest::Take(builder.ImportTexture(colorHandle, RenderGraphResourceClass::External));
         const auto vertex = SubmissionTest::Take(builder.ImportBuffer(vertexHandle, RenderGraphResourceClass::Persistent));
         const auto index = SubmissionTest::Take(builder.ImportBuffer(indexHandle, RenderGraphResourceClass::Persistent));
         const auto uniform = SubmissionTest::Take(builder.ImportBuffer(uniformHandle, RenderGraphResourceClass::Persistent));
+        RenderGraphResourceId depth{};
+        if (depthHandle.IsValid()) {
+            depth = SubmissionTest::Take(builder.ImportTexture(depthHandle, RenderGraphResourceClass::External));
+            REQUIRE(builder.ExportResource(depth).HasValue());
+            REQUIRE(builder.AddUsage({pass, depth, RenderGraphAccess::Write, RenderGraphUsageKind::DepthStencilAttachment}).HasValue());
+        }
         REQUIRE(builder.ExportResource(color).HasValue());
         REQUIRE(builder.AddUsage({pass, color, RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment}).HasValue());
         REQUIRE(builder.AddUsage({pass, vertex, RenderGraphAccess::Read, RenderGraphUsageKind::VertexBuffer}).HasValue());
@@ -62,10 +69,12 @@ namespace Horo::Render::MultiviewTest {
                                             RenderGraphPipelineScope::Graphics,
                                             RenderGraphTextureLayout::NotApplicable,
                                             {1}};
-        const std::array initial{RenderGraphImportedState{color, {}, RenderGraphInitialContents::Discarded},
-                                 RenderGraphImportedState{vertex, input}, RenderGraphImportedState{index, input},
-                                 RenderGraphImportedState{uniform, input}};
+        std::vector initial{RenderGraphImportedState{color, {}, RenderGraphInitialContents::Discarded},
+                            RenderGraphImportedState{vertex, input}, RenderGraphImportedState{index, input},
+                            RenderGraphImportedState{uniform, input}};
+        if (depth.IsValid())
+            initial.push_back({depth, {}, RenderGraphInitialContents::Discarded});
         const auto sync = SubmissionTest::Take(SynthesizeRenderGraphSynchronization(authored, schedule, queues, initial));
-        return {SubmissionTest::Take(CompileRenderGraphExecution(authored, schedule, sync, queues)), color, vertex, index, uniform};
+        return {SubmissionTest::Take(CompileRenderGraphExecution(authored, schedule, sync, queues)), color, vertex, index, uniform, depth};
     }
 }  // namespace Horo::Render::MultiviewTest

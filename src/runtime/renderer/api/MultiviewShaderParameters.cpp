@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <memory>
 
 namespace Horo::Render {
     namespace {
@@ -35,6 +36,17 @@ namespace Horo::Render {
             return true;
         }
 
+        /** @brief Matches a verified motion shader block member without inventing ABI offsets or matrix order. */
+        const ShaderReflectedParameter *MotionField(const MaterialBindingLayout &layout, const ShaderParameterId id,
+                                                    const std::size_t viewCount) {
+            const auto found = std::ranges::find(layout.parameters, id, &ShaderReflectedParameter::id);
+            if (found == layout.parameters.end() || !found->active || found->binding != MultiviewShaderParameterIds::Buffer ||
+                found->type != ShaderValueType::Float32 || found->rows != 4 || found->columns != 4 || found->arrayCount < viewCount ||
+                found->arrayCount > MultiviewExtractionLimits::HardMaximumViews)
+                return nullptr;
+            return std::to_address(found);
+        }
+
         /** @brief Copies canonical mathematical row/column access into the packer's array-major row-major input. */
         void MatrixValues(const Math::Mat4 &matrix, const std::span<float, 16> output) {
             for (int row = 0; row < 4; ++row)
@@ -48,6 +60,41 @@ namespace Horo::Render {
         if (!Admits(layout, viewCount))
             return Result<std::size_t>::Failure(MakeError(MultiviewExtractionErrors::InvalidInput));
         return ComputeMaterialParameterBufferByteSize(layout, MultiviewShaderParameterIds::Buffer);
+    }
+
+    /** @copydoc MultiviewMotionParameterBytes */
+    Result<std::size_t> MultiviewMotionParameterBytes(const MaterialBindingLayout &layout, const std::size_t viewCount) {
+        using namespace MultiviewShaderParameterIds;
+        if (viewCount == 0 || layout.resources.size() != 1 || layout.parameters.size() != 2)
+            return Result<std::size_t>::Failure(MakeError(MultiviewExtractionErrors::InvalidInput));
+        const auto &buffer = layout.resources.front();
+        if (!buffer.active || buffer.id != Buffer || buffer.kind != ShaderResourceKind::UniformBuffer ||
+            buffer.access != ShaderResourceAccess::ReadOnly || buffer.arrayCount != 1 ||
+            !MotionField(layout, CurrentLocalToClip, viewCount) || !MotionField(layout, PreviousLocalToClip, viewCount))
+            return Result<std::size_t>::Failure(MakeError(MultiviewExtractionErrors::InvalidInput));
+        return ComputeMaterialParameterBufferByteSize(layout, Buffer);
+    }
+
+    /** @copydoc PackMultiviewMotionShaderParameters */
+    Result<std::size_t> PackMultiviewMotionShaderParameters(const MaterialBindingLayout &layout, const MultiviewMotionHistory &history,
+                                                            const MultiviewMotionFrame &frame, const std::uint32_t instanceIndex,
+                                                            const std::span<std::byte> destination) {
+        using namespace MultiviewShaderParameterIds;
+        const auto draw = history.ReadDraw(frame, instanceIndex);
+        if (!draw)
+            return Result<std::size_t>::Failure(MakeError(MultiviewExtractionErrors::StalePublication));
+        if (const auto size = MultiviewMotionParameterBytes(layout, draw->viewCount); size.HasError())
+            return Result<std::size_t>::Failure(size.ErrorValue());
+        std::array<float, MultiviewExtractionLimits::HardMaximumViews * 16> current{}, previous{};
+        for (std::size_t eye = 0; eye < draw->viewCount; ++eye) {
+            MatrixValues(draw->currentLocalToClip[eye], std::span<float, 16>{current.data() + eye * 16, 16});
+            MatrixValues(draw->previousLocalToClip[eye], std::span<float, 16>{previous.data() + eye * 16, 16});
+        }
+        const auto currentCount = MotionField(layout, CurrentLocalToClip, draw->viewCount)->arrayCount * 16;
+        const auto previousCount = MotionField(layout, PreviousLocalToClip, draw->viewCount)->arrayCount * 16;
+        const std::array values{MaterialParameterValue{CurrentLocalToClip, std::span<const float>{current}.first(currentCount)},
+                                MaterialParameterValue{PreviousLocalToClip, std::span<const float>{previous}.first(previousCount)}};
+        return PackMaterialParameterBinding(layout, Buffer, values, destination);
     }
 
     /** @copydoc PackMultiviewShaderParameters */
