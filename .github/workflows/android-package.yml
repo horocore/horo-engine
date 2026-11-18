@@ -42,7 +42,18 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install --disable-pip-version-check --no-cache-dir --only-binary :all: cmake==3.31.6
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
+          for attempt in 1 2 3; do
+            if "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'; then
+              break
+            else
+              status=$?
+            fi
+            if (( attempt == 3 )); then
+              exit "$status"
+            fi
+            printf 'Android SDK install attempt %s failed (exit %s). Retrying the locked packages.\n' "$attempt" "$status" >&2
+            sleep "$((attempt * 5))"
+          done
           ninja_version=$(python3 -c 'import json; print(json.load(open("android/toolchain-lock.json"))["ninja"])')
           curl --proto =https --proto-redir =https --fail --location --retry 3 "https://github.com/ninja-build/ninja/releases/download/v$ninja_version/ninja-linux.zip" -o "$RUNNER_TEMP/ninja.zip"
           curl --proto =https --proto-redir =https --fail --location --retry 3 https://services.gradle.org/distributions/gradle-8.11.1-bin.zip -o "$RUNNER_TEMP/gradle.zip"
