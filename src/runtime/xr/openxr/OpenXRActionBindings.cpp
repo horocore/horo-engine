@@ -454,7 +454,7 @@ namespace Horo::XR::OpenXRInternal {
         for (std::size_t index = 0; index < profiles.size(); ++index) {
             XrInteractionProfileState state{XR_TYPE_INTERACTION_PROFILE_STATE};
             const auto result = profile(session, hands[index], &state);
-            if (XR_FAILED(result))
+            if (result != XR_SUCCESS)
                 return Result<Profiles>::Failure(NativeFailure("query interaction profile", result));
             if (state.type != XR_TYPE_INTERACTION_PROFILE_STATE || state.next != nullptr)
                 return Result<Profiles>::Failure(

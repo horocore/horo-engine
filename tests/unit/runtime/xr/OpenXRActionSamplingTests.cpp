@@ -132,4 +132,17 @@ namespace {
         REQUIRE(fixture.owner.Sample(session, plan, devices).HasValue());
     }
 
+    TEST_CASE("OpenXR profile queries reject session-loss results before exposing profile evidence", "[xr][openxr][actions]") {
+        ActionFixture fixture;
+        REQUIRE(fixture.Create().HasValue());
+        const auto session = fixture.session.Request().candidate;
+        fixture.script.profileResult = XR_SESSION_LOSS_PENDING;
+        const auto profiles = fixture.owner.Profiles(session);
+        REQUIRE(profiles.HasError());
+        CHECK(profiles.ErrorValue().code.Value() == XRErrors::OperationUnavailable.code.Value());
+        REQUIRE(fixture.owner.Sync(session).HasValue());
+        const std::array devices{fixture.Device()};
+        CHECK(fixture.owner.Sample(session, fixture.Plan(), devices).HasError());
+    }
+
 }  // namespace

@@ -691,6 +691,10 @@ bounded generation-scoped snapshot, and the host-composed XR/Input adapter joins
 the normal Input snapshot transaction before the cutoff. Each session-state transition
 invalidates the previous cutoff. Regaining focus or restarting a retained session
 requires a fresh publication before the host can borrow tracking again.
+OpenXR profile notifications also revoke the previous tracking sample. Confirming
+the already selected startup fallback preserves the published controller bindings.
+Loss or replacement of a confirmed profile retires the selected input source
+through the Play lifecycle before another input cutoff can publish XR values.
 
 Rendering-time view/head poses are a distinct predicted-frame snapshot. They may reduce
 visual latency but cannot overwrite the Input snapshot, a tick-assigned gameplay frame,

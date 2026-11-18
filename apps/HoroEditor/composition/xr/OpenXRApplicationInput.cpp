@@ -162,6 +162,28 @@ namespace Horo::Application::Internal {
         return input_.native->PreparePresentation({getProc_});
     }
 
+    /** @copydoc OpenXRApplicationSession::RefreshInputProfiles */
+    Result<void> OpenXRApplicationSession::RefreshInputProfiles(const XRSessionId &session, const XRInteractionProfileId fallback) {
+        if (auto current = Current(); current.HasError())
+            return current;
+        if (!input_.native || !input_.bindings || !input_.projection)
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
+        const auto observed = input_.native->Profiles(session);
+        if (observed.HasError())
+            return Result<void>::Failure(observed.ErrorValue());
+        if (auto current = Current(); current.HasError())
+            return current;
+        for (std::size_t index = 0; index < input_.profiles.size(); ++index) {
+            const auto previous = input_.profiles[index].profile;
+            const auto current = observed.Value()[index].profile;
+            // Confirming the configured fallback resolves the same controls as the pre-running selection.
+            if (current != previous && (previous.value != 0 || current != fallback))
+                return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale, "OpenXR controller profile changed."));
+        }
+        input_.profiles = observed.Value();
+        return Result<void>::Success();
+    }
+
     /** @copydoc OpenXRApplicationSession::AppendInput */
     Result<void> OpenXRApplicationSession::AppendInput(const XRSessionLifecycle &sessions, const XRActionBindingCoordinator &coordinator,
                                                        RuntimeInternal::XRTrackingPublication &publication, const OpenXRInputClock &clock,

@@ -238,6 +238,13 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<void> BindInput(const XR::XRSessionId &candidate, XR::XRActionBindingCoordinator &coordinator,
                                              const Input::InputRouter &router, const OpenXRApplicationBindings &bindings);
+        /** @brief Revalidates the exact attached input plan after a runtime profile notification.
+         * @param session Current owner-issued session from the event's canonical lifecycle.
+         * @param fallback Exact generic profile declared by the same immutable installer bindings.
+         * @return Success for unchanged evidence or confirmation of the selected startup fallback. A profile replacement or loss
+         * returns an actionable failure for host-owned retirement and neutralization.
+         */
+        [[nodiscard]] Result<void> RefreshInputProfiles(const XR::XRSessionId &session, XR::XRInteractionProfileId fallback);
         /** @brief Samples and appends the SAME prepared native source at the actual App collection cutoff.
          * @param sessions Sole canonical session authority, whose current focus gates scalar sampling.
          * @param coordinator SAME issued candidate's actual binding revision/plan owner.

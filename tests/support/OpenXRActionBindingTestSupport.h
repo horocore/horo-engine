@@ -19,6 +19,7 @@ namespace Horo::Tests::OpenXRAction {
         std::vector<std::pair<std::string, XrPath>> paths;
         std::vector<std::string> actionNames;
         std::array<XrPath, 2> currentProfiles{};
+        XrResult profileResult{XR_SUCCESS};
         unsigned liveSets{};
         unsigned liveActions{};
         unsigned suggestions{};
@@ -103,7 +104,8 @@ namespace Horo::Tests::OpenXRAction {
             REQUIRE(info->subactionPaths[0] != XR_NULL_PATH);
             if (info->actionType == XR_ACTION_TYPE_POSE_INPUT) {
                 REQUIRE(active->tracking.enabled);
-                REQUIRE(std::string_view{info->localizedActionName} == "Grip");
+                const std::string_view label{info->localizedActionName};
+                REQUIRE((label == "Grip" || label == "Aim"));
             } else {
                 REQUIRE(info->actionType == active->sample.expectedType);
                 REQUIRE(std::string_view{info->localizedActionName} == "Select");
@@ -155,7 +157,8 @@ namespace Horo::Tests::OpenXRAction {
                 return XR_ERROR_ACTIONSET_NOT_ATTACHED;
             const auto left = std::ranges::find(active->paths, std::string{"/user/hand/left"}, &std::pair<std::string, XrPath>::first);
             state->interactionProfile = active->currentProfiles[left->second == hand ? 0 : 1];
-            return Script::Record("profile");
+            const auto result = Script::Record("profile");
+            return XR_FAILED(result) ? result : active->profileResult;
         }
 
         static XRAPI_ATTR XrResult XRAPI_CALL Sync(XrSession, const XrActionsSyncInfo *info) {

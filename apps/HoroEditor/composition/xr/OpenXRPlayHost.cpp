@@ -176,7 +176,10 @@ namespace Horo::Application::Internal {
                 RevokeEventAdmission();
                 return Result<void>::Failure(observed.ErrorValue());
             }
-            if (!ApplyEventObservation(observed.Value()))
+            const auto applied = ApplyEventObservation(observed.Value());
+            if (applied.HasError())
+                return Result<void>::Failure(applied.ErrorValue());
+            if (!applied.Value())
                 return Result<void>::Success();
         }
         if (auto tail = ProgressTail(); tail.HasError()) {
@@ -187,7 +190,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc OpenXRPlayHost::ApplyEventObservation */
-    bool OpenXRPlayHost::ApplyEventObservation(const NativeSessionEventObservation &observed) noexcept {
+    Result<bool> OpenXRPlayHost::ApplyEventObservation(const NativeSessionEventObservation &observed) {
         eventsPending_ = observed.morePending;
         if (observed.loss == NativeSessionEventLoss::Instance) {
             instanceLost_ = true;
@@ -196,17 +199,22 @@ namespace Horo::Application::Internal {
         if (observed.loss != NativeSessionEventLoss::None || observed.exitRequested) {
             if (scene_)
                 scene_->Retire(*this);
-            return false;
+            return Result<bool>::Success(false);
         }
         if (observed.bindingsChanged) {
-            RevokeEventAdmission();
-            return false;
+            tracking_.Revoke();
+            if (auto refreshed =
+                    composition_.session.RefreshInputProfiles(sessions_.Snapshot().session, composition_.bindings->schema.genericFallback);
+                refreshed.HasError()) {
+                RevokeEventAdmission();
+                return Result<bool>::Failure(refreshed.ErrorValue());
+            }
         }
         if (observed.referenceChange && scene_ && scene_->projection) {
             if (observed.referenceChange->kind == XRSpaceKind::Stage) {
                 const auto decision = scene_->projection->plan.Decision(XRCapability::StageSpace).state;
                 if (decision != XRFeatureDecisionState::Required && decision != XRFeatureDecisionState::OptionalEnabled)
-                    return false;
+                    return Result<bool>::Success(false);
             }
             if (!scene_->retiring) {
                 lastReferenceChange_ = observed.referenceChange;
@@ -217,7 +225,7 @@ namespace Horo::Application::Internal {
                 lastReferenceChange_ = observed.referenceChange;
             }
         }
-        return !observed.morePending;
+        return Result<bool>::Success(!observed.morePending);
     }
 
     /** @copydoc OpenXRPlayHost::RevokeEventAdmission */

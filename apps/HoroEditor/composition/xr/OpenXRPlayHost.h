@@ -181,9 +181,11 @@ namespace Horo::Application::Internal {
         /** @brief Checks current owner lane and absence of Play work before a private session test. */
         [[nodiscard]] bool SetupIdle() const noexcept;
         /** @brief Captures a bounded event result and revokes the exact Scene/Input authority when it cannot continue.
-         * @return True when the ordinary frame tail can continue for the same native owner.
+         * @param observed Exact batch of normalized events from this native owner.
+         * @return True when the ordinary frame tail can continue, false on orderly retirement or pending events,
+         * or the original profile/admission failure when a changed input plan must retire.
          */
-        [[nodiscard]] bool ApplyEventObservation(const XR::OpenXRInternal::NativeSessionEventObservation &observed) noexcept;
+        [[nodiscard]] Result<bool> ApplyEventObservation(const XR::OpenXRInternal::NativeSessionEventObservation &observed);
         struct FrameState;
         [[nodiscard]] Result<void> ProgressTail();
         [[nodiscard]] Result<void> AbortRenderFrame();

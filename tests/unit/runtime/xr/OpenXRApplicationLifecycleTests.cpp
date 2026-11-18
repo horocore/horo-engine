@@ -11,6 +11,7 @@
 #include "unit/editor/SceneDocumentHierarchyFixture.h"
 
 #include <algorithm>
+#include <catch2/generators/catch_generators.hpp>
 #include <functional>
 #include <type_traits>
 #include <utility>
@@ -56,7 +57,7 @@ namespace Horo::Tests::OpenXRApplication {
         /** @brief Owns real installation, native preparation and canonical scene/input parents through explicit cleanup. */
         struct ApplicationFixture final {
             ApplicationNativeScript script;
-            OpenXRProduct::InstalledProductFixture product{HORO_TEST_OPENXR_LOADER};
+            OpenXRProduct::InstalledProductFixture product;
             ConfigurationService configuration{XrSchema()};
             PreparedGraphicsPort graphics;
             std::unique_ptr<ApplicationVulkanFixture> vulkan;
@@ -89,7 +90,8 @@ namespace Horo::Tests::OpenXRApplication {
                                         const XR::XRProjectFeaturePolicy depth = XR::XRProjectFeaturePolicy::Unrequested,
                                         const XR::XRProjectFeaturePolicy hands = XR::XRProjectFeaturePolicy::Unrequested,
                                         const XR::XRProjectFeaturePolicy stage = XR::XRProjectFeaturePolicy::Unrequested,
-                                        const bool synthesis = false) {
+                                        const bool synthesis = false, std::optional<std::string> controllerBindings = std::nullopt)
+                : product{HORO_TEST_OPENXR_LOADER, std::move(controllerBindings)} {
                 ConfigurationResolutionRequest request;
                 request.invocation.emplace(SettingKey{"xr.enabled"}, ConfigurationInputValue{true, std::nullopt});
                 if (depth != XR::XRProjectFeaturePolicy::Unrequested) {
@@ -117,8 +119,7 @@ namespace Horo::Tests::OpenXRApplication {
                     script.native.synthesisExtension = true;
                     ++script.native.extensionCount;
                 }
-                REQUIRE(bindings->poses.empty());
-                // This zero-pose Play composition reserves five canonical spaces before native activation.
+                // Play reserves five canonical spaces besides any authored controller pose spaces.
                 request.invocation.emplace(SettingKey{"xr.limits.spaces"}, ConfigurationInputValue{maximumSpaces, std::nullopt});
                 REQUIRE(configuration.ResolveAndCommit(request).HasValue());
                 const auto settings = RequireValue(XR::ResolveXRProjectSettings(configuration.Snapshot()));
@@ -243,7 +244,7 @@ namespace Horo::Tests::OpenXRApplication {
             Input::InputActionCollection InputPort() {
                 const std::vector<Input::ActionDescriptor> registered{
                     {Input::ActionId{"select"},
-                     Input::ActionValueType::Digital,
+                     bindings->schema.actions.front().valueType,
                      Input::InputContextId{"gameplay"},
                      true,
                      {{.kind = Input::BindingControlKind::Key, .key = Input::Key::Space}}}};
@@ -799,6 +800,76 @@ namespace Horo::Tests::OpenXRApplication {
             CHECK(report.actions.front().deviceGeneration == 3);
             CHECK(report.actions.front().active);
         }
+    }
+
+    TEST_CASE("Installed XR Play preserves controller input through startup profile confirmation", "[xr][application][controller]") {
+        using enum XR::XRProjectFeaturePolicy;
+        using enum Input::ActionValueType;
+        using Editor::EditorXrInspectionStatus;
+        const auto type = GENERATE(Digital, Axis1D, Axis2D);
+        const bool aim = type == Axis2D;
+        const std::string profilePath = "/interaction_profiles/oculus/touch_controller";
+        auto document = OpenXRProduct::Json::parse(OpenXRProduct::InstalledProductFixture::BindingDocument());
+        document["profiles"][0]["path"] = profilePath;
+        document["actions"][0]["type"] = static_cast<unsigned>(type);
+        document["controls"][0]["type"] = static_cast<unsigned>(type);
+        document["controls"][0]["path"] = type == Digital  ? "/user/hand/left/input/thumbstick/touch"
+                                          : type == Axis1D ? "/user/hand/left/input/trigger/value"
+                                                           : "/user/hand/left/input/thumbstick";
+        document["poses"].push_back({{"profile", 1},
+                                     {"set", 1},
+                                     {"role", static_cast<unsigned>(XR::XRTrackedDeviceRole::LeftController)},
+                                     {"kind", static_cast<unsigned>(aim ? XR::XRTrackedPoseKind::Aim : XR::XRTrackedPoseKind::Grip)},
+                                     {"path", aim ? "/user/hand/left/input/aim/pose" : "/user/hand/left/input/grip/pose"},
+                                     {"label", aim ? "Aim" : "Grip"}});
+        ApplicationFixture fixture{true, 6, Unrequested, Unrequested, Unrequested, false, document.dump()};
+        fixture.script.actions.tracking.enabled = true;
+        fixture.script.actions.sample.expectedType = type == Digital  ? XR_ACTION_TYPE_BOOLEAN_INPUT
+                                                     : type == Axis1D ? XR_ACTION_TYPE_FLOAT_INPUT
+                                                                      : XR_ACTION_TYPE_VECTOR2F_INPUT;
+        auto scene = PublishPlay(fixture);
+        const auto generation = fixture.play->ReadInspection().sessionGeneration;
+        REQUIRE(generation != 0);
+        auto cutoff = std::make_unique<AppInputSample>(*fixture.play);
+        auto *observed = cutoff.get();
+        REQUIRE(fixture.scheduler->AddParticipant(std::move(cutoff)).HasValue());
+        RequireValue(fixture.scheduler->Startup());
+
+        const auto runCutoff = [&] {
+            RequireValue(fixture.scheduler->RunFrame());
+            REQUIRE(observed->result.has_value());
+            RequireValue(*observed->result);
+            return fixture.router.ReadAction(fixture.inputContext, Input::ActionId{"select"});
+        };
+        const auto before = runCutoff();
+        CHECK(before.down);
+        CHECK(before.x == (type == Digital ? 1.0F : type == Axis1D ? 0.5F : 0.25F));
+        CHECK(before.y == (type == Axis2D ? -0.5F : 0.0F));
+        const auto initial = fixture.play->ReadInspection();
+        REQUIRE(initial.status == EditorXrInspectionStatus::Current);
+        REQUIRE(initial.trackingRevision != 0);
+
+        fixture.script.actions.currentProfiles[0] = fixture.script.actions.Find(profilePath);
+        REQUIRE(fixture.script.actions.currentProfiles[0] != XR_NULL_PATH);
+        fixture.script.events.interactionProfileChanged = true;
+        RequireValue(fixture.play->PollEvents());
+        CHECK(fixture.play->ReadInspection().status == EditorXrInspectionStatus::WaitingForSample);
+        const auto confirmed = runCutoff();
+        CHECK(confirmed.down);
+        CHECK(confirmed.x == before.x);
+        CHECK(confirmed.y == before.y);
+        const auto refreshed = fixture.play->ReadInspection();
+        CHECK(refreshed.sessionGeneration == generation);
+        CHECK(refreshed.bindingRevision == initial.bindingRevision);
+        CHECK(refreshed.trackingRevision > initial.trackingRevision);
+
+        fixture.script.actions.currentProfiles[0] = XR_NULL_PATH;
+        fixture.script.events.interactionProfileChanged = true;
+        const auto loss = fixture.play->PollEvents();
+        REQUIRE(loss.HasError());
+        CHECK(loss.ErrorValue().code.Value() == XR::XRErrors::TrackingSnapshotStale.code.Value());
+        CHECK(fixture.play->ReadInspection().trackingRevision == 0);
+        CHECK_FALSE(runCutoff().down);
     }
 
     TEST_CASE("Real installed Play samples bounded hands before Input and revokes candidates on focus or invalid evidence",
