@@ -201,6 +201,7 @@ namespace Horo::Tests::OpenXRAction {
         CHECK(grip.active);
         CHECK(grip.pose.source.kind == XRSpaceKind::Action);
         CHECK(grip.pose.session == session);
+        CHECK(grip.pose.target.kind == XRSpaceKind::Local);
         CHECK(grip.pose.time == fixture.Time());
         CHECK(grip.pose.source.worldOriginRevision == fixture.origin);
         CHECK(std::ranges::count(fixture.actions.session.script.calls, "locate-space") == 2);
@@ -426,7 +427,18 @@ namespace Horo::Tests::OpenXRAction {
         const auto world = fixture.actions.owner.WorldSpace(fixture.actions.session.Request().candidate);
         REQUIRE(world.HasValue());
         CHECK(world.Value().kind == XRSpaceKind::World);
-        CHECK(fixture.actions.owner.BorrowWorldSpace(world.Value()).HasValue());
+        const auto nativeWorld = fixture.actions.owner.BorrowWorldSpace(world.Value());
+        REQUIRE(nativeWorld.HasValue());
+        fixture.Sync();
+        const auto poses =
+            fixture.actions.owner.ObserveWorldPoses(fixture.actions.session.Request().candidate, fixture.Time(), fixture.origin);
+        REQUIRE(poses.HasValue());
+        REQUIRE(poses.Value().Poses().size() == 2);
+        for (const auto &pose : poses.Value().Poses())
+            CHECK(pose.pose.target == world.Value());
+        CHECK(fixture.actions.script.tracking.locatedBase == nativeWorld.Value());
+        CHECK(std::ranges::count(fixture.actions.session.script.calls, "locate-space") == 2);
+        CHECK(fixture.Sample().HasError());
         auto stale = world.Value();
         stale.worldOriginRevision = IdentityValue<XRWorldOriginRevision>(2);
         CHECK(fixture.actions.owner.BorrowWorldSpace(stale).HasError());

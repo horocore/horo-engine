@@ -1210,6 +1210,78 @@ namespace Horo::Tests::OpenXRApplication {
         REQUIRE(RequireValue(fixture.ClosePlay()));
     }
 
+    TEST_CASE("Installed Play exposes exact player-scoped interaction geometry from its committed tracking cutoff",
+              "[xr][application][interaction]") {
+        using enum XR::XRProjectFeaturePolicy;
+        auto document = OpenXRProduct::Json::parse(OpenXRProduct::InstalledProductFixture::BindingDocument());
+        document["poses"].push_back({{"profile", 1},
+                                     {"set", 1},
+                                     {"role", static_cast<unsigned>(XR::XRTrackedDeviceRole::LeftController)},
+                                     {"kind", static_cast<unsigned>(XR::XRTrackedPoseKind::Aim)},
+                                     {"path", "/user/hand/left/input/aim/pose"},
+                                     {"label", "Aim"}});
+        ApplicationFixture fixture{true, 6, Unrequested, OptionalDisable, Unrequested, false, document.dump()};
+        fixture.script.actions.tracking.enabled = true;
+        constexpr Input::PlayerId player = 7;
+        auto scene = PublishPlay(fixture, player);
+        CHECK(fixture.play->ReadInteractionSources(player).HasError());
+        auto cutoff = std::make_unique<AppInputSample>(*fixture.play);
+        auto *observed = cutoff.get();
+        RequireValue(fixture.scheduler->AddParticipant(std::move(cutoff)));
+        RequireValue(fixture.scheduler->Startup());
+        const auto sample = [&] {
+            RequireValue(fixture.scheduler->RunFrame());
+            REQUIRE(observed->result.has_value());
+            RequireValue(*observed->result);
+        };
+        sample();
+        CHECK(fixture.play->ReadInteractionSources(2).HasError());
+        const auto sources = RequireValue(fixture.play->ReadInteractionSources(player));
+        const auto source = [&](const XR::XRTrackedDeviceRole role) {
+            const auto found = std::ranges::find(sources.Devices(), role, &XR::XRTrackedDeviceRecord::role);
+            REQUIRE(found != sources.Devices().end());
+            return found->id;
+        };
+        const auto controller = source(XR::XRTrackedDeviceRole::LeftController);
+        const auto hand = source(XR::XRTrackedDeviceRole::LeftHand);
+        const auto confidence = XR::XRTrackingConfidence::High;
+        const std::array probes{XR::XRInteractionProbe{controller, XR::XRControllerInteractionPose::Aim,
+                                                       XR::XRInteractionRayProbe{{0, 0, -1}, 6}, confidence},
+                                XR::XRInteractionProbe{hand, XR::XRHandJoint::IndexTip, XR::XRInteractionDirectProbe{}, confidence},
+                                XR::XRInteractionProbe{hand, XR::XRHandJoint::IndexTip, XR::XRInteractionProximityProbe{0.3F}, confidence}};
+        const auto syncs = fixture.script.actions.syncs;
+        const auto handLocates = fixture.script.hands.locates;
+        const auto evidence = RequireValue(fixture.play->ReadInteractionCandidates(sources.Scope(), probes));
+        CHECK(fixture.script.actions.syncs == syncs);
+        CHECK(fixture.script.hands.locates == handLocates);
+        REQUIRE(evidence.Candidates().size() == probes.size());
+        CHECK(evidence.Cutoff() == sources.Scope().cutoff);
+        CHECK(evidence.Candidates()[0].device == controller);
+        CHECK(evidence.Candidates()[1].device == hand);
+        CHECK(evidence.Candidates()[0].space.kind == XR::XRSpaceKind::World);
+        CHECK(evidence.Candidates()[0].space == evidence.Candidates()[1].space);
+        CHECK(std::get<Math::Ray>(evidence.Candidates()[0].shape).maximumDistance == 6.0F);
+        const auto point = std::get<Math::Vec3>(evidence.Candidates()[1].shape);
+        const auto proximity = std::get<Math::BoundingSphere>(evidence.Candidates()[2].shape);
+        CHECK(proximity.center == point);
+        CHECK(proximity.radius == 0.3F);
+
+        sample();
+        const auto newer = RequireValue(fixture.play->ReadInteractionSources(player));
+        CHECK(newer.Scope().cutoff.tracking > sources.Scope().cutoff.tracking);
+        const auto stale = fixture.play->ReadInteractionCandidates(sources.Scope(), probes);
+        REQUIRE(stale.HasError());
+        CHECK(stale.ErrorValue().code.Value() == XR::XRErrors::TrackingSnapshotStale.code.Value());
+        fixture.script.events.Push(XR_SESSION_STATE_VISIBLE);
+        RequireValue(fixture.play->PollEvents());
+        CHECK(fixture.play->ReadInteractionSources(player).HasError());
+        CHECK(fixture.play->ReadInteractionCandidates(newer.Scope(), probes).HasError());
+        fixture.scheduler->Shutdown();
+        scene->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+        CHECK(fixture.play->ReadInteractionCandidates(newer.Scope(), probes).HasError());
+    }
+
     TEST_CASE("Real installed Play samples bounded hands before Input and revokes candidates on focus or invalid evidence",
               "[xr][application][play][hands]") {
         using enum XR::XRProjectFeaturePolicy;

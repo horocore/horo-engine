@@ -314,6 +314,66 @@ namespace Horo::Application::Internal {
         return composition_.session.ReadHandGestures(*snapshot);
     }
 
+    /** @copydoc OpenXRPlayHost::HasCurrentAssignedInput */
+    bool OpenXRPlayHost::HasCurrentAssignedInput() const {
+        if (!input_.router || !input_.port || !input_.port->AssignedPlayer())
+            return false;
+        auto port = *input_.port;
+        const auto refresh = input_.router->RefreshPlayerActionCollection(port);
+        return refresh.HasValue() && !refresh.Value();
+    }
+
+    /** @copydoc OpenXRPlayHost::CurrentInteractionTracking */
+    Result<const XRTrackingSnapshot *> OpenXRPlayHost::CurrentInteractionTracking(const Input::PlayerId player) const {
+        using Outcome = Result<const XRTrackingSnapshot *>;
+        if (const auto lane = Lane(); lane.HasError())
+            return Outcome::Failure(lane.ErrorValue());
+        if (!input_.port || input_.port->AssignedPlayer() != player)
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+        const auto *snapshot = tracking_.Current();
+        const auto state = sessions_.Snapshot();
+        if (!snapshot || !scene_ || !scene_->published || scene_->retiring || !state.admitsActions || eventsPending_ || !input_.admitted ||
+            input_.play != Editor::EditorPlayState::Playing || snapshot->Focus() != XRTrackingFocusState::Focused ||
+            snapshot->Visibility() != XRTrackingVisibilityState::Visible || snapshot->State() != XRTrackingState::Active)
+            return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
+        if (scene_->session != state.session || snapshot->Session() != state.session || snapshot->WorldOriginRevision() != input_.origin ||
+            !input_.coordinator || !input_.coordinator->Current() || input_.coordinator->Revision() != snapshot->BindingRevision() ||
+            !HasCurrentAssignedInput())
+            return Outcome::Failure(MakeError(XRErrors::TrackingSnapshotStale));
+        return Outcome::Success(snapshot);
+    }
+
+    /** @copydoc OpenXRPlayHost::ReadInteractionSources */
+    Result<OpenXRPlayInteractionSources> OpenXRPlayHost::ReadInteractionSources(const Input::PlayerId player) const {
+        using Outcome = Result<OpenXRPlayInteractionSources>;
+        const auto current = CurrentInteractionTracking(player);
+        if (current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        const auto &snapshot = *current.Value();
+        OpenXRPlayInteractionSources sources;
+        sources.scope_ = {DescribeXRInteractionCutoff(snapshot), scene_->scene, player};
+        using enum XRTrackedDeviceCapability;
+        for (const auto &device : snapshot.Devices()) {
+            const auto &capabilities = device.capabilities;
+            if (device.state == XRTrackedDeviceState::Tracked &&
+                (capabilities.Has(AimPose) || capabilities.Has(GripPose) || capabilities.Has(HandJoints)))
+                sources.devices_[sources.count_++] = device;
+        }
+        return Outcome::Success(std::move(sources));
+    }
+
+    /** @copydoc OpenXRPlayHost::ReadInteractionCandidates */
+    Result<XRInteractionCandidates> OpenXRPlayHost::ReadInteractionCandidates(const OpenXRPlayInteractionScope &scope,
+                                                                              const std::span<const XRInteractionProbe> probes) const {
+        using Outcome = Result<XRInteractionCandidates>;
+        const auto current = CurrentInteractionTracking(scope.player);
+        if (current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        if (scope.scene != scene_->scene)
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+        return BuildXRInteractionCandidates(*current.Value(), scope.cutoff, probes);
+    }
+
     /** @copydoc OpenXRPlayHost::BuildInputSnapshot */
     Result<void> OpenXRPlayHost::BuildInputSnapshot(const Runtime::FrameContext &context, const Input::RawInputSnapshot &raw) {
         if (auto lane = Lane(); lane.HasError())

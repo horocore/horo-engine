@@ -271,6 +271,14 @@ namespace Horo::XR::OpenXRInternal {
          */
         [[nodiscard]] Result<NativePoseObservations> ObservePoses(const XRSessionId &session, const XRTimeEvidence &time,
                                                                   XRWorldOriginRevision origin) const;
+        /** @brief Locates the existing simulation sources directly against this owner's calibrated World reference.
+         * @param session Exact active owner. @param time Current synchronized Input cutoff.
+         * @param origin Exact prepared origin revision.
+         * @return Complete World-relative observations or the original admission/native failure.
+         * @post Consumes the same Sync opportunity as ObservePoses and performs one locate per active source.
+         */
+        [[nodiscard]] Result<NativePoseObservations> ObserveWorldPoses(const XRSessionId &session, const XRTimeEvidence &time,
+                                                                       XRWorldOriginRevision origin) const;
         /** @brief Returns the distinct calibrated World identity after native creation and canonical binding.
          * @param session Exact active native owner. @return Current World space or typed unavailable/stale failure.
          */
@@ -506,6 +514,12 @@ namespace Horo::XR::OpenXRInternal {
         };
 
         struct Tracking final {
+            /** @brief An exact retained native reference paired with its matching canonical identity. */
+            struct LocationTarget final {
+                XrSpace space;
+                const XRCoordinateSpace &identity;
+            };
+
             std::vector<PoseAction> actions;
             std::optional<NativeTrackingSpaceRequest> request;
             XrSpace base{XR_NULL_HANDLE};
@@ -555,16 +569,17 @@ namespace Horo::XR::OpenXRInternal {
             [[nodiscard]] Result<void> ClosePoseActions(const TrackingContext &context);
             /** @brief Validates and normalizes one official locate result without inventing unavailable components. */
             [[nodiscard]] Result<XRPoseDescriptor> Locate(const TrackingContext &context, XrSpace source, const XRCoordinateSpace &identity,
-                                                          const XRTimeEvidence &time) const;
+                                                          const LocationTarget &target, const XRTimeEvidence &time) const;
             /** @brief Queries one action's activity then locates independently valid components, or publishes exact loss. */
             [[nodiscard]] Result<NativePoseObservation> LocateAction(const TrackingContext &context, const PoseAction &action,
-                                                                     const XRTimeEvidence &time) const;
+                                                                     const LocationTarget &target, const XRTimeEvidence &time) const;
             /** @brief Appends actual head evidence to the same fixed packet under the existing sampling operation.
+             * @param context Borrowed current action owner. @param target Exact chosen native reference and identity.
              * @param time Validated simulation cutoff. @param samples Candidate packet, never a committed snapshot.
              * @return Original native/pose failure without issuing device or session identity.
              */
-            [[nodiscard]] Result<void> AppendHeadObservation(const TrackingContext &context, const XRTimeEvidence &time,
-                                                             NativePoseObservations &samples) const;
+            [[nodiscard]] Result<void> AppendHeadObservation(const TrackingContext &context, const LocationTarget &target,
+                                                             const XRTimeEvidence &time, NativePoseObservations &samples) const;
             /** @brief Locates and validates the current native base-to-World presentation transform.
              * @param time Exact validated presentation prediction. @return Actual independent-validity pose or native failure.
              * @pre Called within the existing sampling operation between canonical currentness fences.
@@ -579,14 +594,21 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Rejects foreign control lanes before reading or mutating retained native ownership. */
         [[nodiscard]] Result<void> ControlLane() const;
 
+        enum class PoseReference : std::uint8_t {
+            Natural,
+            CalibratedWorld
+        };
+
         /** @brief One native sampling implementation; an explicit existing-device selection preserves legacy query filtering.
          * @param session Exact current native owner. @param time Current simulation-cutoff evidence.
          * @param origin Prepared origin. @param devices Existing runtime-owned records, or no selection for native discovery.
+         * @param reference Use the natural Local/Stage reference or the already calibrated World owner.
          * @return Complete normalized evidence; failed attempts consume their Sync opportunity.
          */
-        [[nodiscard]] Result<NativePoseObservations> CollectPoseObservations(
-            const XRSessionId &session, const XRTimeEvidence &time, XRWorldOriginRevision origin,
-            std::optional<std::span<const XRTrackedDeviceRecord>> devices) const;
+        [[nodiscard]] Result<NativePoseObservations> CollectPoseObservations(const XRSessionId &session, const XRTimeEvidence &time,
+                                                                             XRWorldOriginRevision origin,
+                                                                             std::optional<std::span<const XRTrackedDeviceRecord>> devices,
+                                                                             PoseReference reference) const;
         /** @brief Captures the existing request's borrowed catalogs before native creation and attachment. */
         [[nodiscard]] Result<void> Prepare(const NativeActionBindingRequest &request, std::uint32_t maximumActions);
         /** @brief Validates the bounded exact per-role output catalog and returns its native action count. */

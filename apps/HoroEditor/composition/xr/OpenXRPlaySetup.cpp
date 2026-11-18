@@ -201,15 +201,6 @@ namespace Horo::Application::Internal {
         return std::ranges::find(routes, role, &OpenXRApplicationHaptic::role) != routes.end();
     }
 
-    /** @copydoc OpenXRPlayHost::HasCurrentHapticInput */
-    bool OpenXRPlayHost::HasCurrentHapticInput() const {
-        if (!input_.router || !input_.port || !input_.port->AssignedPlayer())
-            return false;
-        auto copy = *input_.port;
-        const auto refresh = input_.router->RefreshPlayerActionCollection(copy);
-        return refresh.HasValue() && !refresh.Value();
-    }
-
     /** @copydoc Editor::IEditorXrHapticPreview::CanPreviewHaptic */
     bool OpenXRPlayHost::CanPreviewHaptic(Editor::EditorXrHapticHand hand) const noexcept {
         using enum Editor::EditorXrHapticPreviewState;
@@ -233,7 +224,7 @@ namespace Horo::Application::Internal {
         const auto target = CaptureHapticTarget(intent.hand);
         if (!target)
             return Reply::Failure(MakeError(XRErrors::OperationUnavailable));
-        if (!HasCurrentHapticInput())
+        if (!HasCurrentAssignedInput())
             return Reply::Failure(MakeError(XRErrors::IdentityStale));
         if ((hapticPreview_ && (hapticPreview_->state == Queued || hapticPreview_->mayNeedStop)) ||
             nextHapticPreview_ == std::numeric_limits<std::uint64_t>::max())
@@ -267,7 +258,7 @@ namespace Horo::Application::Internal {
         const auto now = std::chrono::steady_clock::now();
         const bool expired = now >= preview.until;
         const auto target = CaptureHapticTarget(preview.intent.hand);
-        const bool revoked = preview.cancelRequested || target != preview.target || !HasCurrentHapticInput();
+        const bool revoked = preview.cancelRequested || target != preview.target || !HasCurrentAssignedInput();
         if (expired || revoked) {
             if (preview.mayNeedStop && sessions_.Snapshot().session == preview.target.session)
                 composition_.session.RequestHapticCancellation(preview.target.role);

@@ -285,7 +285,7 @@ namespace Horo::Application::Internal {
             return synced;
         if (!bindingsCurrent())
             return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
-        const auto poses = input_.native->ObservePoses(state.session, time.Value(), origin);
+        const auto poses = input_.native->ObserveWorldPoses(state.session, time.Value(), origin);
         if (poses.HasError())
             return Result<void>::Failure(poses.ErrorValue());
         if (auto current = Current(); current.HasError())

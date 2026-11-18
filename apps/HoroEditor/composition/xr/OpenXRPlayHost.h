@@ -6,6 +6,7 @@
 #include "EditorXrSceneGeometry.h"
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
+#include "Horo/XR/XRInteraction.h"
 #include "OpenXRApplicationSession.h"
 #include "OpenXRInputClock.h"
 #include "OpenXRSessionEvents.h"
@@ -53,6 +54,35 @@ namespace Horo::Application::Internal {
         Runtime::RuntimeDispatchSource dispatch;
         Duration fixedStep;
         Runtime::SceneObjectId trackingRoot;
+    };
+
+    /** @brief Committed XR interaction scope of the exact playing Scene and assigned local player. */
+    struct OpenXRPlayInteractionScope final {
+        XR::XRInteractionCutoff cutoff;
+        Runtime::SceneRuntimeId scene;
+        Input::PlayerId player{};
+
+        bool operator==(const OpenXRPlayInteractionScope &) const noexcept = default;
+    };
+
+    /** @brief Current controller/hand source identities for a synchronous query, without raw tracking. */
+    class OpenXRPlayInteractionSources final {
+    public:
+        /** @return Exact Scene/player/tracking fences to pass back for geometry. */
+        [[nodiscard]] const OpenXRPlayInteractionScope &Scope() const noexcept {
+            return scope_;
+        }
+
+        /** @return Tracked controller/hand records in the canonical snapshot's order. */
+        [[nodiscard]] std::span<const XR::XRTrackedDeviceRecord> Devices() const noexcept {
+            return std::span{devices_}.first(count_);
+        }
+
+    private:
+        friend class OpenXRPlayHost;
+        OpenXRPlayInteractionScope scope_;
+        std::array<XR::XRTrackedDeviceRecord, XR::XRTrackingSnapshotHardLimits::MaximumDevices> devices_{};
+        std::size_t count_{};
     };
 
     /** @brief Actual workspace Play adapter and application event/input owner, never a second frame scheduler.
@@ -176,6 +206,18 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> BuildInputSnapshot(const Runtime::FrameContext &context, const Input::RawInputSnapshot &raw);
         /** @brief Reads gesture candidates from the current focused cutoff. @return Bounded candidates or empty after loss. */
         [[nodiscard]] XR::XRHandGestureCandidates ReadHandGestures() const noexcept;
+        /** @brief Reads the selected Play host's current interaction sources on its owner lane.
+         * @param player Exact local player using the existing Play Input assignment.
+         * @return Copied sources or a typed unavailable, wrong-owner, or stale failure.
+         */
+        [[nodiscard]] Result<OpenXRPlayInteractionSources> ReadInteractionSources(Input::PlayerId player) const;
+        /** @brief Converts the same committed XR input cutoff into geometry for a synchronous consumer.
+         * @param scope Exact scope from ReadInteractionSources.
+         * @param probes Consumer-supplied shapes and live controller/hand devices.
+         * @return Bounded geometry or typed failure, with no interaction target or semantic action authority.
+         */
+        [[nodiscard]] Result<XR::XRInteractionCandidates> ReadInteractionCandidates(const OpenXRPlayInteractionScope &scope,
+                                                                                    std::span<const XR::XRInteractionProbe> probes) const;
         /** @brief Copies current reference identity and bounds from the selected Play session.
          * @param session Exact published session.
          * @return Immutable-by-copy evidence or typed stale/unavailable error.
@@ -203,6 +245,8 @@ namespace Horo::Application::Internal {
         void Neutralize(const XR::XRSessionId &session, std::uint64_t revision) noexcept override;
         [[nodiscard]] Result<void> AppendInput(const Runtime::FrameContext &context, const Input::InputCollectionFrame &frame);
         [[nodiscard]] Result<void> Lane() const;
+        /** @brief Borrows a current committed interaction cutoff for this synchronous owner-lane read only. */
+        [[nodiscard]] Result<const XR::XRTrackingSnapshot *> CurrentInteractionTracking(Input::PlayerId player) const;
         /** @brief Checks current owner lane and absence of Play work before a private session test. */
         [[nodiscard]] bool SetupIdle() const noexcept;
         /** @brief Captures a bounded event result and revokes the exact Scene/Input authority when it cannot continue.
@@ -334,8 +378,8 @@ namespace Horo::Application::Internal {
         [[nodiscard]] std::optional<HapticTarget> CaptureHapticTarget(Editor::EditorXrHapticHand hand) const noexcept;
         /** @brief Reports whether the signed binding plan declares an output for this exact controller role. */
         [[nodiscard]] bool HasHapticRoute(XR::XRTrackedDeviceRole role) const noexcept;
-        /** @brief Validates that no canonical Input rebind or context retirement is pending before cold submission. */
-        [[nodiscard]] bool HasCurrentHapticInput() const;
+        /** @brief Verifies the borrowed assigned Play Input context without refreshing or mutating it. */
+        [[nodiscard]] bool HasCurrentAssignedInput() const;
         std::optional<HapticPreviewRecord> hapticPreview_;
         std::uint64_t nextHapticPreview_{};
         bool gazeArmed_{}; /**< In-memory grant consumed by one actual Play preparation. */

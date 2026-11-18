@@ -753,6 +753,15 @@ and semantic action; gameplay alone validates use/grab intent; Character alone c
 collision-root movement. Source or target loss neutralizes capture/intents rather than
 reusing the last ray/hit.
 
+The selected Play owner exposes a synchronous interaction read for its committed Input
+cutoff and assigned local player. The existing Input pose sampling uses the same calibrated
+native World space for controller and hand evidence. Consumers select exact controller aim/grip or hand joint
+generations and provide the direction, distance, radius and confidence floor their own
+query needs. The read returns bounded World-space ray segments, points and proximity
+spheres in request order. Replaced or unfocused input and invalid probes reject the whole
+query. These live coordinates stay on the owner lane. World-space canvas resolution,
+contact ordering and focus or capture use the consuming domain's existing contracts.
+
 World-space canvases remain ordinary Runtime UI owner scopes with the same layout,
 localization, semantic accessibility and action-command model. Renderer owns per-view
 projection/depth/occlusion/pixels. A native composition layer does not become a second UI

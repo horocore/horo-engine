@@ -62,6 +62,7 @@ namespace Horo::Tests::OpenXRAction {
             bool enabled{};
             std::optional<XrBool32> poseActive;
             XrTime locatedTime{};
+            XrSpace locatedBase{XR_NULL_HANDLE};
             XrSpaceLocationFlags flags{XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT |
                                        XR_SPACE_LOCATION_POSITION_TRACKED_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT};
             XrSpaceVelocityFlags velocityFlags{XR_SPACE_VELOCITY_LINEAR_VALID_BIT | XR_SPACE_VELOCITY_ANGULAR_VALID_BIT};
@@ -349,6 +350,7 @@ namespace Horo::Tests::OpenXRAction {
         static XRAPI_ATTR XrResult XRAPI_CALL LocateSpace(XrSpace source, XrSpace base, XrTime time, XrSpaceLocation *location) {
             REQUIRE(source != base);
             active->tracking.locatedTime = time;
+            active->tracking.locatedBase = base;
             location->locationFlags = active->tracking.flags;
             const float invalid = std::numeric_limits<float>::quiet_NaN();
             location->pose.position = {invalid, invalid, invalid};
