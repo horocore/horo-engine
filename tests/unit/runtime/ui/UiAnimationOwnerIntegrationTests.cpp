@@ -39,7 +39,11 @@ TEST_CASE("Runtime accessibility publishes registry contrast and focused variant
     CHECK(participant.SetVisualAccessibility({19, false, false}).HasError());
     CHECK(participant.SetVisualAccessibility({20, false, false}).HasError());
     color(ordinary, focused, 0.3F);
-    REQUIRE(fixture.host->RunFrame().HasValue());
+    const auto beforeContrast = Horo::Tests::AllocationProbe::Count();
+    const auto contrasted = fixture.host->RunFrame();
+    const auto afterContrast = Horo::Tests::AllocationProbe::Count();
+    REQUIRE(contrasted.HasValue());
+    CHECK(afterContrast == beforeContrast);
     auto contrast = Frame(participant);
     color(contrast, focused, 1.0F);
     for (const auto &row : contrast.Styles().Records())
@@ -70,7 +74,11 @@ TEST_CASE("Runtime reduced motion completes decorative timelines once and preser
     REQUIRE(original.Timelines().size() == 1);
     CHECK(original.Timelines().front().playback.outcome == UiAnimationOutcome::None);
     REQUIRE(participant.SetVisualAccessibility({1, false, true}).HasValue());
-    REQUIRE(fixture.host->RunFrame().HasValue());
+    const auto beforeMotionChange = Horo::Tests::AllocationProbe::Count();
+    const auto applied = fixture.host->RunFrame();
+    const auto afterMotionChange = Horo::Tests::AllocationProbe::Count();
+    REQUIRE(applied.HasValue());
+    CHECK(afterMotionChange == beforeMotionChange);
     auto next = Frame(participant);
     REQUIRE(next.Timelines().size() == 1);
     CHECK(next.Timelines().front().timeline == timeline.Value());
@@ -84,6 +92,8 @@ TEST_CASE("Runtime reduced motion completes decorative timelines once and preser
     auto repeated = Frame(participant);
     REQUIRE(repeated.Timelines().size() == 1);
     CHECK_FALSE(repeated.Timelines().front().playback.newTerminalOutcome);
+    CHECK(repeated.Timelines().front().playback.outcome == next.Timelines().front().playback.outcome);
+    CheckGeometry(repeated, decorative ? 50 : 200);
 }
 
 TEST_CASE("Real host animation publishes matching style layout and clipping while retained geometry remains immutable",

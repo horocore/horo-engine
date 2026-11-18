@@ -996,6 +996,14 @@ VariableUpdate freezes one clock snapshot, evaluates timelines once in stable or
 then resolves style/layout/focus and publishes immutable values. Render phases only
 consume those values; they never sample time or fire completion markers.
 
+Style, theme and motion qualification runs the Runtime UI Style, Theme, Document,
+Animation, AnimationIntegration and PaintHost CTest suites together. Registry and
+theme cases cover token cycles, missing-token diagnostics and retention of the
+last accepted generation. Clock and host cases cover paused time, deterministic
+publication, authored contrast and focus variants, and essential versus decorative
+motion. The live policy cases verify allocation-free publication and a stable
+terminal value across preference changes.
+
 ## Rendering Contract
 
 Game UI rendering is backend-neutral and extracted into render data:
