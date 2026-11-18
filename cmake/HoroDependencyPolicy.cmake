@@ -349,7 +349,7 @@ horo_allow_target_dependencies(TARGET HoroXRSimulatorProjectWorkflow
 horo_allow_target_dependencies(TARGET HoroXRSimulatorSample DEPENDENCIES HoroXRSimulatorProjectWorkflow)
 horo_allow_target_dependencies(TARGET HoroEditorServices
     DEPENDENCIES HoroPlatformServicesAuthoring HoroSecurity HoroScriptModuleHostInternal HoroEditorPlayXrHostInterface HoroFoundationJsonInternal HoroNavigationBakeAutomation HoroPrefabHierarchyInternal HoroProjectSettings HoroPrefabProjectSettings HoroPCG HoroAudioApi HoroAudioFrontend HoroProjectMutationGuard HoroProjectCollisionSettings HoroProjectSurfaceSettings HoroSceneRuntimeConversion HoroSceneSource HoroProjectReadFilesApi HoroWorldBakeApplication
-        HoroAnimationGraphSourceCodec HoroFoundation HoroHostErrors HoroCinematicRuntime
+        HoroAnimationGraphSourceCodec HoroAI HoroFoundation HoroHostErrors HoroCinematicRuntime
         HoroNetworkApi
         HoroNetworkDebuggerApplication
         HoroApplication

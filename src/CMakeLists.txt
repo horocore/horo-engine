@@ -3887,6 +3887,7 @@ add_library(HoroEditorServices STATIC
         editor/audio/MixerAssetDocument.cpp
         editor/animation/AnimationGraphDocument.cpp
         editor/animation/AnimationGraphDocumentBounds.cpp
+        editor/ai/BlackboardSchemaDocument.cpp
         editor/audio/MixerDocumentCommands.cpp
         editor/CinematicPropertyBindings.cpp
         editor/EditorServiceErrors.cpp
@@ -3964,7 +3965,7 @@ target_sources(HoroEditorServices PRIVATE editor/screens/workspace/prefab/Prefab
 add_library(HoroEngine::EditorServices ALIAS HoroEditorServices)
 target_link_libraries(HoroEditorServices PUBLIC HoroEngine::ProjectSettings HoroEngine::NavigationBakeAutomation)
 target_link_libraries(HoroEditorServices PUBLIC HoroEngine::PrefabProjectSettings HoroEngine::PlatformServicesAuthoring)
-target_link_libraries(HoroEditorServices PUBLIC HoroEngine::AnimationGraphSourceCodec)
+target_link_libraries(HoroEditorServices PUBLIC HoroEngine::AnimationGraphSourceCodec HoroEngine::AI)
 
 target_compile_features(HoroEditorServices PUBLIC cxx_std_20)
 target_include_directories(HoroEditorServices

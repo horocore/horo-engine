@@ -1350,6 +1350,11 @@ target_include_directories(HoroAnimationDocumentTests PRIVATE ${PROJECT_SOURCE_D
 target_link_libraries(HoroAnimationDocumentTests PRIVATE HoroEngine::EditorServices)
 horo_register_catch_test(HoroAnimationDocumentTests LABELS "unit;animation;editor;headless")
 
+add_executable(HoroBlackboardSchemaDocumentTests unit/editor/BlackboardSchemaDocumentTests.cpp)
+target_compile_features(HoroBlackboardSchemaDocumentTests PRIVATE cxx_std_20)
+target_link_libraries(HoroBlackboardSchemaDocumentTests PRIVATE HoroEngine::EditorServices)
+horo_register_catch_test(HoroBlackboardSchemaDocumentTests LABELS "unit;ai;editor;headless")
+
 # Separate allocation harness: the API suite has its own operator new counter.
 add_executable(HoroAnimationGraphValueAllocationTests
         support/AllocationProbe.cpp

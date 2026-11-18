@@ -679,6 +679,14 @@ Compilation is revision-correlated derived work and does not clear dirty state.
 Live PIE blackboards, nodes, tasks and query results never enter document history;
 importing reviewed runtime data requires a separate typed editor command.
 
+The `BlackboardSchemaDocument` authoring model pairs ordered source rows with the
+immutable schema validated by `BlackboardSchema::Capture`. Display edits retain
+the same runtime projection and stable key IDs. A command creates an exact
+semantic history entry only after the candidate validates. Changing or deleting
+a key from the opened durable source requires a reference-resolution transaction.
+The model owns typed edits and immutable captures. Durable source publication and
+the project-wide reference review belong to the application document host.
+
 ## Cinematic Sequence Asset Documents
 
 [ADR-121](../../adr/121-cinematic-editor-document-and-authoring-context.md)
