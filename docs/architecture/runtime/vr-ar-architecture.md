@@ -861,8 +861,14 @@ launch lease, removes OpenXR runtime/layer environment overrides, and passes the
 exact project and signed catalog paths to the child. The child privately
 compares the runtime-reported runtime and HMD names before running reversible
 preflight. The existing terminal interrupt handling and process deadline retire the child and its owned descendants.
-The terminal forwards only the bounded receipt from the child's stdout and
-requires successful exit and a current executable digest.
+The terminal reads one bounded evidence record from the child's stdout. It
+publishes success to stdout only after a zero exit and an unchanged executable
+digest. A typed failure with the same requested installation, host, runtime/HMD
+identity, renderer and `desktop-local` connection reaches stderr only after a
+matching failure exit and successful process retirement. The record reports a
+fixed reason such as permission denial, rejected runtime, stale evidence or
+unsupported profile. Native diagnostic text and device labels stay in the
+child.
 
 The receipt records the installed component digest, host, loader route,
 renderer, a digest of the explicit runtime/HMD pair, the runtime and graphics

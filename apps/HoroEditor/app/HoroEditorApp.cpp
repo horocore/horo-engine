@@ -22,6 +22,7 @@
 #include "EditorOpenXRHostServices.h"
 #endif
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+#include "Horo/XR/XRSessionErrors.h"
 #include "OpenXRApplicationSession.h"
 #include "OpenXRPackageProbeWire.h"
 #include "OpenXRPlayHost.h"
@@ -4282,22 +4283,26 @@ namespace Horo::Editor {
     /** @brief Parses the dedicated installed-child probe arguments before any application startup. */
     [[nodiscard]] static Result<std::optional<Application::Internal::OpenXRDesktopProbeTarget>> ParseDesktopXrProbe(
         std::vector<char *> &arguments) {
+        namespace Wire = Application::Internal::OpenXRProbeWire;
         using Target = Application::Internal::OpenXRDesktopProbeTarget;
         using Outcome = Result<std::optional<Target>>;
         std::optional<Target> target;
         for (std::size_t index = 1; index < arguments.size(); ++index) {
-            if (std::string_view{arguments[index]} != Application::Internal::OpenXRProbeWire::Command)
+            if (std::string_view{arguments[index]} != Wire::Command)
                 continue;
             if (target || arguments.size() - index < 6)
                 return Outcome::Failure(MakeError(XR::XRErrors::OperationInvalid, "Malformed XR process probe invocation."));
-            if (std::string_view{arguments[index + 2]} != Application::Internal::OpenXRProbeWire::Route)
+            const auto host = Wire::DesktopHost();
+            if (host.empty() || std::string_view{arguments[index + 1]} != host || std::string_view{arguments[index + 2]} != Wire::Route)
                 return Outcome::Failure(
-                    MakeError(XR::XRErrors::OperationUnsupported, "XR process probe requires the Desktop system-default route."));
+                    MakeError(XR::XRErrors::OperationUnsupported, "XR process probe requires the current Desktop system-default route."));
+            if (!Wire::ValidTargetLabel(arguments[index + 3]) || !Wire::ValidTargetLabel(arguments[index + 4]))
+                return Outcome::Failure(MakeError(XR::XRErrors::OperationInvalid, "Invalid XR process probe runtime or HMD label."));
             const auto digest = ParseSha256(arguments[index + 5]);
             if (digest.HasError())
                 return Outcome::Failure(
                     MakeError(XR::XRErrors::OperationInvalid, "XR process probe requires a canonical installation digest."));
-            target = Target{arguments[index + 1], arguments[index + 3], arguments[index + 4], digest.Value()};
+            target = Target{host, arguments[index + 3], arguments[index + 4], digest.Value()};
             arguments.erase(arguments.begin() + static_cast<std::ptrdiff_t>(index),
                             arguments.begin() + static_cast<std::ptrdiff_t>(index + 6));
             --index;
@@ -4305,19 +4310,65 @@ namespace Horo::Editor {
         return Outcome::Success(std::move(target));
     }
 
+    /** @brief Maps stable owner errors onto the bounded Desktop probe wire vocabulary. */
+    [[nodiscard]] static Application::Internal::OpenXRProbeWire::FailureReason DesktopProbeFailure(const Error &error) noexcept {
+        using Application::Internal::OpenXRProbeWire::FailureReason;
+        using namespace XR::XRErrors;
+
+        struct Mapping {
+            const ErrorCodeDescriptor *error;
+            FailureReason reason;
+        };
+
+        constexpr std::array routes{Mapping{&RuntimeRejected, FailureReason::RuntimeRejected},
+                                    Mapping{&PermissionDenied, FailureReason::Permission},
+                                    Mapping{&OperationUnsupported, FailureReason::Unsupported},
+                                    Mapping{&SystemUnsupported, FailureReason::Unsupported},
+                                    Mapping{&OperationInvalid, FailureReason::Invalid},
+                                    Mapping{&LoaderPreflightInvalid, FailureReason::Invalid},
+                                    Mapping{&CapacityExceeded, FailureReason::Capacity},
+                                    Mapping{&LoaderPreflightStale, FailureReason::Stale},
+                                    Mapping{&IdentityStale, FailureReason::Stale},
+                                    Mapping{&CapabilityStale, FailureReason::Stale},
+                                    Mapping{&OperationIncompatible, FailureReason::Renderer},
+                                    Mapping{&XR::XRSessionErrors::SetupCleanupPending, FailureReason::Retirement}};
+        const auto found = std::ranges::find_if(routes, [&](const Mapping &route) {
+            return error.domain.Value() == route.error->domain.Value() && error.code.Value() == route.error->code.Value();
+        });
+        return found == routes.end() ? FailureReason::RuntimeUnavailable : found->reason;
+    }
+
+    /** @brief Writes a typed failure for the requested tuple without forwarding native or user text. */
+    static void EmitDesktopProbeFailure(const Application::Internal::OpenXRDesktopProbeTarget &target,
+                                        Application::Internal::OpenXRProbeWire::FailureReason reason) {
+        namespace Wire = Application::Internal::OpenXRProbeWire;
+        const auto install = FormatSha256(target.installDigest);
+        const auto identity = FormatSha256(Wire::TargetDigest(target.runtimeName, target.systemName));
+        std::fprintf(stdout, "%s %s %s %s %s %s %s %s\n", Wire::FailureRecord.data(), install.c_str(), Wire::DesktopHost().data(),
+                     Wire::Route.data(), Wire::Renderer.data(), identity.c_str(), Wire::LocalConnection.data(),
+                     Wire::FailureName(reason).data());
+        std::fflush(stdout);
+    }
+
     /** @brief Emits a finite process-scoped receipt after the real selected graphics/runtime owners drain. */
     [[nodiscard]] static int CompleteDesktopXrProbe(PreparedEditorStartup &startup, EditorPresentation &presentation,
                                                     const Application::Internal::OpenXRDesktopProbeTarget &target) {
         using namespace Application::Internal;
         std::optional<OpenXRPackagedPreflight> evidence;
+        auto failure = OpenXRProbeWire::FailureReason::RuntimeUnavailable;
         if (startup.xrNative && startup.xrHost && startup.xrHost->bindings) {
             auto observed = startup.xrNative->ProbeDesktopTarget(*startup.xrHost->bindings, target);
             if (observed.HasValue())
                 evidence.emplace(std::move(observed).Value());
+            else
+                failure = DesktopProbeFailure(observed.ErrorValue());
         }
-        EditorSessionResult terminal{std::nullopt, evidence.has_value()};
+        EditorSessionResult terminal{std::nullopt, true};
         RetireEditorSessionPresentation(presentation, terminal);
         RetireEditorXrStartup(startup);
+        if (!terminal.healthy)
+            failure = OpenXRProbeWire::FailureReason::Retirement;
+        terminal.healthy = terminal.healthy && evidence.has_value();
         if (terminal.healthy) {
             const auto &observed = evidence->Compatibility();
             const auto digest = FormatSha256(observed.installDigest);
@@ -4340,6 +4391,8 @@ namespace Horo::Editor {
                                             static_cast<unsigned>(graphics.patch), static_cast<unsigned>(observed.referenceSpaceCount),
                                             static_cast<unsigned>(observed.runtimeSwapchainFormatCount), admittedRoutes) > 0 &&
                                std::fflush(stdout) == 0;
+        } else {
+            EmitDesktopProbeFailure(target, failure);
         }
         return CompleteEditorSession(startup, terminal, nullptr);
     }
@@ -4408,6 +4461,10 @@ namespace Horo::Editor {
 
         auto prepared = PrepareEditorStartup(std::move(opts), xrHost, launch.hostArguments, launch.console);
         if (!prepared) {
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+            if (packageProbe.Value())
+                EmitDesktopProbeFailure(*packageProbe.Value(), Application::Internal::OpenXRProbeWire::FailureReason::Startup);
+#endif
             saveTelemetry.reset();
             Log::Logger::Shutdown();
             return 1;
@@ -4416,6 +4473,10 @@ namespace Horo::Editor {
         if (auto xrPrepared = PrepareSelectedEditorXrStartup(*prepared); xrPrepared.HasError()) {
             LOG_CRITICAL("editor.xr", "%s", xrPrepared.ErrorValue().message.c_str());
             RetireEditorXrStartup(*prepared);
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+            if (packageProbe.Value())
+                EmitDesktopProbeFailure(*packageProbe.Value(), DesktopProbeFailure(xrPrepared.ErrorValue()));
+#endif
             saveTelemetry.reset();
             Log::Logger::Shutdown();
             return 1;
@@ -4423,6 +4484,10 @@ namespace Horo::Editor {
         auto presentation = StartEditorPresentation(*prepared);
         if (!presentation) {
             RetireEditorXrStartup(*prepared);
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+            if (packageProbe.Value())
+                EmitDesktopProbeFailure(*packageProbe.Value(), Application::Internal::OpenXRProbeWire::FailureReason::Renderer);
+#endif
             saveTelemetry.reset();
             Log::Logger::Shutdown();
             return 1;

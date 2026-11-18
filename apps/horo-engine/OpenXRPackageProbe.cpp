@@ -64,29 +64,44 @@ namespace Horo::Application::Internal {
             return file.peek() == std::char_traits<char>::eof() && !file.bad() && digest.Finalize() == expected;
         }
 
+        enum class ReceiptKind : std::uint8_t {
+            Invalid,
+            Success,
+            Failure
+        };
+
         /** @brief Validates one process-owned record and rejects any extra strings or keys. */
-        bool IsReceipt(const std::string_view line, const std::string_view digest, const std::string_view host,
-                       const std::string_view target) {
+        ReceiptKind ReadReceipt(const std::string_view line, const std::string_view digest, const std::string_view host,
+                                const std::string_view target) {
             constexpr std::size_t IdentityColumns = 6;
             constexpr std::array<std::uint32_t, 9> maxima{65'535, 65'535, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, 16, 128, 7};
             std::array<std::string_view, IdentityColumns + maxima.size()> columns{};
             std::size_t count{};
             for (auto word : std::views::split(line, ' ')) {
                 if (count == columns.size() || word.empty())
-                    return false;
+                    return ReceiptKind::Invalid;
                 columns[count++] = std::string_view{word.begin(), word.end()};
             }
-            if (count != columns.size() || columns[0] != OpenXRProbeWire::Record || columns[1] != digest || columns[2] != host ||
-                columns[3] != OpenXRProbeWire::Route || columns[4] != OpenXRProbeWire::Renderer || columns[5] != target)
-                return false;
+            if (count < IdentityColumns || columns[1] != digest || columns[2] != host || columns[3] != OpenXRProbeWire::Route ||
+                columns[4] != OpenXRProbeWire::Renderer || columns[5] != target)
+                return ReceiptKind::Invalid;
+            if (columns[0] == OpenXRProbeWire::FailureRecord) {
+                const auto &reasons = OpenXRProbeWire::FailureNames;
+                return count == IdentityColumns + 2 && columns[6] == OpenXRProbeWire::LocalConnection &&
+                               std::ranges::find(reasons, columns[7]) != reasons.end()
+                           ? ReceiptKind::Failure
+                           : ReceiptKind::Invalid;
+            }
+            if (count != columns.size() || columns[0] != OpenXRProbeWire::Record)
+                return ReceiptKind::Invalid;
             for (std::size_t index = 0; index < maxima.size(); ++index) {
                 const auto field = columns[index + IdentityColumns];
                 std::uint32_t value{};
                 const auto parsed = std::from_chars(field.data(), field.data() + field.size(), value);
                 if (parsed.ec != std::errc{} || parsed.ptr != field.data() + field.size() || value > maxima[index])
-                    return false;
+                    return ReceiptKind::Invalid;
             }
-            return true;
+            return ReceiptKind::Success;
         }
 
         /** @brief Converts the terminal host's UTF-8 argv to a native path without losing non-ASCII bytes. */
@@ -104,24 +119,6 @@ namespace Horo::Application::Internal {
         bool Contained(const std::filesystem::path &exe, const std::filesystem::path &installation) {
             const auto relative = exe.lexically_relative(installation);
             return !relative.empty() && relative != "." && !relative.is_absolute() && *relative.begin() != "..";
-        }
-
-        /** @brief Limits explicit target labels to regular non-control input; private labels are never printed. */
-        bool ValidLabel(const std::string_view value) {
-            return !value.empty() && value.size() < 256 && !value.starts_with('-') && std::ranges::none_of(value, [](unsigned char byte) {
-                return byte < ' ' || byte == 127;
-            });
-        }
-
-        /** @brief Retrieves the exact desktop tool platform, if this build supports the probe. */
-        std::string_view ProbeHost() noexcept {
-#if defined(_WIN32)
-            return "windows";
-#elif defined(__linux__)
-            return "linux";
-#else
-            return {};
-#endif
         }
 
         /** @brief Requests an exact fixed child mode. Only signed project and installed renderer flags are forwarded. */
@@ -170,10 +167,17 @@ namespace Horo::Application::Internal {
             std::array<char, MaximumReceiptBytes> receipt{};
             std::size_t received{};
             bool rejected{};
+            ReceiptKind kind{};
             request.onOutput = [&](const ProcessOutputLine &line) noexcept {
-                if (line.stream != ProcessOutputStream::StandardOutput || !line.text.starts_with(OpenXRProbeWire::Record))
+                if (line.stream != ProcessOutputStream::StandardOutput ||
+                    (!line.text.starts_with(OpenXRProbeWire::Record) && !line.text.starts_with(OpenXRProbeWire::FailureRecord)))
                     return;
-                if (received || line.truncated || line.text.size() > receipt.size() || !IsReceipt(line.text, digest, host, target)) {
+                if (received || line.truncated || line.text.size() > receipt.size()) {
+                    rejected = true;
+                    return;
+                }
+                kind = ReadReceipt(line.text, digest, host, target);
+                if (kind == ReceiptKind::Invalid) {
                     rejected = true;
                     return;
                 }
@@ -195,9 +199,15 @@ namespace Horo::Application::Internal {
                 errors << "XR probe was interrupted or required process cleanup.\n";
                 return 1;
             }
-            if (terminal.Value().exitCode != 0 || rejected || received == 0 || !MatchesExecutable(executable, executableDigest)) {
+            const bool finishedSuccess = kind == ReceiptKind::Success && terminal.Value().exitCode == 0;
+            const bool finishedFailure = kind == ReceiptKind::Failure && terminal.Value().exitCode == 1;
+            if (rejected || (!finishedSuccess && !finishedFailure) || !MatchesExecutable(executable, executableDigest)) {
                 errors << "XR probe reported no current installed runtime/device receipt. Check the requested default runtime, HMD and "
                           "package.\n";
+                return 1;
+            }
+            if (finishedFailure) {
+                errors << std::string_view{receipt.data(), received} << '\n';
                 return 1;
             }
             output << std::string_view{receipt.data(), received} << '\n';
@@ -215,14 +225,14 @@ namespace Horo::Application::Internal {
             return 2;
         }
         const std::string_view host{arguments[Host]};
-        if (host.empty() || host != ProbeHost() || std::string_view{arguments[Route]} != OpenXRProbeWire::Route) {
+        if (host.empty() || host != OpenXRProbeWire::DesktopHost() || std::string_view{arguments[Route]} != OpenXRProbeWire::Route) {
             errors << "XR probe unavailable for the declared host or connection route.\n";
             return 2;
         }
         const std::string_view digest{arguments[InstallDigest]};
         const auto executableDigest = ParseSha256(arguments[ExecutableDigest]);
-        if (!ValidLabel(arguments[Runtime]) || !ValidLabel(arguments[System]) || ParseSha256(digest).HasError() ||
-            executableDigest.HasError()) {
+        if (!OpenXRProbeWire::ValidTargetLabel(arguments[Runtime]) || !OpenXRProbeWire::ValidTargetLabel(arguments[System]) ||
+            ParseSha256(digest).HasError() || executableDigest.HasError()) {
             errors << Usage;
             return 2;
         }

@@ -17,6 +17,7 @@ runtime = "Selected Runtime"
 headset = "Selected HMD"
 target = digest(b"Horo Desktop OpenXR probe v1\0" + runtime.encode() + b"\0" + headset.encode())
 record = f"horo-xr-package-probe-v1 {install} linux system-default vulkan {target} 9 8 7 1 3 0 2 2 3"
+failure = f"horo-xr-package-probe-failure-v1 {install} linux system-default vulkan {target} desktop-local permission-denied"
 launch = Path(sys.argv[1]).resolve(strict=True)
 
 with tempfile.TemporaryDirectory(prefix="horo installed probe ") as directory:
@@ -26,7 +27,10 @@ with tempfile.TemporaryDirectory(prefix="horo installed probe ") as directory:
     trust = [root / name for name in ("roots", "catalog", "signature")]
     for path in trust:
         path.touch()
-    for variant in ("accepted", "foreign", "malformed", "duplicate", "failed", "stale-executable", "surviving-child", "interrupted"):
+    success_variants = ("accepted", "foreign", "malformed", "duplicate", "failed", "stale-executable", "surviving-child", "interrupted")
+    failure_variants = ("failure-receipt", "foreign-failure", "malformed-failure", "failure-exit-mismatch", "mixed-receipts",
+                        "stale-after-failure", "wrong-connection", "failure-on-stderr")
+    for variant in (*success_variants, *failure_variants):
         executable = root / "selected editor"
         executable.write_text(f"""#!/usr/bin/python3
 import os, subprocess, sys, time
@@ -38,10 +42,24 @@ print('private-device-data', file=sys.stderr)
 Path('ran').write_text('1')
 variant = {variant!r}
 record = {record!r}
+failure = {failure!r}
 if variant == "foreign":
     record = record.replace({target!r}, {digest(b"different target")!r})
 elif variant == "malformed":
     record += " /root/a-sensitive-path"
+if variant == 'foreign-failure':
+    failure = failure.replace({target!r}, {digest(b"different target")!r})
+if variant == 'malformed-failure':
+    failure = failure.replace('permission-denied', '/root/a-sensitive-path')
+if variant == 'wrong-connection':
+    failure = failure.replace('desktop-local', 'remote-device')
+if variant in {failure_variants!r}:
+    print(failure, file=sys.stderr if variant == 'failure-on-stderr' else sys.stdout, flush=True)
+    if variant == 'mixed-receipts':
+        print(record, flush=True)
+    if variant == 'stale-after-failure':
+        Path(sys.argv[0]).write_text('changed executable')
+    sys.exit(0 if variant == 'failure-exit-mismatch' else 1)
 print(record, flush=True)
 if variant == "duplicate":
     print(record, flush=True)
@@ -75,7 +93,12 @@ sys.exit(7 if variant == "failed" else 0)
             run = subprocess.run(args, env=env, timeout=8, capture_output=True, text=True, check=False)
         assert (run.returncode == 0) == (variant == "accepted"), (variant, run)
         assert run.stdout == (record + "\n" if variant == "accepted" else ""), (variant, run)
-        assert "private" not in run.stderr and (root / "ran").exists() == (variant != "stale-executable"), (variant, run)
+        assert "private" not in run.stderr and "/root/" not in run.stderr, (variant, run)
+        assert (root / "ran").exists() == (variant != "stale-executable"), (variant, run)
+        if variant == "failure-receipt":
+            assert run.stderr == failure + "\n", (variant, run)
+        else:
+            assert "horo-xr-package-probe-failure-v1" not in run.stderr, (variant, run)
         if variant in ("surviving-child", "interrupted"):
             proc_stat = Path("/proc") / (root / "pid").read_text() / "stat"
             for _ in range(20):
