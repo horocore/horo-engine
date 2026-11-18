@@ -1801,6 +1801,7 @@ add_library(HoroAI STATIC
         runtime/ai/api/StateMachinePlan.cpp
         runtime/ai/api/StateMachineInstance.cpp
         runtime/ai/api/EnvironmentQueryAsset.cpp
+        runtime/ai/compile/EnvironmentQuerySourceCodec.cpp
         runtime/ai/api/EnvironmentQueryErrors.cpp
         runtime/ai/api/EnvironmentQueryRegistry.cpp
     runtime/ai/api/EnvironmentQueryScoring.cpp

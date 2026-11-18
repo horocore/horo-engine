@@ -86,7 +86,8 @@ namespace Horo::Assets {
                                             ".jpg"sv,         ".tga"sv,     ".exr"sv,       ".hdr"sv,     ".horomat"sv,
                                             ".vert"sv,        ".frag"sv,    ".comp"sv,      ".hlsl"sv,    ".horoshadergraph"sv,
                                             ".horo"sv,        ".prefab"sv,  ".horoasset"sv, ".uistyle"sv, ".terrainlayers"sv,
-                                            ".foliagetype"sv, ".horo_bb"sv, ".horo_bt"sv,   ".horo_sm"sv, ".horo_utility"sv};
+                                            ".foliagetype"sv, ".horo_bb"sv, ".horo_bt"sv,   ".horo_sm"sv, ".horo_utility"sv,
+                                            ".horo_eqs"sv};
             return std::ranges::find(extensions, extension) != extensions.end() || extension == ".wav" || extension == ".ogg";
         }
 

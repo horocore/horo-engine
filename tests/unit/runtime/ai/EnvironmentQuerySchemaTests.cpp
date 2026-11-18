@@ -1,6 +1,7 @@
 #include "AiTestSupport.h"
 #include "Horo/AI/EnvironmentQuerySchema.h"
 #include "Horo/AI/EnvironmentQueryScoring.h"
+#include "Horo/AI/EnvironmentQuerySourceCodec.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -69,6 +70,76 @@ namespace Horo::AI {
                 return source;
             }
         };
+
+        TEST_CASE("EQS source transport preserves typed stable order and unknown stages", "[unit][ai][eqs][source]") {
+            const Fixture fixture;
+            auto source = fixture.Asset();
+            const std::vector<std::byte> opaque{std::byte{0x00}, std::byte{0xff}};
+            source.stages.push_back({.id = Identity<QueryStageId>(5),
+                                     .kind = QueryStageKind::Unknown,
+                                     .executionOrder = 30,
+                                     .displayName = "Contributed stage",
+                                     .descriptorVersion = {2, 4},
+                                     .properties = {{Identity<QueryPropertyId>(54), opaque},
+                                                    {Identity<QueryPropertyId>(53), 1.25},
+                                                    {Identity<QueryPropertyId>(52), std::uint64_t{1} << 63},
+                                                    {Identity<QueryPropertyId>(51), std::int64_t{-5}},
+                                                    {Identity<QueryPropertyId>(50), true}},
+                                     .unknownTypeId = 800,
+                                     .opaquePayload = opaque});
+            const auto original = EnvironmentQueryAsset::Capture(source);
+            REQUIRE(original.HasValue());
+            const auto encoded = EnvironmentQuerySourceCodec::Encode(original.Value());
+            REQUIRE(encoded.HasValue());
+            std::ranges::reverse(source.stages.back().properties);
+            std::ranges::reverse(source.stages);
+            const auto reordered = EnvironmentQueryAsset::Capture(source);
+            REQUIRE(reordered.HasValue());
+            const auto reorderedBytes = EnvironmentQuerySourceCodec::Encode(reordered.Value());
+            REQUIRE(reorderedBytes.HasValue());
+            CHECK(reorderedBytes.Value() == encoded.Value());
+
+            const auto decoded = EnvironmentQuerySourceCodec::Decode(encoded.Value());
+            REQUIRE(decoded.HasValue());
+            CHECK(decoded.Value().Id() == source.id);
+            CHECK(decoded.Value().ResultSchema() == source.result);
+            REQUIRE(decoded.Value().Stages().size() == 3);
+            const auto &unknown = decoded.Value().Stages().back();
+            CHECK(unknown.displayName == "Contributed stage");
+            CHECK(unknown.kind == QueryStageKind::Unknown);
+            CHECK(unknown.unknownTypeId == 800);
+            CHECK(unknown.opaquePayload == opaque);
+            CHECK(unknown.descriptorVersion == (QueryVersionRange{2, 4}));
+            CHECK(unknown.properties == source.stages.front().properties);
+            const auto reencoded = EnvironmentQuerySourceCodec::Encode(decoded.Value());
+            REQUIRE(reencoded.HasValue());
+            CHECK(reencoded.Value() == encoded.Value());
+            const auto registry = fixture.Registry();
+            REQUIRE(registry.HasValue());
+            const auto refused = EnvironmentQueryPlan::Compile(decoded.Value(), registry.Value());
+            REQUIRE(refused.HasError());
+            CHECK(refused.ErrorValue().code.Value() == AIErrors::EnvironmentQueryStageUnsupported.code.Value());
+        }
+
+        TEST_CASE("EQS source transport refuses incomplete, oversized and incompatible bytes", "[unit][ai][eqs][source]") {
+            const auto asset = EnvironmentQueryAsset::Capture(Fixture{}.Asset());
+            REQUIRE(asset.HasValue());
+            const auto encoded = EnvironmentQuerySourceCodec::Encode(asset.Value());
+            REQUIRE(encoded.HasValue());
+            const std::span bytes{encoded.Value()};
+            for (std::size_t count = 0; count < bytes.size(); ++count)
+                CHECK(EnvironmentQuerySourceCodec::Decode(bytes.first(count)).HasError());
+            auto trailing = encoded.Value();
+            trailing.push_back(0);
+            CHECK(EnvironmentQuerySourceCodec::Decode(trailing).HasError());
+            auto future = encoded.Value();
+            future[8] = 2;
+            const auto incompatible = EnvironmentQuerySourceCodec::Decode(future);
+            REQUIRE(incompatible.HasError());
+            CHECK(incompatible.ErrorValue().code.Value() == AIErrors::EnvironmentQueryVersionIncompatible.code.Value());
+            const std::vector<std::uint8_t> oversized(EnvironmentQuerySourceCodec::MaximumBytes + 1);
+            CHECK(EnvironmentQuerySourceCodec::Decode(oversized).HasError());
+        }
 
         TEST_CASE("EQS ranks fixed-range test facts without depending on candidate enumeration", "[unit][ai][eqs][scoring]") {
             const Fixture fixture;

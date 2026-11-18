@@ -860,6 +860,7 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/DecisionAssetValidation.h
     Horo/AI/StateMachine.h
     Horo/AI/EnvironmentQuerySchema.h
+    Horo/AI/EnvironmentQuerySourceCodec.h
     Horo/AI/EnvironmentQueryScoring.h
     Horo/AI/UtilitySelector.h
     Horo/AI/UtilityDecision.h

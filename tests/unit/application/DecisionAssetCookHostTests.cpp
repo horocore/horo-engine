@@ -1,4 +1,5 @@
 #include "DecisionGraphCompilerTestSupport.h"
+#include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/Application/BlackboardUsageReview.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Editor/ProjectMutation.h"
@@ -229,6 +230,53 @@ namespace {
             REQUIRE(duplicate.HasError());
             CHECK(duplicate.ErrorValue().code.Value() == AIErrors::DecisionAssetSchemaAmbiguous.code.Value());
         }
+    }
+
+    TEST_CASE("Project Asset Registry retains the typed EQS source identity through a paired move", "[native][ai][assets][eqs][source]") {
+        Fixture fixture;
+        const auto asset = AssetId::FromBytes({0xd1});
+        QueryAssetSource source{.id = MakeIdentity<QueryId>(69),
+                                .displayName = "Seek cover",
+                                .result = {.id = MakeIdentity<QueryResultSchemaId>(70), .itemType = MakeIdentity<QueryItemTypeId>(71)},
+                                .stages = {{.id = MakeIdentity<QueryStageId>(72),
+                                            .kind = QueryStageKind::Generator,
+                                            .executionOrder = 10,
+                                            .generator = MakeIdentity<QueryGeneratorId>(73)}}};
+        const auto query = EnvironmentQueryAsset::Capture(source);
+        REQUIRE(query.HasValue());
+        const auto bytes = EnvironmentQuerySourceCodec::Encode(query.Value());
+        REQUIRE(bytes.HasValue());
+        const auto sidecar = Files::SidecarJson(asset.ToString(), EnvironmentQuerySourceAssetType);
+        const auto write = [&](std::string_view path) {
+            Files::WriteFile(fixture.source.path / path, bytes.Value());
+            Files::WriteFile(fixture.source.path / (std::string{path} + ".horo"),
+                             {reinterpret_cast<const std::uint8_t *>(sidecar.data()), sidecar.size()});
+        };
+        const auto assertCurrent = [&](std::string_view path) {
+            const auto rebuilt = RebuildAssetRegistry(fixture.registry, fixture.source.path, AssetRegistryOpenMode::ReadOnly);
+            REQUIRE(rebuilt.HasValue());
+            REQUIRE(rebuilt.Value().status == AssetRegistryBuildStatus::Complete);
+            const auto capture =
+                AssetCookInputSnapshot::CaptureSelected(fixture.source.path, fixture.registry.Snapshot(), std::span{&asset, 1},
+                                                        {.maximumSourceBytes = EnvironmentQuerySourceCodec::MaximumBytes,
+                                                         .maximumAssets = 1},
+                                                        EnvironmentQuerySourceCodec::MaximumBytes);
+            REQUIRE(capture.HasValue());
+            const auto *admitted = capture.Value().Find(asset);
+            REQUIRE(admitted != nullptr);
+            CHECK(admitted->record.type.Value() == EnvironmentQuerySourceAssetType);
+            CHECK(admitted->record.sourcePath.String() == path);
+            const auto decoded = EnvironmentQuerySourceCodec::Decode(admitted->bytes);
+            REQUIRE(decoded.HasValue());
+            CHECK(decoded.Value().Id() == source.id);
+            REQUIRE(decoded.Value().Stages().size() == 1);
+            CHECK(decoded.Value().Stages().front().generator == source.stages.front().generator);
+        };
+        write("assets/cover.horo_eqs");
+        assertCurrent("assets/cover.horo_eqs");
+        std::filesystem::rename(fixture.source.path / "assets/cover.horo_eqs", fixture.source.path / "assets/search.horo_eqs");
+        std::filesystem::rename(fixture.source.path / "assets/cover.horo_eqs.horo", fixture.source.path / "assets/search.horo_eqs.horo");
+        assertCurrent("assets/search.horo_eqs");
     }
 
     TEST_CASE("Project review reports saved controller schema bindings with separate unresolved owners",
