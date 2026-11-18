@@ -12,10 +12,12 @@
 #include "Horo/Platform/NativeProjectIoOwners.h"
 #include "SimulatorPlayHost.h"
 #include "SimulatorProjectArtifacts.h"
+#if defined(HORO_HAS_RENDER_METAL) || defined(HORO_HAS_RENDER_VULKAN)
+#include "EditorColorPipelineStartup.h"
+#endif
 #if defined(HORO_HAS_RENDER_METAL)
 #include "EditorBaselineLightingAssets.h"
 #include "EditorClusteredLightingStartup.h"
-#include "EditorColorPipelineStartup.h"
 #include "Horo/Runtime/Render/SceneColorEncoding.h"
 #endif
 #include "Horo/Runtime/Render/DirectionalShadowErrors.h"
