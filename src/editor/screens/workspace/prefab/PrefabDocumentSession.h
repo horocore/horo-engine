@@ -201,8 +201,11 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> KeepExternalDraft(const PrefabDocumentFence &fence, const PrefabExternalComparison &expected);
 
         /** @brief Replaces accepted source only after explicit dirty-state decision and complete validation.
-         * @param fence Exact admission. @param discardDirty Explicit discard decision. @return Success or retained session. */
-        [[nodiscard]] Result<void> Reload(const PrefabDocumentFence &fence, bool discardDirty);
+         * @param fence Exact admission. @param discardDirty Explicit discard decision.
+         * @param expectedDisk Exact disk comparison accepted by the user when supplied.
+         * @return Success or retained session. */
+        [[nodiscard]] Result<void> Reload(const PrefabDocumentFence &fence, bool discardDirty,
+                                          std::optional<Assets::AssetSourceIdentity> expectedDisk = std::nullopt);
         /** @brief Writes dirty source to shared recovery storage, never canonical source.
          * @param mutations Shared writer. @param files Native durable service. @return Durable recovery or retained prior record. */
         [[nodiscard]] Result<void> Autosave(const ProjectMutationCoordinator &mutations, DurableFileSystem &files);

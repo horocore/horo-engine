@@ -386,13 +386,18 @@ namespace Horo::Editor {
     }
 
     /** @copydoc PrefabDocumentSession::Reload */
-    Result<void> PrefabDocumentSession::Reload(const PrefabDocumentFence &fence, const bool discardDirty) {
+    Result<void> PrefabDocumentSession::Reload(const PrefabDocumentFence &fence, const bool discardDirty,
+                                               const std::optional<Assets::AssetSourceIdentity> expectedDisk) {
         if (auto admitted = Admit(fence); admitted.HasError())
             return admitted;
         if (state_ != saved_ && !discardDirty)
             return Result<void>::Failure(MakeError(WorkspaceDocumentErrors::DirtyDocument));
         auto capture = Assets::CaptureAssetSource(root_, path_, Prefab::PrefabHardLimits::SourceDocumentBytes);
-        return capture.HasError() ? Result<void>::Failure(capture.ErrorValue()) : Replace(capture.Value());
+        if (capture.HasError())
+            return Result<void>::Failure(capture.ErrorValue());
+        if (expectedDisk && capture.Value().identity != *expectedDisk)
+            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+        return Replace(capture.Value());
     }
 
     /** @copydoc PrefabDocumentSession::ReleaseStage */

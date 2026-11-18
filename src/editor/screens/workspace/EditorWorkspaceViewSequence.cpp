@@ -183,6 +183,8 @@ namespace Horo::Editor {
                 outCommand.prefabAction = intent;
                 if (intent == PrefabDocumentAction::Recover || intent == PrefabDocumentAction::DiscardRecovery)
                     outCommand.prefabRecovery = viewModel.prefabRecovery;
+                if (intent == PrefabDocumentAction::Reload || intent == PrefabDocumentAction::DiscardAndReload)
+                    outCommand.prefabExternalComparison = source.externalComparison;
             }
         };
         action("workspace.documents.save", PrefabDocumentAction::Save, source.dirty && !source.externalConflict);

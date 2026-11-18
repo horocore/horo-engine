@@ -120,3 +120,19 @@ libraries. Existing valid UTF-8 identities retain their bytes. A previously
 misdecoded filename must be corrected and its registry refreshed rather than
 supported by a second path identity. Native editor launch is a separate platform
 qualification from the in-process path and document regressions.
+
+
+## External source conflict
+
+The active dirty prefab is inspected on the shared editor I/O lane. Each
+comparison pins the draft, document revision and accepted disk identity. Changed
+source evidence invalidates a dependent hierarchy projection before it can
+authorize any further edits. Compare shows differences using the same local
+member identities. Keep local draft preserves the draft, history, recovery and
+original save fence. Reload checks the disk identity from the current
+comparison before replacing the draft.
+
+Save prefab as creates an exclusive source and sidecar pair under the project
+asset root using a new registered asset identity. The original conflict and
+draft stay available. Creation from a Scene and Save As use the same file
+locks, tracked receipts and ownership-checked rollback.

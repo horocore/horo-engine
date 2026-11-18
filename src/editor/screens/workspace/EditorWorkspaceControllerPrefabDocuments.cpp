@@ -265,8 +265,10 @@ namespace Horo::Editor {
         else {
             m_viewModel.prefabDocumentError.reset();
             if (!command.prefabEdit &&
-                (command.prefabAction == PrefabDocumentAction::Reload || command.prefabAction == PrefabDocumentAction::DiscardAndReload))
+                (command.prefabAction == PrefabDocumentAction::Reload || command.prefabAction == PrefabDocumentAction::DiscardAndReload)) {
+                RefreshSceneProjections();
                 ScheduleContentBrowserPreviews();
+            }
             if (command.prefabAction == PrefabDocumentAction::DiscardRecovery) {
                 m_viewModel.prefabRecovery.reset();
                 m_viewModel.prefabRecoveryAvailable = false;
@@ -303,9 +305,13 @@ namespace Horo::Editor {
                     return Result<void>::Failure(MakeError(SourceDocumentErrors::Invalid));
                 return SavePrefabAs(document.Snapshot(), *command.prefabSaveDestination);
             case Reload:
-                return document.Reload(fence, false);
-            case DiscardAndReload:
-                return document.Reload(fence, true);
+            case DiscardAndReload: {
+                const auto current = document.Snapshot().externalComparison;
+                if (command.prefabExternalComparison && command.prefabExternalComparison != current)
+                    return Result<void>::Failure(MakeError(SourceDocumentErrors::Stale));
+                return document.Reload(fence, command.prefabAction == DiscardAndReload,
+                                       current ? std::optional{current->observed} : std::nullopt);
+            }
             case DiscardAndClose:
                 return ClosePrefabDocument(fence.instance, true);
             case Save: {
@@ -392,6 +398,15 @@ namespace Horo::Editor {
         });
         if (published != m_viewModel.prefabDocuments.end())
             *published = snapshot;
+        if (snapshot.externalConflict && m_prefabSources) {
+            const auto asset = snapshot.source->Data().assetId;
+            const auto sources = m_prefabSources->resolver.Sources();
+            if (std::ranges::any_of(sources, [asset](const auto &entry) { return entry.document.Data().assetId == asset; })) {
+                m_prefabSources.reset();
+                m_viewModel.prefabHierarchyUnavailable = true;
+                m_viewModel.prefabHierarchyError = MakeError(Prefab::PrefabErrors::ResolutionStale);
+            }
+        }
         if (m_activePrefabDocument == instance) {
             m_prefabViewportScene = {};
             ++m_viewportSceneRevision;

@@ -434,7 +434,11 @@ namespace Horo::Editor {
                                                           Prefab::PrefabHardLimits::SourceDocumentBytes);
         REQUIRE(persisted.HasValue());
         CHECK(persisted.Value().identity == comparison.Value()->observed);
-        REQUIRE(fixture.document->Reload(kept.fence, true).HasValue());
+        fixture.project.WriteSource("Unseen disk revision");
+        CHECK(fixture.document->Reload(kept.fence, true, comparison.Value()->observed).HasError());
+        CHECK(fixture.document->Snapshot().source == kept.source);
+        fixture.project.WriteSource("Disk version");
+        REQUIRE(fixture.document->Reload(kept.fence, true, comparison.Value()->observed).HasValue());
         const auto reloaded = fixture.document->Snapshot();
         CHECK_FALSE(reloaded.externalConflict);
         CHECK_FALSE(reloaded.keepExternalDraft);
