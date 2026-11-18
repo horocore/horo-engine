@@ -292,6 +292,9 @@ must prove isolation and bounds before enabling that feature. Fake snapshots
 and Null tests do not certify native display or pacing behavior. M0 checks
 document consistency and migration ownership, not unimplemented GPU behavior.
 
+The [presentation qualification guide](../guides/presentation-qualification.md)
+defines the pass criteria and reproduces the current desktop lanes.
+
 ## Consequences
 
 The host owns intent, Platform owns window/display facts, and Rendering owns

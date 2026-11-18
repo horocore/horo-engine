@@ -22,6 +22,7 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <thread>
 #include <utility>
 
@@ -29,10 +30,12 @@ namespace Horo::Tests::VulkanEditor {
     using namespace Render;
     using namespace Editor;
 
-    template <typename T> void Check(const Result<T> &result) {
+    template <typename T> void Check(const Result<T> &result, const std::string_view operation = "native composition") {
         if (result.HasError()) {
-            INFO(result.ErrorValue().message);
-            FAIL("Native composition operation failed");
+            const auto &error = result.ErrorValue();
+            INFO("Vulkan / SDL WSI / " << operation);
+            INFO(error.domain.Value() << "/" << error.code.Value() << ": " << error.message);
+            FAIL("Vulkan operation failed");
         }
     }
 
@@ -62,7 +65,8 @@ namespace Horo::Tests::VulkanEditor {
         const FramebufferExtent extent{640, 480};
 
         Host() {
-            window.reset(SDL_CreateWindow("Horo Vulkan qualification", extent.width, extent.height, SDL_WINDOW_VULKAN));
+            window.reset(
+                SDL_CreateWindow("Horo Vulkan qualification", extent.width, extent.height, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE));
             REQUIRE(window);
             port = std::make_unique<SdlVulkanPresentationPort>(*window);
             bridge = std::make_unique<Render::Detail::VulkanEditorGraphicsBridge>();
@@ -174,19 +178,23 @@ namespace Horo::Tests::VulkanEditor {
         }
 
         RenderFrameScope Frame(const std::uint64_t number) {
+            return Frame(number, extent);
+        }
+
+        RenderFrameScope Frame(const std::uint64_t number, const FramebufferExtent output) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
             do {
-                const auto available = frontend->PollPresentationAvailability(extent);
-                Check(available);
+                const auto available = frontend->PollPresentationAvailability(output);
+                Check(available, "poll swapchain acquisition");
                 if (available.Value()) {
-                    auto frame = frontend->BeginFrame({number, extent});
-                    Check(frame);
+                    auto frame = frontend->BeginFrame({number, output});
+                    Check(frame, "begin acquired frame");
                     return std::move(frame).Value();
                 }
                 SDL_PumpEvents();
                 std::this_thread::sleep_for(std::chrono::milliseconds{1});
             } while (std::chrono::steady_clock::now() < deadline);
-            FAIL("No retired native presentation slot became ready within the qualification budget");
+            FAIL("Vulkan / SDL WSI / poll swapchain acquisition: no retired slot ready within 5 seconds");
             std::terminate();
         }
 
@@ -219,6 +227,71 @@ namespace Horo::Tests::VulkanEditor {
         CHECK(SDL_GetWindowID(host.window.get()) != 0);
         host.gui.reset();
         CHECK(ImGui::GetIO().BackendPlatformUserData == nullptr);
+        CHECK(SDL_GetWindowID(host.window.get()) != 0);
+    }
+
+    TEST_CASE("Native Vulkan keeps frame ownership and resumes presentation after an observed SDL pixel resize",
+              "[native-smoke][vulkan][presentation]") {
+        Host host;
+        INFO("Vulkan / SDL window and swapchain / " << SDL_GetCurrentVideoDriver());
+        host.RecordCapabilities();
+        const std::array passes{RenderPassDescriptor{.kind = RenderPassKind::Graphics, .primaryOutput = PrimaryOutputAttachment{}}};
+        {
+            auto initial = host.Frame(1);
+            Check(initial.Execute(passes), "record initial SDR output");
+            Check(initial.Present(), "present initial SDR output");
+        }
+        constexpr FramebufferExtent logical{512, 384};
+        {
+            auto active = host.Frame(2);
+            const auto rejected = host.frontend->Resize(logical);
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == "render.frontend.resize_during_frame");
+            active.Cancel();
+        }
+        const auto suspended = host.frontend->PollPresentationAvailability({});
+        Check(suspended, "poll without a drawable extent");
+        CHECK_FALSE(suspended.Value());
+        {
+            INFO("Vulkan / SDL window / resize requested logical extent to " << logical.width << "x" << logical.height);
+            REQUIRE(SDL_SetWindowSize(host.window.get(), static_cast<int>(logical.width), static_cast<int>(logical.height)));
+            FramebufferExtent output;
+            const auto pollWindow = [&] {
+                int width{}, height{};
+                INFO(SDL_GetError());
+                REQUIRE(SDL_GetWindowSizeInPixels(host.window.get(), &width, &height));
+                if (width > 0 && height > 0)
+                    output = {static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)};
+                return output.IsValid() && output != host.extent;
+            };
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+            while (!pollWindow()) {
+                REQUIRE(std::chrono::steady_clock::now() < deadline);
+                SDL_PumpEvents();
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+            for (;;) {
+                const auto resized = host.frontend->Resize(output);
+                if (resized.HasValue())
+                    break;
+                const auto &error = resized.ErrorValue();
+                INFO("Vulkan / swapchain / realize resized output: " << error.domain.Value() << "/" << error.code.Value() << ": "
+                                                                     << error.message);
+                REQUIRE(error.code.Value() == RenderPresentationErrors::DrawableUnavailable.code.Value());
+                REQUIRE(std::chrono::steady_clock::now() < deadline);
+                SDL_PumpEvents();
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+            const auto retiredExtent = host.frontend->PollPresentationAvailability(host.extent);
+            Check(retiredExtent, "poll the superseded pixel extent");
+            CHECK_FALSE(retiredExtent.Value());
+            auto resumed = host.Frame(3, output);
+            Check(resumed.Execute(passes), "record SDR output at realized pixel extent");
+            Check(resumed.Present(), "present the resized SDR output");
+        }
+        REQUIRE(host.Drain());
+        CHECK(host.frontend->MemorySnapshot().allocationCount == 0);
+        CHECK(host.port->GetInstanceProcAddr() == nullptr);
         CHECK(SDL_GetWindowID(host.window.get()) != 0);
     }
 
