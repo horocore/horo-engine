@@ -3,6 +3,7 @@
 #include "EditorPlayState.h"
 #include "Horo/Editor/ActivityBarLayout.h"
 #include "Horo/Editor/AudioComponentPreview.h"
+#include "Horo/Editor/BlackboardSchemaDocument.h"
 #include "Horo/Editor/EditorMenuModel.h"
 #include "Horo/Editor/EditorWorkspaceEvents.h"
 #include "Horo/Editor/NavigationInspector.h"
@@ -150,6 +151,7 @@ namespace Horo::Editor {
         SaveAllSourceDocuments,
         CloseSourceDocument,
         UiCanvasSelect,
+        BlackboardDocument,
         UiCanvasCreate,
         UiCanvasMove,
         UiCanvasSearch,
@@ -403,6 +405,26 @@ namespace Horo::Editor {
         std::optional<GyroscopeBindingReplacement> replacement;
     };
 
+    /** @brief Commands emitted by Blackboard presentation for an exact document revision. */
+    enum class BlackboardDocumentOperation : std::uint8_t {
+        Edit,
+        Undo,
+        Redo,
+        Save,
+        Reload
+    };
+
+    struct BlackboardWorkspaceRequest final {
+        BlackboardDocumentFence fence;
+        BlackboardDocumentOperation operation{BlackboardDocumentOperation::Edit};
+        std::optional<BlackboardSchemaEdit> edit;
+    };
+
+    struct BlackboardWorkspaceDocument final {
+        BlackboardSchemaDocumentSnapshot snapshot;
+        std::optional<Error> diagnostic;
+    };
+
     struct EditorWorkspaceViewCommandData {  // NOSONAR(cpp:S1820) Command payload variant container
         EditorWorkspaceViewCommand command = EditorWorkspaceViewCommand::None;
         std::optional<GyroscopeBindingEditRequest> gyroscopeBinding;
@@ -439,6 +461,7 @@ namespace Horo::Editor {
         Runtime::Ui::RuntimeStyleGeneration uiCanvasInspectorStyles;
         std::uint64_t uiCanvasInspectorResourcePublication{};
         Runtime::Ui::RuntimeStyleAssetId uiCanvasTheme;
+        std::optional<BlackboardWorkspaceRequest> blackboard;
         std::optional<SequenceTimelineState> sequenceTimeline;
         std::optional<PCGEditorRequest> pcgRequest;
         std::optional<EditorMenuInvocation> menuInvocation = std::nullopt;
@@ -617,6 +640,7 @@ namespace Horo::Editor {
         BottomDockMode bottomDockMode = BottomDockMode::Full;
         std::string activeDocumentPanelId = "horo.viewport";
         std::vector<SequenceWorkspaceDocument> sequenceDocuments;
+        std::vector<BlackboardWorkspaceDocument> blackboardDocuments;
         std::vector<PCGWorkspaceDocument> pcgDocuments;
         std::vector<PCGPaletteEntry> pcgPalette;
         PCG::PCGNodeCatalogSnapshot pcgSchemas;

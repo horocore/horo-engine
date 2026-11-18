@@ -2,6 +2,7 @@
 
 /** @file SourceDocumentCloseModal.h @brief Exclusive revision-fenced close presentation for one source document. */
 
+#include "Horo/Editor/BlackboardSchemaDocument.h"
 #include "Horo/Editor/DesignSystem/DesignTokens.h"
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorModalHost.h"
@@ -27,6 +28,9 @@ namespace Horo::Editor {
         /** @brief Captures a canvas owner state using the same workspace close presentation. */
         SourceDocumentCloseModal(const EditorGuiContext &context, EditorWorkspaceController &controller, std::weak_ptr<const void> lifetime,
                                  UiCanvasDocumentStateId request, std::string source);
+        /** @brief Captures an exact Blackboard schema revision for the shared close workflow. */
+        SourceDocumentCloseModal(const EditorGuiContext &context, EditorWorkspaceController &controller, std::weak_ptr<const void> lifetime,
+                                 BlackboardDocumentFence request, std::string source);
         [[nodiscard]] ModalId Id() const override;
         [[nodiscard]] ModalPresentation Presentation() const override;
         [[nodiscard]] ModalClosePolicy ClosePolicy() const override;
@@ -47,7 +51,7 @@ namespace Horo::Editor {
         const EditorGuiContext &context_;
         EditorWorkspaceController *controller_;
         std::weak_ptr<const void> lifetime_;
-        std::variant<SourceSaveRequest, UiCanvasDocumentStateId> request_;
+        std::variant<SourceSaveRequest, UiCanvasDocumentStateId, BlackboardDocumentFence> request_;
         std::string source_;
         bool failed_{};
     };

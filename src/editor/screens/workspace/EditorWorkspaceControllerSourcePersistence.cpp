@@ -29,7 +29,8 @@ namespace Horo::Editor {
                     return true;
         }
         return std::ranges::any_of(m_viewModel.workspacePanelHost.DocumentTabs(), [](const WorkspaceDocumentTab &tab) {
-            return (tab.identity.key.kind == DocumentKind::Source || tab.identity.key.kind == DocumentKind::UiCanvas) && tab.dirty;
+            const auto kind = tab.identity.key.kind;
+            return tab.dirty && (kind == DocumentKind::Source || kind == DocumentKind::UiCanvas || kind == DocumentKind::BlackboardSchema);
         });
     }
 
@@ -57,6 +58,17 @@ namespace Horo::Editor {
                 return saved;
         }
         RefreshUiCanvasProjection();
+        for (const auto &document : m_blackboardDocuments) {
+            const auto snapshot = document->Snapshot();
+            if (snapshot.HasError())
+                return Result<void>::Failure(snapshot.ErrorValue());
+            if (!snapshot.Value().dirty)
+                continue;
+            const auto saved = SaveBlackboardDocument(*document, snapshot.Value().revision);
+            RefreshBlackboardDocument(*document, saved);
+            if (saved.HasError())
+                return saved;
+        }
         return SaveTerrainDocuments();
     }
 
@@ -231,6 +243,14 @@ namespace Horo::Editor {
             close.command = CloseSequenceDocument;
             close.documentInstance = instance;
             static_cast<void>(ProcessSequenceDocumentCommand(close));
+        } else if (auto *blackboard = FindBlackboardDocument(instance)) {
+            const auto snapshot = blackboard->Snapshot();
+            if (snapshot.HasValue()) {
+                if (snapshot.Value().dirty)
+                    RefreshBlackboardDocument(*blackboard, Result<void>::Failure(MakeError(BlackboardDocumentErrors::Dirty)));
+                else
+                    static_cast<void>(ResolveBlackboardClose({instance, snapshot.Value().revision}, SourceCloseDecision::Save));
+            }
         } else if (m_pcgDocuments.Snapshot(instance).HasValue()) {
             static_cast<void>(ClosePCGDocument(instance, false));
         } else if (const auto canvas = std::ranges::find_if(m_uiCanvasDocuments,

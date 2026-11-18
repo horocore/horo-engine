@@ -2,6 +2,8 @@
 
 #include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/Assets/AssetRegistry.h"
+#include "Horo/Assets/AssetSourcePublication.h"
+#include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Editor/SemanticDocumentHistory.h"
 
 #include <algorithm>
@@ -35,6 +37,10 @@ namespace Horo::Editor {
                                                     "Open the latest source revision."};
         const ErrorCodeDescriptor WrongThread{Domain, ErrorCode{"editor.blackboard.thread.wrong"}, ErrorSeverity::Error,
                                               "The Blackboard document requires its owner thread.", "Dispatch through the document owner."};
+        const ErrorCodeDescriptor Dirty{Domain, ErrorCode{"editor.blackboard.document.dirty"}, ErrorSeverity::Error,
+                                        "The Blackboard document contains unsaved source edits.", "Save or explicitly discard the edits."};
+        const ErrorCodeDescriptor Busy{Domain, ErrorCode{"editor.blackboard.document.busy"}, ErrorSeverity::Error,
+                                       "The Blackboard source publication is in progress.", "Retry after publication finishes."};
         const ErrorCodeDescriptor Cancelled{Domain,
                                             ErrorCode{"editor.blackboard.edit.cancelled"},
                                             ErrorSeverity::Error,
@@ -78,6 +84,30 @@ namespace Horo::Editor {
                 return Result<Schema>::Failure(captured.ErrorValue());
             return Result<Schema>::Success(std::make_shared<const BlackboardSchema>(std::move(captured).Value()));
         }
+
+        /** @brief Matches the current asset against the stable source classification and document key. */
+        bool IsRegisteredSource(const Assets::AssetRegistrySnapshot &registry, const Assets::AssetId asset,
+                                const DocumentIdentity &document) {
+            const auto *record = registry.Find(asset);
+            return record && record->type.Value() == BlackboardSchemaAssetType &&
+                   record->sourcePath.String() == document.key.source.Value();
+        }
+
+        /** @brief Fences domain mutations while a foreign filesystem owner can call back during publication. */
+        struct FileOperation final {
+            bool &active;
+
+            explicit FileOperation(bool &state) noexcept : active(state) {
+                active = true;
+            }
+
+            ~FileOperation() {
+                active = false;
+            }
+
+            FileOperation(const FileOperation &) = delete;
+            FileOperation &operator=(const FileOperation &) = delete;
+        };
 
         /** @brief Previews one exact validated typed command without mutating the live source. */
         Result<RowDelta> MakeDelta(const BlackboardSchemaSource &source, const BlackboardSchemaEdit &edit, const std::uint64_t issuedKey) {
@@ -134,15 +164,49 @@ namespace Horo::Editor {
         DocumentIdentity document;
         std::shared_ptr<const BlackboardSchemaSource> source;
         Schema runtime;
-        Schema opened;
+        Schema durable;
+        std::shared_ptr<const BlackboardSchemaSource> saved;
+
+        struct SourceFile final {
+            std::filesystem::path root;
+            std::filesystem::path path;
+            Assets::AssetSourceIdentity accepted;
+        };
+
+        std::optional<SourceFile> file;
+        bool conflict{};
+        bool fileOperation{};
         SemanticDocumentHistory<RowDelta> history{HistoryLimits};
         std::uint64_t revision{1};
         std::uint64_t issuedKey{};
+
+        /** @brief Determines authored dirty state independently from mutation revision and current file encoding. */
+        bool DirtySource() const noexcept {
+            return source->rows != saved->rows;
+        }
+
+        /** @brief Checks the same durable semantic barrier for normal edits and history replay. */
+        bool ResolvesDurableKey(const std::optional<PositionedRow> &before, const std::optional<PositionedRow> &after) const {
+            if (!before || (after && before->row.descriptor == after->row.descriptor))
+                return false;
+            const auto key = before->row.descriptor.key;
+            const auto keys = durable->Keys();
+            const auto original = std::ranges::lower_bound(keys, key, {}, &BlackboardKeyDescriptor::key);
+            return original != keys.end() && original->key == key;
+        }
+
+        /** @brief Presents precisely the next executable history step, including save barriers. */
+        bool CanReplay(bool redo) const {
+            const auto *delta = history.Next(redo);
+            return delta && !ResolvesDurableKey(redo ? delta->before : delta->after, redo ? delta->after : delta->before);
+        }
 
         /** @brief Rejects wrong-thread, stale and cancelled mutations before borrowed state is accessed. */
         [[nodiscard]] Result<void> Check(std::uint64_t expected, CancellationToken cancellation) const {
             if (lane != std::this_thread::get_id())
                 return Result<void>::Failure(MakeError(WrongThread));
+            if (fileOperation)
+                return Result<void>::Failure(MakeError(Busy));
             if (expected != revision)
                 return Result<void>::Failure(MakeError(StaleRevision));
             if (cancellation.IsCancellationRequested())
@@ -156,13 +220,8 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> Publish(const std::optional<PositionedRow> &before, const std::optional<PositionedRow> &after,
                                            CancellationToken cancellation) {
             const bool affectsSchema = !before || !after || before->row.descriptor != after->row.descriptor;
-            if (affectsSchema && before) {
-                const auto key = before->row.descriptor.key;
-                const auto keys = opened->Keys();
-                const auto original = std::ranges::lower_bound(keys, key, {}, &BlackboardKeyDescriptor::key);
-                if (original != keys.end() && original->key == key)
-                    return Result<void>::Failure(MakeError(ReferenceResolutionRequired));
-            }
+            if (ResolvesDurableKey(before, after))
+                return Result<void>::Failure(MakeError(ReferenceResolutionRequired));
 
             auto next = std::make_shared<BlackboardSchemaSource>(*source);
             if (before)
@@ -190,7 +249,8 @@ namespace Horo::Editor {
     Result<std::unique_ptr<BlackboardSchemaDocument>> BlackboardSchemaDocument::Open(DocumentIdentity document,
                                                                                      BlackboardSchemaSource source) {
         using Document = Result<std::unique_ptr<BlackboardSchemaDocument>>;
-        if (!document.IsValid() || document.key.kind != DocumentKind::Asset || !source.asset.IsValid())
+        if (!document.IsValid() || (document.key.kind != DocumentKind::Asset && document.key.kind != DocumentKind::BlackboardSchema) ||
+            !source.asset.IsValid())
             return Document::Failure(MakeError(InvalidEdit));
         auto schema = CaptureSchema(source);
         if (schema.HasError())
@@ -199,7 +259,8 @@ namespace Horo::Editor {
         state->document = std::move(document);
         state->source = std::make_shared<const BlackboardSchemaSource>(std::move(source));
         state->runtime = std::move(schema).Value();
-        state->opened = state->runtime;
+        state->durable = state->runtime;
+        state->saved = state->source;
         state->issuedKey = state->runtime->Keys().back().key.Value();
         return Document::Success(std::unique_ptr<BlackboardSchemaDocument>{new BlackboardSchemaDocument(std::move(state))});
     }
@@ -209,8 +270,7 @@ namespace Horo::Editor {
         DocumentIdentity document, const Assets::AssetRegistrySnapshot &registry, const Assets::AssetId asset,
         const std::span<const std::uint8_t> bytes) {
         using Document = Result<std::unique_ptr<BlackboardSchemaDocument>>;
-        const auto *record = registry.Find(asset);
-        if (!record || record->type.Value() != BlackboardSchemaAssetType || record->sourcePath.String() != document.key.source.Value())
+        if (!IsRegisteredSource(registry, asset, document))
             return Document::Failure(MakeError(InvalidEdit));
         auto decoded = BlackboardSchemaSourceCodec::Decode(bytes);
         if (decoded.HasError())
@@ -227,17 +287,49 @@ namespace Horo::Editor {
         return Open(std::move(document), std::move(source));
     }
 
+    /** @copydoc BlackboardSchemaDocument::OpenFile */
+    Result<std::unique_ptr<BlackboardSchemaDocument>> BlackboardSchemaDocument::OpenFile(DocumentIdentity document,
+                                                                                         const Assets::AssetRegistrySnapshot &registry,
+                                                                                         const std::filesystem::path &root,
+                                                                                         const std::filesystem::path &path,
+                                                                                         const CancellationToken cancellation) {
+        using Document = Result<std::unique_ptr<BlackboardSchemaDocument>>;
+        const auto *record = registry.FindByPath(document.key.source.Value());
+        const auto &relative = document.key.source.Value();
+        const auto expected = root / std::filesystem::path{std::u8string{relative.begin(), relative.end()}};
+        if (!record || record->type.Value() != BlackboardSchemaAssetType || path != expected ||
+            document.key.kind != DocumentKind::BlackboardSchema)
+            return Document::Failure(MakeError(InvalidEdit));
+        auto capture = Assets::CaptureAssetSource(root, path, BlackboardSchemaSourceCodec::MaximumBytes, cancellation);
+        if (capture.HasError())
+            return Document::Failure(capture.ErrorValue());
+        const auto &bytes = capture.Value().bytes;
+        auto opened =
+            OpenRegistered(std::move(document), registry, record->id, {reinterpret_cast<const std::uint8_t *>(bytes.data()), bytes.size()});
+        if (opened.HasValue())
+            opened.Value()->state_->file.emplace(root, path, capture.Value().identity);
+        return opened;
+    }
+
     /** @brief Retains one validated owner state. */
     BlackboardSchemaDocument::BlackboardSchemaDocument(std::unique_ptr<State> state) noexcept : state_(std::move(state)) {}
 
     BlackboardSchemaDocument::~BlackboardSchemaDocument() = default;
+
+    /** @copydoc BlackboardSchemaDocument::Identity */
+    const DocumentIdentity &BlackboardSchemaDocument::Identity() const noexcept {
+        return state_->document;
+    }
 
     /** @copydoc BlackboardSchemaDocument::Snapshot */
     Result<BlackboardSchemaDocumentSnapshot> BlackboardSchemaDocument::Snapshot() const {
         using Snapshot = Result<BlackboardSchemaDocumentSnapshot>;
         if (state_->lane != std::this_thread::get_id())
             return Snapshot::Failure(MakeError(WrongThread));
-        return Snapshot::Success({state_->document, state_->revision, state_->source, state_->runtime});
+        auto proposed = NextKeyId();
+        return Snapshot::Success({state_->document, state_->revision, state_->source, state_->runtime, state_->durable,
+                                  proposed.HasValue() ? std::optional{proposed.Value()} : std::nullopt, state_->DirtySource(),
+                                  state_->conflict, state_->CanReplay(false), state_->CanReplay(true)});
     }
 
     /** @copydoc BlackboardSchemaDocument::EncodeSource */
@@ -301,6 +393,81 @@ namespace Horo::Editor {
     /** @copydoc BlackboardSchemaDocument::Redo */
     Result<void> BlackboardSchemaDocument::Redo(const std::uint64_t expectedRevision, const CancellationToken cancellation) {
         return Replay(expectedRevision, true, cancellation);
+    }
+
+    /** @copydoc BlackboardSchemaDocument::Save */
+    Result<void> BlackboardSchemaDocument::Save(std::uint64_t expectedRevision, const Assets::AssetRegistrySnapshot &registry,
+                                                ProjectMutationCoordinator &mutations, DurableFileSystem &files,
+                                                const CancellationToken cancellation) {
+        if (auto admitted = state_->Check(expectedRevision, cancellation); admitted.HasError())
+            return admitted;
+        if (!state_->file || !IsRegisteredSource(registry, state_->source->asset, state_->document))
+            return Result<void>::Failure(MakeError(InvalidEdit));
+        if (state_->conflict)
+            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+        if (!state_->DirtySource())
+            return Result<void>::Success();
+        const auto encoded = EncodeSource(expectedRevision);
+        if (encoded.HasError())
+            return Result<void>::Failure(encoded.ErrorValue());
+        const FileOperation guard{state_->fileOperation};
+        auto &file = *state_->file;
+        const auto project = mutations.TryAcquire({file.root, ProjectMutationOwner::Asset, "blackboard-source-save"});
+        if (project.HasError())
+            return Result<void>::Failure(project.ErrorValue());
+        const auto lockPath = Assets::AssetSourcePublicationLockPath(file.root, file.path);
+        if (lockPath.HasError())
+            return Result<void>::Failure(lockPath.ErrorValue());
+        const auto lease = files.TryAcquireExclusive(lockPath.Value(), "blackboard-source-save");
+        if (lease.HasError())
+            return Result<void>::Failure(lease.ErrorValue());
+        auto written = Assets::PublishAssetSource(file.root, file.path, file.accepted, std::as_bytes(std::span{encoded.Value()}),
+                                                  lease.Value(), files, cancellation);
+        if (written.HasError()) {
+            state_->conflict = written.ErrorValue().code.Value() == Assets::AssetSourceErrors::Conflict.code.Value();
+            return Result<void>::Failure(written.ErrorValue());
+        }
+        if (written.Value().status != Assets::AssetSourcePublicationStatus::Durable) {
+            state_->conflict = true;
+            if (written.Value().durabilityError)
+                return Result<void>::Failure(std::move(*written.Value().durabilityError));
+            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed));
+        }
+        file.accepted = written.Value().identity;
+        state_->saved = state_->source;
+        state_->durable = state_->runtime;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc BlackboardSchemaDocument::Reload */
+    Result<void> BlackboardSchemaDocument::Reload(std::uint64_t expectedRevision, const Assets::AssetRegistrySnapshot &registry,
+                                                  bool discardDirty, const CancellationToken cancellation) {
+        if (auto admitted = state_->Check(expectedRevision, cancellation); admitted.HasError())
+            return admitted;
+        if (!state_->file)
+            return Result<void>::Failure(MakeError(InvalidEdit));
+        if (state_->DirtySource() && !discardDirty)
+            return Result<void>::Failure(MakeError(Dirty));
+        const FileOperation guard{state_->fileOperation};
+        const auto &file = *state_->file;
+        auto reopened = OpenFile(state_->document, registry, file.root, file.path, cancellation);
+        if (reopened.HasError())
+            return Result<void>::Failure(reopened.ErrorValue());
+        auto &candidate = *reopened.Value()->state_;
+        if (candidate.source->asset != state_->source->asset || candidate.runtime->Identity() != state_->runtime->Identity())
+            return Result<void>::Failure(MakeError(StaleRevision));
+        if (cancellation.IsCancellationRequested())
+            return Result<void>::Failure(MakeError(Cancelled));
+        state_->source = std::move(candidate.source);
+        state_->saved = state_->source;
+        state_->runtime = std::move(candidate.runtime);
+        state_->durable = state_->runtime;
+        state_->issuedKey = std::max(state_->issuedKey, candidate.issuedKey);
+        state_->file->accepted = candidate.file->accepted;
+        state_->conflict = false;
+        state_->history.Clear();
+        ++state_->revision;
+        return Result<void>::Success();
     }
 
     /** @copydoc BlackboardSchemaDocument::Replay */

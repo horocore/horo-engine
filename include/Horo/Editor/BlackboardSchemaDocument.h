@@ -9,11 +9,19 @@
 #include "Horo/Editor/EditorSurfaceIdentity.h"
 #include "Horo/Foundation/CancellationToken.h"
 
+#include <filesystem>
+
 namespace Horo::Assets {
     class AssetRegistrySnapshot;
 }
 
+namespace Horo {
+    class DurableFileSystem;
+}
+
 namespace Horo::Editor {
+    class ProjectMutationCoordinator;
+
     namespace BlackboardDocumentErrors {
         extern const ErrorCodeDescriptor InvalidEdit;
         extern const ErrorCodeDescriptor Cancelled;
@@ -23,12 +31,16 @@ namespace Horo::Editor {
         extern const ErrorCodeDescriptor HistoryCapacity;
         extern const ErrorCodeDescriptor IdentityExhausted;
         extern const ErrorCodeDescriptor WrongThread;
+        extern const ErrorCodeDescriptor Dirty;
+        extern const ErrorCodeDescriptor Busy;
     }  // namespace BlackboardDocumentErrors
 
     /** @brief One authored key. Display text and presentation order are independent of the stable key ID. */
     struct BlackboardSchemaRow final {
         AI::BlackboardKeyDescriptor descriptor;
         std::optional<std::string> displayName; /**< Absent on semantic-only legacy sources. */
+
+        bool operator==(const BlackboardSchemaRow &) const noexcept = default;
     };
 
     /** @brief Complete detached authoring source for an Asset Registry identity and a stable AI schema identity. */
@@ -72,18 +84,30 @@ namespace Horo::Editor {
     using BlackboardSchemaEdit =
         std::variant<AddBlackboardKey, RenameBlackboardKey, MoveBlackboardKey, EditBlackboardKey, RemoveBlackboardKey>;
 
+    /** @brief Exact workspace revision captured when a command or dirty-close decision was offered. */
+    struct BlackboardDocumentFence final {
+        DocumentInstanceId instance;
+        std::uint64_t revision{};
+    };
+
     /** @brief Immutable capture of the exact authored rows and last valid runtime projection for a document revision. */
     struct BlackboardSchemaDocumentSnapshot final {
         DocumentIdentity document;
         std::uint64_t revision{};
         std::shared_ptr<const BlackboardSchemaSource> source;
         std::shared_ptr<const AI::BlackboardSchema> schema;
+        std::shared_ptr<const AI::BlackboardSchema> durableSchema;
+        std::optional<AI::BlackboardKeyId> nextKey;
+        bool dirty{};
+        bool conflict{};
+        bool canUndo{};
+        bool canRedo{};
     };
 
     /** @brief Control-thread typed authoring owner for an existing Blackboard asset.
      * @details The document validates detached commands through the runtime schema before publishing any revision.
-     * It owns neither file writes nor a project reference index. It fails closed for descriptor changes to keys
-     * present in the original authored source, including history replay. All captures own their bytes independently.
+     * File-backed openings reuse Assets capture and publication under the project mutation owner. The current durable
+     * schema fences existing key semantics during editing and history replay. Captures retain their values independently.
      */
     class BlackboardSchemaDocument final {
     public:
@@ -105,10 +129,24 @@ namespace Horo::Editor {
                                                                                               const Assets::AssetRegistrySnapshot &registry,
                                                                                               Assets::AssetId asset,
                                                                                               std::span<const std::uint8_t> bytes);
+        /** @brief Opens the canonical registered file through the shared bounded Assets reader.
+         * @param document Exact Asset document session and canonical project-relative path.
+         * @param registry Current host-owned registry. @param root Authorized canonical project root.
+         * @param path Resolved file from the normal source-open route. @param cancellation Read cancellation.
+         * @return File-backed document or original identity, transport or schema failure.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<BlackboardSchemaDocument>> OpenFile(DocumentIdentity document,
+                                                                                        const Assets::AssetRegistrySnapshot &registry,
+                                                                                        const std::filesystem::path &root,
+                                                                                        const std::filesystem::path &path,
+                                                                                        CancellationToken cancellation = {});
         ~BlackboardSchemaDocument();
 
         BlackboardSchemaDocument(const BlackboardSchemaDocument &) = delete;
         BlackboardSchemaDocument &operator=(const BlackboardSchemaDocument &) = delete;
+
+        /** @brief Returns the unchanged workspace identity. @return Borrowed until document destruction. */
+        [[nodiscard]] const DocumentIdentity &Identity() const noexcept;
 
         /** @brief Captures the current source and sorted runtime schema. @return Owned value or wrong-thread failure. */
         [[nodiscard]] Result<BlackboardSchemaDocumentSnapshot> Snapshot() const;
@@ -140,6 +178,22 @@ namespace Horo::Editor {
          * @return Success or typed refusal with both history and source unchanged.
          */
         [[nodiscard]] Result<void> Redo(std::uint64_t expectedRevision, CancellationToken cancellation = {});
+
+        /** @brief Saves the current source through project mutation and exact source-byte publication.
+         * @param expectedRevision Current owner snapshot. @param registry Current project registry.
+         * @param mutations Project mutation owner. @param files Shared native durable filesystem. @param cancellation Save fence.
+         * @return Success only on durable publication (or clean document), or typed error with dirty state retained.
+         */
+        [[nodiscard]] Result<void> Save(std::uint64_t expectedRevision, const Assets::AssetRegistrySnapshot &registry,
+                                        ProjectMutationCoordinator &mutations, DurableFileSystem &files,
+                                        CancellationToken cancellation = {});
+        /** @brief Reloads an exact registered source and clears history after successful typed validation.
+         * @param expectedRevision Current owner snapshot. @param registry Current project registry.
+         * @param discardDirty Explicit consent to replace unsaved changes. @param cancellation Read and commit fence.
+         * @return Success or original identity/read/validation failure with the current draft unchanged.
+         */
+        [[nodiscard]] Result<void> Reload(std::uint64_t expectedRevision, const Assets::AssetRegistrySnapshot &registry,
+                                          bool discardDirty = false, CancellationToken cancellation = {});
 
     private:
         struct State;

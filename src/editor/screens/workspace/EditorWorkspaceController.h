@@ -275,6 +275,8 @@ namespace Horo::Editor {
 
         /** @brief Applies an explicit revision-fenced canvas close decision, preserving dirty state on failure. */
         [[nodiscard]] Result<bool> ResolveUiCanvasClose(UiCanvasDocumentStateId state, SourceCloseDecision decision);
+        /** @brief Handles the shared close dialog's exact Blackboard revision choice. */
+        [[nodiscard]] Result<bool> ResolveBlackboardClose(BlackboardDocumentFence fence, SourceCloseDecision decision);
         /** @brief Captures the current canvas instances and their exact publication fences for leave consent. */
         [[nodiscard]] std::vector<UiCanvasDocumentStateId> UiCanvasStates() const;
         /** @brief Retires all canvases after durable recovery or explicit discard. */
@@ -791,6 +793,7 @@ namespace Horo::Editor {
         std::uint64_t m_contentBrowserPreviewGeneration{};
         Sha256Digest m_contentBrowserPreviewSchemaRevision;
         std::size_t m_contentBrowserNextPreviewEntry{};
+        std::vector<std::unique_ptr<BlackboardSchemaDocument>> m_blackboardDocuments;
         std::vector<UiCanvasDocument> m_uiCanvasDocuments;
         float m_uiCanvasAutosaveSeconds{};
 
@@ -1193,6 +1196,16 @@ namespace Horo::Editor {
         void UpdatePCGAutosave(float elapsedSeconds, int intervalMinutes);
         void RefreshPCGDocumentProjection(DocumentInstanceId instance);
         void OpenEmbeddedSequenceSource(const SourceOpenResult &result);
+        /** @brief Loads or focuses an exact registry-backed Blackboard schema through the embedded workspace. */
+        void OpenEmbeddedBlackboardSource(const SourceOpenResult &result);
+        /** @brief Dispatches a revision-fenced Blackboard document request. */
+        bool ProcessBlackboardDocumentCommand(const EditorWorkspaceViewCommandData &cmd);
+        /** @brief Looks up the existing authored session by tab identity. */
+        [[nodiscard]] BlackboardSchemaDocument *FindBlackboardDocument(DocumentInstanceId instance) noexcept;
+        /** @brief Saves a Blackboard through the same native source publication owner as Save All. */
+        [[nodiscard]] Result<void> SaveBlackboardDocument(BlackboardSchemaDocument &document, std::uint64_t revision);
+        /** @brief Updates immutable tab data and typed diagnostic after one authorized operation. */
+        void RefreshBlackboardDocument(BlackboardSchemaDocument &document, const Result<void> &result);
         /** @brief Dispatches one command to the explicit owning workspace subsystem. */
         void DispatchWorkspaceCommand(const EditorWorkspaceViewCommandData &cmd);
         /** @brief Routes focused prefab persistence/history and global transport without granting Scene mutation. */

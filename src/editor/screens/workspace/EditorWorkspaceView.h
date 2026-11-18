@@ -139,9 +139,20 @@ namespace Horo::Editor {
         /** @brief Draws either the active document or its explicitly focused native panel. */
         void DrawDockContent(WorkspaceDockArea area, const std::shared_ptr<IWorkspacePanel> &panel,
                              const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
-        /** @brief Projects the active immutable sequence through the shared timeline control. */
         /** @brief Draws the active registered PCG document using immutable source and workspace-only state. */
         bool DrawPCGDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
+        /** @brief Projects the active Blackboard schema and emits revision-fenced source commands. */
+        bool DrawBlackboardDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
+
+        struct BlackboardViewDraft final {
+            BlackboardDocumentFence fence;
+            AI::BlackboardKeyId selected;
+            std::string name;
+            std::vector<std::string> rowIds;
+        };
+
+        mutable BlackboardViewDraft m_blackboardDraft;
+        /** @brief Projects the active immutable sequence through the shared timeline control. */
         bool DrawSequenceDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
         /** @brief Draws source-only controls and the isolated stage using shared themed components. */
         bool DrawPrefabDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;

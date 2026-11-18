@@ -1,0 +1,63 @@
+#include "Horo/Editor/Localization/LocalizationService.h"
+#include "Horo/Editor/Localization/LocalizedGui.h"
+
+#include <array>
+#include <catch2/catch_test_macros.hpp>
+#include <filesystem>
+
+TEST_CASE("Blackboard workspace controls resolve in both shipped locales", "[unit][editor][blackboard][localization]") {
+    using namespace Horo::Editor;
+    constexpr GuiLocalizationScope text{"workspace.blackboard"};
+    constexpr std::array Keys{
+        "limit",
+        "invalid",
+        "save",
+        "reload",
+        "undo",
+        "redo",
+        "conflict",
+        "operation_failed",
+        "add",
+        "no_keys",
+        "keys",
+        "name",
+        "apply_name",
+        "move_up",
+        "move_down",
+        "remove",
+        "reference_required",
+        "type",
+        "bool",
+        "integer",
+        "scalar",
+        "entity",
+        "asset",
+        "coordinate",
+        "shape",
+        "single",
+        "collection",
+        "access",
+        "read_only",
+        "read_write",
+        "presence",
+        "required",
+        "optional",
+        "default_set",
+        "clear_default",
+    };
+    const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+    const std::array locales{"en-US", "tr-TR"};
+    LocalizationService service{{"en-US"}};
+    for (const auto locale : locales)
+        REQUIRE(service.LoadCatalogFile(root / (std::string{locale} + ".json")));
+    for (const auto locale : locales) {
+        REQUIRE(service.Prepare({locale}));
+        REQUIRE(service.ActivatePrepared());
+        for (const auto key : Keys) {
+            INFO(locale);
+            INFO(key);
+            CHECK_FALSE(text.Text(service, key).empty());
+            CHECK_FALSE(text.Text(service, key).starts_with("[missing:"));
+        }
+    }
+}

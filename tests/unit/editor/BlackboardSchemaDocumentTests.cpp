@@ -1,8 +1,12 @@
 #include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/Assets/AssetRegistry.h"
 #include "Horo/Editor/BlackboardSchemaDocument.h"
+#include "Horo/Editor/ProjectMutation.h"
+#include "Horo/Editor/SourceFileOpenService.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
+#include <fstream>
 #include <limits>
 #include <thread>
 
@@ -203,6 +207,117 @@ namespace {
             rows[0].displayName = std::string(129, 'x');
         }
         CHECK(BlackboardSchemaSourceCodec::Encode(*schema, rows).HasError());
+    }
+
+    /** @brief Actual source route, registry, project writer and no-follow durable filesystem. */
+    struct FileFixture final {
+        DocumentIdentityRegistry documents;
+        Assets::AssetRegistry registry;
+        NativeDurableFileSystem files;
+        ProjectMutationCoordinator mutations{files};
+        std::filesystem::path root;
+        std::filesystem::path path;
+
+        FileFixture() {
+            const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+            root = std::filesystem::temp_directory_path() / ("horo-blackboard-" + std::to_string(nonce));
+            std::filesystem::create_directories(root / "assets");
+            root = std::filesystem::canonical(root);
+            path = root / "assets/guard.horo_bb";
+            auto semantic = Open();
+            auto encoded = BlackboardSchemaCodec::Encode(*semantic->Snapshot().Value().schema);
+            REQUIRE(encoded.HasValue());
+            Write(encoded.Value());
+            const auto type = Assets::AssetTypeId::Parse(BlackboardSchemaAssetType).Value();
+            REQUIRE(registry
+                        .Publish(std::vector<Assets::AssetRecord>{{Source().asset, type, ProjectPath::Parse("assets/guard.horo_bb").Value(),
+                                                                   ProjectPath::Parse("assets/guard.horo_bb.horo").Value()}})
+                        .status == Assets::AssetRegistryBuildStatus::Complete);
+        }
+
+        ~FileFixture() {
+            std::error_code error;
+            std::filesystem::remove_all(root, error);
+        }
+
+        void Write(std::span<const std::uint8_t> bytes) const {
+            std::ofstream file(path, std::ios::binary | std::ios::trunc);
+            file.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+            REQUIRE(static_cast<bool>(file));
+        }
+    };
+
+    TEST_CASE("Blackboard file route saves typed edits and fences durable keys on reopen", "[editor][blackboard][source]") {
+        FileFixture fixture;
+        SourceFileOpenService service{fixture.root, fixture.documents};
+        const auto open = service.Open({.path = fixture.path, .origin = SourceOpenOrigin::AssetActivation});
+        REQUIRE(open.HasValue());
+        REQUIRE(open.Value().document);
+        CHECK(open.Value().classification.kind == SourceFileKind::BlackboardSchema);
+        CHECK(open.Value().document->identity.key.kind == DocumentKind::BlackboardSchema);
+        CHECK(ParseDocumentKind("blackboard_schema").Value() == DocumentKind::BlackboardSchema);
+        CHECK_FALSE(open.Value().sourceSnapshot);
+        auto candidate = BlackboardSchemaDocument::OpenFile(open.Value().document->identity, fixture.registry.Snapshot(), fixture.root,
+                                                            open.Value().location.absolutePath);
+        REQUIRE(candidate.HasValue());
+        auto &document = *candidate.Value();
+        const auto start = document.Snapshot().Value();
+        CHECK_FALSE(start.dirty);
+        REQUIRE(start.nextKey);
+        REQUIRE(document.Execute(start.revision, AddBlackboardKey{BooleanRow(*start.nextKey, "Visible"), 0}).HasValue());
+        const auto draft = document.Snapshot().Value();
+        CHECK(draft.dirty);
+        CHECK(draft.canUndo);
+        REQUIRE(document.Save(draft.revision, fixture.registry.Snapshot(), fixture.mutations, fixture.files).HasValue());
+        const auto saved = document.Snapshot().Value();
+        CHECK_FALSE(saved.dirty);
+        CHECK_FALSE(saved.canUndo);
+        CHECK(document.Undo(saved.revision).HasError());
+        const auto again = service.Open({.path = fixture.path});
+        REQUIRE(again.HasValue());
+        REQUIRE(again.Value().document);
+        CHECK(again.Value().document->disposition == DocumentOpenDisposition::FocusExisting);
+        CHECK(again.Value().document->identity == open.Value().document->identity);
+        auto reopened = BlackboardSchemaDocument::OpenFile(again.Value().document->identity, fixture.registry.Snapshot(), fixture.root,
+                                                           again.Value().location.absolutePath);
+        REQUIRE(reopened.HasValue());
+        const auto durable = reopened.Value()->Snapshot().Value();
+        CHECK(durable.source->rows[0].descriptor.key == *start.nextKey);
+        CHECK(durable.source->rows[0].displayName == "Visible");
+        CHECK(reopened.Value()->Execute(durable.revision, RemoveBlackboardKey{*start.nextKey}).HasError());
+    }
+
+    TEST_CASE("Blackboard source conflict preserves dirty edits until explicit revision-fenced reload", "[editor][blackboard][source]") {
+        FileFixture fixture;
+        SourceFileOpenService service{fixture.root, fixture.documents};
+        const auto opened = service.Open({.path = fixture.path});
+        REQUIRE(opened.HasValue());
+        REQUIRE(opened.Value().document);
+        auto loaded = BlackboardSchemaDocument::OpenFile(opened.Value().document->identity, fixture.registry.Snapshot(), fixture.root,
+                                                         opened.Value().location.absolutePath);
+        REQUIRE(loaded.HasValue());
+        auto &document = *loaded.Value();
+        const auto start = document.Snapshot().Value();
+        REQUIRE(document.Execute(start.revision, RenameBlackboardKey{Key(8), "Local Target"}).HasValue());
+        const auto dirty = document.Snapshot().Value();
+        std::array labels{BlackboardSchemaAuthoringRow{Key(8), "External Target"}, BlackboardSchemaAuthoringRow{Key(3), std::nullopt}};
+        const auto external = BlackboardSchemaSourceCodec::Encode(*start.schema, labels);
+        REQUIRE(external.HasValue());
+        fixture.Write(external.Value());
+
+        const auto conflict = document.Save(dirty.revision, fixture.registry.Snapshot(), fixture.mutations, fixture.files);
+        REQUIRE(conflict.HasError());
+        CHECK(document.Snapshot().Value().conflict);
+        CHECK(document.Snapshot().Value().source == dirty.source);
+        CHECK(document.Reload(dirty.revision, fixture.registry.Snapshot()).HasError());
+        REQUIRE(document.Reload(dirty.revision, fixture.registry.Snapshot(), true).HasValue());
+        const auto refreshed = document.Snapshot().Value();
+        CHECK_FALSE(refreshed.conflict);
+        CHECK_FALSE(refreshed.dirty);
+        CHECK_FALSE(refreshed.canUndo);
+        CHECK(refreshed.source->rows[0].displayName == "External Target");
+        CHECK(refreshed.revision > dirty.revision);
+        CHECK(document.Execute(dirty.revision, RenameBlackboardKey{Key(8), "Stale"}).HasError());
     }
 
     TEST_CASE("Blackboard owner rejects foreign threads and leaves exhausted identities unchanged", "[editor][blackboard]") {

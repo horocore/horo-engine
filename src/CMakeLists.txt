@@ -4320,6 +4320,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserAssetOperations.cpp
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserSourceOperations.cpp
             editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
+            editor/screens/workspace/EditorWorkspaceControllerBlackboard.cpp
             editor/screens/workspace/EditorWorkspaceControllerPCG.cpp
             editor/screens/workspace/panels/inspector/UiInspectorWidgets.cpp
             editor/screens/workspace/panels/inspector/UiInspectorAuthoringWidgets.cpp
@@ -4347,6 +4348,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceViewPCG.cpp
             editor/pcg/PCGAuthoringInspector.cpp
             editor/screens/workspace/EditorWorkspaceViewSequence.cpp
+            editor/screens/workspace/EditorWorkspaceViewBlackboard.cpp
             editor/screens/workspace/WorldLayerOutliner.cpp
             editor/modals/world_layer/CreateWorldLayerModal.cpp
             editor/modals/xr_setup/XrSetupModal.cpp

@@ -311,6 +311,22 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                 controller->ProcessCommand(command);
                 return true;
             }
+            const auto blackboard = std::ranges::find_if(model.blackboardDocuments, [&](const auto &entry) {
+                return entry.snapshot.document.instance == model.workspacePanelHost.ActiveDocument();
+            });
+            if (blackboard != model.blackboardDocuments.end()) {
+                const auto &snapshot = blackboard->snapshot;
+                BlackboardDocumentOperation operation = BlackboardDocumentOperation::Save;
+                if (action == EditorMenuAction::Undo)
+                    operation = BlackboardDocumentOperation::Undo;
+                if (action == EditorMenuAction::Redo)
+                    operation = BlackboardDocumentOperation::Redo;
+                controller->ProcessCommand(
+                    {.command = EditorWorkspaceViewCommand::BlackboardDocument,
+                     .blackboard =
+                         BlackboardWorkspaceRequest{.fence = {snapshot.document.instance, snapshot.revision}, .operation = operation}});
+                return true;
+            }
         }
         return false;
     }
@@ -458,10 +474,23 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         const auto canvas = std::ranges::find_if(canvases, [&](const auto &document) {
             return document.identity.instance == *command.documentInstance && document.dirty;
         });
-        if (canvas == canvases.end())
+        if (canvas != canvases.end()) {
+            static_cast<void>(
+                modalHost.OpenRoot(std::make_unique<SourceDocumentCloseModal>(context, controller, closeLifetime_, canvas->state,
+                                                                              canvas->identity.key.source.Value())));
+            return true;
+        }
+        const auto &blackboards = controller.ViewModel().blackboardDocuments;
+        const auto blackboard = std::ranges::find_if(blackboards, [&](const auto &document) {
+            return document.snapshot.document.instance == *command.documentInstance && document.snapshot.dirty;
+        });
+        if (blackboard == blackboards.end())
             return false;
-        static_cast<void>(modalHost.OpenRoot(std::make_unique<SourceDocumentCloseModal>(context, controller, closeLifetime_, canvas->state,
-                                                                                        canvas->identity.key.source.Value())));
+        const auto &schema = blackboard->snapshot;
+        static_cast<void>(modalHost.OpenRoot(
+            std::make_unique<SourceDocumentCloseModal>(context, controller, closeLifetime_,
+                                                       BlackboardDocumentFence{schema.document.instance, schema.revision},
+                                                       schema.document.key.source.Value())));
         return true;
     }
 

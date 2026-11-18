@@ -67,6 +67,9 @@ namespace Horo::Editor {
             case Sequence:
                 OpenEmbeddedSequenceSource(result);
                 return true;
+            case BlackboardSchema:
+                OpenEmbeddedBlackboardSource(result);
+                return true;
             case UiCanvas:
                 OpenEmbeddedUiCanvasSource(result);
                 return true;

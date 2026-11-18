@@ -3349,6 +3349,7 @@ if (HORO_BUILD_EDITOR_GUI)
 endif ()
 add_executable(HoroEditorLocalizationServiceTests
         support/AllocationProbe.cpp
+        unit/editor/BlackboardLocalizationTests.cpp
         unit/editor/GuiLocalizationScopeTests.cpp
         unit/editor/LocalizationServiceTests.cpp
         unit/editor/UiInspectorLocalizationTests.cpp
@@ -3847,6 +3848,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceControllerPrefabAuthoringTests.cpp
             unit/editor/EditorWorkspaceControllerPrefabCreationTests.cpp
             unit/editor/EditorWorkspaceControllerSequenceTests.cpp
+            unit/editor/EditorWorkspaceControllerBlackboardTests.cpp
             unit/editor/EditorWorkspaceControllerPCGTests.cpp
             unit/editor/EditorWorkspaceWorldBakeReplicationTests.cpp
             unit/editor/EditorWorkspaceWorldCompositionTests.cpp
