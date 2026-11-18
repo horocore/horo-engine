@@ -4,8 +4,9 @@
 complete Scene transaction. Prefab Runtime uses this dedicated evidence without
 consuming global host operation notifications. Receipts preserve the original
 pre-publication error or the committed group identities through service shutdown.
-Post-publication hook faults remain distinct host errors and do not reverse
-committed topology. `DestroyGroup` validates complete resource-group membership,
+Scene makes committed receipts visible after installing the new aggregate and
+before calling post-publication hooks. Hook faults remain distinct host errors
+and do not reverse committed topology. `DestroyGroup` validates complete resource-group membership,
 exact generations and cancellation, then retires reverse topology atomically.
 Cook-projected reference interfaces and inherited spawn lineage are immutable
 Scene-owned group metadata; Scene resolves interfaces after complete reservation

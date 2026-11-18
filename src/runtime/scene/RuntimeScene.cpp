@@ -499,7 +499,7 @@ namespace Horo::Runtime {
     Result<StructuralCommitResult> RuntimeScene::CommitWithRegistry(
         const SceneCommandBuffer &commands, const Assets::AssetRegistry *registry,
         std::span<const std::unique_ptr<SceneStructuralParticipant>> participants, std::optional<Error> *notificationError,
-        CommitPurpose purpose) {
+        CommitPurpose purpose, std::optional<StructuralCommitResult> *trackedResult) {
         if (commands.Empty())
             return Result<StructuralCommitResult>::Success({});
         if (auto admission = CommandApplier::ValidateResourceAdmission(commands, runtimeId_, registry, purpose); admission.HasError())
@@ -525,8 +525,11 @@ namespace Horo::Runtime {
         RuntimeSceneStorage retired = std::move(storage_);
         storage_ = std::move(candidate);
         ++structuralRevision_;
+        static_assert(std::is_nothrow_move_constructible_v<StructuralCommitResult>);
+        if (trackedResult)
+            trackedResult->emplace(std::move(result));
         CommandApplier::NotifyOwners(owners, notificationError);
-        return Result<StructuralCommitResult>::Success(std::move(result));
+        return Result<StructuralCommitResult>::Success(trackedResult ? StructuralCommitResult{} : std::move(result));
     }
 
 }  // namespace Horo::Runtime

@@ -58,6 +58,9 @@ namespace Horo::Prefab {
         CHECK(fixture.Count() == 3);
         CHECK(fixture.trace.creates == 3);
         CHECK(fixture.runner->InstanceCount() == 3);
+        operation->Cancel();
+        CHECK(operation->State() == PrefabSpawnState::Committed);
+        CHECK(fixture.Count() == 3);
         REQUIRE(fixture.runner->FixedUpdate({}, {0.01}).HasValue());
         CHECK(fixture.trace.starts == 3);
         auto retired = fixture.context->Despawn(instance.Value(), fixture.tick);
@@ -66,6 +69,9 @@ namespace Horo::Prefab {
         CHECK(retired.Value().State() == PrefabSpawnState::Committed);
         CHECK(fixture.Count() == 1);
         CHECK(fixture.runner->InstanceCount() == 1);
+        CHECK(fixture.trace.destroys == 2);
+        retired.Value().Cancel();
+        CHECK(retired.Value().State() == PrefabSpawnState::Committed);
         CHECK(fixture.trace.destroys == 2);
         CHECK(fixture.scenes.ActiveScene()->Get(instance.Value().Root()).HasError());
     }

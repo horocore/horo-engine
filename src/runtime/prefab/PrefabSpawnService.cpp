@@ -282,7 +282,8 @@ namespace Horo::Prefab {
     /** @copydoc PrefabSpawnService::Advance */
     Result<void> PrefabSpawnService::Advance(const std::uint64_t tick) const {
         if (auto valid = state_->Check(); valid.HasError()) {
-            state_->RetireUnavailable(valid.ErrorValue());
+            if (state_->owner == std::this_thread::get_id())
+                state_->RetireUnavailable(valid.ErrorValue());
             return valid;
         }
         if (tick < state_->tick)
@@ -302,7 +303,7 @@ namespace Horo::Prefab {
             }
             if (operation->cancellation.Token().IsCancellationRequested() || operation->scopeCancellation.IsCancellationRequested() ||
                 tick > operation->due + 64) {
-                operation->Fail(MakeError(PrefabErrors::Cancelled));
+                operation->CancelUnpublished();
                 continue;
             }
             if (!state_->TakeLoadResult(*operation))
@@ -353,15 +354,14 @@ namespace Horo::Prefab {
         for (const auto &operation : state_->pending) {
             if (operation->receipt && operation->receipt->ResultValue())
                 state_->Observe(*operation);
-            else {
-                operation->cancellation.RequestCancellation();
-                operation->load.reset();
-                operation->lease.reset();
-                operation->measurement.Complete(PrefabMetricOutcome::Cancelled);
-                operation->status = PrefabSpawnState::Cancelled;
-            }
+            else
+                operation->CancelUnpublished();
         }
         state_->pending.clear();
+        state_->retained.clear();
+        state_->scopes.clear();
+        state_->persistence.reset();
+        state_->schemas.reset();
         state_->provider = nullptr;
         state_->scenes = nullptr;
         state_->preparedScene = nullptr;

@@ -60,8 +60,10 @@ namespace Horo::Application::Internal {
             }
 
             void Cancel() noexcept override {
-                if (!entry->published)
-                    entry->cancelled = true;
+                if (entry->published)
+                    return;
+                entry->cancelled = true;
+                entry->source = {};
             }
 
             std::shared_ptr<Entry> entry;

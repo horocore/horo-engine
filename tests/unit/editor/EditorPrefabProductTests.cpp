@@ -330,12 +330,17 @@ namespace Horo::Application::PrefabEditorProductTest {
         REQUIRE(retired);
         REQUIRE(retired->CurrentTick().Value() == 3);
         REQUIRE(observation.operation);
-        REQUIRE(observation.operation->State() == Prefab::PrefabSpawnState::Pending);
+        RequirePendingPrefab(play, *observation.operation);
+        const auto previousScene = *play.SceneView();
+        const auto pending = *observation.operation;
         auto snapshot = play.QuiesceForReload();
         REQUIRE(snapshot.HasValue());
         CHECK(retired->CurrentTick().HasError());
         CHECK(observation.operation->State() == Prefab::PrefabSpawnState::Cancelled);
         REQUIRE(play.RestoreAfterReload(registry, snapshot.Value()).HasValue());
+        CHECK(play.SceneView()->SameIncarnation(previousScene));
+        CHECK(retired->Spawn(observation.request).HasError());
+        CHECK(pending.State() == Prefab::PrefabSpawnState::Cancelled);
         auto reloaded = host->PrefabServices(registry, components);
         REQUIRE(reloaded.HasValue());
         REQUIRE(reloaded.Value());
@@ -355,6 +360,12 @@ namespace Horo::Application::PrefabEditorProductTest {
         });
         if (const auto *error = next.Value().Failure())
             UNSCOPED_INFO(error->code.Value() << ": " << error->message);
+        REQUIRE(next.Value().State() == Prefab::PrefabSpawnState::Committed);
+        CHECK(pending.State() == Prefab::PrefabSpawnState::Cancelled);
+        CHECK(pending.Spawned().HasError());
+        const auto created = next.Value().Spawned().Value();
+        CHECK(created.ResolveMember({}, *play.SceneView()).HasValue());
+        next.Value().Cancel();
         CHECK(next.Value().State() == Prefab::PrefabSpawnState::Committed);
         play.Stop();
         CHECK(reloaded.Value()->CurrentTick().HasError());

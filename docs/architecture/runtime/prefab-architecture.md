@@ -838,6 +838,10 @@ returned member. Save storage and transport remain outside this interface.
 Commit and cancellation are serialized by the coordinator/owner-thread protocol: cancellation
 accepted before publication leaves no entities; cancellation after publication does not undo
 commit or change the successful spawn into a cancelled operation.
+Terminal retirement releases the operation's unpublished template, token and
+inventory reservations, even while a caller retains the terminal result. Scene
+drains cancelled submissions at its structural safe point. The host closes
+asset loaders before the shared job owner drains accepted work.
 
 ### Runtime spawn recursion
 

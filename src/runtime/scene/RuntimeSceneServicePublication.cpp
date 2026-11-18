@@ -125,22 +125,20 @@ namespace Horo::Runtime {
             const auto revision = assetPreparationServices_.registry ? assetPreparationServices_.registry->Snapshot().Revision()
                                                                      : Assets::AssetRegistryRevision{};
             auto admitted = structuralCommands_->ValidateAdmission(active_.scene->View().RuntimeId(), revision);
+            auto *trackedResult = structuralReceipt_ ? &structuralReceipt_->result_ : nullptr;
             Result<StructuralCommitResult> committed =
-                admitted.HasValue() ? active_.scene->CommitWithRegistry(*structuralCommands_, assetPreparationServices_.registry,
-                                                                        structuralParticipants_, &operationError_)
-                                    : Result<StructuralCommitResult>::Failure(admitted.ErrorValue());
+                admitted.HasValue()
+                    ? active_.scene->CommitWithRegistry(*structuralCommands_, assetPreparationServices_.registry, structuralParticipants_,
+                                                        &operationError_, RuntimeScene::CommitPurpose::Ordinary, trackedResult)
+                    : Result<StructuralCommitResult>::Failure(admitted.ErrorValue());
             structuralCommands_.reset();
             if (committed.HasError())
                 operationError_ = committed.ErrorValue();
             else if (!structuralReceipt_)
                 structuralResult_ = std::move(committed).Value();
-            if (structuralReceipt_) {
-                if (committed.HasError())
-                    structuralReceipt_->error_ = committed.ErrorValue();
-                else
-                    structuralReceipt_->result_ = std::move(committed).Value();
-                structuralReceipt_.reset();
-            }
+            if (structuralReceipt_ && committed.HasError())
+                structuralReceipt_->error_ = committed.ErrorValue();
+            structuralReceipt_.reset();
         }
         if (transition_ == Activate) {
             const auto prepared = PreparePendingPublication();

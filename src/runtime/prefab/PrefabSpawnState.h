@@ -108,6 +108,29 @@ namespace Horo::Prefab::Detail {
             preparedTemplate.reset();
         }
 
+        /** @brief Drops all unpublished operation-owned evidence. Scene owns any submitted command until its safe point. */
+        void ReleaseUnpublished() noexcept {
+            if (receipt && !receipt->Complete()) {
+                cancellation.RequestCancellation();
+                receipt.reset();
+            }
+            load.reset();
+            lease.reset();
+            preparedTemplate.reset();
+            creations.reset();
+            if (prepared && prepared->persistence)
+                prepared->persistence->Cancel();
+            prepared.reset();
+        }
+
+        /** @brief Retires unpublished work with the cancellation error reserved at admission. */
+        void CancelUnpublished() noexcept {
+            cancellation.RequestCancellation();
+            measurement.Complete(PrefabMetricOutcome::Cancelled);
+            status = Prefab::PrefabSpawnState::Cancelled;
+            ReleaseUnpublished();
+        }
+
         /** @brief Preserves the original failure while retiring only unpublished
          * preparation. */
         void Fail(Error failure) {
@@ -119,13 +142,7 @@ namespace Horo::Prefab::Detail {
                 measurement.Complete(PrefabMetricOutcome::Cancelled);
             else
                 measurement.Fail(*error);
-            load.reset();
-            lease.reset();
-            preparedTemplate.reset();
-            creations.reset();
-            if (prepared && prepared->persistence)
-                prepared->persistence->Cancel();
-            prepared.reset();
+            ReleaseUnpublished();
         }
     };
 
@@ -428,10 +445,10 @@ namespace Horo::Prefab::Detail {
                 persistence->PrepareSpawn(*operation.preparedTemplate, operation.request, projected, operation.lineage, operation.creator);
             if (prepared.HasError())
                 return Result<void>::Failure(prepared.ErrorValue());
-            if (!prepared.Value() || !prepared.Value()->InstanceIdentity().IsValid())
-                return Result<void>::Failure(
-                    MakeError(PrefabErrors::AdmissionRejected, "Prefab persistence owner returned no metadata transaction."));
             operation.prepared->persistence = std::move(prepared).Value();
+            if (!operation.prepared->persistence || !operation.prepared->persistence->InstanceIdentity().IsValid())
+                return Result<void>::Failure(
+                    MakeError(PrefabErrors::AdmissionRejected, "Prefab persistence owner returned an invalid metadata transaction."));
             return Result<void>::Success();
         }
 

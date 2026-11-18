@@ -575,7 +575,8 @@ namespace Horo::Runtime {
     };
 
     /** @brief Immutable observation of one Scene-owned transaction, retained safely through Scene/service retirement.
-     * Observers use the Scene owner lane. Pending means unpublished; success remains success after entity retirement.
+     * Observers use the Scene owner lane. Pending means unpublished. A committed receipt is visible to post-publication
+     * callbacks and remains successful after entity retirement.
      */
     class SceneStructuralReceipt final {
     public:
@@ -969,10 +970,20 @@ namespace Horo::Runtime {
             Ordinary,
             RestoreMaterialization
         };
+        /** @brief Publishes the structural aggregate and makes any tracked result visible before notifying owners.
+         * @param commands Structural intent to prepare and validate.
+         * @param registry Optional current registry owner used by resource admission.
+         * @param participants Other owners that prepare and publish with the Scene.
+         * @param notificationError Optional destination for post-publication diagnostics.
+         * @param purpose Selects ordinary commit or private restore materialization.
+         * @param trackedResult Optional destination for the committed result before notifications run.
+         * @return Failure before publication, or success with the committed result when it was not transferred to tracked storage.
+         */
         [[nodiscard]] Result<StructuralCommitResult> CommitWithRegistry(
             const SceneCommandBuffer &commands, const Assets::AssetRegistry *registry,
             std::span<const std::unique_ptr<SceneStructuralParticipant>> participants = {},
-            std::optional<Error> *notificationError = nullptr, CommitPurpose purpose = CommitPurpose::Ordinary);
+            std::optional<Error> *notificationError = nullptr, CommitPurpose purpose = CommitPurpose::Ordinary,
+            std::optional<StructuralCommitResult> *trackedResult = nullptr);
 
         [[nodiscard]] static Result<std::unique_ptr<RuntimeScene>> CreateResolved(const RuntimeSceneDefinition &definition,
                                                                                   SceneRuntimeId runtimeId, RuntimeSceneConfig config,
