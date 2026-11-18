@@ -277,7 +277,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiHudAssociation::EndSuppression */
     Result<void> UiHudAssociation::EndSuppression(UiHotReload &publisher, const UiHudSuppressionToken &token) {
-        if (!Current(publisher))
+        if (!active_ || !publisher.Retains(generation_))
             return Failure<void>(UiErrors::HandleStale);
         if (token.issuer_.lock() != suppressionIssuer_)
             return Failure<void>(UiErrors::HandleOwnerMismatch);

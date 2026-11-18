@@ -158,10 +158,10 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<UiHudSuppressionToken> BeginSuppression(UiHotReload &publisher);
         /**
          * @brief Ends one exact suppression without changing the host's underlying visibility policy.
-         * @param publisher Exact live publisher.
+         * @param publisher Exact publisher, including during replacement of its published generation.
          * @param token Receipt issued by this association. Receipts may end out of order.
          * @return Success or typed stale, foreign or revision failure. A consumed receipt cannot be replayed.
-         * @note Ending the last suppression requires a fresh presentation before input can reopen.
+         * @note Release remains valid before Refresh during reload. Ending the last suppression requires a fresh presentation.
          */
         [[nodiscard]] Result<void> EndSuppression(UiHotReload &publisher, const UiHudSuppressionToken &token);
         /** @brief Resolves authored canvas policy against current copied viewport evidence, even while hidden/disabled.

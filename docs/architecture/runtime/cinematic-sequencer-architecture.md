@@ -636,6 +636,14 @@ pause token holds the whole simulation domain. A granted HUD token suppresses on
 the selected HUD band/route generation and preserves other suppression owners.
 Headless hosts can provide a no-op HUD owner only when there is no HUD to suppress.
 
+The player HUD association exposes bounded suppression receipts to presenters.
+The first receipt withdraws input and cancels capture in that association. Nested
+receipts may end in any order. The final release preserves the underlying host
+visibility policy and requires a fresh presentation receipt before input reopens.
+A cinematic ending during UI reload can release its receipt against the same
+publisher before the association refreshes. Association shutdown invalidates
+all receipts. The cinematic host retains only its own suppression receipt.
+
 An incoming gameplay pause holds `FollowGameplay` players and reports
 `HeldByGameplayPause`; `PlayerOnly` players report
 `ContinuedDuringGameplayPause` and keep consuming their own source clock. A newer
