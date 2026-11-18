@@ -47,6 +47,27 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Admits one authored element after its parent in the pinned canvas traversal. */
+        Result<Row> PrepareRow(const UiReloadCanvas &canvas, std::span<const UiDocumentElement> elements, std::span<const Row> parents,
+                               const UiElementHandle handle) {
+            const auto record = canvas.tree.Get(handle);
+            if (record.HasError())
+                return Result<Row>::Failure(record.ErrorValue());
+            const auto element = std::ranges::find(elements, record.Value().id, &UiDocumentElement::id);
+            if (element == elements.end() || !UiElementCatalog::Find(element->type.Value()))
+                return Result<Row>::Failure(MakeError(UiErrors::HandleMalformed));
+            Row row{.source = std::to_address(element), .element = handle, .end = static_cast<std::uint32_t>(parents.size() + 1)};
+            if (const auto parentHandle = record.Value().parent; parentHandle.IsValid()) {
+                const auto parent = std::ranges::find(parents, parentHandle, &Row::element);
+                if (parent == parents.end())
+                    return Result<Row>::Failure(MakeError(UiErrors::HandleMalformed));
+                row.parent = static_cast<std::uint32_t>(parent - parents.begin());
+            }
+            row.stateIndicators = (canvas.focus && canvas.focus->Find(element->id).HasValue()) ||
+                                  std::ranges::find(canvas.controls, element->id, &UiReloadControl::id) != canvas.controls.end();
+            return Result<Row>::Success(row);
+        }
+
     }  // namespace
 
     /** @copydoc RuntimeUiPaintProjection::Storage::AdmitRows */
@@ -67,29 +88,12 @@ namespace Horo::Application::Internal {
         if (traversed.HasError())
             return Result<void>::Failure(traversed.ErrorValue());
         rows.reserve(traversed.Value());
-        for (std::size_t index = 0; index < traversed.Value(); ++index) {
-            const auto record = canvas->tree.Get(order[index]);
-            if (record.HasError())
-                return Result<void>::Failure(record.ErrorValue());
-            const auto elements = generation.Instance().Elements();
-            const auto element = std::ranges::find_if(elements, [&](const auto &entry) {
-                return entry.id == record.Value().id;
-            });
-            if (element == elements.end() || !UiElementCatalog::Find(element->type.Value()))
-                return InvalidSource();
-            Row row{.source = std::to_address(element), .element = order[index], .end = static_cast<std::uint32_t>(index + 1)};
-            if (record.Value().parent.IsValid()) {
-                const auto parent = std::ranges::find_if(rows, [&](const auto &entry) {
-                    return entry.element == record.Value().parent;
-                });
-                if (parent == rows.end())
-                    return InvalidSource();
-                row.parent = static_cast<std::uint32_t>(parent - rows.begin());
-            }
-            const bool knownFocusNode = canvas->focus && canvas->focus->Find(element->id).HasValue();
-            row.stateIndicators =
-                knownFocusNode || std::ranges::find(canvas->controls, element->id, &UiReloadControl::id) != canvas->controls.end();
-            rows.push_back(row);
+        const auto elements = generation.Instance().Elements();
+        for (const auto handle : std::span{order}.first(traversed.Value())) {
+            auto row = PrepareRow(*canvas, elements, rows, handle);
+            if (row.HasError())
+                return Result<void>::Failure(row.ErrorValue());
+            rows.push_back(std::move(row).Value());
         }
         for (std::size_t index = rows.size(); index-- > 0;)
             if (rows[index].parent != NoUiRenderIndex)
