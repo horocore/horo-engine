@@ -279,9 +279,10 @@ namespace Horo::Application::Internal {
                 auto result = ProjectAdoptionPlan(snapshot, adoption);
                 if (result.HasError())
                     return result;
+                auto output = std::move(result).Value();
                 if (!verify || !adoption) {
-                    AddVerificationFields(result.Value(), nullptr);
-                    return result;
+                    AddVerificationFields(output, nullptr);
+                    return Return::Success(std::move(output));
                 }
                 const auto verified =
                     VerifyAdoption(root, *snapshot.migrationPlan, snapshot.compatibility, transactions, context.Cancellation());
@@ -289,8 +290,8 @@ namespace Horo::Application::Internal {
                     return Return::Failure(MakeError(Cli::CliErrors::ExecutionCancelled));
                 if (verified.HasError())
                     return Return::Failure(RedactMigrationFailure(verified.ErrorValue()));
-                AddVerificationFields(result.Value(), &verified.Value());
-                return result;
+                AddVerificationFields(output, &verified.Value());
+                return Return::Success(std::move(output));
             }
 
         private:
