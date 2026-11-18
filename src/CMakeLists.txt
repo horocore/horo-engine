@@ -4344,6 +4344,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
             editor/screens/workspace/EditorWorkspaceEnvironmentQuery.cpp
             editor/screens/workspace/EditorWorkspaceDecisionGraph.cpp
+            editor/screens/workspace/EditorWorkspaceViewDecisionGraph.cpp
             editor/screens/workspace/DecisionGraphCanvasModel.cpp
             editor/screens/workspace/DecisionGraphLayout.cpp
             editor/screens/workspace/DecisionTreeSubtreeCatalog.cpp

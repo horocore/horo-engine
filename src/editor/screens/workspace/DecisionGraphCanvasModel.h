@@ -116,6 +116,14 @@ namespace Horo::Editor {
     void ApplyDecisionCanvasProviderIssues(GraphViewSnapshot &view, const AI::DecisionGraphSource &source,
                                            const AI::DecisionBlackboardProviderMetadata *providers);
 
+    /** @brief Checks whether an authored state can be removed without changing initial or hierarchy links.
+     * @param machine Exact authored graph under edit.
+     * @param id Stable identity of the state whose removal is proposed.
+     * @return Whether the state is neither the initial state nor referenced as a parent or initial child.
+     * @pre The caller has checked that the state belongs to this graph.
+     */
+    [[nodiscard]] bool CanRemoveMachineState(const AI::StateMachineAssetDescriptor &machine, AI::DecisionNodeId id);
+
     /** @brief Authored transition priority and its one-based position among transitions from the same source state. */
     struct StateMachineTransitionOrder final {
         std::int32_t priority{};

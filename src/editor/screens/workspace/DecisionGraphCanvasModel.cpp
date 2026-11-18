@@ -147,6 +147,13 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc CanRemoveMachineState */
+    bool CanRemoveMachineState(const AI::StateMachineAssetDescriptor &machine, AI::DecisionNodeId id) {
+        return id != machine.initial && std::ranges::none_of(machine.states, [id](const auto &state) {
+            return state.parent == id || state.initialChild == id;
+        });
+    }
+
     /** @copydoc ProjectStateMachineTransitionOrder */
     StateMachineTransitionOrder ProjectStateMachineTransitionOrder(const AI::StateMachineAssetDescriptor &machine,
                                                                    const AI::StateMachineTransition &transition) {
