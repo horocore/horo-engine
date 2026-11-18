@@ -2,6 +2,7 @@
 
 #include "HeadlessNetworkServices.h"
 #include "HeadlessProjectScene.h"
+#include "Horo/AI/EnvironmentQueryGenerators.h"
 #include "Horo/Network/NetworkAddress.h"
 #include "Horo/Network/NetworkErrors.h"
 #include "Horo/Network/NetworkTransport.h"
@@ -352,11 +353,16 @@ namespace Horo::Application::Internal {
                 if (!resources->committed)
                     return Result<NetworkProductComposition>::Failure(
                         MakeError(Net::NetworkErrors::NetworkModeInvalid, "AI decisions require the selected committed Scene generation."));
+                auto querySchema = AI::CaptureBuiltinQuerySchema();
+                if (querySchema.HasError())
+                    return Result<NetworkProductComposition>::Failure(querySchema.ErrorValue());
                 input.cookedDecisions = std::make_shared<const HeadlessCookedDecisionInput>(
                     HeadlessCookedDecisionInput{.committed = *resources->committed,
                                                 .bindings = launch.cookedDecisionBindings,
                                                 .execution = AI::AiSceneCookedDecisionExecution{resources->jobs, {}, {}},
-                                                .provider = HeadlessDecisionProvider::SelectedNativeGameplay});
+                                                .provider = HeadlessDecisionProvider::SelectedNativeGameplay,
+                                                .querySchema =
+                                                    std::make_shared<const AI::QuerySchemaRegistry>(std::move(querySchema).Value())});
             }
             if (resources->perceptionPolicy)
                 input.perceptionProject =

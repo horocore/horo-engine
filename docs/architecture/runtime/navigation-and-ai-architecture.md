@@ -2355,6 +2355,20 @@ checks the saved query and item contract against the actual plan before starting
 work. The new property kind appends to the source wire vocabulary. Graphs without
 it keep the same bytes. Readers that predate it reject graphs that use it.
 
+When the application supplies the target query schema registry, the Decision
+cooker publishes registered queries in the same asset generation. The query
+payload contains the label-free reconstruction recipe and a digest of the
+admitted item, stage and context contracts. Loading checks that digest against
+the host registry before yielding a plan. Decision roots resolve the query ID
+to an actual registered asset and include its dependency through nested graphs.
+Missing queries, incompatible result versions and mismatched destination types
+fail before the asset generation is published.
+
+Headless controller admission resolves these query references against the same
+committed generation as the selected Decision plans. It rejects missing or
+ambiguous query IDs and checks the result contract against the compiled
+Blackboard destination before making the controller available.
+
 Each native distance stage can store a positive integer relative score weight.
 An omitted weight means `1` and keeps existing source payloads valid. The scorer
 normalizes enabled scoring stages by their total weight. A filter-only stage

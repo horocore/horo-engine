@@ -3,6 +3,7 @@
 #include "CommittedSceneAssets.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/AISceneActivation.h"
+#include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Prefab/CookedPrefab.h"
 #include "Horo/Prefab/PrefabErrors.h"
@@ -29,6 +30,79 @@ namespace Horo::Application::Internal {
 
         using Selections = std::map<AI::ControllerTypeId, ControllerSelection>;
         using Descriptors = std::map<AI::ControllerTypeId, AI::AiControllerDescriptor>;
+
+        struct QueryContract final {
+            AI::QueryResultSchema result;
+            AI::QueryItemKind kind;
+        };
+
+        using QueryContracts = std::map<AI::QueryId, QueryContract>;
+
+        /** @brief Resolves query contracts from the same verified generation as the selected Decision artifacts. */
+        Result<QueryContracts> LoadQueryContracts(const HeadlessCookedDecisionInput &input, const CancellationToken &cancellation) {
+            using Loaded = Result<QueryContracts>;
+            if (!input.querySchema)
+                return Loaded::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
+            QueryContracts queries;
+            for (const auto &artifact : input.committed.Artifacts()) {
+                if (cancellation.IsCancellationRequested())
+                    return Loaded::Failure(JobCancelled().ErrorValue());
+                if (artifact.type.Value() != AI::EnvironmentQuerySourceAssetType)
+                    continue;
+                const auto plan = AI::EnvironmentQueryCookedCodec::Decode(artifact.payload, *input.querySchema);
+                if (plan.HasError())
+                    return Loaded::Failure(plan.ErrorValue());
+                const auto &result = plan.Value().ResultSchema();
+                const auto kind = input.querySchema->Find(result.itemType)->kind;
+                if (!queries.emplace(plan.Value().Id(), QueryContract{result, kind}).second)
+                    return Loaded::Failure(MakeError(AI::AIErrors::EnvironmentQueryIdentityConflict));
+            }
+            return Loaded::Success(std::move(queries));
+        }
+
+        /** @brief Validates exact query output identity before publishing a controller, loading queries only when referenced. */
+        Result<void> ValidateQueryOutput(const AI::BehaviorTreeQueryOutput &output, const HeadlessCookedDecisionInput &input,
+                                         const CancellationToken &cancellation, std::optional<QueryContracts> &queries,
+                                         std::span<const AI::DecisionPlanBlackboardBinding> bindings) {
+            if (!queries) {
+                auto loaded = LoadQueryContracts(input, cancellation);
+                if (loaded.HasError())
+                    return Result<void>::Failure(loaded.ErrorValue());
+                queries.emplace(std::move(loaded).Value());
+            }
+            const auto query = queries->find(output.query);
+            if (query == queries->end())
+                return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
+            const auto &[result, kind] = query->second;
+            if (result.id != output.result || result.version != output.resultVersion || result.itemType != output.item)
+                return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryVersionIncompatible));
+            const auto key = std::ranges::find(bindings, output.key, &AI::DecisionPlanBlackboardBinding::key);
+            if (key == bindings.end())
+                return Result<void>::Failure(MakeError(AI::AIErrors::BlackboardValueTypeMismatch));
+            const bool acceptsPoint = kind == AI::QueryItemKind::Point && key->kind == AI::BlackboardValueKind::WorldCoordinate;
+            const bool acceptsActor = kind == AI::QueryItemKind::Actor && key->kind == AI::BlackboardValueKind::EntityReference;
+            if (!acceptsPoint && !acceptsActor)
+                return Result<void>::Failure(MakeError(AI::AIErrors::BlackboardValueTypeMismatch));
+            return Result<void>::Success();
+        }
+
+        /** @brief Checks query dependencies throughout the selected compiled graph closure. */
+        Result<void> ValidatePlanQueries(const AI::CookedDecisionPlan &plan, const HeadlessCookedDecisionInput &input,
+                                         const CancellationToken &cancellation, std::optional<QueryContracts> &queries) {
+            for (const auto &graph : plan.Graphs()) {
+                for (const auto &node : graph.providerProperties) {
+                    for (const auto &property : node.properties) {
+                        const auto *output = std::get_if<AI::BehaviorTreeQueryOutput>(&property.value);
+                        if (!output)
+                            continue;
+                        const auto keys = graph.bindings->BindingsForNode(node.node);
+                        if (auto checked = ValidateQueryOutput(*output, input, cancellation, queries, keys); checked.HasError())
+                            return checked;
+                    }
+                }
+            }
+            return Result<void>::Success();
+        }
 
         /** @brief The decision/schema contract is shared by callers of one controller; enable/capability flags are per agent. */
         [[nodiscard]] bool MatchesDecision(const AI::AiControllerComponent &left, const AI::AiControllerComponent &right) noexcept {
@@ -258,6 +332,7 @@ namespace Horo::Application::Internal {
             if (environment.HasError())
                 return Result<Catalog>::Failure(environment.ErrorValue());
             std::map<Assets::AssetId, Plan> plans;
+            std::optional<QueryContracts> queries;
             auto remaining = input.limits.compilation.maximumCoreBytes;
             for (const auto &[identity, binding] : selected.Value()) {
                 if (cancellation.IsCancellationRequested())
@@ -276,9 +351,14 @@ namespace Horo::Application::Internal {
                 if (artifact->type.Value() != AI::DecisionAssetType(descriptor.Value()->decisionKind))
                     return Result<Catalog>::Failure(
                         MakeError(AI::AIErrors::ControllerDescriptorIncompatible, "Selected cooked AI artifact has the wrong family."));
+                const bool alreadyAdmitted = plans.contains(artifact->id);
                 auto plan = AcquirePlan(environment.Value(), input.limits, *artifact, plans, remaining);
                 if (plan.HasError())
                     return Result<Catalog>::Failure(plan.ErrorValue());
+                if (!alreadyAdmitted) {
+                    if (auto checked = ValidatePlanQueries(*plan.Value(), input, cancellation, queries); checked.HasError())
+                        return Result<Catalog>::Failure(checked.ErrorValue());
+                }
                 if (auto bound = BindPlan(*descriptor.Value(), std::move(plan).Value(), authored); bound.HasError())
                     return Result<Catalog>::Failure(bound.ErrorValue());
             }

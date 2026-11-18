@@ -62,6 +62,43 @@ namespace Horo::Application::DecisionCookDetail {
             return error;
         }
 
+        /** @brief Resolves the actual registered query and validates its supported output against a compiled node binding. */
+        Result<Assets::AssetId> QueryDependency(const State &state, const AI::BehaviorTreeQueryOutput &output,
+                                                std::span<const AI::DecisionPlanBlackboardBinding> keys) {
+            using Dependency = Result<Assets::AssetId>;
+            const auto query = std::ranges::lower_bound(state.queries, output.query, {}, &QueryArtifact::query);
+            if (query == state.queries.end() || query->query != output.query)
+                return Dependency::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
+            const auto &result = query->result;
+            if (result.id != output.result || result.version != output.resultVersion || result.itemType != output.item)
+                return Dependency::Failure(MakeError(AI::AIErrors::EnvironmentQueryVersionIncompatible));
+            const auto key = std::ranges::find(keys, output.key, &AI::DecisionPlanBlackboardBinding::key);
+            if (key == keys.end())
+                return Dependency::Failure(MakeError(AI::AIErrors::BlackboardValueTypeMismatch));
+            const bool acceptsPoint = query->kind == AI::QueryItemKind::Point && key->kind == AI::BlackboardValueKind::WorldCoordinate;
+            const bool acceptsActor = query->kind == AI::QueryItemKind::Actor && key->kind == AI::BlackboardValueKind::EntityReference;
+            if (!acceptsPoint && !acceptsActor)
+                return Dependency::Failure(MakeError(AI::AIErrors::BlackboardValueTypeMismatch));
+            return Dependency::Success(query->asset);
+        }
+
+        /** @brief Adds typed query references, including those in nested graphs, to the existing asset dependency set. */
+        Result<void> AppendQueryDependencies(const State &state, const AI::DecisionCompiledGraph &graph,
+                                             std::vector<Assets::AssetId> &dependencies) {
+            for (const auto &config : graph.providerProperties) {
+                for (const auto &property : config.properties) {
+                    const auto *output = std::get_if<AI::BehaviorTreeQueryOutput>(&property.value);
+                    if (!output)
+                        continue;
+                    const auto dependency = QueryDependency(state, *output, graph.bindings->BindingsForNode(config.node));
+                    if (dependency.HasError())
+                        return Result<void>::Failure(dependency.ErrorValue());
+                    dependencies.push_back(dependency.Value());
+                }
+            }
+            return Result<void>::Success();
+        }
+
         Result<Prepared> Prepare(const State &state, std::size_t index) {
             auto closure = Closure(state, index);
             if (closure.HasError())
@@ -89,6 +126,8 @@ namespace Horo::Application::DecisionCookDetail {
                 });
                 if (found != state.schemas.end())
                     dependencies.push_back(found->asset);
+                if (auto attached = AppendQueryDependencies(state, graph, dependencies); attached.HasError())
+                    return Result<Prepared>::Failure(attached.ErrorValue());
             }
             std::ranges::sort(dependencies);
             const auto duplicates = std::ranges::unique(dependencies);
@@ -123,7 +162,7 @@ namespace Horo::Application::DecisionCookDetail {
     }  // namespace
 
     Result<void> PrepareRoots(State &state, const CancellationToken &cancellation) {
-        auto bytes = state.preparedSchemaBytes;
+        auto bytes = state.preparedDependencyBytes;
         for (std::size_t index = 0; index < state.inputs.size(); ++index) {
             if (cancellation.IsCancellationRequested())
                 return Invalid<void>(DecisionCookErrors::Cancelled);

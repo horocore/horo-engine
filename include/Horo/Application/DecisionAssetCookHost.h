@@ -5,6 +5,10 @@
 #include "Horo/AI/DecisionGraphCompiler.h"
 #include "Horo/Assets/AssetCookService.h"
 
+namespace Horo::AI {
+    class QuerySchemaRegistry;
+}
+
 namespace Horo::Application {
     namespace DecisionCookErrors {
         extern const ErrorCodeDescriptor Invalid;
@@ -27,6 +31,7 @@ namespace Horo::Application {
         std::vector<Assets::CookerContribution>
             additionalCookers; /**< Existing host strategies for non-decision records, not an alternate registry. */
         std::uint64_t maximumPreparedBytes{64ULL * 1024ULL * 1024ULL};
+        std::shared_ptr<const AI::QuerySchemaRegistry> querySchema; /**< Explicit target descriptors for built-in query cooking. */
     };
 
     /** @brief Domain adapter; AssetCookService remains the sole generation/cache/publication owner.

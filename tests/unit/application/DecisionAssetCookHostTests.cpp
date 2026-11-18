@@ -531,6 +531,92 @@ namespace {
         }
     }
 
+    TEST_CASE("Decision cook publishes registered query artifacts for nested typed outputs", "[native][decision-cook][eqs]") {
+        Fixture fixture;
+        const auto asset = Files::Id("00000000-0000-0000-0000-0000000000ae");
+        const auto key = MakeIdentity<BlackboardKeyId>(44);
+        const auto item = MakeIdentity<QueryItemTypeId>(45);
+        const auto generator = MakeIdentity<QueryGeneratorId>(46);
+        const auto query = MakeIdentity<QueryId>(47);
+        const auto result = MakeIdentity<QueryResultSchemaId>(48);
+        const QueryDescriptorOrigin origin{QueryDescriptorSourceKind::Native, MakeIdentity<QueryProviderId>(49), 1};
+        const std::array items{QueryItemTypeDescriptor{item, origin}};
+        const std::array generators{QueryGeneratorDescriptor{generator, origin, item}};
+        auto registry = QuerySchemaRegistry::Capture({.items = items, .generators = generators});
+        REQUIRE(registry.HasValue());
+        fixture.request.querySchema = std::make_shared<const QuerySchemaRegistry>(std::move(registry).Value());
+        const std::array keys{
+            BlackboardKeyDescriptor{.key = key, .kind = BlackboardValueKind::WorldCoordinate, .presence = BlackboardKeyPresence::Optional}};
+        auto schema = BlackboardSchema::Capture({.identity = SchemaId(), .keys = keys});
+        REQUIRE(schema.HasValue());
+        fixture.request.environment.schemas = {std::make_shared<const BlackboardSchema>(std::move(schema).Value())};
+        const BehaviorTreeQueryOutput output{query, result, 1, item, key, 18};
+        auto registration = Registration(fixture.ai.probe);
+        registration.contract.properties.emplace_back(MakeIdentity<BehaviorTreePropertyId>(50), "query output",
+                                                      BehaviorTreePropertyKind::QueryOutput, output);
+        const auto providers = DecisionNodeGeneration::Capture({&registration, 1}, fixture.ai.admission);
+        REQUIRE(providers.HasValue());
+        fixture.request.environment.nodes = providers.Value();
+        auto task = TreeNode(2, DecisionControlKind::Task);
+        task.properties = registration.contract.properties;
+        task.requirements = {{.key = key, .kind = BlackboardValueKind::WorldCoordinate, .access = BlackboardKeyAccess::ReadWrite}};
+        fixture.WriteGraph("assets/task.horo_bt", Tree(2, {TreeNode(1, DecisionControlKind::Root), task}, {Edge(1, 1, 2)}));
+        constexpr auto sourcePath = "assets/tactics.horo_eqs";
+        const auto writeQuery = [&](std::uint32_t version) {
+            const auto source = EnvironmentQueryAsset::Capture(
+                {.id = query,
+                 .displayName = "Tactics",
+                 .result = {result, version, item},
+                 .stages = {{.id = MakeIdentity<QueryStageId>(51), .kind = QueryStageKind::Generator, .generator = generator}}});
+            REQUIRE(source.HasValue());
+            const auto bytes = EnvironmentQuerySourceCodec::Encode(source.Value());
+            REQUIRE(bytes.HasValue());
+            Files::WriteFile(fixture.source.path / sourcePath, bytes.Value());
+        };
+        writeQuery(1);
+        const auto sidecar = Files::SidecarJson(asset.ToString(), EnvironmentQuerySourceAssetType);
+        Files::WriteFile(fixture.source.path / "assets/tactics.horo_eqs.horo",
+                         {reinterpret_cast<const std::uint8_t *>(sidecar.data()), sidecar.size()});
+        const auto rebuilt = RebuildAssetRegistry(fixture.registry, fixture.source.path, AssetRegistryOpenMode::ReadOnly);
+        REQUIRE(rebuilt.HasValue());
+        REQUIRE(rebuilt.Value().status == AssetRegistryBuildStatus::Complete);
+        fixture.request.assets.registry = fixture.registry.Snapshot();
+        fixture.Capture();
+
+        const auto cooked = fixture.Cook();
+        REQUIRE(cooked.HasValue());
+        CHECK(cooked.Value().cookedAssets == 3);
+        CHECK(fixture.ai.probe.factories == 0);
+        const auto artifacts = fixture.Read();
+        const auto queryArtifact = std::ranges::find(artifacts, asset, &AssetCookArtifact::id);
+        REQUIRE(queryArtifact != artifacts.end());
+        CHECK(queryArtifact->type.Value() == EnvironmentQuerySourceAssetType);
+        const auto plan = EnvironmentQueryCookedCodec::Decode(queryArtifact->payload, *fixture.request.querySchema);
+        REQUIRE(plan.HasValue());
+        CHECK(plan.Value().Id() == query);
+        CHECK(plan.Value().ResultSchema().id == result);
+        const auto previous = fixture.Current().manifestDigest;
+        const auto reused = fixture.Cook();
+        REQUIRE(reused.HasValue());
+        CHECK(reused.Value().cacheHits == 3);
+
+        SECTION("an incompatible query result leaves the last generation intact") {
+            writeQuery(2);
+            fixture.Capture();
+            const auto rejected = fixture.Cook();
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == AIErrors::EnvironmentQueryVersionIncompatible.code.Value());
+            CHECK(fixture.Current().manifestDigest == previous);
+        }
+        SECTION("missing descriptor authority leaves the last generation intact") {
+            fixture.request.querySchema.reset();
+            const auto rejected = fixture.Cook();
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == AIErrors::EnvironmentQueryDescriptorUnavailable.code.Value());
+            CHECK(fixture.Current().manifestDigest == previous);
+        }
+    }
+
     TEST_CASE("Actual decision source pairs cook through AssetCookService and load into the real composed headless runner",
               "[native][decision-cook]") {
         Fixture fixture;

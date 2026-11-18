@@ -65,8 +65,10 @@ namespace Horo::Application::DecisionCookDetail {
                 return Result<std::shared_ptr<const Assets::CookerCatalogSnapshot>>::Failure(registered.ErrorValue());
         }
         const auto strategy = std::make_shared<Strategy>(state);
-        for (const auto type :
-             {DecisionBehaviorTreeSourceType, DecisionStateMachineSourceType, DecisionUtilitySourceType, AI::BlackboardSchemaAssetType}) {
+        for (const auto type : {DecisionBehaviorTreeSourceType, DecisionStateMachineSourceType, DecisionUtilitySourceType,
+                                AI::BlackboardSchemaAssetType, AI::EnvironmentQuerySourceAssetType}) {
+            if (type == AI::EnvironmentQuerySourceAssetType && !state->querySchema)
+                continue;
             auto parsed = Assets::AssetTypeId::Parse(type);
             if (parsed.HasError())
                 return Result<std::shared_ptr<const Assets::CookerCatalogSnapshot>>::Failure(parsed.ErrorValue());

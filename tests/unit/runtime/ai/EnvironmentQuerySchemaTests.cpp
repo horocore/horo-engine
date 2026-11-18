@@ -72,6 +72,52 @@ namespace Horo::AI {
             }
         };
 
+        TEST_CASE("EQS cooked transport pins the actual descriptor owners and strips presentation names", "[unit][ai][eqs][cook]") {
+            Fixture fixture;
+            auto source = fixture.Asset();
+            const auto asset = EnvironmentQueryAsset::Capture(source);
+            const auto registry = fixture.Registry();
+            REQUIRE(asset.HasValue());
+            REQUIRE(registry.HasValue());
+            const auto bytes = EnvironmentQueryCookedCodec::Encode(asset.Value(), registry.Value());
+            REQUIRE(bytes.HasValue());
+            const auto expected = EnvironmentQueryPlan::Compile(asset.Value(), registry.Value());
+            REQUIRE(expected.HasValue());
+            const auto loaded = EnvironmentQueryCookedCodec::Decode(bytes.Value(), registry.Value());
+            REQUIRE(loaded.HasValue());
+            CHECK(loaded.Value().Id() == expected.Value().Id());
+            CHECK(loaded.Value().ResultSchema() == expected.Value().ResultSchema());
+            CHECK(std::ranges::equal(loaded.Value().Stages(), expected.Value().Stages()));
+
+            SECTION("renamed sources produce identical payloads") {
+                source.displayName = "Renamed";
+                source.stages.front().displayName = "Renamed generator";
+                const auto renamed = EnvironmentQueryAsset::Capture(source);
+                REQUIRE(renamed.HasValue());
+                const auto encoded = EnvironmentQueryCookedCodec::Encode(renamed.Value(), registry.Value());
+                REQUIRE(encoded.HasValue());
+                CHECK(encoded.Value() == bytes.Value());
+            }
+            SECTION("another owner with the same descriptor version is incompatible") {
+                fixture.generators.front().origin.provider = Identity<QueryProviderId>(98);
+                const auto replaced = fixture.Registry();
+                REQUIRE(replaced.HasValue());
+                ExpectError(EnvironmentQueryCookedCodec::Decode(bytes.Value(), replaced.Value()),
+                            AIErrors::EnvironmentQueryVersionIncompatible);
+            }
+            SECTION("a tampered admitted fingerprint is refused") {
+                auto damaged = bytes.Value();
+                damaged[12] ^= 1;
+                ExpectError(EnvironmentQueryCookedCodec::Decode(damaged, registry.Value()), AIErrors::EnvironmentQueryVersionIncompatible);
+            }
+            SECTION("authoring bytes are not executable artifacts") {
+                const auto authored = EnvironmentQuerySourceCodec::Encode(asset.Value());
+                REQUIRE(authored.HasValue());
+                ExpectError(EnvironmentQueryCookedCodec::Decode(authored.Value(), registry.Value()),
+                            AIErrors::EnvironmentQuerySchemaInvalid);
+            }
+        }
+
         TEST_CASE("EQS source transport preserves typed stable order and unknown stages", "[unit][ai][eqs][source]") {
             const Fixture fixture;
             auto source = fixture.Asset();

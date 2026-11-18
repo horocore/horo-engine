@@ -1,6 +1,7 @@
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
 
 #include "DecisionBinary.h"
+#include "Horo/Foundation/Sha256.h"
 #include "Horo/Foundation/Utf8.h"
 
 #include <algorithm>
@@ -12,6 +13,8 @@
 namespace Horo::AI {
     namespace {
         constexpr std::array<std::uint8_t, 8> Signature{'H', 'O', 'R', 'O', 'E', 'Q', 'S', '1'};
+        constexpr std::array<std::uint8_t, 8> CookedSignature{'H', 'O', 'R', 'O', 'E', 'Q', 'C', '1'};
+        constexpr std::uint32_t CookedVersion = 1;
         using Detail::DecisionReader;
         using Detail::DecisionWriter;
         using Limits = EnvironmentQuerySchemaLimits;
@@ -129,6 +132,65 @@ namespace Horo::AI {
             stage.opaquePayload = ReadBytes(reader, Limits::UnknownStageBytes);
             return stage;
         }
+
+        /** @brief Emits stable owner and schema identity without copying a native object representation. */
+        void WriteOrigin(DecisionWriter &writer, const QueryDescriptorOrigin &origin) {
+            writer.Enumeration(origin.kind);
+            writer.IdentityValue(origin.provider);
+            writer.Unsigned(origin.version, 4);
+        }
+
+        /** @brief Records the bytes a compiled stage relies on at provider and context boundaries. */
+        void WriteStageAdmission(DecisionWriter &writer, const QueryPlanStage &stage, const QuerySchemaRegistry &registry) {
+            writer.IdentityValue(stage.id);
+            const auto &origin =
+                stage.kind == QueryStageKind::Generator ? registry.Find(stage.generator)->origin : registry.Find(stage.test)->origin;
+            WriteOrigin(writer, origin);
+            writer.IdentityValue(stage.selectedContext, true);
+            if (!writer.Count(stage.contexts.size(), Limits::Contexts))
+                return;
+            for (const auto &requirement : stage.contexts) {
+                const auto *context = registry.Find(requirement.id);
+                writer.IdentityValue(requirement.id);
+                WriteVersions(writer, requirement.version);
+                WriteOrigin(writer, context->origin);
+                writer.Unsigned(context->maximumPayloadBytes, 4);
+            }
+        }
+
+        /** @brief Fingerprints only descriptors and resolved choices that the admitted plan actually consumes. */
+        Sha256Digest AdmissionDigest(const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry,
+                                     std::span<const std::uint8_t> recipe) {
+            using namespace std::literals;
+            constexpr auto domain = "horo.eqs.admission.v1"sv;
+            DecisionWriter writer{EnvironmentQueryCookedCodec::MaximumBytes};
+            writer.String(domain);
+            const auto *item = registry.Find(plan.ResultSchema().itemType);
+            writer.IdentityValue(item->id);
+            WriteOrigin(writer, item->origin);
+            writer.Enumeration(item->kind);
+            writer.Unsigned(item->maximumPayloadBytes, 4);
+            if (writer.Count(plan.Stages().size(), Limits::Stages))
+                for (const auto &stage : plan.Stages())
+                    WriteStageAdmission(writer, stage, registry);
+            Sha256Builder digest;
+            static_cast<void>(digest.Update(std::as_bytes(writer.Data())));
+            static_cast<void>(digest.Update(std::as_bytes(recipe)));
+            return digest.Finalize();
+        }
+
+        /** @brief Removes presentation labels before encoding the deterministic reconstruction recipe. */
+        Result<std::vector<std::uint8_t>> EncodeRecipe(const EnvironmentQueryAsset &asset) {
+            QueryAssetSource recipe{.id = asset.Id(),
+                                    .result = asset.ResultSchema(),
+                                    .stages = {asset.Stages().begin(), asset.Stages().end()}};
+            for (auto &stage : recipe.stages)
+                stage.displayName.clear();
+            const auto canonical = EnvironmentQueryAsset::Capture(recipe);
+            if (canonical.HasError())
+                return Result<std::vector<std::uint8_t>>::Failure(canonical.ErrorValue());
+            return EnvironmentQuerySourceCodec::Encode(canonical.Value());
+        }
     }  // namespace
 
     /** @copydoc EnvironmentQuerySourceCodec::Encode */
@@ -200,6 +262,69 @@ namespace Horo::AI {
             return EnvironmentQueryAsset::Capture(source);
         } catch (const std::bad_alloc &) {
             return Decoded::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
+        }
+    }
+
+    /** @copydoc EnvironmentQueryCookedCodec::Encode */
+    Result<std::vector<std::uint8_t>> EnvironmentQueryCookedCodec::Encode(const EnvironmentQueryAsset &asset,
+                                                                          const QuerySchemaRegistry &registry) {
+        using Encoded = Result<std::vector<std::uint8_t>>;
+        try {
+            const auto plan = EnvironmentQueryPlan::Compile(asset, registry);
+            if (plan.HasError())
+                return Encoded::Failure(plan.ErrorValue());
+            const auto recipe = EncodeRecipe(asset);
+            if (recipe.HasError())
+                return Encoded::Failure(recipe.ErrorValue());
+            const auto digest = AdmissionDigest(plan.Value(), registry, recipe.Value());
+            DecisionWriter writer{MaximumBytes};
+            writer.Bytes(CookedSignature);
+            writer.Unsigned(CookedVersion, 4);
+            writer.Bytes(digest.bytes);
+            if (writer.Count(recipe.Value().size(), EnvironmentQuerySourceCodec::MaximumBytes))
+                writer.Bytes(recipe.Value());
+            if (!writer.Valid())
+                return Encoded::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
+            return Encoded::Success(std::move(writer).Take());
+        } catch (const std::bad_alloc &) {
+            return Encoded::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
+        }
+    }
+
+    /** @copydoc EnvironmentQueryCookedCodec::Decode */
+    Result<EnvironmentQueryPlan> EnvironmentQueryCookedCodec::Decode(std::span<const std::uint8_t> bytes,
+                                                                     const QuerySchemaRegistry &registry) {
+        using Plan = Result<EnvironmentQueryPlan>;
+        if (bytes.size() > MaximumBytes)
+            return Plan::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
+        try {
+            DecisionReader reader{bytes};
+            if (!std::ranges::equal(reader.Bytes(CookedSignature.size()), CookedSignature))
+                return Plan::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+            const auto version = reader.Unsigned(4);
+            if (reader.Valid() && version != CookedVersion)
+                return Plan::Failure(MakeError(AIErrors::EnvironmentQueryVersionIncompatible));
+            const auto expected = reader.Bytes(Sha256Digest{}.bytes.size());
+            const auto recipe = reader.Bytes(reader.Count(EnvironmentQuerySourceCodec::MaximumBytes));
+            if (!reader.Complete())
+                return Plan::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+            const auto asset = EnvironmentQuerySourceCodec::Decode(recipe);
+            if (asset.HasError())
+                return Plan::Failure(asset.ErrorValue());
+            const auto canonical = EncodeRecipe(asset.Value());
+            if (canonical.HasError())
+                return Plan::Failure(canonical.ErrorValue());
+            if (!std::ranges::equal(canonical.Value(), recipe))
+                return Plan::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+            auto plan = EnvironmentQueryPlan::Compile(asset.Value(), registry);
+            if (plan.HasError())
+                return plan;
+            const auto admitted = AdmissionDigest(plan.Value(), registry, recipe);
+            if (!std::ranges::equal(expected, admitted.bytes))
+                return Plan::Failure(MakeError(AIErrors::EnvironmentQueryVersionIncompatible));
+            return plan;
+        } catch (const std::bad_alloc &) {
+            return Plan::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
         }
     }
 }  // namespace Horo::AI

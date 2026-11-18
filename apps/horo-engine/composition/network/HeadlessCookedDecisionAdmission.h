@@ -7,6 +7,10 @@
 #include "Horo/Assets/AssetId.h"
 #include "Horo/Prefab/PrefabLimits.h"
 
+namespace Horo::AI {
+    class QuerySchemaRegistry;
+}
+
 namespace Horo::Runtime {
     class RuntimeSceneDefinition;
 }
@@ -35,6 +39,7 @@ namespace Horo::Application::Internal {
         AI::DecisionCodecLimits limits; /**< Per-plan codec limits; compiled bytes also bound total retained unique plans. */
         std::optional<AI::AiSceneCookedDecisionExecution> execution; /**< Explicit authority scheduler; empty only admits assets. */
         HeadlessDecisionProvider provider{HeadlessDecisionProvider::Captured};
+        std::shared_ptr<const AI::QuerySchemaRegistry> querySchema; /**< Explicit host descriptors for committed query artifacts. */
     };
 
     /** @brief Builds an immutable staged descriptor catalog from authenticated plans and the exact compiler environment.

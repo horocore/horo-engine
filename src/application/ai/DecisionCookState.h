@@ -1,5 +1,6 @@
 #pragma once
 #include "Horo/AI/DecisionPlanCodec.h"
+#include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
 
 namespace Horo::Application::DecisionCookDetail {
@@ -25,15 +26,25 @@ namespace Horo::Application::DecisionCookDetail {
         Assets::AssetId asset;
     };
 
+    /** @brief Typed association from saved query semantics to the exact registered artifact. */
+    struct QueryArtifact final {
+        AI::QueryId query;
+        AI::QueryResultSchema result;
+        AI::QueryItemKind kind{};
+        Assets::AssetId asset;
+    };
+
     struct State final {
         std::shared_ptr<const Assets::AssetCookInputSnapshot> files;
         AI::DecisionCompilationEnvironment environment;
         AI::DecisionCompilationLimits limits;
         AssetCookTargetId target;
         std::uint64_t maximumPreparedBytes{};
-        std::uint64_t preparedSchemaBytes{};
+        std::uint64_t preparedDependencyBytes{};
         std::vector<Input> inputs;
         std::vector<SchemaArtifact> schemas;
+        std::shared_ptr<const AI::QuerySchemaRegistry> querySchema;
+        std::vector<QueryArtifact> queries;
         std::vector<Prepared> prepared;
         Sha256Digest settings;
     };

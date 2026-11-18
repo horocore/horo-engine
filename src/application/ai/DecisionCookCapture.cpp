@@ -125,12 +125,35 @@ namespace Horo::Application::DecisionCookDetail {
             auto payload = AI::BlackboardSchemaCodec::Encode(*schema);
             if (payload.HasError())
                 return Result<void>::Failure(payload.ErrorValue());
-            if (payload.Value().size() > state.maximumPreparedBytes - state.preparedSchemaBytes)
+            if (payload.Value().size() > state.maximumPreparedBytes - state.preparedDependencyBytes)
                 return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetLimitExceeded));
-            state.preparedSchemaBytes += payload.Value().size();
+            state.preparedDependencyBytes += payload.Value().size();
             state.schemas.push_back({schema->Identity(), schema->Version(), record.id});
             state.environment.schemas.push_back(std::move(schema));
             state.prepared.push_back({record.id, record.type, file->sourceDigest, std::move(payload).Value(), {}});
+            return Result<void>::Success();
+        }
+
+        /** @brief Compiles one registered query and stages an immutable compatible artifact. */
+        Result<void> CaptureQuery(State &state, const Assets::AssetRecord &record) {
+            const auto *file = state.files->Find(record.id);
+            if (!file || !SameRecord(record, file->record))
+                return Result<void>::Failure(MakeError(DecisionCookErrors::Stale));
+            const auto decoded = AI::EnvironmentQuerySourceCodec::Decode(file->bytes);
+            if (decoded.HasError())
+                return Result<void>::Failure(decoded.ErrorValue());
+            const auto &query = decoded.Value();
+            auto payload = AI::EnvironmentQueryCookedCodec::Encode(query, *state.querySchema);
+            if (payload.HasError())
+                return Result<void>::Failure(payload.ErrorValue());
+            if (payload.Value().size() > state.maximumPreparedBytes - state.preparedDependencyBytes)
+                return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetLimitExceeded));
+            state.preparedDependencyBytes += payload.Value().size();
+            const auto &result = query.ResultSchema();
+            const auto kind = state.querySchema->Find(result.itemType)->kind;
+            state.queries.emplace_back(query.Id(), result, kind, record.id);
+            state.prepared.emplace_back(record.id, record.type, file->sourceDigest, std::move(payload).Value(),
+                                        std::vector<Assets::AssetId>{});
             return Result<void>::Success();
         }
 
@@ -148,6 +171,13 @@ namespace Horo::Application::DecisionCookDetail {
         if (registry.Records().size() > 16384)
             return Result<void>::Failure(MakeError(DecisionCookErrors::Invalid));
         for (const auto &record : registry.Records()) {
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(DecisionCookErrors::Cancelled));
+            if (state.querySchema && record.type.Value() == AI::EnvironmentQuerySourceAssetType) {
+                if (auto captured = CaptureQuery(state, record); captured.HasError())
+                    return captured;
+                continue;
+            }
             if (record.type.Value() == AI::BlackboardSchemaAssetType) {
                 if (auto captured = CaptureSchema(state, record, cancellation); captured.HasError())
                     return captured;
@@ -159,7 +189,7 @@ namespace Horo::Application::DecisionCookDetail {
             if (auto captured = CaptureRecord(state, record, cancellation); captured.HasError())
                 return captured;
         }
-        if (state.inputs.empty() && state.schemas.empty())
+        if (state.inputs.empty() && state.schemas.empty() && state.queries.empty())
             return Result<void>::Failure(MakeError(DecisionCookErrors::Invalid));
         std::ranges::sort(state.inputs, {}, [](const auto &input) {
             return input.graph.asset;
@@ -168,6 +198,9 @@ namespace Horo::Application::DecisionCookDetail {
             return input.graph.asset;
         }) != state.inputs.end())
             return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetSubtreeAmbiguous));
+        std::ranges::sort(state.queries, {}, &QueryArtifact::query);
+        if (std::ranges::adjacent_find(state.queries, {}, &QueryArtifact::query) != state.queries.end())
+            return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryIdentityConflict));
         return Verify(state, cancellation);
     }
 }  // namespace Horo::Application::DecisionCookDetail

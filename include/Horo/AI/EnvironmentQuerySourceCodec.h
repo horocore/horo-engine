@@ -33,4 +33,23 @@ namespace Horo::AI {
          */
         [[nodiscard]] static Result<EnvironmentQueryAsset> Decode(std::span<const std::uint8_t> bytes);
     };
+
+    /** @brief Versioned execution artifact with no editor labels and an exact admitted descriptor fingerprint. */
+    class EnvironmentQueryCookedCodec final {
+    public:
+        static constexpr std::size_t MaximumBytes = EnvironmentQuerySourceCodec::MaximumBytes + 64U;
+
+        /** @brief Compiles and encodes the query with its provider and context assumptions.
+         * @param asset Authoring source. @param registry Target host descriptor snapshot.
+         * @return Immutable artifact payload or a typed admission or storage error.
+         */
+        [[nodiscard]] static Result<std::vector<std::uint8_t>> Encode(const EnvironmentQueryAsset &asset,
+                                                                      const QuerySchemaRegistry &registry);
+
+        /** @brief Reconstructs an executable plan and verifies the admitted descriptor fingerprint.
+         * @param bytes Stored payload. @param registry Exact host descriptor snapshot for admission.
+         * @return Admitted plan or a typed corrupt, unsupported, or incompatible error.
+         */
+        [[nodiscard]] static Result<EnvironmentQueryPlan> Decode(std::span<const std::uint8_t> bytes, const QuerySchemaRegistry &registry);
+    };
 }  // namespace Horo::AI
