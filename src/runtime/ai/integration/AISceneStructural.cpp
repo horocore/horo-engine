@@ -32,6 +32,7 @@ namespace Horo::AI::Detail {
             std::vector<AgentRuntimeState> retired;
             std::vector<AgentRuntimeState> tombstones;
             decltype(AiSceneRuntimeState::agentsByOwner) owners;
+            std::optional<PerceptionGroupPublication> perception;
             bool published{};
 
             ~StructuralCandidate() override {
@@ -49,6 +50,8 @@ namespace Horo::AI::Detail {
                 if (!state || state->closed || state->revision != revision || !scene.IsCurrent() ||
                     state->binding.scene != scene.RuntimeId())
                     return Failure<void>("The staged AI group lost its exact owner or Scene publication.");
+                if (perception && !perception->IsCurrent())
+                    return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
                 return Result<void>::Success();
             }
 
@@ -74,6 +77,8 @@ namespace Horo::AI::Detail {
                 state->agentsByOwner.swap(owners);
                 state->lastAgentIdentity = lastAgentIdentity;
                 ++state->revision;
+                if (perception)
+                    perception->Publish();
                 published = true;
             }
 
@@ -93,8 +98,9 @@ namespace Horo::AI::Detail {
     /** @brief Explicit runtime borrow resolved at preparation, allowing registration before initial Scene activation. */
     class AiSceneStructuralParticipant final : public Runtime::SceneStructuralParticipant {
     public:
-        AiSceneStructuralParticipant(AiSceneRuntime &runtime, const std::span<const AiControllerDescriptor> descriptors)
-            : runtime_(&runtime), descriptors_(descriptors.begin(), descriptors.end()) {}
+        AiSceneStructuralParticipant(AiSceneRuntime &runtime, const std::span<const AiControllerDescriptor> descriptors,
+                                     std::optional<AiScenePerceptionGroupInput> perception)
+            : runtime_(&runtime), descriptors_(descriptors.begin(), descriptors.end()), perception_(std::move(perception)) {}
 
         Runtime::SceneStructuralOwner Owner() const noexcept override {
             return Runtime::SceneStructuralOwner::AI;
@@ -166,6 +172,13 @@ namespace Horo::AI::Detail {
             candidate->additions = std::move(prepared).Value();
             if (auto capacity = ValidatePerceptionCapacity(state.agents, candidate->additions, candidate->removals); capacity.HasError())
                 return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(capacity.ErrorValue());
+            if (perception_) {
+                auto preparedPerception =
+                    PerceptionGroupPublication::Prepare(*perception_, scene, created, destroyed, candidate->additions);
+                if (preparedPerception.HasError())
+                    return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(preparedPerception.ErrorValue());
+                candidate->perception = std::move(preparedPerception).Value();
+            }
             PreparePublicationStorage(*candidate, agents, appended);
             return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Success(std::move(candidate));
         }
@@ -242,11 +255,13 @@ namespace Horo::AI::Detail {
 
         AiSceneRuntime *runtime_;
         std::vector<AiControllerDescriptor> descriptors_;
+        std::optional<AiScenePerceptionGroupInput> perception_;
     };
 
     /** @copydoc MakeStructuralParticipant */
     std::unique_ptr<Runtime::SceneStructuralParticipant> MakeStructuralParticipant(
-        AiSceneRuntime &runtime, const std::span<const AiControllerDescriptor> descriptors) {
-        return std::make_unique<AiSceneStructuralParticipant>(runtime, descriptors);
+        AiSceneRuntime &runtime, const std::span<const AiControllerDescriptor> descriptors,
+        std::optional<AiScenePerceptionGroupInput> perception) {
+        return std::make_unique<AiSceneStructuralParticipant>(runtime, descriptors, std::move(perception));
     }
 }  // namespace Horo::AI::Detail

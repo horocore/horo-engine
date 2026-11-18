@@ -202,7 +202,8 @@ namespace Horo::Application::PrefabAtomicTest {
         std::uint64_t frame{};
 
         explicit Fixture(bool aiFirst = false, Fault fault = Fault::None, const AI::AiSceneRuntimeSettings &aiSettings = {},
-                         std::shared_ptr<const AI::AiControllerPerceptionEndpoints> endpoints = {})
+                         std::shared_ptr<const AI::AiControllerPerceptionEndpoints> endpoints = {},
+                         std::optional<AI::AiScenePerceptionGroupInput> perception = std::nullopt)
             : ai(std::move(AI::AiSceneRuntime::Create(aiSettings)).Value()) {
             if (endpoints) {
                 controller.descriptor.perceptionEndpoints = std::move(endpoints);
@@ -214,7 +215,7 @@ namespace Horo::Application::PrefabAtomicTest {
             PublishMaterial(fault);
             artifact = PublishTemplate(fault);
             CaptureCommittedGeneration();
-            RegisterOwners(aiFirst, fault);
+            RegisterOwners(aiFirst, fault, perception);
             REQUIRE(scenes.Startup(cancellation.Token()).HasValue());
             REQUIRE(scenes.QueuePreparation(InitialScene()).HasValue());
             Pump();
@@ -366,27 +367,28 @@ namespace Horo::Application::PrefabAtomicTest {
             return Put(bytes, asset, Assets::AssetTypeId::Parse("core.prefab").Value(), target, std::move(payload));
         }
 
-        std::unique_ptr<Runtime::SceneStructuralParticipant> AiOwner(std::span<const AI::AiControllerDescriptor> descriptors, Fault fault) {
+        std::unique_ptr<Runtime::SceneStructuralParticipant> AiOwner(std::span<const AI::AiControllerDescriptor> descriptors, Fault fault,
+                                                                     const std::optional<AI::AiScenePerceptionGroupInput> &perception) {
             using enum Fault;
-            auto owner = ai.MakeStructuralParticipant(descriptors);
+            auto owner = ai.MakeStructuralParticipant(descriptors, perception);
             if (fault == DuplicateFacts || fault == ForeignFacts || fault == MissingFacts)
                 return std::make_unique<InvalidIdentityParticipant>(std::move(owner), fault);
             return owner;
         }
 
-        void RegisterOwners(bool aiFirst, Fault fault) {
+        void RegisterOwners(bool aiFirst, Fault fault, const std::optional<AI::AiScenePerceptionGroupInput> &perception) {
             auto initial = native.MakeParticipant(*physics, authority, Physics::Settings());
             REQUIRE(initial.HasValue());
             REQUIRE(scenes.AddActivationParticipant(std::move(initial).Value()).HasValue());
             REQUIRE(scenes.AddActivationParticipant(std::make_unique<AI::AiSceneActivationParticipant>(ai, catalog)).HasValue());
             if (aiFirst)
-                REQUIRE(scenes.AddStructuralParticipant(AiOwner(catalog, fault)).HasValue());
+                REQUIRE(scenes.AddStructuralParticipant(AiOwner(catalog, fault, perception)).HasValue());
             auto structural = native.MakeStructuralParticipant();
             REQUIRE(structural.HasValue());
             REQUIRE(scenes.AddStructuralParticipant(std::move(structural).Value()).HasValue());
             REQUIRE(scenes.AddStructuralParticipant(MakeGameplayStructuralParticipant(activeGameplay)).HasValue());
             if (!aiFirst)
-                REQUIRE(scenes.AddStructuralParticipant(AiOwner(catalog, fault)).HasValue());
+                REQUIRE(scenes.AddStructuralParticipant(AiOwner(catalog, fault, perception)).HasValue());
             if (fault == Fault::DuplicateProducer)
                 REQUIRE(scenes.AddStructuralParticipant(ai.MakeStructuralParticipant(catalog)).HasError());
         }

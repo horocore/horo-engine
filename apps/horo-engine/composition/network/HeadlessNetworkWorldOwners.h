@@ -41,7 +41,6 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         bool closed{};
         std::unique_ptr<AI::AiSceneRuntime> ai;
         AI::PerceptionSpatialBroadphase perception;
-        std::uint64_t perceptionRevision{};
         std::unique_ptr<ProjectSceneNavigationWorld> navigation;
         std::unique_ptr<Runtime::RuntimeSceneService> scenes;
         std::unique_ptr<Prefab::PrefabTemplateProvider> templates; /**< Retired before Scene, borrowing its real loader. */

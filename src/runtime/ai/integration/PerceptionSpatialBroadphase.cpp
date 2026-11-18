@@ -41,11 +41,14 @@ namespace Horo::AI {
         }
 
         /** @brief Validates exact scene membership and a non-empty duplicate-free sense set. */
-        template <typename Record> [[nodiscard]] Result<void> ValidateRecord(const Runtime::RuntimeSceneView &scene, const Record &record) {
+        template <typename Record>
+        [[nodiscard]] Result<void> ValidateRecord(const Runtime::RuntimeSceneView &scene, const Record &record,
+                                                  const std::span<const Runtime::RuntimeEntityView> additions) {
             if (!record.entity.IsValid() || record.senseCount == 0 || record.senseCount > record.senses.size())
                 return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialInvalid));
             if (record.ownerCancellation.IsCancellationRequested() || record.entity.runtime != scene.RuntimeId() ||
-                scene.Get(record.entity).HasError())
+                (scene.Get(record.entity).HasError() &&
+                 std::ranges::find(additions, record.entity, &Runtime::RuntimeEntityView::entity) == additions.end()))
                 return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
             for (std::size_t index = 0; index < record.senseCount; ++index) {
                 if (!record.senses[index].IsValid())
@@ -60,16 +63,17 @@ namespace Horo::AI {
         /** @brief Validates copied endpoints and sorts only active sense prefixes, preserving spatial error precedence. */
         [[nodiscard]] Result<void> ValidateEndpoints(const Runtime::RuntimeSceneView &scene,
                                                      const std::span<PerceptionSpatialListener> listeners,
-                                                     const std::span<PerceptionSpatialSource> sources) {
+                                                     const std::span<PerceptionSpatialSource> sources,
+                                                     const std::span<const Runtime::RuntimeEntityView> additions) {
             for (auto &listener : listeners) {
                 if (const auto valid = ValidatePerceptionParticipant(listener.filtering, listener.admission); valid.HasError())
                     return valid;
-                if (const auto valid = ValidateRecord(scene, listener); valid.HasError())
+                if (const auto valid = ValidateRecord(scene, listener, additions); valid.HasError())
                     return valid;
                 std::sort(listener.senses.begin(), listener.senses.begin() + listener.senseCount);
             }
             for (auto &source : sources) {
-                if (const auto valid = ValidateRecord(scene, source); valid.HasError())
+                if (const auto valid = ValidateRecord(scene, source, additions); valid.HasError())
                     return valid;
                 if (source.layers == 0)
                     return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialInvalid));
@@ -281,6 +285,17 @@ namespace Horo::AI {
     Result<std::shared_ptr<const PerceptionSpatialSnapshot>> PerceptionSpatialBroadphase::Publish(
         const Runtime::RuntimeSceneView &scene, const std::uint64_t revision, const std::span<const PerceptionSpatialListener> listeners,
         const std::span<const PerceptionSpatialSource> sources, const PerceptionFilteringPolicy &filtering) {
+        auto prepared = Prepare(scene, revision, listeners, sources, filtering, {});
+        if (prepared.HasValue())
+            PublishPrepared(prepared.Value());
+        return prepared;
+    }
+
+    /** @copydoc PerceptionSpatialBroadphase::Prepare */
+    Result<std::shared_ptr<const PerceptionSpatialSnapshot>> PerceptionSpatialBroadphase::Prepare(
+        const Runtime::RuntimeSceneView &scene, const std::uint64_t revision, const std::span<const PerceptionSpatialListener> listeners,
+        const std::span<const PerceptionSpatialSource> sources, const PerceptionFilteringPolicy &filtering,
+        const std::span<const Runtime::RuntimeEntityView> additions) const {
         using SnapshotResult = Result<std::shared_ptr<const PerceptionSpatialSnapshot>>;
         if (!scene.IsCurrent() || !scene.RuntimeId().IsValid())
             return SnapshotResult::Failure(MakeError(AIErrors::PerceptionSpatialStale));
@@ -299,7 +314,7 @@ namespace Horo::AI {
         next->revision_ = revision;
         next->listeners_.assign(listeners.begin(), listeners.end());
         next->sources_.assign(sources.begin(), sources.end());
-        if (const auto valid = ValidateEndpoints(scene, next->listeners_, next->sources_); valid.HasError())
+        if (const auto valid = ValidateEndpoints(scene, next->listeners_, next->sources_, additions); valid.HasError())
             return SnapshotResult::Failure(valid.ErrorValue());
         std::ranges::sort(next->listeners_, {}, &PerceptionSpatialListener::entity);
         std::ranges::sort(next->sources_, {}, &PerceptionSpatialSource::entity);
@@ -317,10 +332,14 @@ namespace Horo::AI {
         }
         if (!scene.IsCurrent())
             return SnapshotResult::Failure(MakeError(AIErrors::PerceptionSpatialStale));
+        return SnapshotResult::Success(std::move(next));
+    }
+
+    /** @copydoc PerceptionSpatialBroadphase::PublishPrepared */
+    void PerceptionSpatialBroadphase::PublishPrepared(std::shared_ptr<const PerceptionSpatialSnapshot> prepared) noexcept {
         if (current_)
             current_->authorization_->Revoke();
-        current_ = std::move(next);
-        return SnapshotResult::Success(current_);
+        current_ = std::move(prepared);
     }
 
     /** @copydoc PerceptionSpatialBroadphase::Current */

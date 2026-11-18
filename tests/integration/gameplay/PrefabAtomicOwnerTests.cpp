@@ -401,6 +401,79 @@ namespace Horo::Application::PrefabAtomicTest {
             sceneService.Shutdown();
         }
 
+        TEST_CASE("Cooked prefab Perception endpoint positions publish within the actual aggregate Scene lifecycle",
+                  "[prefab][integration][atomic][ai][perception]") {
+            AI::PerceptionSpatialBroadphase spatial;
+            std::size_t captures{};
+            bool supplied = true;
+            Fault fault = Fault::None;
+            const ErrorCodeDescriptor *failure = nullptr;
+            AI::AiScenePerceptionGroupInput group{spatial,
+                                                  {},
+                                                  [&](const Runtime::RuntimeSceneView &scene,
+                                                      std::span<const Runtime::RuntimeEntityView> prospective) {
+                ++captures;
+                std::vector<AI::AiScenePerceptionPosition> positions;
+                REQUIRE(prospective.size() == 2);
+                for (const auto &entity : prospective) {
+                    CHECK(scene.Get(entity.entity).HasError());
+                    if (supplied)
+                        positions.push_back(
+                            {entity.entity, Math::WorldCoordinate64::FromMillimeters(entity.entity.entity.index * 1000, 0, 0)});
+                }
+                return Result<std::vector<AI::AiScenePerceptionPosition>>::Success(std::move(positions));
+            }};
+            SECTION("valid initial coordinates publish and later despawn requires no position capture") {}
+            SECTION("missing prospective authority preserves all owners") {
+                group.positions = {};
+                failure = &AI::AIErrors::PerceptionDependencyMissing;
+            }
+            SECTION("absent prospective coordinates preserve all owners") {
+                supplied = false;
+                failure = &AI::AIErrors::PerceptionDependencyMissing;
+            }
+            SECTION("later Gameplay rejection discards the prepared spatial snapshot") {
+                fault = Fault::GameplayDescriptor;
+                failure = &Gameplay::GameplayErrors::BehaviorNotRegistered;
+            }
+            Fixture fixture{true, fault, {.requirePerceptionEndpoints = true}, PerceptionEndpoints(), group};
+            const auto baseline = *fixture.scenes.ActiveScene();
+            const auto positions = PerceptionPositions(baseline);
+            REQUIRE(positions.HasValue());
+            const auto initial = fixture.ai.PublishPerceptionAtSafePoint(baseline, 1, positions.Value(), spatial);
+            REQUIRE(initial.HasValue());
+            REQUIRE(initial.Value()->SourceCount() == 1);
+            fixture.Tick(1);
+            if (failure) {
+                const auto rejected = fixture.AwaitRejection();
+                REQUIRE(rejected.Failure());
+                CHECK(rejected.Failure()->code.Value() == failure->code.Value());
+                CHECK(baseline.IsCurrent());
+                CHECK(spatial.Current() == initial.Value());
+                CHECK(initial.Value()->ReadAuthorization()->IsCurrent());
+                CHECK(captures == (group.positions ? 1 : 0));
+                RequireAllOwners(fixture, 1, 0);
+                return;
+            }
+            fixture.Reach(3);
+            RequireAllOwners(fixture, 3, 1);
+            REQUIRE(spatial.Current());
+            CHECK(spatial.Current()->ListenerCount() == 3);
+            CHECK(spatial.Current()->SourceCount() == 3);
+            CHECK(spatial.Current()->Revision() == 2);
+            CHECK_FALSE(initial.Value()->ReadAuthorization()->IsCurrent());
+            const auto spawned = spatial.Current();
+            supplied = false;
+            fixture.Tick(2);
+            fixture.Reach(1);
+            RequireAllOwners(fixture, 1, 0);
+            CHECK(captures == 1);
+            CHECK(spatial.Current()->ListenerCount() == 1);
+            CHECK(spatial.Current()->SourceCount() == 1);
+            CHECK(spatial.Current()->Revision() == 3);
+            CHECK_FALSE(spawned->ReadAuthorization()->IsCurrent());
+        }
+
         /** @brief Observes whether aggregate retirement revokes the actual owner token before scheduler callbacks. */
         struct RetirementProbe final : AI::IAiScheduledDecision {
             CancellationToken owner;

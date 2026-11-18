@@ -10,6 +10,11 @@
 
 namespace Horo::AI {
     namespace {
+        /** @brief Selects only active agents with admitted Perception descriptors. */
+        [[nodiscard]] bool HasActiveEndpoints(const Detail::AgentRuntimeState &agent) noexcept {
+            return !agent.retired && agent.record.state == AiAgentActivationState::Active && agent.perceptionEndpoints;
+        }
+
         /** @brief Appends one fully admitted endpoint using exact host-captured coordinates. */
         void AppendEndpoints(const Detail::AgentRuntimeState &agent, const Math::WorldCoordinate64 position,
                              std::vector<PerceptionSpatialListener> &listeners, std::vector<PerceptionSpatialSource> &sources) {
@@ -110,6 +115,76 @@ namespace Horo::AI {
         }
     }  // namespace
 
+    /** @copydoc Detail::PerceptionGroupPublication::Prepare */
+    Result<std::optional<Detail::PerceptionGroupPublication>> Detail::PerceptionGroupPublication::Prepare(
+        const AiScenePerceptionGroupInput &input, const Runtime::RuntimeSceneView &scene,
+        const std::span<const Runtime::RuntimeEntityView> created, const std::span<const Runtime::EntityRef> destroyed,
+        const std::span<const AgentRuntimeState> additions) {
+        using Publication = Result<std::optional<PerceptionGroupPublication>>;
+        const auto previous = input.spatial.Current();
+        const auto retires = [destroyed](const auto &endpoint) {
+            return std::ranges::find(destroyed, endpoint.entity) != destroyed.end();
+        };
+        const bool changes =
+            std::ranges::any_of(additions, HasActiveEndpoints) ||
+            (previous && (std::ranges::any_of(previous->listeners_, retires) || std::ranges::any_of(previous->sources_, retires)));
+        if (!changes)
+            return Publication::Success(std::nullopt);
+        if (!previous || previous->Scene() != scene.RuntimeId())
+            return Publication::Failure(MakeError(AIErrors::PerceptionSpatialStale));
+        if (previous->Revision() == std::numeric_limits<std::uint64_t>::max())
+            return Publication::Failure(MakeError(AIErrors::PerceptionSpatialLimitExceeded));
+
+        std::vector<Runtime::RuntimeEntityView> prospective;
+        for (const auto &agent : additions) {
+            if (!HasActiveEndpoints(agent))
+                continue;
+            const auto found = std::ranges::find(created, agent.record.owner, &Runtime::RuntimeEntityView::entity);
+            if (found == created.end())
+                return Publication::Failure(MakeError(AIErrors::PerceptionSpatialStale));
+            prospective.push_back(*found);
+        }
+        auto listeners = previous->listeners_;
+        auto sources = previous->sources_;
+        const auto inactive = [&](const auto &endpoint) {
+            return endpoint.ownerCancellation.IsCancellationRequested() || retires(endpoint);
+        };
+        std::erase_if(listeners, inactive);
+        std::erase_if(sources, inactive);
+        if (!prospective.empty()) {
+            if (!input.positions)
+                return Publication::Failure(MakeError(AIErrors::PerceptionDependencyMissing));
+            std::ranges::sort(prospective, {}, &Runtime::RuntimeEntityView::entity);
+            const auto captured = input.positions(scene, prospective);
+            if (captured.HasError())
+                return Publication::Failure(captured.ErrorValue());
+            const auto &positions = captured.Value();
+            if (positions.size() != prospective.size() ||
+                !std::ranges::equal(positions, prospective, {}, &AiScenePerceptionPosition::entity, &Runtime::RuntimeEntityView::entity))
+                return Publication::Failure(MakeError(AIErrors::PerceptionDependencyMissing));
+            for (const auto &agent : additions) {
+                if (!HasActiveEndpoints(agent))
+                    continue;
+                const auto position = std::ranges::lower_bound(positions, agent.record.owner, {}, &AiScenePerceptionPosition::entity);
+                AppendEndpoints(agent, position->position, listeners, sources);
+            }
+        }
+        auto next = input.spatial.Prepare(scene, previous->Revision() + 1, listeners, sources, input.filtering, prospective);
+        if (next.HasError())
+            return Publication::Failure(next.ErrorValue());
+        return Publication::Success(PerceptionGroupPublication{&input.spatial, previous, std::move(next).Value()});
+    }
+
+    /** @copydoc Detail::PerceptionGroupPublication::IsCurrent */
+    bool Detail::PerceptionGroupPublication::IsCurrent() const noexcept {
+        return owner->Current() == previous;
+    }
+
+    /** @copydoc Detail::PerceptionGroupPublication::Publish */
+    void Detail::PerceptionGroupPublication::Publish() noexcept {
+        owner->PublishPrepared(std::move(next));
+    }
+
     /** @copydoc Detail::ValidatePerceptionCapacity */
     Result<void> Detail::ValidatePerceptionCapacity(const std::span<const AgentRuntimeState> residents,
                                                     const std::span<const AgentRuntimeState> additions,
@@ -149,7 +224,7 @@ namespace Horo::AI {
             std::vector<PerceptionSpatialListener> listeners;
             std::vector<PerceptionSpatialSource> sources;
             for (const auto &agent : active_->agents) {
-                if (agent.retired || agent.record.state != AiAgentActivationState::Active || !agent.perceptionEndpoints)
+                if (!HasActiveEndpoints(agent))
                     continue;
                 const auto entity = agent.record.owner;
                 const auto position = std::ranges::lower_bound(positions, entity, {}, byEntity);

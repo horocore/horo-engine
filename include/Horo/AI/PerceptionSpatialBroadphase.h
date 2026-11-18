@@ -20,6 +20,10 @@
 #include <vector>
 
 namespace Horo::AI {
+    namespace Detail {
+        struct PerceptionGroupPublication;
+    }
+
     /** @brief Fixed hard ceilings for one scene publication and allocation-free candidate query. */
     struct PerceptionSpatialLimits final {
         static constexpr std::size_t Sources = 8192;
@@ -126,6 +130,7 @@ namespace Horo::AI {
 
     private:
         friend class PerceptionSpatialBroadphase;
+        friend struct Detail::PerceptionGroupPublication;
 
         struct Node final {
             std::array<std::int64_t, 3> minimum{};
@@ -179,6 +184,14 @@ namespace Horo::AI {
         [[nodiscard]] std::shared_ptr<const PerceptionSpatialSnapshot> Current() const noexcept;
 
     private:
+        friend struct Detail::PerceptionGroupPublication;
+        /** @brief Validates and allocates a complete value snapshot, including admitted detached Scene memberships. */
+        [[nodiscard]] Result<std::shared_ptr<const PerceptionSpatialSnapshot>> Prepare(
+            const Runtime::RuntimeSceneView &scene, std::uint64_t revision, std::span<const PerceptionSpatialListener> listeners,
+            std::span<const PerceptionSpatialSource> sources, const PerceptionFilteringPolicy &filtering,
+            std::span<const Runtime::RuntimeEntityView> additions) const;
+        /** @brief Runs only after the owner fence validates the prepared revision. */
+        void PublishPrepared(std::shared_ptr<const PerceptionSpatialSnapshot> prepared) noexcept;
         std::shared_ptr<const PerceptionSpatialSnapshot> current_;
     };
 }  // namespace Horo::AI

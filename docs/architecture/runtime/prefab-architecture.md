@@ -1320,6 +1320,13 @@ authority stops activation. A missing position in a later capture preserves the
 previous spatial publication, with exact agent lifetime revocation still
 excluding retired endpoints.
 
+The authoritative Scene host also supplies absolute positions for prospective
+prefab endpoints during structural preparation. The AI participant combines
+those positions with the retained resident sample, then validates and prepares
+the entire spatial snapshot before the Scene publishes. Missing prospective
+authority or a later owner rejection preserves the prior Scene, AI and spatial
+publications. Despawn can retire the endpoints without another position capture.
+
 An application that already owns an authoritative Navigation world can install
 the Navigation Scene activation participant and its structural agent participant
 on the same Scene service. Enabled prefab agent components require the exact

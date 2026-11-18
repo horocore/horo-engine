@@ -53,6 +53,7 @@ namespace Horo::Application::Internal {
         std::function<Result<std::vector<AI::AiScenePerceptionPosition>>(const Runtime::RuntimeSceneView &)>
             perceptionPositions; /**< Authority-projected global positions in ascending entity order. */
         AI::PerceptionFilteringPolicy perceptionFiltering;
+        AI::AiScenePerceptionGroupPositionSource perceptionGroupPositions; /**< Exact detached endpoint coordinates at admission. */
         std::shared_ptr<const ProjectSceneNavigationSelection> navigation;
     };
 

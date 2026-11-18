@@ -298,8 +298,8 @@ namespace Horo::AI {
 
     /** @copydoc AiSceneRuntime::MakeStructuralParticipant */
     std::unique_ptr<Runtime::SceneStructuralParticipant> AiSceneRuntime::MakeStructuralParticipant(
-        const std::span<const AiControllerDescriptor> descriptors) {
-        return Detail::MakeStructuralParticipant(*this, descriptors);
+        const std::span<const AiControllerDescriptor> descriptors, std::optional<AiScenePerceptionGroupInput> perception) {
+        return Detail::MakeStructuralParticipant(*this, descriptors, std::move(perception));
     }
 
     /** @copydoc AiSceneSnapshot::Find */

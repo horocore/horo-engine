@@ -19,6 +19,24 @@ namespace Horo::AI::Detail {
         bool retired{};
     };
 
+    /** @brief Complete spatial candidate prepared against the current owner and detached entity evidence. */
+    struct PerceptionGroupPublication final {
+        PerceptionSpatialBroadphase *owner{};
+        std::shared_ptr<const PerceptionSpatialSnapshot> previous;
+        std::shared_ptr<const PerceptionSpatialSnapshot> next;
+
+        /** @brief Projects exact new and surviving endpoints before any structural publication. */
+        [[nodiscard]] static Result<std::optional<PerceptionGroupPublication>> Prepare(const AiScenePerceptionGroupInput &input,
+                                                                                       const Runtime::RuntimeSceneView &scene,
+                                                                                       std::span<const Runtime::RuntimeEntityView> created,
+                                                                                       std::span<const Runtime::EntityRef> destroyed,
+                                                                                       std::span<const AgentRuntimeState> additions);
+        /** @brief Fences a concurrent owner mutation during aggregate preparation. @return True for the same retained predecessor. */
+        [[nodiscard]] bool IsCurrent() const noexcept;
+        /** @brief Publishes detached spatial state while every Scene owner commits. */
+        void Publish() noexcept;
+    };
+
     /** @brief Exact Scene/entity generation hash for the owner index. */
     struct EntityRefHash final {
         [[nodiscard]] std::size_t operator()(const Runtime::EntityRef &entity) const noexcept;
@@ -63,7 +81,8 @@ namespace Horo::AI::Detail {
 
     /** @brief Builds one detached structural adapter against a retained owner publication. */
     [[nodiscard]] std::unique_ptr<Runtime::SceneStructuralParticipant> MakeStructuralParticipant(
-        AiSceneRuntime &runtime, std::span<const AiControllerDescriptor> descriptors);
+        AiSceneRuntime &runtime, std::span<const AiControllerDescriptor> descriptors,
+        std::optional<AiScenePerceptionGroupInput> perception);
 
     /** @brief Validates and constructs detached agents with exact destination slots and generations. */
     [[nodiscard]] Result<std::vector<AgentRuntimeState>> PrepareStructuralAgents(AiSceneActivationBinding binding,

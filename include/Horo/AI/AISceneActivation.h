@@ -16,6 +16,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -30,6 +31,18 @@ namespace Horo::AI {
     struct AiScenePerceptionPosition final {
         Runtime::EntityRef entity;
         Math::WorldCoordinate64 position;
+    };
+
+    /** @brief Captures absolute positions for each exact prospective Perception endpoint in ascending entity order. */
+    using AiScenePerceptionGroupPositionSource =
+        std::function<Result<std::vector<AiScenePerceptionPosition>>(const Runtime::RuntimeSceneView &,
+                                                                     std::span<const Runtime::RuntimeEntityView>)>;
+
+    /** @brief Explicit host composition for publishing spatial endpoints with the Scene structural transaction. */
+    struct AiScenePerceptionGroupInput final {
+        PerceptionSpatialBroadphase &spatial; /**< Owner outliving the structural participant and its candidates. */
+        PerceptionFilteringPolicy filtering;
+        AiScenePerceptionGroupPositionSource positions; /**< Missing authority rejects additions and permits retirement. */
     };
 
     inline constexpr std::size_t MaximumAiSceneAgents = 65'536;
@@ -345,12 +358,13 @@ namespace Horo::AI {
 
         /** @brief Creates an explicit owner-lane adapter for atomic entity-group additions and retirement.
          * @param descriptors Immutable controller catalog copied into the owned adapter.
+         * @param perception Optional host-owned atomic endpoint publication.
          * @return Adapter borrowing this runtime, which must outlive the Scene service using it.
          * @details Preparation never replaces existing agents/tasks. Detached candidates retain their publication
          * across shutdown and reject publication after any owner mutation. Public C++ consumers must rebuild.
          */
         [[nodiscard]] std::unique_ptr<Runtime::SceneStructuralParticipant> MakeStructuralParticipant(
-            std::span<const AiControllerDescriptor> descriptors);
+            std::span<const AiControllerDescriptor> descriptors, std::optional<AiScenePerceptionGroupInput> perception = std::nullopt);
 
         /** @brief Reports whether the runtime rejects new activation and safe-point operations. */
         [[nodiscard]] constexpr bool IsShutdown() const noexcept {

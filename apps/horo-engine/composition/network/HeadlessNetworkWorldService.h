@@ -117,12 +117,13 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             if (owners_->gameplay && owners_->gameplay->moduleRetirements)
                 (void)owners_->gameplay->moduleRetirements->Drain();
             if (owners_->configured && request_.service == Network::NetworkModeServiceKind::Physics && configuredActivated_) {
+                const auto previous = record_->perception.Current();
                 if (gameplay_) {
                     const Runtime::FrameContext frame{.frameNumber = ++phaseFrame_, .cancellation = record_->sceneCancellation};
                     if (auto advanced = gameplay_->OnPhase(phase, frame); advanced.HasError())
                         return advanced;
                 }
-                if (phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges)
+                if (phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges && previous == record_->perception.Current())
                     return PublishConfiguredPerception();
             }
             return Result<void>::Success();
@@ -289,7 +290,12 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                     std::make_unique<AI::AiSceneActivationParticipant>(*record_->ai, input.aiControllers));
                 added.HasError())
                 return added;
-            if (auto added = record_->scenes->AddStructuralParticipant(record_->ai->MakeStructuralParticipant(input.aiControllers));
+            std::optional<AI::AiScenePerceptionGroupInput> perception;
+            if (OwnsPerception())
+                perception.emplace(
+                    AI::AiScenePerceptionGroupInput{record_->perception, input.perceptionFiltering, input.perceptionGroupPositions});
+            if (auto added = record_->scenes->AddStructuralParticipant(
+                    record_->ai->MakeStructuralParticipant(input.aiControllers, std::move(perception)));
                 added.HasError())
                 return added;
             return Result<void>::Success();
@@ -325,16 +331,17 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             const auto scene = record_->scenes->ActiveScene();
             if (!scene)
                 return Result<void>::Success();
-            if (record_->perceptionRevision == std::numeric_limits<std::uint64_t>::max())
+            const auto previous = record_->perception.Current();
+            const auto revision = previous && previous->Scene() == scene->RuntimeId() ? previous->Revision() : 0;
+            if (revision == std::numeric_limits<std::uint64_t>::max())
                 return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionSpatialLimitExceeded));
             auto positions = owners_->configured->perceptionPositions(*scene);
             if (positions.HasError())
                 return Result<void>::Failure(positions.ErrorValue());
-            const auto published = record_->ai->PublishPerceptionAtSafePoint(*scene, record_->perceptionRevision + 1, positions.Value(),
-                                                                             record_->perception, owners_->configured->perceptionFiltering);
+            const auto published = record_->ai->PublishPerceptionAtSafePoint(*scene, revision + 1, positions.Value(), record_->perception,
+                                                                             owners_->configured->perceptionFiltering);
             if (published.HasError())
                 return Result<void>::Failure(published.ErrorValue());
-            ++record_->perceptionRevision;
             return Result<void>::Success();
         }
 
