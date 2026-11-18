@@ -1,5 +1,7 @@
 #include "CommittedSceneAssets.h"
 
+#include "Horo/Assets/NavMeshAssetType.h"
+
 #include <algorithm>
 #include <utility>
 
@@ -15,9 +17,11 @@ namespace Horo::Application::Internal {
                                               {}};
         constexpr std::size_t MaximumCommittedBytes = 256U * 1024U * 1024U;
 
-        bool IsAnimation(const Assets::AssetTypeId &type) noexcept {
-            return type.Value() == "core.animation.skeleton" || type.Value() == "core.animation.clip" ||
-                   type.Value() == "core.animation.graph";
+        /** @brief Selects Scene decoders that verify canonical artifact metadata with the payload. */
+        bool RequiresSceneEnvelope(const Assets::AssetTypeId &type) noexcept {
+            const auto name = type.Value();
+            return name == Assets::NavMeshAssetTypeName || name == "core.animation.skeleton" || name == "core.animation.clip" ||
+                   name == "core.animation.graph";
         }
 
         bool MatchesCommittedIdentity(const Assets::AssetRecord *record, const Assets::AssetCookManifestEntry &entry,
@@ -30,9 +34,9 @@ namespace Horo::Application::Internal {
         class SceneBytes final : public Assets::IAssetProvider {
         public:
             SceneBytes(const Assets::IAssetProvider &payloads, const Assets::IAssetProvider &artifacts,
-                       std::vector<Assets::AssetId> animation)
-                : payloads_(payloads), artifacts_(artifacts), animation_(std::move(animation)) {
-                std::ranges::sort(animation_);
+                       std::vector<Assets::AssetId> enveloped)
+                : payloads_(payloads), artifacts_(artifacts), enveloped_(std::move(enveloped)) {
+                std::ranges::sort(enveloped_);
             }
 
             Result<bool> Exists(Assets::AssetId id, const CancellationToken &cancellation) const override {
@@ -45,12 +49,12 @@ namespace Horo::Application::Internal {
 
         private:
             const Assets::IAssetProvider &Select(Assets::AssetId id) const noexcept {
-                return std::ranges::binary_search(animation_, id) ? artifacts_ : payloads_;
+                return std::ranges::binary_search(enveloped_, id) ? artifacts_ : payloads_;
             }
 
             const Assets::IAssetProvider &payloads_;
             const Assets::IAssetProvider &artifacts_;
-            std::vector<Assets::AssetId> animation_;
+            std::vector<Assets::AssetId> enveloped_;
         };
     }  // namespace
 
@@ -68,7 +72,7 @@ namespace Horo::Application::Internal {
             return Result<std::unique_ptr<CommittedSceneAssets>>::Failure(contents.ErrorValue());
         auto published = std::move(contents).Value();
         auto result = std::make_unique<CommittedSceneAssets>();
-        std::vector<Assets::AssetId> animation;
+        std::vector<Assets::AssetId> enveloped;
         result->artifacts_.reserve(published.entries.size());
         for (std::size_t index = 0; index < published.entries.size(); ++index) {
             const auto &entry = published.entries[index];
@@ -78,8 +82,8 @@ namespace Horo::Application::Internal {
                 return Result<std::unique_ptr<CommittedSceneAssets>>::Failure(artifact.ErrorValue());
             if (!MatchesCommittedIdentity(record, entry, artifact.Value(), selection.target))
                 return Result<std::unique_ptr<CommittedSceneAssets>>::Failure(MakeError(InvalidCook));
-            if (IsAnimation(entry.assetType))
-                animation.push_back(entry.assetId);
+            if (RequiresSceneEnvelope(entry.assetType))
+                enveloped.push_back(entry.assetId);
             // Keep the actual verified metadata and bytes. This provider is populated only from
             // committed envelopes, never from synthetic material or Scene artifacts.
             result->provider_.Insert(entry.assetId, artifact.Value().payload);
@@ -88,7 +92,7 @@ namespace Horo::Application::Internal {
             result->artifactProvider_.Insert(entry.assetId, std::move(published.artifacts[index]));
             result->artifacts_.push_back(std::move(artifact).Value());
         }
-        result->sceneProvider_ = std::make_unique<SceneBytes>(result->provider_, result->artifactProvider_, std::move(animation));
+        result->sceneProvider_ = std::make_unique<SceneBytes>(result->provider_, result->artifactProvider_, std::move(enveloped));
         return Result<std::unique_ptr<CommittedSceneAssets>>::Success(std::move(result));
     }
 

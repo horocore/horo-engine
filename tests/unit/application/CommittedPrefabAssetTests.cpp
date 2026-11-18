@@ -1,12 +1,33 @@
 #include "CommittedSceneAssets.h"
+#include "Horo/Assets/NavMeshAssetType.h"
 #include "PrefabSceneCookHostFixture.h"
 
 #include <algorithm>
+#include <array>
+#include <span>
+#include <string_view>
 
 namespace Horo::Application::PrefabCookTestSupport {
     namespace {
         /** @brief Publishes verified HCAF envelopes with distinct types; payload semantics belong to each downstream decoder. */
         struct RoutingPublication final {
+            struct Route final {
+                std::string_view type;
+                std::string_view extension;
+                bool sceneEnvelope;
+            };
+
+            static constexpr std::array routes{
+                Route{"core.animation.skeleton", ".skeleton", true},
+                Route{"core.animation.clip", ".clip", true},
+                Route{"core.animation.graph", ".graph", true},
+                Route{Assets::NavMeshAssetTypeName, ".navmesh", true},
+                Route{"core.scene", ".scene", false},
+                Route{"core.animation.graph.extra", ".extra", false},
+                Route{"core.navmesh.extra", ".extra", false},
+                Route{"core.prefab", ".prefab", false},
+            };
+
             TempDir root;
             NativeDurableFileSystem files;
             AssetRegistry registry;
@@ -15,22 +36,20 @@ namespace Horo::Application::PrefabCookTestSupport {
             std::vector<std::vector<std::uint8_t>> envelopes;
 
             RoutingPublication() {
-                const std::array types{"core.animation.skeleton",    "core.animation.clip", "core.animation.graph", "core.scene",
-                                       "core.animation.graph.extra", "core.prefab"};
-                const std::array extensions{".skeleton", ".clip", ".graph", ".scene", ".extra", ".prefab"};
                 std::vector<AssetRecord> records;
-                for (std::size_t index = 0; index < types.size(); ++index) {
+                for (std::size_t index = 0; index < routes.size(); ++index) {
+                    const auto &route = routes[index];
                     std::array<std::uint8_t, 16> bytes{};
                     bytes.back() = static_cast<std::uint8_t>(index + 1);
                     const auto id = AssetId::FromBytes(bytes);
-                    const auto type = Type(types[index]);
+                    const auto type = Type(route.type);
                     const std::vector<std::uint8_t> payload{static_cast<std::uint8_t>(index + 10), 0, 255};
                     const auto digest = ComputeSha256(std::as_bytes(std::span(payload)));
                     auto encoded = Assets::EncodeCookedArtifact({id, type, target, digest, digest, digest, payload});
                     REQUIRE(encoded.HasValue());
                     entries.push_back({id, type, id.ToString() + ".cooked", ComputeSha256(std::as_bytes(std::span(encoded.Value())))});
                     envelopes.push_back(std::move(encoded).Value());
-                    const auto path = "assets/" + id.ToString() + extensions[index];
+                    const auto path = "assets/" + id.ToString() + std::string{route.extension};
                     records.push_back({.id = id,
                                        .type = type,
                                        .sourcePath = ProjectPath::Parse(path).Value(),
@@ -62,8 +81,8 @@ namespace Horo::Application::PrefabCookTestSupport {
         }
     }  // namespace
 
-    TEST_CASE("Committed Scene view routes exactly three Animation types without changing legacy payloads",
-              "[animation][host][committed][provider]") {
+    TEST_CASE("Committed Scene view retains exact Animation and NavMesh envelopes for their canonical decoders",
+              "[animation][navigation][host][committed][provider]") {
         RoutingPublication publication;
         const auto captured = publication.Capture();
         for (std::size_t index = 0; index < publication.entries.size(); ++index) {
@@ -78,7 +97,17 @@ namespace Horo::Application::PrefabCookTestSupport {
             REQUIRE(envelope.HasValue());
             CHECK(payload.Value() == artifact->payload);
             CHECK(envelope.Value() == publication.envelopes[index]);
-            CHECK(scene.Value() == (index < 3 ? envelope.Value() : payload.Value()));
+            const auto &route = RoutingPublication::routes[index];
+            CAPTURE(route.type);
+            CHECK(scene.Value() == (route.sceneEnvelope ? envelope.Value() : payload.Value()));
+            if (route.sceneEnvelope) {
+                const auto decoded = Assets::DecodeCookedArtifact(scene.Value());
+                REQUIRE(decoded.HasValue());
+                CHECK(decoded.Value().id == id);
+                CHECK(decoded.Value().type == publication.entries[index].assetType);
+                CHECK(decoded.Value().target == publication.target);
+                CHECK(ComputeSha256(std::as_bytes(std::span(scene.Value()))) == publication.entries[index].artifactHash);
+            }
             CHECK(captured->SceneProvider().Exists(id, {}).Value());
         }
     }
