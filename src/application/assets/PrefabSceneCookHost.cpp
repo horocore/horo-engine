@@ -58,15 +58,18 @@ namespace Horo::Application {
             const std::string_view summary = cancelled ? "Prefab cook preparation cancelled" : "Prefab cook preparation failed";
             try {
                 // Producer messages and native paths may include machine-local data. Project-relative registry identity is safe.
-                activity_.FailPreparation(
-                    {.code = error.code, .domain = error.domain, .severity = error.severity, .message = std::string{summary}},
-                    {.timestampUtc = std::chrono::system_clock::now(),
-                     .severity = cancelled ? DiagnosticSeverity::Warning : DiagnosticSeverity::Error,
-                     .result = cancelled ? BuildOutputResult::Cancelled : BuildOutputResult::Failed,
-                     .stage = std::string{phase_},
-                     .code = DiagnosticCode{error.code.Value()},
-                     .message = failedSource ? std::format("{} [{}] {}", summary, failedSource->id.ToString(), failedSource->sourcePath.String())
-                                             : std::string{summary}});
+                activity_.FailPreparation({.code = error.code,
+                                           .domain = error.domain,
+                                           .severity = error.severity,
+                                           .message = std::string{summary}},
+                                          {.timestampUtc = std::chrono::system_clock::now(),
+                                           .severity = cancelled ? DiagnosticSeverity::Warning : DiagnosticSeverity::Error,
+                                           .result = cancelled ? BuildOutputResult::Cancelled : BuildOutputResult::Failed,
+                                           .stage = std::string{phase_},
+                                           .code = DiagnosticCode{error.code.Value()},
+                                           .message = failedSource ? std::format("{} [{}] {}", summary, failedSource->id.ToString(),
+                                                                                 failedSource->sourcePath.String())
+                                                                   : std::string{summary}});
             } catch (...) {
                 // The activity's destructor still releases the admission after projection allocation failure.
             }
@@ -153,7 +156,7 @@ namespace Horo::Application {
                 auto effective = request;
                 effective.prefabPolicy = validated.profile->Policy();
                 return CookWithProjectLease(effective, *validated.profile, cancellation, releasePlan, diagnostics,
-                                                std::move(projectLease).Value());
+                                            std::move(projectLease).Value());
             }
         }();
         if (result.HasError())
@@ -162,12 +165,9 @@ namespace Horo::Application {
     }
 
     /** @copydoc PrefabSceneCookHost::CookWithProjectLease */
-    Result<Assets::AssetCookReport> PrefabSceneCookHost::CookWithProjectLease(const PrefabSceneCookRequest &request,
-                                                                              const Prefab::PrefabLimitProfile &limits,
-                                                                              const CancellationToken &cancellation,
-                                                                              const Release::ReleaseExecutionPlan *releasePlan,
-                                                                              PreparationDiagnostics &diagnostics,
-                                                                              Editor::ProjectMutationLease) {
+    Result<Assets::AssetCookReport> PrefabSceneCookHost::CookWithProjectLease(
+        const PrefabSceneCookRequest &request, const Prefab::PrefabLimitProfile &limits, const CancellationToken &cancellation,
+        const Release::ReleaseExecutionPlan *releasePlan, PreparationDiagnostics &diagnostics, Editor::ProjectMutationLease) {
         if (const auto recovery = migrations_.InspectPendingRecovery(request.assets.sourceRoot);
             recovery.action != Editor::MigrationRecoveryAction::None)
             return Result<Assets::AssetCookReport>::Failure(recovery.diagnostic.value_or(MakeError(PrefabSceneCookErrors::Invalid)));
@@ -188,7 +188,7 @@ namespace Horo::Application {
             return Result<Assets::AssetCookReport>::Failure(replaced.ErrorValue());
         diagnostics.Stage("prefab.validate_sources", 0.1F);
         auto composed = PrefabCookDetail::PrepareCatalog(request, host.Value(), *inputs, limits, *catalog_, cancellation, expansion_,
-                                                          diagnostics.failedSource);
+                                                         diagnostics.failedSource);
         if (auto closed = expansion_.CloseDocument(sourceJoin); closed.HasError())
             return Result<Assets::AssetCookReport>::Failure(closed.ErrorValue());
         if (composed.HasError())

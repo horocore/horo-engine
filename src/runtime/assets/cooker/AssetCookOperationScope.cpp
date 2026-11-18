@@ -66,9 +66,9 @@ namespace Horo::Assets::Detail {
         try {
             if (id_)
                 static_cast<void>(store_->Update(*id_, {.state = cancelled ? OperationState::Cancelled : OperationState::Failed,
-                                                       .phase = std::move(record.stage),
-                                                       .message = error.message,
-                                                       .error = std::move(error)}));
+                                                        .phase = std::move(record.stage),
+                                                        .message = error.message,
+                                                        .error = std::move(error)}));
         } catch (...) {
             // The host still returns the authoritative preparation failure.
         }

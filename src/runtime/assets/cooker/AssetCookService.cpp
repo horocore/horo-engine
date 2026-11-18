@@ -368,17 +368,19 @@ namespace Horo::Assets {
         }
 
         /** @brief Admits the optional authoritative cook row only after its output identity was allocated. */
-        [[nodiscard]] Result<std::optional<OperationId>> BeginCookOperation(const AssetCookRequest &request,
-                                                                            std::string title, std::string phase, std::string message = {}) {
+        [[nodiscard]] Result<std::optional<OperationId>> BeginCookOperation(const AssetCookRequest &request, std::string title,
+                                                                            std::string phase,
+                                                                            std::optional<std::size_t> recordCount = std::nullopt) {
             if (request.operationStore == nullptr)
                 return Result<std::optional<OperationId>>::Success(std::nullopt);
-            auto operation = request.operationStore->Begin(OperationDescriptor{.kind = OperationKind::Cook,
-                                                                               .title = std::move(title),
-                                                                               .phase = std::move(phase),
-                                                                               .message = std::move(message),
-                                                                               .progress = 0.0F,
-                                                                               .cancellable = static_cast<bool>(request.requestCancel),
-                                                                               .requestCancel = request.requestCancel});
+            auto operation = request.operationStore->Begin(
+                OperationDescriptor{.kind = OperationKind::Cook,
+                                    .title = std::move(title),
+                                    .phase = std::move(phase),
+                                    .message = recordCount ? std::format("{} assets", *recordCount) : std::string{},
+                                    .progress = 0.0F,
+                                    .cancellable = static_cast<bool>(request.requestCancel),
+                                    .requestCancel = request.requestCancel});
             if (!operation.has_value())
                 return Result<std::optional<OperationId>>::Failure(MakeError(CookErrors::OperationAdmissionFailed));
             return Result<std::optional<OperationId>>::Success(operation);
@@ -510,6 +512,7 @@ namespace Horo::Assets {
                 operation.RecordError(published.ErrorValue());
             return published;
         }
+
         /** @brief Performs side-effect-free request admission shared by direct and prepared cooks. */
         [[nodiscard]] Result<void> ValidateCookRequest(const AssetCookRequest &request, const bool hasCatalog,
                                                        const CancellationToken &cancellation) {
@@ -522,8 +525,8 @@ namespace Horo::Assets {
 
         /** @brief Executes the real cook pipeline once after request validation and operation admission. */
         [[nodiscard]] Result<AssetCookReport> RunCook(JobSystem &jobs, const CookerCatalogSnapshot &catalog,
-                                                     const AssetCookRequest &request, const CancellationToken &cancellation,
-                                                     CookOperationScope &operation) {
+                                                      const AssetCookRequest &request, const CancellationToken &cancellation,
+                                                      CookOperationScope &operation) {
             const auto records = request.registry.Records();
             if (request.buildOutputStore != nullptr) {
                 operation.Publish(BuildOutputRecord{
@@ -587,7 +590,7 @@ namespace Horo::Assets {
         auto session = BeginOutputSession(request.buildOutputStore);
         if (session.HasError())
             return Result<AssetCookReport>::Failure(session.ErrorValue());
-        auto operationId = BeginCookOperation(request, "Cook assets", "prepare", std::format("{} assets", request.registry.Records().size()));
+        auto operationId = BeginCookOperation(request, "Cook assets", "prepare", request.registry.Records().size());
         if (operationId.HasError())
             return Result<AssetCookReport>::Failure(operationId.ErrorValue());
         CookOperationScope operation{request.operationStore, request.buildOutputStore, cancellation,
