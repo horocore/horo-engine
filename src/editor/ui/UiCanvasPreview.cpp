@@ -107,7 +107,7 @@ namespace Horo::Editor {
         /** @brief Run the sole Runtime UI style resolver against exact preview tree and actual registry evidence. */
         Result<UiComputedStyleSnapshot> ComputePreviewStyles(const UiDocument &source, const UiElementTree &tree,
                                                              const RuntimeStyleRegistry &registry,
-                                                             std::span<const UiStyleElementInput> inputs) {
+                                                             std::span<const UiStyleElementInput> inputs, UiStyleFailureLocation &failure) {
             const auto capacity = tree.Size();
             const auto instance = tree.Instance();
             const auto canvas = tree.Canvas();
@@ -126,7 +126,7 @@ namespace Horo::Editor {
                                                       UiStyleContentRevision::Create(1).Value(),
                                                       UiStylePolicyRevision::Create(1).Value(),
                                                       UiInteractionRevision::Create(1).Value()};
-            auto computed = resolver.Update(tree, registry, {styleSources, inputs});
+            auto computed = resolver.Update(tree, registry, {styleSources, inputs, &failure});
             if (computed.HasError())
                 return Result<UiComputedStyleSnapshot>::Failure(computed.ErrorValue());
             return computed;
@@ -152,7 +152,7 @@ namespace Horo::Editor {
         Result<void> ResolvePreviewStyles(const UiDocument &source, const UiElementTree &tree,
                                           const std::vector<const UiDocumentElement *> &authored,
                                           std::vector<UiLayoutElementDescriptor> &descriptors, const UiInspectorResourceSnapshot *resources,
-                                          UiElementId &problemElement) {
+                                          UiElementId &problemElement, UiStylePropertyId &problemProperty) {
             if (resources && resources->styles) {
                 const auto &registry = *resources->styles;
                 auto prepared = PreparePreviewStyleInputs(authored, descriptors, resources->theme);
@@ -160,9 +160,15 @@ namespace Horo::Editor {
                     return Result<void>::Failure(prepared.ErrorValue());
                 const auto &inputs = prepared.Value().inputs;
                 const auto &surfaces = prepared.Value().surfaces;
-                auto computed = ComputePreviewStyles(source, tree, registry, inputs);
-                if (computed.HasError())
+                UiStyleFailureLocation failure;
+                auto computed = ComputePreviewStyles(source, tree, registry, inputs, failure);
+                if (computed.HasError()) {
+                    if (const auto element = tree.Get(failure.element); element.HasValue()) {
+                        problemElement = element.Value().id;
+                        problemProperty = failure.inlineProperty;
+                    }
                     return Result<void>::Failure(computed.ErrorValue());
+                }
                 for (std::size_t i = 0; i < descriptors.size(); ++i) {
                     const auto bindings = PreviewStyleBindings(computed.Value(), surfaces[i].style.element);
                     if (bindings.HasError())
@@ -316,9 +322,11 @@ namespace Horo::Editor {
     /** @copydoc BuildUiCanvasPreview */
     Result<UiCanvasPreview> BuildUiCanvasPreview(const UiDocument &source, const UiCanvasPreviewState &state,
                                                  const DocumentInstanceId ownership, const UiInspectorResourceSnapshot *resources,
-                                                 std::optional<UiDiagnosticRecord> *problem) {
+                                                 std::optional<UiDiagnosticRecord> *problem, UiStylePropertyId *styleProblem) {
         if (problem)
             problem->reset();
+        if (styleProblem)
+            *styleProblem = {};
         try {
             if (!state.IsValid() || !ownership.IsValid() || source.Canvases().empty())
                 return Failure<UiCanvasPreview>();
@@ -347,9 +355,14 @@ namespace Horo::Editor {
                 return fail(UiDiagnosticCategory::Layout, selected.ErrorValue());
             result.profile = selected.Value();
             UiElementId problemElement;
-            if (const auto styled = ResolvePreviewStyles(source, tree, values.authored, descriptors, resources, problemElement);
-                styled.HasError())
+            UiStylePropertyId problemProperty;
+            if (const auto styled =
+                    ResolvePreviewStyles(source, tree, values.authored, descriptors, resources, problemElement, problemProperty);
+                styled.HasError()) {
+                if (styleProblem)
+                    *styleProblem = problemProperty;
                 return fail(UiDiagnosticCategory::Render, styled.ErrorValue(), problemElement);
+            }
             auto layout = EvaluatePreviewLayout(source, tree, descriptors, result.canvas);
             if (layout.HasError())
                 return fail(UiDiagnosticCategory::Layout, layout.ErrorValue());

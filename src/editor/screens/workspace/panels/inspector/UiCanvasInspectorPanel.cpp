@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdio>
 #include <limits>
+#include <utility>
 
 namespace Horo::Editor {
     namespace {
@@ -103,6 +104,7 @@ namespace Horo::Editor {
 
     /** @copydoc UiCanvasInspectorPanel::Clear */
     void UiCanvasInspectorPanel::Clear() noexcept {
+        styleProblemFocus_.reset();
         if (!context_)
             return;
         sourceElement_ = {};
@@ -406,9 +408,17 @@ namespace Horo::Editor {
         return true;
     }
 
+    /** @copydoc UiCanvasInspectorPanel::QueueStyleProblemFocus */
+    void UiCanvasInspectorPanel::QueueStyleProblemFocus(const UiCanvasWorkspaceDocument &source, const Runtime::Ui::UiElementId element,
+                                                        const Runtime::Ui::UiStylePropertyId property) noexcept {
+        styleProblemFocus_ =
+            StyleProblemFocus{source.identity.instance, source.state, element, property, source.inspectorResourcePublication};
+    }
+
     /** @copydoc UiCanvasInspectorPanel::Draw */
     void UiCanvasInspectorPanel::Draw(const UiCanvasWorkspaceDocument &source, const EditorGuiContext &context,
                                       EditorWorkspaceViewCommandData &output) {
+        const auto focus = std::exchange(styleProblemFocus_, std::nullopt);
         if (DrawTheme(source, context, output))
             return;
         if (!source.selectedElement || source.selectionRevision == std::numeric_limits<std::uint64_t>::max()) {
@@ -431,6 +441,12 @@ namespace Horo::Editor {
         }
         if (!context_ || *context_ != current)
             Capture(source, current);
+        if (focus && !dirty_ && focus->document == current.document && focus->state == current.state && focus->element == current.element &&
+            focus->resourcePublication == current.resourcePublication && source.preview.problemStyleProperty == focus->property) {
+            const auto found = std::ranges::find(presentation_.inlineStyle, focus->property, &UiStyleAssignment::property);
+            if (found != presentation_.inlineStyle.end())
+                SelectProperty(static_cast<int>(found - presentation_.inlineStyle.begin()));
+        }
         const auto &id = current.element.Bytes();
         ImGui::PushID(reinterpret_cast<const char *>(id.data()), reinterpret_cast<const char *>(id.data() + id.size()));
         if (const auto &layout = source.preview.selectedLayout; layout && layout->element == current.element) {

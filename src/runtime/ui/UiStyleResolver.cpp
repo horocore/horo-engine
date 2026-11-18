@@ -84,6 +84,8 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiStyleResolver::Prepare */
     Result<UiStyleResolver::PreparedUpdate> UiStyleResolver::Prepare(const UiElementTree &tree, const RuntimeStyleRegistry &registry,
                                                                      const UiStyleUpdateRequest &request) const {
+        if (request.failure)
+            *request.failure = {};
         if (!storage_ || storage_->lifecycle != UiStyleResolverState::Active)
             return StyleInternal::Failure<PreparedUpdate>(UiErrors::StyleLifecycleUnavailable);
         if (storage_->prepared)

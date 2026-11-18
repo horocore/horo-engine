@@ -329,24 +329,29 @@ namespace Horo::Runtime::Ui::StyleInternal {
 
         [[nodiscard]] Result<void> ValidateAssignments(const RuntimeStyleRegistry &registry,
                                                        const std::span<const UiStyleAssignment> assignments,
-                                                       const std::uint32_t propertyCapacity) {
+                                                       const std::uint32_t propertyCapacity, UiStylePropertyId *failedProperty = nullptr) {
             if (assignments.size() > propertyCapacity)
                 return Failure(UiErrors::StyleInvalid);
             for (const auto &assignment : assignments) {
+                const auto reject = [&](const ErrorCodeDescriptor &error) {
+                    if (failedProperty)
+                        *failedProperty = assignment.property;
+                    return Failure(error);
+                };
                 if (!assignment.value.IsValid() || assignment.value.referencesToken)
-                    return Failure(UiErrors::StyleInvalid);
+                    return reject(UiErrors::StyleInvalid);
                 const auto *property = FindProperty(registry.Properties(), assignment.property);
                 if (property == nullptr)
-                    return Failure(UiErrors::StyleReferenceInvalid);
+                    return reject(UiErrors::StyleReferenceInvalid);
                 if (!IsValueCompatible(*property, assignment.value.literal))
-                    return Failure(UiErrors::StyleTypeMismatch);
+                    return reject(UiErrors::StyleTypeMismatch);
             }
             return Result<void>::Success();
         }
     }  // namespace
 
     Result<void> ValidateElementInput(const RuntimeStyleRegistry &registry, const UiStyleElementInput &input,
-                                      const std::uint32_t propertyCapacity) {
+                                      const std::uint32_t propertyCapacity, UiStylePropertyId *failedInlineProperty) {
         if (!input.element.IsValid() || (input.asset.IsValid() && !registry.HasAsset(input.asset)) || !input.state.IsValid() ||
             input.classes.size() > MaximumUiStyleClasses)
             return Failure(UiErrors::StyleInvalid);
@@ -357,7 +362,8 @@ namespace Horo::Runtime::Ui::StyleInternal {
         for (const auto &classReference : input.classes)
             if (!classReference.IsValid() || !registry.HasClass(classReference))
                 return Failure(UiErrors::StyleReferenceInvalid);
-        if (const auto valid = ValidateAssignments(registry, input.inlineProperties, propertyCapacity); valid.HasError())
+        if (const auto valid = ValidateAssignments(registry, input.inlineProperties, propertyCapacity, failedInlineProperty);
+            valid.HasError())
             return valid;
         if (const auto valid = ValidateAssignments(registry, input.policyProperties, propertyCapacity); valid.HasError())
             return valid;

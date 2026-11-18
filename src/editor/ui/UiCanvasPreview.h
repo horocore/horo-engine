@@ -63,12 +63,14 @@ namespace Horo::Editor {
      * @param ownership Exact document workspace incarnation, isolated from game runtime ownership.
      * @param resources Optional committed style resources.
      * @param problem Optional retained diagnostic. Reset on every evaluation; filled only for a supported Runtime UI failure.
+     * @param styleProblem Optional exact rejected override ID; reset before every evaluation.
      * @return Evaluated boxes or the original typed resolution/layout failure.
      */
     [[nodiscard]] Result<UiCanvasPreview> BuildUiCanvasPreview(const Runtime::Ui::UiDocument &source, const UiCanvasPreviewState &state,
                                                                DocumentInstanceId ownership,
                                                                const UiInspectorResourceSnapshot *resources = nullptr,
-                                                               std::optional<Runtime::Ui::UiDiagnosticRecord> *problem = nullptr);
+                                                               std::optional<Runtime::Ui::UiDiagnosticRecord> *problem = nullptr,
+                                                               Runtime::Ui::UiStylePropertyId *styleProblem = nullptr);
 
     /** @brief Convert a completed logical drag into one canonical presentation transaction.
      * @param element Current authored element. @param box Actual preview box at gesture start.

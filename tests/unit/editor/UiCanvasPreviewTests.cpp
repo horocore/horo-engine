@@ -340,6 +340,34 @@ TEST_CASE("Preview admits the legacy implicit root and rejects world projection 
     }
 }
 
+TEST_CASE("Canvas preview retains the exact failing authored override from an active registry", "[ui_canvas][preview][styles]") {
+    const UiStyleAssetDocument style{UiStyleContentRevision::Create(1).Value(), {.id = Id<RuntimeStyleAssetId>(8)}, {}, {}};
+    const auto resources = Resources(style);
+    auto property = Id<UiStylePropertyId>(99);
+    const auto *expected = &UiErrors::StyleReferenceInvalid;
+    SECTION("unregistered property") {}
+    SECTION("registered property with incompatible value") {
+        property = CoreUiStylePropertyId(UiCoreStyleProperty::Width);
+        expected = &UiErrors::StyleTypeMismatch;
+    }
+    auto presentation = *Document().Elements().back().presentation;
+    presentation.inlineStyle = {{property, UiStyleValueSource::Literal(UiStyleScalar{1}), false}};
+    const auto document = Document(false, &presentation);
+    const auto original = SerializeUiDocument(document).Value();
+    std::optional<UiDiagnosticRecord> problem;
+    UiStylePropertyId rejected;
+    REQUIRE(BuildUiCanvasPreview(document, {}, Instance(), &resources, &problem, &rejected).HasError());
+    REQUIRE(problem);
+    REQUIRE(problem->correlationCount == 3);
+    CHECK(problem->code.Value() == expected->code.Value());
+    CHECK(std::get<UiElementId>(problem->correlation[1].value) == document.Elements().back().id);
+    CHECK(rejected == property);
+    CHECK(SerializeUiDocument(document).Value() == original);
+    REQUIRE(BuildUiCanvasPreview(Document(), {}, Instance(), &resources, &problem, &rejected).HasValue());
+    CHECK_FALSE(problem);
+    CHECK_FALSE(rejected.IsValid());
+}
+
 TEST_CASE("Preview preserves typed missing style and intrinsic capability failures", "[ui_canvas][preview][capabilities]") {
     auto presentation = *Document().Elements().back().presentation;
     presentation.styleAsset = Id<RuntimeStyleAssetId>(8);

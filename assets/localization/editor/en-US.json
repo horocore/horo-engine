@@ -4518,6 +4518,7 @@
     "workspace.ui_canvas.preview.zoom_out": {"text": "Zoom out"},
     "workspace.ui_canvas.preview.zoom_in": {"text": "Zoom in"},
     "workspace.ui_canvas.preview.unavailable": {"text": "Layout preview unavailable for these source or device inputs"},
+    "workspace.ui_canvas.preview.inspect_problem_property": {"text": "Inspect affected style override"},
     "workspace.ui_canvas.preview.inspect_problem_element": {"text": "Inspect affected element"},
     "workspace.ui_canvas.preview.hint": {"text": "Layout bounds preview. Shift-click adds a vertical guide; Ctrl-Shift-click adds a horizontal guide. Middle-drag pans. Escape cancels a drag."},
     "workspace.ui_canvas.undo": {

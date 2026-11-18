@@ -14,6 +14,8 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::LayoutCandidateBusy,
             &UiErrors::StyleCandidateBusy,
             &UiErrors::StyleReferenceInvalid,
+            &UiErrors::StyleInvalid,
+            &UiErrors::StyleTypeMismatch,
             &UiErrors::ClockInputInvalid,
             &UiErrors::ClockSourceStale,
             &UiErrors::ClockOverflow,

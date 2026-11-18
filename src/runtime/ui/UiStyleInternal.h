@@ -82,7 +82,7 @@ namespace Horo::Runtime::Ui::StyleInternal {
     };
 
     [[nodiscard]] Result<void> ValidateElementInput(const RuntimeStyleRegistry &registry, const UiStyleElementInput &input,
-                                                    std::uint32_t propertyCapacity);
+                                                    std::uint32_t propertyCapacity, UiStylePropertyId *failedInlineProperty);
     [[nodiscard]] Result<WorkingStyle> ResolveElement(const RuntimeStyleRegistry &registry, const UiStyleElementInput &input,
                                                       const WorkingStyle *parent, std::uint32_t propertyCapacity);
 

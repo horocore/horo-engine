@@ -82,7 +82,8 @@ namespace Horo::Editor {
         /** @brief Publish geometry and failure evidence from the same evaluation. */
         void RefreshCanvasPreview(const UiCanvasDocument &owner, UiCanvasPreviewPresentation &preview,
                                   const UiInspectorResourceSnapshot &resources) {
-            auto evaluated = BuildUiCanvasPreview(owner.Document(), preview.state, owner.Identity().instance, &resources, &preview.problem);
+            auto evaluated = BuildUiCanvasPreview(owner.Document(), preview.state, owner.Identity().instance, &resources, &preview.problem,
+                                                  &preview.problemStyleProperty);
             preview.diagnostic = evaluated.HasError() ? std::optional{evaluated.ErrorValue()} : std::nullopt;
             preview.layout = evaluated.HasValue() ? std::optional{std::move(evaluated).Value()} : std::nullopt;
             RefreshSelectedLayout(preview, owner.Selection());
