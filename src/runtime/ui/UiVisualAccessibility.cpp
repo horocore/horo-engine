@@ -1,6 +1,8 @@
 #include "Horo/Runtime/Ui/UiVisualAccessibility.h"
 
 #include "Horo/Runtime/Ui/UiErrors.h"
+#include "Horo/Runtime/Ui/UiRenderSnapshot.h"
+#include "Horo/Runtime/Ui/UiStyle.h"
 
 #include <algorithm>
 #include <array>
@@ -26,7 +28,130 @@ namespace Horo::Runtime::Ui {
                                                         SettingKey{"accessibility.visual.ui.high_contrast"}};
             return keys;
         }
+
+        /** @brief Integer cell bounds relative to the interior of a five-cell status badge. */
+        struct IndicatorStroke final {
+            std::int32_t x{};
+            std::int32_t y{};
+            std::int32_t width{};
+            std::int32_t height{};
+        };
+
+        /** @brief Distinct silhouettes in stable order so simultaneous states retain independent meaning. */
+        struct IndicatorShape final {
+            UiVisualState state;
+            std::array<IndicatorStroke, 3> strokes;
+        };
+
+        constexpr std::array IndicatorShapes{
+            IndicatorShape{UiVisualState::Checked, {{{0, 1, 1, 1}, {1, 2, 1, 1}, {2, 0, 1, 2}}}},
+            IndicatorShape{UiVisualState::Selected, {{{1, 1, 1, 1}}}},
+            IndicatorShape{UiVisualState::Pressed, {{{0, 0, 3, 1}, {1, 1, 1, 2}}}},
+            IndicatorShape{UiVisualState::Disabled, {{{0, 1, 3, 1}}}},
+            IndicatorShape{UiVisualState::Invalid, {{{1, 0, 1, 1}, {1, 2, 1, 1}}}},
+            IndicatorShape{UiVisualState::Busy, {{{0, 0, 1, 1}, {1, 1, 1, 1}, {2, 2, 1, 1}}}},
+        };
+
+        constexpr auto IndicatorStateMask = [] {
+            UiVisualStateMask state{UiVisualState::Focused};
+            for (const auto &shape : IndicatorShapes)
+                state = state | shape.state;
+            return state;
+        }();
+
+        constexpr auto IndicatorCommandCount = [] {
+            unsigned count = UiVisualIndicatorLimits::FocusCommands;
+            for (const auto &shape : IndicatorShapes) {
+                ++count;
+                for (const auto &stroke : shape.strokes)
+                    count += stroke.width != 0;
+            }
+            return count;
+        }();
+        static_assert(IndicatorCommandCount == UiVisualIndicatorLimits::Commands);
+
+        constexpr UiLinearColor IndicatorBackground{0, 0, 0, 1};
+        constexpr UiLinearColor IndicatorForeground{1, 1, 1, 1};
+        constexpr std::int32_t IndicatorCellMaximum = 2 * 64;
+        constexpr std::int32_t BadgeCells = 5;
+        constexpr std::int32_t BadgeStride = BadgeCells + 1;
+
+        /** @brief Internal writer preserving the surface's inherited presentation scopes on every emitted draw. */
+        struct IndicatorWriter final {
+            const UiDrawCommand &surface;
+            std::span<UiDrawCommand> output;
+            std::size_t count{};
+
+            void Add(UiLogicalRect rect, UiDrawPayload paint) noexcept {
+                auto draw = surface;
+                draw.rect = rect;
+                draw.opacity = 1.0F;
+                draw.payload = paint;
+                output[count++] = draw;
+            }
+
+            void DrawFocus() noexcept {
+                auto [origin, extent] = surface.rect;
+                const auto width = std::min({IndicatorCellMaximum / 2, extent.width / 4, extent.height / 4});
+                if (width == 0)
+                    return;
+                Add(surface.rect, UiBorderDraw{IndicatorBackground, width});
+                origin.x += width;
+                origin.y += width;
+                extent.width -= 2 * width;
+                extent.height -= 2 * width;
+                Add({origin, extent}, UiBorderDraw{IndicatorForeground, width});
+            }
+
+            void DrawBadge(const IndicatorShape &shape, const UiLogicalPoint origin, const std::int32_t cell) noexcept {
+                Add({origin, {BadgeCells * cell, BadgeCells * cell}}, UiSolidDraw{IndicatorBackground});
+                for (const auto &stroke : shape.strokes) {
+                    if (stroke.width == 0)
+                        break;
+                    const UiLogicalPoint point{origin.x + (stroke.x + 1) * cell, origin.y + (stroke.y + 1) * cell};
+                    Add({point, {stroke.width * cell, stroke.height * cell}}, UiSolidDraw{IndicatorForeground});
+                }
+            }
+        };
     }  // namespace
+
+    /** @copydoc HasUiVisualIndicators */
+    bool HasUiVisualIndicators(const UiVisualStateMask state) noexcept {
+        return (state.bits & IndicatorStateMask.bits) != 0;
+    }
+
+    /** @copydoc ProjectUiVisualIndicators */
+    Result<std::size_t> ProjectUiVisualIndicators(const UiVisualStateMask state, const UiDrawCommand &surface,
+                                                  const std::span<UiDrawCommand> output) {
+        if (!HasUiVisualIndicators(state) || surface.opacity == 0 || surface.rect.extent.width == 0 || surface.rect.extent.height == 0)
+            return Result<std::size_t>::Success(0);
+        const bool focused = state.Contains(UiVisualStateMask{UiVisualState::Focused});
+        const auto badges = static_cast<std::int32_t>(std::ranges::count_if(IndicatorShapes, [state](const auto &shape) {
+            return state.Contains(UiVisualStateMask{shape.state});
+        }));
+        const auto [origin, extent] = surface.rect;
+        const auto right = static_cast<std::int64_t>(origin.x) + extent.width;
+        const auto bottom = static_cast<std::int64_t>(origin.y) + extent.height;
+        if (!surface.rect.IsValid() || right > std::numeric_limits<std::int32_t>::max() ||
+            bottom > std::numeric_limits<std::int32_t>::max())
+            return Result<std::size_t>::Failure(MakeError(UiErrors::HandleMalformed));
+        if (output.size() < UiVisualIndicatorLimits::Commands)
+            return Result<std::size_t>::Failure(MakeError(UiErrors::CapacityExceeded));
+        IndicatorWriter writer{surface, output};
+        if (focused)
+            writer.DrawFocus();
+        const auto cell = std::min({IndicatorCellMaximum, extent.width / (badges * BadgeStride + 1), extent.height / 10});
+        if (badges == 0 || cell == 0)
+            return Result<std::size_t>::Success(writer.count);
+        UiLogicalPoint position{static_cast<std::int32_t>(right) - (badges * BadgeStride + 1) * cell, origin.y + 3 * cell};
+        for (const auto &shape : IndicatorShapes) {
+            if (state.Contains(UiVisualStateMask{shape.state})) {
+                writer.DrawBadge(shape, position, cell);
+                position.x += BadgeStride * cell;
+            }
+        }
+        return Result<std::size_t>::Success(writer.count);
+    }
 
     /** @copydoc UiVisualPresentationPolicy::ValidateReplacement */
     Result<void> UiVisualPresentationPolicy::ValidateReplacement(const UiVisualPresentationPolicy &current) const {

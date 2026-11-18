@@ -990,6 +990,16 @@ rules form an accessibility layer after animated values so motion cannot overwri
 the selected contrast or focus treatment. Themes supply the colors and focus
 treatments through their registered assets or classes.
 
+The paint projection consumes the same immutable control and focus states used by
+the style cascade. Focus adds a dual-tone outline. Checked, selected, pressed,
+disabled, invalid, and busy states have distinct geometric marks that can appear
+together. The marks carry the exact element's transform, clip, mask, and opacity
+group. Visible controls keep the marks when a project customizes the theme; a
+hidden control emits none. Known focus and control owners determine the cold
+paint budget. A retained paint program reserves one stable indicator slot per
+eligible element. Changes in state emit or remove geometry within that slot
+and keep the program's bound roles and resources.
+
 An explicitly decorative timeline completes at its resolved endpoint on the first
 update with reduced motion, including required route transitions. This publishes
 one normal completion and respects the existing presentation gate. Decorative

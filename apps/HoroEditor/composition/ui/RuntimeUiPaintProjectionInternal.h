@@ -39,6 +39,7 @@ namespace Horo::Application::Internal {
             std::uint32_t component{NoUiRenderIndex};
             std::uint32_t authoredMask{NoUiRenderIndex};
             bool isolate{};
+            bool stateIndicators{}; /**< Stable role admission from the source control or focus owner. */
             std::uint32_t firstCommand{};
             std::uint32_t mask{NoUiRenderIndex};
             std::uint32_t group{NoUiRenderIndex};

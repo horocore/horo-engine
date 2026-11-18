@@ -2,6 +2,7 @@
 
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
 #include "Horo/Runtime/Ui/UiStyleAsset.h"
+#include "Horo/Runtime/Ui/UiVisualAccessibility.h"
 #include "RuntimeUiPaintHostInternal.h"
 #include "RuntimeUiPaintPackagedKernel.h"
 #include "RuntimeUiPaintProjectKernel.h"
@@ -178,8 +179,13 @@ namespace Horo::Application::Internal {
                 return Result<PreparedPaintCanvas>::Failure(presentation.ErrorValue());
             // The actual source view is registered while this generation is private. Only a later native receipt enables input.
             canvas.presentations.push_back(std::move(presentation).Value());
-            const UiRenderExtractorDescriptor extraction{view, {count, 1, 1, count, 0, count, 1, 0}, 8};
-            const UiRenderGeometryArenaDescriptor geometry{view, {count * 4, count * 6, count}, 8};
+            // A registered focus graph supplies at most one focus indicator. Other cues belong to actual controls.
+            const auto controls = static_cast<std::uint32_t>(canvas.controls.size());
+            const auto cues = controls * UiVisualIndicatorLimits::ControlCommands;
+            const auto commands = count + (canvas.focus ? count : controls);
+            const auto quads = count + cues + (canvas.focus ? UiVisualIndicatorLimits::FocusQuads : 0);
+            const UiRenderExtractorDescriptor extraction{view, {commands, 1, 1, count, 0, count, 1, 0}, 8};
+            const UiRenderGeometryArenaDescriptor geometry{view, {quads * 4, quads * 6, commands}, 8};
             return Result<PreparedPaintCanvas>::Success({std::move(styles).Value(), std::move(definition).Value(), extraction, geometry});
         }
 
@@ -289,7 +295,9 @@ namespace Horo::Application::Internal {
         if (preparation.HasError())
             return Built::Failure(preparation.ErrorValue());
         auto prepared = std::move(preparation).Value();
-        const auto count = static_cast<std::uint32_t>(prepared.definition.elements.size());
+        const auto &geometry = prepared.geometry.limits;
+        const auto surfaces = static_cast<std::uint32_t>(prepared.definition.elements.size());
+        const Render::UiPaintFrameBudget paint{2 * geometry.vertices, 2 * geometry.indices, 3 * surfaces + geometry.batches};
         const auto runtime = RuntimeConfig(resolved);
         RuntimeUiPaintDeclaration declaration{loaded.document.Id(), loaded.document.SourceRevision(), reference.canvas};
         const bool hasSceneProviders = std::ranges::any_of(canvases, [](const auto &entry) {
@@ -312,7 +320,7 @@ namespace Horo::Application::Internal {
               {},
               prepared.extraction,
               prepared.geometry,
-              {resolved, {count * 8, count * 12, count * 4}, 2, 256},
+              {resolved, paint, 2, 256},
               *policy.kernel,
               allocator}});
     }

@@ -187,6 +187,11 @@ namespace Horo::Runtime::Ui {
             return PresentIndex(draw.run, runs.size()) ? Result<void>::Success() : Failure(UiErrors::RenderCommandInvalid);
         }
 
+        Result<void> ValidatePayload(const UiVisualIndicatorDraw &draw, const std::span<const UiTextRun>,
+                                     const std::span<const UiRenderResourceReference>) {
+            return draw.state.IsValid() ? Result<void>::Success() : Failure(UiErrors::RenderCommandInvalid);
+        }
+
         Result<void> ValidateCommands(const UiElementTree &tree, const std::span<const UiDrawCommand> commands,
                                       const std::span<const UiTextRun> runs, const std::span<const UiClip> clips,
                                       const std::span<const UiMask> masks, const std::span<const UiLogicalTransform> transforms,

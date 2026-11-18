@@ -22,6 +22,15 @@ namespace {
         }
         REQUIRE(found);
     }
+
+    /** @brief A dual border contributes eight solid quads through the selected paint execution path. */
+    bool HasFocusOutline() {
+        for (const auto &pass : Tests::RenderFrontendTesting::lifecycleState.uiPaint.passes)
+            for (const auto &draw : pass.draws)
+                if (draw.sampling == Render::UiPaintSampling::Solid && draw.indexCount >= 8 * 6)
+                    return true;
+        return false;
+    }
 }  // namespace
 
 TEST_CASE("Empty application UI startup does not require optional native paint capability", "[application][runtime_ui][paint]") {
@@ -65,12 +74,14 @@ TEST_CASE("Application UI projects committed accessibility through the selected 
     fixture.Frame();
     auto initial = Take(fixture.port.AcquireFrame());
     CHECK_FALSE(initial.Styles().Records().front().state.Contains(UiVisualStateMask{UiVisualState::HighContrast}));
+    REQUIRE(HasFocusOutline());
     REQUIRE(fixture.port.UpdateVisualAccessibility({10, true, false}).HasValue());
     CHECK(fixture.port.UpdateVisualAccessibility({9, false, false}).HasError());
     const auto uploads = Tests::RenderFrontendTesting::lifecycleState.uiPaint.updates;
     fixture.Frame();
     auto current = Take(fixture.port.AcquireFrame());
     CHECK(current.Styles().Records().front().state.Contains(UiVisualStateMask{UiVisualState::HighContrast}));
+    CHECK(HasFocusOutline());
     CHECK_FALSE(initial.Styles().Records().front().state.Contains(UiVisualStateMask{UiVisualState::HighContrast}));
     CHECK(initial.Styles().Descriptor().geometry == current.Styles().Descriptor().geometry);
     CHECK(Tests::RenderFrontendTesting::lifecycleState.uiPaint.updates > uploads);

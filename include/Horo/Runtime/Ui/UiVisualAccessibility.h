@@ -5,7 +5,36 @@
  */
 #include "Horo/Foundation/ModuleHost.h"
 
+#include <span>
+
 namespace Horo::Runtime::Ui {
+    struct UiDrawCommand;
+    struct UiVisualStateMask;
+
+    /** @brief Worst-case shared budgets for one control's persistent non-color state indicators. */
+    struct UiVisualIndicatorLimits final {
+        static constexpr std::uint32_t ControlCommands = 18;                       /**< Solid draws for simultaneous control states. */
+        static constexpr std::uint32_t FocusCommands = 2;                          /**< Ordered dual-tone borders. */
+        static constexpr std::uint32_t FocusQuads = 4 * FocusCommands;             /**< Realized border geometry. */
+        static constexpr std::uint32_t Commands = ControlCommands + FocusCommands; /**< Total caller scratch envelope. */
+    };
+
+    /** @brief Reports whether the state carries supported non-color visual cues.
+     * @param state Exact current style-state evidence. @return Whether focus or a control marker is present.
+     */
+    [[nodiscard]] bool HasUiVisualIndicators(UiVisualStateMask state) noexcept;
+
+    /** @brief Projects visible immutable control state into backend-neutral non-color indicators.
+     * @param state Exact same-frame visual-state evidence from the UI style owner.
+     * @param surface Final logical bounds and inherited transform, clip, mask, group and opacity.
+     * @param output Caller-owned scratch space with at least UiVisualIndicatorLimits::Commands entries.
+     * @return Count written or typed capacity/layout error before writing. Empty bounds and invisible surfaces emit no indicators.
+     * @details Focus uses a dual-tone outline. Control states use contrasting geometric marks independent of the authored palette.
+     * A visible surface keeps opaque marks in normal and high-contrast styles. The owner's existing clip, mask and group still apply.
+     */
+    [[nodiscard]] Result<std::size_t> ProjectUiVisualIndicators(UiVisualStateMask state, const UiDrawCommand &surface,
+                                                                std::span<UiDrawCommand> output);
+
     /** @brief One immutable configuration revision projected to Runtime UI presentation preferences.
      * @details The host captures both flags from the same configuration. Colours and focus treatments are selected by the
      * ordinary registered style cascade; the UI never changes input focus or visual-safety settings.

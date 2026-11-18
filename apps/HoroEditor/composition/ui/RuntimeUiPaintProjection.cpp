@@ -25,8 +25,10 @@ namespace Horo::Application::Internal {
                 auto row = rowFor(input.components[index].element);
                 if (row == rows.end() || row->component != NoUiRenderIndex)
                     return InvalidSource();
+                const auto &payload = input.components[index].payload;
                 if (const auto *kind = UiElementCatalog::Find(row->source->type.Value());
-                    !kind || (kind->surface && std::holds_alternative<UiSolidDraw>(input.components[index].payload)))
+                    !kind || std::holds_alternative<UiVisualIndicatorDraw>(payload) ||
+                    (kind->surface && std::holds_alternative<UiSolidDraw>(payload)))
                     return InvalidSource();
                 row->component = static_cast<std::uint32_t>(index);
             }
@@ -84,12 +86,21 @@ namespace Horo::Application::Internal {
                     return InvalidSource();
                 row.parent = static_cast<std::uint32_t>(parent - rows.begin());
             }
+            const bool knownFocusNode = canvas->focus && canvas->focus->Find(element->id).HasValue();
+            row.stateIndicators =
+                knownFocusNode || std::ranges::find(canvas->controls, element->id, &UiReloadControl::id) != canvas->controls.end();
             rows.push_back(row);
         }
         for (std::size_t index = rows.size(); index-- > 0;)
             if (rows[index].parent != NoUiRenderIndex)
                 rows[rows[index].parent].end = std::max(rows[rows[index].parent].end, rows[index].end);
-        return BindComponents(rows, declaration);
+        if (const auto bound = BindComponents(rows, declaration); bound.HasError())
+            return bound;
+        const auto commands = declaration.components.size() + std::ranges::count_if(rows, [](const Row &row) {
+            return UiElementCatalog::Find(row.source->type.Value())->surface;
+        }) + std::ranges::count(rows, true, &Row::stateIndicators);
+        return commands <= descriptor.limits.commands ? Result<void>::Success()
+                                                      : Result<void>::Failure(MakeError(UiErrors::CapacityExceeded));
     }
 
     /** @copydoc RuntimeUiPaintProjection::Create */

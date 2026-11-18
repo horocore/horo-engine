@@ -32,6 +32,7 @@ namespace Horo::Runtime::Ui {
         SpriteRectangle,
         TextGlyphs,
         NineSliceRectangle,
+        VisualIndicators, /**< Zero or more solid quads projected from immutable control state. */
     };
 
     /** @brief One finite logical point after optional downstream physical-pixel snapping. */

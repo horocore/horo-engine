@@ -7,13 +7,13 @@ namespace Horo::Application::Internal {
 
     namespace {
         /** @brief Resolves paint from the actual computed publication without repeating cascade or layout. */
-        Result<UiDrawCommand> ComputedPaint(const Row &row, const PaintProjectionDetail::Presentation &frame) {
+        Result<UiThemeSurfaceProjection> ComputedPaint(const Row &row, const PaintProjectionDetail::Presentation &frame) {
             auto style = ProjectUiElementStyle(*row.source, row.element);
             auto layout = ProjectUiElementLayout(*row.source, row.element);
             if (style.HasError())
-                return Result<UiDrawCommand>::Failure(style.ErrorValue());
+                return Result<UiThemeSurfaceProjection>::Failure(style.ErrorValue());
             if (layout.HasError())
-                return Result<UiDrawCommand>::Failure(layout.ErrorValue());
+                return Result<UiThemeSurfaceProjection>::Failure(layout.ErrorValue());
             UiThemeSurfaceInput input{.style = style.Value(),
                                       .layout = layout.Value().style,
                                       .intrinsic = layout.Value().intrinsic,
@@ -22,7 +22,7 @@ namespace Horo::Application::Internal {
             if (const auto *kind = UiElementCatalog::Find(row.source->type.Value()); kind && kind->surface) {
                 auto canonical = ProjectUiElementSurface(*row.source, row.element);
                 if (canonical.HasError())
-                    return Result<UiDrawCommand>::Failure(canonical.ErrorValue());
+                    return Result<UiThemeSurfaceProjection>::Failure(canonical.ErrorValue());
                 input = std::move(canonical).Value();
             }
             auto properties = CoreUiStyleSurfaceProperties();
@@ -30,10 +30,7 @@ namespace Horo::Application::Internal {
             properties.width = {};
             properties.height = {};
             properties.padding = {};
-            auto surface = ProjectUiThemeSurface(frame.Styles(), input, properties);
-            if (surface.HasError())
-                return Result<UiDrawCommand>::Failure(surface.ErrorValue());
-            return Result<UiDrawCommand>::Success(surface.Value().paint);
+            return ProjectUiThemeSurface(frame.Styles(), input, properties);
         }
     }  // namespace
 
@@ -68,7 +65,8 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(computed.ErrorValue());
         if (layout.HasError())
             return Result<void>::Failure(layout.ErrorValue());
-        auto paint = std::move(computed).Value();
+        auto surface = std::move(computed).Value();
+        auto &paint = surface.paint;
         paint.rect = layout.Value().arrangement.borderBox;
         paint.transform = static_cast<std::uint32_t>(index);
         UiLogicalTransform transform;
@@ -86,12 +84,19 @@ namespace Horo::Application::Internal {
             return scopes;
         paint.mask = row.mask;
         paint.group = row.group;
+        const bool visible = paint.opacity > 0.0F;
         if (row.isolate)
             paint.opacity = 1.0F;
-        if (const auto *kind = UiElementCatalog::Find(row.source->type.Value()); kind && kind->surface)
+        if (const auto *kind = UiElementCatalog::Find(row.source->type.Value()); kind->surface)
             commands.push_back(paint);
         if (row.component != NoUiRenderIndex) {
             paint.payload = declaration.components[row.component].payload;
+            commands.push_back(paint);
+        }
+        if (row.stateIndicators) {
+            // The native program pins this role across frames. An inactive or hidden slot realizes no geometry.
+            paint.payload = UiVisualIndicatorDraw{surface.state};
+            paint.opacity = visible ? 1.0F : 0.0F;
             commands.push_back(paint);
         }
         return Result<void>::Success();
@@ -112,9 +117,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc RuntimeUiPaintProjection::Storage::Build */
     Result<void> RuntimeUiPaintProjection::Storage::Build(const PaintProjectionDetail::Presentation &frame) {
-        // Worst-case capacity is checked before any push; ordinary successful frames cannot grow a vector.
-        if (rows.size() + declaration.components.size() > descriptor.limits.commands)
-            return Result<void>::Failure(MakeError(UiErrors::CapacityExceeded));
+        // Admission reserved exact immutable roles, including dormant state indicators.
         commands.clear();
         clips.clear();
         masks.clear();

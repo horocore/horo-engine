@@ -8,6 +8,7 @@
 #include "Horo/Assets/AssetId.h"
 #include "Horo/Runtime/Ui/UiImageResource.h"
 #include "Horo/Runtime/Ui/UiLayout.h"
+#include "Horo/Runtime/Ui/UiStyle.h"
 
 #include <array>
 #include <compare>
@@ -165,8 +166,14 @@ namespace Horo::Runtime::Ui {
         std::uint32_t run{}; /**< Text run table index. */
     };
 
+    /** @brief Stable paint slot carrying same-frame control/focus state for geometric realization. */
+    struct UiVisualIndicatorDraw final {
+        UiVisualStateMask state; /**< UI-owned style evidence. Unsupported visual states produce no geometry. */
+    };
+
     /** @brief Closed backend-neutral draw payload vocabulary. */
-    using UiDrawPayload = std::variant<UiSolidDraw, UiBorderDraw, UiImageDraw, UiSpriteDraw, UiTextDraw, UiNineSliceDraw>;
+    using UiDrawPayload =
+        std::variant<UiSolidDraw, UiBorderDraw, UiImageDraw, UiSpriteDraw, UiTextDraw, UiNineSliceDraw, UiVisualIndicatorDraw>;
 
     /** @brief One ordered logical draw emitted for an exact retained element. */
     struct UiDrawCommand final {
