@@ -825,6 +825,7 @@ namespace Horo::Editor {
     void EditorWorkspaceController::RefreshDecisionTaskChoices() {
         auto &choices = m_viewModel.decisionTaskChoices;
         choices.clear();
+        m_viewModel.decisionProviderMetadata = m_gameplayRegistry ? m_gameplayRegistry->DecisionUsageMetadata() : nullptr;
         if (!m_gameplayRegistry)
             return;
         const auto generation = m_gameplayRegistry->AcquireDecisionAuthoringGeneration();
@@ -1631,7 +1632,7 @@ namespace Horo::Editor {
         };
         if (!opened->editable) {
             label(text("workspace.decision_graph.read_only"), Theme::Muted());
-            const auto canvas = m_decisionGraphCanvas.Draw(*opened, m_context);
+            const auto canvas = m_decisionGraphCanvas.Draw(*opened, m_context, viewModel.decisionProviderMetadata);
             if (const auto *machine = std::get_if<AI::StateMachineAssetDescriptor>(&opened->graph->body)) {
                 auto &selection = m_stateMachineSelection;
                 if (selection.instance != opened->identity.instance)
@@ -1657,7 +1658,7 @@ namespace Horo::Editor {
                         .font = m_context.theme.fonts.sans}))
             m_decisionGraphCanvas.RequestFocus({instance, opened->revision}, selected);
 
-        const auto canvas = m_decisionGraphCanvas.Draw(*opened, m_context);
+        const auto canvas = m_decisionGraphCanvas.Draw(*opened, m_context, viewModel.decisionProviderMetadata);
         ApplyDecisionCanvasInteraction(*opened, canvas, outCommand);
         if (canvas.edit || canvas.layout)
             return true;

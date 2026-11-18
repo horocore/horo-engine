@@ -7,6 +7,10 @@
 #include <optional>
 #include <span>
 
+namespace Horo::AI {
+    class DecisionBlackboardProviderMetadata;
+}  // namespace Horo::AI
+
 namespace Horo::Editor {
     struct EditorGuiContext;
     struct DecisionGraphWorkspaceDocument;
@@ -28,8 +32,14 @@ namespace Horo::Editor {
         DecisionGraphCanvas(const DecisionGraphCanvas &) = delete;
         DecisionGraphCanvas &operator=(const DecisionGraphCanvas &) = delete;
 
-        /** @brief Renders one immutable graph using its revision-correlated native presentation session. */
-        [[nodiscard]] DecisionCanvasInteraction Draw(const DecisionGraphWorkspaceDocument &document, const EditorGuiContext &context);
+        /** @brief Renders one immutable graph using its revision-correlated native presentation session.
+         * @param document Exact authored document.
+         * @param context Editor presentation dependencies.
+         * @param providers Current detached Project provider catalog, when available.
+         * @return Typed selection and edit intents owned by this frame.
+         */
+        [[nodiscard]] DecisionCanvasInteraction Draw(const DecisionGraphWorkspaceDocument &document, const EditorGuiContext &context,
+                                                     const std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> &providers = {});
         /** @brief Reveals one stable selected node in the exact current document revision. */
         void RequestFocus(DecisionGraphDocumentFence fence, AI::DecisionNodeId node);
         /** @brief Retires presentation sessions for closed document instances. */

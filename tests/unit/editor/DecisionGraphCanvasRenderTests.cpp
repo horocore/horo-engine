@@ -1,3 +1,4 @@
+#include "Horo/AI/BlackboardUsageInspection.h"
 #include "Horo/AI/DecisionGraphCompiler.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorGuiContext.h"
@@ -27,6 +28,10 @@ namespace Horo::Editor {
         public:
             const std::string &Get(std::string_view, std::string_view key) const override {
                 return labels_.try_emplace(std::string{key}, "Localized graph label " + std::string{key}).first->second;
+            }
+
+            void Clear() {
+                labels_.clear();
             }
 
             bool Used(std::string_view key) const {
@@ -61,13 +66,14 @@ namespace Horo::Editor {
                 Theme::ApplyCurrentTheme();
             }
 
-            DecisionCanvasInteraction Draw(const DecisionGraphWorkspaceDocument &document, float width) {
+            DecisionCanvasInteraction Draw(const DecisionGraphWorkspaceDocument &document, float width,
+                                           const std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> &providers = {}) {
                 ImGui::NewFrame();
                 ImGui::SetNextWindowPos({0, 0});
                 ImGui::SetNextWindowSize({width, 650});
                 ImGui::Begin("Decision canvas test", nullptr, ImGuiWindowFlags_NoSavedSettings);
                 canvas.Retain(std::span{&document, 1});
-                const auto interaction = canvas.Draw(document, context);
+                const auto interaction = canvas.Draw(document, context, providers);
                 CHECK_FALSE(interaction.edit.has_value());
                 ImGui::End();
                 ImGui::Render();
@@ -274,6 +280,42 @@ namespace Horo::Editor {
         REQUIRE(committed != trace.Records().end());
         CHECK(committed->node == Node(10));
         CHECK(fixture.probe.factories == 0);
+    }
+
+    TEST_CASE("Decision canvas shows an unknown placeholder and refreshes provider warnings without changing the source",
+              "[unit][editor][decision][canvas]") {
+        using namespace AI::DecisionGraphTestSupport;
+        CanvasFixture fixture;
+        Fixture provider;
+        auto task = TreeNode(3, AI::DecisionControlKind::Task);
+        task.typeVersion = {2, 0};
+        auto unknown = TreeNode(4, AI::DecisionControlKind::Task);
+        unknown.kind = AI::BehaviorTreeNodeKind::Unknown;
+        unknown.control.kind = AI::DecisionControlKind::Unspecified;
+        unknown.task = {};
+        const auto source = std::make_shared<const AI::DecisionGraphSource>(
+            Tree(4, {TreeNode(1, AI::DecisionControlKind::Root), TreeNode(2, AI::DecisionControlKind::Parallel), task, unknown},
+                 {Edge(1, 1, 2), Edge(2, 2, 3), Edge(3, 2, 4, 1)}));
+        DecisionGraphWorkspaceDocument document;
+        document.identity.instance = DocumentInstanceId::Create(18).Value();
+        document.graph = source;
+        document.family = AI::DecisionPlanKind::BehaviorTree;
+        document.revision = 1;
+
+        fixture.Draw(document, 280.0F);
+        CHECK(fixture.labels.Used("workspace.decision_canvas.unknown"));
+        CHECK(fixture.labels.Used("workspace.decision_canvas.provider_catalog_unavailable"));
+        fixture.labels.Clear();
+
+        const auto metadata = AI::DecisionBlackboardProviderMetadata::Capture(*provider.providers);
+        REQUIRE(metadata.HasValue());
+        fixture.Draw(document, 280.0F, metadata.Value());
+        CHECK(fixture.labels.Used("workspace.decision_canvas.unknown"));
+        CHECK(fixture.labels.Used("workspace.decision_canvas.provider_version_mismatch"));
+        CHECK_FALSE(fixture.labels.Used("workspace.decision_canvas.provider_catalog_unavailable"));
+        CHECK(provider.probe.factories == 0);
+        CHECK(document.graph == source);
+        CHECK(document.revision == 1);
     }
 
     TEST_CASE("Utility canvas labels options in the real selector evaluation order", "[unit][editor][decision][canvas]") {

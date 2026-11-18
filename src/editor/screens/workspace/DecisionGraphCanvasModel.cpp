@@ -1,5 +1,6 @@
 #include "DecisionGraphCanvasModel.h"
 
+#include "Horo/AI/BlackboardUsageInspection.h"
 #include "Horo/AI/DecisionGraphCompiler.h"
 
 #include <algorithm>
@@ -134,6 +135,16 @@ namespace Horo::Editor {
             }
         }, graph.body);
         return projection;
+    }
+
+    /** @copydoc ApplyDecisionCanvasProviderIssues */
+    void ApplyDecisionCanvasProviderIssues(GraphViewSnapshot &view, const AI::DecisionGraphSource &source,
+                                           const AI::DecisionBlackboardProviderMetadata *providers) {
+        const auto issues = AI::InspectDecisionProviderBindings(source, providers);
+        for (auto &node : view.nodes) {
+            const auto issue = std::ranges::lower_bound(issues, node.id, {}, &AI::DecisionProviderBindingIssue::node);
+            node.providerIssue = issue != issues.end() && issue->node == node.id ? std::optional{issue->kind} : std::nullopt;
+        }
     }
 
     /** @copydoc ProjectStateMachineTransitionOrder */

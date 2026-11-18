@@ -46,6 +46,7 @@
 #include <vector>
 
 namespace Horo::AI {
+    class DecisionBlackboardProviderMetadata;
     class EnvironmentQueryAsset;
     struct DecisionGraphSource;
     class QuerySchemaRegistry;
@@ -819,6 +820,7 @@ namespace Horo::Editor {
         std::vector<DecisionSchemaChoice> decisionSchemaChoices;
         std::vector<DecisionSchemaChoice> behaviorTreeSubtreeChoices;
         std::vector<DecisionTaskChoice> decisionTaskChoices;
+        std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> decisionProviderMetadata; /**< Detached current Project catalog. */
         std::vector<DecisionGraphWorkspaceDocument> decisionGraphDocuments;
         std::vector<PCGWorkspaceDocument> pcgDocuments;
         std::vector<PCGPaletteEntry> pcgPalette;

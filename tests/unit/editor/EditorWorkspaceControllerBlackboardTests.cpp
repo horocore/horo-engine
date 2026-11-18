@@ -1,5 +1,6 @@
 #include "DecisionGraphCompilerTestSupport.h"
 #include "GameplayModuleTestSupport.h"
+#include "Horo/AI/BlackboardUsageInspection.h"
 #include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/Application/BlackboardUsageReview.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
@@ -1464,7 +1465,16 @@ TEST_CASE("Behavior Tree and Utility New use the current registered native task 
 TEST_CASE("Decision assets open canonical family tabs even with unavailable task providers", "[unit][editor][decision][workspace]") {
     using namespace AI::DecisionGraphTestSupport;
     BlackboardWorkspaceFixture project;
-    const auto tree = TaskTree(601);
+    auto sequence = TreeNode(2, AI::DecisionControlKind::Parallel);
+    sequence.control.kind = AI::DecisionControlKind::Sequence;
+    auto compatible = TreeNode(3, AI::DecisionControlKind::Task);
+    compatible.type = MakeIdentity<AI::BehaviorTreeNodeTypeId>(101);
+    auto incompatible = TreeNode(4, AI::DecisionControlKind::Task);
+    incompatible.type = compatible.type;
+    incompatible.typeVersion = {2, 0};
+    auto tree = Tree(601, {TreeNode(1, AI::DecisionControlKind::Root), sequence, compatible, incompatible},
+                     {Edge(1, 1, 2), Edge(2, 2, 3), Edge(3, 2, 4, 1)});
+    tree.blackboard = project.schema;
     const AI::DecisionGraphSource utility{Graph(602),
                                           1,
                                           project.schema,
@@ -1474,6 +1484,11 @@ TEST_CASE("Decision assets open canonical family tabs even with unavailable task
                                           AI::UtilityDecisionSource{.root = Node(1),
                                                                     .options = {{.option = {Node(2), MakeIdentity<AI::TaskId>(701)},
                                                                                  .provider = {.id = Node(2), .type = Type(702)}}}}};
+    auto machine = TerminalMachine(603);
+    machine.blackboard = project.schema;
+    auto &state = std::get<AI::StateMachineAssetDescriptor>(machine.body).states.front();
+    state.entry = MakeIdentity<AI::TaskId>(704);
+    state.entryProvider = AI::StateMachineProviderAction{{.id = Node(8), .type = Type(101), .descriptorVersion = {2, 2}}, {}};
     const auto write = [&](const AI::DecisionGraphSource &source, const std::string &path, Assets::AssetId id, std::string_view type) {
         const auto encoded = AI::DecisionPlanCodec::EncodeSource(std::span{&source, 1}, source.asset);
         REQUIRE(encoded.HasValue());
@@ -1486,8 +1501,20 @@ TEST_CASE("Decision assets open canonical family tabs even with unavailable task
     };
     write(tree, "assets/guard.horo_bt", Assets::AssetId::FromBytes({0x21}), Application::DecisionBehaviorTreeSourceType);
     write(utility, "assets/score.horo_utility", Assets::AssetId::FromBytes({0x22}), Application::DecisionUtilitySourceType);
+    write(machine, "assets/priority.horo_sm", Assets::AssetId::FromBytes({0x24}), Application::DecisionStateMachineSourceType);
     write(tree, "assets/wrong.horo_sm", Assets::AssetId::FromBytes({0x23}), Application::DecisionStateMachineSourceType);
     project.RebuildRegistry();
+
+    bool installed{};
+    SECTION("Missing native authoring catalog is distinct from a missing declaration") {}
+    SECTION("The installed catalog distinguishes a compatible task, wrong version, and missing declaration") {
+        Tests::WriteReplicationProject(project.root);
+        const auto manifest = Tests::WriteGameplayModuleManifest(project.root, HORO_TEST_AI_MODULE_PATH, "game.ai.tests",
+                                                                 Gameplay::CurrentGameplayBuildFingerprint(),
+                                                                 Tests::ReadDescriptorRevision(HORO_TEST_AI_MODULE_REVISION_PATH));
+        REQUIRE(std::filesystem::is_regular_file(manifest));
+        installed = true;
+    }
     EditorWorkspaceController controller(project.root, project.runtime, project.registry.Snapshot(), {});
     const auto open = [&](const char *path) {
         controller.ProcessCommand({.command = EditorWorkspaceViewCommand::OpenSourceFile,
@@ -1495,16 +1522,49 @@ TEST_CASE("Decision assets open canonical family tabs even with unavailable task
     };
     open("assets/guard.horo_bt");
     open("assets/score.horo_utility");
+    open("assets/priority.horo_sm");
     const auto &documents = controller.ViewModel().decisionGraphDocuments;
-    REQUIRE(documents.size() == 2);
+    REQUIRE(documents.size() == 3);
     CHECK(documents[0].graph->asset == tree.asset);
     CHECK(documents[1].graph->asset == utility.asset);
     CHECK(std::holds_alternative<std::shared_ptr<const AI::BehaviorTreeAsset>>(documents[0].graph->body));
     CHECK(std::holds_alternative<AI::UtilityDecisionSource>(documents[1].graph->body));
+    const auto &catalog = controller.ViewModel().decisionProviderMetadata;
+    CHECK(static_cast<bool>(catalog) == installed);
+    const auto projectCanvas = [&](const auto &document) {
+        auto projected = ProjectDecisionCanvas(*document.graph, {document.identity.instance, document.revision}, document.editable);
+        ApplyDecisionCanvasProviderIssues(projected, *document.graph, catalog.get());
+        return projected;
+    };
+    using Issue = AI::DecisionProviderBindingIssueKind;
+    const auto treeView = projectCanvas(documents[0]);
+    CHECK(treeView.links.size() == 3);
+    REQUIRE(treeView.nodes.size() == 4);
+    CHECK(treeView.nodes[0].id == Node(1));
+    CHECK_FALSE(treeView.nodes[0].providerIssue);
+    CHECK_FALSE(treeView.nodes[1].providerIssue);
+    CHECK(treeView.nodes[2].id == Node(3));
+    if (installed)
+        CHECK_FALSE(treeView.nodes[2].providerIssue);
+    else
+        CHECK(treeView.nodes[2].providerIssue == Issue::CatalogUnavailable);
+    CHECK(treeView.nodes[3].id == Node(4));
+    CHECK(treeView.nodes[3].role == GraphNodeRole::Task);
+    CHECK(treeView.nodes[3].providerIssue == (installed ? Issue::DescriptorVersionMismatch : Issue::CatalogUnavailable));
+    const auto utilityView = projectCanvas(documents[1]);
+    CHECK(utilityView.links.size() == 1);
+    REQUIRE(utilityView.nodes.size() == 2);
+    CHECK(utilityView.nodes[1].id == Node(2));
+    CHECK(utilityView.nodes[1].providerIssue == (installed ? Issue::DescriptorMissing : Issue::CatalogUnavailable));
+    const auto machineView = projectCanvas(documents[2]);
+    REQUIRE(machineView.nodes.size() == 1);
+    CHECK(machineView.nodes[0].id == Node(1));
+    CHECK(machineView.nodes[0].providerIssue == (installed ? Issue::DescriptorVersionMismatch : Issue::CatalogUnavailable));
+    CHECK_FALSE(controller.HasDirtySourceDocuments());
     open("assets/wrong.horo_sm");
     CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.decision_graph.invalid");
-    CHECK(documents.size() == 2);
-    CHECK(controller.ViewModel().workspacePanelHost.DocumentTabs().size() == 2);
+    CHECK(documents.size() == 3);
+    CHECK(controller.ViewModel().workspacePanelHost.DocumentTabs().size() == 3);
 }
 
 TEST_CASE("Blackboard asset activation saves, reloads and reopens its real workspace tab", "[unit][editor][blackboard][workspace]") {

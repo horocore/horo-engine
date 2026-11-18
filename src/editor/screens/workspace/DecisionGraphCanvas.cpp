@@ -1,6 +1,7 @@
 #include "DecisionGraphCanvas.h"
 
 #include "DecisionGraphCanvasModel.h"
+#include "Horo/AI/BlackboardUsageInspection.h"
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
@@ -109,6 +110,20 @@ namespace Horo::Editor {
             return localization.Get("editor", Keys[static_cast<std::size_t>(role)]);
         }
 
+        /** @brief Maps detached binding evidence to a localized, node-local warning. */
+        const char *ProviderIssueLabel(AI::DecisionProviderBindingIssueKind kind) {
+            using enum AI::DecisionProviderBindingIssueKind;
+            switch (kind) {
+                case CatalogUnavailable:
+                    return "workspace.decision_canvas.provider_catalog_unavailable";
+                case DescriptorMissing:
+                    return "workspace.decision_canvas.provider_missing";
+                case DescriptorVersionMismatch:
+                    return "workspace.decision_canvas.provider_version_mismatch";
+            }
+            return "workspace.decision_canvas.provider_catalog_unavailable";
+        }
+
         /** @brief Registers one native endpoint and draws it with existing editor theme tokens. */
         void DrawPin(const GraphPinView &pin, std::size_t slot, float scale) {
             Widget::BeginPin(WidgetId<Widget::PinId>(slot), pin.output ? Widget::PinKind::Output : Widget::PinKind::Input);
@@ -134,9 +149,13 @@ namespace Horo::Editor {
                 const auto &role = RoleLabel(node.role, context.localization);
                 const auto &title = node.label.empty() ? role : node.label;
                 ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 172.0F * scale);
-                ImGui::TextUnformatted(title.c_str());
-                if (node.missing && !node.label.empty())
+                if (!node.missing || !node.label.empty())
+                    ImGui::TextUnformatted(title.c_str());
+                if (node.missing)
                     ImGui::TextColored(Theme::Warn(), "%s", role.c_str());
+                if (node.providerIssue)
+                    ImGui::TextColored(Theme::Warn(), "%s",
+                                       context.localization.Get("editor", ProviderIssueLabel(*node.providerIssue)).c_str());
                 if (node.incomingOrder) {
                     const auto label = node.role == GraphNodeRole::UtilityOption ? "workspace.decision_canvas.utility_order"
                                                                                  : "workspace.decision_graph.edit_tree_order";
@@ -246,6 +265,7 @@ namespace Horo::Editor {
         struct Session final {
             GraphViewSnapshot snapshot;
             std::shared_ptr<const AI::DecisionGraphSource> source;
+            std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> providers;
             DecisionGraphLayout positions;
             float scale{};
             std::unique_ptr<Widget::EditorContext, CanvasContextDeleter> context;
@@ -276,7 +296,8 @@ namespace Horo::Editor {
     }
 
     /** @copydoc DecisionGraphCanvas::Draw */
-    DecisionCanvasInteraction DecisionGraphCanvas::Draw(const DecisionGraphWorkspaceDocument &document, const EditorGuiContext &context) {
+    DecisionCanvasInteraction DecisionGraphCanvas::Draw(const DecisionGraphWorkspaceDocument &document, const EditorGuiContext &context,
+                                                        const std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> &providers) {
         DecisionCanvasInteraction out;
         auto &session = state_->sessions[document.identity.instance];
         const float scale = Theme::GetActiveTokens().sizes.uiScale;
@@ -288,6 +309,10 @@ namespace Horo::Editor {
             session.scale = scale;
             session.context = CreateCanvasContext();
             session.revealing.reset();
+        }
+        if (rebuildCanvas || session.providers != providers) {
+            ApplyDecisionCanvasProviderIssues(session.snapshot, *document.graph, providers.get());
+            session.providers = providers;
         }
         if (replacePositions) {
             session.snapshot.revision = document.revision;

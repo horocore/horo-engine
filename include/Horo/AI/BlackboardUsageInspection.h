@@ -1,6 +1,6 @@
 #pragma once
 
-/** @file BlackboardUsageInspection.h @brief Typed Blackboard requirement evidence from Decision source. */
+/** @file BlackboardUsageInspection.h @brief Detached provider and typed Blackboard evidence from Decision source. */
 
 #include "Horo/AI/DecisionAssetValidation.h"
 
@@ -28,6 +28,27 @@ namespace Horo::AI {
         explicit DecisionBlackboardProviderMetadata(std::vector<DecisionNodeDescriptor> descriptors);
         std::vector<DecisionNodeDescriptor> descriptors_;
     };
+
+    /** @brief Why an authored binding has no matching provider descriptor in the observed catalog. */
+    enum class DecisionProviderBindingIssueKind : std::uint8_t {
+        CatalogUnavailable,
+        DescriptorMissing,
+        DescriptorVersionMismatch,
+    };
+
+    /** @brief One diagnostic attached to the visible authored node that owns the provider binding. */
+    struct DecisionProviderBindingIssue final {
+        DecisionNodeId node; /**< Authored tree node, Utility option, or state owning a provider action. */
+        DecisionProviderBindingIssueKind kind;
+    };
+
+    /** @brief Inspects direct authored provider bindings even when another node is an unknown placeholder.
+     * @param source The decoded source being presented.
+     * @param providers Detached descriptors from the current Project registry, or null if the catalog is unavailable.
+     * @return At most one finding per visible node in stable node order. No properties, dependencies or factories are evaluated.
+     */
+    [[nodiscard]] std::vector<DecisionProviderBindingIssue> InspectDecisionProviderBindings(
+        const DecisionGraphSource &source, const DecisionBlackboardProviderMetadata *providers);
 
     /** @brief One statically declared key use in a source node or its current provider contract. */
     struct DecisionBlackboardSourceUse final {

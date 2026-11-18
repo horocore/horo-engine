@@ -11,6 +11,8 @@
 #include <vector>
 
 namespace Horo::AI {
+    class DecisionBlackboardProviderMetadata;
+    enum class DecisionProviderBindingIssueKind : std::uint8_t;
     struct DecisionGraphSource;
     struct StateMachineAssetDescriptor;
     struct StateMachineTransition;
@@ -62,6 +64,7 @@ namespace Horo::Editor {
         std::optional<std::size_t> incomingOrder; /**< Zero-based tree child or Utility option evaluation order. */
         bool initial{};
         bool missing{};
+        std::optional<AI::DecisionProviderBindingIssueKind> providerIssue;
     };
 
     /** @brief Stable link and the two projected endpoint indices it connects. */
@@ -104,6 +107,14 @@ namespace Horo::Editor {
     /** @brief Projects immutable family-specific sources without invoking a provider or compiler. */
     [[nodiscard]] GraphViewSnapshot ProjectDecisionCanvas(const AI::DecisionGraphSource &source, DecisionGraphDocumentFence fence,
                                                           bool editable);
+
+    /** @brief Refreshes only source-local provider diagnostics on an unchanged graph projection.
+     * @param view Projected exact source nodes.
+     * @param source Same exact source used to project the graph.
+     * @param providers Current detached Project catalog, if available.
+     */
+    void ApplyDecisionCanvasProviderIssues(GraphViewSnapshot &view, const AI::DecisionGraphSource &source,
+                                           const AI::DecisionBlackboardProviderMetadata *providers);
 
     /** @brief Authored transition priority and its one-based position among transitions from the same source state. */
     struct StateMachineTransitionOrder final {

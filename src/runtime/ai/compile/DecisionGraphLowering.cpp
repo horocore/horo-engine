@@ -54,6 +54,11 @@ namespace Horo::AI::Detail {
             }
         }
 
+        /** @brief Major versions alone identify the native/tree provider wire contract. */
+        DecisionVersionRange TreeProviderVersions(const BehaviorTreeNode &node) {
+            return {node.typeVersion.major, node.typeVersion.major};
+        }
+
         SourceLocation NodeSource(const SourceLocation &preferred, const SourceLocation &graph) {
             return preferred.source.empty() ? graph : preferred;
         }
@@ -63,7 +68,7 @@ namespace Horo::AI::Detail {
             if (id.HasError())
                 return Result<DecisionAssetNode>::Failure(id.ErrorValue());
             DecisionAssetNode result{.id = id.Value(),
-                                     .descriptorVersion = {node.typeVersion.major, node.typeVersion.major},
+                                     .descriptorVersion = TreeProviderVersions(node),
                                      .requirements = node.requirements,
                                      .source = NodeSource(node.source, source)};
             if (ProviderControl(node.control.kind)) {
@@ -277,6 +282,84 @@ namespace Horo::AI {
         }
     }
 
+    namespace {
+        /** @brief Finds the detached declaration for an exact stable type. */
+        const DecisionNodeDescriptor *FindProviderDeclaration(std::span<const DecisionNodeDescriptor> descriptors,
+                                                              DecisionNodeTypeId type) {
+            const auto found = std::ranges::lower_bound(descriptors, type, {}, &DecisionNodeDescriptor::type);
+            return found != descriptors.end() && found->type == type ? &*found : nullptr;
+        }
+
+        /** @brief Resolves one immutable authored binding without loading or starting its provider. */
+        std::optional<DecisionProviderBindingIssueKind> InspectProviderDeclaration(const DecisionBlackboardProviderMetadata *providers,
+                                                                                   DecisionNodeTypeId type, DecisionVersionRange versions) {
+            using enum DecisionProviderBindingIssueKind;
+            if (!providers)
+                return CatalogUnavailable;
+            const auto *found = FindProviderDeclaration(providers->Descriptors(), type);
+            if (!found)
+                return DescriptorMissing;
+            if (!versions.Contains(found->origin.version))
+                return DescriptorVersionMismatch;
+            return std::nullopt;
+        }
+
+        /** @brief Independent source inspection preserves known nodes when another node cannot be lowered. */
+        void InspectTreeProviderDeclarations(const BehaviorTreeAsset &tree, const DecisionBlackboardProviderMetadata *providers,
+                                             std::vector<DecisionProviderBindingIssue> &out) {
+            for (const auto &node : tree.Nodes()) {
+                if (node.kind == BehaviorTreeNodeKind::Unknown || !Detail::ProviderControl(node.control.kind))
+                    continue;
+                const auto id = DecisionNodeId::Create(node.id.Value()).Value();
+                const auto type = DecisionNodeTypeId::Create(node.type.Value());
+                if (node.typeVersion.minor != 0) {
+                    out.push_back({id, DecisionProviderBindingIssueKind::DescriptorVersionMismatch});
+                } else if (type.HasError()) {
+                    out.push_back({id, DecisionProviderBindingIssueKind::DescriptorMissing});
+                } else if (const auto issue = InspectProviderDeclaration(providers, type.Value(), Detail::TreeProviderVersions(node))) {
+                    out.push_back({id, *issue});
+                }
+            }
+        }
+
+        /** @brief The owning state displays the first unresolved authored action in entry/update/exit order. */
+        void InspectStateProviderDeclarations(const StateMachineAssetDescriptor &machine,
+                                              const DecisionBlackboardProviderMetadata *providers,
+                                              std::vector<DecisionProviderBindingIssue> &out) {
+            for (const auto &state : machine.states) {
+                for (const auto *action : {&state.entryProvider, &state.updateProvider, &state.exitProvider}) {
+                    if (!*action)
+                        continue;
+                    const auto &binding = action->value().binding;
+                    if (const auto issue = InspectProviderDeclaration(providers, binding.type, binding.descriptorVersion)) {
+                        out.push_back({state.id, *issue});
+                        break;
+                    }
+                }
+            }
+        }
+    }  // namespace
+
+    /** @copydoc InspectDecisionProviderBindings */
+    std::vector<DecisionProviderBindingIssue> InspectDecisionProviderBindings(const DecisionGraphSource &source,
+                                                                              const DecisionBlackboardProviderMetadata *providers) {
+        std::vector<DecisionProviderBindingIssue> out;
+        if (const auto *tree = std::get_if<std::shared_ptr<const BehaviorTreeAsset>>(&source.body)) {
+            if (*tree)
+                InspectTreeProviderDeclarations(**tree, providers, out);
+        } else if (const auto *machine = std::get_if<StateMachineAssetDescriptor>(&source.body)) {
+            InspectStateProviderDeclarations(*machine, providers, out);
+        } else {
+            for (const auto &option : std::get<UtilityDecisionSource>(source.body).options) {
+                const auto &binding = option.provider;
+                if (const auto issue = InspectProviderDeclaration(providers, binding.type, binding.descriptorVersion))
+                    out.push_back({option.option.id, *issue});
+            }
+        }
+        std::ranges::sort(out, {}, &DecisionProviderBindingIssue::node);
+        return out;
+    }
+
     /** @copydoc InspectDecisionBlackboardUses */
     Result<DecisionBlackboardSourceUses> InspectDecisionBlackboardUses(const DecisionGraphSource &source, BlackboardKeyId key,
                                                                        const DecisionBlackboardProviderMetadata *providers) {
@@ -303,8 +386,8 @@ namespace Horo::AI {
                 return Report::Failure(MakeError(AIErrors::DecisionAssetLimitExceeded));
             if (node.intrinsic != DecisionControlKind::Unspecified)
                 continue;
-            const auto found = std::ranges::lower_bound(contracts, node.type, {}, &DecisionNodeDescriptor::type);
-            if (found == contracts.end() || found->type != node.type || !node.descriptorVersion.Contains(found->origin.version)) {
+            const auto *found = FindProviderDeclaration(contracts, node.type);
+            if (!found || !node.descriptorVersion.Contains(found->origin.version)) {
                 result.unresolvedProviders.push_back(node.id);
                 continue;
             }
