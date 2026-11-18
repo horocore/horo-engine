@@ -166,6 +166,30 @@ namespace Horo::Render {
         }
     };
 
+    /** @brief Owning bounded copy of the exact resident textures; iteration borrows the frame snapshot. */
+    class TemporalHistoryResourceSnapshot final {
+    public:
+        /** @brief Begins iteration over the exact captured generations. @return First element or end. */
+        [[nodiscard]] const RenderTextureHandle *begin() const noexcept {
+            return resources_.data();
+        }
+
+        /** @brief Ends iteration over the active bounded range. @return Position following the final captured element. */
+        [[nodiscard]] const RenderTextureHandle *end() const noexcept {
+            return resources_.data() + size_;
+        }
+
+        /** @brief Counts captured resident records. @return Active texture count. */
+        [[nodiscard]] std::size_t size() const noexcept {
+            return size_;
+        }
+
+    private:
+        friend class TemporalHistoryStore;
+        std::array<RenderTextureHandle, TemporalHistoryLimits::HardMaxResourcesPerHistory> resources_{};
+        std::size_t size_{};
+    };
+
     /**
      * @brief Owning resource and validity snapshot for one attempted real frame.
      *
@@ -179,7 +203,7 @@ namespace Horo::Render {
         std::uint64_t attempt{0};
         bool canReadPrevious{false};
         std::optional<TemporalHistoryResetCause> resetCause;
-        std::vector<RenderTextureHandle> resources;
+        TemporalHistoryResourceSnapshot resources;
     };
 
     /** @brief Exact compatibility and optional invalidation supplied by a real-frame consumer. */

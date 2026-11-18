@@ -1,6 +1,9 @@
 #include "../../support/renderer/RenderBackendDrainTestSupport.h"
 #include "../../support/renderer/RenderGraphSubmissionFixture.h"
+#include "Horo/Runtime/Render/NativeReconstructionViewHistory.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
+#include "Horo/Runtime/Render/RenderOriginScene.h"
+#include "Horo/Runtime/Render/TemporalHistoryErrors.h"
 #include "Horo/Vfx/CpuParticleSimulator.h"
 #include "Horo/Vfx/GpuParticleSimulator.h"
 #include "Horo/Vfx/VfxWorld.h"
@@ -359,6 +362,7 @@ namespace {
     }
 
 #include "VulkanReconstructionNativeSmoke.inl"
+#include "VulkanReconstructionSceneHistorySmoke.inl"
 #include "VulkanVfxGpuNativeSmoke.inl"
 #include "VulkanVfxInstancedNativeSmoke.inl"
 }  // namespace

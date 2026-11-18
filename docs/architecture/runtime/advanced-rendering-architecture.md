@@ -303,8 +303,20 @@ requires exact shader entry, descriptor bindings, storage image formats, 48 byte
 of push constants and group size. The Vulkan graph records on the explicitly
 admitted compute queue and retains exact image views and the kernel until
 completion. The graph retains writes through the same journal as other native
-workloads. Provider availability requires qualified image behavior and product
-composition as specified by ADR-040.
+workloads. A scene using native temporal reconstruction provisions two resident
+resolved color/depth pairs per view and stamps its compatibility from the live
+render-origin cache. The view owner stages the exact current/prior/destination
+bindings and preserved import states for the compiled scene graph. Successful
+presentation, native timeline completion, retirement of the graph resource
+lease and matching current scene compatibility are all required to publish the
+new pair. A partial submission failure invalidates state and keeps the
+destinations fenced until retirement. Resize or scene discontinuity supplies an
+explicit reset before reseeding.
+
+The temporal attempt's resident handles are a bounded owning snapshot. Existing
+readers can iterate and query its size without change. A caller that needs
+mutable storage copies the range explicitly. Provider availability requires
+qualified image behavior and product composition as specified by ADR-040.
 
 ## Upscaling
 

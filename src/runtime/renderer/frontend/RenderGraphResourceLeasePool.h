@@ -8,6 +8,10 @@
 #include <array>
 #include <vector>
 
+namespace Horo::Render {
+    class NativeReconstructionViewHistory;
+}
+
 namespace Horo::Render::Detail {
     struct RenderGraphTransientResourceSet;
 
@@ -72,6 +76,10 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<IRenderGraphResourceLease *> AcquireGui(std::span<const RenderGraphResidentIdentity> pins,
                                                                      IRenderGraphResourceLease *existing);
 
+        /** @brief Retains staged scene owners on this exact active graph lease until native retirement. */
+        [[nodiscard]] bool RetainReconstructionHistories(
+            const IRenderGraphResourceLease *active, std::span<const std::shared_ptr<NativeReconstructionViewHistory>> histories) noexcept;
+
     private:
         using Pin = RenderGraphResidentIdentity;
 
@@ -115,6 +123,9 @@ namespace Horo::Render::Detail {
             RenderGraphTransientResourceSet *transient{nullptr};
             std::array<std::shared_ptr<const ResidentMaterialBinding>, RenderGraphMaterialRaster::MaximumRetainedDraws> materials;
             std::size_t materialCount{0};
+            std::array<std::shared_ptr<NativeReconstructionViewHistory>, RenderGraphNativeReconstruction::MaximumPassesPerFrame>
+                reconstructionHistories;
+            std::size_t reconstructionHistoryCount{};
         };
 
         RenderResourceRegistry *registry_;

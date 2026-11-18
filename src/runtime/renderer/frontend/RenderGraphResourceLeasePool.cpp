@@ -1,5 +1,6 @@
 #include "RenderGraphResourceLeasePool.h"
 
+#include "Horo/Runtime/Render/NativeReconstructionViewHistory.h"
 #include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
 #include "Horo/Runtime/Render/VfxFrameUpload.h"
 #include "RenderFrontendErrors.h"
@@ -127,6 +128,25 @@ namespace Horo::Render::Detail {
             templateBinding.reset();
         }
         active = false;
+        for (auto &history : std::span{reconstructionHistories}.first(reconstructionHistoryCount)) {
+            history->NativeLeaseRetired();
+            history.reset();
+        }
+        reconstructionHistoryCount = 0;
+    }
+
+    /** @copydoc RenderGraphResourceLeasePool::RetainReconstructionHistories */
+    bool RenderGraphResourceLeasePool::RetainReconstructionHistories(
+        const IRenderGraphResourceLease *active,
+        const std::span<const std::shared_ptr<NativeReconstructionViewHistory>> histories) noexcept {
+        const auto lease = std::ranges::find_if(leases_, [active](const auto &entry) {
+            return &entry == active && entry.active;
+        });
+        if (lease == leases_.end() || lease->reconstructionHistoryCount != 0 || histories.size() > lease->reconstructionHistories.size())
+            return false;
+        std::ranges::copy(histories, lease->reconstructionHistories.begin());
+        lease->reconstructionHistoryCount = histories.size();
+        return true;
     }
 
     /** @copydoc RenderGraphResourceLeasePool::Lease::PinResource */

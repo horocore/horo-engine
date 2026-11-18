@@ -1,8 +1,10 @@
 /** @file RenderFrameGraphExecution.cpp
  * @brief Canonical frame-owned graph admission and completion-lease transfer. */
+#include "Horo/Runtime/Render/NativeReconstructionViewHistory.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
+#include "Horo/Runtime/Render/TemporalHistoryErrors.h"
 #include "Horo/Runtime/Render/VfxFrameUpload.h"
 #include "RenderFrameGraphResources.h"
 #include "RenderFrontendErrors.h"
@@ -16,6 +18,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <ranges>
 
 namespace Horo::Render {
     namespace {
@@ -80,6 +83,95 @@ namespace Horo::Render {
             return ValidateGpuVfxSupport(backend, workloads, explicitSubmissions);
         }
 
+        /** @brief Matches the graph-facing view and its actual resident source generation, not only the logical slot. */
+        bool MatchesSceneImage(const CompiledRenderGraphExecution &graph, const RenderGraphReconstructionImage &binding,
+                               const NativeReconstructionSceneImage &exact) noexcept {
+            if (binding.view != exact.view)
+                return false;
+            if (!exact.texture.IsValid())
+                return binding.resource == RenderGraphResourceId{};
+            const auto resources = graph.Resources();
+            if (binding.resource.owner != graph.Owner() || binding.resource.value == 0 || binding.resource.value > resources.size())
+                return false;
+            const auto &resource = resources[binding.resource.value - 1];
+            const auto *texture = std::get_if<RenderTextureHandle>(&resource.binding);
+            return resource.id == binding.resource && texture && *texture == exact.texture;
+        }
+
+        /** @brief Matches all packed shader inputs and exact image generations to a staged real frame. */
+        bool MatchesScenePlan(const CompiledRenderGraphExecution &graph, const RenderGraphNativeReconstruction &workload,
+                              const NativeReconstructionScenePlan &plan) noexcept {
+            const auto &expected = plan.dispatch;
+            const auto &actual = workload.dispatch;
+            if (actual.entry != expected.entry || actual.constants.extents != expected.constants.extents ||
+                actual.constants.sample != expected.constants.sample || actual.constants.depth != expected.constants.depth)
+                return false;
+            for (std::size_t i = 0; i < plan.images.size(); ++i)
+                if (!MatchesSceneImage(graph, workload.images[i], plan.images[i]))
+                    return false;
+            return true;
+        }
+
+        /** @brief Requires the history lifetime and uses the exact compiled state preserved from its previous graph. */
+        bool MatchesPreviousHistoryState(const CompiledRenderGraphExecution &graph, RenderGraphResourceId resource,
+                                         const RenderGraphLogicalState &previous) noexcept {
+            if (graph.Resources()[resource.value - 1].resourceClass != RenderGraphResourceClass::History)
+                return false;
+            const auto initial = std::ranges::find(graph.ImportedStates(), resource, &RenderGraphImportedState::resource);
+            return initial != graph.ImportedStates().end() && initial->contents == RenderGraphInitialContents::Preserved &&
+                   initial->state == previous;
+        }
+
+        /** @brief Obtains the final logical state of a retained history image, including subsequent consumers. */
+        std::optional<RenderGraphLogicalState> FinalHistoryState(const CompiledRenderGraphExecution &graph,
+                                                                 RenderGraphResourceId resource) noexcept {
+            if (graph.Resources()[resource.value - 1].resourceClass != RenderGraphResourceClass::History)
+                return std::nullopt;
+            const auto transitions = graph.Transitions();
+            const auto reverse = transitions | std::views::reverse;
+            const auto last = std::ranges::find(reverse, resource, &RenderGraphTransition::resource);
+            if (last == reverse.end())
+                return std::nullopt;
+            return last->newState;
+        }
+
+        /** @brief Observes the exact scheduler point covering the native compute dispatch. */
+        RenderTimelinePoint ReconstructionCompletion(std::span<const RenderGraphQueueSubmission> submissions, std::size_t passIndex,
+                                                     std::size_t passCount) noexcept {
+            for (const auto &entry : submissions) {
+                const auto range = entry.passes;
+                if (range.IsValidFor(passCount) && passIndex >= range.offset && passIndex - range.offset < range.count)
+                    return entry.submission.signal;
+            }
+            return {};
+        }
+
+        /** @brief Rejects a second producer of either staged output anywhere in the retained scene graph. */
+        bool HasExclusiveHistoryWrites(const CompiledRenderGraphExecution &graph, const RenderGraphNativeReconstruction &workload,
+                                       RenderGraphPassRef pass) noexcept {
+            const auto textureOf = [&](RenderGraphResourceId id) {
+                const auto *texture = std::get_if<RenderTextureHandle>(&graph.Resources()[id.value - 1].binding);
+                return texture == nullptr ? RenderTextureHandle{} : *texture;
+            };
+            const auto output = [&](NativeReconstructionImage image) {
+                return textureOf(workload.images[static_cast<std::size_t>(image)].resource);
+            };
+            const auto protectedImages = std::array{NativeReconstructionImage::OutputColor, NativeReconstructionImage::OutputDepth,
+                                                    NativeReconstructionImage::PreviousColor, NativeReconstructionImage::PreviousDepth};
+            std::array<RenderTextureHandle, protectedImages.size()> retained;
+            std::ranges::transform(protectedImages, retained.begin(), [&](NativeReconstructionImage image) {
+                return NativeReconstructionUsesImage(workload.dispatch.entry, image) ? output(image) : RenderTextureHandle{};
+            });
+            for (const auto &use : graph.Usages()) {
+                if (use.pass == pass || use.access == RenderGraphAccess::Read)
+                    continue;
+                const auto texture = textureOf(use.resource);
+                if (texture.IsValid() && std::ranges::find(retained, texture) != retained.end())
+                    return false;
+            }
+            return true;
+        }
+
         /** @brief Retains the canonical VFX scratch owner only when this graph needs it and no callback already borrows it. */
         Result<std::shared_ptr<Detail::VfxSchedulingStorage>> SelectVfxResolutionStorage(
             const std::span<const RenderGraphPassWorkload> workloads, const std::shared_ptr<Detail::VfxSchedulingStorage> &storage) {
@@ -115,6 +207,79 @@ namespace Horo::Render {
                 MakeError(RenderGraphExecutionErrors::InvalidGraph, "Explicit graph execution requires frontend submission records."));
         }
         return ExecuteGraphInternal(graph, workloads, nullptr, transientResources, submissions);
+    }
+
+    /** @copydoc RenderFrameScope::ExecuteNativeReconstructionScene */
+    Result<void> RenderFrameScope::ExecuteNativeReconstructionScene(
+        const CompiledRenderGraphExecution &graph, const std::span<const RenderGraphPassWorkload> workloads,
+        const std::span<const RenderGraphQueueSubmission> submissions,
+        const std::span<const std::shared_ptr<NativeReconstructionViewHistory>> histories,
+        const RenderGraphTransientResourcesHandle transientResources) {
+        if (const auto admitted = ValidateExecutionAdmission(); admitted.HasError())
+            return admitted;
+        const auto invalid = [] {
+            return Result<void>::Failure(MakeError(TemporalHistoryErrors::InvalidFrame));
+        };
+        if (histories.empty() || histories.size() > reconstructionHistories_.size() || workloads.size() != graph.Passes().size() ||
+            submissions.empty() || submissions.size() > RenderGraphSubmissionLimits::MaximumSubmissions)
+            return invalid();
+
+        using Image = NativeReconstructionImage;
+
+        struct SceneCompletion final {
+            RenderTimelinePoint point;
+            NativeReconstructionHistoryStates states;
+        };
+
+        std::array<SceneCompletion, RenderGraphNativeReconstruction::MaximumPassesPerFrame> completions;
+        std::size_t ownerIndex = 0;
+        for (std::size_t i = 0; i < workloads.size(); ++i) {
+            const auto *workload = std::get_if<RenderGraphNativeReconstruction>(&workloads[i].workload);
+            if (workload == nullptr || workload->dispatch.entry == NativeReconstructionEntry::Spatial)
+                continue;
+            if (ownerIndex == histories.size())
+                return invalid();
+            const auto &history = histories[ownerIndex];
+            if (!history || !history->SameFrontend(*owner_) || history->phase_ != NativeReconstructionViewHistory::Phase::Staged ||
+                history->pending_->frameId != hostFrame_ || workloads[i].pass != graph.Passes()[i].pass)
+                return invalid();
+            if (!MatchesScenePlan(graph, *workload, history->plan_) || !HasExclusiveHistoryWrites(graph, *workload, workloads[i].pass))
+                return invalid();
+            const auto image = [workload](Image role) {
+                return workload->images[static_cast<std::size_t>(role)].resource;
+            };
+            const auto &previous = history->plan_.previousStates;
+            if (previous && (!MatchesPreviousHistoryState(graph, image(Image::PreviousColor), previous->color) ||
+                             !MatchesPreviousHistoryState(graph, image(Image::PreviousDepth), previous->depth)))
+                return invalid();
+            const auto color = FinalHistoryState(graph, image(Image::OutputColor));
+            const auto depth = FinalHistoryState(graph, image(Image::OutputDepth));
+            const auto signal = ReconstructionCompletion(submissions, i, workloads.size());
+            if (!signal.IsValid() || !color || !depth)
+                return invalid();
+            completions[ownerIndex++] = {signal, {*color, *depth}};
+        }
+        if (ownerIndex != histories.size())
+            return invalid();
+
+        const auto recorded = ExecuteSubmittedGraph(graph, workloads, submissions, transientResources);
+        if (recorded.HasError()) {
+            for (const auto &history : histories)
+                history->Abandon();
+            return recorded;
+        }
+        if (!owner_->graphResourceLeases_->RetainReconstructionHistories(completionLease_, histories)) {
+            Abort();
+            for (const auto &history : histories)
+                history->Abandon();
+            return invalid();
+        }
+        for (std::size_t i = 0; i < histories.size(); ++i) {
+            reconstructionHistories_[i] = histories[i];
+            histories[i]->BeginRecording(completions[i].point, completions[i].states);
+        }
+        reconstructionHistoryCount_ = histories.size();
+        return Result<void>::Success();
     }
 
     /** @copydoc RenderFrameScope::ExecuteGraph(const CompiledRenderGraphExecution &, std::span<const RenderGraphPassWorkload>,

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Runtime/Render/ClusteredLightGrid.h"
+#include "Horo/Runtime/Render/MultiviewSceneExtraction.h"
 #include "Horo/Runtime/Render/RenderGraphInspection.h"
 #include "Horo/Runtime/Render/RenderReadback.h"
 #include "Horo/Runtime/Render/VfxGpuGraphScheduling.h"
@@ -17,6 +18,7 @@
 #include "Horo/Runtime/Render/RenderParallelWork.h"
 #include "Horo/Runtime/Render/RenderShaderResources.h"
 
+#include <array>
 #include <memory>
 #include <span>
 #include <thread>
@@ -24,6 +26,7 @@
 
 namespace Horo::Render {
     class RenderFrontend;
+    class NativeReconstructionViewHistory;
     class IRenderGraphResourceLease;
     struct UiPaintFrameBuffers;
     struct UiPaintFrameUpdate;
@@ -280,6 +283,23 @@ namespace Horo::Render {
                                                          std::span<const RenderGraphQueueSubmission> submissions,
                                                          RenderGraphTransientResourcesHandle transientResources = {});
         /**
+         * @brief Records one scene graph with exact staged owners for every native temporal reconstruction workload.
+         * @param graph Exact compiled scene graph.
+         * @param workloads Complete workloads in compiled pass order.
+         * @param submissions Exact scheduler-owned graph submissions and their timelines.
+         * @param histories Staged view owners in temporal workload order, omitting spatial passes.
+         * @param transientResources Optional other scene transients; the history pairs must remain resident.
+         * @return Success or typed graph, owner, resource or native failure.
+         * @details Preflight rejection leaves plans staged for an explicit retry or cancellation. Accepted frames retain
+         * the owners through canonical GPU retirement. History becomes publishable only after successful presentation.
+         */
+        [[nodiscard]] Result<void> ExecuteNativeReconstructionScene(
+            const CompiledRenderGraphExecution &graph, std::span<const RenderGraphPassWorkload> workloads,
+            std::span<const RenderGraphQueueSubmission> submissions,
+            std::span<const std::shared_ptr<NativeReconstructionViewHistory>> histories,
+            RenderGraphTransientResourcesHandle transientResources = {});
+
+        /**
          * @brief Freezes borrowed inputs and schedules bounded preparation and CPU command recording.
          * @param jobs Const facade of the host worker pool; its owned scheduler continues servicing accepted jobs until host shutdown.
          * @param orderedPasses Immutable source views borrowed only during this call; all arrays are copied.
@@ -420,6 +440,10 @@ namespace Horo::Render {
         [[nodiscard]] MaterialExecutionOutcome ExecuteMaterialPassBoundary(const RenderMaterialPass &pass) noexcept;
         void Abort() noexcept;
         void Release() noexcept;
+        /** @brief Marks admitted views successful or uncertain at the native presentation boundary. */
+        void FinishReconstructionPresentation(bool presented) noexcept;
+        /** @brief Discards recordings that have not reached native presentation. */
+        void CancelReconstructionScene() noexcept;
         /** @brief Enforces the one-shot frame admission gate shared by synchronous and worker routes. */
         [[nodiscard]] Result<void> ValidateExecutionAdmission() const;
         /** @brief Validates owner-side executor and target liveness before synchronous borrowing. */
@@ -445,6 +469,8 @@ namespace Horo::Render {
         bool uiComposing_{false}; /**< Owner-thread reentry fence spanning the complete ordered UI batch. */
         std::unique_ptr<Detail::RenderParallelWorkState> parallelWork_;
         std::unique_ptr<Detail::RenderParallelGraphWorkState> parallelGraphWork_;
+        std::array<std::shared_ptr<NativeReconstructionViewHistory>, MultiviewExtractionLimits::HardMaximumViews> reconstructionHistories_;
+        std::size_t reconstructionHistoryCount_{};
     };
 
     /**
@@ -957,6 +983,7 @@ namespace Horo::Render {
 
     private:
         friend class RenderFrameScope;
+        friend class NativeReconstructionViewHistory;
         friend class Detail::RenderFrontendResourceAccess;
         friend class Detail::RenderExternalTextureAccess;
         friend class Detail::PreparedRenderGraphTemplate;

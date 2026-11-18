@@ -6794,7 +6794,7 @@ if (HORO_BUILD_RENDER_VULKAN)
         target_link_libraries(HoroVulkanCommandExecutionSmoke PRIVATE Catch2::Catch2WithMain
                 HoroEngine::RenderFrontend HoroEngine::RenderVulkan HoroRenderVulkanHostInterface
                 HoroEngine::VfxApi HoroVfxGpuVulkanCookInternal HoroEngine::ShaderCompilerToolchain
-                HoroEngine::Platform Vulkan::Headers ${CMAKE_DL_LIBS})
+                HoroEngine::Platform HoroEngine::SceneRenderExtraction Vulkan::Headers ${CMAKE_DL_LIBS})
         add_test(NAME HoroVulkanCommandExecutionSmoke COMMAND HoroVulkanCommandExecutionSmoke)
         set_tests_properties(HoroVulkanCommandExecutionSmoke PROPERTIES
                 LABELS "gpu;vulkan;renderer;qualification" TIMEOUT 45 RUN_SERIAL TRUE SKIP_RETURN_CODE 4

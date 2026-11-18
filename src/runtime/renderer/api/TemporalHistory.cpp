@@ -224,26 +224,24 @@ namespace Horo::Render {
         const bool predecessorMatches = record.valid && predecessorFrameId == record.lastPublishedFrame;
         if (!cause.has_value() && !predecessorMatches)
             cause = TemporalHistoryResetCause::MissingPredecessor;
-        try {
-            TemporalHistoryFrame frame{history,
-                                       record.compatibility,
-                                       frameId,
-                                       record.contentGeneration + 1,
-                                       record.nextAttempt,
-                                       predecessorMatches && !cause.has_value(),
-                                       cause,
-                                       record.resources};
-            record.pendingFrame = frameId;
-            record.pendingAttempt = record.nextAttempt;
-            record.pendingCanReadPrevious = frame.canReadPrevious;
-            record.pendingFrameReset = frame.resetCause;
-            if (reset)
-                record.pendingReset = reset;
-            ++record.nextAttempt;
-            return Result<TemporalHistoryFrame>::Success(std::move(frame));
-        } catch (const std::bad_alloc &) {
-            return Result<TemporalHistoryFrame>::Failure(MakeError(TemporalHistoryErrors::AllocationFailed));
-        }
+        TemporalHistoryFrame frame{history,
+                                   record.compatibility,
+                                   frameId,
+                                   record.contentGeneration + 1,
+                                   record.nextAttempt,
+                                   predecessorMatches && !cause.has_value(),
+                                   cause,
+                                   {}};
+        frame.resources.size_ = record.resources.size();
+        std::ranges::copy(record.resources, frame.resources.resources_.begin());
+        record.pendingFrame = frameId;
+        record.pendingAttempt = record.nextAttempt;
+        record.pendingCanReadPrevious = frame.canReadPrevious;
+        record.pendingFrameReset = frame.resetCause;
+        if (reset)
+            record.pendingReset = reset;
+        ++record.nextAttempt;
+        return Result<TemporalHistoryFrame>::Success(std::move(frame));
     }
 
     /** @copydoc TemporalHistoryStore::ValidatePendingFrame */
@@ -251,7 +249,7 @@ namespace Horo::Render {
         if (frame.compatibility != record.compatibility || frame.frameId == 0 || record.pendingFrame != frame.frameId ||
             frame.contentGeneration != record.contentGeneration + 1 || frame.attempt == 0 || frame.attempt != record.pendingAttempt ||
             frame.canReadPrevious != record.pendingCanReadPrevious || frame.resetCause != record.pendingFrameReset ||
-            frame.resources != record.resources)
+            !std::ranges::equal(frame.resources, record.resources))
             return Result<void>::Failure(MakeError(TemporalHistoryErrors::InvalidFrame));
         return Result<void>::Success();
     }
