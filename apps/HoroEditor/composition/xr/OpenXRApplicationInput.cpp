@@ -296,7 +296,7 @@ namespace Horo::Application::Internal {
             const auto devices = publication.Devices();
             const auto device = std::ranges::find(devices, pose.role, &XRTrackedDeviceRecord::role);
             if (const auto capability = NativePoseCapability(pose.kind);
-                device == devices.end() || device->state == XRTrackedDeviceState::Disconnected || !device->capabilities.Has(capability))
+                device == devices.end() || device->state != XRTrackedDeviceState::Tracked || !device->capabilities.Has(capability))
                 continue;
             normalized[poseCount++] = {device->id, pose.kind, pose.pose};
             tracked |= pose.pose.components.positionMeters.validity != XRPoseComponentValidity::Invalid ||

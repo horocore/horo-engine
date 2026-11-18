@@ -888,7 +888,8 @@ namespace Horo::Tests::OpenXRApplication {
         REQUIRE(fixture.scheduler->AddParticipant(std::move(cutoff)).HasValue());
         RequireValue(fixture.scheduler->Startup());
 
-        const auto runCutoff = [&] {
+        const auto runCutoff = [&](const char *phase = "active controller cutoff") {
+            INFO(phase);
             RequireValue(fixture.scheduler->RunFrame());
             REQUIRE(observed->result.has_value());
             RequireValue(*observed->result);
@@ -936,10 +937,13 @@ namespace Horo::Tests::OpenXRApplication {
         const auto controllerGeneration = refreshed.actions.front().deviceGeneration;
 
         fixture.script.actions.tracking.poseActive = XR_FALSE;
-        const auto untracked = runCutoff();
+        const auto untracked = runCutoff("pose loss with native scalar still active");
         CHECK_FALSE(untracked.down);
         CHECK(untracked.released);
-        CHECK(fixture.play->ReadInspection().sessionGeneration == generation);
+        const auto trackingLost = fixture.play->ReadInspection();
+        CHECK(trackingLost.sessionGeneration == generation);
+        CHECK(trackingLost.deviceCount == refreshed.deviceCount);
+        CHECK(trackingLost.actionCount == 0);
         CHECK_FALSE(runCutoff().released);
         fixture.script.actions.tracking.poseActive = XR_TRUE;
         const auto trackedAgain = runCutoff();
@@ -954,7 +958,7 @@ namespace Horo::Tests::OpenXRApplication {
         fixture.script.events.Push(XR_SESSION_STATE_FOCUSED);
         RequireValue(fixture.play->PollEvents());
         CHECK(fixture.play->ReadInspection().trackingRevision == 0);
-        const auto neutral = runCutoff();
+        const auto neutral = runCutoff("neutral cutoff after focus returns in one event batch");
         CHECK_FALSE(neutral.down);
         CHECK(neutral.released);
         CHECK(runCutoff().pressed);
@@ -966,7 +970,7 @@ namespace Horo::Tests::OpenXRApplication {
             RequireValue(fixture.play->PollEvents());
         }
         // Digital tests the same confirmed profile change detected by native sampling before notification.
-        const auto unplugged = runCutoff();
+        const auto unplugged = runCutoff("confirmed profile loss");
         const auto retired = fixture.play->ReadInspection();
         CHECK(retired.status == EditorXrInspectionStatus::Stale);
         CHECK(retired.trackingRevision == 0);
@@ -993,7 +997,7 @@ namespace Horo::Tests::OpenXRApplication {
         scene->Shutdown();
         CHECK(fixture.play->UsesXrScene());
         CHECK(fixture.play->ReadInspection().sessionGeneration != generation);
-        CHECK(runCutoff().pressed);
+        CHECK(runCutoff("replacement session cutoff").pressed);
         replacementScene->Shutdown();
     }
 
