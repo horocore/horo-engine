@@ -80,10 +80,11 @@ namespace {
 
         auto failedRelease = ordinary;
         failedRelease.failure = XRFakeFailure::Release;
+        const auto terminal = Event(XRSessionEvent::SessionLost);
         using enum XRFrameStatus;
 
         struct ExpectedStep final {
-            XRSimulatorStep controls;
+            const XRSimulatorStep &controls;
             XRFrameStatus status{Ok};
             XRSessionState session{XRSessionState::Focused};
             std::uint32_t acquiredImages{1};
@@ -96,12 +97,15 @@ namespace {
             ExpectedStep{.controls = trackingLost, .left = XRTrackedDeviceState::TrackingLost},
             ExpectedStep{failedRelease, Unavailable, XRSessionState::Focused, 1, std::nullopt},
             ExpectedStep{ordinary},
-            ExpectedStep{Event(XRSessionEvent::SessionLost), Ok, XRSessionState::Lost, 0, std::nullopt},
+            ExpectedStep{terminal, Ok, XRSessionState::Lost, 0, std::nullopt},
         };
 
-        const auto checkStep = [&](const XRSimulatorRuntime &owner, const XRSimulatorAdvance &advanced, const std::size_t index,
-                                   const std::uint64_t elapsed) {
+        const auto checkStep = [&](XRSimulatorRuntime &owner, const bool replaying, const std::size_t index, const std::uint64_t elapsed) {
             CAPTURE(index);
+            const auto cutoff = Cutoff(index + 1);
+            const auto result = replaying ? owner.Tick(cutoff) : owner.Step(cutoff);
+            REQUIRE(result.HasValue());
+            const auto &advanced = result.Value();
             const auto &expected = timeline[index];
             CHECK(advanced.consumed);
             CHECK(advanced.cursor == index + 1);
@@ -122,15 +126,13 @@ namespace {
 
         REQUIRE(runtime->ArmCapture().HasValue());
         std::uint64_t elapsed{};
-        std::optional<XRTrackingSnapshot> originalTracking;
+        std::unique_ptr<XRTrackingSnapshot> originalTracking;
         for (std::size_t index = 0; index < timeline.size(); ++index) {
             REQUIRE(runtime->SetControls(timeline[index].controls).HasValue());
-            const auto result = runtime->Step(Cutoff(index + 1));
-            REQUIRE(result.HasValue());
             elapsed += timeline[index].controls.deltaNanoseconds;
-            checkStep(*runtime, result.Value(), index, elapsed);
+            checkStep(*runtime, false, index, elapsed);
             if (index == 0)
-                originalTracking = *runtime->Tracking();
+                originalTracking = std::make_unique<XRTrackingSnapshot>(*runtime->Tracking());
         }
         REQUIRE(runtime->Snapshot().playback == XRSimulatorPlayback::Failed);
         const auto captured = runtime->RecordedScenario();
@@ -150,7 +152,7 @@ namespace {
         auto replay = Runtime();
         REQUIRE(replay->LoadScenario(decoded.Value()).HasValue());
         REQUIRE(replay->Replay().HasValue());
-        REQUIRE(originalTracking.has_value());
+        REQUIRE(originalTracking != nullptr);
         const auto replaySession = replay->Snapshot().session.session;
         const auto stale = ValidateXRTrackingSnapshot(*originalTracking, replaySession, originalTracking->Revision(),
                                                       originalTracking->WorldOriginRevision());
@@ -158,10 +160,8 @@ namespace {
         CHECK(stale.ErrorValue().code.Value() == XRErrors::IdentityStale.code.Value());
         elapsed = 0;
         for (std::size_t index = 0; index < timeline.size(); ++index) {
-            const auto result = replay->Tick(Cutoff(index + 1));
-            REQUIRE(result.HasValue());
             elapsed += timeline[index].controls.deltaNanoseconds;
-            checkStep(*replay, result.Value(), index, elapsed);
+            checkStep(*replay, true, index, elapsed);
         }
         CHECK(replay->Snapshot().playback == XRSimulatorPlayback::Failed);
         replay->Shutdown();
