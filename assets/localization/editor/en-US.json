@@ -884,6 +884,8 @@
     "workspace.decision_canvas.service": {"text": "Service"},
     "workspace.decision_canvas.task": {"text": "Task"},
     "workspace.decision_canvas.unknown": {"text": "Unknown Node"},
+    "workspace.decision_canvas.layout_unavailable": {"text": "The saved layout could not be read for this asset."},
+    "workspace.decision_canvas.auto_layout": {"text": "Auto-Layout"},
     "workspace.decision_canvas.fit": {"text": "Fit Graph"},
     "workspace.decision_graph.edit_tree_node": {"text": "Behavior Tree Node"},
     "workspace.decision_graph.edit_tree_order": {"text": "Child execution order"},

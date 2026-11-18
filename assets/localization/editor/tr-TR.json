@@ -884,6 +884,8 @@
     "workspace.decision_canvas.service": {"text": "Servis"},
     "workspace.decision_canvas.task": {"text": "Görev"},
     "workspace.decision_canvas.unknown": {"text": "Bilinmeyen Düğüm"},
+    "workspace.decision_canvas.layout_unavailable": {"text": "Bu varlığın kayıtlı yerleşimi okunamadı."},
+    "workspace.decision_canvas.auto_layout": {"text": "Otomatik Yerleşim"},
     "workspace.decision_canvas.fit": {"text": "Grafiği Sığdır"},
     "workspace.decision_graph.edit_tree_node": {"text": "Davranış Ağacı Düğümü"},
     "workspace.decision_graph.edit_tree_order": {"text": "Alt düğüm yürütme sırası"},

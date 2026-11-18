@@ -724,9 +724,15 @@ Decision document tabs project canonical graph nodes, pins and edges into a
 shared visual snapshot. The private imgui-node-editor adapter owns canvas
 navigation and selection for each open revision. Selected authored nodes and
 links drive their family controls. State Machine link gestures submit normal
-revision-fenced document commands. Automatic placement belongs to the
-presentation session. Sidecar-backed layout and authored subtree gestures are
-separate increments of the graph surface.
+revision-fenced document commands. A released drag or explicitly accepted
+automatic layout records bounded logical placement by stable node identity in
+the same document history. The canonical .meta sidecar binds placement to
+both the Asset Registry and graph identities. It has its own accepted file
+identity and publication receipt under the Project mutation lease. Saving
+placement alone leaves runtime source bytes untouched. Each durable receipt
+advances its own saved baseline, so a failed second write keeps its changes
+pending. Canvas pan and zoom are session presentation state. Authored subtree
+gestures are a separate increment.
 
 The workspace usage review submits one bounded Project-owned read of the exact
 durable schema bytes and registered Decision sources. The application holds the

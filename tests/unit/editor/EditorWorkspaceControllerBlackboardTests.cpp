@@ -485,6 +485,131 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
         CHECK_FALSE(documents.front().canUndo);
     }
 
+    SECTION("canvas layout shares document history and saves separately across paired rename") {
+        controller.ProcessCommand(*command);
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        const auto &documents = controller.ViewModel().decisionGraphDocuments;
+        REQUIRE(documents.size() == 1);
+        const auto &view = documents.front();
+        REQUIRE(view.layoutWritable);
+        REQUIRE(view.layout);
+        CHECK(view.layout->empty());
+        const auto instance = view.identity.instance;
+        const auto asset = view.asset;
+        const auto graph = view.graph;
+        const auto node = std::get<AI::StateMachineAssetDescriptor>(graph->body).initial;
+        const auto initial = view.revision;
+        const auto sourcePath = project.root / path;
+        const auto originalBytes = Assets::CaptureAssetSource(project.root, sourcePath, AI::DecisionCodecLimits{}.maximumBytes);
+        REQUIRE(originalBytes.HasValue());
+        const auto layout = [&](DecisionLayoutOperation operation, DecisionGraphLayout positions, std::uint64_t revision) {
+            controller.ProcessCommand(
+                {.command = EditorWorkspaceViewCommand::EditDecisionLayout,
+                 .decisionLayoutEdit = DecisionGraphLayoutRequest{{instance, revision}, operation, std::move(positions)}});
+        };
+        const auto reject = [&](DecisionGraphLayout positions, std::uint64_t revision) {
+            layout(DecisionLayoutOperation::Move, std::move(positions), revision);
+            CHECK(view.diagnostic.has_value());
+            CHECK(view.revision == initial);
+            CHECK_FALSE(view.canUndo);
+        };
+        reject({{node, 24, 51}}, initial + 1);
+        reject({{node, 1, 2}, {node, 4, 8}}, initial);
+        reject({{node, std::numeric_limits<float>::quiet_NaN(), 0}}, initial);
+        reject({{node, MaximumDecisionLayoutCoordinate + 1, 0}}, initial);
+        reject({{AI::DecisionNodeId::Create(999).Value(), 0, 0}}, initial);
+        reject(DecisionGraphLayout(MaximumDecisionLayoutNodes + 1, {node, 0, 0}), initial);
+
+        layout(DecisionLayoutOperation::AutoLayout, {}, initial);
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        const auto automatic = view.layout;
+        REQUIRE(automatic->size() == 1);
+        CHECK(automatic->front().node == node);
+        const auto automaticRevision = view.revision;
+        layout(DecisionLayoutOperation::AutoLayout, {}, automaticRevision);
+        CHECK(view.revision == automaticRevision);
+        const DecisionNodePlacement moved{node, -84.5F, 247.25F};
+        layout(DecisionLayoutOperation::Move, {moved}, automaticRevision);
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        const auto positions = view.layout;
+        REQUIRE(positions->front() == moved);
+        CHECK(view.graph == graph);
+
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::EditDecisionStateMachine,
+                                   .stateMachineEdit = StateMachineEditRequest{instance,
+                                                                               view.revision,
+                                                                               StateMachineEditOperation::SetTerminal,
+                                                                               node,
+                                                                               {},
+                                                                               AI::DecisionStateTerminal::Succeeded}});
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        CHECK(view.graph != graph);
+        controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Undo));
+        CHECK(view.graph == graph);
+        CHECK(view.layout == positions);
+        controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Undo));
+        CHECK(view.layout == automatic);
+        controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Redo));
+        CHECK(view.layout == positions);
+        CHECK(controller.HasDirtySourceDocuments());
+
+        controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Save));
+        REQUIRE_FALSE(view.diagnostic.has_value());
+        CHECK_FALSE(controller.HasDirtySourceDocuments());
+        const auto unchanged = Assets::CaptureAssetSource(project.root, sourcePath, AI::DecisionCodecLimits{}.maximumBytes);
+        REQUIRE(unchanged.HasValue());
+        CHECK(unchanged.Value().identity == originalBytes.Value().identity);
+        const auto durable = CaptureDecisionLayout(project.root, sourcePath, asset, graph->asset);
+        REQUIRE(durable.HasValue());
+        CHECK(durable.Value().accepted.exists);
+        CHECK(durable.Value().layout == *positions);
+        CHECK(CaptureDecisionLayout(project.root, sourcePath, Assets::AssetId::FromBytes({9}), graph->asset).HasError());
+
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = instance});
+        REQUIRE(documents.empty());
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::RenameContentBrowserEntry,
+                                   .stringPayload = WorkspacePathText(sourcePath),
+                                   .secondaryStringPayload = "Canvas moved.horo_sm"});
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        CHECK_FALSE(std::filesystem::exists(DecisionLayoutPath(sourcePath)));
+        controller.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::OpenSourceFile,
+             .sourceOpenRequest = SourceOpenRequest{.path = "assets/Canvas moved.horo_sm", .origin = SourceOpenOrigin::AssetActivation}});
+        REQUIRE(documents.size() == 1);
+        CHECK(documents.front().asset == asset);
+        CHECK(documents.front().layoutWritable);
+        CHECK(*documents.front().layout == *positions);
+        CHECK_FALSE(documents.front().canUndo);
+    }
+
+    SECTION("layout publication rejects a new external sidecar without dropping the draft") {
+        controller.ProcessCommand(*command);
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        const auto &view = controller.ViewModel().decisionGraphDocuments.front();
+        const auto node = std::get<AI::StateMachineAssetDescriptor>(view.graph->body).initial;
+        const auto instance = view.identity.instance;
+        const auto metadata = DecisionLayoutPath(project.root / path);
+        controller.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::EditDecisionLayout,
+             .decisionLayoutEdit = DecisionGraphLayoutRequest{{instance, view.revision}, DecisionLayoutOperation::Move, {{node, 4, 8}}}});
+        REQUIRE(view.dirty);
+        const auto local = view.layout;
+        {
+            std::ofstream file(metadata, std::ios::binary);
+            file << "{}";
+            REQUIRE(static_cast<bool>(file));
+        }
+        const auto external = Assets::CaptureAssetSource(project.root, metadata, MaximumDecisionLayoutBytes);
+        REQUIRE(external.HasValue());
+        controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Save));
+        CHECK(view.conflict);
+        CHECK(view.dirty);
+        CHECK(view.layout == local);
+        const auto preserved = Assets::CaptureAssetSource(project.root, metadata, MaximumDecisionLayoutBytes);
+        REQUIRE(preserved.HasValue());
+        CHECK(preserved.Value().identity == external.Value().identity);
+    }
+
     SECTION("the durable source and sidecar open the same stable Decision document") {
         controller.ProcessCommand(BlackboardWorkspaceFixture::Open());
         REQUIRE(controller.ViewModel().blackboardDocuments.size() == 1);

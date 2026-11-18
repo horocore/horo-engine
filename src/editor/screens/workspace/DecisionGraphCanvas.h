@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Horo/Editor/EditorSurfaceIdentity.h"
-#include "editor/screens/workspace/DecisionStateMachineAuthoring.h"
+#include "editor/screens/workspace/DecisionGraphLayout.h"
 
 #include <memory>
 #include <optional>
@@ -16,6 +16,7 @@ namespace Horo::Editor {
         std::optional<AI::DecisionNodeId> node;
         std::optional<AI::DecisionNodeId> transition;
         std::optional<StateMachineEditRequest> edit;
+        std::optional<DecisionGraphLayoutRequest> layout;
     };
 
     /** @brief Workspace-owned presentation adapter. Vendor types stay in the implementation. */

@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <imgui_node_editor.h>
 #include <map>
@@ -57,45 +58,43 @@ namespace Horo::Editor {
 
         constexpr std::size_t PinsPerCanvasRow{9};
 
-        /** @brief Assigns bounded deterministic positions with cycles handled by visited breadth layers. */
-        std::vector<ImVec2> InitialCanvasPositions(const GraphViewSnapshot &graph, float scale) {
-            const auto noDepth = graph.nodes.size();
-            std::map<AI::DecisionNodeId, std::size_t> indices;
-            std::vector<std::vector<std::size_t>> connections(graph.nodes.size());
-            std::vector<std::size_t> depth(graph.nodes.size(), noDepth);
-            std::vector<std::size_t> pending;
-            pending.reserve(graph.nodes.size());
-            for (std::size_t index = 0; index < graph.nodes.size(); ++index) {
-                const auto &node = graph.nodes[index];
-                indices.emplace(node.id, index);
-                if (node.initial) {
-                    depth[index] = 0;
-                    pending.push_back(index);
-                }
-            }
-            for (const auto &link : graph.links)
-                connections[indices.at(graph.pins[link.from].node)].push_back(indices.at(graph.pins[link.to].node));
-            for (std::size_t cursor = 0; cursor < pending.size(); ++cursor) {
-                const auto source = pending[cursor];
-                for (const auto target : connections[source]) {
-                    if (depth[target] == noDepth) {
-                        depth[target] = depth[source] + 1;
-                        pending.push_back(target);
+        /** @brief Resolves canonical logical positions in the same widget order as the projection. */
+        DecisionGraphLayout CanvasPositions(const GraphViewSnapshot &graph, const DecisionGraphLayout *saved) {
+            const auto automatic = AutomaticDecisionLayout(graph);
+            DecisionGraphLayout result;
+            result.reserve(graph.nodes.size());
+            for (const auto &node : graph.nodes) {
+                if (saved) {
+                    const auto override = std::ranges::lower_bound(*saved, node.id, {}, &DecisionNodePlacement::node);
+                    if (override != saved->end() && override->node == node.id) {
+                        result.push_back(*override);
+                        continue;
                     }
                 }
+                const auto fallback = std::ranges::lower_bound(automatic, node.id, {}, &DecisionNodePlacement::node);
+                result.push_back(*fallback);
             }
-            const auto lastReachable = pending.empty() ? 0 : depth[pending.back()];
-            std::vector<float> row(lastReachable + 2, 32.0F);
-            std::vector<ImVec2> positions;
-            positions.reserve(graph.nodes.size());
-            for (std::size_t index = 0; index < graph.nodes.size(); ++index) {
-                const auto level = depth[index];
-                const auto column = level == noDepth ? lastReachable + 1 : level;
-                const auto pinRows = (graph.nodes[index].pinCount + PinsPerCanvasRow - 1) / PinsPerCanvasRow;
-                positions.push_back({scale * (32.0F + static_cast<float>(column) * 236.0F), scale * row[column]});
-                row[column] += 116.0F + 24.0F * static_cast<float>(pinRows);
+            return result;
+        }
+
+        /** @brief Emits a whole drag as one command and restores the last accepted widget positions until the owner commits. */
+        DecisionGraphLayout ReadCompletedDrag(const DecisionGraphLayout &baseline, float scale) {
+            DecisionGraphLayout moved;
+            if (!ImGui::IsMouseReleased(ImGuiMouseButton_Left) && !ImGui::GetIO().AppFocusLost)
+                return moved;
+            constexpr float LogicalEpsilon = 0.5F;
+            for (std::size_t index = 0; index < baseline.size(); ++index) {
+                const auto &accepted = baseline[index];
+                const auto widgetId = WidgetId<Widget::NodeId>(index);
+                const auto current = Widget::GetNodePosition(widgetId);
+                const auto x = current.x / scale;
+                const auto y = current.y / scale;
+                if (std::abs(x - accepted.x) <= LogicalEpsilon && std::abs(y - accepted.y) <= LogicalEpsilon)
+                    continue;
+                moved.push_back({accepted.node, x, y});
+                Widget::SetNodePosition(widgetId, {accepted.x * scale, accepted.y * scale});
             }
-            return positions;
+            return moved;
         }
 
         /** @brief Uses localized roles for blank labels and typed unknown/terminal presentation. */
@@ -223,6 +222,9 @@ namespace Horo::Editor {
     struct DecisionGraphCanvas::Impl final {
         struct Session final {
             GraphViewSnapshot snapshot;
+            std::shared_ptr<const AI::DecisionGraphSource> source;
+            DecisionGraphLayout positions;
+            float scale{};
             std::unique_ptr<Widget::EditorContext, CanvasContextDeleter> context;
         };
 
@@ -246,21 +248,37 @@ namespace Horo::Editor {
     DecisionCanvasInteraction DecisionGraphCanvas::Draw(const DecisionGraphWorkspaceDocument &document, const EditorGuiContext &context) {
         DecisionCanvasInteraction out;
         auto &session = state_->sessions[document.identity.instance];
-        const bool newSnapshot = !session.context || session.snapshot.revision != document.revision;
-        if (newSnapshot) {
+        const float scale = Theme::GetActiveTokens().sizes.uiScale;
+        const bool rebuildCanvas = !session.context || session.source != document.graph || session.scale != scale;
+        const bool replacePositions = rebuildCanvas || session.snapshot.revision != document.revision;
+        if (rebuildCanvas) {
             session.snapshot = ProjectDecisionCanvas(*document.graph, {document.identity.instance, document.revision}, document.editable);
+            session.source = document.graph;
+            session.scale = scale;
             session.context = CreateCanvasContext();
+        }
+        if (replacePositions) {
+            session.snapshot.revision = document.revision;
+            session.positions = CanvasPositions(session.snapshot, document.layout.get());
         }
         if (!session.context)
             return out;
 
         const auto &graph = session.snapshot;
         ScopedCanvasContext current(session.context.get());
-        const float scale = Theme::GetActiveTokens().sizes.uiScale;
         const auto available = ImGui::GetContentRegionAvail();
         const auto &fonts = context.theme.fonts;
         const auto &frameLabel = context.localization.Get("editor", "workspace.decision_canvas.fit");
         const bool fit = Ui::Button({.label = frameLabel.c_str(), .font = fonts.sans});
+        if (document.editable) {
+            const auto &automatic = context.localization.Get("editor", "workspace.decision_canvas.auto_layout");
+            if (Ui::Button({.label = automatic.c_str(), .enabled = document.layoutWritable, .font = fonts.sans}))
+                out.layout =
+                    DecisionGraphLayoutRequest{{document.identity.instance, document.revision}, DecisionLayoutOperation::AutoLayout};
+            if (!document.layoutWritable)
+                Ui::WrappedText(available.x, context.localization.Get("editor", "workspace.decision_canvas.layout_unavailable"),
+                                Theme::Muted(), fonts);
+        }
         Widget::PushStyleColor(Widget::StyleColor_Bg, Theme::Bg0());
         Widget::PushStyleColor(Widget::StyleColor_Grid, Theme::Border());
         Widget::PushStyleColor(Widget::StyleColor_NodeBg, Theme::Bg1());
@@ -268,10 +286,11 @@ namespace Horo::Editor {
         Widget::PushStyleColor(Widget::StyleColor_SelNodeBorder, Theme::Accent());
         Widget::Begin("##DecisionGraphCanvas",
                       {std::max(1.0F, available.x), std::clamp(available.y * 0.42F, 160.0F * scale, 420.0F * scale)});
-        if (newSnapshot) {
-            const auto positions = InitialCanvasPositions(graph, scale);
-            for (std::size_t i = 0; i < positions.size(); ++i)
-                Widget::SetNodePosition(WidgetId<Widget::NodeId>(i), positions[i]);
+        if (replacePositions) {
+            for (std::size_t i = 0; i < session.positions.size(); ++i) {
+                const auto &placement = session.positions[i];
+                Widget::SetNodePosition(WidgetId<Widget::NodeId>(i), {placement.x * scale, placement.y * scale});
+            }
         }
         for (std::size_t index = 0; index < graph.nodes.size(); ++index)
             DrawNode(graph, index, context, scale);
@@ -283,9 +302,15 @@ namespace Horo::Editor {
         }
         ReadSelection(graph, out);
         ReadTopologyIntent(graph, out);
-        if (fit || newSnapshot)
+        if (fit || rebuildCanvas)
             Widget::NavigateToContent(0.0F);
         Widget::End();
+        auto moved = ReadCompletedDrag(session.positions, scale);
+        if (!out.edit && !out.layout && document.layoutWritable && !moved.empty() && !ImGui::GetIO().AppFocusLost &&
+            !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
+            out.layout = DecisionGraphLayoutRequest{{document.identity.instance, document.revision},
+                                                    DecisionLayoutOperation::Move,
+                                                    std::move(moved)};
         Widget::PopStyleColor(5);
         return out;
     }

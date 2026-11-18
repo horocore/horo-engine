@@ -554,6 +554,8 @@ namespace Horo::Editor {
             std::shared_ptr<const AI::DecisionGraphSource> after;
             Sha256Digest beforeDigest;
             Sha256Digest afterDigest;
+            std::shared_ptr<const DecisionGraphLayout> beforeLayout;
+            std::shared_ptr<const DecisionGraphLayout> afterLayout;
             std::size_t bytes{};
         };
 
@@ -562,6 +564,8 @@ namespace Horo::Editor {
             Sha256Digest savedDigest;
             Sha256Digest currentDigest;
             std::size_t acceptedBytes{};
+            Assets::AssetSourceIdentity acceptedLayout;
+            std::shared_ptr<const DecisionGraphLayout> savedLayout;
             SemanticDocumentHistory<DecisionGraphHistoryEntry> history{};
         };
 
@@ -574,6 +578,11 @@ namespace Horo::Editor {
         /** @brief Executes and commits one fully validated editable candidate. */
         template <typename Request>
         Result<void> ApplyDecisionGraphEdit(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft, const Request &request);
+        /** @brief Applies one bounded layout candidate to the same revision and history timeline. */
+        Result<void> ApplyDecisionGraphLayout(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
+                                              const DecisionGraphLayoutRequest &request);
+        /** @brief Replays the next heterogeneous Decision history entry. */
+        Result<void> ReplayDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft, bool redo);
         /** @brief Publishes the semantic draft flags to shared tab lifecycle. */
         void ProjectDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, const DecisionGraphDraft &draft);
 

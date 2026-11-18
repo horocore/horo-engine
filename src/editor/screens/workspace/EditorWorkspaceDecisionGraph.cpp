@@ -1,4 +1,5 @@
 #include "AuthoredAiSourceInventory.h"
+#include "DecisionGraphCanvasModel.h"
 #include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Application/ProjectAssetImportCommitter.h"
@@ -782,6 +783,12 @@ namespace Horo::Editor {
                                                  std::make_shared<const AI::DecisionGraphSource>(std::move(graph).Value())};
         decltype(m_decisionGraphDrafts) prepared;
         candidate.family = DecisionFamily(*candidate.graph);
+        auto metadata = CaptureDecisionLayout(ProjectRoot(), result.location.absolutePath, candidate.asset, candidate.graph->asset);
+        candidate.layout = std::make_shared<const DecisionGraphLayout>();
+        if (metadata.HasValue()) {
+            candidate.layout = std::make_shared<const DecisionGraphLayout>(std::move(metadata.Value().layout));
+            candidate.layoutWritable = true;
+        }
         const bool needsProviders = NeedsDecisionTaskProviders(*candidate.graph);
         if (m_mutations && m_durableFiles && (EditableMachine(*candidate.graph) || (needsProviders && m_gameplayRegistry))) {
             const auto providers = AcquireDecisionDraftProviders(*candidate.graph);
@@ -791,12 +798,17 @@ namespace Horo::Editor {
             const auto encoded = AI::DecisionPlanCodec::EncodeSource(std::span{candidate.graph.get(), 1}, candidate.graph->asset);
             if (canEdit && encoded.HasValue()) {
                 const auto digest = ComputeSha256(std::as_bytes(std::span{encoded.Value()}));
-                prepared.try_emplace(candidate.identity.instance, DecisionGraphDraft{.savedDigest = digest,
-                                                                                     .currentDigest = digest,
-                                                                                     .acceptedBytes = source.bytes.size()});
+                prepared.try_emplace(candidate.identity.instance,
+                                     DecisionGraphDraft{.savedDigest = digest,
+                                                        .currentDigest = digest,
+                                                        .acceptedBytes = source.bytes.size(),
+                                                        .acceptedLayout =
+                                                            metadata.HasValue() ? metadata.Value().accepted : Assets::AssetSourceIdentity{},
+                                                        .savedLayout = candidate.layout});
             }
         }
         candidate.editable = !prepared.empty();
+        candidate.layoutWritable = candidate.editable && candidate.layoutWritable;
         candidate.revision = existing == documents.end() ? 1 : existing->revision + 1;
         if (host.OpenDocument(opened.identity.key).HasError()) {
             fail("workspace.source_open.unavailable");
@@ -863,7 +875,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::ProjectDecisionGraphDraft */
     void EditorWorkspaceController::ProjectDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, const DecisionGraphDraft &draft) {
-        document.dirty = draft.currentDigest != draft.savedDigest;
+        document.dirty = draft.currentDigest != draft.savedDigest || *document.layout != *draft.savedLayout;
         document.canUndo = draft.history.UndoCount() != 0;
         document.canRedo = draft.history.RedoCount() != 0;
         static_cast<void>(m_viewModel.workspacePanelHost.SetDocumentDirty(document.identity.instance, document.dirty));
@@ -879,6 +891,61 @@ namespace Horo::Editor {
         return Result<std::shared_ptr<const AI::DecisionNodeGeneration>>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
     }
 
+    /** @copydoc EditorWorkspaceController::ApplyDecisionGraphLayout */
+    Result<void> EditorWorkspaceController::ApplyDecisionGraphLayout(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
+                                                                     const DecisionGraphLayoutRequest &request) {
+        using Edited = Result<void>;
+        if (!document.layoutWritable || document.revision == std::numeric_limits<std::uint64_t>::max())
+            return Edited::Failure(MakeError(Assets::AssetSourceErrors::Authority));
+        const auto graph = ProjectDecisionCanvas(*document.graph, {document.identity.instance, document.revision}, document.editable);
+        auto layout = ApplyDecisionLayout(graph, *document.layout, request);
+        if (layout.HasError())
+            return Edited::Failure(layout.ErrorValue());
+        if (layout.Value() == *document.layout)
+            return Edited::Success();
+        auto candidate = std::make_shared<const DecisionGraphLayout>(std::move(layout).Value());
+        const auto bytes = (document.layout->size() + candidate->size()) * sizeof(DecisionNodePlacement);
+        auto prepared = draft.history.Prepare(
+            {document.graph, document.graph, draft.currentDigest, draft.currentDigest, document.layout, candidate, bytes});
+        if (!prepared)
+            return Edited::Failure(MakeError(Assets::AssetSourceErrors::Limit));
+        draft.history.Commit(*prepared);
+        document.layout = std::move(candidate);
+        ++document.revision;
+        ProjectDecisionGraphDraft(document, draft);
+        return Edited::Success();
+    }
+
+    /** @copydoc EditorWorkspaceController::ReplayDecisionGraphDraft */
+    Result<void> EditorWorkspaceController::ReplayDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
+                                                                     bool redo) {
+        using Replay = Result<void>;
+        const auto *entry = draft.history.Next(redo);
+        if (!entry || document.graph != (redo ? entry->before : entry->after) ||
+            document.layout != (redo ? entry->beforeLayout : entry->afterLayout))
+            return Replay::Failure(MakeError(Application::DecisionCookErrors::Stale));
+        const auto &candidate = redo ? entry->after : entry->before;
+        if (candidate != document.graph) {
+            const auto root = ProjectRoot();
+            const auto lease = m_mutations->TryAcquire({root, ProjectMutationOwner::Asset, "decision-history-replay"});
+            if (lease.HasError())
+                return Replay::Failure(lease.ErrorValue());
+            const auto registry = m_mutableAssetRegistry ? m_mutableAssetRegistry->Snapshot() : m_assetRegistry;
+            const auto providers = AcquireDecisionDraftProviders(*candidate);
+            if (providers.HasError())
+                return Replay::Failure(providers.ErrorValue());
+            if (auto admitted = ValidateDecisionDraft(root, registry, *candidate, providers.Value()); admitted.HasError())
+                return admitted;
+        }
+        document.graph = candidate;
+        document.layout = redo ? entry->afterLayout : entry->beforeLayout;
+        draft.currentDigest = redo ? entry->afterDigest : entry->beforeDigest;
+        draft.history.DidReplay(redo);
+        ++document.revision;
+        ProjectDecisionGraphDraft(document, draft);
+        return Replay::Success();
+    }
+
     /** @copydoc EditorWorkspaceController::ApplyDecisionGraphEdit */
     template <typename Request>
     Result<void> EditorWorkspaceController::ApplyDecisionGraphEdit(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
@@ -889,6 +956,8 @@ namespace Horo::Editor {
         using Operation = decltype(request.operation);
         if (request.operation == Operation::Save)
             return SaveDecisionGraphDraft(document, draft);
+        if (request.operation == Operation::Undo || request.operation == Operation::Redo)
+            return ReplayDecisionGraphDraft(document, draft, request.operation == Operation::Redo);
 
         const auto root = ProjectRoot();
         const auto project = m_mutations->TryAcquire({root, ProjectMutationOwner::Asset, "decision-source-edit"});
@@ -910,51 +979,47 @@ namespace Horo::Editor {
         const auto validate = [&](const AI::DecisionGraphSource &candidate) {
             return ValidateDecisionDraft(root, registry, candidate, providers.Value(), expectedScoreSchema);
         };
-        if (request.operation == Operation::Undo || request.operation == Operation::Redo) {
-            const bool redo = request.operation == Operation::Redo;
-            const auto *entry = draft.history.Next(redo);
-            if (!entry || document.graph != (redo ? entry->before : entry->after))
-                return Edit::Failure(MakeError(Application::DecisionCookErrors::Stale));
-            const auto &candidate = redo ? entry->after : entry->before;
-            if (const auto verified = validate(*candidate); verified.HasError())
-                return verified;
-            document.graph = candidate;
-            draft.currentDigest = redo ? entry->afterDigest : entry->beforeDigest;
-            draft.history.DidReplay(redo);
-        } else {
-            auto candidate = std::make_shared<AI::DecisionGraphSource>(*document.graph);
-            const auto edited = [&]() {
-                if constexpr (std::is_same_v<Request, StateMachineEditRequest>)
-                    return EditStateMachineCandidate(*candidate, request);
-                else if constexpr (std::is_same_v<Request, BehaviorTreeEditRequest>)
-                    return EditBehaviorTreeCandidate(*candidate, request, *providers.Value(), m_viewModel.availableBehaviorsRevision);
-                else {
-                    const auto *task = request.task && request.task->catalogRevision == m_viewModel.availableBehaviorsRevision
-                                           ? FindStarterTask(*providers.Value(), *request.task)
-                                           : nullptr;
-                    return EditUtilityGraphCandidate(*candidate, request, task);
-                }
-            }();
-            if (edited.HasError())
-                return Edit::Failure(edited.ErrorValue());
-            if (!edited.Value())
-                return Edit::Success();
-            if (const auto verified = validate(*candidate); verified.HasError())
-                return verified;
-            const auto before = AI::DecisionPlanCodec::EncodeSource(std::span{document.graph.get(), 1}, document.graph->asset);
-            const auto after =
-                AI::DecisionPlanCodec::EncodeSource(std::span<const AI::DecisionGraphSource>{candidate.get(), 1}, candidate->asset);
-            if (before.HasError() || after.HasError())
-                return Edit::Failure(MakeError(Application::DecisionCookErrors::Invalid));
-            const auto candidateDigest = ComputeSha256(std::as_bytes(std::span{after.Value()}));
-            auto prepared = draft.history.Prepare(
-                {document.graph, candidate, draft.currentDigest, candidateDigest, before.Value().size() + after.Value().size()});
-            if (!prepared)
-                return Edit::Failure(MakeError(Assets::AssetSourceErrors::Limit));
-            draft.history.Commit(*prepared);
-            draft.currentDigest = candidateDigest;
-            document.graph = std::move(candidate);
+        auto candidate = std::make_shared<AI::DecisionGraphSource>(*document.graph);
+        const auto edited = [&]() {
+            if constexpr (std::is_same_v<Request, StateMachineEditRequest>)
+                return EditStateMachineCandidate(*candidate, request);
+            else if constexpr (std::is_same_v<Request, BehaviorTreeEditRequest>)
+                return EditBehaviorTreeCandidate(*candidate, request, *providers.Value(), m_viewModel.availableBehaviorsRevision);
+            else {
+                const auto *task = request.task && request.task->catalogRevision == m_viewModel.availableBehaviorsRevision
+                                       ? FindStarterTask(*providers.Value(), *request.task)
+                                       : nullptr;
+                return EditUtilityGraphCandidate(*candidate, request, task);
+            }
+        }();
+        if (edited.HasError())
+            return Edit::Failure(edited.ErrorValue());
+        if (!edited.Value())
+            return Edit::Success();
+        if (const auto verified = validate(*candidate); verified.HasError())
+            return verified;
+        const auto before = AI::DecisionPlanCodec::EncodeSource(std::span{document.graph.get(), 1}, document.graph->asset);
+        const auto after =
+            AI::DecisionPlanCodec::EncodeSource(std::span<const AI::DecisionGraphSource>{candidate.get(), 1}, candidate->asset);
+        if (before.HasError() || after.HasError())
+            return Edit::Failure(MakeError(Application::DecisionCookErrors::Invalid));
+        const auto candidateDigest = ComputeSha256(std::as_bytes(std::span{after.Value()}));
+        auto layout = document.layout;
+        if (!layout->empty()) {
+            const auto graph = ProjectDecisionCanvas(*candidate, {document.identity.instance, document.revision}, document.editable);
+            auto surviving = PruneDecisionLayout(*layout, graph);
+            if (surviving != *layout)
+                layout = std::make_shared<const DecisionGraphLayout>(std::move(surviving));
         }
+        const auto layoutBytes = layout == document.layout ? 0 : (layout->size() + document.layout->size()) * sizeof(DecisionNodePlacement);
+        auto prepared = draft.history.Prepare({document.graph, candidate, draft.currentDigest, candidateDigest, document.layout, layout,
+                                               before.Value().size() + after.Value().size() + layoutBytes});
+        if (!prepared)
+            return Edit::Failure(MakeError(Assets::AssetSourceErrors::Limit));
+        draft.history.Commit(*prepared);
+        draft.currentDigest = candidateDigest;
+        document.graph = std::move(candidate);
+        document.layout = std::move(layout);
         ++document.revision;
         ProjectDecisionGraphDraft(document, draft);
         return Edit::Success();
@@ -992,28 +1057,69 @@ namespace Horo::Editor {
             if (captured.HasError() || captured.Value().Sources().front().sourceDigest != accepted.digest ||
                 captured.Value().Sources().front().bytes.size() != accepted.bytes)
                 return fail(MakeError(Assets::AssetSourceErrors::Conflict));
-            const auto providers = AcquireDecisionDraftProviders(*document.graph);
-            if (providers.HasError())
-                return fail(providers.ErrorValue());
-            const auto validated = ValidateDecisionDraft(root, registry, *document.graph, providers.Value());
-            if (validated.HasError())
-                return fail(validated.ErrorValue());
-            const auto encoded = AI::DecisionPlanCodec::EncodeSource(std::span{document.graph.get(), 1}, document.graph->asset);
-            if (encoded.HasError())
-                return fail(encoded.ErrorValue());
-            if (auto unchanged = captured.Value().VerifyUnchanged(); unchanged.HasError())
-                return fail(MakeError(Assets::AssetSourceErrors::Conflict));
-            const auto published =
-                Assets::PublishAssetSource(root, path, accepted, std::as_bytes(std::span{encoded.Value()}), lease.Value(), *m_durableFiles);
-            if (published.HasError())
-                return fail(published.ErrorValue());
-            if (published.Value().status != Assets::AssetSourcePublicationStatus::Durable) {
-                document.conflict = true;
-                return fail(published.Value().durabilityError.value_or(MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed)));
+            const bool graphChanged = draft.currentDigest != draft.savedDigest;
+            const bool layoutChanged = *document.layout != *draft.savedLayout;
+            const auto layoutPath = DecisionLayoutPath(path);
+            std::optional<ExclusiveFileLock> layoutLease;
+            std::vector<std::byte> layoutBytes;
+            if (layoutChanged) {
+                if (!document.layoutWritable)
+                    return fail(MakeError(Assets::AssetSourceErrors::Authority));
+                const auto layoutLock = Assets::AssetSourcePublicationLockPath(root, layoutPath);
+                if (layoutLock.HasError())
+                    return fail(layoutLock.ErrorValue());
+                auto acquired = m_durableFiles->TryAcquireExclusive(layoutLock.Value(), "decision-layout-save");
+                if (acquired.HasError())
+                    return fail(acquired.ErrorValue());
+                layoutLease.emplace(std::move(acquired).Value());
+                const auto observed = Assets::CaptureAssetSource(root, layoutPath, MaximumDecisionLayoutBytes);
+                if (observed.HasError() || observed.Value().identity != draft.acceptedLayout)
+                    return fail(MakeError(Assets::AssetSourceErrors::Conflict));
+                auto encoded = EncodeDecisionLayout(*document.layout, document.asset, document.graph->asset);
+                if (encoded.HasError())
+                    return fail(encoded.ErrorValue());
+                layoutBytes = std::move(encoded).Value();
             }
-            document.source = published.Value().identity.digest;
-            draft.acceptedBytes = published.Value().identity.bytes;
-            draft.savedDigest = draft.currentDigest;
+            if (!graphChanged && captured.Value().VerifyUnchanged().HasError())
+                return fail(MakeError(Assets::AssetSourceErrors::Conflict));
+
+            const auto requireDurable = [&](const Result<Assets::AssetSourcePublication> &publication) {
+                if (publication.HasError())
+                    return fail(publication.ErrorValue());
+                if (publication.Value().status == Assets::AssetSourcePublicationStatus::Durable)
+                    return Saved::Success();
+                document.conflict = true;
+                return fail(publication.Value().durabilityError.value_or(MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed)));
+            };
+            if (graphChanged) {
+                const auto providers = AcquireDecisionDraftProviders(*document.graph);
+                if (providers.HasError())
+                    return fail(providers.ErrorValue());
+                const auto validated = ValidateDecisionDraft(root, registry, *document.graph, providers.Value());
+                if (validated.HasError())
+                    return fail(validated.ErrorValue());
+                const auto encoded = AI::DecisionPlanCodec::EncodeSource(std::span{document.graph.get(), 1}, document.graph->asset);
+                if (encoded.HasError())
+                    return fail(encoded.ErrorValue());
+                if (auto unchanged = captured.Value().VerifyUnchanged(); unchanged.HasError())
+                    return fail(MakeError(Assets::AssetSourceErrors::Conflict));
+                const auto written = Assets::PublishAssetSource(root, path, accepted, std::as_bytes(std::span{encoded.Value()}),
+                                                                lease.Value(), *m_durableFiles);
+                if (auto durable = requireDurable(written); durable.HasError())
+                    return durable;
+                document.source = written.Value().identity.digest;
+                draft.acceptedBytes = written.Value().identity.bytes;
+                draft.savedDigest = draft.currentDigest;
+                ProjectDecisionGraphDraft(document, draft);
+            }
+            if (layoutLease) {
+                const auto written =
+                    Assets::PublishAssetSource(root, layoutPath, draft.acceptedLayout, layoutBytes, *layoutLease, *m_durableFiles);
+                if (auto durable = requireDurable(written); durable.HasError())
+                    return durable;
+                draft.acceptedLayout = written.Value().identity;
+                draft.savedLayout = document.layout;
+            }
             document.conflict = false;
             ProjectDecisionGraphDraft(document, draft);
             return Saved::Success();
@@ -1024,20 +1130,33 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::ProcessDecisionGraphEdit */
     bool EditorWorkspaceController::ProcessDecisionGraphEdit(const EditorWorkspaceViewCommandData &cmd) {
-        const auto route = [this]<typename Request>(const std::optional<Request> &request, AI::DecisionPlanKind family) {
-            if (!request || m_viewModel.workspacePanelHost.ActiveDocument() != request->instance)
+        const auto route = [this]<typename Request>(const std::optional<Request> &request, std::optional<AI::DecisionPlanKind> family) {
+            if (!request)
                 return;
-            const auto draft = m_decisionGraphDrafts.find(request->instance);
+            const auto instance = [&] {
+                if constexpr (std::is_same_v<Request, DecisionGraphLayoutRequest>)
+                    return request->fence.instance;
+                else
+                    return request->instance;
+            }();
+            if (m_viewModel.workspacePanelHost.ActiveDocument() != instance)
+                return;
+            const auto draft = m_decisionGraphDrafts.find(instance);
             if (draft == m_decisionGraphDrafts.end())
                 return;
             auto &documents = m_viewModel.decisionGraphDocuments;
             const auto document = std::ranges::find_if(documents, [&](const auto &entry) {
-                return entry.identity.instance == request->instance;
+                return entry.identity.instance == instance;
             });
-            if (document == documents.end() || document->family != family)
+            if (document == documents.end() || (family && document->family != *family))
                 return;
             try {
-                const auto result = ApplyDecisionGraphEdit(*document, draft->second, *request);
+                const auto result = [&] {
+                    if constexpr (std::is_same_v<Request, DecisionGraphLayoutRequest>)
+                        return ApplyDecisionGraphLayout(*document, draft->second, *request);
+                    else
+                        return ApplyDecisionGraphEdit(*document, draft->second, *request);
+                }();
                 document->diagnostic = result.HasError() ? std::optional{result.ErrorValue()} : std::nullopt;
             } catch (const std::bad_alloc &) {
                 document->diagnostic = MakeError(Assets::AssetSourceErrors::Limit);
@@ -1052,6 +1171,9 @@ namespace Horo::Editor {
                 return true;
             case EditorWorkspaceViewCommand::EditDecisionUtilityGraph:
                 route(cmd.utilityGraphEdit, AI::DecisionPlanKind::Utility);
+                return true;
+            case EditorWorkspaceViewCommand::EditDecisionLayout:
+                route(cmd.decisionLayoutEdit, std::nullopt);
                 return true;
             default:
                 return false;
@@ -1213,6 +1335,8 @@ namespace Horo::Editor {
         }
         if (interaction.edit)
             outCommand = {.command = EditorWorkspaceViewCommand::EditDecisionStateMachine, .stateMachineEdit = interaction.edit};
+        else if (interaction.layout)
+            outCommand = {.command = EditorWorkspaceViewCommand::EditDecisionLayout, .decisionLayoutEdit = interaction.layout};
     }
 
     /** @copydoc EditorWorkspaceView::DrawDecisionGraphDocument */
@@ -1246,7 +1370,7 @@ namespace Horo::Editor {
 
         const auto canvas = m_decisionGraphCanvas.Draw(*opened, m_context);
         ApplyDecisionCanvasInteraction(*opened, canvas, outCommand);
-        if (canvas.edit)
+        if (canvas.edit || canvas.layout)
             return true;
         if (opened->family == AI::DecisionPlanKind::BehaviorTree) {
             DrawBehaviorTreeTopology(viewModel, *opened, outCommand);

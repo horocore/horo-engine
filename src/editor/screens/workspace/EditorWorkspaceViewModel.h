@@ -26,6 +26,7 @@
 #include "editor/project_model/EditorViewportModel.h"
 #include "editor/screens/workspace/AssetSceneDrop.h"
 #include "editor/screens/workspace/ContentBrowserModel.h"
+#include "editor/screens/workspace/DecisionGraphLayout.h"
 #include "editor/screens/workspace/DecisionStateMachineAuthoring.h"
 #include "editor/screens/workspace/GameplayBehaviorRequest.h"
 #include "editor/screens/workspace/InspectorExtensionEdit.h"
@@ -261,6 +262,7 @@ namespace Horo::Editor {
         EditDecisionStateMachine,
         EditDecisionBehaviorTree,
         EditDecisionUtilityGraph,
+        EditDecisionLayout,
         OpenDiagnosticSource,
         ChangeActivePanel,
         CloseWorkspacePanel,
@@ -499,6 +501,8 @@ namespace Horo::Editor {
         std::uint64_t revision{};
         bool editable{};
         AI::DecisionPlanKind family{AI::DecisionPlanKind::StateMachine};
+        std::shared_ptr<const DecisionGraphLayout> layout;
+        bool layoutWritable{};
         bool dirty{};
         bool canUndo{};
         bool canRedo{};
@@ -628,6 +632,7 @@ namespace Horo::Editor {
         std::optional<StateMachineEditRequest> stateMachineEdit = std::nullopt;
         std::optional<BehaviorTreeEditRequest> behaviorTreeEdit = std::nullopt;
         std::optional<UtilityGraphEditRequest> utilityGraphEdit = std::nullopt;
+        std::optional<DecisionGraphLayoutRequest> decisionLayoutEdit = std::nullopt;
         std::optional<DiagnosticSourceRequest> diagnosticSource = std::nullopt;
         std::optional<CreateGameplayBehaviorRequest> gameplayBehaviorRequest = std::nullopt;
         std::optional<AssetSceneDropRequest> assetSceneDrop = std::nullopt;
