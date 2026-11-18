@@ -156,6 +156,7 @@ namespace Horo::Runtime::Ui {
         RuntimeStyleRegistry registry;
         UiStyleResolver resolver;
         UiAnimationCanvasDefinition definition;
+        UiVisualPresentationPolicy accessibility;
         UiAnimationLimits limits;
         UiElementSlotRange range;
         std::vector<Timeline> timelines;

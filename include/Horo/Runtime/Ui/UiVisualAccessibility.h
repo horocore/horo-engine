@@ -6,6 +6,22 @@
 #include "Horo/Foundation/ModuleHost.h"
 
 namespace Horo::Runtime::Ui {
+    /** @brief One immutable configuration revision projected to Runtime UI presentation preferences.
+     * @details The host captures both flags from the same configuration. Colours and focus treatments are selected by the
+     * ordinary registered style cascade; the UI never changes input focus or visual-safety settings.
+     */
+    struct UiVisualPresentationPolicy final {
+        ConfigurationRevision revision{};
+        bool highContrast{};
+        bool reduceMotion{};
+        /** @brief Validates a new policy against one exact current value, where revision zero is unconfigured.
+         * @param current Last admitted value.
+         * @return Success for newer or exactly equal evidence, typed malformed, conflicting or stale failure otherwise.
+         */
+        [[nodiscard]] Result<void> ValidateReplacement(const UiVisualPresentationPolicy &current) const;
+        [[nodiscard]] auto operator<=>(const UiVisualPresentationPolicy &) const noexcept = default;
+    };
+
     /** @brief Frame-captured UI preferences; no renderer quality, theme or bus owns these values. */
     class UiVisualAccessibilitySnapshot final {
     public:

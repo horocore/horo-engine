@@ -298,6 +298,10 @@ namespace Horo::Application::Internal {
         candidate.output.pending = state_->output;
         if (const auto output = candidate.ApplyOutput(); output.HasError())
             return output;
+        if (state_->accessibility.revision != 0) {
+            if (auto admitted = candidate.animation->SetVisualAccessibility(state_->accessibility); admitted.HasError())
+                return admitted;
+        }
         auto baseline = candidate.animation->PrepareSourcePresentation();
         if (baseline.HasError())
             return Result<void>::Failure(baseline.ErrorValue());

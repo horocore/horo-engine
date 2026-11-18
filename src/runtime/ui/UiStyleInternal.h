@@ -40,7 +40,7 @@ namespace Horo::Runtime::Ui::StyleInternal {
         static_cast<std::uint16_t>(UiVisualState::Focused) | static_cast<std::uint16_t>(UiVisualState::Hovered) |
         static_cast<std::uint16_t>(UiVisualState::Pressed) | static_cast<std::uint16_t>(UiVisualState::Dragging) |
         static_cast<std::uint16_t>(UiVisualState::Disabled) | static_cast<std::uint16_t>(UiVisualState::Invalid) |
-        static_cast<std::uint16_t>(UiVisualState::Busy);
+        static_cast<std::uint16_t>(UiVisualState::Busy) | static_cast<std::uint16_t>(UiVisualState::HighContrast);
 
     [[nodiscard]] bool IsKnownCategory(UiStyleValueCategory category) noexcept;
     [[nodiscard]] bool IsKnownLayer(UiStateLayer layer) noexcept;

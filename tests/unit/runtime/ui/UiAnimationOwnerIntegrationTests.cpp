@@ -11,6 +11,81 @@ namespace {
 
 }  // namespace
 
+TEST_CASE("Runtime accessibility publishes registry contrast and focused variants on the same immutable frame",
+          "[runtime_ui][animation][integration][accessibility]") {
+    HostFixture fixture{{.contrastVariants = true, .focusAccess = true}};
+    auto &participant = *fixture.participant;
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    auto ordinary = Frame(participant);
+    REQUIRE(fixture.attachedFocus);
+    REQUIRE(fixture.attachedFocus->FocusDefault().HasValue());
+    const auto focus = fixture.attachedFocus->CurrentFocus();
+    REQUIRE(focus.HasValue());
+    REQUIRE(focus.Value());
+    const auto focused = focus.Value()->element;
+    const auto fill = CoreUiStylePropertyId(UiCoreStyleProperty::Fill);
+    auto color = [&](const UiAnimationFrameLease &frame, const UiElementHandle target, const float expected) {
+        const auto record = frame.Styles().Get(target);
+        REQUIRE(record.HasValue());
+        const auto properties = frame.Styles().Properties(record.Value());
+        const auto found = std::ranges::find(properties, fill, &UiComputedStyleProperty::property);
+        REQUIRE(found != properties.end());
+        CHECK(std::get<UiStyleColor>(found->value).red == expected);
+        if (expected != 0.3F)
+            CHECK(found->provenance.origin == UiStyleOrigin::AccessibilityPolicy);
+    };
+    color(ordinary, focused, 0.3F);
+    REQUIRE(participant.SetVisualAccessibility({20, true, false}).HasValue());
+    CHECK(participant.SetVisualAccessibility({19, false, false}).HasError());
+    CHECK(participant.SetVisualAccessibility({20, false, false}).HasError());
+    color(ordinary, focused, 0.3F);
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    auto contrast = Frame(participant);
+    color(contrast, focused, 1.0F);
+    for (const auto &row : contrast.Styles().Records())
+        if (row.element != focused)
+            color(contrast, row.element, 0.0F);
+    CHECK(contrast.Styles().Descriptor().geometry == ordinary.Styles().Descriptor().geometry);
+    REQUIRE(participant.SetVisualAccessibility({21, false, false}).HasValue());
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    color(Frame(participant), focused, 0.3F);
+    color(contrast, focused, 1.0F);
+    fixture.host->Shutdown();
+    CHECK(participant.SetVisualAccessibility({22, true, true}).HasError());
+}
+
+TEST_CASE("Runtime reduced motion completes decorative timelines once and preserves essential timing",
+          "[runtime_ui][animation][integration][accessibility]") {
+    bool decorative{};
+    SECTION("explicit decorative motion") {
+        decorative = true;
+    }
+    SECTION("authored essential timing") {}
+    HostFixture fixture{{.decorativeMotion = decorative}};
+    auto &participant = *fixture.participant;
+    const auto timeline = participant.Start(Stable<UiAnimationId>(1));
+    REQUIRE(timeline.HasValue());
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    auto original = Frame(participant);
+    REQUIRE(original.Timelines().size() == 1);
+    CHECK(original.Timelines().front().playback.outcome == UiAnimationOutcome::None);
+    REQUIRE(participant.SetVisualAccessibility({1, false, true}).HasValue());
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    auto next = Frame(participant);
+    REQUIRE(next.Timelines().size() == 1);
+    CHECK(next.Timelines().front().timeline == timeline.Value());
+    CHECK(next.Timelines().front().playback.newTerminalOutcome == decorative);
+    CHECK(next.Timelines().front().playback.outcome == (decorative ? UiAnimationOutcome::Completed : UiAnimationOutcome::None));
+    CHECK(next.Timelines().front().playback.elapsed == original.Timelines().front().playback.elapsed);
+    CheckGeometry(next, decorative ? 50 : 200);
+    original = {};
+    REQUIRE(participant.SetVisualAccessibility({2, false, false}).HasValue());
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    auto repeated = Frame(participant);
+    REQUIRE(repeated.Timelines().size() == 1);
+    CHECK_FALSE(repeated.Timelines().front().playback.newTerminalOutcome);
+}
+
 TEST_CASE("Real host animation publishes matching style layout and clipping while retained geometry remains immutable",
           "[runtime_ui][animation][integration]") {
     HostFixture fixture;

@@ -5,6 +5,7 @@
 #include "EditorConsoleLaunch.h"
 #include "EditorDirectionalShadowOptions.h"
 #include "EditorLightingOptions.h"
+#include "Horo/Accessibility/VisualSafety.h"
 #include "Horo/Editor/XRSimulatorModel.h"
 #include "Horo/Platform/NativeProjectIoOwners.h"
 #include "SimulatorPlayHost.h"
@@ -1459,6 +1460,25 @@ namespace Horo::Editor {
             bool healthy{false}; /**< Set only after runtime startup and a normal, completed main-loop closure. */
         };
 
+        /** @brief Forwards one committed UI and visual-safety preference without copying keys or polling native settings. */
+        Result<void> RefreshRuntimeUiAccessibility(const ConfigurationService &configuration,
+                                                   const Application::Internal::RuntimeUiPaintPort &port, ConfigurationRevision &applied) {
+            const auto config = configuration.Snapshot();
+            if (config.Revision() == applied)
+                return Result<void>::Success();
+            const auto visual = Runtime::Ui::UiVisualAccessibilitySnapshot::Capture(config);
+            if (visual.HasError())
+                return Result<void>::Failure(visual.ErrorValue());
+            const auto safety = Accessibility::VisualSafetySnapshot::Capture(config);
+            if (safety.HasError())
+                return Result<void>::Failure(safety.ErrorValue());
+            const auto update =
+                port.UpdateVisualAccessibility({config.Revision(), visual.Value().HighContrast(), safety.Value().ReduceMotion()});
+            if (update.HasValue())
+                applied = config.Revision();
+            return update;
+        }
+
         /** @brief Owner-thread pacing state bound to the current editor host and its selected backend. */
         struct EditorPacingState {
             explicit EditorPacingState(Clock &hostClock) noexcept : clock(hostClock) {}
@@ -1723,6 +1743,9 @@ namespace Horo::Editor {
             Result<void> DispatchControlPhase(const Runtime::RuntimePhase phase, const Runtime::FrameContext &context) {
                 switch (phase) {
                     case Runtime::RuntimePhase::BeginFrame:
+                        if (auto updated = RefreshRuntimeUiAccessibility(p_->configuration, authorities_.ui, uiAccessibilityRevision_);
+                            updated.HasError())
+                            return updated;
                         PollShaderReload();
 #if !defined(NDEBUG)
                         themeReload_.Update(static_cast<double>(context.variableDelta.ToNanoseconds()) / 1'000'000'000.0);
@@ -2605,6 +2628,7 @@ namespace Horo::Editor {
             std::optional<EditorRendererRestartRequest> *rendererRestart_{};
             EditorRuntimeAuthorities authorities_;
             EditorPacingState pacing_;
+            ConfigurationRevision uiAccessibilityRevision_{};
             std::unique_ptr<Application::Internal::EditorConsoleExecution> console_;
             std::unique_ptr<RuntimeConsoleView> consoleView_;
             std::string consoleActivationErrorCode_;
@@ -3023,6 +3047,10 @@ namespace Horo::Editor {
                                                                     .maximumRetiredInstances = 8,
                                                                     .maximumPreparedTransitions = 2});
             if (uiComposition.HasError())
+                return std::nullopt;
+            ConfigurationRevision initialAccessibility{};
+            if (auto updated = RefreshRuntimeUiAccessibility(p.configuration, uiComposition.Value().port, initialAccessibility);
+                updated.HasError())
                 return std::nullopt;
             auto allocator = Runtime::Ui::UiElementSlotAllocator::Create(Runtime::Ui::UiOwnershipGeneration::Create(1).Value());
             if (allocator.HasError())
@@ -3558,6 +3586,12 @@ namespace Horo::Editor {
                 return std::nullopt;
             }
         }
+        const std::array accessibilitySettings{Runtime::Ui::MakeUiVisualAccessibilityContribution(),
+                                               Accessibility::MakeVisualSafetyContribution()};
+        for (const auto &contribution : accessibilitySettings)
+            for (const auto &descriptor : contribution.settings)
+                if (const auto registered = configurationSchema.Register(descriptor); registered.HasError())
+                    return std::nullopt;
         auto consoleSettings = Debug::ConsoleConfigurationDescriptors(Debug::ProductProfile::Editor);
         if (consoleSettings.HasError()) {
             LOG_CRITICAL("editor.startup", "Console configuration failed: %s", consoleSettings.ErrorValue().message.c_str());

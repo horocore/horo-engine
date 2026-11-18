@@ -170,6 +170,11 @@ namespace Horo::Runtime {
          * @param viewport Complete typed application facts. @return Admission or typed malformed/lifecycle failure.
          */
         [[nodiscard]] Result<void> SetViewport(Ui::UiAnimationViewport viewport);
+        /** @brief Applies the host's latest immutable visual accessibility policy without advancing a clock.
+         * @param policy Complete flags from the same committed configuration revision.
+         * @return Original lifecycle or stale/invalid policy failure from the animation owner.
+         */
+        [[nodiscard]] Result<void> SetVisualAccessibility(const Ui::UiVisualPresentationPolicy &policy);
         /** @copydoc Ui::UiAnimationOwner::ConfigureInspection */
         [[nodiscard]] Result<void> ConfigureInspection(Ui::UiPresentationAttachmentId attachment, Ui::UiLayoutInspectorLimits limits,
                                                        bool enabled);

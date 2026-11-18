@@ -58,6 +58,28 @@ TEST_CASE("Unavailable optional native paint rejects real source attachment with
     fixture.Stop();
 }
 
+TEST_CASE("Application UI projects committed accessibility through the selected native paint",
+          "[application][runtime_ui][paint][accessibility]") {
+    Fixture fixture{true, {}, true};
+    fixture.Frame();
+    fixture.Frame();
+    auto initial = Take(fixture.port.AcquireFrame());
+    CHECK_FALSE(initial.Styles().Records().front().state.Contains(UiVisualStateMask{UiVisualState::HighContrast}));
+    REQUIRE(fixture.port.UpdateVisualAccessibility({10, true, false}).HasValue());
+    CHECK(fixture.port.UpdateVisualAccessibility({9, false, false}).HasError());
+    const auto uploads = Tests::RenderFrontendTesting::lifecycleState.uiPaint.updates;
+    fixture.Frame();
+    auto current = Take(fixture.port.AcquireFrame());
+    CHECK(current.Styles().Records().front().state.Contains(UiVisualStateMask{UiVisualState::HighContrast}));
+    CHECK_FALSE(initial.Styles().Records().front().state.Contains(UiVisualStateMask{UiVisualState::HighContrast}));
+    CHECK(initial.Styles().Descriptor().geometry == current.Styles().Descriptor().geometry);
+    CHECK(Tests::RenderFrontendTesting::lifecycleState.uiPaint.updates > uploads);
+    initial = {};
+    current = {};
+    fixture.Stop();
+    CHECK(fixture.port.UpdateVisualAccessibility({11, false, false}).HasError());
+}
+
 TEST_CASE("Application UI coalesces actual resize DPI and insets before new native presentation restores input",
           "[application][runtime_ui][paint][output]") {
     const auto evidence = GENERATE(UiCanvasViewportEvidence{{160, 120}, {1, 1}, {}}, UiCanvasViewportEvidence{{100, 100}, {2, 1}, {}},

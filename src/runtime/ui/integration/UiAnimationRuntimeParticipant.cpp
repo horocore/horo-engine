@@ -163,6 +163,13 @@ namespace Horo::Runtime {
         return storage_->owner.Detach(attachment);
     }
 
+    /** @copydoc UiAnimationRuntimeParticipant::SetVisualAccessibility */
+    Result<void> UiAnimationRuntimeParticipant::SetVisualAccessibility(const Ui::UiVisualPresentationPolicy &policy) {
+        if (!storage_ || storage_->stopped || storage_->controls->frameReserved)
+            return Result<void>::Failure(MakeError(Ui::UiErrors::AnimationLifecycleUnavailable));
+        return storage_->owner.SetVisualAccessibility(policy);
+    }
+
     /** @copydoc UiAnimationRuntimeParticipant::SetViewport */
     Result<void> UiAnimationRuntimeParticipant::SetViewport(Ui::UiAnimationViewport viewport) {
         if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || storage_->stopped || storage_->controls->frameReserved)

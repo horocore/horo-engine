@@ -82,6 +82,17 @@ namespace Horo::Runtime::Ui {
              free->generation});
     }
 
+    /** @copydoc UiAnimationOwner::SetVisualAccessibility */
+    Result<void> UiAnimationOwner::SetVisualAccessibility(const UiVisualPresentationPolicy &policy) {
+        if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || storage_->lifecycle.stopped ||
+            storage_->lifecycle.draining || storage_->lifecycle.pointerDispatching || storage_->candidate.admitted)
+            return Result<void>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
+        if (auto valid = policy.ValidateReplacement(storage_->accessibility); valid.HasError())
+            return valid;
+        storage_->accessibility = policy;
+        return Result<void>::Success();
+    }
+
     /** @copydoc UiAnimationOwner::Cancel */
     Result<void> UiAnimationOwner::Cancel(const UiAnimationTimelineId timeline, const UiAnimationCancellation reason) {
         if (!storage_ || storage_->ownerThread != std::this_thread::get_id())

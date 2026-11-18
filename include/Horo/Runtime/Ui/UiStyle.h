@@ -287,6 +287,7 @@ namespace Horo::Runtime::Ui {
         Disabled = 1U << 6U,
         Invalid = 1U << 7U,
         Busy = 1U << 8U,
+        HighContrast = 1U << 9U, /**< Immutable host preference, composable with Focused and other control state. */
     };
 
     /** @brief Converts one named state bit to a mask. @param state Closed state bit. */

@@ -89,6 +89,16 @@ namespace Horo::Application::Internal {
         return Result<void>::Success();
     }
 
+    /** @copydoc RuntimeUiPaintPort::UpdateVisualAccessibility */
+    Result<void> RuntimeUiPaintPort::UpdateVisualAccessibility(const UiVisualPresentationPolicy &policy) const {
+        if (!state_ || !state_->Available() || state_->dispatching)
+            return Unavailable();
+        if (auto valid = policy.ValidateReplacement(state_->accessibility); valid.HasError())
+            return valid;
+        state_->accessibility = policy;
+        return Result<void>::Success();
+    }
+
     /** @copydoc RuntimeUiPaintHost::OnPhase */
     Result<void> RuntimeUiPaintHost::OnPhase(const Runtime::RuntimePhase phase, const Runtime::FrameContext &context) {
         if (!state_->Available() || !state_->started || state_->dispatching)
@@ -104,6 +114,12 @@ namespace Horo::Application::Internal {
         for (auto *source : state_->Sources()) {
             if (!source)
                 continue;
+            if (phase == Runtime::RuntimePhase::VariableUpdate && state_->accessibility.revision != 0) {
+                if (auto admitted = source->animation->SetVisualAccessibility(state_->accessibility); admitted.HasError()) {
+                    state_->dispatching = false;
+                    return admitted;
+                }
+            }
             const auto forwarded = source->OnPhase(state_->service, *state_->frontend, phase, context, state_->cancellation.Token());
             if (forwarded.HasError()) {
                 state_->dispatching = false;

@@ -72,6 +72,12 @@ namespace Horo::Runtime::Ui {
         UiAnimationLayoutValuePolicy values{UiAnimationLayoutValuePolicy::AllComputedValues};
     };
 
+    /** @brief Explicit accessibility behavior for one timeline. */
+    enum class UiAnimationMotionIntent : std::uint8_t {
+        Essential,  /**< Retains authored timing, including semantic markers. */
+        Decorative, /**< Reduced motion completes once at its endpoint; decorative tracks cannot declare semantic markers. */
+    };
+
     /** @brief Inert authored marker at one exact normalized position; repeats are handled by the bounded playback owner. */
     struct UiAnimationMarker final {
         UiAnimationMarkerId id;
@@ -91,6 +97,7 @@ namespace Horo::Runtime::Ui {
         UiStylePolicyRevision resolvedMotionPolicy;
         std::vector<UiAnimationPropertyTrack> tracks;
         std::vector<UiAnimationMarker> markers;
+        UiAnimationMotionIntent motionIntent{UiAnimationMotionIntent::Essential};
     };
 
     /** @brief Lifetime capacity contract; owner construction allocates all mutable instance/candidate/publication storage. */

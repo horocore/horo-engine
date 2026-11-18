@@ -24,6 +24,9 @@ namespace Horo::Runtime::Ui {
         auto evaluated = [&] {
             if (timeline.cancellation != UiAnimationCancellation::None)
                 return AnimationInternal::CancelPlayback(initial, timeline.cancellation);
+            if (storage.accessibility.reduceMotion && definition.motionIntent == UiAnimationMotionIntent::Decorative)
+                return Result<AnimationInternal::PlaybackCursor>::Success(
+                    AnimationInternal::FinishReducedMotion(timeline.cursor, definition.time));
             if (seek)
                 return AnimationInternal::SeekPlayback(definition.time, delta);
             return AnimationInternal::AdvancePlayback(initial, definition.time, delta, storage.candidate.remainingCrossings);

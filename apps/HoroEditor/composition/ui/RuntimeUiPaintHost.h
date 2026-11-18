@@ -110,6 +110,11 @@ namespace Horo::Application::Internal {
          * @return Admission or typed invalid/source/lifecycle failure. Prior prepared geometry cannot restore input after a change.
          */
         [[nodiscard]] Result<void> UpdateOutput(const Runtime::Ui::UiCanvasViewportEvidence &evidence) const;
+        /** @brief Admits one committed host preference for all active and subsequently attached UI sources.
+         * @param policy Complete immutable accessibility policy from one committed configuration revision.
+         * @return Original owner, stale, or invalid policy failure. No local snapshot changes until the derived update.
+         */
+        [[nodiscard]] Result<void> UpdateVisualAccessibility(const Runtime::Ui::UiVisualPresentationPolicy &policy) const;
         /** @brief Closes new source/render work and retains the stopped child until the canonical drain fence permits collection. */
         [[nodiscard]] Result<void> DetachSource() const;
         /** @brief Collects retired child/source resources only at explicit application quiescence; never waits for native completion. */

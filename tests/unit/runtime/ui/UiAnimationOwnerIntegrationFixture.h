@@ -4,6 +4,7 @@
  * @brief Shared real host, provider and immutable-frame fixtures for animation integration tests.
  */
 #include "Horo/Runtime/RuntimeHost.h"
+#include "Horo/Runtime/Ui/UiStyleAsset.h"
 #include "Horo/Runtime/UiAnimationRuntimeParticipant.h"
 #include "UiBindingWriteTestFixture.h"
 #include "UiHotReloadTestFixture.h"
@@ -85,7 +86,8 @@ namespace Horo::Runtime::Ui::AnimationTests {
     }
 
     /** @brief Actual registry authority with an optional Busy layout override for host integration coverage. */
-    inline RuntimeStyleRegistry AnimationRegistry(const bool busyStyle, const bool explicitOrigins = false) {
+    inline RuntimeStyleRegistry AnimationRegistry(const bool busyStyle, const bool explicitOrigins = false,
+                                                  const bool contrastVariants = false) {
         UiStyleRegistryDefinition schema;
         schema.properties.push_back({.id = Stable<UiStylePropertyId>(1),
                                      .category = UiStyleValueCategory::Dimension,
@@ -109,6 +111,21 @@ namespace Horo::Runtime::Ui::AnimationTests {
                 schema.assets.back().states.back().assignments.push_back(
                     {Stable<UiStylePropertyId>(2), UiStyleValueSource::Literal(UiStyleDimension{4}), false});
         }
+        if (contrastVariants) {
+            const auto fill = CoreUiStylePropertyId(UiCoreStyleProperty::Fill);
+            schema.properties.push_back({.id = fill,
+                                         .category = UiStyleValueCategory::Color,
+                                         .defaultValue = UiStyleColor{0.3F, 0.3F, 0.3F, 1, UiStyleColorRole::Surface}});
+            auto &asset = schema.assets.back();
+            asset.states.push_back({UiVisualStateMask{UiVisualState::HighContrast},
+                                    {},
+                                    UiStateLayer::Focus,
+                                    {{fill, UiStyleValueSource::Literal(UiStyleColor{0, 0, 0, 1, UiStyleColorRole::Surface}), false}}});
+            asset.states.push_back({UiVisualState::HighContrast | UiVisualState::Focused,
+                                    {},
+                                    UiStateLayer::Focus,
+                                    {{fill, UiStyleValueSource::Literal(UiStyleColor{1, 1, 1, 1, UiStyleColorRole::Surface}), false}}});
+        }
         auto registry = RuntimeStyleRegistry::Create(std::move(schema), Revision<RuntimeStyleGeneration>(1));
         REQUIRE(registry.HasValue());
         return std::move(registry).Value();
@@ -116,11 +133,12 @@ namespace Horo::Runtime::Ui::AnimationTests {
 
     inline AnimationResources Resources(const UiReloadCanvas &canvas, const bool routeMotion = false,
                                         const std::int64_t deadline = 1000000000, const bool busyStyle = false,
-                                        const bool explicitOrigins = false) {
-        auto registry = AnimationRegistry(busyStyle, explicitOrigins);
+                                        const bool explicitOrigins = false, const bool contrastVariants = false) {
+        auto registry = AnimationRegistry(busyStyle, explicitOrigins, contrastVariants);
         // Three retained owner frames need one additional style slot for a prepared candidate.
-        auto styles = UiStyleResolver::Create({Instance(), canvas.tree.Canvas(), canvas.tree.SourceDocument(), 8, explicitOrigins ? 2U : 1U,
-                                               8, 4, Revision<RuntimeStyleGeneration>(1), Revision<UiStylePublicationRevision>(1)});
+        auto styles = UiStyleResolver::Create({Instance(), canvas.tree.Canvas(), canvas.tree.SourceDocument(), 8,
+                                               static_cast<std::uint32_t>(registry.Properties().size()), 8, 4,
+                                               Revision<RuntimeStyleGeneration>(1), Revision<UiStylePublicationRevision>(1)});
         REQUIRE(styles.HasValue());
         UiAnimationCanvasDefinition definition;
         definition.canvas = canvas.id;
@@ -173,6 +191,8 @@ namespace Horo::Runtime::Ui::AnimationTests {
         bool boundWidth{};
         bool accessibilityWidth{};
         bool explicitLayoutOrigins{};
+        bool decorativeMotion{};
+        bool contrastVariants{};
         bool focusAccess{}; /**< Test-only quiescent borrow; never exposed by a production owner contract. */
     };
 
@@ -196,7 +216,11 @@ namespace Horo::Runtime::Ui::AnimationTests {
         }
         auto *routeStack = routeActions ? &*initial.Canvas(canvas.id)->routes : nullptr;
         const auto routeOwner = canvas.controls.front().control.Owner();
-        auto resources = Resources(canvas, options.routeMotion, options.deadline, options.busyStyle, options.explicitLayoutOrigins);
+        auto resources = Resources(canvas, options.routeMotion, options.deadline, options.busyStyle, options.explicitLayoutOrigins,
+                                   options.contrastVariants);
+        if (options.decorativeMotion)
+            for (auto &motion : resources.definition.animations)
+                motion.motionIntent = UiAnimationMotionIntent::Decorative;
         if (options.boundWidth)
             resources.definition.layoutBindings.front().field = UiAnimationLayoutField::Width;
         if (options.accessibilityWidth)

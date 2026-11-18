@@ -117,6 +117,7 @@ namespace Horo::Application::Internal::Detail {
         std::optional<Runtime::Ui::UiCanvasViewportEvidence> output;
         CancellationSource cancellation;
         RuntimeUiPaintHostPhase phase{RuntimeUiPaintHostPhase::NoSource};
+        Runtime::Ui::UiVisualPresentationPolicy accessibility;
         bool started{};
         bool revoked{};
         bool dispatching{};

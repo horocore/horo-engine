@@ -96,7 +96,7 @@ namespace Horo::Tests::UiPaintHostTesting {
             return result;
         }
 
-        explicit Fixture(const bool paintAvailable = true, const UiLogicalPoint initialScroll = {})
+        explicit Fixture(const bool paintAvailable = true, const UiLogicalPoint initialScroll = {}, const bool contrastVariants = false)
             : frontend(Frontend(paintAvailable)), source(false, false, true, initialScroll) {
             std::array<std::byte, 64> pixels;
             pixels.fill(std::byte{128});
@@ -104,7 +104,8 @@ namespace Horo::Tests::UiPaintHostTesting {
             REQUIRE(frontend->ProcessResourceRequests().HasValue());
             const auto admitted = Take(source.service.Acquire(Source::Instance()));
             authoredCanvas = admitted.Get()->Instance().Canvases().front();
-            auto resources = Runtime::Ui::AnimationTests::Resources(admitted.Get()->Canvases().front());
+            auto resources = Runtime::Ui::AnimationTests::Resources(admitted.Get()->Canvases().front(), false, 1'000'000'000, false, false,
+                                                                    contrastVariants);
             if (initialScroll != UiLogicalPoint{})
                 for (auto &element : resources.definition.elements)
                     if (element.element == Source::Stable<UiElementId>(11)) {

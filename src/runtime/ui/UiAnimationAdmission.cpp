@@ -31,7 +31,9 @@ namespace Horo::Runtime::Ui::AnimationInternal {
         Result<void> ValidateAnimation(const UiAnimationDefinition &animation, const UiElementTree &tree,
                                        const RuntimeStyleRegistry &registry, const UiAnimationLimits &limits) {
             if (!animation.id.IsValid() || animation.schemaVersion != 1 || animation.tracks.empty() ||
-                animation.tracks.size() > limits.propertiesPerTimeline || animation.markers.size() > limits.markersPerTimeline)
+                animation.tracks.size() > limits.propertiesPerTimeline || animation.markers.size() > limits.markersPerTimeline ||
+                animation.motionIntent > UiAnimationMotionIntent::Decorative ||
+                (animation.motionIntent == UiAnimationMotionIntent::Decorative && !animation.markers.empty()))
                 return Result<void>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
             if (const auto time = ValidatePlaybackPolicy(animation.time); time.HasError())
                 return time;

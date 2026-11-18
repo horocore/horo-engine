@@ -28,6 +28,15 @@ namespace Horo::Runtime::Ui {
         }
     }  // namespace
 
+    /** @copydoc UiVisualPresentationPolicy::ValidateReplacement */
+    Result<void> UiVisualPresentationPolicy::ValidateReplacement(const UiVisualPresentationPolicy &current) const {
+        if (revision == 0 || (revision == current.revision && *this != current))
+            return Result<void>::Failure(MakeError(UiErrors::VisualAccessibilityInvalid));
+        if (revision < current.revision)
+            return Result<void>::Failure(MakeError(UiErrors::RevisionStale));
+        return Result<void>::Success();
+    }
+
     /** @copydoc MakeUiVisualAccessibilityContribution */
     ModuleConfigurationContribution MakeUiVisualAccessibilityContribution() {
         ModuleConfigurationContribution contribution{.module = ModuleId{"horo.runtime.ui.accessibility"},

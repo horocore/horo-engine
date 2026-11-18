@@ -973,8 +973,21 @@ rendering cannot advance an animation.
 Enter/exit transitions may block screen activation/retirement only when declared
 required and within finite deadlines. Element/screen/scope removal, replacement,
 dependency failure, reload policy or shutdown completes/cancels one generation
-exactly once. Reduced-motion policy resolves before publication and can make motion
-zero-duration while still completing the lifecycle in the same VariableUpdate.
+exactly once. The application captures high contrast and reduced motion from the
+same committed configuration. The UI publishes the preference at its ordinary
+derived-frame cutoff and keeps the exact policy through structural replacement.
+The style registry selects high-contrast states, including combined focused states,
+through the same rules for core and contributed elements. Matching high-contrast
+rules form an accessibility layer after animated values so motion cannot overwrite
+the selected contrast or focus treatment. Themes supply the colors and focus
+treatments through their registered assets or classes.
+
+An explicitly decorative timeline completes at its resolved endpoint on the first
+update with reduced motion, including required route transitions. This publishes
+one normal completion and respects the existing presentation gate. Decorative
+definitions omit semantic markers. Essential definitions retain their authored
+timing and markers. Pending/failed derived updates and retained frames keep their
+existing publication and lifecycle guarantees.
 
 VariableUpdate freezes one clock snapshot, evaluates timelines once in stable order,
 then resolves style/layout/focus and publishes immutable values. Render phases only

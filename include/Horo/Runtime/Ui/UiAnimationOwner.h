@@ -7,6 +7,7 @@
 #include "Horo/Runtime/Ui/UiHotReload.h"
 #include "Horo/Runtime/Ui/UiLayoutInspector.h"
 #include "Horo/Runtime/Ui/UiPointerInteraction.h"
+#include "Horo/Runtime/Ui/UiVisualAccessibility.h"
 
 namespace Horo::Runtime::Ui {
     class RuntimeUiService;
@@ -353,6 +354,11 @@ namespace Horo::Runtime::Ui {
          *       old frame records remain readable and the old raw timeline handle cannot admit commands.
          */
         [[nodiscard]] Result<UiAnimationTimelineId> Start(UiAnimationId animation);
+        /** @brief Admits one monotonic immutable accessibility policy before the next derived update.
+         * @param policy Flags from the exact same host configuration revision.
+         * @return Success, typed malformed/stale/conflicting revision, or owner lifecycle failure. No snapshot changes until publication.
+         */
+        [[nodiscard]] Result<void> SetVisualAccessibility(const UiVisualPresentationPolicy &policy);
         /** @brief Queues exactly one typed cancellation for a live timeline.
          * @param timeline Actual current owner-issued incarnation.
          * @param reason Explicit terminal cancellation correlation.

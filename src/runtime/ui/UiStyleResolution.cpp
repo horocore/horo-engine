@@ -293,10 +293,9 @@ namespace Horo::Runtime::Ui::StyleInternal {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> ApplyStateApplications(WorkingStyle &style, const RuntimeStyleRegistry &registry,
-                                                          const UiStyleElementInput &input,
-                                                          std::array<StateApplication, MaximumUiStyleStateBlocks> &applications,
-                                                          const std::uint32_t applicationCount, const std::uint32_t propertyCapacity) {
+        /** @brief Preserves ordinary state precedence within each presentation cascade layer. */
+        void SortStateApplications(std::array<StateApplication, MaximumUiStyleStateBlocks> &applications,
+                                   const std::uint32_t applicationCount) {
             std::sort(applications.begin(), applications.begin() + applicationCount,
                       [](const StateApplication &left, const StateApplication &right) {
                 if (left.state->layer != right.state->layer)
@@ -307,13 +306,21 @@ namespace Horo::Runtime::Ui::StyleInternal {
                     return leftSpecificity < rightSpecificity;
                 return left.order < right.order;
             });
-            for (std::uint32_t index = 0; index < applicationCount; ++index) {
-                const auto &application = applications[index];
-                if (!input.state.Contains(application.state->required) || (input.state.bits & application.state->forbidden.bits) != 0)
+        }
+
+        /** @brief Applies matching ordinary states or the later user-requested high-contrast layer. */
+        [[nodiscard]] Result<void> ApplyStateApplications(WorkingStyle &style, const RuntimeStyleRegistry &registry,
+                                                          const UiStyleElementInput &input, std::span<const StateApplication> applications,
+                                                          const std::uint32_t propertyCapacity, const bool highContrastLayer) {
+            for (const auto &application : applications) {
+                const bool contrast = application.state->required.Contains(UiVisualStateMask{UiVisualState::HighContrast});
+                if (contrast != highContrastLayer || !input.state.Contains(application.state->required) ||
+                    (input.state.bits & application.state->forbidden.bits) != 0)
                     continue;
                 for (const auto &assignment : application.state->assignments)
-                    if (const auto result = ApplyAssignment(style, registry, assignment, application.origin, application.asset,
-                                                            application.styleClass, propertyCapacity);
+                    if (const auto result =
+                            ApplyAssignment(style, registry, assignment, contrast ? UiStyleOrigin::AccessibilityPolicy : application.origin,
+                                            application.asset, application.styleClass, propertyCapacity);
                         result.HasError())
                         return result;
             }
@@ -390,11 +397,15 @@ namespace Horo::Runtime::Ui::StyleInternal {
         if (const auto result = CollectStateApplications(registry, input, assetChain, assetCount, applications, applicationCount);
             result.HasError())
             return Result<WorkingStyle>::Failure(result.ErrorValue());
-        if (const auto result = ApplyStateApplications(style, registry, input, applications, applicationCount, propertyCapacity);
-            result.HasError())
+        SortStateApplications(applications, applicationCount);
+        const auto states = std::span{applications}.first(applicationCount);
+        if (const auto result = ApplyStateApplications(style, registry, input, states, propertyCapacity, false); result.HasError())
             return Result<WorkingStyle>::Failure(result.ErrorValue());
         if (const auto result = ApplyAnimation(style, registry, input, propertyCapacity); result.HasError())
             return Result<WorkingStyle>::Failure(result.ErrorValue());
+        if (input.state.Contains(UiVisualStateMask{UiVisualState::HighContrast}))
+            if (const auto result = ApplyStateApplications(style, registry, input, states, propertyCapacity, true); result.HasError())
+                return Result<WorkingStyle>::Failure(result.ErrorValue());
         if (const auto result = ApplyInlineOrPolicy(style, registry, input.policyProperties, UiStyleOrigin::AccessibilityPolicy,
                                                     input.asset, propertyCapacity);
             result.HasError())
