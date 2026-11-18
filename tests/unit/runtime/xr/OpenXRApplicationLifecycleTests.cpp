@@ -904,11 +904,27 @@ namespace Horo::Tests::OpenXRApplication {
             REQUIRE(batch.Value().Planes().size() == 2);
             CHECK(batch.Value().Scope().space.kind == XR::XRSpaceKind::World);
             CHECK(batch.Value().Planes()[0].classification == XR::XRPlaneClassification::Platform);
+            const auto &plane = batch.Value().Planes().front();
+            const auto normal = plane.orientation.Rotate({0.0F, 1.0F, 0.0F});
+            const XR::XRSpatialHitRequest ray{batch.Value().Scope(),
+                                              {plane.centerMeters + normal, -normal, 0.0F, 2.0F},
+                                              batch.Value().SampledAt(),
+                                              Duration::FromMilliseconds(500),
+                                              2};
+            const auto hits = RequireValue(fixture.play->QueryPlaneHits(ray));
+            REQUIRE(hits.Hits().size() == 1);
+            CHECK(hits.Source() == batch.Value().Scope());
+            CHECK(hits.SampledAt() == batch.Value().SampledAt());
+            CHECK(hits.Hits().front().plane == plane.id);
+            CHECK(hits.Hits().front().intersection.distance > 0.99F);
+            CHECK(hits.Hits().front().intersection.distance < 1.01F);
+            CHECK(hits.Hits().front().confidence == plane.confidence);
             CHECK(preview.ReadPlaneCaptureState() == Tracking);
             CHECK(native.scans == 1);
             CHECK(sample(620'000'000).HasValue());
             CHECK(native.scans == 2);
             preview.RevokePlaneCapture();
+            CHECK(fixture.play->QueryPlaneHits(ray).HasError());
             CHECK(fixture.play->ReadPlaneObservations().HasError());
             RequireValue(fixture.play->PollEvents());
             CHECK(native.cancels == 1);
@@ -917,6 +933,7 @@ namespace Horo::Tests::OpenXRApplication {
         } else {
             CHECK(native.scans == 0);
             CHECK(geometry.calls == 0);
+            CHECK(fixture.play->QueryPlaneHits({}).HasError());
         }
         fixture.scheduler->Shutdown();
         scene->Shutdown();
