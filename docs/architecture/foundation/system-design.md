@@ -82,7 +82,13 @@ Executable-specific adapters and composition live with their host:
 - `apps/HoroEditor/tools/shader_cook/` owns the graphical product's offline tool
   authentication and package publication helpers.
 - `apps/horo-engine/composition/` owns terminal/headless network and Scene
-  composition and module-script package admission.
+  composition and module-script package admission. Its `HoroNetworkProductHost`
+  composes the explicitly selected standalone World mount. It uses
+  `HoroWorldStreaming` for verified partition, planner, scheduler, residency and
+  origin authority, `HoroSceneCellPayload` for cooked cell admission through the
+  active Scene, and `HoroSceneRenderExtraction` for optional backend-neutral CPU
+  geometry capture. GPU execution, windows and presentation stay with the
+  graphical host.
 - `apps/shared/` contains only composition used by multiple executable hosts:
   module activation, package sessions, host signatures, navigation preparation,
   Scene/Physics lifetime adaptation and animation owner identities. Keep each
