@@ -170,7 +170,7 @@ namespace Horo::Editor {
         const auto conflict = owner.ViewModel().prefabDocuments.front();
         REQUIRE(conflict.externalConflict);
         const auto before = Assets::CaptureAssetSource(workspace.project.directory.path, workspace.project.source,
-                                                        Prefab::PrefabHardLimits::SourceDocumentBytes);
+                                                       Prefab::PrefabHardLimits::SourceDocumentBytes);
         REQUIRE(before.HasValue());
         const auto destination = workspace.project.source.parent_path() / "copy.prefab";
         owner.ProcessCommand({.command = EditorWorkspaceViewCommand::PrefabDocument,

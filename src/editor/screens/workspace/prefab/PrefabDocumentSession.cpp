@@ -313,8 +313,8 @@ namespace Horo::Editor {
 
     /** @copydoc PrefabDocumentSession::CaptureExternalInspection */
     PrefabExternalInspection PrefabDocumentSession::CaptureExternalInspection() const {
-        return {root_, path_, {owner_, identity_.instance, revision_}, accepted_, source_, limits_,
-                conflict_ ? externalComparison_ : nullptr};
+        return {root_,   path_,   {owner_, identity_.instance, revision_},  accepted_,
+                source_, limits_, conflict_ ? externalComparison_ : nullptr};
     }
 
     /** @copydoc PrefabDocumentSession::ObserveExternal */

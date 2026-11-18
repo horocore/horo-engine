@@ -504,7 +504,8 @@ namespace Horo::Editor {
         CHECK(fixture.document->Snapshot().externalConflict);
     }
 
-    TEST_CASE("Detached prefab recovery checkpoints retain the captured state while the owner continues editing", "[editor][prefab][session]") {
+    TEST_CASE("Detached prefab recovery checkpoints retain the captured state while the owner continues editing",
+              "[editor][prefab][session]") {
         Fixture fixture;
         fixture.Rename("Scheduled intent");
         const auto original = fixture.document->Snapshot();
@@ -523,8 +524,7 @@ namespace Horo::Editor {
 
         fixture.Rename("Later intent");
         JobSystem jobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
-        auto submitted = jobs.SubmitResult({.resource = JobResource::Io},
-                                          [&checkpoint, &recovery](const CancellationToken &token) {
+        auto submitted = jobs.SubmitResult({.resource = JobResource::Io}, [&checkpoint, &recovery](const CancellationToken &token) {
             const auto written = WritePrefabRecovery(*checkpoint.Value(), recovery, token);
             return written.HasError() ? Result<void>::Failure(written.ErrorValue()) : Result<void>::Success();
         });

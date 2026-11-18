@@ -403,7 +403,9 @@ namespace Horo::Editor {
         if (snapshot.externalConflict && m_prefabSources) {
             const auto asset = snapshot.source->Data().assetId;
             const auto sources = m_prefabSources->resolver.Sources();
-            if (std::ranges::any_of(sources, [asset](const auto &entry) { return entry.document.Data().assetId == asset; })) {
+            if (std::ranges::any_of(sources, [asset](const auto &entry) {
+                return entry.document.Data().assetId == asset;
+            })) {
                 m_prefabSources.reset();
                 m_viewModel.prefabHierarchyUnavailable = true;
                 m_viewModel.prefabHierarchyError = MakeError(Prefab::PrefabErrors::ResolutionStale);
@@ -520,17 +522,17 @@ namespace Horo::Editor {
             return;
         auto checkpoint = std::make_shared<const PrefabRecoveryCheckpoint>(std::move(captured).Value().value());
         auto persisted = std::make_shared<std::shared_ptr<const DocumentRecoveryRecord>>();
-        auto submitted = m_sourceRecoveryJobs->SubmitResult(
-            {.priority = JobPriority::Background, .resource = JobResource::Io},
-            [root = std::filesystem::path(ProjectRoot()), mutations = m_mutations, files = m_durableFiles,
-             checkpoint, persisted](const CancellationToken &cancellation) {
-                DocumentRecoveryService recovery(root, *mutations, *files);
-                auto written = WritePrefabRecovery(*checkpoint, recovery, cancellation);
-                if (written.HasError())
-                    return Result<void>::Failure(written.ErrorValue());
-                *persisted = std::move(written).Value();
-                return Result<void>::Success();
-            });
+        auto submitted =
+            m_sourceRecoveryJobs->SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Io},
+                                               [root = std::filesystem::path(ProjectRoot()), mutations = m_mutations,
+                                                files = m_durableFiles, checkpoint, persisted](const CancellationToken &cancellation) {
+            DocumentRecoveryService recovery(root, *mutations, *files);
+            auto written = WritePrefabRecovery(*checkpoint, recovery, cancellation);
+            if (written.HasError())
+                return Result<void>::Failure(written.ErrorValue());
+            *persisted = std::move(written).Value();
+            return Result<void>::Success();
+        });
         if (submitted.HasError()) {
             m_viewModel.prefabDocumentError = submitted.ErrorValue();
             return;
