@@ -1,6 +1,7 @@
 #include "Horo/XR/XRCapabilities.h"
 #include "Horo/XR/XRErrors.h"
 #include "Horo/XR/XRPlaneTracking.h"
+#include "Horo/XR/XRSpatialHitTest.h"
 #include "support/TypedIdentityTestSupport.h"
 
 #include <array>
@@ -196,6 +197,65 @@ namespace Horo::XR {
             RequireFailureIdentity(publication.Read(scope, next), XRErrors::IdentityStale);
             RequireFailureIdentity(publication.Read(replacement, next), XRErrors::OperationUnavailable);
             publication.Revoke();
+        }
+
+        TEST_CASE("XR environment queries preserve finite plane bounds and deterministic source provenance", "[unit][xr][spatial]") {
+            const auto session = MakeSession(MakeSystem());
+            const XRPlaneScope scope{session,
+                                     {{session, {2, 1}}, XRSpaceKind::World, MakeGeneration<XRWorldOriginRevision>(4)},
+                                     MakeGeneration<XRPlaneGrant>(2)};
+            const auto sampledAt = XRRuntimeTime::Create(100).Value();
+            XRPlanePublication publication;
+            const XRPlaneLimits limits{4, Duration::FromNanoseconds(10), Duration::FromNanoseconds(30)};
+            REQUIRE(publication.Activate(scope, limits).HasValue());
+            const std::array planes{XRPlaneObservation{.id = {session, {1, 1}},
+                                                       .extentMeters = {2.0F, 2.0F},
+                                                       .classification = XRPlaneClassification::Floor,
+                                                       .confidence = XRTrackingConfidence::High},
+                                    XRPlaneObservation{.id = {session, {2, 1}},
+                                                       .centerMeters = {0.0F, 1.0F, 0.0F},
+                                                       .extentMeters = {2.0F, 2.0F},
+                                                       .classification = XRPlaneClassification::Platform,
+                                                       .confidence = XRTrackingConfidence::Low},
+                                    XRPlaneObservation{.id = {session, {3, 1}},
+                                                       .centerMeters = {0.0F, 1.0F, 0.0F},
+                                                       .extentMeters = {3.0F, 3.0F},
+                                                       .confidence = XRTrackingConfidence::High}};
+            REQUIRE(publication.Publish(scope, sampledAt, planes).HasValue());
+            const auto snapshot = publication.Read(scope, sampledAt);
+            REQUIRE(snapshot.HasValue());
+            XRSpatialHitRequest request{scope,
+                                        {{1.0F, 2.0F, 0.0F}, {0.0F, -2.0F, 0.0F}, 0.0F, 2.0F},
+                                        XRRuntimeTime::Create(130).Value(),
+                                        Duration::FromNanoseconds(30),
+                                        3};
+            const auto found = QueryXRPlaneHits(snapshot.Value(), request);
+            REQUIRE(found.HasValue());
+            REQUIRE(found.Value().Hits().size() == 3);
+            CHECK(found.Value().Source() == scope);
+            CHECK(found.Value().SampledAt() == sampledAt);
+            CHECK(found.Value().Hits()[0].plane == planes[1].id);
+            CHECK(found.Value().Hits()[0].confidence == XRTrackingConfidence::Low);
+            CHECK(found.Value().Hits()[1].plane == planes[2].id);
+            CHECK(found.Value().Hits()[2].plane == planes[0].id);
+            CHECK(found.Value().Hits()[2].intersection.distance == 2.0F);
+
+            request.ray.origin.x = 1.51F;
+            const auto miss = QueryXRPlaneHits(snapshot.Value(), request);
+            REQUIRE(miss.HasValue());
+            CHECK(miss.Value().Hits().empty());
+            request.ray.origin.x = 1.0F;
+            request.maximumHits = 2;
+            RequireFailureIdentity(QueryXRPlaneHits(snapshot.Value(), request), XRErrors::CapacityExceeded);
+            request.maximumHits = 3;
+            request.ray.direction = {};
+            RequireFailureIdentity(QueryXRPlaneHits(snapshot.Value(), request), XRErrors::OperationInvalid);
+            request.now = XRRuntimeTime::Create(131).Value();
+            RequireFailureIdentity(QueryXRPlaneHits(snapshot.Value(), request), XRErrors::TrackingSnapshotStale);
+            request.scope.space.worldOriginRevision = MakeGeneration<XRWorldOriginRevision>(5);
+            RequireFailureIdentity(QueryXRPlaneHits(snapshot.Value(), request), XRErrors::IdentityStale);
+            publication.Revoke();
+            RequireFailureIdentity(publication.Read(scope, sampledAt), XRErrors::OperationUnavailable);
         }
 
         TEST_CASE("XR capability snapshot owns exact immutable versioned evidence", "[unit][xr][capability]") {

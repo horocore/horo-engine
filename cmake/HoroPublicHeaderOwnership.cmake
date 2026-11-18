@@ -1115,6 +1115,7 @@ horo_configure_target_header_boundary(HoroXRApi PUBLIC_HEADERS
     Horo/XR/XRHandTracking.h
     Horo/XR/XRInteraction.h
     Horo/XR/XRPlaneTracking.h
+    Horo/XR/XRSpatialHitTest.h
     Horo/XR/XRLoaderPreflight.h
     Horo/XR/XRSpacePose.h
     Horo/XR/XRTrackingSnapshot.h

@@ -312,6 +312,14 @@ namespace Horo::Application::Internal {
                         : Outcome::Failure(MakeError(XR::XRErrors::TrackingSnapshotStale));
     }
 
+    /** @copydoc OpenXRPlayHost::QueryPlaneHits */
+    Result<XR::XRSpatialHits> OpenXRPlayHost::QueryPlaneHits(const XR::XRSpatialHitRequest &request) const {
+        auto source = ReadPlaneObservations();
+        if (source.HasError())
+            return Result<XR::XRSpatialHits>::Failure(source.ErrorValue());
+        return XR::QueryXRPlaneHits(source.Value(), request);
+    }
+
     /** @copydoc Editor::IEditorXrPlaneCapturePreview::ReadPlaneCaptureState */
     Editor::EditorXrPlaneCaptureState OpenXRPlayHost::ReadPlaneCaptureState() const noexcept {
         using enum Editor::EditorXrPlaneCaptureState;

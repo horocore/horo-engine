@@ -1,4 +1,5 @@
 #pragma once
+#include "Horo/XR/XRSpatialHitTest.h"
 /** @file OpenXRPlayHost.h
  * @brief Concrete app-owned selected XR Play/Input/event composition over the canonical existing owners.
  */
@@ -160,6 +161,11 @@ namespace Horo::Application::Internal {
         [[nodiscard]] std::optional<XR::XRPoseSample> ReadEyeGaze() const noexcept;
         /** @return Live authorized geometry for the current calibrated Play cutoff or typed unavailability. */
         [[nodiscard]] Result<XR::XRPlaneSnapshot> ReadPlaneObservations() const;
+        /** @brief Intersects a ray with the current consented World planes.
+         * @param request Exact capture scope, age limit and
+         * finite ray.
+         * @return Ordered placement candidates without mutating authored or runtime Scene objects. */
+        [[nodiscard]] Result<XR::XRSpatialHits> QueryPlaneHits(const XR::XRSpatialHitRequest &request) const;
         /** @brief Supplies bounded, current runtime prerequisites to the separate device qualification runner. */
         [[nodiscard]] Result<OpenXRPackagedPreflight> ReadDeviceQualificationPreflight() const;
         [[nodiscard]] Result<void> AttachInput(const Input::InputActionCollection &input,
