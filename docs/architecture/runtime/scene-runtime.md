@@ -783,6 +783,14 @@ residency. Prepare failure, cancellation or stale admission releases the private
 root and its cell together. Save restore continues to use its own private
 candidate authority.
 
+The mounted World startup owner loads the selected committed cell through its
+planner and holds the scheduler's activation reservation while the private root
+receipt is pending. Reconciliation checks the published runtime, structural
+revision and exact cell occurrence before completing scheduler activation and
+exposing the cell's canonical anchors. Rejection retires the same reservation.
+Closing the mount cancels its pending Scene predicate before releasing the
+planner, scheduler or residency ledger.
+
 Activated instances use a separate, one-use RuntimeSceneService and entity
 domain. The canonical parent reserves the child's runtime identity from its
 monotonic cursor and supplies the existing asset authorities. An explicitly

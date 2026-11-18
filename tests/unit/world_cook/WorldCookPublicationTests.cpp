@@ -275,7 +275,11 @@ namespace Horo::WorldCook {
                                                                                          cameraPosition[2]),
                                                 request};
 
-        S::RuntimeSceneService parent{S::SceneRuntimeId{101}};
+        JobSystem jobs{JobSystemConfig{1, 4}};
+        A::MemoryAssetProvider provider;
+        A::AssetLoadService loads{jobs, provider};
+        A::AssetRegistry registry;
+        S::RuntimeSceneService parent{registry, loads, S::RuntimeSceneAssetLimits{}, S::SceneRuntimeId{101}};
         auto definition = std::move(S::SceneDefinitionBuilder{{99}, {1}}).Build();
         REQUIRE(definition.HasValue());
         HeadlessSceneLoadBoundary boundary{{}, std::chrono::steady_clock::now() + std::chrono::seconds(5)};
@@ -308,6 +312,74 @@ namespace Horo::WorldCook {
             ++request.revision.value;
             CHECK(mount->ActivateInitialCell(request, {boundary.cancellation, boundary.deadline}).HasError());
             CHECK_FALSE(S::FindStreamedSceneInstance(*parent.ActiveScene(), address, selected, epoch));
+        }
+        SECTION("Private startup retains a real mount reservation until the exact Scene receipt publishes") {
+            const auto old = *parent.ActiveScene();
+            auto successor = address;
+            successor.parent = parent.NextRuntimeId();
+            REQUIRE(registry.Publish(std::vector<A::AssetRecord>{}).status == A::AssetRegistryBuildStatus::Complete);
+            const auto revision = registry.Snapshot().Revision();
+            REQUIRE(revision != A::AssetRegistryRevision{});
+            const auto next = std::move(S::SceneDefinitionBuilder{{100}, {1}}).Build().Value();
+            REQUIRE(mount->QueueInitialCell(next, request, {boundary.cancellation, boundary.deadline}, revision).HasValue());
+            const auto waiting = mount->ReconcileInitialCell();
+            REQUIRE(waiting.HasValue());
+            CHECK_FALSE(waiting.Value());
+            CHECK(parent.ActiveScene()->SameIncarnation(old));
+            CHECK(mount->Anchors(old).empty());
+            REQUIRE(
+                parent.OnPhase(S::RuntimePhase::CommitDeferredLifecycleChanges, {.frameNumber = 2, .cancellation = boundary.cancellation})
+                    .HasValue());
+            const auto current = parent.ActiveScene();
+            REQUIRE(current);
+            REQUIRE(S::FindStreamedSceneInstance(*current, successor, selected, epoch));
+            CHECK(mount->Anchors(*current).empty());
+            const auto active = mount->ReconcileInitialCell();
+            REQUIRE(active.HasValue());
+            REQUIRE(active.Value());
+            REQUIRE(mount->Anchors(*current).size() == 1);
+            CHECK(mount->Anchors(*current).front() == anchors.front());
+            CHECK_FALSE(old.IsCurrent());
+            mount.reset();
+            CHECK_FALSE(parent.ActiveScene());
+        }
+        SECTION("An initial cell conflict rejects the private root and retires the mount operation") {
+            const auto old = *parent.ActiveScene();
+            S::SceneDefinitionBuilder next{{100}, {1}};
+            next.Add({.object = cameraEntity.object});
+            const auto conflict = std::move(next).Build().Value();
+            CHECK(mount->QueueInitialCell(conflict, request, {boundary.cancellation, boundary.deadline}, {}).HasError());
+            CHECK(mount->ReconcileInitialCell().HasError());
+            CHECK(parent.ActiveScene()->SameIncarnation(old));
+            CHECK(mount->Anchors(old).empty());
+            mount.reset();
+            CHECK(parent.ActiveScene()->SameIncarnation(old));
+        }
+        SECTION("Parent cancellation retires the reservation without replacing the active Scene") {
+            const auto old = *parent.ActiveScene();
+            const auto next = std::move(S::SceneDefinitionBuilder{{100}, {1}}).Build().Value();
+            CancellationSource cancellation;
+            REQUIRE(mount->QueueInitialCell(next, request, {cancellation.Token(), boundary.deadline}, {}).HasValue());
+            cancellation.RequestCancellation();
+            REQUIRE(
+                parent.OnPhase(S::RuntimePhase::CommitDeferredLifecycleChanges, {.frameNumber = 2, .cancellation = boundary.cancellation})
+                    .HasValue());
+            W::TestSupport::RequireError(mount->ReconcileInitialCell(), S::SceneCellPayloadErrors::Cancelled);
+            CHECK(mount->Anchors(old).empty());
+            mount.reset();
+            CHECK(parent.ActiveScene()->SameIncarnation(old));
+        }
+        SECTION("Closing the mount while a private root is pending revokes its publication lease") {
+            const auto old = *parent.ActiveScene();
+            const auto next = std::move(S::SceneDefinitionBuilder{{100}, {1}}).Build().Value();
+            REQUIRE(mount->QueueInitialCell(next, request, {boundary.cancellation, boundary.deadline}, {}).HasValue());
+            mount.reset();
+            REQUIRE(
+                parent.OnPhase(S::RuntimePhase::CommitDeferredLifecycleChanges, {.frameNumber = 2, .cancellation = boundary.cancellation})
+                    .HasValue());
+            REQUIRE(parent.TakeOperationError());
+            CHECK(lease.Get().HasError());
+            CHECK(parent.ActiveScene()->SameIncarnation(old));
         }
         SECTION("Success exposes the exact authored occurrence until actual parent shutdown") {
             REQUIRE(mount->ActivateInitialCell(request, {boundary.cancellation, boundary.deadline}).HasValue());

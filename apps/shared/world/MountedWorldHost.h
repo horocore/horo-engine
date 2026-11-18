@@ -116,6 +116,24 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> ActivateInitialCell(const CommittedWorldInitialCell &selected, const MountedWorldStartup &boundary,
                                                        const Runtime::FrameContext *phase = nullptr);
 
+        /** @brief Reserves a verified cell and queues it inside the private startup root.
+         * @param parent Exact root definition being prepared by the bound Scene service.
+         * @param selected Exact committed cell and authored occurrence.
+         * @param boundary Parent cancellation and deadline retained through publication.
+         * @param registry The Scene service's current structural catalog fence.
+         * @return Successful admission (possibly pending) or original typed rejection after reservation retirement.
+         * @pre Call on the bound Scene owner lane. The mount must stay alive through reconciliation or cancel the pending authority.
+         */
+        [[nodiscard]] Result<void> QueueInitialCell(const Runtime::RuntimeSceneDefinition &parent,
+                                                    const CommittedWorldInitialCell &selected, const MountedWorldStartup &boundary,
+                                                    Assets::AssetRegistryRevision registry);
+
+        /** @brief Settles startup against the receipt after the bound Scene service advances its normal lifecycle cutoff.
+         * @return True on exact active root and cell, false while pending, or the originating failure after retirement.
+         * @pre Call on the bound Scene owner lane after each startup cutoff until completion.
+         */
+        [[nodiscard]] Result<bool> ReconcileInitialCell();
+
         /** @brief Observe authored global anchors for the exact current parent and mounted Scene occurrence.
          * @param parent Active Scene borrow on the owning lane.
          * @return Synchronous mounted storage borrow, empty for legacy, foreign, stale or retired Scene evidence.

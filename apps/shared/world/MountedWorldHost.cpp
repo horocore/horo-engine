@@ -13,6 +13,7 @@
 #include <array>
 #include <charconv>
 #include <initializer_list>
+#include <new>
 #include <optional>
 #include <utility>
 
@@ -183,12 +184,15 @@ namespace Horo::Application::Internal {
         class InitialCellAuthority final : public Runtime::SceneCellPayloadAuthority {
         public:
             InitialCellAuthority(const Runtime::SceneCellPayloadIdentity &identity, WS::StreamingCellStateLedger &residency,
-                                 const WS::StreamingSchedulerAdmissionLedger &scheduler,
-                                 WS::StreamingSchedulerReservation reservation) noexcept
-                : identity_(identity), residency_(residency), scheduler_(scheduler), reservation_(reservation) {}
+                                 const WS::StreamingSchedulerAdmissionLedger &scheduler, WS::StreamingSchedulerReservation reservation,
+                                 MountedWorldStartup boundary) noexcept
+                : identity_(identity), residency_(residency), scheduler_(scheduler), reservation_(reservation),
+                  boundary_(std::move(boundary)) {}
 
             Result<void> ValidatePublication(const Runtime::SceneCellPayloadIdentity &identity,
                                              const WS::StreamingFence &fence) const override {
+                if (const auto ready = CheckBoundary(boundary_); ready.HasError())
+                    return ready;
                 const auto operation = scheduler_.Inspect(reservation_);
                 const auto resident = residency_.Resolve(residency_.Owner(), fence);
                 if (identity != identity_ || operation.HasError() || resident.HasError() || operation.Value().Handle().fence != fence ||
@@ -203,6 +207,7 @@ namespace Horo::Application::Internal {
             WS::StreamingCellStateLedger &residency_;
             const WS::StreamingSchedulerAdmissionLedger &scheduler_;
             WS::StreamingSchedulerReservation reservation_;
+            MountedWorldStartup boundary_;
         };
 
         /** @brief Reconcile the actual scheduler successor through the mounted residency ledger. */
@@ -215,76 +220,84 @@ namespace Horo::Application::Internal {
             return recorded.HasError() ? Result<void>::Failure(recorded.ErrorValue()) : Result<void>::Success();
         }
 
+        /** @brief Retires the canonical reservation and reports the original rejected work if cleanup succeeded. */
+        Result<void> RejectCellOperation(WS::StreamingSchedulerAdmissionLedger &scheduler, WS::StreamingCellStateLedger &residency,
+                                         const WS::StreamingSchedulerReservation &reservation, const Error &error) {
+            using enum WS::StreamingCellOperationTransition;
+            const auto current = scheduler.Inspect(reservation);
+            if (current.HasError())
+                return Result<void>::Failure(current.ErrorValue());
+            const auto state = residency.Resolve(residency.Owner(), reservation.operation.fence);
+            const bool recorded = state.HasValue() && state.Value().operation == reservation.operation;
+            const auto advance = [&](const auto step) {
+                if (recorded)
+                    return AdvanceCell(scheduler, residency, reservation, step);
+                const auto unrecorded = scheduler.Advance(reservation, step);
+                return unrecorded.HasError() ? Result<void>::Failure(unrecorded.ErrorValue()) : Result<void>::Success();
+            };
+            if (!current.Value().IsTerminal()) {
+                if (current.Value().State() != WS::StreamingCellOperationState::Retiring) {
+                    const auto code = error.code.Value();
+                    const bool cancelled = code == Runtime::SceneCellPayloadErrors::Cancelled.code.Value() ||
+                                           code == WS::WorldArtifactErrors::Cancelled.code.Value();
+                    if (const auto interrupted = advance(cancelled ? Cancel : Fail); interrupted.HasError())
+                        return interrupted;
+                }
+                if (const auto retired = advance(AcknowledgeRetirement); retired.HasError())
+                    return retired;
+            }
+            if (auto released = scheduler.Release(reservation); released.HasError())
+                return released;
+            return Result<void>::Failure(error);
+        }
+
+        /** @brief Reserves and prepares one exact operation, keeping the reservation until its owner settles the work. */
+        Result<WS::StreamingSchedulerReservation> BeginCellOperation(
+            WS::StreamingSchedulerAdmissionLedger &scheduler, WS::StreamingCellStateLedger &residency,
+            const WS::StreamingCellOperationHandle &handle, const WS::StreamingCellOperationKind kind,
+            const std::initializer_list<WS::StreamingCellOperationTransition> setup) {
+            using Output = Result<WS::StreamingSchedulerReservation>;
+            const auto queued = WS::StreamingCellOperation::Create(handle, kind);
+            if (queued.HasError())
+                return Output::Failure(queued.ErrorValue());
+            const auto admitted = scheduler.TryAdmit(queued.Value(), 1, scheduler.Limits().concurrency.revision);
+            if (admitted.HasError())
+                return admitted;
+            const auto &reservation = admitted.Value();
+            const auto fail = [&](const Error &error) {
+                return Output::Failure(RejectCellOperation(scheduler, residency, reservation, error).ErrorValue());
+            };
+            // Retire goes directly from admission to Evicting.
+            if (kind != WS::StreamingCellOperationKind::Retire) {
+                const auto current = scheduler.Inspect(reservation);
+                if (current.HasError())
+                    return fail(current.ErrorValue());
+                if (auto recorded = residency.Apply(residency.Owner(), current.Value()); recorded.HasError())
+                    return fail(recorded.ErrorValue());
+            }
+            for (const auto step : setup)
+                if (const auto advanced = AdvanceCell(scheduler, residency, reservation, step); advanced.HasError())
+                    return fail(advanced.ErrorValue());
+            return admitted;
+        }
+
         /** @brief Run one synchronous, bounded cold operation; work returns only after its borrows and deferred work settle. */
         template <typename Work>
         Result<void> RunCellOperation(WS::StreamingSchedulerAdmissionLedger &scheduler, WS::StreamingCellStateLedger &residency,
                                       const WS::StreamingCellOperationHandle &handle, const WS::StreamingCellOperationKind kind,
                                       const std::initializer_list<WS::StreamingCellOperationTransition> setup,
                                       const WS::StreamingCellOperationTransition terminal, Work work) {
-            using enum WS::StreamingCellOperationTransition;
-            const auto queued = WS::StreamingCellOperation::Create(handle, kind);
-            if (queued.HasError())
-                return Result<void>::Failure(queued.ErrorValue());
-            const auto admitted = scheduler.TryAdmit(queued.Value(), 1, scheduler.Limits().concurrency.revision);
+            const auto admitted = BeginCellOperation(scheduler, residency, handle, kind, setup);
             if (admitted.HasError())
                 return Result<void>::Failure(admitted.ErrorValue());
             const auto &reservation = admitted.Value();
-            const auto advance = [&](const auto step) {
-                return AdvanceCell(scheduler, residency, reservation, step);
-            };
-
-            const auto fail = [&](const Error &error) -> Result<void> {
-                const auto code = error.code.Value();
-                const bool cancelled = code == Runtime::SceneCellPayloadErrors::Cancelled.code.Value() ||
-                                       code == WS::WorldArtifactErrors::Cancelled.code.Value();
-                auto current = scheduler.Inspect(reservation);
-                if (current.HasError())
-                    return Result<void>::Failure(current.ErrorValue());
-                const auto state = residency.Resolve(residency.Owner(), handle.fence);
-                const bool recorded = state.HasValue() && state.Value().operation == handle;
-                if (!current.Value().IsTerminal()) {
-                    if (current.Value().State() != WS::StreamingCellOperationState::Retiring) {
-                        const auto disposition = cancelled ? Cancel : Fail;
-                        const auto interrupted = recorded ? advance(disposition) : Result<void>::Success();
-                        if (interrupted.HasError())
-                            return interrupted;
-                        if (!recorded) {
-                            const auto unrecorded = scheduler.Advance(reservation, disposition);
-                            if (unrecorded.HasError())
-                                return Result<void>::Failure(unrecorded.ErrorValue());
-                        }
-                    }
-                    if (recorded) {
-                        if (const auto retired = advance(AcknowledgeRetirement); retired.HasError())
-                            return retired;
-                    } else {
-                        const auto unrecorded = scheduler.Advance(reservation, AcknowledgeRetirement);
-                        if (unrecorded.HasError())
-                            return Result<void>::Failure(unrecorded.ErrorValue());
-                    }
-                }
-                if (auto released = scheduler.Release(reservation); released.HasError())
-                    return released;
-                return Result<void>::Failure(error);
-            };
-
-            // Retire goes directly from admission to Evicting.
-            if (kind != WS::StreamingCellOperationKind::Retire) {
-                auto current = scheduler.Inspect(reservation);
-                if (current.HasError())
-                    return Result<void>::Failure(current.ErrorValue());
-                if (auto recorded = residency.Apply(residency.Owner(), current.Value()); recorded.HasError())
-                    return fail(recorded.ErrorValue());
-            }
-            for (const auto step : setup)
-                if (const auto advanced = advance(step); advanced.HasError())
-                    return fail(advanced.ErrorValue());
-
             const auto result = work(reservation);
             if (result.HasError())
-                return kind == WS::StreamingCellOperationKind::Retire ? result : fail(result.ErrorValue());
-            if (const auto finished = advance(terminal); finished.HasError())
-                return fail(finished.ErrorValue());
+                return kind == WS::StreamingCellOperationKind::Retire
+                           ? result
+                           : RejectCellOperation(scheduler, residency, reservation, result.ErrorValue());
+            if (const auto finished = AdvanceCell(scheduler, residency, reservation, terminal); finished.HasError())
+                return RejectCellOperation(scheduler, residency, reservation, finished.ErrorValue());
             return scheduler.Release(reservation);
         }
 
@@ -443,7 +456,34 @@ namespace Horo::Application::Internal {
             std::vector<Math::Vec3> initialLocalPositions;
         };
 
+        struct PreparedCell final {
+            WS::StreamingSourceRegistration source;
+            Runtime::RuntimeSceneCellPayload payload;
+            ActiveCell cell;
+        };
+
+        struct PendingCell final {
+            WS::StreamingSourceRegistration source;
+            ActiveCell cell;
+            WS::StreamingSchedulerReservation reservation;
+            std::optional<Runtime::ScenePublicationReceipt> publication;
+        };
+
+        /** @brief Loads verified Core ECS content through the actual mounted planner and residency ledgers. */
+        [[nodiscard]] Result<PreparedCell> PrepareInitialCell(const CommittedWorldInitialCell &selected,
+                                                              const MountedWorldStartup &boundary, Runtime::SceneRuntimeId parent);
+
+        /** @brief Finds the currently published parent of the exact mounted cell occurrence. */
+        [[nodiscard]] std::optional<Runtime::RuntimeSceneView> AttachedParent(const ActiveCell &cell) const noexcept {
+            const auto current = scene.ActiveScene();
+            if (current && Runtime::FindStreamedSceneInstance(*current, cell.address, cell.identity, cell.fence.epoch))
+                return current;
+            return {};
+        }
+
         std::optional<ActiveCell> activeCell;
+        std::optional<PendingCell> pendingCell;
+        std::optional<CancellationSource> pendingLifetime;
         bool initialAttempted{};
     };
 
@@ -543,50 +583,51 @@ namespace Horo::Application::Internal {
         return Output::Success(std::unique_ptr<MountedWorld>{new MountedWorld{std::move(state)}});
     }
 
-    /** @copydoc MountedWorld::ActivateInitialCell */
-    Result<void> MountedWorld::ActivateInitialCell(const CommittedWorldInitialCell &selected, const MountedWorldStartup &boundary,
-                                                   const Runtime::FrameContext *phase) {
+    /** @copydoc MountedWorld::State::PrepareInitialCell */
+    Result<MountedWorld::State::PreparedCell> MountedWorld::State::PrepareInitialCell(const CommittedWorldInitialCell &selected,
+                                                                                      const MountedWorldStartup &boundary,
+                                                                                      const Runtime::SceneRuntimeId parent) {
+        using Output = Result<PreparedCell>;
         if (auto ready = CheckBoundary(boundary); ready.HasError())
-            return ready;
-        const auto parent = state_->scene.ActiveScene();
-        if (!parent || state_->initialAttempted || !selected.cell.IsValid() || !selected.occurrence.IsValid() ||
+            return Output::Failure(ready.ErrorValue());
+        if (!parent.IsValid() || initialAttempted || !selected.cell.IsValid() || !selected.occurrence.IsValid() ||
             !selected.definition.IsValid() || selected.revision.value == 0)
-            return Result<void>::Failure(MakeError(Runtime::SceneCellPayloadErrors::Invalid));
-        const auto partition = state_->registry->Snapshot();
+            return Output::Failure(MakeError(Runtime::SceneCellPayloadErrors::Invalid));
+        const auto partition = registry->Snapshot();
         if (partition.HasError())
-            return Result<void>::Failure(partition.ErrorValue());
+            return Output::Failure(partition.ErrorValue());
         const auto handle = partition.Value().Find(selected.cell);
         if (handle.HasError())
-            return Result<void>::Failure(handle.ErrorValue());
+            return Output::Failure(handle.ErrorValue());
         const auto record = partition.Value().Resolve(handle.Value());
         if (record.HasError())
-            return Result<void>::Failure(record.ErrorValue());
-        const auto metadata = std::ranges::lower_bound(state_->integrity, selected.cell, WS::StreamingCellCanonicalLess{},
-                                                       &WS::CookedWorldCellManifestEntry::cell);
-        const auto dependencies = std::ranges::lower_bound(state_->dependencies->cells, selected.cell, WS::StreamingCellCanonicalLess{},
-                                                           &WS::WorldDependencyCellProjection::cell);
-        if (metadata == state_->integrity.end() || dependencies == state_->dependencies->cells.end() || metadata->cell != selected.cell ||
-            dependencies->cell != selected.cell)
-            return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Stale));
-        if (!dependencies->hardTargets.empty())
-            return Result<void>::Failure(
+            return Output::Failure(record.ErrorValue());
+        const auto metadata =
+            std::ranges::lower_bound(integrity, selected.cell, WS::StreamingCellCanonicalLess{}, &WS::CookedWorldCellManifestEntry::cell);
+        const auto cellDependencies = std::ranges::lower_bound(dependencies->cells, selected.cell, WS::StreamingCellCanonicalLess{},
+                                                               &WS::WorldDependencyCellProjection::cell);
+        if (metadata == integrity.end() || cellDependencies == dependencies->cells.end() || metadata->cell != selected.cell ||
+            cellDependencies->cell != selected.cell)
+            return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale));
+        if (!cellDependencies->hardTargets.empty())
+            return Output::Failure(
                 MakeError(WS::WorldArtifactErrors::Unsupported,
-                          "Standalone startup supports one cell. The selection requires a hard co-load transaction."));
+                          "Mounted World startup supports one cell. The selection requires a hard co-load transaction."));
 
-        state_->initialAttempted = true;
-        auto source = PlanInitialCell(*state_->planner, partition.Value(), handle.Value(), boundary);
+        initialAttempted = true;
+        auto source = PlanInitialCell(*planner, partition.Value(), handle.Value(), boundary);
         if (source.HasError())
-            return Result<void>::Failure(source.ErrorValue());
-        const auto &owner = state_->composition->Owner();
+            return Output::Failure(source.ErrorValue());
+        const auto &owner = composition->Owner();
         const WS::StreamingFence fence{owner.partition, owner.epoch, selected.cell, Identity<WS::StreamingGeneration>(1)};
         const Runtime::SceneCellPayloadIdentity identity{owner.partition, selected.cell, selected.definition, selected.revision};
-        auto &scheduler = state_->composition->Scheduler();
+        auto &scheduler = composition->Scheduler();
         using enum WS::StreamingCellOperationTransition;
         std::optional<Runtime::RuntimeSceneCellPayload> payload;
-        const auto loaded = RunCellOperation(scheduler, *state_->residency, {Identity<WS::StreamingCellOperationId>(1), fence},
+        const auto loaded = RunCellOperation(scheduler, *residency, {Identity<WS::StreamingCellOperationId>(1), fence},
                                              WS::StreamingCellOperationKind::Load, {BeginPreparation}, Complete, [&](const auto &) {
-            auto decoded = DecodeInitialCell(state_->cells, *partition.Value().Descriptor(), *record.Value(), *metadata, identity,
-                                             boundary.cancellation);
+            auto decoded =
+                DecodeInitialCell(cells, *partition.Value().Descriptor(), *record.Value(), *metadata, identity, boundary.cancellation);
             if (decoded.HasError())
                 return Result<void>::Failure(decoded.ErrorValue());
             if (!decoded.Value().Definition().AssetDependencies().empty())
@@ -599,10 +640,9 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         });
         if (loaded.HasError())
-            return loaded;
+            return Output::Failure(loaded.ErrorValue());
 
-        const Runtime::SceneInstanceAddress address{parent->RuntimeId(), selected.occurrence, selected.definition,
-                                                    Runtime::SceneInstanceMode::Streamed};
+        const Runtime::SceneInstanceAddress address{parent, selected.occurrence, selected.definition, Runtime::SceneInstanceMode::Streamed};
         const auto authored = payload->WorldAnchors();
         State::ActiveCell active{fence, address, identity, {authored.begin(), authored.end()}, std::vector<Math::Vec3>(authored.size())};
         for (const auto &entity : payload->Definition().Entities()) {
@@ -610,6 +650,22 @@ namespace Horo::Application::Internal {
             if (anchor != authored.end() && anchor->object == entity.object)
                 active.initialLocalPositions[static_cast<std::size_t>(anchor - authored.begin())] = entity.localTransform.translation;
         }
+        return Output::Success({std::move(source).Value(), std::move(*payload), std::move(active)});
+    }
+
+    /** @copydoc MountedWorld::ActivateInitialCell */
+    Result<void> MountedWorld::ActivateInitialCell(const CommittedWorldInitialCell &selected, const MountedWorldStartup &boundary,
+                                                   const Runtime::FrameContext *phase) {
+        const auto parent = state_->scene.ActiveScene();
+        auto prepared = state_->PrepareInitialCell(selected, boundary, parent ? parent->RuntimeId() : Runtime::SceneRuntimeId{});
+        if (prepared.HasError())
+            return Result<void>::Failure(prepared.ErrorValue());
+        auto &cell = prepared.Value();
+        const auto &fence = cell.cell.fence;
+        const auto &address = cell.cell.address;
+        const auto &identity = cell.cell.identity;
+        auto &scheduler = state_->composition->Scheduler();
+        using enum WS::StreamingCellOperationTransition;
         const Runtime::SceneCellAttachmentRequest request{.runtime = address.parent,
                                                           .fence = fence,
                                                           .registry = parent->AssetRegistryRevision(),
@@ -621,8 +677,8 @@ namespace Horo::Application::Internal {
                                                 [&](const auto &reservation) {
             if (auto ready = CheckBoundary(boundary); ready.HasError())
                 return ready;
-            auto authority = std::make_shared<const InitialCellAuthority>(identity, *state_->residency, scheduler, reservation);
-            auto queued = Runtime::QueueStreamedSceneInstance(state_->scene, address, *payload, request, {}, std::move(authority));
+            auto authority = std::make_shared<const InitialCellAuthority>(identity, *state_->residency, scheduler, reservation, boundary);
+            auto queued = Runtime::QueueStreamedSceneInstance(state_->scene, address, cell.payload, request, {}, std::move(authority));
             if (queued.HasError())
                 return Result<void>::Failure(queued.ErrorValue());
 
@@ -639,7 +695,7 @@ namespace Horo::Application::Internal {
             const auto current = state_->scene.ActiveScene();
             const auto *receipt = queued.Value().Receipt()->ResultValue();
             if (!receipt || receipt->baselinesAttached != 1 || !current ||
-                !Runtime::FindStreamedSceneInstance(*current, address, identity, owner.epoch)) {
+                !Runtime::FindStreamedSceneInstance(*current, address, identity, fence.epoch)) {
                 state_->scene.Shutdown();
                 return Result<void>::Failure(MakeError(Runtime::SceneCellPayloadErrors::Stale));
             }
@@ -654,9 +710,112 @@ namespace Horo::Application::Internal {
             return activated;
         }
 
-        state_->initialSource.emplace(std::move(source).Value());
-        state_->activeCell.emplace(std::move(active));
+        state_->initialSource.emplace(std::move(cell.source));
+        state_->activeCell.emplace(std::move(cell.cell));
         return Result<void>::Success();
+    }
+
+    /** @copydoc MountedWorld::QueueInitialCell */
+    Result<void> MountedWorld::QueueInitialCell(const Runtime::RuntimeSceneDefinition &parent, const CommittedWorldInitialCell &selected,
+                                                const MountedWorldStartup &boundary, const Assets::AssetRegistryRevision registry) {
+        if (state_->pendingCell)
+            return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Stale));
+        auto &scheduler = state_->composition->Scheduler();
+        auto &residency = *state_->residency;
+        std::optional<WS::StreamingSchedulerReservation> reservation;
+        const auto reject = [&](const Error &error) {
+            if (state_->pendingLifetime)
+                state_->pendingLifetime->RequestCancellation();
+            state_->pendingCell.reset();
+            state_->pendingLifetime.reset();
+            return reservation ? RejectCellOperation(scheduler, residency, *reservation, error) : Result<void>::Failure(error);
+        };
+        try {
+            auto prepared = state_->PrepareInitialCell(selected, boundary, state_->scene.NextRuntimeId());
+            if (prepared.HasError())
+                return Result<void>::Failure(prepared.ErrorValue());
+            auto &data = prepared.Value();
+            const auto &cell = data.cell;
+            state_->pendingLifetime.emplace();
+            using enum WS::StreamingCellOperationTransition;
+            const auto admitted = BeginCellOperation(scheduler, residency, {Identity<WS::StreamingCellOperationId>(2), cell.fence},
+                                                     WS::StreamingCellOperationKind::Activate, {BeginPreparation, BeginActivation});
+            if (admitted.HasError())
+                return reject(admitted.ErrorValue());
+            reservation = admitted.Value();
+            const Runtime::SceneCellAttachmentRequest request{.runtime = cell.address.parent,
+                                                              .fence = cell.fence,
+                                                              .registry = registry,
+                                                              .limits = {1, 65536, 1},
+                                                              .cancellation = boundary.cancellation,
+                                                              .ownerCancellation = state_->pendingLifetime->Token()};
+            auto authority = std::make_shared<const InitialCellAuthority>(cell.identity, residency, scheduler, *reservation, boundary);
+            state_->pendingCell.emplace(State::PendingCell{std::move(data.source), std::move(data.cell), *reservation, {}});
+            auto &pending = *state_->pendingCell;
+            auto queued = Runtime::QueuePreparationWithInitialStreamedScene(state_->scene, parent, pending.cell.address, data.payload,
+                                                                            request, std::move(authority));
+            if (queued.HasError())
+                return reject(queued.ErrorValue());
+            pending.publication.emplace(std::move(queued).Value());
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
+            return reject(MakeError(WS::WorldArtifactErrors::CapacityExceeded));
+        }
+    }
+
+    /** @copydoc MountedWorld::ReconcileInitialCell */
+    Result<bool> MountedWorld::ReconcileInitialCell() {
+        using Output = Result<bool>;
+        if (!state_->pendingCell) {
+            if (state_->activeCell && state_->AttachedParent(*state_->activeCell))
+                return Output::Success(true);
+            return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale));
+        }
+        auto &pending = *state_->pendingCell;
+        if (!pending.publication)
+            return Output::Success(false);
+        const auto observation = pending.publication->Snapshot();
+        if (observation.HasError())
+            return Output::Failure(observation.ErrorValue());
+        const auto &published = observation.Value();
+        if (published.status == Runtime::ScenePublicationStatus::Pending)
+            return Output::Success(false);
+
+        auto &scheduler = state_->composition->Scheduler();
+        auto &residency = *state_->residency;
+        const auto reject = [&](const Error &error) {
+            const auto retired = RejectCellOperation(scheduler, residency, pending.reservation, error);
+            state_->pendingCell.reset();
+            state_->pendingLifetime.reset();
+            return Output::Failure(retired.ErrorValue());
+        };
+        if (published.status != Runtime::ScenePublicationStatus::Published) {
+            if (const auto error = state_->scene.TakeOperationError())
+                return reject(*error);
+            return reject(MakeError(published.status == Runtime::ScenePublicationStatus::Cancelled ? WS::WorldArtifactErrors::Cancelled
+                                                                                                   : WS::WorldArtifactErrors::Stale));
+        }
+
+        const auto current = state_->AttachedParent(pending.cell);
+        if (!current || published.scene != current->RuntimeId())
+            return reject(MakeError(WS::WorldArtifactErrors::Stale));
+        if (published.structuralRevision != current->StructuralRevision()) {
+            state_->scene.Shutdown();
+            return reject(MakeError(WS::WorldArtifactErrors::Stale));
+        }
+        auto completed = AdvanceCell(scheduler, residency, pending.reservation, WS::StreamingCellOperationTransition::Complete);
+        if (completed.HasValue())
+            completed = scheduler.Release(pending.reservation);
+        if (completed.HasError()) {
+            state_->scene.Shutdown();
+            return reject(completed.ErrorValue());
+        }
+
+        state_->initialSource.emplace(std::move(pending.source));
+        state_->activeCell.emplace(std::move(pending.cell));
+        state_->pendingCell.reset();
+        state_->pendingLifetime.reset();
+        return Output::Success(true);
     }
 
     /** @copydoc MountedWorld::Anchors */
@@ -778,18 +937,28 @@ namespace Horo::Application::Internal {
 
     /** @copydoc MountedWorld::~MountedWorld */
     MountedWorld::~MountedWorld() {
+        if (state_->pendingCell) {
+            // Close the Scene predicate before its borrowed scheduler and residency ledgers retire.
+            state_->pendingLifetime->RequestCancellation();
+            if (state_->AttachedParent(state_->pendingCell->cell))
+                state_->scene.Shutdown();
+            static_cast<void>(RejectCellOperation(state_->composition->Scheduler(), *state_->residency, state_->pendingCell->reservation,
+                                                  MakeError(WS::WorldArtifactErrors::Cancelled)));
+            state_->pendingCell.reset();
+        }
         if (state_->activeCell) {
             using enum WS::StreamingCellOperationTransition;
-            const auto &fence = state_->activeCell->fence;
-            auto retired =
-                RunCellOperation(state_->composition->Scheduler(), *state_->residency, {Identity<WS::StreamingCellOperationId>(3), fence},
-                                 WS::StreamingCellOperationKind::Retire, {BeginRetirement}, AcknowledgeRetirement, [&](const auto &) {
-                // Parent shutdown performs actual synchronous removal of all owned baselines.
-                state_->scene.Shutdown();
-                return state_->scene.ActiveScene() ? Result<void>::Failure(MakeError(Runtime::SceneCellPayloadErrors::Stale))
-                                                   : Result<void>::Success();
+            const auto &cell = *state_->activeCell;
+            auto retired = RunCellOperation(state_->composition->Scheduler(), *state_->residency,
+                                            {Identity<WS::StreamingCellOperationId>(3), cell.fence}, WS::StreamingCellOperationKind::Retire,
+                                            {BeginRetirement}, AcknowledgeRetirement, [&](const auto &) {
+                // Shut down only the published incarnation that owns this cell.
+                if (state_->AttachedParent(cell))
+                    state_->scene.Shutdown();
+                return state_->AttachedParent(cell) ? Result<void>::Failure(MakeError(Runtime::SceneCellPayloadErrors::Stale))
+                                                    : Result<void>::Success();
             });
-            if (retired.HasError())
+            if (retired.HasError() && state_->AttachedParent(cell))
                 state_->scene.Shutdown();
         }
         state_->initialSource.reset();
