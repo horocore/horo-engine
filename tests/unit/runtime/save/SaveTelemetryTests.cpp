@@ -262,6 +262,7 @@ TEST_CASE("Save telemetry production storage jobs isolate private ambient contex
     const auto archive = Read(bundle.Value().outputPath);
     REQUIRE(archive.find("save.summary") != std::string::npos);
     REQUIRE(archive.find("retained_logs") != std::string::npos);
+    REQUIRE(archive.find("data_categories") != std::string::npos);
     REQUIRE(archive.find("Safe provider request") != std::string::npos);
     for (const auto secret : {"private-display", "private-account", "/private/save/path", "private-payload", "private-secret"})
         REQUIRE(archive.find(secret) == std::string::npos);
@@ -315,6 +316,36 @@ TEST_CASE("Save telemetry cancelled interrupted and sync contract observations u
     REQUIRE(summary.Value().second.find("cancelled") != std::string::npos);
     REQUIRE(summary.Value().second.find("interrupted") != std::string::npos);
     REQUIRE(summary.Value().second.find("private-cancellation") == std::string::npos);
+    CHECK(summary.Value().second.find("\"cancellation\":1") != std::string::npos);
+    CHECK(summary.Value().second.find("\"unclassified\":1") != std::string::npos);
+}
+
+TEST_CASE("Save retained failure categories accept only canonical numeric evidence", "[save][telemetry][summary]") {
+    Session session;
+    REQUIRE(session.host);
+    const auto log = session.directory / "failure-categories.jsonl";
+    {
+        std::ofstream rows{log};
+        const auto append = [&](std::string_view category) {
+            rows
+                << R"({"category":"runtime.save.stage","fields":{"stage":"commit","outcome":"failed","duration_ns":1,"bytes":0,"retries":0,"dropped_work":0,"queue_depth":0)"
+                << category << "}}\n";
+        };
+        const auto storage = static_cast<std::uint64_t>(SaveFailureCategory::Storage);
+        append(",\"failure_category\":" + std::to_string(storage));
+        append(",\"failure_category\":4294967296");
+        append(R"(,"failure_category":"untrusted-account-tag")");
+        append("");
+        REQUIRE(rows.good());
+    }
+    const std::array inputs{log};
+    const auto summary = SummarizeSaveTelemetry(inputs);
+    REQUIRE(summary.HasValue());
+    const auto &content = summary.Value().second;
+    CHECK(content.find("\"storage\":1") != std::string::npos);
+    CHECK(content.find("\"unclassified\":3") != std::string::npos);
+    CHECK(content.find("\"failed\":4") != std::string::npos);
+    CHECK(content.find("untrusted-account-tag") == std::string::npos);
 }
 
 TEST_CASE("Save retained summary bounds malformed oversized and missing inputs without exporting source text",

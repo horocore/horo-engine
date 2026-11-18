@@ -1864,7 +1864,10 @@ inputs. It creates no second event store. Input work is bounded to 32 sources,
 missing input is represented explicitly. Only closed stage/outcome names and
 validated unsigned aggregates enter the summary; raw rows and source paths are
 never copied. The summary describes retained observations, not lifetime totals;
-queue/dispatcher drops and retention can limit evidence.
+queue/dispatcher drops and retention can limit evidence. The summary lists the
+data categories it includes and excludes and reports failure counts using the
+closed Save failure taxonomy. Failed or cancelled rows with missing or invalid
+category evidence contribute to the unclassified count.
 
 ## Qualification And Implementation Status
 
