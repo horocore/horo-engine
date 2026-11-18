@@ -1,6 +1,7 @@
 #include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/LocalizedGui.h"
+#include "editor/screens/workspace/BlackboardScalarInput.h"
 #include "editor/screens/workspace/EditorWorkspaceView.h"
 
 #include <algorithm>
@@ -21,8 +22,18 @@ namespace Horo::Editor {
                 return BlackboardText.Text(localization, key);
             }
 
+            void Label(std::string_view text) const {
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, text, Theme::Text(), fonts);
+            }
+
             void Caption(const char *key) const {
-                Ui::WrappedText(ImGui::GetContentRegionAvail().x, Text(key), Theme::Text(), fonts);
+                Label(Text(key));
+            }
+
+            bool Input(const char *id, std::string &value, std::size_t capacity) const {
+                const bool submitted = Ui::InputTextControl(id, value, capacity, fonts, {.submitOnEnter = true});
+                command.sourceTextInputOwned = command.sourceTextInputOwned || ImGui::IsItemActive();
+                return submitted;
             }
 
             bool Button(const char *key, bool enabled = true) const {
@@ -64,23 +75,126 @@ namespace Horo::Editor {
             }
         };
 
-        /** @brief Renders descriptor fields while leaving durable semantics under the document's reference fence. */
-        void DrawTypeFields(const BlackboardFrame &frame, const AI::BlackboardKeyDescriptor &current, bool draft) {
-            auto changed = current;
-            if (frame.Choice("type", changed.kind, std::to_array({"bool", "integer", "scalar", "entity", "asset", "coordinate"}), draft)) {
-                changed.defaultValue.reset();
+        enum class BooleanDefault : std::uint8_t {
+            Absent,
+            False,
+            True,
+            Count
+        };
+
+        /** @brief Returns the incoming scalar Boolean if supplied by the admitted descriptor. */
+        std::optional<bool> ReadBooleanDefault(const AI::BlackboardKeyDescriptor &current) {
+            const auto *scalar = current.defaultValue ? std::get_if<AI::BlackboardScalarValue>(&*current.defaultValue) : nullptr;
+            if (const auto *value = scalar ? std::get_if<bool>(scalar) : nullptr)
+                return *value;
+            return std::nullopt;
+        }
+
+        /** @brief Edits a Boolean default and its presence in one typed operation. */
+        void DrawBooleanDefault(const BlackboardFrame &frame, AI::BlackboardKeyDescriptor &current, bool draft) {
+            const auto existing = ReadBooleanDefault(current);
+            auto selection = BooleanDefault::Absent;
+            if (existing)
+                selection = *existing ? BooleanDefault::True : BooleanDefault::False;
+            if (!frame.Choice("default_value", selection, std::to_array({"default_none", "value_false", "value_true"}), draft))
+                return;
+            if (selection == BooleanDefault::Absent)
+                current.defaultValue.reset();
+            else
+                current.defaultValue = AI::BlackboardScalarValue{selection == BooleanDefault::True};
+        }
+
+        /** @brief Keeps incomplete or non-finite text local until a complete numeric replacement is applied. */
+        void DrawNumericDefault(const BlackboardFrame &frame, AI::BlackboardKeyDescriptor &current, std::string &text, bool draft) {
+            frame.Caption("default_value");
+            if (!draft) {
+                if (current.defaultValue)
+                    frame.Label(text);
+                else
+                    frame.Caption("default_none");
+                return;
             }
-            if (frame.Choice("shape", changed.cardinality, std::to_array({"single", "collection"}), draft)) {
+            constexpr std::size_t MaximumNumericTextBytes = 64;
+            const bool submitted = frame.Input("BlackboardNumericDefault", text, MaximumNumericTextBytes + 1);
+            const auto candidate = ReadBlackboardNumericDefault(current.kind, text);
+            const bool apply = frame.Button("apply_default", candidate.has_value()) || submitted;
+            if (apply && candidate)
+                current.defaultValue = *candidate;
+            if (!text.empty() && !candidate)
+                Ui::ErrorText(frame.Text("default_invalid").c_str(), frame.fonts);
+            if (frame.Button("clear_default", current.defaultValue.has_value())) {
+                current.defaultValue.reset();
+                text.clear();
+            }
+        }
+
+        /** @brief Selects the typed scalar default control. Other defaults stay inspectable and clearable. */
+        void DrawDefaultField(const BlackboardFrame &frame, AI::BlackboardKeyDescriptor &current, std::string &text, bool draft) {
+            using enum AI::BlackboardValueKind;
+            if (current.cardinality == AI::BlackboardValueCardinality::Scalar) {
+                if (current.kind == Boolean) {
+                    DrawBooleanDefault(frame, current, draft);
+                    return;
+                }
+                if (current.kind == SignedInteger || current.kind == Scalar) {
+                    DrawNumericDefault(frame, current, text, draft);
+                    return;
+                }
+            }
+            frame.Caption(current.defaultValue ? "default_set" : "default_none");
+            if (draft && frame.Button("clear_default", current.defaultValue.has_value()))
+                current.defaultValue.reset();
+        }
+
+        /** @brief Bounds capacity without truncating an existing collection default. */
+        void DrawCollectionCapacity(const BlackboardFrame &frame, AI::BlackboardKeyDescriptor &current, bool draft) {
+            if (current.cardinality != AI::BlackboardValueCardinality::Collection)
+                return;
+            frame.Caption("collection_capacity");
+            const auto capacity = static_cast<int>(current.maximumCollectionElements);
+            if (!draft) {
+                frame.Label(std::to_string(capacity));
+                return;
+            }
+            const auto *initial = current.defaultValue ? std::get_if<AI::BlackboardCollectionValue>(&*current.defaultValue) : nullptr;
+            const auto minimum = initial ? std::max(1, static_cast<int>(initial->count)) : 1;
+            constexpr int maximum = static_cast<int>(AI::MaximumBlackboardCollectionElements);
+            if (minimum == maximum) {
+                frame.Label(std::to_string(capacity));
+                return;
+            }
+            static const auto labels = [] {
+                std::array<std::string, AI::MaximumBlackboardCollectionElements> result;
+                for (std::size_t index = 0; index < result.size(); ++index)
+                    result[index] = std::to_string(index + 1);
+                return result;
+            }();
+            const Ui::ComboItemSource choices{.label = [minimum](int index) {
+                return labels[static_cast<std::size_t>(index + minimum - 1)].c_str();
+            }};
+            int selection = capacity - minimum;
+            if (Ui::ComboControl("BlackboardCollectionCapacity", &selection, maximum - minimum + 1, choices, frame.fonts))
+                current.maximumCollectionElements = static_cast<std::size_t>(selection + minimum);
+        }
+
+        /** @brief Renders descriptor fields while leaving durable semantics under the document's reference fence. */
+        void DrawTypeFields(const BlackboardFrame &frame, const AI::BlackboardKeyDescriptor &current, std::string &number, bool draft) {
+            auto changed = current;
+            const bool typeChanged =
+                frame.Choice("type", changed.kind, std::to_array({"bool", "integer", "scalar", "entity", "asset", "coordinate"}), draft);
+            const bool shapeChanged = frame.Choice("shape", changed.cardinality, std::to_array({"single", "collection"}), draft);
+            if (shapeChanged)
                 changed.maximumCollectionElements =
                     changed.cardinality == AI::BlackboardValueCardinality::Scalar ? 1 : AI::MaximumBlackboardCollectionElements;
-                changed.defaultValue.reset();
-            }
             static_cast<void>(frame.Choice("access", changed.access, std::to_array({"read_only", "read_write"}), draft));
             static_cast<void>(frame.Choice("presence", changed.presence, std::to_array({"required", "optional"}), draft));
-            if (changed.defaultValue)
-                frame.Caption("default_set");
-            if (draft && frame.Button("clear_default", changed.defaultValue.has_value()))
+            if (typeChanged || shapeChanged) {
                 changed.defaultValue.reset();
+                number.clear();
+            } else {
+                DrawCollectionCapacity(frame, changed, draft);
+                DrawDefaultField(frame, changed, number, draft);
+            }
             if (changed != current)
                 frame.Edit(EditBlackboardKey{std::move(changed)});
         }
@@ -126,12 +240,19 @@ namespace Horo::Editor {
             return entry.descriptor.key == draft.selected;
         });
         int rowIndex = selected == rows.end() ? 0 : static_cast<int>(selected - rows.begin());
+        const auto selectRow = [&](int index) {
+            const auto &selectedRow = rows[static_cast<std::size_t>(index)];
+            draft.selected = selectedRow.descriptor.key;
+            draft.name = selectedRow.displayName.value_or("");
+            draft.numericDefault = BlackboardNumericDefaultText(selectedRow.descriptor.defaultValue);
+        };
         if (draft.fence.instance != frame.fence.instance || draft.fence.revision != frame.fence.revision) {
             draft.fence = frame.fence;
             draft.rowIds.clear();
             for (const auto &row : rows)
                 draft.rowIds.push_back(std::to_string(row.descriptor.key.Value()));
-            draft.name = rows.empty() ? "" : rows[static_cast<std::size_t>(rowIndex)].displayName.value_or("");
+            if (!rows.empty())
+                selectRow(rowIndex);
         }
 
         DrawSourceTools(frame, *document);
@@ -149,15 +270,13 @@ namespace Horo::Editor {
             return row.displayName ? row.displayName->c_str() : draft.rowIds[slot].c_str();
         }};
         if (Ui::ComboControl("BlackboardKey", &rowIndex, static_cast<int>(rows.size()), display, frame.fonts))
-            draft.name = rows[static_cast<std::size_t>(rowIndex)].displayName.value_or("");
+            selectRow(rowIndex);
         const auto index = static_cast<std::size_t>(rowIndex);
         const auto &row = rows[index];
         draft.selected = row.descriptor.key;
         ImGui::PushID(draft.rowIds[index].c_str());
         frame.Caption("name");
-        const bool rename = Ui::InputTextControl("BlackboardName", draft.name, AI::BlackboardSchemaAuthoringRow::MaximumLabelBytes + 1,
-                                                 frame.fonts, {.submitOnEnter = true});
-        outCommand.sourceTextInputOwned = outCommand.sourceTextInputOwned || ImGui::IsItemActive();
+        const bool rename = frame.Input("BlackboardName", draft.name, AI::BlackboardSchemaAuthoringRow::MaximumLabelBytes + 1);
         if (frame.Button("apply_name", AI::IsValidBlackboardDisplayName(draft.name)) || rename)
             frame.Edit(RenameBlackboardKey{draft.selected, draft.name});
         if (frame.Button("move_up", index > 0))
@@ -173,7 +292,7 @@ namespace Horo::Editor {
         } else {
             frame.Caption("reference_required");
         }
-        DrawTypeFields(frame, row.descriptor, draftKey);
+        DrawTypeFields(frame, row.descriptor, draft.numericDefault, draftKey);
         ImGui::PopID();
         return true;
     }

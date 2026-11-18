@@ -148,6 +148,7 @@ namespace Horo::Editor {
             BlackboardDocumentFence fence;
             AI::BlackboardKeyId selected;
             std::string name;
+            std::string numericDefault;
             std::vector<std::string> rowIds;
         };
 

@@ -1,6 +1,7 @@
 #include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/Assets/AssetRegistry.h"
 #include "Horo/Editor/ProjectMutation.h"
+#include "editor/screens/workspace/BlackboardScalarInput.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 #include <array>
@@ -8,6 +9,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 
 namespace {
     using namespace Horo;
@@ -119,4 +121,65 @@ TEST_CASE("Blackboard asset activation saves, reloads and reopens its real works
     CHECK(project.Current(controller).instance != initial.instance);
     CHECK(project.Snapshot(controller).source->rows.front().displayName == "Saved on close");
     CHECK_FALSE(controller.HasDirtySourceDocuments());
+}
+
+TEST_CASE("Blackboard workspace numeric defaults preserve exact typed input", "[unit][editor][blackboard][workspace]") {
+    using enum AI::BlackboardValueKind;
+    const auto integer = ReadBlackboardNumericDefault(SignedInteger, "-9223372036854775808");
+    REQUIRE(integer);
+    CHECK(std::get<std::int64_t>(*integer) == std::numeric_limits<std::int64_t>::min());
+    const auto decimal = ReadBlackboardNumericDefault(Scalar, "0.12345678901234568");
+    REQUIRE(decimal);
+    const auto shown = BlackboardNumericDefaultText(AI::BlackboardValue{*decimal});
+    CHECK(ReadBlackboardNumericDefault(Scalar, shown) == decimal);
+
+    CHECK_FALSE(ReadBlackboardNumericDefault(SignedInteger, "9223372036854775808"));
+    CHECK_FALSE(ReadBlackboardNumericDefault(SignedInteger, "1.0"));
+    CHECK_FALSE(ReadBlackboardNumericDefault(Scalar, "15x"));
+    CHECK_FALSE(ReadBlackboardNumericDefault(Scalar, "nan"));
+    CHECK_FALSE(ReadBlackboardNumericDefault(Scalar, "1e999"));
+    CHECK_FALSE(ReadBlackboardNumericDefault(Boolean, "1"));
+}
+
+TEST_CASE("Blackboard workspace cannot shrink a typed collection below its authored default", "[unit][editor][blackboard][workspace]") {
+    BlackboardWorkspaceFixture project;
+    EditorWorkspaceController controller(project.root, project.runtime, project.registry.Snapshot(),
+                                         {.mutations = &project.mutations, .durableFiles = &project.files});
+    controller.ProcessCommand(project.Open());
+    const auto next = project.Snapshot(controller).nextKey;
+    REQUIRE(next);
+    const auto edit = [&](BlackboardSchemaEdit command) {
+        controller.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::BlackboardDocument,
+             .blackboard = BlackboardWorkspaceRequest{.fence = project.Current(controller), .edit = std::move(command)}});
+    };
+    AI::BlackboardCollectionValue values{.elementKind = AI::BlackboardValueKind::SignedInteger,
+                                         .elements = {std::int64_t{3}, std::int64_t{-5}},
+                                         .count = 2};
+    AI::BlackboardKeyDescriptor key{.key = *next,
+                                    .kind = values.elementKind,
+                                    .cardinality = AI::BlackboardValueCardinality::Collection,
+                                    .maximumCollectionElements = 4,
+                                    .defaultValue = values};
+    edit(AddBlackboardKey{BlackboardSchemaRow{key, "Draft collection"}, 1});
+    const auto admitted = project.Snapshot(controller);
+    REQUIRE(admitted.source->rows.size() == 2);
+
+    key.maximumCollectionElements = 1;
+    edit(EditBlackboardKey{key});
+    CHECK(project.Snapshot(controller).source == admitted.source);
+    CHECK(project.Snapshot(controller).revision == admitted.revision);
+    REQUIRE(controller.ViewModel().blackboardDocuments.front().diagnostic);
+
+    key.maximumCollectionElements = 2;
+    edit(EditBlackboardKey{key});
+    const auto updated = project.Snapshot(controller);
+    REQUIRE(updated.revision > admitted.revision);
+    CHECK(updated.source->rows.back().descriptor == key);
+    REQUIRE(controller.SaveSourceDocuments().HasValue());
+    const auto closed = controller.ResolveBlackboardClose(project.Current(controller), SourceCloseDecision::Save);
+    REQUIRE(closed.HasValue());
+    REQUIRE(closed.Value());
+    controller.ProcessCommand(project.Open());
+    CHECK(project.Snapshot(controller).source->rows.back().descriptor == key);
 }
