@@ -168,6 +168,18 @@ links, and unrepresentable topology receive typed errors. The host still
 selects the provider and supplies the complete admitted closure and resource
 limits.
 
+An authoritative headless product can select this provider with
+`--navigation recast-detour` alongside a committed `cooked:<Scene AssetId>`
+selection. The host keeps the full Scene UUID for tile admission and reads the
+registered Navigation definition and project runtime policy from the local
+workspace before it builds the Scene. The cooked artifact must have that exact
+project policy. A missing
+surface, foreign scope, unsupported topology, or unavailable provider rejects
+startup. The paired client of a listen server retains its ordinary presentation
+Scene. This path installs logical registration and retirement along with the
+provider world. Character movement and gameplay query publication require their
+own host composition.
+
 Private runtime and build source groups are separate. A runtime-only provider composition
 excludes Recast voxelization/build objects and their private link dependencies; enabling
 the bake capability adds them for tools. Runtime topology/crowd support retains only its

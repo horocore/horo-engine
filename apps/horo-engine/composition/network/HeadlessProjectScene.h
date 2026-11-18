@@ -12,6 +12,11 @@
 #include "Horo/Scene/SceneSource.h"
 
 namespace Horo::Application::Internal {
+    enum class HeadlessNavigationMode : std::uint8_t {
+        Disabled,
+        RecastDetour
+    };
+
     /** @brief Explicit Scene input parsed at the CLI boundary, without backend discovery. */
     struct HeadlessProjectSceneOptions final {
         std::filesystem::path projectRoot;
@@ -21,6 +26,7 @@ namespace Horo::Application::Internal {
         Physics::PhysicsRuntimeMode physicsMode{Physics::PhysicsRuntimeMode::Null};
         std::chrono::milliseconds loadTimeout{30'000};
         std::string publicationNamespace; /**< Empty preserves read-only hosts; explicit derived output selected by the application. */
+        HeadlessNavigationMode navigationMode{HeadlessNavigationMode::Disabled};
     };
 
     /** @brief Owns all borrowed assets/jobs/project captures until every world service has retired.
@@ -42,6 +48,8 @@ namespace Horo::Application::Internal {
         Platform::ProjectReadContext sourceContext;
         std::optional<SceneSource::SceneSourceDocument> authoredSource; /**< Exact decoded admitted source, never a second parse. */
         std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition;
+        Assets::AssetId sceneAsset; /**< Exact selected cooked Scene identity, including the full UUID. */
+        std::shared_ptr<const HeadlessNavigationSelection> navigation;
         std::optional<Physics::PhysicsSceneActivationSettings> settings;
         Prefab::PrefabMetricHandles prefabMetrics; /**< Process-prebound numeric observations retained by host resources. */
         Prefab::PrefabProjectPolicy prefabPolicy;  /**< Project-launch capture, passed by value to source-free world composition. */

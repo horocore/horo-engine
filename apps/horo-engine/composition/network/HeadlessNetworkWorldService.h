@@ -242,6 +242,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return native;
             if (auto ai = PrepareConfiguredAi(); ai.HasError())
                 return ai;
+            if (auto navigation = PrepareConfiguredNavigation(); navigation.HasError())
+                return navigation;
             if (auto animation = PrepareConfiguredAnimation(*owners_, *record_); animation.HasError())
                 return animation;
             if (auto vfx = PrepareConfiguredVfx(); vfx.HasError())
@@ -291,6 +293,18 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 added.HasError())
                 return added;
             return Result<void>::Success();
+        }
+
+        /** @brief Installs one authoritative navigation aggregate; paired client worlds stay presentation-only. */
+        Result<void> PrepareConfiguredNavigation() const {
+            const auto &selection = owners_->configured->navigation;
+            if (!selection || !IsAuthoritativeWorld())
+                return Result<void>::Success();
+            auto world = CreateHeadlessNavigationWorld(*selection);
+            if (world.HasError())
+                return Result<void>::Failure(world.ErrorValue());
+            record_->navigation = std::move(world).Value();
+            return RegisterHeadlessNavigation(*record_->scenes, *record_->navigation, selection);
         }
 
         /** @brief Identifies the local world that owns authoritative simulation. */

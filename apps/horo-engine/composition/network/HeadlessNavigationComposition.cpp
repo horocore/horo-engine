@@ -1,0 +1,212 @@
+#include "HeadlessNavigationComposition.h"
+
+#include "HeadlessProjectScene.h"
+#include "Horo/Application/NavigationProjectSettings.h"
+#include "Horo/Assets/NavMeshAssetType.h"
+#include "Horo/Navigation/Backends/RecastDetourProvider.h"
+#include "Horo/Navigation/NavigationDefinitionSerialization.h"
+
+#include <algorithm>
+#include <bit>
+#include <limits>
+#include <new>
+
+namespace Horo::Application::Internal {
+    namespace Nav = Navigation;
+
+    namespace {
+        /** @brief The currently qualified native provider admits one authored surface/profile without dropping content. */
+        [[nodiscard]] Result<const Runtime::NavigationSurfaceComponent *> SelectedSurface(const Runtime::RuntimeSceneDefinition &scene) {
+            using Surface = Result<const Runtime::NavigationSurfaceComponent *>;
+            const Runtime::NavigationSurfaceComponent *selected = nullptr;
+            for (const auto &entity : scene.Entities()) {
+                if (entity.components.navigationLink && entity.components.navigationLink->enabled)
+                    return Surface::Failure(
+                        MakeError(Nav::NavigationErrors::OperationUnsupported, "Headless Detour cannot activate authored off-mesh links."));
+                const auto &surface = entity.components.navigationSurface;
+                if (!surface || !surface->enabled)
+                    continue;
+                if (selected || surface->profiles.size() != 1)
+                    return Surface::Failure(MakeError(Nav::NavigationErrors::OperationUnsupported,
+                                                      "Headless Detour requires one enabled surface and one profile."));
+                selected = std::addressof(*surface);
+            }
+            if (!selected)
+                return Surface::Failure(MakeError(Nav::NavigationErrors::SceneSurfaceMissing));
+            return Surface::Success(selected);
+        }
+
+        /** @brief Reads one registered definition through canonical project file and source codecs. */
+        [[nodiscard]] Result<Nav::NavigationDefinition> ReadCatalog(const Assets::AssetId id,
+                                                                    const HeadlessProjectSceneResources &resources) {
+            using Catalog = Result<Nav::NavigationDefinition>;
+            const auto registry = resources.registry.Snapshot();
+            const auto *record = registry.Find(id);
+            if (!record || record->type.Value() != Assets::NavMeshAssetTypeName)
+                return Catalog::Failure(MakeError(Nav::NavigationErrors::NoNavigationData));
+            const auto source = resources.sourceFiles->SourceText(record->sourcePath.String(), resources.sourceContext, {});
+            if (source.HasError())
+                return Catalog::Failure(source.ErrorValue());
+            const std::array support{Nav::NavigationDefinitionRecordSupport()};
+            const auto records =
+                Nav::DeserializeNavigationSourceRecords(std::as_bytes(std::span{*source.Value().text}), {.supportedRecords = support});
+            if (records.HasError())
+                return Catalog::Failure(records.ErrorValue());
+            if (records.Value().Records().size() != 1 || !records.Value().GeneratedPayloads().empty() ||
+                records.Value().HasQuarantinedGeneratedPayloads())
+                return Catalog::Failure(MakeError(Nav::NavigationErrors::NavMeshArtifactInvalid));
+            return Nav::DecodeNavigationDefinitionRecord(records.Value().Records().front());
+        }
+
+        /** @brief Uses the one immutable catalog to admit resident agents and later prefab additions. */
+        [[nodiscard]] Result<void> AdmitAgent(const HeadlessNavigationSelection &selection, const Nav::NavigationAgentDescriptor &agent) {
+            if (agent.profile != selection.profile)
+                return Result<void>::Failure(
+                    MakeError(Nav::NavigationErrors::AgentDescriptorInvalid, "Agent profile has no admitted headless Detour surface."));
+            const auto filter = selection.catalog->Registry().ResolveFilter(agent.filter);
+            if (filter.HasError())
+                return Result<void>::Failure(filter.ErrorValue());
+            return Result<void>::Success();
+        }
+
+        /** @brief Materializes only the selected exact decoded partition through the production native factory. */
+        [[nodiscard]] Result<Nav::NavigationPreparedAssetBackend> PrepareBackend(const HeadlessNavigationSelection &selection,
+                                                                                 const Nav::NavigationWorldActivationDescriptor &world,
+                                                                                 std::span<const Nav::NavigationLoadedSurface> surfaces,
+                                                                                 const std::size_t budget) {
+            using Prepared = Result<Nav::NavigationPreparedAssetBackend>;
+            if (surfaces.size() != 1 || !surfaces.front().partition)
+                return Prepared::Failure(MakeError(Nav::NavigationErrors::OperationUnsupported));
+            const auto &partition = *surfaces.front().partition;
+            if (partition.tiles.size() != 1 || !partition.tiles.front())
+                return Prepared::Failure(
+                    MakeError(Nav::NavigationErrors::OperationUnsupported, "Headless Detour requires one tile for the admitted surface."));
+            if (partition.tiles.front()->StorageBytes() > selection.policy.Capacities().maximumBytesPerResidentTile)
+                return Prepared::Failure(MakeError(Nav::NavigationErrors::CapacityExceeded));
+            const auto &geometry = partition.descriptor.geometry;
+            const float horizontal = std::max(geometry.radiusMeters, geometry.cellSizeMeters);
+            const auto reservation = std::min(budget, Nav::RecastDetourProviderHardLimits::OwnedBytes);
+            auto backend = Nav::CreateRecastDetourCookedNavigationQueryBackend(
+                {.world = world.world,
+                 .topology = world.topology,
+                 .surface = selection.surface,
+                 .profile = selection.profile,
+                 .definition = *selection.catalog,
+                 .tiles = partition.tiles,
+                 .nearestPointHalfExtents = {horizontal, geometry.heightMeters, horizontal},
+                 .queryLimits = selection.policy.MaximumQuery().limits,
+                 .maximumConcurrentQueries = selection.policy.Capacities().maximumConcurrentQueries,
+                 .maximumOwnedBytes = reservation,
+                 .capabilityRevision = selection.policy.Revision().Value()});
+            if (backend.HasError())
+                return Prepared::Failure(backend.ErrorValue());
+            return Prepared::Success({std::move(backend).Value(), reservation});
+        }
+
+        /** @brief Bounds queued work from the same project capacities as provider admission. */
+        [[nodiscard]] Nav::NavigationPathBatchLimits CoordinatorLimits(const Nav::NavigationProjectProfile &profile) noexcept {
+            const auto &capacity = profile.Capacities();
+            const auto slots = std::bit_ceil(std::max(2U, capacity.maximumConcurrentQueries));
+            return {.requestSlots = slots,
+                    .maximumJobs = capacity.maximumConcurrentQueries,
+                    .requestsPerJob = 1,
+                    .requestsPerTick = capacity.maximumConcurrentQueries,
+                    .requestsPerCaller = 1,
+                    .maximumPendingPerCaller = 1,
+                    .nodeExpansionsPerTick = capacity.maximumWorkUnitsPerTick,
+                    .nodeExpansionsPerCaller = profile.MaximumQuery().limits.maximumNodeExpansions,
+                    .selectionProbesPerTick = slots * 2,
+                    .maximumOwnedBytes = static_cast<std::size_t>(capacity.maximumResidentMemoryBytes)};
+        }
+    }  // namespace
+
+    /** @copydoc CaptureHeadlessNavigation */
+    Result<std::shared_ptr<const HeadlessNavigationSelection>> CaptureHeadlessNavigation(const HeadlessProjectSceneOptions &options,
+                                                                                         HeadlessProjectSceneResources &resources) {
+        using Selection = Result<std::shared_ptr<const HeadlessNavigationSelection>>;
+        if (!resources.committed || !resources.sceneAsset.IsValid())
+            return Selection::Failure(MakeError(Nav::NavigationErrors::NoNavigationData));
+        const auto surface = SelectedSurface(*resources.definition);
+        if (surface.HasError())
+            return Selection::Failure(surface.ErrorValue());
+        const auto source =
+            resources.sourceFiles->SourceText(".horo/navigation.json", resources.sourceContext, {.maximumFileBytes = 64U * 1024U});
+        if (source.HasError())
+            return Selection::Failure(source.ErrorValue());
+        const auto settings = DecodeNavigationProjectSettings(*source.Value().text);
+        if (settings.HasError())
+            return Selection::Failure(settings.ErrorValue());
+        const auto &input = settings.Value().Input();
+        if (input.defaultProvider != "recast_detour" || input.definition != surface.Value()->definition)
+            return Selection::Failure(MakeError(Nav::NavigationErrors::OperationUnsupported,
+                                                "Selected Scene surface must use the explicitly configured Recast definition."));
+        auto catalog = ReadCatalog(input.definition, resources);
+        if (catalog.HasError())
+            return Selection::Failure(catalog.ErrorValue());
+        const auto scope = Nav::NavigationBakeScopeId::ForScene(resources.sceneAsset.Bytes());
+        const auto target = AssetCookTargetId::Parse(options.cookTarget);
+        if (scope.HasError() || target.HasError())
+            return Selection::Failure(scope.HasError() ? scope.ErrorValue() : target.ErrorValue());
+        return Selection::Success(std::make_shared<const HeadlessNavigationSelection>(
+            HeadlessNavigationSelection{{surface.Value()->id, scope.Value()},
+                                        surface.Value()->profiles.front(),
+                                        target.Value(),
+                                        settings.Value().RuntimeProfile(),
+                                        std::make_shared<const Nav::NavigationDefinition>(std::move(catalog).Value()),
+                                        resources.jobs}));
+    }
+
+    /** @copydoc CreateHeadlessNavigationWorld */
+    Result<std::unique_ptr<HeadlessNavigationWorld>> CreateHeadlessNavigationWorld(const HeadlessNavigationSelection &selection) {
+        using World = Result<std::unique_ptr<HeadlessNavigationWorld>>;
+        const auto &capacity = selection.policy.Capacities();
+        if (capacity.maximumConcurrentQueries > Nav::RecastDetourProviderHardLimits::ConcurrentQueries ||
+            capacity.maximumResidentMemoryBytes > std::numeric_limits<std::size_t>::max() ||
+            capacity.maximumBytesPerResidentTile >= capacity.maximumResidentMemoryBytes)
+            return World::Failure(MakeError(Nav::NavigationErrors::CapacityExceeded));
+        auto cache = Assets::AssetPayloadCache::Create(capacity.maximumResidentTiles,
+                                                       static_cast<std::size_t>(capacity.maximumBytesPerResidentTile));
+        if (cache.HasError())
+            return World::Failure(cache.ErrorValue());
+        auto agents = Nav::NavigationAgentRegistry::Create({capacity.maximumAgents});
+        if (agents.HasError())
+            return World::Failure(agents.ErrorValue());
+        auto coordinator = Nav::NavigationCoordinator::Create(selection.jobs, CoordinatorLimits(selection.policy));
+        if (coordinator.HasError())
+            return World::Failure(coordinator.ErrorValue());
+        return World::Success(std::make_unique<HeadlessNavigationWorld>(
+            HeadlessNavigationWorld{std::move(cache).Value(), std::move(agents).Value(), std::move(coordinator).Value()}));
+    }
+
+    /** @copydoc RegisterHeadlessNavigation */
+    Result<void> RegisterHeadlessNavigation(Runtime::RuntimeSceneService &scene, HeadlessNavigationWorld &world,
+                                            std::shared_ptr<const HeadlessNavigationSelection> selection) {
+        const auto &capacity = selection->policy.Capacities();
+        auto assets =
+            std::make_unique<Nav::NavigationAssetSceneActivationParticipant>(*world.cache, selection->target,
+                                                                             [selection](const auto &descriptor, const auto surfaces,
+                                                                                         const auto budget) {
+            return PrepareBackend(*selection, descriptor, surfaces, budget);
+        },
+                                                                             Nav::NavigationAssetSceneLimits{
+                                                                                 .maximumReservedProviderBytes = static_cast<std::size_t>(
+                                                                                     capacity.maximumResidentMemoryBytes -
+                                                                                     capacity.maximumBytesPerResidentTile)},
+                                                                             std::nullopt,
+                                                                             Nav::NavigationAssetSceneSelection{selection->surface.scope,
+                                                                                                                selection->policy});
+        world.assets = assets.get();
+        const auto admission = [selection](const Nav::NavigationAgentDescriptor &agent) {
+            return AdmitAgent(*selection, agent);
+        };
+        auto agents = std::make_unique<Nav::NavigationSceneActivationParticipant>(world.agents, admission);
+        auto groups = agents->MakeStructuralParticipant([assets = world.assets] {
+            return assets->ActiveWorld();
+        }, world.coordinator, admission);
+        if (auto added = scene.AddActivationParticipant(std::move(assets)); added.HasError())
+            return added;
+        if (auto added = scene.AddActivationParticipant(std::move(agents)); added.HasError())
+            return added;
+        return scene.AddStructuralParticipant(std::move(groups));
+    }
+}  // namespace Horo::Application::Internal

@@ -340,7 +340,11 @@ namespace Horo::Application::Internal {
                                                .prefabMetrics = resources->prefabMetrics,
                                                .prefabPolicy = resources->prefabPolicy,
                                                .animationTarget = animationTarget,
-                                               .animationIdentities = animationTarget.IsValid() ? std::move(animationIdentities) : nullptr};
+                                               .animationIdentities = animationTarget.IsValid() ? std::move(animationIdentities) : nullptr,
+                                               .navigation = resources->navigation};
+            if (input.navigation && launch.role == Net::NetworkProjectRole::Client)
+                return Result<NetworkProductComposition>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "Navigation requires an authoritative world."));
             return ComposeHeadlessSceneNetworkServices(std::move(scene), std::move(input), std::move(factories), launch.gameplay,
                                                        replicationAdmission);
         }

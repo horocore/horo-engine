@@ -65,19 +65,19 @@ namespace Horo::Navigation {
         /** @brief Carries an exact provider-world fence alongside a detached registry delta. */
         class NavigationStructuralCandidate final : public Runtime::SceneStructuralCandidate {
         public:
-            explicit NavigationStructuralCandidate(NavigationWorldLifecycle &world, NavigationCoordinator &coordinator,
+            explicit NavigationStructuralCandidate(std::shared_ptr<NavigationWorldLifecycle> world, NavigationCoordinator &coordinator,
                                                    const NavigationWorldActivationDescriptor activation = {},
                                                    std::unique_ptr<NavigationAgentStructuralCandidate> agents = {}) noexcept
-                : world_(world), coordinator_(coordinator), activation_(activation), agents_(std::move(agents)) {}
+                : world_(std::move(world)), coordinator_(coordinator), activation_(activation), agents_(std::move(agents)) {}
 
             [[nodiscard]] Result<void> ValidatePublication() const override {
                 if (!agents_)
                     return Result<void>::Success();
                 if (activation_.IsValid()) {
-                    const auto active = world_.ActiveDescriptor();
+                    const auto active = world_->ActiveDescriptor();
                     if (active.HasError())
                         return Result<void>::Failure(active.ErrorValue());
-                    if (active.Value() != activation_ || world_.State() != NavigationWorldLifecycleState::Active)
+                    if (active.Value() != activation_ || world_->State() != NavigationWorldLifecycleState::Active)
                         return Result<void>::Failure(MakeError(NavigationErrors::StaleSnapshot));
                 }
                 return agents_->ValidatePublication();
@@ -95,7 +95,7 @@ namespace Horo::Navigation {
             }
 
         private:
-            NavigationWorldLifecycle &world_;
+            std::shared_ptr<NavigationWorldLifecycle> world_;
             NavigationCoordinator &coordinator_;
             NavigationWorldActivationDescriptor activation_;
             std::unique_ptr<NavigationAgentStructuralCandidate> agents_;
@@ -104,10 +104,11 @@ namespace Horo::Navigation {
         /** @brief Stages typed agent-only changes alongside Scene, AI and other prefab owners. */
         class NavigationStructuralParticipant final : public Runtime::SceneStructuralParticipant {
         public:
-            NavigationStructuralParticipant(NavigationAgentRegistry &registry, NavigationWorldLifecycle &world,
+            NavigationStructuralParticipant(NavigationAgentRegistry &registry,
+                                            NavigationSceneActivationParticipant::ActiveWorldSource world,
                                             NavigationCoordinator &coordinator,
                                             NavigationSceneActivationParticipant::StructuralAdmission admission)
-                : registry_(registry), world_(world), coordinator_(coordinator), admission_(std::move(admission)) {}
+                : registry_(registry), world_(std::move(world)), coordinator_(coordinator), admission_(std::move(admission)) {}
 
             [[nodiscard]] Runtime::SceneStructuralOwner Owner() const noexcept override {
                 return Runtime::SceneStructuralOwner::Navigation;
@@ -137,7 +138,7 @@ namespace Horo::Navigation {
                             removals.push_back({binding.Value().scene, entity.entity.index, entity.entity.generation});
                     }
                     if (additions.empty() && removals.empty())
-                        return Candidate::Success(std::make_unique<NavigationStructuralCandidate>(world_, coordinator_));
+                        return Candidate::Success(std::make_unique<NavigationStructuralCandidate>(nullptr, coordinator_));
                     return PrepareAgents(binding.Value(), additions, removals);
                 } catch (const std::bad_alloc &) {
                     return Candidate::Failure(MakeError(NavigationErrors::AgentRegistryCapacityExceeded));
@@ -151,8 +152,12 @@ namespace Horo::Navigation {
                 const std::span<const NavigationAgentOwner> removals) {
                 using Candidate = Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>;
                 NavigationWorldActivationDescriptor activation;
+                std::shared_ptr<NavigationWorldLifecycle> world;
                 if (!additions.empty()) {
-                    const auto admitted = AdmitAdditions(binding, additions);
+                    world = world_ ? world_() : nullptr;
+                    if (!world)
+                        return Candidate::Failure(MakeError(NavigationErrors::NoNavigationData));
+                    const auto admitted = AdmitAdditions(*world, binding, additions);
                     if (admitted.HasError())
                         return Candidate::Failure(admitted.ErrorValue());
                     activation = admitted.Value();
@@ -161,14 +166,15 @@ namespace Horo::Navigation {
                 if (staged.HasError())
                     return Candidate::Failure(staged.ErrorValue());
                 return Candidate::Success(
-                    std::make_unique<NavigationStructuralCandidate>(world_, coordinator_, activation, std::move(staged).Value()));
+                    std::make_unique<NavigationStructuralCandidate>(std::move(world), coordinator_, activation, std::move(staged).Value()));
             }
 
             /** @brief Additions need a live topology; exact owner retirement remains possible while it is paused or unloaded. */
             [[nodiscard]] Result<NavigationWorldActivationDescriptor> AdmitAdditions(
-                const NavigationAgentSceneBinding binding, const std::span<const NavigationAgentDescriptor> additions) const {
+                const NavigationWorldLifecycle &world, const NavigationAgentSceneBinding binding,
+                const std::span<const NavigationAgentDescriptor> additions) const {
                 using Admission = Result<NavigationWorldActivationDescriptor>;
-                const auto lease = world_.Acquire(binding.world);
+                const auto lease = world.Acquire(binding.world);
                 if (lease.HasError())
                     return Admission::Failure(lease.ErrorValue());
                 const auto activation = lease.Value().Descriptor();
@@ -184,7 +190,7 @@ namespace Horo::Navigation {
             }
 
             NavigationAgentRegistry &registry_;
-            NavigationWorldLifecycle &world_;
+            NavigationSceneActivationParticipant::ActiveWorldSource world_;
             NavigationCoordinator &coordinator_;
             NavigationSceneActivationParticipant::StructuralAdmission admission_;
         };
@@ -211,7 +217,12 @@ namespace Horo::Navigation {
                     return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(
                         MakeError(NavigationErrors::AgentRegistryStale));
                 const Runtime::NavigationAgentComponent &component = *entity.components.navigationAgent;
-                descriptors.push_back(MakeDescriptor(binding.Value(), *runtimeEntity, component));
+                const auto descriptor = MakeDescriptor(binding.Value(), *runtimeEntity, component);
+                if (initialAdmission_) {
+                    if (const auto admitted = initialAdmission_(descriptor); admitted.HasError())
+                        return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(admitted.ErrorValue());
+                }
+                descriptors.push_back(descriptor);
             }
             auto candidate = registry_->PrepareScene(binding.Value(), descriptors);
             if (candidate.HasError())
@@ -227,6 +238,16 @@ namespace Horo::Navigation {
     /** @copydoc NavigationSceneActivationParticipant::MakeStructuralParticipant */
     std::unique_ptr<Runtime::SceneStructuralParticipant> NavigationSceneActivationParticipant::MakeStructuralParticipant(
         NavigationWorldLifecycle &world, NavigationCoordinator &coordinator, StructuralAdmission admission) const {
-        return std::make_unique<NavigationStructuralParticipant>(*registry_, world, coordinator, std::move(admission));
+        return MakeStructuralParticipant([&world] {
+            return std::shared_ptr<NavigationWorldLifecycle>{std::shared_ptr<void>{}, &world};
+        }, coordinator, std::move(admission));
+    }
+
+    /** @copydoc
+     * NavigationSceneActivationParticipant::MakeStructuralParticipant(ActiveWorldSource,NavigationCoordinator&,StructuralAdmission) const
+     */
+    std::unique_ptr<Runtime::SceneStructuralParticipant> NavigationSceneActivationParticipant::MakeStructuralParticipant(
+        ActiveWorldSource world, NavigationCoordinator &coordinator, StructuralAdmission admission) const {
+        return std::make_unique<NavigationStructuralParticipant>(*registry_, std::move(world), coordinator, std::move(admission));
     }
 }  // namespace Horo::Navigation

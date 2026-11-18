@@ -54,6 +54,12 @@ namespace Horo::Navigation {
         NavMeshAssetLimits assets;
     };
 
+    /** @brief Exact host-selected local or packaged Scene scope and optional mandatory project policy. */
+    struct NavigationAssetSceneSelection final {
+        NavigationBakeScopeId scope;
+        std::optional<NavigationProjectProfile> requiredProfile; /**< Requires a real world and exact cooked project policy. */
+    };
+
     namespace Detail {
         struct NavigationAssetSceneState;
     }
@@ -77,10 +83,12 @@ namespace Horo::Navigation {
          * @param factory Fully initialized provider constructor, without backend discovery.
          * @param limits Finite positive live-world/provider and asset bounds.
          * @param content Optional owned release expectations. Presence requires an exact entry for each Scene NavMesh asset;
-         * empty or missing entries never permit legacy fallback. The host obtains these from verified package evidence. */
+         * empty or missing entries never permit legacy fallback. The host obtains these from verified package evidence.
+         * @param selection Exact selected scope and project-policy requirement. Default retains definition-local compatibility. */
         NavigationAssetSceneActivationParticipant(Assets::AssetPayloadCache &cache, AssetCookTargetId target,
                                                   NavigationAssetBackendFactory factory, const NavigationAssetSceneLimits &limits = {},
-                                                  std::optional<std::vector<NavMeshAssetContentExpectation>> content = std::nullopt);
+                                                  std::optional<std::vector<NavMeshAssetContentExpectation>> content = std::nullopt,
+                                                  NavigationAssetSceneSelection selection = {});
         /** @brief Revoke active work without waiting; worker leases keep storage safe. */
         ~NavigationAssetSceneActivationParticipant() override;
         /** @copydoc Runtime::SceneActivationParticipant::Prepare */
@@ -89,6 +97,9 @@ namespace Horo::Navigation {
         /** @brief Acquire current generation through the existing runtime world lease.
          * @return Current provider pin or NoNavigationData. */
         [[nodiscard]] Result<NavigationWorldReadLease> Acquire() const;
+        /** @brief Pins the active lifecycle for structural registration on the same host owner thread.
+         * @return Exact published lifecycle or null. The Scene participant still owns replacement and shutdown. */
+        [[nodiscard]] std::shared_ptr<NavigationWorldLifecycle> ActiveWorld() const noexcept;
         /** @brief Read exact asset provenance for the current provider generation.
          * @return Owner-thread borrow valid until publication or shutdown; no inactive fallback is returned. */
         [[nodiscard]] std::span<const NavigationAssetProvenance> ActiveAssetProvenance() const noexcept;

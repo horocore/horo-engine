@@ -2637,6 +2637,7 @@ target_compile_features(HoroCharacterSceneProductTests PRIVATE cxx_std_20)
 target_link_libraries(HoroCharacterSceneProductTests PRIVATE HoroEngine::ProjectSurfaceSettings)
 target_compile_definitions(HoroCharacterSceneProductTests PRIVATE
         HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>
+        HORO_TEST_NAVIGATION_NATIVE=$<BOOL:${HORO_BUILD_NAVIGATION_RECAST_DETOUR}>
         HORO_TEST_CHARACTER_CLI_PATH="$<TARGET_FILE:horo-engine>"
         HORO_TEST_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
 target_include_directories(HoroCharacterSceneProductTests PRIVATE
@@ -2644,7 +2645,7 @@ target_include_directories(HoroCharacterSceneProductTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/support
         ${PROJECT_SOURCE_DIR}/src/runtime/assets/cooker/builtin)
 target_link_libraries(HoroCharacterSceneProductTests PRIVATE HoroNetworkProductHost HoroEngine::PhysicsTriggerVolumeHost HoroEngine::Platform
-        nlohmann_json::nlohmann_json miniz)
+        HoroEngine::ProjectSettings HoroEngine::NavigationApi nlohmann_json::nlohmann_json miniz)
 add_dependencies(HoroCharacterSceneProductTests horo-engine)
 # The generated canonical case runs source/cooked CLI children for both scene sizes.
 # Four bounded 90-second children plus fixture setup must fit within the CTest budget.

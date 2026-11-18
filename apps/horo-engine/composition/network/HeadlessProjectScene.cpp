@@ -1,5 +1,6 @@
 #include "HeadlessProjectScene.h"
 
+#include "HeadlessNavigationComposition.h"
 #include "Horo/Application/PrefabProjectSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Application/ProjectSurfaceSettings.h"
@@ -73,14 +74,17 @@ namespace Horo::Application::Internal {
 
         /** @brief Resolves only the selected actual Scene envelope; embedded revision is admitted by Scene's canonical decoder. */
         Result<Runtime::RuntimeSceneDefinition> ReadProductCookedScene(const HeadlessProjectSceneOptions &launch,
-                                                                       const HeadlessProjectSceneResources &resources) {
+                                                                       HeadlessProjectSceneResources &resources) {
             if (!resources.committed)
                 return Result<Runtime::RuntimeSceneDefinition>::Failure(
                     MakeError(Net::NetworkErrors::NetworkModeInvalid, "Cooked Scene selection requires --cooked-root and --cook-target."));
             auto id = Assets::AssetId::Parse(std::string_view{launch.scene}.substr(std::string_view{"cooked:"}.size()));
             if (id.HasError())
                 return Result<Runtime::RuntimeSceneDefinition>::Failure(id.ErrorValue());
-            return resources.committed->DecodeScene(id.Value());
+            auto decoded = resources.committed->DecodeScene(id.Value());
+            if (decoded.HasValue())
+                resources.sceneAsset = id.Value();
+            return decoded;
         }
 
         /** @brief Captures complete registry state and an explicitly selected verified cook generation. */
@@ -172,6 +176,12 @@ namespace Horo::Application::Internal {
                 MakeError(Net::NetworkErrors::NetworkModeInvalid,
                           "This Scene requires committed asset payloads; provide --cooked-root and --cook-target."));
         resources->definition = std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(definition).Value());
+        if (launch.navigationMode == HeadlessNavigationMode::RecastDetour) {
+            auto navigation = CaptureHeadlessNavigation(launch, *resources);
+            if (navigation.HasError())
+                return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(navigation.ErrorValue());
+            resources->navigation = std::move(navigation).Value();
+        }
         PrepareProductLoaders(*resources);
         if (const auto settings = CaptureProductPhysics(launch, *resources, metadata.Value().projectId); settings.HasError())
             return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(settings.ErrorValue());

@@ -19,6 +19,7 @@ namespace Horo::Navigation {
             NavigationAssetBackendFactory factory;
             NavigationAssetSceneLimits limits;
             std::optional<std::vector<NavMeshAssetContentExpectation>> content;
+            NavigationAssetSceneSelection selection;
             std::shared_ptr<NavigationAssetWorldAccounting> accounting{std::make_shared<NavigationAssetWorldAccounting>()};
             std::shared_ptr<NavigationWorldLifecycle> active;
             std::shared_ptr<const std::vector<NavigationAssetProvenance>> provenance;
@@ -157,9 +158,14 @@ namespace Horo::Navigation {
             }
             const Assets::AssetDependency metadata{id, *resolved->type};
             auto loaded = LoadNavMeshAsset(metadata, scene.AssetRegistryRevision(), resolved->bytes, state.target, *state.cache,
-                                           {.limits = state.limits.assets, .expectation = expectation});
+                                           {.limits = state.limits.assets, .expectation = expectation, .scope = state.selection.scope});
             if (loaded.HasError())
                 return Result<std::size_t>::Failure(loaded.ErrorValue());
+            if (const auto &required = state.selection.requiredProfile; required) {
+                const auto &provenance = loaded.Value().contentProvenance;
+                if (!provenance || !provenance->projectProfile || !provenance->projectProfile->MatchesAuthority(*required))
+                    return Result<std::size_t>::Failure(MakeError(NavigationErrors::ProjectProfileStale));
+            }
             assets.push_back(std::move(loaded).Value());
             return Result<std::size_t>::Success(assets.size() - 1);
         }
@@ -292,13 +298,15 @@ namespace Horo::Navigation {
     /** @copydoc NavigationAssetSceneActivationParticipant::NavigationAssetSceneActivationParticipant */
     NavigationAssetSceneActivationParticipant::NavigationAssetSceneActivationParticipant(
         Assets::AssetPayloadCache &cache, AssetCookTargetId target, NavigationAssetBackendFactory factory,
-        const NavigationAssetSceneLimits &limits, std::optional<std::vector<NavMeshAssetContentExpectation>> content)
+        const NavigationAssetSceneLimits &limits, std::optional<std::vector<NavMeshAssetContentExpectation>> content,
+        NavigationAssetSceneSelection selection)
         : state_(std::make_shared<Detail::NavigationAssetSceneState>()) {
         state_->cache = &cache;
         state_->target = std::move(target);
         state_->factory = std::move(factory);
         state_->limits = limits;
         state_->content = std::move(content);
+        state_->selection = std::move(selection);
     }
 
     /** @copydoc NavigationAssetSceneActivationParticipant::~NavigationAssetSceneActivationParticipant */
@@ -324,7 +332,10 @@ namespace Horo::Navigation {
             std::vector<NavigationLoadedSurface> surfaces;
             if (const auto selected = SelectSurfaces(definition, scene, *state_, assets, surfaces); selected.HasError())
                 return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(selected.ErrorValue());
-            if (state_->content) {
+            if (state_->selection.requiredProfile && surfaces.empty())
+                return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(
+                    MakeError(NavigationErrors::SceneSurfaceMissing));
+            if (state_->content || state_->selection.requiredProfile) {
                 if (const auto required = ValidateRequiredCoverage(definition, scene, *state_, assets, surfaces); required.HasError())
                     return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(required.ErrorValue());
                 if (const auto coverage = ValidateAgentCoverage(definition, surfaces); coverage.HasError())
@@ -361,6 +372,11 @@ namespace Horo::Navigation {
         if (descriptor.HasError())
             return Result<NavigationWorldReadLease>::Failure(descriptor.ErrorValue());
         return state_->active->Acquire(descriptor.Value().world);
+    }
+
+    /** @copydoc NavigationAssetSceneActivationParticipant::ActiveWorld */
+    std::shared_ptr<NavigationWorldLifecycle> NavigationAssetSceneActivationParticipant::ActiveWorld() const noexcept {
+        return state_->closed ? nullptr : state_->active;
     }
 
     /** @copydoc NavigationAssetSceneActivationParticipant::ActiveAssetProvenance */

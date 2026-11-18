@@ -97,14 +97,11 @@ namespace Horo::Application::Internal {
             CookTarget,
             Physics,
             Timeout,
+            Navigation,
             Count
         };
-        constexpr std::array<std::string_view, static_cast<std::size_t>(SceneOption::Count)> SceneOptionNames{"--project",
-                                                                                                              "--scene",
-                                                                                                              "--cooked-root",
-                                                                                                              "--cook-target",
-                                                                                                              "--physics",
-                                                                                                              "--load-timeout-ms"};
+        constexpr std::array<std::string_view, static_cast<std::size_t>(SceneOption::Count)>
+            SceneOptionNames{"--project", "--scene", "--cooked-root", "--cook-target", "--physics", "--load-timeout-ms", "--navigation"};
         using SeenSceneOptions = std::array<bool, static_cast<std::size_t>(SceneOption::Count)>;
 
         /** @brief Applies one admitted unique option; paths retain the canonical native UTF-8 conversion. */
@@ -141,6 +138,12 @@ namespace Horo::Application::Internal {
                     input.loadTimeout = std::chrono::milliseconds{milliseconds};
                     break;
                 }
+                case Navigation:
+                    if (value != "recast-detour")
+                        return Result<void>::Failure(
+                            MakeError(Net::NetworkErrors::NetworkModeInvalid, "Navigation mode must be recast-detour."));
+                    input.navigationMode = HeadlessNavigationMode::RecastDetour;
+                    break;
                 case Count:
                     return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid));
             }
@@ -162,6 +165,9 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(
                     MakeError(Net::NetworkErrors::NetworkModeInvalid,
                               "Use an absolute project/cook root and source:<project path> or cooked:<Scene AssetId>."));
+            if (has(SceneOption::Navigation) && (!input.scene.starts_with("cooked:") || !has(SceneOption::CookRoot)))
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                                       "Navigation requires a durable cooked Scene and committed cook generation."));
             return Result<void>::Success();
         }
 
