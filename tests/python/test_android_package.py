@@ -448,6 +448,20 @@ class AndroidAssemblyTests(unittest.TestCase):
         self.assertNotIn('ninja==', workflow)
         self.assertEqual(len(self.tools["ninjaSha256"]), 64)
 
+    def test_hosted_gradle_cache_keys_all_locked_resolution_inputs(self):
+        workflow = (android_package.ROOT / ".github/workflows/android-package.yml").read_text()
+        java_setup = workflow.split("uses: actions/setup-java@", 1)[1].split("- name:", 1)[0]
+        self.assertIn("cache: gradle", java_setup)
+        key_paths = java_setup.split("cache-dependency-path:", 1)[1].splitlines()[1:]
+        self.assertEqual(set(filter(None, map(str.strip, key_paths))), {
+            "android/toolchain-lock.json",
+            "android/package-profiles.json",
+            "android/gradle/build.gradle",
+            "android/gradle/settings.gradle",
+            "android/gradle/gradle.properties",
+            "android/gradle/gradle.lockfile",
+        })
+
     def test_tool_preflight_actual_metadata_and_version_commands(self):
         arguments = self.arguments()
         for root, revision in ((arguments.ndk,self.tools["ndk"]),

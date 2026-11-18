@@ -29,6 +29,14 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
+          cache-dependency-path: |
+            android/toolchain-lock.json
+            android/package-profiles.json
+            android/gradle/build.gradle
+            android/gradle/settings.gradle
+            android/gradle/gradle.properties
+            android/gradle/gradle.lockfile
       - name: Install locked SDK and build tools
         shell: bash
         run: |
