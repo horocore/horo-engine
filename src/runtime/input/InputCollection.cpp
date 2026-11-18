@@ -190,12 +190,13 @@ namespace Horo::Input {
 
     /** @copydoc InputRouter::ActionCollectionForPlayer */
     Result<InputActionCollection> InputRouter::ActionCollectionForPlayer(const InputContextToken &context, const PlayerId player) const {
-        auto port = ActionCollection(context);
-        if (port.HasValue()) {
-            port.Value().player_ = player;
-            port.Value().assignment_.reset();
-        }
-        return port;
+        auto borrowed = ActionCollection(context);
+        if (borrowed.HasError())
+            return borrowed;
+        auto port = std::move(borrowed).Value();
+        port.player_ = player;
+        port.assignment_.reset();
+        return Result<InputActionCollection>::Success(std::move(port));
     }
 
     /** @copydoc InputRouter::RefreshPlayerActionCollection */
