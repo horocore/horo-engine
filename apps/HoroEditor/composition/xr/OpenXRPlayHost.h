@@ -256,6 +256,11 @@ namespace Horo::Application::Internal {
          * @post Native/frame/image debt remains owned for the explicit retirement path.
          */
         void RevokeEventAdmission() noexcept;
+        /** @brief Retires the selected session only for a confirmed input profile transition.
+         * @param error Exact failure from native sampling or explicit profile observation.
+         * @return Whether the existing Play retirement path accepted the profile change.
+         */
+        [[nodiscard]] bool RetireIfInputProfileChanged(const Error &error);
         /** @brief Neutralizes the XR source while keeping the SAME lifetime-fenced workspace collection for next Play.
          * @post No native frame/source can publish until a new actual preparation/binding succeeds; replacement still
          * requires the router's real neutral commit. Explicit workspace RevokeInput/DetachInput also drop that borrow.

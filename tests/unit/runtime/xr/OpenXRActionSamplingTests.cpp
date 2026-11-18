@@ -56,6 +56,34 @@ namespace {
         CHECK(fixture.script.liveActions == 0);
     }
 
+    TEST_CASE("OpenXR scalar sampling distinguishes lost confirmed profiles from stale device identities", "[xr][openxr][actions]") {
+        ActionFixture fixture;
+        REQUIRE(fixture.Create().HasValue());
+        const auto plan = fixture.Plan();
+        const auto session = fixture.session.Request().candidate;
+        std::array devices{fixture.Device()};
+        fixture.script.currentProfiles[0] = fixture.script.Find(fixture.profilePaths[0].path);
+        REQUIRE(fixture.script.currentProfiles[0] != XR_NULL_PATH);
+        REQUIRE(fixture.owner.Sync(session).HasValue());
+        const auto confirmed = fixture.owner.Sample(session, plan, devices);
+        REQUIRE(confirmed.HasValue());
+        REQUIRE(confirmed.Value().Actions().size() == 1);
+
+        fixture.script.currentProfiles[0] = XR_NULL_PATH;
+        const auto scalarQueries = std::ranges::count(fixture.session.script.calls, "sample-boolean");
+        REQUIRE(fixture.owner.Sync(session).HasValue());
+        const auto lost = fixture.owner.Sample(session, plan, devices, confirmed.Value().Profiles());
+        REQUIRE(lost.HasError());
+        CHECK(lost.ErrorValue().code == XRErrors::ActionProfileChanged.code);
+        CHECK(std::ranges::count(fixture.session.script.calls, "sample-boolean") == scalarQueries);
+
+        ++devices.front().id.session.slot.generation;
+        REQUIRE(fixture.owner.Sync(session).HasValue());
+        const auto stale = fixture.owner.Sample(session, plan, devices, confirmed.Value().Profiles());
+        REQUIRE(stale.HasError());
+        CHECK(stale.ErrorValue().code == XRErrors::IdentityStale.code);
+    }
+
     TEST_CASE("OpenXR scalar sampling preserves native errors and rejects malformed Boolean states atomically", "[xr][openxr][actions]") {
         ActionFixture fixture;
         REQUIRE(fixture.Create().HasValue());

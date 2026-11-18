@@ -99,9 +99,15 @@ namespace Horo::XR::OpenXRInternal {
             return std::span{records_}.first(count_);
         }
 
+        /** @brief Returns the exact per-role profiles used to admit this packet. */
+        [[nodiscard]] const std::array<XRActiveInteractionProfile, 2> &Profiles() const noexcept {
+            return profiles_;
+        }
+
     private:
         friend class OpenXRActionBindings;
         std::array<XRTrackedActionRecord, XRActionBindingLimits::MaximumActions> records_{};
+        std::array<XRActiveInteractionProfile, 2> profiles_{};
         std::size_t count_{};
     };
 
@@ -224,16 +230,25 @@ namespace Horo::XR::OpenXRInternal {
          * @return Success or typed focus/session/native failure; no gameplay or Input mutation occurs here.
          */
         [[nodiscard]] Result<void> Sync(const XRSessionId &session) const;
+        /** @brief Preserves confirmed profile identities across observation and allows startup fallback confirmation.
+         * @param previous Profiles retained from the exact preparation or last admitted cutoff.
+         * @param current Fresh native observation in canonical role order.
+         * @return Success or a typed malformed or changed-profile error. Performs no native calls.
+         */
+        [[nodiscard]] Result<void> ValidateProfileContinuity(const std::array<XRActiveInteractionProfile, 2> &previous,
+                                                             const std::array<XRActiveInteractionProfile, 2> &current) const;
         /** @brief Samples the current synchronized scalar actions without publishing Input or a tracking snapshot.
          * @param session Exact current canonical session generation.
          * @param plan Current existing resolved binding publication, never a native-path plan.
          * @param devices Exact current XRRuntime-issued physical device generations.
          * @return Fixed complete packet or the original native/typed validation failure; no partial packet escapes.
+         * @param previous Optional host-owned per-role evidence, copied before any foreign callbacks.
          * @pre Sync has succeeded since the previous sampling attempt. The host has admitted focused simulation sampling.
          * @post Successful normal sampling allocates no storage and produces no transition flags or gameplay mutations.
          */
-        [[nodiscard]] Result<NativeScalarActionSamples> Sample(const XRSessionId &session, const XRResolvedActionBindings &plan,
-                                                               std::span<const XRTrackedDeviceRecord> devices) const;
+        [[nodiscard]] Result<NativeScalarActionSamples> Sample(
+            const XRSessionId &session, const XRResolvedActionBindings &plan, std::span<const XRTrackedDeviceRecord> devices,
+            std::optional<std::array<XRActiveInteractionProfile, 2>> previous = std::nullopt) const;
         /** @brief Locates the same synchronized native pose spaces at the caller's exact runtime sampling time.
          * @param session Current lifecycle-issued owner.
          * @param time Existing simulation-cutoff clock evidence; runtimeSample is the exact native XrTime, never a host-clock cast.

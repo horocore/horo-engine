@@ -223,16 +223,11 @@ namespace Horo::Application::Internal {
         }
         if (observed.bindingsChanged) {
             tracking_.Revoke();
-            if (auto refreshed =
-                    composition_.session.RefreshInputProfiles(sessions_.Snapshot().session, composition_.bindings->schema.genericFallback);
-                refreshed.HasError()) {
-                const auto &error = refreshed.ErrorValue();
-                RevokeEventAdmission();
-                if (ErrorChainContains(error, XRErrors::TrackingSnapshotStale.domain, XRErrors::TrackingSnapshotStale.code)) {
-                    LOG_WARN("editor.xr", "Controller profile changed. Start a new XR Play session to use the current profile.");
+            if (const auto refreshed = composition_.session.RefreshInputProfiles(state.session); refreshed.HasError()) {
+                if (RetireIfInputProfileChanged(refreshed.ErrorValue()))
                     return Result<bool>::Success(false);
-                }
-                return Result<bool>::Failure(error);
+                RevokeEventAdmission();
+                return Result<bool>::Failure(refreshed.ErrorValue());
             }
         }
         if (const auto &change = observed.referenceChange; change && scene_ && scene_->projection && change->session == scene_->session) {
@@ -263,6 +258,15 @@ namespace Horo::Application::Internal {
             scene_->Retire(*this);
         else
             RevokeSource();
+    }
+
+    /** @copydoc OpenXRPlayHost::RetireIfInputProfileChanged */
+    bool OpenXRPlayHost::RetireIfInputProfileChanged(const Error &error) {
+        if (!ErrorChainContains(error, XRErrors::ActionProfileChanged.domain, XRErrors::ActionProfileChanged.code))
+            return false;
+        RevokeEventAdmission();
+        LOG_WARN("editor.xr", "Controller profile changed. Start a new XR Play session to use the current profile.");
+        return true;
     }
 
     /** @copydoc OpenXRPlayHost::AppendInput */
@@ -359,6 +363,8 @@ namespace Horo::Application::Internal {
             return committed;
         }
         if (sampled.HasError()) {
+            if (RetireIfInputProfileChanged(sampled.ErrorValue()))
+                return Result<void>::Success();
             RevokeSource();
             return sampled;
         }

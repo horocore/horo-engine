@@ -147,9 +147,24 @@ namespace Horo::XR::OpenXRInternal {
         return Result<XRTrackedActionRecord>::Failure(MakeError(XRErrors::TrackingSnapshotInvalid));
     }
 
+    /** @copydoc OpenXRActionBindings::ValidateProfileContinuity */
+    Result<void> OpenXRActionBindings::ValidateProfileContinuity(const std::array<XRActiveInteractionProfile, 2> &previous,
+                                                                 const std::array<XRActiveInteractionProfile, 2> &current) const {
+        for (std::size_t index = 0; index < previous.size(); ++index) {
+            if (previous[index].role != current[index].role)
+                return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotInvalid));
+            const auto before = previous[index].profile;
+            const auto after = current[index].profile;
+            if (before != after && (before.value != 0 || after != fallbackProfile_))
+                return Result<void>::Failure(MakeError(XRErrors::ActionProfileChanged));
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc OpenXRActionBindings::Sample */
-    Result<NativeScalarActionSamples> OpenXRActionBindings::Sample(const XRSessionId &session, const XRResolvedActionBindings &plan,
-                                                                   const std::span<const XRTrackedDeviceRecord> devices) const {
+    Result<NativeScalarActionSamples> OpenXRActionBindings::Sample(
+        const XRSessionId &session, const XRResolvedActionBindings &plan, const std::span<const XRTrackedDeviceRecord> devices,
+        const std::optional<std::array<XRActiveInteractionProfile, 2>> previous) const {
         if (auto lane = ControlLane(); lane.HasError())
             return Result<NativeScalarActionSamples>::Failure(lane.ErrorValue());
         if (!active_ || sampling_ || syncSequence_ == 0 || sampledSequence_ == syncSequence_)
@@ -167,11 +182,15 @@ namespace Horo::XR::OpenXRInternal {
         if (profiles.HasError())
             return Result<NativeScalarActionSamples>::Failure(profiles.ErrorValue());
         NativeScalarActionSamples result;
+        result.profiles_ = profiles.Value();
+        if (previous)
+            if (const auto valid = ValidateProfileContinuity(*previous, result.profiles_); valid.HasError())
+                return Result<NativeScalarActionSamples>::Failure(valid.ErrorValue());
         for (const auto &candidate : std::span{prepared.Value().entries}.first(prepared.Value().count)) {
             const auto role = candidate.action->role == XRTrackedDeviceRole::LeftController ? 0U : 1U;
             if (const auto profile = profiles.Value()[role].profile;
                 candidate.profile != profile && !(profile.value == 0 && candidate.fallback && candidate.profile == fallbackProfile_))
-                return Result<NativeScalarActionSamples>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
+                return Result<NativeScalarActionSamples>::Failure(MakeError(XRErrors::ActionProfileChanged));
             auto sample = ReadScalar(*candidate.action, candidate.device, candidate.bindingIndex);
             if (sample.HasError())
                 return Result<NativeScalarActionSamples>::Failure(sample.ErrorValue());

@@ -704,8 +704,9 @@ requires a fresh publication before the host can borrow tracking again.
 OpenXR profile notifications also revoke the previous tracking sample. Confirming
 the already selected startup fallback preserves the published controller bindings.
 Loss or replacement of a confirmed profile retires the selected input source
-through the Play lifecycle. Desktop Input continues to commit while a new Play
-occurrence prepares the current profile and fresh session.
+through the Play lifecycle whether the event pump or the next action cutoff
+observes it first. Desktop Input continues to commit while a new Play occurrence
+prepares the current profile and fresh session.
 An observed interruption commits neutral XR actions before sampling can resume,
 including when focus is restored within the same native event batch. A controller
 with admitted grip or aim evidence and a matching native pose route withdraws its

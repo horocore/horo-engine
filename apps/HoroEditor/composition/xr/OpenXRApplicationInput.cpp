@@ -163,7 +163,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc OpenXRApplicationSession::RefreshInputProfiles */
-    Result<void> OpenXRApplicationSession::RefreshInputProfiles(const XRSessionId &session, const XRInteractionProfileId fallback) {
+    Result<void> OpenXRApplicationSession::RefreshInputProfiles(const XRSessionId &session) {
         if (auto current = Current(); current.HasError())
             return current;
         if (!input_.native || !input_.bindings)
@@ -173,13 +173,8 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(observed.ErrorValue());
         if (auto current = Current(); current.HasError())
             return current;
-        for (std::size_t index = 0; index < input_.profiles.size(); ++index) {
-            const auto previous = input_.profiles[index].profile;
-            const auto current = observed.Value()[index].profile;
-            // Confirming the configured fallback resolves the same controls as the pre-running selection.
-            if (current != previous && (previous.value != 0 || current != fallback))
-                return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale, "OpenXR controller profile changed."));
-        }
+        if (const auto valid = input_.native->ValidateProfileContinuity(input_.profiles, observed.Value()); valid.HasError())
+            return valid;
         input_.profiles = observed.Value();
         return Result<void>::Success();
     }
@@ -274,16 +269,19 @@ namespace Horo::Application::Internal {
             if (!bindingsCurrent())
                 return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
         }
-        const auto actions = input_.native->Sample(state.session, *coordinator.Current(), publication.Devices());
+        const auto actions = input_.native->Sample(state.session, *coordinator.Current(), publication.Devices(), input_.profiles);
         if (actions.HasError())
             return Result<void>::Failure(actions.ErrorValue());
         if (auto current = Current(); current.HasError())
             return current;
         if (!bindingsCurrent())
             return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
-        return AppendPreparedInput({poses.Value(), actions.Value(), state, time.Value(), origin, bindingRevision,
-                                    hands ? &*hands : nullptr},
-                                   publication, frame);
+        const auto appended =
+            AppendPreparedInput({poses.Value(), actions.Value(), state, time.Value(), origin, bindingRevision, hands ? &*hands : nullptr},
+                                publication, frame);
+        if (appended.HasValue())
+            input_.profiles = actions.Value().Profiles();
+        return appended;
     }
 
     /** @copydoc OpenXRApplicationSession::AppendPreparedInput */

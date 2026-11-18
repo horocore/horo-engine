@@ -242,11 +242,10 @@ namespace Horo::Application::Internal {
                                              const Input::InputRouter &router, const OpenXRApplicationBindings &bindings);
         /** @brief Revalidates the exact attached input plan after a runtime profile notification.
          * @param session Current owner-issued session from the event's canonical lifecycle.
-         * @param fallback Exact generic profile declared by the same immutable installer bindings.
          * @return Success for unchanged evidence or confirmation of the selected startup fallback. A profile replacement or loss
          * returns an actionable failure for host-owned retirement and neutralization.
          */
-        [[nodiscard]] Result<void> RefreshInputProfiles(const XR::XRSessionId &session, XR::XRInteractionProfileId fallback);
+        [[nodiscard]] Result<void> RefreshInputProfiles(const XR::XRSessionId &session);
         /** @brief Closes current native vibration admission without dispatching to the runtime.
          * @param role Exact affected role, or no role to revoke the same Play owner's outputs.
          * @pre Owner lane. Can be requested while a foreign runtime call is still on the stack.

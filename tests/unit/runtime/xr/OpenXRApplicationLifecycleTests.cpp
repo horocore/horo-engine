@@ -961,13 +961,16 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(fixture.play->ReadInspection().sessionGeneration == generation);
 
         fixture.script.actions.currentProfiles[0] = XR_NULL_PATH;
-        fixture.script.events.interactionProfileChanged = true;
-        RequireValue(fixture.play->PollEvents());
+        if (type != Digital) {
+            fixture.script.events.interactionProfileChanged = true;
+            RequireValue(fixture.play->PollEvents());
+        }
+        // Digital tests the same confirmed profile change detected by native sampling before notification.
+        const auto unplugged = runCutoff();
         const auto retired = fixture.play->ReadInspection();
         CHECK(retired.status == EditorXrInspectionStatus::Stale);
         CHECK(retired.trackingRevision == 0);
         CHECK_FALSE(fixture.play->UsesXrScene());
-        const auto unplugged = runCutoff();
         CHECK_FALSE(unplugged.down);
         CHECK(unplugged.released);
 

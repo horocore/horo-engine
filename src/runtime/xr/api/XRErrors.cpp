@@ -169,6 +169,15 @@ namespace Horo::XR::XRErrors {
         .retryable = true,
         .userActionable = false,
     };
+    const ErrorCodeDescriptor ActionProfileChanged{
+        .domain = XRDomain,
+        .code = ErrorCode{"xr.action_profile.changed"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "The admitted XR interaction profile was lost or replaced.",
+        .remediationHint = "Start a new XR Play session to prepare the current interaction profile.",
+        .retryable = true,
+        .userActionable = true,
+    };
     const ErrorCodeDescriptor ViewPlanInvalid{
         .domain = XRDomain,
         .code = ErrorCode{"xr.view_plan.invalid"},
@@ -318,6 +327,7 @@ namespace Horo::XR::XRErrors {
             &OriginRevisionStale,
             &TrackingSnapshotInvalid,
             &TrackingSnapshotStale,
+            &ActionProfileChanged,
             &ViewPlanInvalid,
             &ViewConfigurationStale,
             &ExternalTargetInvalid,
