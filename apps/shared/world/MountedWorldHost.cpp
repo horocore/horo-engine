@@ -672,7 +672,7 @@ namespace Horo::Application::Internal {
         auto prepared = state_->PrepareInitialCell(selected, boundary, parent ? parent->RuntimeId() : Runtime::SceneRuntimeId{});
         if (prepared.HasError())
             return Result<void>::Failure(prepared.ErrorValue());
-        auto &cell = prepared.Value();
+        auto cell = std::move(prepared).Value();
         const auto &fence = cell.cell.fence;
         const auto &address = cell.cell.address;
         const auto &identity = cell.cell.identity;
@@ -746,7 +746,7 @@ namespace Horo::Application::Internal {
             auto prepared = state_->PrepareInitialCell(selected, boundary, state_->scene.NextRuntimeId());
             if (prepared.HasError())
                 return Result<void>::Failure(prepared.ErrorValue());
-            auto &data = prepared.Value();
+            auto data = std::move(prepared).Value();
             const auto &cell = data.cell;
             state_->pendingLifetime.emplace();
             using enum WS::StreamingCellOperationTransition;
