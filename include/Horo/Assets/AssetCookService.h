@@ -25,6 +25,13 @@
 #include <vector>
 
 namespace Horo::Assets {
+    namespace CookErrors {
+        /** @brief Cooperative cancellation acknowledged by AssetCook or its input capture. */
+        extern const ErrorCodeDescriptor Cancelled;
+        /** @brief The host's bounded operation store cannot admit this cook. */
+        extern const ErrorCodeDescriptor OperationAdmissionFailed;
+    }  // namespace CookErrors
+
     class AssetCookKeyProjection;
 
     /** @brief Validated unpublished resource envelope, borrowed only until the dependent-catalog callback returns. */

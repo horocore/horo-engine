@@ -176,6 +176,34 @@ TEST_CASE("Host prefab cook handles an operation-store cancellation before sourc
     fixture.AssertRetained(first.Value().generation);
 }
 
+TEST_CASE("Host prefab cook preserves typed failure when its cancellation races admission", "[native][prefab-cook][host]") {
+    HostFixture fixture;
+    BuildOutputStore output{8};
+    OperationStore operations{1, 2};
+    CancellationSource cancellation;
+    fixture.request.assets.buildOutputStore = &output;
+    fixture.request.assets.operationStore = &operations;
+    fixture.request.assets.newPublicationOperationId = [&] {
+        cancellation.RequestCancellation();
+        return Result<AssetId>::Failure(MakeError(PrefabSceneCookErrors::Invalid, fixture.project.dir.path.string()));
+    };
+
+    const auto failed = fixture.Cook(cancellation.Token());
+    REQUIRE(failed.HasError());
+    CHECK(failed.ErrorValue().code == PrefabSceneCookErrors::Invalid.code);
+    const auto snapshot = operations.SnapshotIfChanged(0);
+    REQUIRE(snapshot);
+    REQUIRE(snapshot->operations.size() == 1);
+    CHECK(snapshot->operations.front().state == OperationState::Failed);
+    REQUIRE(snapshot->operations.front().error);
+    CHECK(snapshot->operations.front().error->message == "Prefab cook preparation failed");
+    const auto records = output.SnapshotIfChanged(0);
+    REQUIRE(records);
+    REQUIRE(records->records.size() == 1);
+    CHECK(records->records.front().result == BuildOutputResult::Failed);
+    CHECK(records->records.front().message == "Prefab cook preparation failed");
+}
+
 TEST_CASE("Host prefab scene cook publishes expanded source-free scenes and validates cache reuse", "[native][prefab-cook][host]") {
     HostFixture fixture;
     const auto first = fixture.Cook();

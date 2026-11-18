@@ -39,8 +39,8 @@ namespace Horo::Application {
     /** @brief Projects the host preflight until ownership passes to AssetCook's publication operation. */
     class PrefabSceneCookHost::PreparationDiagnostics final {
     public:
-        PreparationDiagnostics(const Assets::AssetCookRequest &request, const CancellationToken &cancellation)
-            : operations_(request.operationStore), output_(request.buildOutputStore), cancellation_(cancellation) {
+        explicit PreparationDiagnostics(const Assets::AssetCookRequest &request)
+            : operations_(request.operationStore), output_(request.buildOutputStore) {
             if (operations_) {
                 id_ = operations_->Begin({.kind = OperationKind::Cook,
                                           .title = "Prepare prefab cook",
@@ -71,7 +71,8 @@ namespace Horo::Application {
                 return;
             finished_ = true;
             const bool cancelled =
-                error && (cancellation_.IsCancellationRequested() || IsJobCancelled(*error) ||
+                error && (IsJobCancelled(*error) ||
+                          ErrorChainContains(*error, Assets::CookErrors::Cancelled.domain, Assets::CookErrors::Cancelled.code) ||
                           ErrorChainContains(*error, PrefabSceneCookErrors::Cancelled.domain, PrefabSceneCookErrors::Cancelled.code) ||
                           ErrorChainContains(*error, Prefab::PrefabErrors::Cancelled.domain, Prefab::PrefabErrors::Cancelled.code) ||
                           ErrorChainContains(*error, FileStorageErrors::Cancelled.domain, FileStorageErrors::Cancelled.code));
@@ -120,7 +121,6 @@ namespace Horo::Application {
     private:
         OperationStore *operations_;
         BuildOutputStore *output_;
-        const CancellationToken &cancellation_;
         std::optional<OperationId> id_;
         std::string_view phase_{"prefab.preflight"};
         const Error abandoned_ = MakeError(PrefabSceneCookErrors::Invalid);
@@ -162,9 +162,9 @@ namespace Horo::Application {
     Result<Assets::AssetCookReport> PrefabSceneCookHost::CookImpl(const PrefabSceneCookRequest &request,
                                                                   const CancellationToken &cancellation,
                                                                   const Release::ReleaseExecutionPlan *releasePlan) {
-        PreparationDiagnostics diagnostics{request.assets, cancellation};
+        PreparationDiagnostics diagnostics{request.assets};
         if (!diagnostics.Admitted()) {
-            const auto error = MakeError(PrefabSceneCookErrors::Invalid, "Prefab cook preparation could not acquire an operation slot.");
+            const auto error = MakeError(Assets::CookErrors::OperationAdmissionFailed);
             diagnostics.Finish(&error);
             return Result<Assets::AssetCookReport>::Failure(error);
         }
