@@ -49,15 +49,15 @@ TEST_CASE("Image provider discovery seals the bounded independent category route
     const auto reconstruction = Provider();
     REQUIRE(providers.Register(Provider(ImageProviderCategory::Latency)).HasValue());
     REQUIRE(providers.Register(reconstruction).HasValue());
-    CHECK(providers.Find(reconstruction.route).ErrorValue().code == ImageProviderRegistryErrors::RegistryUnsealed.code);
+    CHECK(providers.Find(reconstruction.route).ErrorValue().code.Value() == ImageProviderRegistryErrors::RegistryUnsealed.code.Value());
     CHECK(providers.Descriptors().empty());
-    CHECK(providers.Register(reconstruction).ErrorValue().code == ImageProviderRegistryErrors::DuplicateRoute.code);
+    CHECK(providers.Register(reconstruction).ErrorValue().code.Value() == ImageProviderRegistryErrors::DuplicateRoute.code.Value());
     auto malformed = Provider();
     malformed.route.mode = "../unknown";
-    CHECK(providers.Register(malformed).ErrorValue().code == ImageProviderRegistryErrors::InvalidDescriptor.code);
+    CHECK(providers.Register(malformed).ErrorValue().code.Value() == ImageProviderRegistryErrors::InvalidDescriptor.code.Value());
     malformed = Provider();
     malformed.requiredCookedArtifacts = {Digest(1), Digest(1)};
-    CHECK(providers.Register(malformed).ErrorValue().code == ImageProviderRegistryErrors::InvalidDescriptor.code);
+    CHECK(providers.Register(malformed).ErrorValue().code.Value() == ImageProviderRegistryErrors::InvalidDescriptor.code.Value());
 
     providers.Seal();
     providers.Seal();
@@ -65,8 +65,8 @@ TEST_CASE("Image provider discovery seals the bounded independent category route
     CHECK(providers.Descriptors().front().route == reconstruction.route);
     CHECK(providers.Descriptors().back().route.category == ImageProviderCategory::Latency);
     const auto unrelated = Provider(ImageProviderCategory::Denoising);
-    CHECK(providers.Find(unrelated.route).ErrorValue().code == ImageProviderRegistryErrors::UnknownRoute.code);
-    CHECK(providers.Register(unrelated).ErrorValue().code == ImageProviderRegistryErrors::RegistrySealed.code);
+    CHECK(providers.Find(unrelated.route).ErrorValue().code.Value() == ImageProviderRegistryErrors::UnknownRoute.code.Value());
+    CHECK(providers.Register(unrelated).ErrorValue().code.Value() == ImageProviderRegistryErrors::RegistrySealed.code.Value());
 }
 
 TEST_CASE("Image provider discovery keeps installation separate from runtime compatibility", "[renderer][image-provider]") {
@@ -185,7 +185,7 @@ TEST_CASE("Native reconstruction is discoverable without a vendor or imaginary c
     auto frame = RequireValue(frontend->BeginFrame({.frameNumber = 1, .outputExtent = {16, 16}}));
     const auto active = frontend->DiscoverImageProvider(providers, route, context);
     REQUIRE(active.HasError());
-    CHECK(active.ErrorValue().code == ImageProviderRegistryErrors::InvalidQuery.code);
+    CHECK(active.ErrorValue().code.Value() == ImageProviderRegistryErrors::InvalidQuery.code.Value());
     frame.Cancel();
     Test::RequireDrainedOwner(*frontend);
 }
