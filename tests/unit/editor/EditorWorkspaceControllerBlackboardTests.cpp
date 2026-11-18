@@ -2,6 +2,8 @@
 #include "GameplayModuleTestSupport.h"
 #include "Horo/AI/BlackboardUsageInspection.h"
 #include "Horo/AI/DecisionPlanCodec.h"
+#include "Horo/AI/EnvironmentQueryGenerators.h"
+#include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/Application/BlackboardUsageReview.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Assets/AssetRegistry.h"
@@ -1197,6 +1199,140 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
     }
 }
 
+TEST_CASE("Decision query output review fences writable keys and saved source before appending or editing a Task",
+          "[unit][editor][decision][eqs][workspace]") {
+    using namespace AI;
+    BlackboardWorkspaceFixture project;
+    Horo::Tests::WriteReplicationProject(project.root);
+    const auto ungranted = BlackboardKeyId::Create(5).Value();
+    const std::array keys{BlackboardKeyDescriptor{.key = project.key,
+                                                  .kind = BlackboardValueKind::WorldCoordinate,
+                                                  .presence = BlackboardKeyPresence::Optional},
+                          BlackboardKeyDescriptor{.key = ungranted,
+                                                  .kind = BlackboardValueKind::WorldCoordinate,
+                                                  .presence = BlackboardKeyPresence::Optional}};
+    const std::array rows{BlackboardSchemaAuthoringRow{project.key, "Cover position"}, BlackboardSchemaAuthoringRow{ungranted, "Other"}};
+    project.WriteSchema(keys, rows);
+    const auto manifest = Horo::Tests::WriteGameplayModuleManifest(project.root, HORO_TEST_AI_MODULE_PATH, "game.ai.tests",
+                                                                   Gameplay::CurrentGameplayBuildFingerprint(),
+                                                                   Horo::Tests::ReadDescriptorRevision(HORO_TEST_AI_MODULE_REVISION_PATH));
+    REQUIRE(std::filesystem::is_regular_file(manifest));
+
+    constexpr auto path = "assets/cover.horo_eqs";
+    const auto asset = Assets::AssetId::FromBytes({8});
+    const auto queryId = QueryId::Create(21).Value();
+    const auto resultId = QueryResultSchemaId::Create(23).Value();
+    const auto write = [&](const char *name) {
+        const auto query = CreateBuiltinLatticeQuery(queryId, QueryStageId::Create(22).Value(), resultId, name,
+                                                     {.stepMillimeters = 500, .outerSteps = 1}, 10);
+        REQUIRE(query.HasValue());
+        const auto bytes = EnvironmentQuerySourceCodec::Encode(query.Value());
+        REQUIRE(bytes.HasValue());
+        std::ofstream output(project.root / path, std::ios::binary | std::ios::trunc);
+        output.write(reinterpret_cast<const char *>(bytes.Value().data()), static_cast<std::streamsize>(bytes.Value().size()));
+        REQUIRE(static_cast<bool>(output));
+    };
+    write("Cover");
+    project.WriteSidecar(path, asset, EnvironmentQuerySourceAssetType);
+    project.RebuildRegistry();
+    const auto schema = CaptureBuiltinQuerySchema();
+    REQUIRE(schema.HasValue());
+    EditorWorkspaceController controller(project.root, project.runtime, project.registry.Snapshot(),
+                                         {.assets = {.mutableAssetRegistry = &project.registry},
+                                          .mutations = &project.mutations,
+                                          .durableFiles = &project.files,
+                                          .querySchema = &schema.Value()});
+    const auto &model = controller.ViewModel();
+    REQUIRE(model.decisionTaskChoices.size() == 1);
+    const auto starter = model.decisionTaskChoices.front();
+    controller.ProcessCommand(
+        {.command = EditorWorkspaceViewCommand::CreateTaskDecision,
+         .newTaskDecision = TaskDecisionCreationRequest{WorkspacePathText(project.root / "assets"), "Working query tree", project.asset,
+                                                        DecisionPlanKind::BehaviorTree, starter.type, starter.provider, starter.version,
+                                                        model.availableBehaviorsRevision}});
+    REQUIRE(model.contentBrowserOperationError.empty());
+    REQUIRE(model.decisionGraphDocuments.size() == 1);
+    const auto &document = model.decisionGraphDocuments.front();
+    REQUIRE(document.editable);
+    const auto tree = [&]() -> const BehaviorTreeAsset & {
+        return *std::get<std::shared_ptr<const BehaviorTreeAsset>>(document.graph->body);
+    };
+    const auto edit = [&](BehaviorTreeEditRequest request) {
+        request.instance = document.identity.instance;
+        request.revision = document.revision;
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::EditDecisionBehaviorTree, .behaviorTreeEdit = request});
+    };
+    using enum BehaviorTreeEditOperation;
+    edit({.operation = WrapSequence, .node = DecisionNodeId::Create(tree().Edges().front().targetNode.Value()).Value()});
+    REQUIRE_FALSE(document.diagnostic);
+    const auto group = std::ranges::find(tree().Nodes(), BehaviorTreeNodeKind::Composite, &BehaviorTreeNode::kind);
+    REQUIRE(group != tree().Nodes().end());
+    const auto parent = DecisionNodeId::Create(group->id.Value()).Value();
+    const auto choice = std::ranges::find(model.behaviorTreeTaskChoices, true, &DecisionTaskChoice::queryOutput);
+    REQUIRE(choice != model.behaviorTreeTaskChoices.end());
+    const DecisionTaskSelection selected{choice->type, choice->provider, choice->version, model.availableBehaviorsRevision};
+    const auto review = [&](DecisionNodeId node, std::optional<DecisionTaskSelection> task = {}) {
+        edit({.operation = ReviewQueryOutput, .node = node, .task = task, .queryOutput = BehaviorTreeQueryOutputEdit{asset}});
+        REQUIRE_FALSE(document.diagnostic);
+        REQUIRE(document.queryReview);
+        REQUIRE(document.queryReview->keys.size() == 1);
+        CHECK(document.queryReview->keys.front().first == project.key);
+        CHECK(document.queryReview->keys.front().second == "Cover position");
+    };
+    review(parent, selected);
+    const auto append = [&](BlackboardKeyId key) {
+        edit({.operation = AppendTask, .node = parent, .task = selected, .queryOutput = BehaviorTreeQueryOutputEdit{asset, key, 12}});
+    };
+    const auto before = document.graph;
+    append(ungranted);
+    REQUIRE(document.diagnostic);
+    CHECK(document.graph == before);
+    write("Replaced cover");
+    append(project.key);
+    REQUIRE(document.diagnostic);
+    CHECK(document.graph == before);
+    review(parent, selected);
+    append(project.key);
+    REQUIRE_FALSE(document.diagnostic);
+    const auto appended = std::ranges::find_if(tree().Nodes(), [&](const auto &node) {
+        return node.type.Value() == selected.type.Value();
+    });
+    REQUIRE(appended != tree().Nodes().end());
+    const auto node = appended->id;
+    const auto output = [&] {
+        const auto *task = tree().FindNode(node);
+        REQUIRE(task);
+        REQUIRE(task->properties.size() == 1);
+        return std::get<BehaviorTreeQueryOutput>(task->properties.front().value);
+    };
+    CHECK(output().query == queryId);
+    CHECK(output().result == resultId);
+    CHECK(output().timeoutTicks == 12);
+    const auto selectedNode = DecisionNodeId::Create(node.Value()).Value();
+    review(selectedNode);
+    edit({.operation = SetQueryOutput, .node = selectedNode, .queryOutput = BehaviorTreeQueryOutputEdit{asset, project.key, 18}});
+    REQUIRE_FALSE(document.diagnostic);
+    CHECK(output().timeoutTicks == 18);
+    edit({.operation = Undo});
+    CHECK(output().timeoutTicks == 12);
+    edit({.operation = Redo});
+    CHECK(output().timeoutTicks == 18);
+    edit({.operation = Save});
+    REQUIRE_FALSE(document.diagnostic);
+    CHECK_FALSE(document.dirty);
+    const auto expected = output();
+    const auto savedPath = document.graph->location.source;
+    controller.ProcessCommand(
+        {.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = document.identity.instance});
+    REQUIRE(model.decisionGraphDocuments.empty());
+    controller.ProcessCommand({.command = EditorWorkspaceViewCommand::OpenSourceFile,
+                               .sourceOpenRequest = SourceOpenRequest{.path = savedPath, .origin = SourceOpenOrigin::AssetActivation}});
+    REQUIRE(model.decisionGraphDocuments.size() == 1);
+    const auto &saved = *std::get<std::shared_ptr<const BehaviorTreeAsset>>(model.decisionGraphDocuments.front().graph->body);
+    REQUIRE(saved.FindNode(node));
+    CHECK(std::get<BehaviorTreeQueryOutput>(saved.FindNode(node)->properties.front().value) == expected);
+}
+
 TEST_CASE("Behavior Tree and Utility New use the current registered native task and selected saved schema",
           "[unit][editor][decision][workspace]") {
     BlackboardWorkspaceFixture project;
@@ -2147,8 +2283,9 @@ TEST_CASE("Blackboard workspace reviews the loaded native Decision catalog and r
         REQUIRE(view.usageReview);
         const auto providers = view.usageReview->providers.lock();
         REQUIRE(providers);
-        REQUIRE(providers->Descriptors().size() == 1);
+        REQUIRE(providers->Descriptors().size() == 2);
         CHECK(providers->Descriptors().front().type == AI::DecisionNodeTypeId::Create(101).Value());
+        CHECK(providers->Descriptors().back().type == AI::DecisionNodeTypeId::Create(102).Value());
         CHECK(std::ranges::none_of(view.usageReview->gaps, [](const Application::BlackboardUsageGap &gap) {
             return gap.kind == Application::BlackboardUsageGapKind::DecisionProvider;
         }));

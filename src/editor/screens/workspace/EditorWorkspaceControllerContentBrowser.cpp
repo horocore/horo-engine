@@ -1,4 +1,5 @@
 #include "Horo/AI/DecisionPlanCodec.h"
+#include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/Assets/AssetCook.h"
 #include "Horo/Assets/AssetReimport.h"
 #include "Horo/Editor/ProjectIntegrityValidatorService.h"
@@ -58,6 +59,18 @@ namespace Horo::Editor {
             subtrees.push_back({record.id, std::string{record.sourcePath.String()}});
         }
         std::ranges::sort(subtrees, {}, &DecisionSchemaChoice::path);
+        auto &queries = m_viewModel.behaviorTreeQueryChoices;
+        queries.clear();
+        for (const auto &record : m_assetRegistry.Records()) {
+            if (record.type.Value() != AI::EnvironmentQuerySourceAssetType)
+                continue;
+            if (queries.size() == Assets::AssetCookLimits{}.maximumAssets) {
+                queries.clear();
+                break;
+            }
+            queries.push_back({record.id, std::string{record.sourcePath.String()}});
+        }
+        std::ranges::sort(queries, {}, &DecisionSchemaChoice::path);
         ScheduleContentBrowserPreviews();
     }
 

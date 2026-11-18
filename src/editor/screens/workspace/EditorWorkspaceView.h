@@ -229,6 +229,25 @@ namespace Horo::Editor {
 
         mutable BehaviorTreeSelection m_behaviorTreeSelection;
 
+        /** @brief Widget selections for one exact task and graph revision. */
+        struct BehaviorTreeQuerySelection final {
+            DocumentInstanceId instance;
+            AI::DecisionNodeId node;
+            std::uint64_t revision{};
+            std::optional<DecisionTaskSelection> task;
+            Assets::AssetId source;
+            AI::BlackboardKeyId key;
+            std::string timeout;
+        };
+
+        mutable BehaviorTreeQuerySelection m_behaviorTreeQuerySelection;
+        /** @brief Draws the saved query review and typed output controls for one Task. */
+        void DrawBehaviorTreeQueryOutput(const EditorWorkspaceViewModel &viewModel, const DecisionGraphWorkspaceDocument &document,
+                                         const AI::BehaviorTreeNode &node, EditorWorkspaceViewCommandData &outCommand,
+                                         std::optional<DecisionTaskSelection> task = {}) const;
+        /** @brief Draws the reviewed key and tick fields and returns a valid submitted timeout. */
+        std::optional<std::uint32_t> DrawBehaviorTreeQueryFields(const BehaviorTreeQueryReview &review) const;
+
         /** @brief Bounded numeric text drafts and stable selection for a Utility document. */
         struct UtilityGraphSelection final {
             DocumentInstanceId instance;

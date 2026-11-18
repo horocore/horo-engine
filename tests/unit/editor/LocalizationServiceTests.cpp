@@ -758,6 +758,26 @@ namespace {
     }
 }  // namespace
 
+TEST_CASE("Decision query output authoring copy resolves in both shipped locales", "[unit][editor][decision][localization]") {
+    const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+    Horo::Editor::LocalizationService service{Horo::Editor::LocaleTag{"en-US"}};
+    Horo::Editor::LocalizationError error;
+    for (const auto locale : {"en-US", "tr-TR"})
+        REQUIRE(service.LoadCatalogFile(root / (std::string{locale} + ".json"), &error));
+    for (const auto locale : {"en-US", "tr-TR"}) {
+        REQUIRE(service.Prepare(Horo::Editor::LocaleTag{locale}, &error));
+        REQUIRE(service.ActivatePrepared(&error));
+        for (const auto key : {"bound_query", "select_query", "review_query", "no_query_keys", "query_output_key", "select_query_key",
+                               "query_timeout", "apply_query_output"}) {
+            const auto full = std::string{"workspace.decision_graph."} + key;
+            INFO(locale);
+            INFO(full);
+            CHECK_FALSE(service.Get("editor", full).empty());
+            CHECK(service.Get("editor", full) != full);
+        }
+    }
+}
+
 TEST_CASE("UI canvas hierarchy and catalog copy resolve in both shipped locales", "[unit][editor][ui_canvas][localization]") {
     const std::filesystem::path root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
     Horo::Editor::LocalizationService service{Horo::Editor::LocaleTag{"en-US"}};

@@ -80,7 +80,10 @@ namespace {
     };
 
     /** @brief Real generated decision-node callbacks live in the unloadable fixture image. */
-    class FixtureDecisionNode final : public Horo::AI::IBehaviorTreeExecutor {
+    class FixtureDecisionNode : public Horo::AI::IBehaviorTreeExecutor {
+    protected:
+        FixtureDecisionNode() = default;
+
     public:
         static Horo::AI::DecisionNodeContract DescribeDecisionNode() {
             using namespace Horo::AI;
@@ -127,8 +130,33 @@ namespace {
             return Horo::Result<void>::Success();
         }
     };
+
+    /** @brief Registered test task with one typed query result and an explicit writable key. */
+    class FixtureQueryDecisionNode final : public FixtureDecisionNode {
+    public:
+        static Horo::AI::DecisionNodeContract DescribeDecisionNode() {
+            using namespace Horo::AI;
+            DecisionNodeContract contract;
+            contract.descriptor.origin = {DecisionDescriptorSourceKind::Native, DecisionProviderId::Create(501).Value(), 1};
+            const auto key = BlackboardKeyId::Create(4).Value();
+            contract.descriptor.requirements = {
+                {.key = key, .kind = BlackboardValueKind::WorldCoordinate, .access = BlackboardKeyAccess::ReadWrite}};
+            const BehaviorTreeQueryOutput output{QueryId::Create(1).Value(),
+                                                 QueryResultSchemaId::Create(1).Value(),
+                                                 1,
+                                                 QueryItemTypeId::Create(1).Value(),
+                                                 key,
+                                                 1};
+            contract.properties.emplace_back(BehaviorTreePropertyId::Create(10).Value(), "output", BehaviorTreePropertyKind::QueryOutput,
+                                             output);
+            return contract;
+        }
+
+        explicit FixtureQueryDecisionNode(std::span<const Horo::AI::BehaviorTreeProperty>) {}
+    };
 }  // namespace
 HORO_AI_NODE(FixtureDecisionNode, "101")
+HORO_AI_NODE(FixtureQueryDecisionNode, "102")
 
 namespace {
     std::uint32_t *perceptionLifecycleCounters{};

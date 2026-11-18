@@ -26,7 +26,8 @@ namespace Horo::AI {
             auto acquired = module->AcquireDecisionNodes();
             REQUIRE(acquired.HasValue());
             auto generation = std::move(acquired).Value();
-            REQUIRE(generation->Contracts().size() == 1);
+            REQUIRE(generation->Contracts().size() == 2);
+            CHECK(generation->Contracts()[1].descriptor.type.Value() == 102);
             CHECK(generation->Contracts()[0].descriptor.type.Value() == 101);
             CHECK(generation->Contracts()[0].descriptor.source.source.ends_with("AiGameModule.cpp"));
             CHECK(generation->Contracts()[0].descriptor.source.line != 0);

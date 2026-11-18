@@ -39,6 +39,8 @@ namespace Horo::Editor {
         ReviewSubtree,
         AppendSubtree,
         RetargetSubtree,
+        ReviewQueryOutput,
+        SetQueryOutput,
         MoveEarlier,
         MoveLater,
         DeleteTask,
@@ -47,12 +49,20 @@ namespace Horo::Editor {
         Save,
     };
 
+    /** @brief Selected saved query and the writable Blackboard target chosen after review. */
+    struct BehaviorTreeQueryOutputEdit final {
+        Assets::AssetId asset;
+        AI::BlackboardKeyId key;
+        std::uint32_t timeoutTicks{};
+    };
+
     /** @brief Exact installed descriptor selected by the workspace Task picker. */
     struct DecisionTaskSelection final {
         AI::DecisionNodeTypeId type;
         AI::DecisionProviderId provider;
         std::uint32_t version{};
         std::uint64_t catalogRevision{};
+        bool operator==(const DecisionTaskSelection &) const = default;
     };
 
     /** @brief Detached exact saved source evidence from the active tree's explicit target review. */
@@ -77,6 +87,7 @@ namespace Horo::Editor {
         std::optional<DecisionTaskSelection> task;
         std::optional<Assets::AssetId> subtreeTarget;
         std::optional<BehaviorTreeSubtreeReview> subtree;
+        std::optional<BehaviorTreeQueryOutputEdit> queryOutput;
     };
 
     /** @brief Typed operations for the authored option and its complete scoring policy. */

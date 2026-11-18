@@ -34,6 +34,107 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    /** @copydoc EditorWorkspaceView::DrawBehaviorTreeQueryOutput */
+    void EditorWorkspaceView::DrawBehaviorTreeQueryOutput(const EditorWorkspaceViewModel &viewModel,
+                                                          const DecisionGraphWorkspaceDocument &document, const AI::BehaviorTreeNode &node,
+                                                          EditorWorkspaceViewCommandData &outCommand,
+                                                          std::optional<DecisionTaskSelection> task) const {
+        const auto property =
+            std::ranges::find(node.properties, AI::BehaviorTreePropertyKind::QueryOutput, &AI::BehaviorTreeProperty::kind);
+        if (!task && property == node.properties.end())
+            return;
+        const auto *bound = task ? nullptr : std::get_if<AI::BehaviorTreeQueryOutput>(&property->value);
+        const auto id = AI::DecisionNodeId::Create(node.id.Value()).Value();
+        auto &selection = m_behaviorTreeQuerySelection;
+        if (selection.instance != document.identity.instance || selection.node != id || selection.revision != document.revision ||
+            selection.task != task) {
+            selection = {.instance = document.identity.instance,
+                         .node = id,
+                         .revision = document.revision,
+                         .task = task,
+                         .key = bound ? bound->key : AI::BlackboardKeyId{},
+                         .timeout = bound ? std::to_string(bound->timeoutTicks) : std::string{}};
+        }
+
+        const auto &fonts = m_context.theme.fonts;
+        const auto text = [&](std::string_view key) -> const std::string & {
+            return m_context.localization.Get("editor", key);
+        };
+        const auto button = [&](std::string_view key, bool enabled) {
+            return Ui::Button({.label = text(key).c_str(), .enabled = enabled, .font = fonts.sans});
+        };
+        const auto emit = [&](BehaviorTreeEditOperation operation, std::uint32_t timeout = 0) {
+            outCommand = {.command = EditorWorkspaceViewCommand::EditDecisionBehaviorTree,
+                          .behaviorTreeEdit = BehaviorTreeEditRequest{.instance = document.identity.instance,
+                                                                      .revision = document.revision,
+                                                                      .operation = operation,
+                                                                      .node = id,
+                                                                      .task = task,
+                                                                      .queryOutput = BehaviorTreeQueryOutputEdit{selection.source,
+                                                                                                                 selection.key, timeout}}};
+        };
+        if (bound)
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x,
+                            std::format("{} {}", text("workspace.decision_graph.bound_query"), bound->query.Value()), Theme::Text(), fonts);
+        const auto &queries = viewModel.behaviorTreeQueryChoices;
+        const auto query = std::ranges::find(queries, selection.source, &DecisionSchemaChoice::asset);
+        int queryIndex = query == queries.end() ? 0 : static_cast<int>(query - queries.begin()) + 1;
+        const Ui::ComboItemSource queryItems{.label = [&](int slot) {
+            return slot == 0 ? text("workspace.decision_graph.select_query").c_str()
+                             : queries[static_cast<std::size_t>(slot - 1)].path.c_str();
+        }};
+        static_cast<void>(Ui::ComboControl("##BehaviorTreeQuery", &queryIndex, static_cast<int>(queries.size()) + 1, queryItems, fonts));
+        selection.source = queryIndex == 0 ? Assets::AssetId{} : queries[static_cast<std::size_t>(queryIndex - 1)].asset;
+        if (button("workspace.decision_graph.review_query", selection.source.IsValid()))
+            emit(BehaviorTreeEditOperation::ReviewQueryOutput);
+
+        const auto &review = document.queryReview;
+        if (!review || review->asset != selection.source || review->node != id || review->documentRevision != document.revision ||
+            review->task != task)
+            return;
+        const auto timeout = DrawBehaviorTreeQueryFields(*review);
+        const auto operation = task ? BehaviorTreeEditOperation::AppendTask : BehaviorTreeEditOperation::SetQueryOutput;
+        const auto action = task ? "workspace.decision_graph.edit_tree_append_task" : "workspace.decision_graph.apply_query_output";
+        if (button(action, timeout.has_value()) && timeout)
+            emit(operation, *timeout);
+    }
+
+    /** @copydoc EditorWorkspaceView::DrawBehaviorTreeQueryFields */
+    std::optional<std::uint32_t> EditorWorkspaceView::DrawBehaviorTreeQueryFields(const BehaviorTreeQueryReview &review) const {
+        auto &selection = m_behaviorTreeQuerySelection;
+        const auto &fonts = m_context.theme.fonts;
+        const auto text = [&](std::string_view key) -> const std::string & {
+            return m_context.localization.Get("editor", key);
+        };
+        const auto label = [&](std::string_view key) {
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, text(key), Theme::Text(), fonts);
+        };
+        const auto &keys = review.keys;
+        if (keys.empty()) {
+            label("workspace.decision_graph.no_query_keys");
+            return std::nullopt;
+        }
+        label("workspace.decision_graph.query_output_key");
+        const auto key = std::ranges::find_if(keys, [&](const auto &entry) {
+            return entry.first == selection.key;
+        });
+        int keyIndex = key == keys.end() ? 0 : static_cast<int>(key - keys.begin()) + 1;
+        const Ui::ComboItemSource keyItems{.label = [&](int slot) {
+            return slot == 0 ? text("workspace.decision_graph.select_query_key").c_str()
+                             : keys[static_cast<std::size_t>(slot - 1)].second.c_str();
+        }};
+        static_cast<void>(Ui::ComboControl("##BehaviorTreeQueryKey", &keyIndex, static_cast<int>(keys.size()) + 1, keyItems, fonts));
+        selection.key = keyIndex == 0 ? AI::BlackboardKeyId{} : keys[static_cast<std::size_t>(keyIndex - 1)].first;
+        label("workspace.decision_graph.query_timeout");
+        static_cast<void>(Ui::InputTextControl("##BehaviorTreeQueryTimeout", selection.timeout, 11, fonts));
+        std::uint32_t timeout{};
+        const auto *end = selection.timeout.data() + selection.timeout.size();
+        const auto parsed = std::from_chars(selection.timeout.data(), end, timeout);
+        if (selection.key.IsValid() && parsed.ec == std::errc{} && parsed.ptr == end && timeout != 0)
+            return timeout;
+        return std::nullopt;
+    }
+
     /** @copydoc EditorWorkspaceView::DrawBehaviorTreeTopology */
     void EditorWorkspaceView::DrawBehaviorTreeTopology(const EditorWorkspaceViewModel &viewModel,
                                                        const DecisionGraphWorkspaceDocument &document,
@@ -149,6 +250,7 @@ namespace Horo::Editor {
             }
         }
         if (node.kind == AI::BehaviorTreeNodeKind::Task) {
+            DrawBehaviorTreeQueryOutput(viewModel, document, node, outCommand);
             const auto *parent = tree.FindNode(incoming->sourceNode);
             const auto siblings = std::ranges::count(edges, incoming->sourceNode, &AI::BehaviorTreeEdge::sourceNode);
             if (button("workspace.decision_graph.edit_tree_delete", parent && static_cast<std::size_t>(siblings) > parent->minimumChildren))
@@ -157,7 +259,7 @@ namespace Horo::Editor {
         }
         if (button("workspace.decision_graph.edit_tree_unwrap", children == 1))
             emit(BehaviorTreeEditOperation::UnwrapComposite);
-        const auto &choices = viewModel.decisionTaskChoices;
+        const auto &choices = viewModel.behaviorTreeTaskChoices;
         if (choices.empty())
             return;
         const auto chosen = std::ranges::find(choices, selection.task, &DecisionTaskChoice::type);
@@ -171,9 +273,14 @@ namespace Horo::Editor {
             Ui::ComboControl("##BehaviorTreeTask", &taskIndex, static_cast<int>(choices.size()), taskItems, m_context.theme.fonts));
         const auto &task = choices[static_cast<std::size_t>(taskIndex)];
         selection.task = task.type;
+        const DecisionTaskSelection selected{task.type, task.provider, task.version, viewModel.availableBehaviorsRevision};
+        if (task.queryOutput) {
+            if (room && children < node.maximumChildren)
+                DrawBehaviorTreeQueryOutput(viewModel, document, node, outCommand, selected);
+            return;
+        }
         if (button("workspace.decision_graph.edit_tree_append_task", room && children < node.maximumChildren))
-            emit(BehaviorTreeEditOperation::AppendTask,
-                 DecisionTaskSelection{task.type, task.provider, task.version, viewModel.availableBehaviorsRevision});
+            emit(BehaviorTreeEditOperation::AppendTask, selected);
     }
 
     /** @copydoc EditorWorkspaceView::ApplyDecisionCanvasInteraction */

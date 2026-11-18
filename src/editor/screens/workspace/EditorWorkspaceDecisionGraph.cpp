@@ -1,7 +1,9 @@
 #include "AuthoredAiSourceInventory.h"
 #include "DecisionGraphCanvasModel.h"
 #include "DecisionTreeSubtreeCatalog.h"
+#include "EnvironmentQueryWorkspaceSource.h"
 #include "Horo/AI/DecisionPlanCodec.h"
+#include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Application/ProjectAssetImportCommitter.h"
 #include "Horo/Foundation/PathUtils.h"
@@ -18,6 +20,7 @@
 #include <functional>
 #include <limits>
 #include <set>
+#include <tuple>
 #include <type_traits>
 
 namespace Horo::Editor {
@@ -193,6 +196,7 @@ namespace Horo::Editor {
             std::shared_ptr<const AI::BlackboardSchema> schema;
             Sha256Digest digest;
             Assets::AssetCookInputSnapshot inputs;
+            std::vector<AI::BlackboardSchemaAuthoringRow> rows;
         };
 
         Result<CapturedDecisionSchema> CaptureDecisionDraftSchema(const std::filesystem::path &root,
@@ -205,6 +209,7 @@ namespace Horo::Editor {
                 return Captured::Failure(inputs.ErrorValue());
             std::shared_ptr<const AI::BlackboardSchema> schema;
             Sha256Digest digest;
+            std::vector<AI::BlackboardSchemaAuthoringRow> rows;
             for (const auto &file : inputs.Value().Sources()) {
                 auto decoded = AI::BlackboardSchemaSourceCodec::Decode(file.bytes);
                 if (decoded.HasError())
@@ -215,11 +220,179 @@ namespace Horo::Editor {
                 if (schema)
                     return Captured::Failure(MakeError(AI::AIErrors::DescriptorConflict));
                 digest = file.sourceDigest;
+                rows = std::move(decoded.Value().rows);
                 schema = std::make_shared<const AI::BlackboardSchema>(std::move(decoded).Value().schema);
             }
             if (!schema)
                 return Captured::Failure(MakeError(Application::DecisionCookErrors::Invalid));
-            return Captured::Success({std::move(schema), digest, std::move(inputs).Value()});
+            return Captured::Success({std::move(schema), digest, std::move(inputs).Value(), std::move(rows)});
+        }
+
+        /** @brief Finds the output declaration owned by the exact installed task contract. */
+        const AI::BehaviorTreeProperty *QueryOutputProperty(const AI::DecisionNodeContract &contract) {
+            const auto output =
+                std::ranges::find(contract.properties, AI::BehaviorTreePropertyKind::QueryOutput, &AI::BehaviorTreeProperty::kind);
+            return output == contract.properties.end() ? nullptr : &*output;
+        }
+
+        /** @brief Reads inert Task metadata without constructing a provider instance. */
+        const AI::DecisionNodeContract *QueryTaskContract(const AI::BehaviorTreeNode &node, const AI::DecisionNodeGeneration &providers) {
+            if (node.control.kind != AI::DecisionControlKind::Task)
+                return nullptr;
+            const auto contracts = providers.Contracts();
+            const auto contract = std::ranges::find_if(contracts, [&](const auto &entry) {
+                return entry.descriptor.type.Value() == node.type.Value() && entry.descriptor.origin.version == node.typeVersion.major;
+            });
+            if (contract == contracts.end() || contract->role != AI::DecisionNodeRole::Task || !QueryOutputProperty(*contract))
+                return nullptr;
+            return &*contract;
+        }
+
+        /** @brief Keeps only scalar output keys already granted to the task. */
+        bool CanWriteQueryOutput(const AI::BlackboardKeyDescriptor &key, AI::BlackboardValueKind kind,
+                                 std::span<const AI::DecisionBlackboardRequirement> requirements,
+                                 const AI::DecisionNodeContract &contract) {
+            using AI::BlackboardKeyAccess::ReadWrite;
+            using AI::BlackboardValueCardinality::Scalar;
+            if (key.kind != kind || key.cardinality != Scalar || key.access != ReadWrite)
+                return false;
+            const auto granted = [&](const auto &requirement) {
+                return requirement.key == key.key && requirement.kind == kind && requirement.cardinality == Scalar &&
+                       requirement.access == ReadWrite;
+            };
+            return std::ranges::any_of(requirements, granted) || std::ranges::any_of(contract.descriptor.requirements, granted);
+        }
+
+        const AI::DecisionNodeContract *FindStarterTask(const AI::DecisionNodeGeneration &generation, const DecisionTaskSelection &task);
+
+        struct CapturedQueryOutputReview final {
+            BehaviorTreeQueryReview review;
+            Assets::AssetCookInputSnapshot input;
+        };
+
+        /** @brief Saved query identity and result contract admitted against the application descriptor registry. */
+        struct SavedQueryOutput final {
+            Assets::AssetCookInputSnapshot input;
+            AI::QueryId query;
+            AI::QueryResultSchema result;
+            AI::BlackboardValueKind kind;
+        };
+
+        /** @brief Captures and compiles one registered query without running its providers. */
+        Result<SavedQueryOutput> CaptureSavedQueryOutput(const std::filesystem::path &root, const Assets::AssetRegistrySnapshot &registry,
+                                                         const AI::QuerySchemaRegistry &queryRegistry, Assets::AssetId source) {
+            using Saved = Result<SavedQueryOutput>;
+            const auto *record = registry.Find(source);
+            if (!record || record->type.Value() != AI::EnvironmentQuerySourceAssetType)
+                return Saved::Failure(MakeError(Application::DecisionCookErrors::Invalid));
+            auto pinned = EnvironmentQueryWorkspaceSource::CaptureQuerySource(root, registry, source);
+            if (pinned.HasError())
+                return Saved::Failure(pinned.ErrorValue());
+            const auto query = AI::EnvironmentQuerySourceCodec::Decode(pinned.Value().Sources().front().bytes);
+            if (query.HasError())
+                return Saved::Failure(query.ErrorValue());
+            const auto plan = AI::EnvironmentQueryPlan::Compile(query.Value(), queryRegistry);
+            if (plan.HasError())
+                return Saved::Failure(plan.ErrorValue());
+            const auto &result = plan.Value().ResultSchema();
+            const auto *item = queryRegistry.Find(result.itemType);
+            if (!item || (item->kind != AI::QueryItemKind::Point && item->kind != AI::QueryItemKind::Actor))
+                return Saved::Failure(MakeError(AI::AIErrors::EnvironmentQuerySchemaInvalid));
+            const auto kind = item->kind == AI::QueryItemKind::Point ? AI::BlackboardValueKind::WorldCoordinate
+                                                                     : AI::BlackboardValueKind::EntityReference;
+            return Saved::Success({std::move(pinned).Value(), plan.Value().Id(), result, kind});
+        }
+
+        /** @brief Preserves saved key order and labels while applying the admitted task write contract. */
+        void ProjectQueryKeys(BehaviorTreeQueryReview &review, const CapturedDecisionSchema &schema, AI::BlackboardValueKind kind,
+                              std::span<const AI::DecisionBlackboardRequirement> requirements, const AI::DecisionNodeContract &contract) {
+            const auto keys = schema.schema->Keys();
+            for (const auto &row : schema.rows) {
+                const auto key = std::ranges::lower_bound(keys, row.key, {}, &AI::BlackboardKeyDescriptor::key);
+                if (key != keys.end() && key->key == row.key && CanWriteQueryOutput(*key, kind, requirements, contract))
+                    review.keys.emplace_back(row.key, row.displayName.value_or(std::to_string(row.key.Value())));
+            }
+        }
+
+        /** @brief Resolves one registered saved query, validates its result, and projects compatible saved key rows. */
+        Result<CapturedQueryOutputReview> CaptureQueryOutputReview(
+            const std::filesystem::path &root, const Assets::AssetRegistrySnapshot &registry, const AI::QuerySchemaRegistry &queryRegistry,
+            const DecisionGraphWorkspaceDocument &document, const BehaviorTreeEditRequest &request,
+            const AI::DecisionNodeGeneration &providers, std::uint64_t catalogRevision) {
+            using Review = Result<CapturedQueryOutputReview>;
+            if (!request.queryOutput)
+                return Review::Failure(MakeError(Application::DecisionCookErrors::Invalid));
+            const auto *tree = EditableTree(*document.graph);
+            const auto id = AI::BehaviorTreeNodeId::Create(request.node.Value());
+            const auto *node = tree && id.HasValue() ? tree->FindNode(id.Value()) : nullptr;
+            if (!node ||
+                (request.task && (request.task->catalogRevision != catalogRevision || node->kind != AI::BehaviorTreeNodeKind::Composite)))
+                return Review::Failure(MakeError(Application::DecisionCookErrors::Stale));
+            const auto *contract = request.task ? FindStarterTask(providers, *request.task) : QueryTaskContract(*node, providers);
+            if (!contract || !QueryOutputProperty(*contract))
+                return Review::Failure(MakeError(AI::AIErrors::DecisionAssetDescriptorIncompatible));
+            const auto source = request.queryOutput->asset;
+            auto query = CaptureSavedQueryOutput(root, registry, queryRegistry, source);
+            if (query.HasError())
+                return Review::Failure(query.ErrorValue());
+            const auto schema = CaptureDecisionDraftSchema(root, registry, *document.graph);
+            if (schema.HasError())
+                return Review::Failure(schema.ErrorValue());
+            const auto &saved = query.Value();
+            BehaviorTreeQueryReview review{.asset = source,
+                                           .node = request.node,
+                                           .documentRevision = document.revision,
+                                           .queryDigest = saved.input.Sources().front().sourceDigest,
+                                           .schemaDigest = schema.Value().digest,
+                                           .query = saved.query,
+                                           .result = saved.result.id,
+                                           .resultVersion = saved.result.version,
+                                           .item = saved.result.itemType,
+                                           .task = request.task};
+            const auto requirements = request.task ? std::span<const AI::DecisionBlackboardRequirement>{} : std::span{node->requirements};
+            ProjectQueryKeys(review, schema.Value(), saved.kind, requirements, *contract);
+            if (auto verified = saved.input.VerifyUnchanged(); verified.HasError())
+                return Review::Failure(verified.ErrorValue());
+            if (auto verified = schema.Value().inputs.VerifyUnchanged(); verified.HasError())
+                return Review::Failure(verified.ErrorValue());
+            return Review::Success({std::move(review), std::move(query.Value().input)});
+        }
+
+        /** @brief Resolves the exact reviewed binding before constructing a semantic candidate. */
+        Result<AI::BehaviorTreeQueryOutput> PrepareQueryOutputEdit(const std::optional<BehaviorTreeQueryReview> &previous,
+                                                                   const BehaviorTreeQueryReview &fresh,
+                                                                   const BehaviorTreeQueryOutputEdit &requested) {
+            using Output = Result<AI::BehaviorTreeQueryOutput>;
+            const auto identity = [](const BehaviorTreeQueryReview &review) {
+                return std::tie(review.asset, review.node, review.documentRevision, review.queryDigest, review.schemaDigest, review.task);
+            };
+            if (!previous || identity(*previous) != identity(fresh))
+                return Output::Failure(MakeError(Application::DecisionCookErrors::Stale));
+            const auto key = std::ranges::find(fresh.keys, requested.key, &std::pair<AI::BlackboardKeyId, std::string>::first);
+            if (key == fresh.keys.end())
+                return Output::Failure(MakeError(AI::AIErrors::BlackboardValueTypeMismatch));
+            if (requested.timeoutTicks == 0)
+                return Output::Failure(MakeError(AI::AIErrors::EnvironmentQuerySchemaInvalid));
+            return Output::Success({fresh.query, fresh.result, fresh.resultVersion, fresh.item, requested.key, requested.timeoutTicks});
+        }
+
+        /** @brief Replaces exactly the property declared by the task provider. */
+        Result<bool> SetTreeQueryOutput(AI::BehaviorTreeNode &node, const AI::DecisionNodeGeneration &providers,
+                                        const AI::BehaviorTreeQueryOutput &output) {
+            using Edit = Result<bool>;
+            const auto *contract = QueryTaskContract(node, providers);
+            if (!contract || !output.IsValid())
+                return Edit::Failure(MakeError(AI::AIErrors::DecisionAssetDescriptorIncompatible));
+            const auto &declared = *QueryOutputProperty(*contract);
+            const auto existing = std::ranges::find(node.properties, declared.id, &AI::BehaviorTreeProperty::id);
+            if (existing == node.properties.end()) {
+                node.properties.emplace_back(declared.id, declared.displayName, declared.kind, output);
+                return Edit::Success(true);
+            }
+            if (existing->value == AI::BehaviorTreePropertyValue{output})
+                return Edit::Success(false);
+            existing->value = output;
+            return Edit::Success(true);
         }
 
         /** @brief Compiles a supported draft against the unique saved schema and actual provider metadata. */
@@ -355,9 +528,11 @@ namespace Horo::Editor {
         }
 
         /** @brief Identifies native Tasks that can be authored without granting missing capabilities or inventing port wiring. */
-        bool SupportsInitialTask(const AI::DecisionNodeContract &contract, const AI::DecisionNodeGeneration &generation) {
+        bool SupportsAuthorableTask(const AI::DecisionNodeContract &contract, const AI::DecisionNodeGeneration &generation) {
             return contract.role == AI::DecisionNodeRole::Task && contract.capabilities.bits == 0 &&
                    std::ranges::none_of(contract.ports, &AI::DecisionNodePort::required) &&
+                   std::ranges::count(contract.properties, AI::BehaviorTreePropertyKind::QueryOutput, &AI::BehaviorTreeProperty::kind) <=
+                       1 &&
                    generation.HasImplementation(contract.descriptor.type);
         }
 
@@ -369,7 +544,7 @@ namespace Horo::Editor {
                 return descriptor.type == task.type && descriptor.origin.provider == task.provider &&
                        descriptor.origin.version == task.version;
             });
-            return provider != contracts.end() && SupportsInitialTask(*provider, generation) ? &*provider : nullptr;
+            return provider != contracts.end() && SupportsAuthorableTask(*provider, generation) ? &*provider : nullptr;
         }
 
         /** @brief Issues a stable identity from the canonical node, edge or pin namespace. */
@@ -460,7 +635,8 @@ namespace Horo::Editor {
 
         /** @brief Adds a typed installed Task and a connecting edge in one candidate. */
         Result<bool> AppendTreeTask(AI::BehaviorTreeAssetDescriptor &tree, const AI::BehaviorTreeNode &parent,
-                                    const AI::DecisionGraphSource &graph, const AI::DecisionNodeContract &provider) {
+                                    const AI::DecisionGraphSource &graph, const AI::DecisionNodeContract &provider,
+                                    const std::optional<AI::BehaviorTreeQueryOutput> &output) {
             using Edited = Result<bool>;
             if (provider.descriptor.origin.version > std::numeric_limits<std::uint16_t>::max())
                 return Edited::Failure(MakeError(Application::DecisionCookErrors::Invalid));
@@ -470,11 +646,18 @@ namespace Horo::Editor {
             const auto task = AuthoredAiSources::Issue(used);
             if (task.HasError())
                 return Edited::Failure(task.ErrorValue());
+            const auto *property = QueryOutputProperty(provider);
+            if ((property != nullptr) != output.has_value() || (output && !output->IsValid()))
+                return Edited::Failure(MakeError(AI::AIErrors::DecisionAssetSchemaInvalid));
+            std::vector<AI::BehaviorTreeProperty> properties;
+            if (property)
+                properties.emplace_back(property->id, property->displayName, property->kind, *output);
             return AttachTreeLeaf(tree, parent,
                                   {
                                       .kind = AI::BehaviorTreeNodeKind::Task,
                                       .type = AI::BehaviorTreeNodeTypeId::Create(provider.descriptor.type.Value()).Value(),
                                       .typeVersion = {static_cast<std::uint16_t>(provider.descriptor.origin.version), 0},
+                                      .properties = std::move(properties),
                                       .control = {.kind = AI::DecisionControlKind::Task},
                                       .task = task.Value(),
                                       .source = graph.location,
@@ -513,7 +696,8 @@ namespace Horo::Editor {
 
         /** @brief Applies only complete, reachable tree commands before the general compiler publication fence. */
         Result<bool> EditBehaviorTreeCandidate(AI::DecisionGraphSource &graph, const BehaviorTreeEditRequest &request,
-                                               const AI::DecisionNodeGeneration &providers, std::uint64_t catalogRevision) {
+                                               const AI::DecisionNodeGeneration &providers, std::uint64_t catalogRevision,
+                                               const std::optional<AI::BehaviorTreeQueryOutput> &output) {
             using Edit = Result<bool>;
             const auto invalid = [] {
                 return Edit::Failure(MakeError(Application::DecisionCookErrors::Invalid));
@@ -530,6 +714,14 @@ namespace Horo::Editor {
 
             using enum BehaviorTreeEditOperation;
             switch (request.operation) {
+                case SetQueryOutput: {
+                    if (!output)
+                        return invalid();
+                    const auto updated = SetTreeQueryOutput(*node, providers, *output);
+                    if (updated.HasError() || !updated.Value())
+                        return updated;
+                    break;
+                }
                 case WrapSequence:
                 case WrapSelector: {
                     const auto kind =
@@ -544,7 +736,7 @@ namespace Horo::Editor {
                                                : nullptr;
                     if (!provider)
                         return invalid();
-                    if (auto edited = AppendTreeTask(tree, *node, graph, *provider); edited.HasError())
+                    if (auto edited = AppendTreeTask(tree, *node, graph, *provider, output); edited.HasError())
                         return edited;
                     break;
                 }
@@ -804,7 +996,9 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::RefreshDecisionTaskChoices */
     void EditorWorkspaceController::RefreshDecisionTaskChoices() {
         auto &choices = m_viewModel.decisionTaskChoices;
+        auto &treeChoices = m_viewModel.behaviorTreeTaskChoices;
         choices.clear();
+        treeChoices.clear();
         m_viewModel.decisionProviderMetadata = m_gameplayRegistry ? m_gameplayRegistry->DecisionUsageMetadata() : nullptr;
         if (!m_gameplayRegistry)
             return;
@@ -812,11 +1006,15 @@ namespace Horo::Editor {
         if (generation.HasError())
             return;
         for (const auto &contract : generation.Value()->Contracts()) {
-            if (!SupportsInitialTask(contract, *generation.Value()))
+            if (!SupportsAuthorableTask(contract, *generation.Value()))
                 continue;
             const auto &descriptor = contract.descriptor;
             const auto label = std::format("{} ({})", descriptor.source.source, descriptor.type.Value());
-            choices.push_back({descriptor.type, descriptor.origin.provider, descriptor.origin.version, label});
+            const bool queryOutput = QueryOutputProperty(contract) != nullptr;
+            DecisionTaskChoice choice{descriptor.type, descriptor.origin.provider, descriptor.origin.version, label, queryOutput};
+            if (!queryOutput)
+                choices.push_back(choice);
+            treeChoices.push_back(std::move(choice));
         }
     }
 
@@ -833,7 +1031,7 @@ namespace Horo::Editor {
                 return;
             const auto *provider =
                 FindStarterTask(*generation.Value(), {request.task, request.provider, request.version, request.catalogRevision});
-            if (!provider)
+            if (!provider || QueryOutputProperty(*provider))
                 return;
             const auto root = ProjectRoot();
             auto saved = ReadSavedDecisionSchema(root, m_mutableAssetRegistry->Snapshot(), request.schema);
@@ -1179,8 +1377,32 @@ namespace Horo::Editor {
             return Edit::Failure(providers.ErrorValue());
         std::optional<Sha256Digest> expectedScoreSchema;
         std::optional<BehaviorTreeSubtreeReview> reviewedSubtree;
+        std::optional<AI::BehaviorTreeQueryOutput> queryOutput;
+        std::optional<Assets::AssetCookInputSnapshot> queryInput;
         if constexpr (std::is_same_v<Request, BehaviorTreeEditRequest>) {
             using enum BehaviorTreeEditOperation;
+            if (request.operation == ReviewQueryOutput || request.operation == SetQueryOutput ||
+                (request.operation == AppendTask && request.queryOutput)) {
+                if (!m_querySchema)
+                    return Edit::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+                if (request.operation == ReviewQueryOutput)
+                    document.queryReview.reset();
+                auto review = CaptureQueryOutputReview(root, registry, *m_querySchema, document, request, *providers.Value(),
+                                                       m_viewModel.availableBehaviorsRevision);
+                if (review.HasError())
+                    return Edit::Failure(review.ErrorValue());
+                if (request.operation == ReviewQueryOutput) {
+                    document.queryReview = std::move(review.Value().review);
+                    return Edit::Success();
+                }
+                const auto &fresh = review.Value().review;
+                const auto output = PrepareQueryOutputEdit(document.queryReview, fresh, *request.queryOutput);
+                if (output.HasError())
+                    return Edit::Failure(output.ErrorValue());
+                queryOutput = output.Value();
+                expectedScoreSchema = fresh.schemaDigest;
+                queryInput.emplace(std::move(review.Value().input));
+            }
             if (request.operation == AppendSubtree || request.operation == RetargetSubtree) {
                 if (!request.subtree || request.subtree != document.subtreeReview ||
                     request.subtree->documentRevision != document.revision ||
@@ -1207,12 +1429,13 @@ namespace Horo::Editor {
             if constexpr (std::is_same_v<Request, StateMachineEditRequest>)
                 return EditStateMachineCandidate(*candidate, request);
             else if constexpr (std::is_same_v<Request, BehaviorTreeEditRequest>)
-                return EditBehaviorTreeCandidate(*candidate, request, *providers.Value(), m_viewModel.availableBehaviorsRevision);
+                return EditBehaviorTreeCandidate(*candidate, request, *providers.Value(), m_viewModel.availableBehaviorsRevision,
+                                                 queryOutput);
             else {
                 const auto *task = request.task && request.task->catalogRevision == m_viewModel.availableBehaviorsRevision
                                        ? FindStarterTask(*providers.Value(), *request.task)
                                        : nullptr;
-                return EditUtilityGraphCandidate(*candidate, request, task);
+                return EditUtilityGraphCandidate(*candidate, request, task && !QueryOutputProperty(*task) ? task : nullptr);
             }
         }();
         if (edited.HasError())
@@ -1221,6 +1444,10 @@ namespace Horo::Editor {
             return Edit::Success();
         if (const auto verified = validate(*candidate); verified.HasError())
             return verified;
+        if (queryInput) {
+            if (const auto verified = queryInput->VerifyUnchanged(); verified.HasError())
+                return verified;
+        }
         const auto before = AI::DecisionPlanCodec::EncodeSource(std::span{document.graph.get(), 1}, document.graph->asset);
         const auto after =
             AI::DecisionPlanCodec::EncodeSource(std::span<const AI::DecisionGraphSource>{candidate.get(), 1}, candidate->asset);

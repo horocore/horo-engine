@@ -547,6 +547,7 @@ namespace Horo::Editor {
         AI::DecisionProviderId provider;
         std::uint32_t version{};
         std::string label;
+        bool queryOutput{};
     };
 
     /** @brief Explicit first Utility score input from a saved scalar key. */
@@ -570,6 +571,21 @@ namespace Horo::Editor {
         std::optional<InitialUtilityScore> score;
     };
 
+    /** @brief Saved inputs and compatible writable keys for the reviewed task and revision. */
+    struct BehaviorTreeQueryReview final {
+        Assets::AssetId asset;
+        AI::DecisionNodeId node;
+        std::uint64_t documentRevision{};
+        Sha256Digest queryDigest;
+        Sha256Digest schemaDigest;
+        AI::QueryId query;
+        AI::QueryResultSchemaId result;
+        std::uint32_t resultVersion{};
+        AI::QueryItemTypeId item;
+        std::vector<std::pair<AI::BlackboardKeyId, std::string>> keys;
+        std::optional<DecisionTaskSelection> task;
+    };
+
     /** @brief Immutable authored source projection independently of runtime graphs. */
     struct DecisionGraphWorkspaceDocument final {
         DocumentIdentity identity;
@@ -582,6 +598,7 @@ namespace Horo::Editor {
         std::shared_ptr<const DecisionGraphLayout> layout;
         bool layoutWritable{};
         std::optional<BehaviorTreeSubtreeReview> subtreeReview;
+        std::optional<BehaviorTreeQueryReview> queryReview;
         bool dirty{};
         bool canUndo{};
         bool canRedo{};
@@ -908,7 +925,9 @@ namespace Horo::Editor {
         bool blackboardCreationAvailable{};
         std::vector<DecisionSchemaChoice> decisionSchemaChoices;
         std::vector<DecisionSchemaChoice> behaviorTreeSubtreeChoices;
+        std::vector<DecisionSchemaChoice> behaviorTreeQueryChoices;
         std::vector<DecisionTaskChoice> decisionTaskChoices;
+        std::vector<DecisionTaskChoice> behaviorTreeTaskChoices;
         std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> decisionProviderMetadata; /**< Detached current Project catalog. */
         std::vector<DecisionGraphWorkspaceDocument> decisionGraphDocuments;
         std::vector<PCGWorkspaceDocument> pcgDocuments;
