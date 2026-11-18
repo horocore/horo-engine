@@ -164,7 +164,10 @@ namespace Horo::AI {
             return CancelEvaluation(binding_.agent);
         if (Terminal(states_[0].status))
             return Result<AiTaskState>::Success(states_[0].status);
-        if (const auto observed = ObservePriority(blackboard); observed.HasError()) {
+        const auto observed = ObservePriority(blackboard);
+        if (EvaluationCancelled(binding_.agent))
+            return CancelEvaluation(binding_.agent);
+        if (observed.HasError()) {
             CancelRange(0, AiTaskCancellationReason::Requested);
             return Result<AiTaskState>::Failure(observed.ErrorValue());
         }
@@ -188,7 +191,10 @@ namespace Horo::AI {
                                                                                         : tick_ - state.tick >= service.intervalTicks);
                 !due)
                 continue;
-            if (const auto result = executor_->Service(Context(service.id, blackboard)); result.HasError())
+            if (EvaluationCancelled(binding_.agent))
+                return Result<void>::Success();
+            const auto result = executor_->Service(Context(service.id, blackboard));
+            if (result.HasError() || EvaluationCancelled(binding_.agent))
                 return result;
             state = {.tick = tick_, .revision = revision.Value(), .active = true};
         }
@@ -220,7 +226,11 @@ namespace Horo::AI {
                 if (const auto mode = plan_->Nodes()[child].execution.abort;
                     mode != BehaviorTreeAbortMode::LowerPriority && mode != BehaviorTreeAbortMode::Both)
                     continue;
+                if (EvaluationCancelled(binding_.agent))
+                    return Result<void>::Success();
                 const auto checked = Check(child, blackboard);
+                if (EvaluationCancelled(binding_.agent))
+                    return Result<void>::Success();
                 if (checked.HasError())
                     return Result<void>::Failure(checked.ErrorValue());
                 if (!checked.Value())
@@ -250,9 +260,10 @@ namespace Horo::AI {
         ApplyTemporalControl(node, entering);
         if (auto condition = ApplyConditionControl(node, blackboard, entering); condition.HasError())
             return condition;
-        if (state.status != Running)
+        if (state.status != Running || EvaluationCancelled(binding_.agent))
             return Result<void>::Success();
-        if (auto serviced = RunServices(node, blackboard); serviced.HasError())
+        const auto serviced = RunServices(node, blackboard);
+        if (serviced.HasError() || EvaluationCancelled(binding_.agent))
             return serviced;
         const auto op = record.execution.operation;
         if (op == Task)
@@ -281,6 +292,8 @@ namespace Horo::AI {
         if (!entering && execution.abort != BehaviorTreeAbortMode::Self && execution.abort != BehaviorTreeAbortMode::Both)
             return Result<void>::Success();
         auto checked = Check(node, blackboard);
+        if (EvaluationCancelled(binding_.agent))
+            return Result<void>::Success();
         if (checked.HasError())
             return Result<void>::Failure(checked.ErrorValue());
         if (!checked.Value()) {
@@ -292,6 +305,8 @@ namespace Horo::AI {
 
     Result<void> BehaviorTreeInstance::RunSubplan(std::size_t node, const BlackboardSnapshot &blackboard, bool entering) {
         auto result = executor_->EvaluateSubplan(Context(plan_->Nodes()[node].execution.id, blackboard), entering);
+        if (EvaluationCancelled(binding_.agent))
+            return Result<void>::Success();
         if (result.HasError())
             return Result<void>::Failure(result.ErrorValue());
         const auto outcome = result.Value();
@@ -459,7 +474,11 @@ namespace Horo::AI {
             const auto &node = plan_->Nodes()[frame.node];
             const auto &state = states_[frame.node];
             if (!frame.entered && !Terminal(state.status)) {
-                if (const auto entered = Enter(frame.node, blackboard); entered.HasError())
+                const auto entered = Enter(frame.node, blackboard);
+                // A provider may revoke the owner while this frame is active.
+                if (EvaluationCancelled(binding_.agent))
+                    return CancelEvaluation(binding_.agent);
+                if (entered.HasError())
                     return Result<AiTaskState>::Failure(entered.ErrorValue());
                 frame.entered = true;
                 frame.nextChild = node.execution.operation == Parallel ? 0 : state.cursor;
@@ -474,6 +493,8 @@ namespace Horo::AI {
             }
             if (parallel && !Terminal(state.status)) {
                 FinishParallel(frame.node);
+                if (EvaluationCancelled(binding_.agent))
+                    return CancelEvaluation(binding_.agent);
             }
             const std::size_t completed = frame.node;
             --depth;

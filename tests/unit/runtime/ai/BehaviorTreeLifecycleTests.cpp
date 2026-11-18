@@ -88,6 +88,28 @@ namespace Horo::AI {
             }
         }
 
+        TEST_CASE("Owner revocation during a service fences the current tree evaluation", "[unit][ai][bt_runtime]") {
+            using enum BehaviorTreeOperation;
+            using enum AiTaskState;
+            Fixture fixture({Node(1, Parallel, {2, 3, 4}), Node(2, Task), Node(3, Task), Node(4, Task)},
+                            {{Id(5), Id(3), BehaviorTreeServiceMode::Periodic, 1}, {Id(6), Id(3), BehaviorTreeServiceMode::Periodic, 1}});
+            CancellationSource cancellation;
+            fixture.probe->cancelService = 5;
+            fixture.probe->cancellation = &cancellation;
+            fixture.probe->outcome[2] = Running;
+            auto instance = fixture.Instance(1, cancellation.Token());
+            CHECK(fixture.Evaluate(*instance, 1) == Cancelled);
+            CHECK(fixture.probe->services[5] == 1);
+            CHECK(fixture.probe->services[6] == 0);
+            CHECK(fixture.probe->starts[3] == 0);
+            CHECK(fixture.probe->starts[4] == 0);
+            REQUIRE(fixture.probe->terminals[2]);
+            CHECK(fixture.probe->terminals[2]->cancellationReason == AiTaskCancellationReason::ContextCancelled);
+            instance->Shutdown();
+            CHECK(fixture.probe->aborts[2] == 1);
+            CHECK(fixture.probe->cleanups[2] == 1);
+        }
+
         TEST_CASE("Precancelled trees never start tasks and destructors abort running work", "[unit][ai][bt_runtime]") {
             using enum AiTaskState;
             Fixture fixture({Node(1, BehaviorTreeOperation::Task)});
