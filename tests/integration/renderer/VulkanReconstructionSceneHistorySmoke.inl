@@ -161,8 +161,7 @@ namespace ReconstructionSmoke {
 
 TEST_CASE("Vulkan scene history publishes only from its retained completed frame", "[integration][renderer][vulkan][gpu][reconstruction]") {
     using namespace ReconstructionSmoke;
-    const auto seedShader = CookScene(Entry::TemporalSeed).reconstruction;
-    const auto historyShader = CookScene(Entry::TemporalHistory).reconstruction;
+    const std::array shaders{CookScene(Entry::TemporalSeed).reconstruction, CookScene(Entry::TemporalHistory).reconstruction};
     Owner owner;
     REQUIRE(RegisterVulkanRenderBackend(owner.registry, owner.observed).HasValue());
     REQUIRE(owner.registry.Seal().HasValue());
@@ -170,8 +169,20 @@ TEST_CASE("Vulkan scene history publishes only from its retained completed frame
     config.queueAssignments = {{RenderQueueRole::Graphics, {1}}, {RenderQueueRole::Compute, {1}}, {RenderQueueRole::Transfer, {1}}};
     owner.frontend = Take(RenderFrontend::Create(owner.registry, RenderBackendId{"vulkan"}, config));
     auto &frontend = *owner.frontend;
-    const auto seed = Take(frontend.RealizeNativeReconstructionKernel(seedShader));
-    const auto temporal = Take(frontend.RealizeNativeReconstructionKernel(historyShader));
+    auto declared = Take(DescribeNativeReconstructionImageProvider(ReconstructionKind::Temporal, shaders));
+    const auto route = declared.route;
+    const std::array cookKeys{shaders[0].artifact.artifactKey, shaders[1].artifact.artifactKey};
+    const std::array inventory{ImageDescriptor(Image::CurrentColor), ImageDescriptor(Image::CurrentDepth), ImageDescriptor(Image::Motion),
+                               ImageDescriptor(Image::OutputColor), ImageDescriptor(Image::OutputDepth)};
+    ImageProviderRegistry providers;
+    REQUIRE(providers.Register(std::move(declared)).HasValue());
+    providers.Seal();
+    const ImageProviderEvidence evidence{.hostApi = {1, 0}, .admittedCookedArtifacts = cookKeys, .textures = inventory};
+    const auto available = Take(frontend.DiscoverImageProvider(providers, route, evidence));
+    REQUIRE(available.installation == ImageProviderInstallStatus::Linked);
+    REQUIRE(available.readiness == ImageProviderReadiness::Ready);
+    const auto seed = Take(frontend.RealizeNativeReconstructionKernel(shaders[0]));
+    const auto temporal = Take(frontend.RealizeNativeReconstructionKernel(shaders[1]));
     const auto color = SceneImage(frontend, Image::CurrentColor);
     const auto depth = SceneImage(frontend, Image::CurrentDepth);
     const auto motion = SceneImage(frontend, Image::Motion);

@@ -4932,6 +4932,7 @@ add_executable(HoroRenderFrontendTests
         unit/runtime/renderer/RenderGraphTransientResourceTests.cpp
         unit/runtime/renderer/RenderGraphTransientReservationTests.cpp
         unit/runtime/renderer/RenderFrontendTests.cpp
+        unit/runtime/renderer/ImageProviderRegistryTests.cpp
         unit/runtime/renderer/RenderFrontendLightPreparationTests.cpp
         unit/runtime/renderer/RenderGraphMaterialRasterTests.cpp
         unit/runtime/renderer/RenderGraphMaterialRetentionBoundaryTests.cpp

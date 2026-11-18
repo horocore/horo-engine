@@ -320,6 +320,16 @@ qualified image behavior and product composition as specified by ADR-040.
 
 ## Upscaling
 
+The image-provider registry freezes explicitly contributed category routes.
+Discovery checks the selected backend, API, device and current resource
+requirements. Packaged routes require matching product inventory evidence,
+including binary and license notices, and any required SDK needs its own runtime
+evidence. The renderer reads those host records without probing for a library.
+The linked native reconstruction declarations require an admitted spatial
+artifact or both temporal seed and accumulation artifacts before reporting
+readiness. Discovery reports the exact requested route without selecting a
+replacement or creating a provider.
+
 [ADR-040](../../adr/040-reconstruction-frame-generation-and-latency-providers.md)
 replaces the legacy single upscaler interface with four sealed frontend-owned
 registries:

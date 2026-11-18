@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Runtime/Render/ClusteredLightGrid.h"
+#include "Horo/Runtime/Render/ImageProviderRegistry.h"
 #include "Horo/Runtime/Render/MultiviewSceneExtraction.h"
 #include "Horo/Runtime/Render/RenderGraphInspection.h"
 #include "Horo/Runtime/Render/RenderReadback.h"
@@ -577,6 +578,17 @@ namespace Horo::Render {
         /** @brief Queries actual selected backend/device facts for pipeline cache identity outside an active frame.
          * @return Native-free compatibility facts or typed thread/lifecycle/unsupported failure. */
         [[nodiscard]] Result<RenderPipelineDeviceIdentity> QueryPipelineDeviceIdentity() const;
+
+        /** @brief Reports effective support for one exact declared image-provider route before device work.
+         * @param providers Host-composed sealed registry.
+         * @param route Exact configured category/provider/mode.
+         * @param evidence Borrowed owner-verified install/cook data and requested textures.
+         * @return Current device-generation readiness or typed owner, lifecycle, route or driver diagnostic.
+         * @details This cold discovery call uses only the already selected renderer. It never realizes a provider or falls back.
+         */
+        [[nodiscard]] Result<ImageProviderAvailability> DiscoverImageProvider(const ImageProviderRegistry &providers,
+                                                                              const ImageProviderRoute &route,
+                                                                              const ImageProviderEvidence &evidence) const;
         /** @copydoc IMaterialBindingBackend::Realize */
         [[nodiscard]] Result<std::unique_ptr<IResidentMaterialBinding>> Realize(const MaterialBindingDescriptor &descriptor) override;
 

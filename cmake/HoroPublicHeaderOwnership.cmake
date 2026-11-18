@@ -1417,6 +1417,7 @@ horo_configure_target_header_boundary(HoroRenderBackendRegistry PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroRenderFrontend PUBLIC_HEADERS
     Horo/Runtime/Render/NativeReconstructionViewHistory.h
+    Horo/Runtime/Render/ImageProviderRegistry.h
     Horo/Runtime/Render/LightFrameBufferPool.h
     Horo/Runtime/Render/UiPaintFrameBufferPool.h
     Horo/Runtime/Render/UiPaintProgram.h

@@ -3132,6 +3132,7 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/ExposureGpuPreparation.cpp
         runtime/renderer/frontend/NativeReconstructionPreparation.cpp
         runtime/renderer/frontend/NativeReconstructionViewHistory.cpp
+        runtime/renderer/frontend/ImageProviderRegistry.cpp
         runtime/renderer/frontend/VfxPreparation.cpp
         runtime/renderer/frontend/VfxGpuInventoryLease.cpp
         runtime/renderer/frontend/VfxGpuPreparation.cpp
