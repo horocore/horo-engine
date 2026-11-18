@@ -86,6 +86,27 @@ namespace Horo::Application::Internal {
         }
 
     private:
+        /** @brief Retires an unpublished Play attempt until its candidate takes responsibility. */
+        class PreparationScope final {
+        public:
+            PreparationScope(OpenXRPlayHost &owner, const std::shared_ptr<SceneState> &state) noexcept : owner_(owner), state_(state) {}
+            PreparationScope(const PreparationScope &) = delete;
+            PreparationScope &operator=(const PreparationScope &) = delete;
+
+            ~PreparationScope() noexcept {
+                if (state_)
+                    state_->Retire(owner_);
+            }
+
+            void Accept() noexcept {
+                state_.reset();
+            }
+
+        private:
+            OpenXRPlayHost &owner_;
+            std::shared_ptr<SceneState> state_;
+        };
+
         /** @brief Prepares the exact Scene/native candidate under the existing host rollback scope. */
         [[nodiscard]] Result<std::shared_ptr<SceneState>> PrepareCurrent(const Runtime::RuntimeSceneDefinition &definition,
                                                                          const Runtime::RuntimeSceneView &candidate);
@@ -235,28 +256,11 @@ namespace Horo::Application::Internal {
         owner.input_.origin = origin.Value();
         owner.scene_ = state;
 
-        struct PreparationScope final {
-            PreparationScope(OpenXRPlayHost &owner, std::shared_ptr<SceneState> prepared) noexcept
-                : host(owner), state(std::move(prepared)) {}
-
-            PreparationScope(const PreparationScope &) = delete;
-            PreparationScope &operator=(const PreparationScope &) = delete;
-
-            OpenXRPlayHost &host;
-            std::shared_ptr<SceneState> state;
-            bool accepted{};
-
-            ~PreparationScope() noexcept {
-                if (!accepted)
-                    state->Retire(host);
-            }
-        };
-
         PreparationScope rollback{owner, state};
         // All Scene/view reads and geometry leases are captured before native/host preparation can call foreign code.
         if (auto prepared = state->PrepareResources(owner, {origin.Value(), XRSpaceKind::Local, root.Value()}); prepared.HasError())
             return Output::Failure(prepared.ErrorValue());
-        rollback.accepted = true;
+        rollback.Accept();
         return Output::Success(std::move(state));
     }
 
