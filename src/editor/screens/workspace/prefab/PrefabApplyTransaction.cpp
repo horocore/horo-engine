@@ -57,6 +57,7 @@ namespace Horo::Editor {
             Assets::AssetSourceIdentity identity;
             JournalDisposition disposition{JournalDisposition::Prepared};
         };
+
         constexpr std::size_t MaximumRecoveryPathBytes = 4096;
 
         /** @brief Stable private recovery namespace for one unresolved paired operation per project. */
