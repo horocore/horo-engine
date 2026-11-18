@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <limits>
 
 namespace {
@@ -123,6 +124,58 @@ namespace {
         REQUIRE(router.ReadAction(context, ActionId{"confirm"}, 1).pressed);
         REQUIRE(backend.PlayRumble(id, {.lowFrequency = 0.5F, .durationMilliseconds = 1000}).HasError());
         REQUIRE(CanonicalGlyph({BindingControlKind::RawGamepadButton, 0}).label == "Raw button 0");
+    }
+
+    TEST_CASE("Replacing the SDL collector rediscovers attached controllers after add events drain", "[unit][input][sdl][gamepad]") {
+        const bool canonical = GENERATE(true, false);
+        NativeVirtualPad native{canonical, false};
+        const auto findNative = [&native](const RawInputSnapshot &snapshot) {
+            return std::ranges::find(snapshot.gamepads, native.name, &GamepadState::name);
+        };
+        const auto button = [canonical](const GamepadState &pad) -> const ButtonState & {
+            return canonical ? pad.buttons[static_cast<std::size_t>(GamepadButton::South)] : pad.rawButtons.at(0);
+        };
+        GamepadDeviceId retired;
+        {
+            SdlInputBackend first;
+            first.BeginFrame(1);
+            first.PollEvents();
+            const auto &snapshot = first.Commit();
+            const auto found = findNative(snapshot);
+            REQUIRE(found != snapshot.gamepads.end());
+            retired = found->id;
+            first.BeginFrame(2);
+            REQUIRE(SDL_SetJoystickVirtualButton(native.joystick, 0, true));
+            SDL_UpdateJoysticks();
+            first.PollEvents();
+            const auto *pressed = first.Commit().FindGamepad(retired);
+            REQUIRE(pressed != nullptr);
+            REQUIRE(button(*pressed).down);
+        }
+
+        SdlInputBackend replacement;
+        replacement.BeginFrame(3);
+        const auto &snapshot = replacement.Commit();
+        const auto found = findNative(snapshot);
+        REQUIRE(found != snapshot.gamepads.end());
+        CHECK(found->canonicalMapping == canonical);
+        CHECK(found->id != retired);
+        CHECK_FALSE(button(*found).down);
+        CHECK(snapshot.FindGamepad(retired) == nullptr);
+        CHECK(replacement.PlayRumble(retired, {}).HasError());
+        const auto fresh = found->id;
+
+        replacement.BeginFrame(4);
+        REQUIRE(SDL_SetJoystickVirtualButton(native.joystick, 0, false));
+        SDL_UpdateJoysticks();
+        REQUIRE(SDL_SetJoystickVirtualButton(native.joystick, 0, true));
+        SDL_UpdateJoysticks();
+        replacement.PollEvents();
+        const auto &updated = replacement.Commit();
+        const auto *pad = updated.FindGamepad(fresh);
+        REQUIRE(pad != nullptr);
+        REQUIRE(std::ranges::count(updated.gamepads, native.name, &GamepadState::name) == 1);
+        CHECK(button(*pad).pressed);
     }
 
     TEST_CASE("Optional SDL mapping upgrades a raw device through a fresh canonical generation", "[unit][input][sdl][gamepad]") {

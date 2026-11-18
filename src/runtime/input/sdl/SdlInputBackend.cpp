@@ -285,12 +285,15 @@ namespace Horo::Input {
         bool touchAdmissionClosed{};
         bool gyroRequested{};
         bool gyroSyncPending{};
+        bool initialDiscoveryPending{true};
 
         void HandleKeyboardEvent(const SDL_Event &event);
         void HandlePointerEvent(const SDL_Event &event);
         void HandleWindowEvent(const SDL_Event &event);
         void HandleGamepadEvent(const SDL_Event &event);
+        void OpenAttachedDevices();
         void OpenGamepad(SDL_JoystickID native);
+        void OpenRawJoystick(SDL_JoystickID native);
         void RemapGamepad(SDL_JoystickID native);
         void CloseDevice(SDL_JoystickID native);
         void HandleJoystickEvent(const SDL_Event &event);
@@ -543,6 +546,42 @@ namespace Horo::Input {
         ConfigureGyroscope(opened->second);
     }
 
+    /** @brief Opens an unmapped joystick with the same bounded raw controls as a queued add event. */
+    void SdlInputBackend::Impl::OpenRawJoystick(const SDL_JoystickID native) {
+        if (devices.contains(native) || SDL_IsGamepad(native))
+            return;
+        SDL_Joystick *joystick = SDL_OpenJoystick(native);
+        if (!joystick)
+            return;
+        const char *name = SDL_GetJoystickName(joystick);
+        const auto buttons = static_cast<std::size_t>(std::clamp(SDL_GetNumJoystickButtons(joystick), 0, 256));
+        const auto axes = static_cast<std::size_t>(std::clamp(SDL_GetNumJoystickAxes(joystick), 0, 256));
+        const GamepadDeviceId id = collector.ConnectGamepad(name ? name : "SDL Joystick", false, buttons, axes);
+        if (!id.IsValid()) {
+            SDL_CloseJoystick(joystick);
+            return;
+        }
+        devices.try_emplace(native, id, nullptr, joystick);
+    }
+
+    /** @brief Admits attached devices on the first collection boundary even when another owner drained their add events. */
+    void SdlInputBackend::Impl::OpenAttachedDevices() {
+        initialDiscoveryPending = false;
+        if (SDL_WasInit(SDL_INIT_GAMEPAD) == 0)
+            return;
+        int count{};
+        const std::unique_ptr<SDL_JoystickID[], decltype(&SDL_free)> nativeIds{SDL_GetJoysticks(&count), &SDL_free};
+        if (!nativeIds)
+            return;
+        for (int index = 0; index < count; ++index) {
+            const auto native = nativeIds[static_cast<std::size_t>(index)];
+            if (SDL_IsGamepad(native))
+                OpenGamepad(native);
+            else
+                OpenRawJoystick(native);
+        }
+    }
+
     /** @brief Retires old mapping ownership and effects before issuing a fresh canonical incarnation. */
     void SdlInputBackend::Impl::RemapGamepad(const SDL_JoystickID native) {
         const auto found = devices.find(native);
@@ -611,23 +650,9 @@ namespace Horo::Input {
     /** @brief Opens and closes raw joysticks and forwards their raw button and axis state. */
     void SdlInputBackend::Impl::HandleJoystickEvent(const SDL_Event &event) {
         switch (event.type) {
-            case SDL_EVENT_JOYSTICK_ADDED: {
-                if (devices.contains(event.jdevice.which) || SDL_IsGamepad(event.jdevice.which))
-                    break;
-                SDL_Joystick *joystick = SDL_OpenJoystick(event.jdevice.which);
-                if (!joystick)
-                    break;
-                const char *name = SDL_GetJoystickName(joystick);
-                const auto buttons = static_cast<std::size_t>(std::clamp(SDL_GetNumJoystickButtons(joystick), 0, 256));
-                const auto axes = static_cast<std::size_t>(std::clamp(SDL_GetNumJoystickAxes(joystick), 0, 256));
-                const GamepadDeviceId id = collector.ConnectGamepad(name ? name : "SDL Joystick", false, buttons, axes);
-                if (!id.IsValid()) {
-                    SDL_CloseJoystick(joystick);
-                    break;
-                }
-                devices.try_emplace(event.jdevice.which, id, nullptr, joystick);
+            case SDL_EVENT_JOYSTICK_ADDED:
+                OpenRawJoystick(event.jdevice.which);
                 break;
-            }
             case SDL_EVENT_JOYSTICK_REMOVED:
                 CloseDevice(event.jdevice.which);
                 break;
@@ -671,6 +696,8 @@ namespace Horo::Input {
         }
         if (impl_->gyroSyncPending)
             impl_->SyncGyroscopes();
+        if (impl_->initialDiscoveryPending)
+            impl_->OpenAttachedDevices();
     }
 
     /** @copydoc SdlInputBackend::SetGamepadGyroscopeEnabled */

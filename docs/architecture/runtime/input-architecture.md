@@ -739,7 +739,9 @@ owners; aggregate reads retain editor/global delivery. Gamepad bindings without
 keyboard chords remain eligible while another player holds keyboard modifiers.
 Pointer-device loss retires pointing controls while keyboard/gamepad ownership
 continues. Focus loss retires every control and rejects later unfocused events.
-Gamepad incarnations remain distinct across collector replacement. Disconnect
+On its first collection frame, the SDL adapter admits currently attached devices
+with fresh generations and neutral controls, including when an earlier collector
+consumed their initial add events. Disconnect
 release evidence belongs to the old player for one frame and does not erase a
 held keyboard binding. Digital bindings contribute thresholded zero/one pulses
 before their configured scale and action aggregation, including a press/release
