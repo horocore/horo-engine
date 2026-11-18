@@ -659,6 +659,11 @@ Prompts:
 - never echo secrets
 - fail with an actionable error when required input is unavailable
 
+A required prompt can be replaced by its declared option only when the current
+invocation explicitly supplies a value. Defaults and configured values cannot
+authorize a non-interactive invocation. The non-interactive switch only disables
+interaction and cannot serve as a prompt alternative.
+
 Release credentials use credential providers or protected input channels, not
 ordinary command arguments.
 

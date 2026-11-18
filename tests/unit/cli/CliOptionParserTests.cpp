@@ -126,6 +126,15 @@ namespace Horo::Cli {
                                    .sensitivity = SettingSensitivity::Public,
                                    .sourcePolicy = sources})
                         .HasValue());
+            REQUIRE(schema
+                        .Register({.key = SettingKey{"cli.validation.mode"},
+                                   .type = SettingValueType::String,
+                                   .defaultValue = std::string{"safe"},
+                                   .scope = SettingScope::Invocation,
+                                   .reloadPolicy = ReloadPolicy::NextOperation,
+                                   .sensitivity = SettingSensitivity::Public,
+                                   .sourcePolicy = sources})
+                        .HasValue());
             REQUIRE(schema.Seal().HasValue());
             ConfigurationResolutionRequest request{.environment = environment, .user = user};
             auto resolved = ConfigurationResolver::Resolve(schema, request, 9);
@@ -304,16 +313,36 @@ namespace Horo::Cli {
         CliCommandDescriptor descriptor = Descriptor();
         descriptor.interactive = CliInteractivePolicy::Required;
         descriptor.interactiveAlternativeOption = "mode";
-        descriptor.options[1].defaultValue.reset();
+        descriptor.options[1].configurationKey = "cli.validation.mode";
+        descriptor.stdinPolicy = CliStdinPolicy::JsonDocument;
         const CliCommandRegistry registry = Registry(std::move(descriptor));
-        const auto missing = std::to_array<std::string_view>({"project", "validate", "--count", "2", "--non-interactive"});
-        RequireError(CliOptionParser::Parse(missing, registry, {.terminalAvailable = true}), CliErrors::InteractiveInputUnavailable);
 
-        const auto supplied =
-            std::to_array<std::string_view>({"project", "validate", "--count", "2", "--non-interactive", "--mode", "fast"});
-        auto parsed = CliOptionParser::Parse(supplied, registry, {.terminalAvailable = true});
+        ConfigurationSourceMap environment;
+        environment.try_emplace(SettingKey{"cli.validation.mode"}, ConfigurationInputValue{.value = std::string{"fast"}});
+        const auto configuration = Configuration(environment);
+        TestInputReader input;
+        input.payload = Bytes("{}");
+        CliParserContext context{.configuration = &configuration,
+                                 .inputReader = &input,
+                                 .stdinSelected = true,
+                                 .selectedStdinPolicy = CliStdinPolicy::JsonDocument,
+                                 .terminalAvailable = true};
+        const auto disabled = std::to_array<std::string_view>({"project", "validate", "--count", "2", "--non-interactive"});
+        RequireError(CliOptionParser::Parse(disabled, registry, context), CliErrors::InteractiveInputUnavailable);
+
+        context.configuration = nullptr;
+        const auto noTerminal = std::to_array<std::string_view>({"project", "validate", "--count", "2"});
+        context.terminalAvailable = false;
+        RequireError(CliOptionParser::Parse(noTerminal, registry, context), CliErrors::InteractiveInputUnavailable);
+        CHECK(input.calls == 0);
+
+        const auto supplied = std::to_array<std::string_view>({"project", "validate", "--count", "2", "--mode", "fast"});
+        const auto parsed = CliOptionParser::Parse(supplied, registry, context);
         REQUIRE(parsed.HasValue());
-        REQUIRE_FALSE(parsed.Value().interactive);
+        CHECK_FALSE(parsed.Value().interactive);
+        CHECK(input.calls == 1);
+        REQUIRE(FindOption(parsed.Value(), "mode"));
+        CHECK(FindOption(parsed.Value(), "mode")->values.front().source == CliValueSource::Invocation);
     }
 
     TEST_CASE("CLI parser bounds argv diagnostics and unknown commands before retaining input", "[unit][cli][parser]") {

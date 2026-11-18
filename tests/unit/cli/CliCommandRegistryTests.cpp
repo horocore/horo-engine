@@ -415,5 +415,7 @@ namespace Horo::Cli {
 
         descriptor.interactiveAlternativeOption = "missing";
         RequireError(CliCommandRegistry::Create(std::span{&descriptor, 1}, Policy()), CliErrors::DescriptorInvalid);
+        descriptor.interactiveAlternativeOption = "non-interactive";
+        RequireError(CliCommandRegistry::Create(std::span{&descriptor, 1}, Policy()), CliErrors::DescriptorInvalid);
     }
 }  // namespace Horo::Cli

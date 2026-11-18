@@ -413,9 +413,13 @@ namespace Horo::Cli {
                    std::get<bool>(state->values.back().value);
         }
 
-        [[nodiscard]] bool OptionHasValue(const std::span<const OptionState> states, const std::string_view name) noexcept {
+        /** @brief Requires the current invocation to explicitly supply a usable prompt alternative. */
+        [[nodiscard]] bool HasExplicitPromptAlternative(const std::span<const OptionState> states, const std::string_view name) noexcept {
             const OptionState *state = FindOptionState(states, name);
-            return state != nullptr && !state->values.empty();
+            return state != nullptr && std::ranges::any_of(state->values, [](const CliResolvedValue &entry) {
+                const auto *flag = std::get_if<bool>(&entry.value);
+                return entry.source == CliValueSource::Invocation && (flag == nullptr || *flag);
+            });
         }
 
         /** @brief Checks the parsed explicit deadline against command policy before any input or application work. */
@@ -470,7 +474,7 @@ namespace Horo::Cli {
             const bool nonInteractive = OptionIsTrue(states, "non-interactive") || !context.terminalAvailable;
             request.interactive = command.interactive != CliInteractivePolicy::Forbidden && !nonInteractive;
             if (command.interactive == CliInteractivePolicy::Required && nonInteractive &&
-                !OptionHasValue(states, *command.interactiveAlternativeOption))
+                !HasExplicitPromptAlternative(states, *command.interactiveAlternativeOption))
                 return Result<void>::Failure(MakeError(CliErrors::InteractiveInputUnavailable));
             return Result<void>::Success();
         }

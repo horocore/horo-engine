@@ -490,6 +490,8 @@ namespace Horo::Cli {
         [[nodiscard]] Result<void> ValidateInteractiveOption(const CliCommandDescriptor &descriptor) {
             if (!descriptor.interactiveAlternativeOption)
                 return Result<void>::Success();
+            if (*descriptor.interactiveAlternativeOption == "non-interactive")
+                return Result<void>::Failure(MakeError(CliErrors::DescriptorInvalid));
             const auto namedAlternative = [&descriptor](const CliOptionDescriptor &option) {
                 return option.name == *descriptor.interactiveAlternativeOption;
             };
