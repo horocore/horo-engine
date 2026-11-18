@@ -5,6 +5,7 @@
 
 #include <array>
 #include <string>
+#include <string_view>
 
 namespace Horo::Editor::NativeReconstructionRelease {
     using Render::NativeReconstructionEntry;
@@ -23,6 +24,10 @@ namespace Horo::Editor::NativeReconstructionRelease {
             return {};
         return "assets/shaders/runtime/native-reconstruction-vulkan/" + std::string{name};
     }
+
+    /** @brief Exact scene-linear material files consumed by explicit signed spatial startup. */
+    inline constexpr std::string_view SceneLinearPayloadPath = "assets/shaders/editor/viewport-scene-linear-vulkan.horoshdr";
+    inline constexpr std::string_view SceneLinearReflectionPath = "assets/shaders/editor/viewport-scene-linear-vulkan.reflection.json";
 
     /** @brief Exact portable target contract shared by the release cook and signed editor. */
     inline constexpr Render::ShaderTargetRequirement Target{.backend = Render::ShaderTargetBackend::Vulkan,

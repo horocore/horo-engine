@@ -34,7 +34,7 @@ namespace {
             case Viewport:
                 return Editor::EditorVulkanViewportShaderManifest();
             case SceneLinear:
-                return Editor::EditorVulkanSceneLinearShaderManifest();
+                return {};  // The signed release and standalone route use their shared complete request.
             case Multiview:
                 return Editor::EditorVulkanMultiviewShaderManifest();
             case Shadow:
@@ -49,8 +49,9 @@ namespace {
         switch (mode) {
             using enum CookMode;
             case Viewport:
-            case SceneLinear:
                 return Editor::EditorVulkanViewportReflectionNames();
+            case SceneLinear:
+                return {};
             case Multiview:
                 return Editor::EditorVulkanMultiviewReflectionNames();
             case Shadow:
@@ -170,6 +171,10 @@ namespace {
 
     ShaderCompilationRequest Request(CookMode mode, std::vector<std::uint8_t> source,
                                      const std::vector<ShaderCompilerToolInstallation> &tools) {
+        if (mode == CookMode::SceneLinear) {
+            const std::array identities{tools[0].identity, tools[1].identity, tools[2].identity};
+            return Editor::Offline::MakeVulkanSceneLinearCookRequest(std::move(source), identities);
+        }
         const auto target = Editor::EditorVulkanViewportShaderTarget();
         ShaderCompilerTargetDescriptor route{.requirement = target,
                                              .platformTriple = "linux-x86_64",
@@ -184,12 +189,33 @@ namespace {
         return request;
     }
 
-    /** @brief Delivers a canonical inventory for the caller's release job on stdout. */
-    Result<void> CookReconstruction(char **argv, Release::ReleaseCandidateId candidate, const std::vector<std::uint8_t> &source,
-                                    const std::vector<ShaderCompilerToolInstallation> &tools, const IShaderCompilerAdapter &adapter) {
+    /** @brief Explicit compatible release invocation; the same owner handles both closed package profiles. */
+    struct ReconstructionReleaseRequest final {
+        Release::ReleaseCandidateId candidate;
+        const char *sceneLinearSource{};
+    };
+
+    /** @brief Cooks the optional scene pair before the existing atomic release stage fence. */
+    Result<Release::ReleasePreSignInventory> CookReconstructionStage(char **argv, const ReconstructionReleaseRequest &release,
+                                                                     const std::vector<std::uint8_t> &source,
+                                                                     const std::vector<ShaderCompilerToolInstallation> &tools,
+                                                                     const IShaderCompilerAdapter &adapter) {
+        using Outcome = Result<Release::ReleasePreSignInventory>;
         const std::array identities{tools[0].identity, tools[1].identity, tools[2].identity};
-        const auto inventory = Editor::Offline::CookVulkanReconstructionRelease(argv[2], std::filesystem::absolute(argv[3]), candidate,
-                                                                                source, identities, adapter);
+        const auto scratch = std::filesystem::absolute(argv[3]);
+        if (!release.sceneLinearSource)
+            return Editor::Offline::CookVulkanReconstructionRelease(argv[2], scratch, release.candidate, source, identities, adapter);
+        auto scene = Read(release.sceneLinearSource, 16U * 1024U * 1024U);
+        if (scene.HasError())
+            return Outcome::Failure(scene.ErrorValue());
+        return Editor::Offline::CookVulkanSpatialReconstructionRelease(argv[2], scratch, release.candidate, source, scene.Value(),
+                                                                       identities, adapter);
+    }
+
+    /** @brief Delivers a canonical inventory for the caller's release job on stdout. */
+    Result<void> CookReconstruction(char **argv, const ReconstructionReleaseRequest &release, const std::vector<std::uint8_t> &source,
+                                    const std::vector<ShaderCompilerToolInstallation> &tools, const IShaderCompilerAdapter &adapter) {
+        const auto inventory = CookReconstructionStage(argv, release, source, tools, adapter);
         if (inventory.HasError())
             return Result<void>::Failure(inventory.ErrorValue());
         std::cout << inventory.Value().CanonicalJson();
@@ -200,7 +226,7 @@ namespace {
         return Result<void>::Success();
     }
 
-    Result<void> Cook(char **argv, CookMode mode, std::optional<Release::ReleaseCandidateId> candidate, bool manualColorOutput) {
+    Result<void> Cook(char **argv, CookMode mode, std::optional<ReconstructionReleaseRequest> reconstruction, bool manualColorOutput) {
         auto configuration = Configuration(argv);
         if (configuration.HasError())
             return Result<void>::Failure(configuration.ErrorValue());
@@ -217,8 +243,8 @@ namespace {
         auto source = Read(argv[1], 16U * 1024U * 1024U);
         if (source.HasError())
             return Result<void>::Failure(source.ErrorValue());
-        if (candidate)
-            return CookReconstruction(argv, *candidate, source.Value(), tools, adapter.Value());
+        if (reconstruction)
+            return CookReconstruction(argv, *reconstruction, source.Value(), tools, adapter.Value());
         const auto request = Request(mode, std::move(source).Value(), tools);
         const auto compiled = CompileShaderTargets(request, adapter.Value(), {});
         if (compiled.HasError())
@@ -256,8 +282,11 @@ namespace {
     }
 
     /** @brief Takes only the explicit release job's positive decimal identity. */
-    std::optional<Horo::Release::ReleaseCandidateId> ParseReconstruction(int argc, char **argv) {
-        if (argc != 9 || std::string_view{argv[7]} != "--native-reconstruction")
+    std::optional<ReconstructionReleaseRequest> ParseReconstruction(int argc, char **argv) {
+        const bool withScene = argc == 11;
+        if ((argc != 9 && !withScene) || std::string_view{argv[7]} != "--native-reconstruction")
+            return std::nullopt;
+        if (withScene && (std::string_view{argv[9]} != "--scene-linear-source" || std::string_view{argv[10]}.empty()))
             return std::nullopt;
         const std::string_view token{argv[8]};
         Horo::Release::ReleaseCandidateId id;
@@ -265,7 +294,7 @@ namespace {
         const auto converted = std::from_chars(token.data(), end, id.value);
         if (converted.ec != std::errc{} || converted.ptr != end || id.value == 0)
             return std::nullopt;
-        return id;
+        return ReconstructionReleaseRequest{id, withScene ? argv[10] : nullptr};
     }
 
     std::optional<CookMode> ParseMode(int argc, char **argv) {
@@ -298,7 +327,7 @@ int main(int argc, char **argv) {
         std::cerr << "Usage: HoroEditorVulkanShaderCook source.hlsl output-prefix scratch-root dxc spirv-val spirv-cross "
                      "[--scene-linear|--multiview|--multiview-motion|--shadow]\n"
                      "       HoroEditorVulkanShaderCook source.hlsl absolute-new-stage scratch-root dxc spirv-val spirv-cross "
-                     "--native-reconstruction candidate-id\n"
+                     "--native-reconstruction candidate-id [--scene-linear-source viewport.hlsl]\n"
                      "       HoroEditorVulkanShaderCook repository absolute-new-stage scratch-root dxc spirv-val spirv-cross "
                      "--color-output-manual analytic-root\n";
         return 2;

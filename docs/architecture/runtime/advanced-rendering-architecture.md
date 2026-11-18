@@ -376,29 +376,44 @@ HoroEditorVulkanShaderCook "$source_root" "$new_absolute_stage" \
 The read-only package loader explicitly selects the Vulkan manual target. Its
 scene stage accepts a finite positive scalar exposure and shares the existing
 analytic color mapping, auxiliary tables and exact SDR encode source. This
-cook omits GPU exposure history and creative looks. The native Vulkan
-material graph admits the eight passes required for four shadow cascades,
-scene, analytic transform, overlay and final encode. The ordinary viewport
-still needs the signed spatial kernel, manual color owner and these graph
-resources connected for product activation.
+cook omits GPU exposure history and creative looks. The Vulkan viewport
+can select same-extent spatial reconstruction explicitly on this ColorOutput
+route.
 
-The release cook uses the existing locked Ubuntu 26.04 x86-64 shader host.
-Run `HoroEditorVulkanShaderCook --describe-tools` for the approved external
-tool identities and pass the release job's existing candidate ID:
+The release cook uses the locked Ubuntu 26.04 x86-64 shader host. Run
+`HoroEditorVulkanShaderCook --describe-tools` for the approved external tool
+identities and pass the release job's existing candidate ID.
 
 ```bash
 HoroEditorVulkanShaderCook assets/shaders/runtime/native_reconstruction.hlsl \
   "$new_absolute_stage" "$existing_scratch" "$dxc" "$spirv_val" "$spirv_cross" \
-  --native-reconstruction "$release_candidate_id" > "$inventory_outside_stage"
+  --native-reconstruction "$release_candidate_id" \
+  --scene-linear-source assets/shaders/editor/viewport.hlsl > "$inventory_outside_stage"
 ```
 
-The new stage contains the three canonical payload/reflection pairs. Standard
-output carries the canonical pre-sign inventory with a size and SHA-256 for
-each exact file. Release assembly includes those records alongside the other
-Editor product records and passes the complete stage through the existing
-release verification and signing boundary. The release host supplies the
-product identity, final manifest, detached envelope and independent publisher
-trust used during staging and final verification.
+The atomic stage carries eight files. It contains the three canonical
+reconstruction payload/reflection pairs and the scene-linear material pair
+under `assets/shaders/editor/viewport-scene-linear-vulkan`. Without
+`--scene-linear-source` the existing invocation publishes the six kernel files
+for inspection and other native consumers. Each inventory entry records the
+exact file size and SHA-256. The independently cooked `--scene-linear` route
+uses the same compile request as the combined stage.
+
+Release assembly incorporates the returned records into the complete Editor
+product manifest and verifies the assembled bytes before the existing detached
+signing boundary. A spatial startup fixture needs the combined stage, the actual
+platform, architecture and executable version in `manifest.json`, the matching
+`manifest.signature.json`, and an independent trusted-publisher document. Use the
+normal Editor launcher with the Vulkan renderer, `--activate-image-provider=spatial`,
+`--image-provider-root=<absolute installed product>` and
+`--image-provider-trust=<absolute publisher document>`. Supply the explicit
+`--color-pipeline-root` whose `color/` child contains the Vulkan manual ColorOutput
+cook. The signed spatial route reads both shader pairs from the same verified
+inventory. Native SDL qualification `[signed-spatial]` uses the installed product
+and trusted-publisher paths in `HORO_TEST_VULKAN_SPATIAL_PRODUCT_ROOT` and
+`HORO_TEST_VULKAN_SPATIAL_PUBLISHER_TRUST`. It also uses
+`HORO_EDITOR_VULKAN_ASSET_ROOT` for the normal installed raster assets and
+`HORO_TEST_VULKAN_COLOR_OUTPUT_PACKAGE` for the exact Vulkan manual package.
 
 [ADR-040](../../adr/040-reconstruction-frame-generation-and-latency-providers.md)
 replaces the legacy single upscaler interface with four sealed frontend-owned

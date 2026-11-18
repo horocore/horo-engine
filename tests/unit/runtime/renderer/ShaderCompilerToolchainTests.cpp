@@ -1,9 +1,11 @@
 #include "EditorNativeReconstructionReleaseLayout.h"
+#include "EditorVulkanViewportShader.h"
 #include "Horo/Runtime/Render/NativeReconstructionKernel.h"
 #include "Horo/Runtime/Render/VfxShaderParameters.h"
 #include "VulkanReconstructionReleaseCook.h"
 #include "support/ShaderCompilerToolchainFixture.h"
 
+#include <algorithm>
 #include <array>
 #include <utility>
 
@@ -368,6 +370,8 @@ TEST_CASE("The Vulkan reconstruction release cook publishes its complete canonic
     using namespace Horo::Release;
     namespace Layout = Horo::Editor::NativeReconstructionRelease;
     using Horo::Editor::Offline::CookVulkanReconstructionRelease;
+    using Horo::Editor::Offline::CookVulkanSpatialReconstructionRelease;
+    using Horo::Editor::Offline::MakeVulkanSceneLinearCookRequest;
 
     const auto dxc = Installation(ShaderCompilerTool::Dxc, "HORO_TEST_SHADER_DXC");
     const auto spirvTools = Installation(ShaderCompilerTool::SpirvTools, "HORO_TEST_SHADER_SPIRV_VAL");
@@ -390,12 +394,21 @@ TEST_CASE("The Vulkan reconstruction release cook publishes its complete canonic
     const auto repeat = temporary.Path() / "repeat stage";
     const ReleaseCandidateId candidate{24};
 
-    const auto cooked = CookVulkanReconstructionRelease(destination, scratch, candidate, source, tools, adapter.Value());
+    const auto withScene = GENERATE(false, true);
+    const auto scene = withScene ? Read(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/shaders/editor/viewport.hlsl")
+                                 : std::vector<std::uint8_t>{};
+    const auto cook = [&](const std::filesystem::path &stage, const CancellationToken &cancel = {}) {
+        if (withScene)
+            return CookVulkanSpatialReconstructionRelease(stage, scratch, candidate, source, scene, tools, adapter.Value(), cancel);
+        return CookVulkanReconstructionRelease(stage, scratch, candidate, source, tools, adapter.Value(), cancel);
+    };
+
+    const auto cooked = cook(destination);
     INFO((cooked.HasError() ? cooked.ErrorValue().message : "cooked"));
     REQUIRE(cooked.HasValue());
     const auto &inventory = cooked.Value();
     CHECK(inventory.Candidate() == candidate);
-    REQUIRE(inventory.Artifacts().size() == 6);
+    REQUIRE(inventory.Artifacts().size() == (withScene ? 8 : 6));
     CHECK(VerifyReleaseStagedTree(destination, inventory).HasValue());
     const auto parsed = ReleasePreSignInventory::ParseCanonical(inventory.CanonicalJson());
     REQUIRE(parsed.HasValue());
@@ -419,7 +432,7 @@ TEST_CASE("The Vulkan reconstruction release cook publishes its complete canonic
     for (const auto &record : inventory.Artifacts())
         CHECK(record.role == ReleaseArtifactRole::AssetArchive);
 
-    const auto duplicate = CookVulkanReconstructionRelease(repeat, scratch, candidate, source, tools, adapter.Value());
+    const auto duplicate = cook(repeat);
     REQUIRE(duplicate.HasValue());
     CHECK(duplicate.Value().CanonicalJson() == inventory.CanonicalJson());
     CHECK(VerifyReleaseStagedTree(repeat, inventory).HasValue());
@@ -429,9 +442,39 @@ TEST_CASE("The Vulkan reconstruction release cook publishes its complete canonic
     CHECK_FALSE(std::filesystem::exists(invalid));
     CancellationSource stopped;
     stopped.RequestCancellation();
-    const auto cancelled = CookVulkanReconstructionRelease(invalid, scratch, candidate, source, tools, adapter.Value(), stopped.Token());
+    const auto cancelled = cook(invalid, stopped.Token());
     RequireError(cancelled, ShaderCompilerPipelineErrors::CancellationRequested);
     CHECK_FALSE(std::filesystem::exists(invalid));
-    CHECK(CookVulkanReconstructionRelease(destination, scratch, candidate, source, tools, adapter.Value()).HasError());
+    CHECK(cook(destination).HasError());
     CHECK(VerifyReleaseStagedTree(destination, inventory).HasValue());
+    if (withScene) {
+        const auto path = destination / Layout::SceneLinearPayloadPath;
+        const auto payload = Read(path);
+        const auto metadata = Read(destination / Layout::SceneLinearReflectionPath);
+        CHECK(Horo::Editor::LoadEditorVulkanSceneLinearCook(payload, metadata).HasValue());
+        CHECK(Horo::Editor::LoadEditorVulkanViewportCook(payload, metadata).HasError());
+        const auto record = std::ranges::find(inventory.Artifacts(), Layout::SceneLinearPayloadPath, &ReleaseArtifactRecord::path);
+        REQUIRE(record != inventory.Artifacts().end());
+        CHECK(record->size == payload.size());
+        CHECK(record->digest == ComputeSha256(std::as_bytes(std::span{payload})));
+
+        const auto standalone = CompileShaderTargets(MakeVulkanSceneLinearCookRequest(scene, tools), adapter.Value(), {});
+        REQUIRE(standalone.HasValue());
+        REQUIRE(standalone.Value().artifacts.size() == 1);
+        REQUIRE(standalone.Value().artifacts.front().reflection);
+        CHECK(standalone.Value().artifacts.front().payload == payload);
+        const auto standaloneMetadata = EncodeReflectedShaderArtifact(*standalone.Value().artifacts.front().reflection);
+        REQUIRE(standaloneMetadata.HasValue());
+        CHECK(standaloneMetadata.Value() == metadata);
+
+        const auto failedScene =
+            CookVulkanSpatialReconstructionRelease(invalid, scratch, candidate, source, {0x3f}, tools, adapter.Value());
+        CHECK(failedScene.HasError());
+        CHECK_FALSE(std::filesystem::exists(invalid));
+        REQUIRE(std::filesystem::remove(repeat / Layout::SceneLinearReflectionPath));
+        CHECK(VerifyReleaseStagedTree(repeat, inventory).HasError());
+    } else {
+        CHECK_FALSE(std::filesystem::exists(destination / Layout::SceneLinearPayloadPath));
+        CHECK_FALSE(std::filesystem::exists(destination / Layout::SceneLinearReflectionPath));
+    }
 }

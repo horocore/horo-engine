@@ -16,7 +16,7 @@ target_include_directories(HoroEditorNativeReconstructionReleaseCookInternal
     PUBLIC "${HORO_EDITOR_RECONSTRUCTION_RELEASE_COOK_HEADERS}")
 target_link_libraries(HoroEditorNativeReconstructionReleaseCookInternal
     PUBLIC HoroEngine::Application HoroEngine::RenderApi
-    PRIVATE HoroEditorNativeReconstructionReleaseLayoutInternal HoroAtomicShaderCookPackageInternal)
+    PRIVATE HoroEditorNativeReconstructionReleaseLayoutInternal HoroAtomicShaderCookPackageInternal HoroEditorVulkanShaderInternal)
 
 # Offline preparation tool, never linked into HoroEditor or a runtime renderer.
 add_executable(HoroEditorVulkanShaderCook EXCLUDE_FROM_ALL HoroEditor/tools/VulkanViewportCook.cpp)

@@ -256,13 +256,13 @@ namespace Horo::Editor {
             if (manifest.HasError())
                 return Outcome::Failure(manifest.ErrorValue());
             auto payload =
-                ReadSignedScene(files, request.productRoot, manifest.Value(), "assets/shaders/editor/viewport-scene-linear-vulkan.horoshdr",
+                ReadSignedScene(files, request.productRoot, manifest.Value(), NativeReconstructionRelease::SceneLinearPayloadPath,
                                 NativeReconstructionRelease::MaximumPayloadBytes);
             if (payload.HasError())
                 return Outcome::Failure(payload.ErrorValue());
-            auto reflection = ReadSignedScene(files, request.productRoot, manifest.Value(),
-                                              "assets/shaders/editor/viewport-scene-linear-vulkan.reflection.json",
-                                              NativeReconstructionRelease::MaximumReflectionBytes);
+            auto reflection =
+                ReadSignedScene(files, request.productRoot, manifest.Value(), NativeReconstructionRelease::SceneLinearReflectionPath,
+                                NativeReconstructionRelease::MaximumReflectionBytes);
             if (reflection.HasError())
                 return Outcome::Failure(reflection.ErrorValue());
             EditorSignedSpatialProvider admitted{};
