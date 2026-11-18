@@ -17,6 +17,7 @@ namespace Horo::Navigation {
             return input.caller.owner.IsValid() && input.caller.generation.IsValid() && ValidateNavigationOutcomeProvenance(input.source) &&
                    input.source.world == request.world && input.source.topology == request.topology && Math::IsFinite(request.start) &&
                    Math::IsFinite(request.destination) && request.filter.IsValid() &&
+                   (input.agent == CrowdAgentHandle{} || (input.agent.IsValid() && input.agent.world == request.world)) &&
                    request.coveragePolicy < NavigationPathCoveragePolicy::Count && request.requirement.query == NavigationQueryKind::Path &&
                    input.priority <= JobPriority::Background && input.targetTick >= tick && input.deadlineTick >= input.targetTick &&
                    input.deadlineTick > tick && std::isfinite(request.clearanceMeters) && request.clearanceMeters >= 0.0F;
@@ -207,6 +208,16 @@ namespace Horo::Navigation {
         entry->terminal.reset();
         State::Retire(state->slots[handle.slot.index]);
         return true;
+    }
+
+    /** @copydoc NavigationCoordinator::RetireAgentQueriesAtSafePoint */
+    void NavigationCoordinator::RetireAgentQueriesAtSafePoint(const std::span<const CrowdAgentHandle> retired) noexcept {
+        const auto &state = MutableState();
+        if (!state || retired.empty())
+            return;
+        for (const auto &slot : state->slots)
+            if (slot.entry && std::ranges::binary_search(retired, slot.entry->submission.agent))
+                static_cast<void>(Abandon(slot.entry->query.handle));
     }
 
     /** @copydoc NavigationCoordinator::CollectRetiredAtSafePoint */

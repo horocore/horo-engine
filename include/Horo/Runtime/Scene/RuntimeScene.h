@@ -762,7 +762,8 @@ namespace Horo::Runtime {
         Physics,
         Gameplay,
         AI,
-        Animation
+        Animation,
+        Navigation
     };
 
     /** @brief Explicit structural preparation order, independent of host registration order. */
@@ -807,7 +808,7 @@ namespace Horo::Runtime {
     };
 
     /** @brief Host structural-participant virtual contract revision; external host implementations must rebuild. */
-    inline constexpr std::uint32_t SceneStructuralParticipantContractVersion = 4;
+    inline constexpr std::uint32_t SceneStructuralParticipantContractVersion = 5;
 
     /** @brief Application-composed subsystem participant for bounded Scene group transactions. */
     class SceneStructuralParticipant {

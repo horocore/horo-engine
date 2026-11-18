@@ -1320,6 +1320,24 @@ authority stops activation. A missing position in a later capture preserves the
 previous spatial publication, with exact agent lifetime revocation still
 excluding retired endpoints.
 
+An application that already owns an authoritative Navigation world can install
+the Navigation Scene activation participant and its structural agent participant
+on the same Scene service. Enabled prefab agent components require the exact
+active grounded-query world and host admission of their authored profile and
+filter. The registry prepares additions and retirements privately, then publishes
+them at the structural fence with the Scene. Despawn invalidates the exact logical
+Navigation handle even when its world is paused or unloaded. The same fence
+abandons path reservations associated with the retiring registration. Provider
+jobs retain their leases until terminal, and movement owners reconcile through
+the normal Navigation owner phase.
+Prefab topology changes still require a separate topology transaction and are
+rejected before Scene publication.
+
+Host implementations should rebuild against `SceneStructuralParticipantContractVersion`
+5 and account for the new `SceneStructuralOwner::Navigation` category in owner
+dispatch. The application supplies the Navigation world, coordinator and catalog
+admission.
+
 ### Selection Physics endpoint codec domain
 
 Selection creation rewrites internal collider and constraint body endpoints into

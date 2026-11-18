@@ -50,6 +50,7 @@ namespace Horo::Navigation {
         CancellationToken cancellation;
         std::optional<ConfigurationSnapshotRef> configuration;
         Telemetry::OperationContext operation;
+        CrowdAgentHandle agent; /**< Exact logical registration for movement-owned reservations, or zero for standalone queries. */
     };
 
     /** @brief One owned terminal result; a partial corridor retains the provider's exact status and stop evidence. */
@@ -119,6 +120,10 @@ namespace Horo::Navigation {
          * Cancel, this explicitly discards even an already published result. Use when its consumer is destroyed.
          */
         [[nodiscard]] bool Abandon(NavRequestHandle handle) noexcept;
+        /** @brief Abandons all retained movement queries belonging to the passed logical agent generations.
+         * @param retired Exact retiring handles in strict ascending order, borrowed for this call only.
+         * @details Owner thread, no allocation or callback. Running provider work retains its immutable lease until terminal. */
+        void RetireAgentQueriesAtSafePoint(std::span<const CrowdAgentHandle> retired) noexcept;
         /** @brief Dispatch one bounded tick slice without waiting; repeated calls cannot reset quotas.
          * @param tick Monotonic simulation tick. @return Number of queries accepted by Foundation this call.
          */

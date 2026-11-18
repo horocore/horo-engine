@@ -3,6 +3,132 @@
 namespace Horo::Navigation {
     using namespace SceneLifecycleTestSupport;
 
+    namespace {
+        /** @brief Rejects the aggregate after Navigation has already prepared its detached registry delta. */
+        class StructuralGate final : public Runtime::SceneStructuralParticipant {
+        public:
+            explicit StructuralGate(const bool &reject) noexcept : reject_(reject) {}
+
+            Runtime::SceneStructuralOwner Owner() const noexcept override {
+                return Runtime::SceneStructuralOwner::Gameplay;
+            }
+
+            Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(const Runtime::RuntimeSceneView &,
+                                                                               std::span<const Runtime::RuntimeEntityView>,
+                                                                               std::span<const Runtime::EntityRef>) override {
+                class Candidate final : public Runtime::SceneStructuralCandidate {
+                public:
+                    explicit Candidate(const bool &reject) noexcept : reject_(reject) {}
+
+                    Result<void> ValidatePublication() const override {
+                        if (reject_)
+                            return Result<void>::Failure(MakeError(NavigationErrors::AdmissionRejected));
+                        return Result<void>::Success();
+                    }
+
+                    void Publish() noexcept override {}
+
+                    Result<void> AfterPublication() override {
+                        return Result<void>::Success();
+                    }
+
+                private:
+                    const bool &reject_;
+                };
+
+                return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Success(std::make_unique<Candidate>(reject_));
+            }
+
+        private:
+            const bool &reject_;
+        };
+    }  // namespace
+
+    TEST_CASE("Scene groups stage navigation against exact provider and retire only committed registrations",
+              "[unit][navigation][scene][lifecycle][prefab]") {
+        const auto profile = NavigationAgentProfileId::Create(1).Value();
+        const auto filter = NavigationFilterId::Create(1).Value();
+        bool rejectPublication{};
+        Fixture fixture{1, true, {}, [profile, filter](const NavigationAgentDescriptor &agent) {
+            if (agent.profile != profile || agent.filter != filter)
+                return Result<void>::Failure(MakeError(NavigationErrors::AgentDescriptorInvalid));
+            return Result<void>::Success();
+        }, std::make_unique<StructuralGate>(rejectPublication)};
+        const auto admission = Runtime::SceneStructuralAdmission{fixture.scene.ActiveScene()->RuntimeId(),
+                                                                 fixture.assets.Snapshot().Revision(), fixture.cancellation.Token()};
+        const auto queue = [&](const NavigationFilterId authoredFilter) {
+            Runtime::RuntimeEntityGroupEntry entry;
+            entry.info.components.navigationAgent = Runtime::NavigationAgentComponent{.profile = profile, .filter = authoredFilter};
+            Runtime::SceneCommandBuffer commands;
+            REQUIRE(commands.CreateGroup({entry}, {}, admission).HasValue());
+            REQUIRE(fixture.scene.QueueStructuralCommands(std::move(commands)).HasValue());
+        };
+
+        SECTION("late validation rejects the complete candidate") {
+            const auto oldScene = *fixture.scene.ActiveScene();
+            rejectPublication = true;
+            queue(filter);
+            REQUIRE(fixture.scene
+                        .OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges,
+                                 {.frameNumber = 1, .cancellation = fixture.cancellation.Token()})
+                        .HasValue());
+            REQUIRE(fixture.scene.TakeOperationError().has_value());
+            CHECK(oldScene.IsCurrent());
+            CHECK(fixture.registry.Snapshot().Value().Agents().size() == 1);
+            CHECK(fixture.registry.Find(fixture.agent).HasValue());
+        }
+        SECTION("bad catalog filter preserves existing publication") {
+            queue(NavigationFilterId::Create(7).Value());
+            REQUIRE(fixture.scene
+                        .OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges,
+                                 {.frameNumber = 1, .cancellation = fixture.cancellation.Token()})
+                        .HasValue());
+            const auto error = fixture.scene.TakeOperationError();
+            REQUIRE(error);
+            CHECK(error->code.Value() == NavigationErrors::AgentDescriptorInvalid.code.Value());
+            CHECK(fixture.registry.Snapshot().Value().Agents().size() == 1);
+        }
+        SECTION("paused-world despawn retires the exact agent and abandons its late real query") {
+            queue(filter);
+            fixture.CommitScene();
+            const auto receipt = fixture.scene.TakeStructuralCommitResult();
+            REQUIRE(receipt);
+            REQUIRE(receipt->created.size() == 1);
+            const auto entity = receipt->created.front().entity;
+            const auto snapshot = fixture.registry.Snapshot().Value();
+            REQUIRE(snapshot.Agents().size() == 2);
+            const auto newAgent = snapshot.Agents().back();
+            CHECK(newAgent.owner.entityIndex == entity.entity.index);
+            CHECK(newAgent.owner.entityGeneration == entity.entity.generation);
+            CHECK(fixture.registry.Find(fixture.agent).HasValue());
+
+            const auto current = fixture.Now();
+            auto movement =
+                NavigationSceneAgentLifecycle::Create(fixture.registry, fixture.world, fixture.coordinator, *fixture.scene.ActiveScene(),
+                                                      {entity, newAgent.handle, fixture.caller, 1});
+            REQUIRE(movement.HasValue());
+            REQUIRE(movement.Value()->Start(*fixture.scene.ActiveScene(), fixture.Move(), current).HasValue());
+            REQUIRE(movement.Value()->Update(*fixture.scene.ActiveScene(), current).HasValue());
+            REQUIRE(fixture.coordinator.Dispatch(0) == 1);
+            REQUIRE(fixture.fence->WaitEntered());
+
+            REQUIRE(fixture.world.Pause(fixture.binding.world).HasValue());
+            Runtime::SceneCommandBuffer commands;
+            REQUIRE(commands.DestroyGroup({entity}, admission).HasValue());
+            REQUIRE(fixture.scene.QueueStructuralCommands(std::move(commands)).HasValue());
+            fixture.CommitScene();
+            CHECK(fixture.scene.ActiveScene()->Get(entity).HasError());
+            CHECK(fixture.registry.Find(newAgent.handle).HasError());
+            CHECK(fixture.registry.Find(fixture.agent).HasValue());
+            CHECK_FALSE(fixture.coordinator.IsDrained());
+            fixture.FinishHeldProvider();
+            const std::array callers{fixture.caller};
+            CHECK(fixture.coordinator.Commit({fixture.activation, current.path.provenance, callers, 1}) == 0);
+            CHECK(fixture.coordinator.IsDrained());
+            CHECK(movement.Value()->ReconcileAtSafePoint(fixture.scene.ActiveScene()).HasError());
+        }
+    }
+
     TEST_CASE("Default lifecycle admission identity rejects missing Character revision without registration mutation",
               "[unit][navigation][scene][lifecycle][admission]") {
         Fixture fixture;

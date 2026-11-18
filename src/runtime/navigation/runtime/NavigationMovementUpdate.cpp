@@ -165,7 +165,8 @@ namespace Horo::Navigation {
                                             .targetTick = path.tick + 1,
                                             .deadlineTick = deadline_,
                                             .cancellation = request_.cancellation,
-                                            .operation = request_.operation};
+                                            .operation = request_.operation,
+                                            .agent = agent_.handle};
         auto accepted = coordinator_.Submit(world_, std::move(submission), path.tick);
         if (accepted.HasError()) {
             if (!IsError(accepted.ErrorValue(), NavigationErrors::AdmissionRejected))

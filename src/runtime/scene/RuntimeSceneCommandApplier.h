@@ -447,13 +447,13 @@ namespace Horo::Runtime {
             return !created.empty() || !destroyed.empty();
         }
 
-        /** @brief Native Navigation has only whole-Scene activation today; structural work must never silently omit that owner. */
-        static bool HasEnabledNavigation(const RuntimeComponentSet &components) {
+        /** @brief Navigation topology still belongs to whole-Scene preparation. */
+        static bool HasEnabledNavigationTopology(const RuntimeComponentSet &components) {
             const auto enabled = [](const auto &value) {
                 return value && value->enabled;
             };
             return enabled(components.navigationSurface) || enabled(components.navigationRegion) ||
-                   enabled(components.navigationModifier) || enabled(components.navigationLink) || enabled(components.navigationAgent);
+                   enabled(components.navigationModifier) || enabled(components.navigationLink);
         }
 
         /** @brief One closed component-to-owner predicate shared by created and destroyed entity evidence. */
@@ -468,6 +468,8 @@ namespace Horo::Runtime {
                     return components.aiAgent.has_value() || components.aiController.has_value();
                 case Animation:
                     return components.animation.has_value();
+                case Navigation:
+                    return components.navigationAgent && components.navigationAgent->enabled;
             }
             return false;
         }
@@ -477,10 +479,10 @@ namespace Horo::Runtime {
                                     const std::span<const std::unique_ptr<SceneStructuralParticipant>> participants) const {
             if (std::ranges::any_of(created,
                                     [](const auto &entity) {
-                return HasEnabledNavigation(*entity.components);
+                return HasEnabledNavigationTopology(*entity.components);
             }) ||
                 std::ranges::any_of(destroyed, [&](const auto &entity) {
-                return HasEnabledNavigation(scene.storage_.slots[entity.entity.index].components);
+                return HasEnabledNavigationTopology(scene.storage_.slots[entity.entity.index].components);
             }))
                 return Result<void>::Failure(MakeError(SceneErrors::NavigationStructuralUnsupported));
             const auto needs = [&](SceneStructuralOwner owner) {
@@ -491,10 +493,12 @@ namespace Horo::Runtime {
                 });
             };
             for (const auto owner : {SceneStructuralOwner::Physics, SceneStructuralOwner::Gameplay, SceneStructuralOwner::AI,
-                                     SceneStructuralOwner::Animation}) {
+                                     SceneStructuralOwner::Animation, SceneStructuralOwner::Navigation}) {
                 if (needs(owner) && !std::ranges::any_of(participants, [owner](const auto &participant) {
                     return participant->Owner() == owner;
                 })) {
+                    if (owner == SceneStructuralOwner::Navigation)
+                        return Result<void>::Failure(MakeError(SceneErrors::NavigationStructuralUnsupported));
                     const bool hasBaseline = std::ranges::any_of(candidate.slots, [](const auto &slot) {
                         return slot.active && slot.baselineOwner.has_value();
                     });

@@ -21,7 +21,8 @@
 namespace Horo::Navigation {
     namespace Detail {
         struct NavigationAgentRegistryState;
-    }
+        struct NavigationAgentChanges;
+    }  // namespace Detail
 
     class NavigationAgentRegistry;
 
@@ -175,6 +176,32 @@ namespace Horo::Navigation {
         bool published_{};
     };
 
+    /** @brief Prepared additions and retirements for the exact currently published world. */
+    class NavigationAgentStructuralCandidate final {
+    public:
+        NavigationAgentStructuralCandidate(const NavigationAgentStructuralCandidate &) = delete;
+        NavigationAgentStructuralCandidate &operator=(const NavigationAgentStructuralCandidate &) = delete;
+        /** @brief Discards detached additions and retirements when the group did not commit. */
+        ~NavigationAgentStructuralCandidate();
+
+        /** @brief Revalidates registry identity and mutation revision. @return Typed error on a stale candidate. */
+        [[nodiscard]] Result<void> ValidatePublication() const;
+        /** @brief Borrows the exact retiring handles in ascending order until Publish or candidate destruction. */
+        [[nodiscard]] std::span<const CrowdAgentHandle> RetiredHandles() const noexcept;
+        /** @brief Transfers preallocated registration nodes and retires old handles at the aggregate publication fence. */
+        void Publish() noexcept;
+
+    private:
+        friend class NavigationAgentRegistry;
+        NavigationAgentStructuralCandidate(NavigationAgentRegistry &registry, std::uint64_t publication, std::uint64_t revision,
+                                           std::unique_ptr<Detail::NavigationAgentChanges> changes) noexcept;
+
+        NavigationAgentRegistry *registry_{};
+        std::uint64_t publication_{};
+        std::uint64_t revision_{};
+        std::unique_ptr<Detail::NavigationAgentChanges> changes_;
+    };
+
     /**
      * @brief Owner-thread registry for logical agents bound to one exact Scene/world generation.
      * @details Scene activation prepares a detached complete population and publishes it only after all Scene participants
@@ -204,6 +231,15 @@ namespace Horo::Navigation {
          */
         [[nodiscard]] Result<std::unique_ptr<NavigationAgentSceneCandidate>> PrepareScene(
             NavigationAgentSceneBinding binding, std::span<const NavigationAgentDescriptor> descriptors);
+
+        /** @brief Stages an exact owner delta without changing the currently published registry.
+         * @param binding Required active world and Scene generation.
+         * @param additions Enabled agent descriptors in any order.
+         * @param removals Exact Scene entity generations retiring; a previously retired owner is harmless.
+         * @return Prepared delta or a typed stale, descriptor, conflict, capacity, or shutdown error. */
+        [[nodiscard]] Result<std::unique_ptr<NavigationAgentStructuralCandidate>> PrepareStructuralChanges(
+            NavigationAgentSceneBinding binding, std::span<const NavigationAgentDescriptor> additions,
+            std::span<const NavigationAgentOwner> removals);
 
         /**
          * @brief Registers one agent in the currently published Scene at its safe point.
@@ -243,6 +279,7 @@ namespace Horo::Navigation {
 
     private:
         friend class NavigationAgentSceneCandidate;
+        friend class NavigationAgentStructuralCandidate;
 
         explicit NavigationAgentRegistry(NavigationAgentRegistryLimits limits) noexcept;
 
@@ -255,6 +292,7 @@ namespace Horo::Navigation {
         std::unique_ptr<Detail::NavigationAgentRegistryState> active_;
         std::uint64_t nextPublicationToken_{1};
         std::uint64_t activePublicationToken_{};
+        std::uint64_t structuralRevision_{};
         bool shutdown_{};
     };
 }  // namespace Horo::Navigation
