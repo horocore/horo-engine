@@ -27,12 +27,14 @@ namespace Horo::Audio {
         if (const auto &request = output->open;
             ValidateAudioDeviceNegotiation(request.format, output->devices, value.format).status !=
                 AudioDeviceNegotiationStatus::Accepted ||
-            value.access != request.access || value.timing.epoch != request.plannedEpoch ||
+            value.access != request.access || value.timing.capturedAt.clockDomain != output->clockDomain ||
             !ValidateAudioDeviceTimingReport(value.timing, request.plannedEpoch, output->backend->Kind()) ||
             value.format.formatRevision != request.plannedEpoch.formatRevision ||
             value.format.effective.sampleRate != request.format.preferred.sampleRate ||
             value.format.effective.layout != request.format.preferred.layout || value.format.callbackFrames > maximumFrames)
             return Failure(AudioErrors::DeviceFormatUnsupported);
+        outputTiming.emplace(value.timing, value.format.effective.sampleRate, value.format.callbackFrames,
+                             value.format.nativeSignal.sampleRate, value.format.nativePeriodFrames, value.format.deviations.callbackPeriod);
         return Result<void>::Success();
     }
 

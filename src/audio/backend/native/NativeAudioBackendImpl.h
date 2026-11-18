@@ -224,8 +224,7 @@ namespace Horo::Audio::Backend {
 
         /** @brief Required access, latency hint and selected catalog identity are admitted before acquisition. */
         bool ValidOpenPolicy(const Backend::Open &value) const noexcept {
-            const bool knownLatency = value.latency == LatencyClass::Interactive || value.latency == LatencyClass::Balanced ||
-                                      value.latency == LatencyClass::PowerSaving;
+            const bool knownLatency = IsAudioLatencyProfile(value.latency);
             return value.access == AccessMode::Shared && knownLatency && ValidateAudioDeviceFormatRequest(value.format) &&
                    ResolveAudioDevice(catalog, value.format.device).device == value.plannedEpoch.device;
         }

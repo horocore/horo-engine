@@ -2283,6 +2283,18 @@ Physical hardware/end-to-end measurements require loopback provenance; callback
 measurements use callback or deterministic clocks. Null reports physical latency
 Unsupported. Latency components are not implicitly additive.
 
+The frontend publishes the requested buffering profile, sample rate and period
+bounds alongside admitted Open facts for the exact device epoch and clock
+domain. Balanced and Interactive describe stable and low-latency preferences.
+The backend still negotiates within the explicit bounds. A replacement output
+publishes its own callback size, native period when known, and latency
+observations. Closing or losing output clears the admitted facts from the
+current snapshot. The prepared mixer DSP delay, converter input look-ahead and
+current decoder queue depth use separate frame-rate pairs. These fields retain
+their own meanings and provenance. End-to-end latency stays unavailable without
+separate backend or measurement evidence. Audio frontend snapshot consumers
+rebuild for the appended fields. No persisted format or backend ownership changes.
+
 `AudioCallbackEvent` is a trivially copyable bounded record with epoch, sample
 cursor, monotonic timestamp and a typed Ready, Quiesced, Underrun or Fault payload.
 Ready/Quiesced/first-Fault delivery must be retained under saturation; underrun

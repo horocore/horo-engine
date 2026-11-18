@@ -80,6 +80,10 @@ namespace Horo::Tests::VoiceRenderFixture {
             REQUIRE(Audio::StreamingTests::PumpUntil(*host->service, stream, 4));
             REQUIRE(frontend->Start({1, 1'000'000'000}).HasValue());
             CompleteOutputStart(*frontend, *output);
+            const auto timing = frontend->Snapshot().outputTiming;
+            REQUIRE(timing.decodedQueueDepth.has_value());
+            CHECK(timing.decodedQueueDepth->frames == host->service->Snapshot(stream).Value().bufferedFrames);
+            CHECK(timing.decodedQueueDepth->sampleRate == host->service->DecoderSpec(stream).Value().outputFormat.sampleRate);
             REQUIRE(frontend->Transport({frontend->Snapshot().voice, AudioVoiceControl::Start}).Value().status ==
                     AudioCommandStagingStatus::Ok);
             REQUIRE(frontend->Pump({1, 1'000'000'000}).HasValue());

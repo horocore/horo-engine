@@ -7,6 +7,7 @@
 #include "Horo/Audio/AudioSpatialModel.h"
 
 #include <array>
+#include <optional>
 
 namespace Horo::Audio {
     /** @brief Curves normalized to unity at minimum distance and zero at maximum distance. */
@@ -101,6 +102,10 @@ namespace Horo::Audio {
                                                bool resetHistory) noexcept;
         /** @brief Read the last admitted target on the exclusive owner. @return Copied target. */
         [[nodiscard]] AudioStereoSpatialTarget Target() const noexcept;
+        /** @brief Copies the prepared input look-ahead limit on the exclusive owner.
+         * @return Input frames, or no value after transfer of the converter.
+         */
+        [[nodiscard]] std::optional<std::uint32_t> InputLookAheadFrames() const noexcept;
         /** @brief Stream PCM into stereo with exact consumed/produced counts and bounded tail.
          * @param input Borrowed mono/stereo input; same buffer requirements as AudioResampler::Process.
          * @param output Two distinct aligned output planes bounded by the prepared maximumOutputFrames.

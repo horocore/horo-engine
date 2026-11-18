@@ -48,6 +48,7 @@ namespace Horo::Audio {
                 return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(MakeError(AudioErrors::HandleOwnerMismatch));
             state->conversion = conversion;
             state->residentPlan = playback.plan;
+            state->resamplerLookAhead = {playback.plan.Requirements().maximumLookAheadFrames, conversion.inputRate};
             state->coefficientBytes = playback.maximumCoefficientBytes;
             return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Success(
                 std::make_unique<AudioVoiceRenderRuntime>(ConstructionKey{}, std::move(state)));
@@ -103,7 +104,11 @@ namespace Horo::Audio {
         auto preparedSpatial = CoreStereoSpatialRenderer::Create(conversion, coefficientBytes);
         if (preparedSpatial.HasError())
             return Result<void>::Failure(preparedSpatial.ErrorValue());
+        const auto lookAhead = preparedSpatial.Value().InputLookAheadFrames();
+        if (!lookAhead.has_value())
+            return Result<void>::Failure(MakeError(AudioErrors::ResamplerInvalid));
         spatial.emplace(std::move(preparedSpatial).Value());
+        resamplerLookAhead = {*lookAhead, conversion.inputRate};
         auto createdVoice = registry->CreateVoice();
         if (createdVoice.HasError())
             return Result<void>::Failure(createdVoice.ErrorValue());
@@ -134,6 +139,11 @@ namespace Horo::Audio {
     /** @copydoc AudioVoiceRenderRuntime::HasResidentSource */
     bool AudioVoiceRenderRuntime::HasResidentSource() const noexcept {
         return state_->resident != nullptr;
+    }
+
+    /** @copydoc AudioVoiceRenderRuntime::ResamplerLookAhead */
+    AudioTimingFrames AudioVoiceRenderRuntime::ResamplerLookAhead() const noexcept {
+        return state_->resamplerLookAhead;
     }
 
     /** @copydoc AudioVoiceRenderRuntime::Cursor */

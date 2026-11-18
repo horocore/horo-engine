@@ -6,6 +6,8 @@
 #include "AudioVoiceRenderTestFixture.h"
 #include "Horo/Audio/Internal/AudioFrontendComposition.h"
 
+#include <algorithm>
+
 namespace Horo::Tests::VoiceRenderFixture {
     namespace {
         /** @brief Records actual selected Null output while delegating every lifecycle rule to the production peer. */
@@ -18,6 +20,8 @@ namespace Horo::Tests::VoiceRenderFixture {
             bool primingSilent{};
             bool quiescingSilent{};
             bool rejectOpenedFormat{};
+            bool foreignOpenedClock{};
+            bool estimateAdapterLatency{};
             std::size_t callbackEntries{};
 
             AudioBackendKind Kind() const noexcept override {
@@ -47,12 +51,19 @@ namespace Horo::Tests::VoiceRenderFixture {
 
             Result<std::optional<Audio::Backend::Completion>> Poll(const Audio::Backend::OperationId &operation) override {
                 auto completion = null->Poll(operation);
-                if (!rejectOpenedFormat || completion.HasError())
+                if (completion.HasError() || (!rejectOpenedFormat && !foreignOpenedClock && !estimateAdapterLatency))
                     return completion;
                 auto captured = std::move(completion).Value();
                 if (captured.has_value())
-                    if (auto *opened = std::get_if<Audio::Backend::Opened>(&captured->outcome))
-                        opened->format.callbackFrames = 32;
+                    if (auto *opened = std::get_if<Audio::Backend::Opened>(&captured->outcome)) {
+                        if (rejectOpenedFormat)
+                            opened->format.callbackFrames = 32;
+                        if (foreignOpenedClock)
+                            ++opened->timing.capturedAt.clockDomain;
+                        if (estimateAdapterLatency)
+                            opened->timing.adapterLatency = {AudioObservationQuality::Estimated, AudioObservationSource::Adapter, 1000,
+                                                             opened->timing.capturedAt};
+                    }
                 return Result<std::optional<Audio::Backend::Completion>>::Success(std::move(captured));
             }
 
@@ -74,7 +85,9 @@ namespace Horo::Tests::VoiceRenderFixture {
                 ++self.callbackEntries;
                 const auto rendered = self.port.process(self.port.context, invocation);
                 bool silent = true;
-                for (std::size_t index = 0; index < self.left.size(); ++index) {
+                self.left.fill(0.0F);
+                const auto frames = std::min(self.left.size(), static_cast<std::size_t>(invocation.output.validFrames));
+                for (std::size_t index = 0; index < frames; ++index) {
                     self.left[index] = invocation.output.planes[0][index];
                     silent = silent && self.left[index] == 0.0F;
                 }
@@ -87,14 +100,19 @@ namespace Horo::Tests::VoiceRenderFixture {
         };
 
         /** @brief Exact discovery facts belong to explicit host composition, not the editor document. */
-        Internal::AudioFrontendOutput Output(std::unique_ptr<CapturingOutput> backend) {
-            const AudioDeviceEpoch epoch{{MixerFixture::Owner, 1, 1}, 1, Scope.epoch};
+        Internal::AudioFrontendOutput Output(std::unique_ptr<CapturingOutput> backend, const std::uint32_t period = 16,
+                                             const AudioLatencyProfile profile = AudioLatencyProfile::Balanced,
+                                             const std::uint64_t formatRevision = 1) {
+            const AudioDeviceEpoch epoch{{MixerFixture::Owner, 1, 1}, formatRevision, Scope.epoch};
             AudioDeviceSnapshot devices{.owner = MixerFixture::Owner,
                                         .backend = AudioBackendKind::NullAudio,
                                         .revision = 1,
                                         .devices = {{epoch.device, "Null Audio", AudioDeviceClass::Headless}},
                                         .defaults = {epoch.device, epoch.device, epoch.device}};
-            Audio::Backend::Open open{epoch, {epoch.device, {48'000, MixerFixture::Profile().outputLayout}, {}, {16, 16, 16}}};
+            Audio::Backend::Open open{epoch,
+                                      {epoch.device, {48'000, MixerFixture::Profile().outputLayout}, {}, {period, period, period}},
+                                      Audio::Backend::AccessMode::Shared,
+                                      profile};
             return {std::move(backend), std::move(open), std::move(devices), 1};
         }
 
@@ -115,10 +133,11 @@ namespace Horo::Tests::VoiceRenderFixture {
             CapturingOutput *output{};
             std::unique_ptr<AudioFrontend> frontend;
 
-            PreviewRig() {
+            explicit PreviewRig(const std::uint32_t period = 16, const AudioLatencyProfile profile = AudioLatencyProfile::Balanced,
+                                const std::uint64_t formatRevision = 1) {
                 auto backend = std::make_unique<CapturingOutput>();
                 output = backend.get();
-                auto candidate = Output(std::move(backend));
+                auto candidate = Output(std::move(backend), period, profile, formatRevision);
                 auto voice = AudioVoiceRenderRuntime::CreateResident(registry, samples.Source(), Playback(), Descriptor());
                 REQUIRE(voice.HasValue());
                 Internal::AudioFrontendResources resources{Scope, Staging(), std::move(voice).Value(), Runtime(), Plan(Asset()), Request()};
@@ -128,6 +147,10 @@ namespace Horo::Tests::VoiceRenderFixture {
             }
 
             ~PreviewRig() {
+                Retire();
+            }
+
+            void Retire() {
                 if (!frontend)
                     return;
                 frontend->Close();

@@ -26,11 +26,7 @@ namespace Horo::Audio::Backend {
         Exclusive
     };
     /** @brief Preserved host policy hint; explicit format/period bounds remain the admission authority. */
-    enum class LatencyClass : std::uint8_t {
-        Interactive,
-        Balanced,
-        PowerSaving
-    };
+    using LatencyClass = AudioLatencyProfile;
     /** @brief Control-published intent for the currently retained render epoch. */
     enum class RenderPhase : std::uint8_t {
         Priming,

@@ -34,6 +34,9 @@ namespace Horo::Audio {
         std::uint32_t maximumFrames{};
         AudioVoiceHandle voiceIdentity;
         std::optional<AudioVoiceSnapshot> terminalVoice;
+        std::optional<AudioOpenedOutputTiming> outputTiming; /**< Control-owned admitted Open facts for this epoch. */
+        AudioTimingFrames mixerDspLatency;
+        AudioTimingFrames resamplerLookAhead;
         std::atomic<const ErrorCodeDescriptor *> callbackFailure{};
         enum class OperationStatus : std::uint8_t {
             Pending,

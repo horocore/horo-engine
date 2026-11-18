@@ -59,17 +59,66 @@ namespace Horo::Tests::VoiceRenderFixture {
 
         TEST_CASE("AudioFrontend retains negotiation failure through output retirement", "[audio][frontend][rollback]") {
             PreviewRig rig;
-            rig.output->rejectOpenedFormat = true;
+            SECTION("unadmitted block size") {
+                rig.output->rejectOpenedFormat = true;
+            }
+            SECTION("foreign observation clock") {
+                rig.output->foreignOpenedClock = true;
+            }
             REQUIRE(rig.frontend->Start({1, 1'000'000'000}).HasValue());
             REQUIRE(rig.output->null->AdvanceControl().HasValue());
             REQUIRE(rig.frontend->Pump({1, 1'000'000'000}).HasError());
             CHECK(rig.frontend->Snapshot().phase == AudioFrontendPhase::Closing);
+            CHECK_FALSE(rig.frontend->Snapshot().outputTiming.opened.has_value());
             CHECK_FALSE(rig.output->primingSilent);
             REQUIRE(rig.output->null->AdvanceControl().HasValue());
             REQUIRE(rig.frontend->Pump({1, 1'000'000'000}).HasError());
             CHECK(rig.frontend->Snapshot().phase == AudioFrontendPhase::Closed);
             CHECK(rig.frontend->Snapshot().failure.has_value());
             CHECK(rig.output->null->State() == Audio::Backend::NullAudioBackendState::Closed);
+        }
+
+        TEST_CASE("AudioFrontend publishes distinct requested negotiated and estimated latency facts for each output",
+                  "[audio][frontend][timing]") {
+            PreviewRig stable;
+            stable.output->estimateAdapterLatency = true;
+            const auto prepared = stable.frontend->Snapshot().outputTiming;
+            CHECK(prepared.requestedProfile == AudioLatencyProfile::Balanced);
+            CHECK(prepared.requestedSampleRate == 48'000);
+            CHECK(prepared.requestedPeriod.preferredFrames == 16);
+            CHECK_FALSE(prepared.opened.has_value());
+            stable.Activate();
+            const auto configured = stable.frontend->Snapshot().outputTiming;
+            REQUIRE(configured.opened.has_value());
+            CHECK(configured.opened->processingCallbackFrames == 16);
+            CHECK(configured.opened->processingSampleRate == 48'000);
+            CHECK(configured.opened->observations.epoch.formatRevision == 1);
+            CHECK(configured.opened->observations.adapterLatency.quality == AudioObservationQuality::Estimated);
+            CHECK(configured.opened->observations.adapterLatency.source == AudioObservationSource::Adapter);
+            CHECK(configured.opened->observations.adapterLatency.nanoseconds == 1000);
+            CHECK_FALSE(configured.opened->nativePeriodFrames.has_value());
+            CHECK(configured.opened->observations.hardwareLatency.quality == AudioObservationQuality::Unsupported);
+            CHECK(configured.opened->observations.endToEndLatency.quality == AudioObservationQuality::Unsupported);
+            CHECK(configured.mixerDspLatency.frames == 0);
+            CHECK(configured.mixerDspLatency.sampleRate == 48'000);
+            CHECK(configured.resamplerLookAhead.frames == Playback().plan.Requirements().maximumLookAheadFrames);
+            CHECK(configured.resamplerLookAhead.sampleRate == Playback().plan.Descriptor().inputRate);
+            CHECK_FALSE(configured.decodedQueueDepth.has_value());
+            stable.Retire();
+            REQUIRE(stable.frontend->Snapshot().phase == AudioFrontendPhase::Closed);
+            CHECK_FALSE(stable.frontend->Snapshot().outputTiming.opened.has_value());
+
+            PreviewRig interactive{8, AudioLatencyProfile::Interactive, 2};
+            interactive.Activate();
+            const auto replaced = interactive.frontend->Snapshot().outputTiming;
+            REQUIRE(replaced.opened.has_value());
+            CHECK(replaced.requestedProfile == AudioLatencyProfile::Interactive);
+            CHECK(replaced.requestedPeriod.preferredFrames == 8);
+            CHECK(replaced.opened->processingCallbackFrames == 8);
+            CHECK(replaced.opened->observations.epoch.formatRevision == 2);
+            CHECK(replaced.opened->observations.adapterLatency.quality == AudioObservationQuality::Unknown);
+            CHECK_FALSE(replaced.opened->observations.adapterLatency.nanoseconds.has_value());
+            CHECK(configured.opened->observations.epoch.formatRevision == 1);
         }
 
         TEST_CASE("AudioFrontend preserves callback allocation safety and explicit transport retry", "[audio][frontend][realtime-safety]") {

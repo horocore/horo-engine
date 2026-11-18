@@ -4,6 +4,7 @@
  * @brief Retained immutable voice routing/spatial generations and real playback-to-mixer execution.
  */
 
+#include "Horo/Audio/AudioDeviceTiming.h"
 #include "Horo/Audio/AudioStreamingService.h"
 #include "Horo/Audio/AudioVoicePlayback.h"
 #include "Horo/Audio/CoreStereoSpatialRenderer.h"
@@ -103,6 +104,10 @@ namespace Horo::Audio {
         [[nodiscard]] AudioVoiceHandle Voice() const noexcept;
         /** @brief Report whether the exclusive owner retains copied resident PCM. @return False for streamed or detached playback. */
         [[nodiscard]] bool HasResidentSource() const noexcept;
+        /** @brief Copies the source converter's immutable preparation bound without reading callback state.
+         * @return Input read-ahead in source frames and its rate.
+         */
+        [[nodiscard]] AudioTimingFrames ResamplerLookAhead() const noexcept;
         /** @brief Read the audible/logical cursor on the exclusive processing owner.
          * @return Source position excluding decoder look-ahead, or zero after detached release.
          */

@@ -96,6 +96,10 @@ namespace Horo::Audio {
         [[nodiscard]] std::uint32_t SampleRate() const noexcept;
         /** @brief Read immutable admitted callback block bound on control. @return Maximum frames per block. */
         [[nodiscard]] std::uint32_t MaximumFrames() const noexcept;
+        /** @brief Copies the algorithmic DSP latency guaranteed by the graph compiler.
+         * @return Delay in frames at SampleRate(); plans requiring compensation cannot be compiled.
+         */
+        [[nodiscard]] std::uint32_t DspLatencyFrames() const noexcept;
         /** @brief Return canonical topological buses. @return Borrow valid through plan retirement. */
         [[nodiscard]] std::span<const MixerCompiledBus> Buses() const noexcept;
         /** @brief Return destination-grouped, stable-route-ID ordered edges. @return Immutable route table. */
