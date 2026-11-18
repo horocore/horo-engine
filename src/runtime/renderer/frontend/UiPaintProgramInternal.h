@@ -13,6 +13,12 @@ namespace Horo::Render {
         /** @brief Private non-reusable preparation identity; issued observations hold only weak references. */
         struct UiPaintProgramIdentity final {};
 
+        /** @brief Where the final graph pass writes canvas color. */
+        enum class UiPaintRootTarget : std::uint8_t {
+            PrimaryOutput,
+            CanvasSurface
+        };
+
         inline constexpr std::uint32_t NoPaintRole = UINT32_MAX;
 
         struct UiPaintMaskScope final {
@@ -140,6 +146,7 @@ namespace Horo::Render {
         NativePreparation native;
 
         UiPaintProgramDescriptor descriptor;
+        Detail::UiPaintRootTarget target;
         std::weak_ptr<Detail::UiPaintFrontendState> frontend;
         std::shared_ptr<Detail::UiPaintOwnerRetirement> retirement{std::make_shared<Detail::UiPaintOwnerRetirement>()};
         std::shared_ptr<const Detail::UiPaintProgramIdentity> identity;
@@ -147,8 +154,8 @@ namespace Horo::Render {
         bool closed{};
         Detail::UiRenderSubmissionRetention validation;
 
-        Storage(const Runtime::Ui::UiRenderSnapshot &prototype, const UiPaintProgramDescriptor &policy)
-            : source{.prototype = Detail::UiPaintSourceShape{prototype}}, descriptor(policy) {}
+        Storage(const Runtime::Ui::UiRenderSnapshot &prototype, const UiPaintProgramDescriptor &policy, Detail::UiPaintRootTarget output)
+            : source{.prototype = Detail::UiPaintSourceShape{prototype}}, descriptor(policy), target(output) {}
 
         [[nodiscard]] Result<void> BuildRoles();
         [[nodiscard]] Result<std::uint32_t> MaskScope(std::uint32_t leaf, std::uint32_t group);

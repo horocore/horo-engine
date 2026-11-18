@@ -370,6 +370,14 @@ Screen-space UI is resolved after world rendering unless a render graph pass
 explicitly composes it earlier. World-space UI produces normal render instances
 and participates in visibility and depth policy declared by the canvas.
 
+The prepared UI paint program can rasterize the complete canvas into its own
+sampleable color surface. It reserves one transparent linear premultiplied
+target per slot and exports the root write through the render graph. The
+borrowed surface identity is valid for an exact accepted preparation. Sampling
+requires a renderer graph that orders the read after the paint write and
+retains the texture through completion. Placement in a camera or scene and
+interaction mapping both depend on the consuming presentation pass.
+
 ## Responsive Presentation Profiles
 
 [Responsive Presentation Profiles](responsive-presentation-profiles.md) is the

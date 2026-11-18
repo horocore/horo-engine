@@ -83,6 +83,21 @@ namespace Horo::Render {
                                                                    std::span<const RenderTextureHandle> textures,
                                                                    const CookedUiPaintKernel &kernel,
                                                                    const CancellationToken &cancellation) {
+        return CreateForTarget(renderer, descriptor, prototype, textures, kernel, cancellation, Detail::UiPaintRootTarget::PrimaryOutput);
+    }
+
+    /** @copydoc UiPaintProgram::CreateCanvasSurface */
+    Result<std::unique_ptr<UiPaintProgram>> UiPaintProgram::CreateCanvasSurface(
+        RenderFrontend &renderer, const UiPaintProgramDescriptor &descriptor, const Runtime::Ui::UiRenderSnapshot &prototype,
+        std::span<const RenderTextureHandle> textures, const CookedUiPaintKernel &kernel, const CancellationToken &cancellation) {
+        return CreateForTarget(renderer, descriptor, prototype, textures, kernel, cancellation, Detail::UiPaintRootTarget::CanvasSurface);
+    }
+
+    /** @copydoc UiPaintProgram::CreateForTarget */
+    Result<std::unique_ptr<UiPaintProgram>> UiPaintProgram::CreateForTarget(
+        RenderFrontend &renderer, const UiPaintProgramDescriptor &descriptor, const Runtime::Ui::UiRenderSnapshot &prototype,
+        std::span<const RenderTextureHandle> textures, const CookedUiPaintKernel &kernel, const CancellationToken &cancellation,
+        const Detail::UiPaintRootTarget target) {
         using Creation = Result<std::unique_ptr<UiPaintProgram>>;
         if (const auto admitted = renderer.RequireOpenOwner(); admitted.HasError())
             return Creation::Failure(admitted.ErrorValue());
@@ -90,7 +105,7 @@ namespace Horo::Render {
             descriptor.maximumPasses > RenderGraphLimits::HardMaxPasses || textures.size() > UiPaintLimits::MaximumSampledResources)
             return Creation::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
         try {
-            auto storage = std::make_unique<Storage>(prototype, descriptor);
+            auto storage = std::make_unique<Storage>(prototype, descriptor, target);
             storage->source.external.assign(textures.begin(), textures.end());
             for (std::size_t index = 0; index < textures.size(); ++index) {
                 if (const auto prefix = textures.first(index);
@@ -123,10 +138,12 @@ namespace Horo::Render {
             return Result<void>::Failure(buffers.ErrorValue());
         native.buffers = std::move(buffers).Value();
         prepared.frontend = renderer.uiPaintFrontendState_;
-        auto primary = renderer.RealizeUiPaintKernel(kernel);
-        if (primary.HasError())
-            return Result<void>::Failure(primary.ErrorValue());
-        native.primary = std::move(primary).Value();
+        if (prepared.target == Detail::UiPaintRootTarget::PrimaryOutput) {
+            auto primary = renderer.RealizeUiPaintKernel(kernel);
+            if (primary.HasError())
+                return Result<void>::Failure(primary.ErrorValue());
+            native.primary = std::move(primary).Value();
+        }
         auto offscreen = kernel;
         offscreen.colorFormat = RenderTextureFormat::Rgba16Float;
         auto isolated = renderer.RealizeUiPaintKernel(offscreen);
@@ -144,6 +161,29 @@ namespace Horo::Render {
         if (cancellation.IsCancellationRequested())
             return Result<void>::Failure(MakeError(UiPaintFrameErrors::Cancelled));
         return Result<void>::Success();
+    }
+
+    /** @copydoc UiPaintProgram::CanvasSurface */
+    Result<UiPaintCanvasSurface> UiPaintProgram::CanvasSurface(const UiPaintPreparedFrame &prepared) const {
+        using Output = Result<UiPaintCanvasSurface>;
+        const auto &state = *storage_;
+        if (std::this_thread::get_id() != state.owner || state.closed || prepared.identity_.lock() != state.identity ||
+            prepared.slot_ >= state.native.slots.size())
+            return Output::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
+        const auto owner = state.frontend.lock();
+        if (!owner || !owner->frontend || state.target != Detail::UiPaintRootTarget::CanvasSurface)
+            return Output::Failure(MakeError(UiPaintFrameErrors::Unavailable));
+        const auto &slot = state.native.slots[prepared.slot_];
+        if (prepared.revision_ != slot.revision)
+            return Output::Failure(MakeError(UiPaintProgramErrors::PreparationRequired));
+        const auto color = slot.surfaces.back().handle;
+        const auto resident = owner->frontend->ResourceState(color);
+        if (resident.HasError())
+            return Output::Failure(resident.ErrorValue());
+        if (resident.Value() != RenderResourceState::Ready)
+            return Output::Failure(MakeError(UiPaintFrameErrors::Unavailable));
+        const auto extent = state.descriptor.projection.pixelExtent;
+        return Output::Success({color, {extent.width, extent.height}});
     }
 
     /** @copydoc UiPaintProgram::Inventory */

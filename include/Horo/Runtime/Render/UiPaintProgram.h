@@ -9,7 +9,8 @@
 namespace Horo::Render {
     namespace Detail {
         struct UiPaintProgramIdentity;
-    }
+        enum class UiPaintRootTarget : std::uint8_t;
+    }  // namespace Detail
 
     namespace UiPaintProgramErrors {
         /** @brief Source roles, extent or resource generations require explicit structural-safe-point preparation. */
@@ -18,12 +19,18 @@ namespace Horo::Render {
         extern const ErrorCodeDescriptor Capacity;
     }  // namespace UiPaintProgramErrors
 
-    /** @brief Explicit product bounds and exact projection admitted before creating native residents. */
+    /** @brief Explicit product bounds and exact raster projection admitted before creating native residents. */
     struct UiPaintProgramDescriptor final {
         Runtime::Ui::UiResolvedScreenCanvas projection;
         UiPaintFrameBudget capacity;
         std::uint32_t frameSlots{2};
         std::uint32_t maximumPasses{256};
+    };
+
+    /** @brief Borrowed identity of the sampleable color target of an exact prepared frame. */
+    struct UiPaintCanvasSurface final {
+        RenderTextureHandle color;
+        FramebufferExtent extent;
     };
 
     /** @brief Immutable whole-program admission bounds; observing them grants no execution or resource authority. */
@@ -103,6 +110,18 @@ namespace Horo::Render {
         [[nodiscard]] static Result<std::unique_ptr<UiPaintProgram>> Create(
             RenderFrontend &frontend, const UiPaintProgramDescriptor &descriptor, const Runtime::Ui::UiRenderSnapshot &prototype,
             std::span<const RenderTextureHandle> textures, const CookedUiPaintKernel &kernel, const CancellationToken &cancellation = {});
+        /** @brief Prepares a paint program that writes only to a sampled canvas surface.
+         * @param frontend Selected initialized render owner outside an active frame.
+         * @param descriptor Admitted raster projection and finite capacities.
+         * @param prototype Current canonical role snapshot used for structural preparation.
+         * @param textures Complete source texture inventory.
+         * @param kernel Offline cooked paint interface with the exact stencil format.
+         * @param cancellation Source preparation cancellation fence.
+         * @return Owned producer or original typed preparation failure. The acquired output is untouched.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<UiPaintProgram>> CreateCanvasSurface(
+            RenderFrontend &frontend, const UiPaintProgramDescriptor &descriptor, const Runtime::Ui::UiRenderSnapshot &prototype,
+            std::span<const RenderTextureHandle> textures, const CookedUiPaintKernel &kernel, const CancellationToken &cancellation = {});
         /** @brief Closes owner-thread admission and releases residents after callers are quiescent; GPU pins drain independently. */
         ~UiPaintProgram();
         UiPaintProgram(const UiPaintProgram &) = delete;
@@ -129,6 +148,14 @@ namespace Horo::Render {
          * @return Issued accepted frame or original typed error; failure preserves the prior slot publication. */
         [[nodiscard]] Result<UiPaintPreparedFrame> Prepare(std::uint32_t slot, const UiRenderSubmission &source,
                                                            const CancellationToken &cancellation = {});
+        /** @brief Resolves the dedicated canvas surface for an exact, current accepted slot.
+         * @param prepared Preparation issued by this program and still current for its slot.
+         * @return Borrowed linear premultiplied color target, or typed unsupported/currentness failure.
+         * @pre Owner lane. Use this identity in renderer graph work that orders reads after the paint write and
+         * retains the texture through normal completion leases. Preparing a slot alone proves no encoded pixels.
+         * @post No new resource ownership or frame/presentation success is issued.
+         */
+        [[nodiscard]] Result<UiPaintCanvasSurface> CanvasSurface(const UiPaintPreparedFrame &prepared) const;
         /** @brief Encodes the exact accepted program after scene work and before editor GUI.
          * @param frame Actual active frontend frame scope. @param prepared Issued current slot publication.
          * @param source Exact corresponding submission, transferring its sealed atlas lease on admission.
@@ -145,6 +172,11 @@ namespace Horo::Render {
         [[nodiscard]] Result<void> Shutdown();
 
     private:
+        /** @brief Prepares the shared paint graph and residents for the selected exact renderer destination. */
+        [[nodiscard]] static Result<std::unique_ptr<UiPaintProgram>> CreateForTarget(
+            RenderFrontend &frontend, const UiPaintProgramDescriptor &descriptor, const Runtime::Ui::UiRenderSnapshot &prototype,
+            std::span<const RenderTextureHandle> textures, const CookedUiPaintKernel &kernel, const CancellationToken &cancellation,
+            Detail::UiPaintRootTarget target);
         /** @brief Requires exact immutable slot/source correspondence before any batch member reaches the native frame. */
         [[nodiscard]] Result<UiPaintGraphComposition> ValidateSubmission(const UiPaintPreparedFrame &prepared, UiRenderSubmission source);
         /** @brief Realizes finite native residents under the factory candidate's rollback ownership.

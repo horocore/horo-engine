@@ -41,6 +41,8 @@ namespace Horo::Tests::RenderFrontendTesting {
         RenderGraphResourceId color;
         std::vector<RenderGraphResourceId> sampled;
         std::vector<UiPaintDraw> draws;
+        RenderTextureHandle colorTexture;
+        bool clearColor{};
     };
 
     /** @brief CPU admission ledger only; never native completion or pixel evidence. */

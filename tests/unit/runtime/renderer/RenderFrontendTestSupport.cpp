@@ -241,10 +241,17 @@ namespace Horo::Tests::RenderFrontendTesting {
                 auto &passes = lifecycleState.uiPaint.passes;
                 passes.clear();
                 for (const auto &binding : request.workloads) {
-                    if (const auto *paint = std::get_if<RenderGraphUiPaint>(&binding.workload))
+                    if (const auto *paint = std::get_if<RenderGraphUiPaint>(&binding.workload)) {
+                        const auto *color =
+                            paint->color.IsValid()
+                                ? std::get_if<RenderTextureHandle>(&request.graph.Resources()[paint->color.value - 1].binding)
+                                : nullptr;
                         passes.push_back({paint->color,
                                           {paint->sampledResources.begin(), paint->sampledResources.end()},
-                                          {paint->draws.begin(), paint->draws.end()}});
+                                          {paint->draws.begin(), paint->draws.end()},
+                                          color ? *color : RenderTextureHandle{},
+                                          paint->clearColor});
+                    }
                 }
             }
             lifecycleState.graphResources.assign(request.resources.begin(), request.resources.end());
