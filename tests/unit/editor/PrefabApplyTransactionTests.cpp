@@ -378,6 +378,102 @@ namespace Horo::Editor {
             CHECK(Speed(Take(sources.Resolve(parent, instance, Limits())), Object()) == 2.0);
         }
 
+        TEST_CASE("Prefab apply folds a selected property into its owning component addition", "[editor][prefab][apply][native]") {
+            using namespace Prefab::LayerTest;
+            Graph graph;
+            const auto parent = Asset();
+            const auto owner = Id(8);
+            const auto instance = Take(Prefab::PrefabInstanceId::Create(1));
+            const auto speedName = Gameplay::ComponentPropertyId::Parse("speed").Value();
+            const auto weightName = Gameplay::ComponentPropertyId::Parse("weight").Value();
+            const auto speedId = Take(Prefab::PrefabPropertyId::Create(7));
+            const auto weightId = Take(Prefab::PrefabPropertyId::Create(8));
+            const auto occurrence = Take(Prefab::PrefabComponentInstanceId::Create(2));
+            Gameplay::ComponentDescriptor descriptor{Type(),
+                                                     1,
+                                                     "Values",
+                                                     "Tests",
+                                                     {{speedName, "Speed", Gameplay::ComponentPropertyKind::Number, true},
+                                                      {weightName, "Weight", Gameplay::ComponentPropertyKind::Number, false}},
+                                                     {}};
+            const std::vector<Prefab::PrefabValuePropertySchema> properties{{Type(), speedId, speedName, 1,
+                                                                             Gameplay::ComponentPropertyKind::Number, 1.0, 0.0, 10.0, 4096,
+                                                                             true},
+                                                                            {Type(), weightId, weightName, 1,
+                                                                             Gameplay::ComponentPropertyKind::Number, 1.0, 0.0, 10.0}};
+            graph.schemas = std::make_shared<const Prefab::PrefabValueSchemaSnapshot>(
+                Take(Prefab::PrefabValueSchemaSnapshot::Create(properties, Limits(), {{std::move(descriptor), 2, true, true}})));
+            const auto parentBaseline = graph.Resolve(parent);
+            Prefab::RawComponentPayload added{occurrence, {.typeId = Type()}};
+            const std::string_view payload{R"({"speed":4.0,"weight":3.0})"};
+            const auto bytes = std::as_bytes(std::span{payload});
+            added.component.payload.assign(bytes.begin(), bytes.end());
+            const auto addition =
+                Take(Prefab::PreparePrefabComponentEdit(parentBaseline, {}, Prefab::PrefabAddComponentOverride{Object(), added},
+                                                        graph.schemas.get(), Limits()))
+                    .rebased;
+            auto object = Object();
+            bool nested{};
+            SECTION("variant retains its original addition and the parent bytes") {
+                graph.AddVariant(8, parent.Bytes().back(), Revision(1), addition);
+            }
+            SECTION("nested scope folds only the selected occurrence's addition") {
+                nested = true;
+                graph.AddNested(8, parent.Bytes().back(), Revision(1));
+                auto data = graph.sources.back().document.Data();
+                auto &placements = data.composition->nestedPlacements;
+                placements.front().valueOverrides = addition;
+                auto sibling = placements.front();
+                sibling.placementLocalId = {9};
+                placements.push_back(std::move(sibling));
+                graph.sources.back().document = Take(Prefab::PrefabDocument::Create(std::move(data), Limits()));
+                object = NestedProperty().Object();
+            }
+            const auto sources = graph.Snapshot();
+            const auto baseline = Take(sources.Resolve(owner, instance, Limits()));
+            const auto speed = Take(Prefab::PrefabPropertyAddress::Create(object, Type(), occurrence, speedId));
+            const auto weight = Take(Prefab::PrefabPropertyAddress::Create(object, Type(), occurrence, weightId));
+            const auto assign = [&](const auto &current, const auto &target, const double value) {
+                return Take(Prefab::PreparePrefabValueEdit(baseline, current, {Prefab::PrefabValueEditKind::Assign, target, value},
+                                                           graph.schemas.get(), Limits()))
+                    .rebased;
+            };
+            const auto selected = assign(assign(std::nullopt, speed, 8.0), weight, 9.0);
+            const SceneDocumentSnapshot scene{{4},
+                                              {6},
+                                              {},
+                                              {{instance, Take(Prefab::PrefabAssetReference::Create(owner)), {}, {}, selected}}};
+            const auto promote = [&](const ScenePrefabRevertTarget &scope) {
+                return Take(PreparePrefabApply(scene, {instance, scene.revision, baseline.Revision(), graph.schemas->Revision(), scope, 1},
+                                               graph.registry.Snapshot(), sources, graph.schemas, Limits()));
+            };
+            const auto verify = [&](const PreparedPrefabApply &candidate) -> nlohmann::json {
+                const auto &composition = *candidate.source.Data().composition;
+                const auto &owned = nested ? composition.nestedPlacements.front().valueOverrides : composition.variantOverrides;
+                REQUIRE(owned);
+                REQUIRE(owned->componentRecords.size() == 1);
+                CHECK(owned->records.empty());
+                const auto &folded = std::get<Prefab::PrefabAddComponentOverride>(owned->componentRecords.front());
+                CHECK(folded.object == Object());
+                CHECK(folded.payload.component.typeId == Type());
+                CHECK(folded.payload.instance == occurrence);
+                if (nested)
+                    CHECK(composition.nestedPlacements.back().valueOverrides == addition);
+                const auto &stored = folded.payload.component.payload;
+                return nlohmann::json::parse(std::string(reinterpret_cast<const char *>(stored.data()), stored.size()));
+            };
+            const auto one = promote(Prefab::PrefabValueOverrideTarget{speed});
+            REQUIRE(one.placements.front().valueOverrides);
+            REQUIRE(one.placements.front().valueOverrides->records.size() == 1);
+            CHECK(one.placements.front().valueOverrides->records.front().target == Prefab::PrefabValueOverrideTarget{weight});
+            CHECK(verify(one) == nlohmann::json{{"speed", 8.0}, {"weight", 3.0}});
+
+            const auto both = promote(object);
+            CHECK_FALSE(both.placements.front().valueOverrides);
+            CHECK(verify(both) == nlohmann::json{{"speed", 8.0}, {"weight", 9.0}});
+            CHECK(parentBaseline.Objects().front().object.components.size() == 1);
+        }
+
         TEST_CASE("Prefab apply compensates each owned write before reporting failure or recovery", "[editor][prefab][apply][native]") {
             ApplyFixture fixture;
             const auto source = fixture.source.document->Snapshot();

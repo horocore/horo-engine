@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <map>
 #include <new>
+#include <set>
 
 namespace Horo::Editor {
     namespace {
@@ -66,11 +67,18 @@ namespace Horo::Editor {
             const CancellationToken &cancellation;
             PrefabInstanceId instance;
             PrefabExpansionBudget work;
+            const EffectivePrefabCandidate &selectedEffect;
+        };
+
+        /** @brief Holds both the owning layer's local target and the verified Scene occurrence. */
+        struct LayerValueEdit final {
+            PrefabValueEdit edit;
+            PrefabObjectAddress sceneObject;
         };
 
         /** @brief Complete stable targets selected for one owning source layer. */
         struct LayerPromotion final {
-            std::vector<PrefabValueEdit> values;
+            std::vector<LayerValueEdit> values;
             std::vector<PrefabComponentOverrideRecord> components;
 
             [[nodiscard]] bool Empty() const noexcept {
@@ -115,6 +123,42 @@ namespace Horo::Editor {
             return Return::Success(std::move(normalized));
         }
 
+        /** @brief Folds scope-selected content into the owning addition using the canonical resolved Scene payload. */
+        Result<bool> FoldAddedComponent(LayerPreparation &context, const LayerValueEdit &value,
+                                        std::optional<PrefabValueOverrideSet> &owned, std::set<PrefabComponentOverrideTarget> &folded) {
+            using Return = Result<bool>;
+            const auto *property = std::get_if<PrefabPropertyAddress>(&value.edit.target);
+            if (!owned || !property)
+                return Return::Success(false);
+            const PrefabComponentOverrideTarget target{property->Object(), property->ComponentType(), property->ComponentInstance()};
+            const auto addition = std::ranges::find_if(owned->componentRecords, [&](const auto &record) {
+                const auto *add = std::get_if<PrefabAddComponentOverride>(&record);
+                return add && add->object == target.object && add->payload.instance == target.instance &&
+                       add->payload.component.typeId == target.type;
+            });
+            if (addition == owned->componentRecords.end())
+                return Return::Success(false);
+            if (folded.contains(target))
+                return Return::Success(true);
+            const auto objects = context.selectedEffect.Objects();
+            if (auto budget = context.work.Consume(objects.size()); budget.HasError())
+                return Return::Failure(std::move(budget).ErrorValue());
+            const auto resolved = std::ranges::find_if(objects, [&](const auto &object) {
+                return object.key.object == value.sceneObject;
+            });
+            if (resolved == objects.end())
+                return Return::Failure(MakeError(PrefabErrors::OverrideOrphan));
+            const auto &components = resolved->object.components;
+            const auto payload = std::ranges::find(components, target.instance, &RawComponentPayload::instance);
+            auto &ownedPayload = std::get<PrefabAddComponentOverride>(*addition).payload;
+            if (payload == components.end() || payload->component.typeId != target.type ||
+                payload->component.schemaVersion != ownedPayload.component.schemaVersion)
+                return Return::Failure(MakeError(PrefabErrors::OverrideConflict));
+            folded.insert(target);
+            ownedPayload = *payload;
+            return Return::Success(true);
+        }
+
         /** @brief Stages exact authored values and one final topology batch relative to the immediate source. */
         Result<void> PromoteLayer(LayerPreparation &context, const Assets::AssetId immediate, PrefabSourceRevision &authored,
                                   std::optional<PrefabValueOverrideSet> &owned, const LayerPromotion &promotion) {
@@ -124,13 +168,22 @@ namespace Horo::Editor {
             if (source.HasError())
                 return Result<void>::Failure(std::move(source).ErrorValue());
             const auto objects = source.Value().Objects();
-            for (const auto &edit : promotion.values) {
+            std::set<PrefabComponentOverrideTarget> folded;
+            for (const auto &value : promotion.values) {
+                if (context.cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(PrefabErrors::Cancelled));
                 if (auto budget = context.work.Consume(objects.size()); budget.HasError())
                     return budget;
                 if (auto budget = context.work.Consume(owned ? owned->records.size() + owned->componentRecords.size() : 0);
                     budget.HasError())
                     return budget;
-                auto prepared = PreparePrefabValueEdit(source.Value(), owned, edit, context.schemas, context.limits, context.cancellation);
+                auto foldedValue = FoldAddedComponent(context, value, owned, folded);
+                if (foldedValue.HasError())
+                    return Result<void>::Failure(std::move(foldedValue).ErrorValue());
+                if (foldedValue.Value())
+                    continue;
+                auto prepared =
+                    PreparePrefabValueEdit(source.Value(), owned, value.edit, context.schemas, context.limits, context.cancellation);
                 if (prepared.HasError())
                     return Result<void>::Failure(std::move(prepared).ErrorValue());
                 if (!prepared.Value().effective)
@@ -157,6 +210,13 @@ namespace Horo::Editor {
                     owned.reset();
                 else
                     owned = std::move(next);
+            } else if (!folded.empty()) {
+                auto prepared = ResolvePrefabValueOverrides(source.Value(), *owned, context.schemas, context.limits, context.cancellation);
+                if (prepared.HasError())
+                    return Result<void>::Failure(std::move(prepared).ErrorValue());
+                if (!prepared.Value().effective)
+                    return Result<void>::Failure(MakeError(PrefabErrors::OverrideConflict));
+                owned = std::move(prepared).Value().rebased;
             }
             authored = source.Value().Revision().rootSource;
             return Result<void>::Success();
@@ -173,7 +233,7 @@ namespace Horo::Editor {
                 promotion.values.reserve(selected.records.size());
                 promotion.components = selected.componentRecords;
                 for (const auto &record : selected.records)
-                    promotion.values.push_back({PrefabValueEditKind::Assign, record.target, record.value});
+                    promotion.values.push_back({{PrefabValueEditKind::Assign, record.target, record.value}, ValueObject(record)});
                 auto result = PromoteLayer(context, composition->variantParent->Asset(), *composition->variantAuthoredAgainst,
                                            composition->variantOverrides, promotion);
                 if (result.HasError())
@@ -191,7 +251,8 @@ namespace Horo::Editor {
                 auto target = RelativeTarget(record);
                 if (target.HasError())
                     return Result<PrefabDocument>::Failure(std::move(target).ErrorValue());
-                nested[scope.front()].values.push_back({PrefabValueEditKind::Assign, std::move(target).Value(), record.value});
+                nested[scope.front()].values.push_back(
+                    {{PrefabValueEditKind::Assign, std::move(target).Value(), record.value}, ValueObject(record)});
             }
             for (const auto &record : selected.componentRecords) {
                 const auto scope = ComponentObject(record).NestedInstanceScope();
@@ -306,7 +367,13 @@ namespace Horo::Editor {
                 return Return::Failure(std::move(selected).ErrorValue());
             if (!selected.Value().effective)
                 return Return::Failure(MakeError(PrefabErrors::OverrideConflict));
-            LayerPreparation layers{sources, schemas.get(), limits, cancellation, command.instance, PrefabExpansionBudget{limits}};
+            LayerPreparation layers{sources,
+                                    schemas.get(),
+                                    limits,
+                                    cancellation,
+                                    command.instance,
+                                    PrefabExpansionBudget{limits},
+                                    *selected.Value().effective};
             auto updated = PromoteSource(source->document, *selected.Value().effective, selected.Value().rebased, layers);
             if (updated.HasError())
                 return Return::Failure(std::move(updated).ErrorValue());
