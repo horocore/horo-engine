@@ -4795,6 +4795,15 @@ target_compile_features(HoroVfxGpuGraphTests PRIVATE cxx_std_20)
 target_link_libraries(HoroVfxGpuGraphTests PRIVATE HoroEngine::RenderApi)
 horo_register_catch_test(HoroVfxGpuGraphTests LABELS "unit;renderer;vfx;headless")
 
+add_executable(HoroRenderOriginSceneTests
+    support/AllocationProbe.cpp
+    unit/runtime/renderer/RenderOriginSceneTests.cpp)
+target_compile_features(HoroRenderOriginSceneTests PRIVATE cxx_std_20)
+target_include_directories(HoroRenderOriginSceneTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(HoroRenderOriginSceneTests PRIVATE
+    HoroEngine::RenderFrontend HoroEngine::RenderNull HoroEngine::SceneRenderExtraction)
+horo_register_catch_test(HoroRenderOriginSceneTests LABELS "unit;renderer;headless")
+
 add_executable(HoroLightCullingTests
         unit/runtime/renderer/LightCullingGraphTests.cpp
         unit/runtime/renderer/LightCullingTests.cpp

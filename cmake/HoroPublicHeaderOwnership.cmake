@@ -1393,6 +1393,7 @@ Horo/Runtime/Render/VfxGraphScheduling.h
 )
 horo_configure_target_header_boundary(HoroSceneRenderExtraction PUBLIC_HEADERS
     Horo/Runtime/Render/LightSceneExtraction.h
+    Horo/Runtime/Render/RenderOriginScene.h
 )
 horo_configure_target_header_boundary(HoroRenderBackendRegistry PUBLIC_HEADERS
     Horo/Runtime/Render/RenderBackendRegistry.h

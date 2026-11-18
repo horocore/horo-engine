@@ -313,6 +313,25 @@ generation publication.
 - **Shadow Map Cascades & Frustum Culling**:
   Shadow cascade splits and frustum culling calculations operate in camera-relative coordinates $P_{\text{cam\_rel}}$, ensuring sub-millimeter shadow map depth precision near the near clipping plane regardless of global distance.
 
+The renderer-owned `RenderOriginSceneAdapter` in
+`HoroSceneRenderExtraction` participates in the canonical transaction for one
+`OriginFrameOwner` and one frontend-issued render view. The composition supplies
+64-bit camera endpoints and placement anchors from the same world authority.
+Capture subtracts exact millimeter coordinates before narrowing and supplies
+one camera-relative packet to the existing static-mesh, lighting, and culling
+paths. The adapter reserves a finite number of frame slots at creation. A
+retained packet pins its camera, matrices, light and material bytes until its
+last holder releases it. Slot exhaustion reports backpressure before publishing
+any work.
+
+A prepared rebase receipt advances the renderer only when its own canonical
+owner publishes the exact successor. Retained packets then fail new submission
+and history admission. Already accepted work keeps its immutable packet
+and uses the existing renderer completion and retirement contract. A new
+canonical world owner uses a new frontend render-view identity. Composition
+roots choose when to prepare and commit the world origin on the post-simulation
+safe point.
+
 ### 2. Physics Subsystem
 
 - **Local Physics World**: The `PhysicsWorld` simulation operates within $[-R_{\text{physics}}, +R_{\text{physics}}]$ centered around the floating origin.

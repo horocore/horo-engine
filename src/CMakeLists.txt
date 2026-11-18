@@ -3165,10 +3165,12 @@ target_compile_features(HoroTerrainRenderIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroTerrainRenderIntegration PUBLIC
         HoroEngine::TerrainCook HoroEngine::TerrainRender HoroEngine::RenderFrontend HoroEngine::WorldStreaming)
 
-add_library(HoroSceneRenderExtraction STATIC runtime/renderer/frontend/LightSceneExtraction.cpp)
+add_library(HoroSceneRenderExtraction STATIC
+    runtime/renderer/frontend/LightSceneExtraction.cpp
+    runtime/renderer/frontend/RenderOriginScene.cpp)
 add_library(HoroEngine::SceneRenderExtraction ALIAS HoroSceneRenderExtraction)
 target_compile_features(HoroSceneRenderExtraction PUBLIC cxx_std_20)
-target_link_libraries(HoroSceneRenderExtraction PUBLIC HoroEngine::RuntimeScene HoroEngine::RenderApi)
+target_link_libraries(HoroSceneRenderExtraction PUBLIC HoroEngine::RuntimeScene HoroEngine::RenderApi HoroEngine::WorldStreaming)
 
 add_library(HoroSceneModel STATIC
         runtime/scene/PropertyBindingErrors.cpp
