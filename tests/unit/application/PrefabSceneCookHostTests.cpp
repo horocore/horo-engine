@@ -153,7 +153,9 @@ TEST_CASE("Host prefab cook handles an operation-store cancellation before sourc
     CancellationSource cancellation;
     fixture.request.assets.buildOutputStore = &output;
     fixture.request.assets.operationStore = &operations;
-    fixture.request.assets.requestCancel = [&] { cancellation.RequestCancellation(); };
+    fixture.request.assets.requestCancel = [&] {
+        cancellation.RequestCancellation();
+    };
     const auto nextPublication = fixture.request.assets.newPublicationOperationId;
     fixture.request.assets.newPublicationOperationId = [&] {
         const auto snapshot = operations.SnapshotIfChanged(0);
@@ -190,7 +192,7 @@ TEST_CASE("Host prefab cook preserves typed failure when its cancellation races 
 
     const auto failed = fixture.Cook(cancellation.Token());
     REQUIRE(failed.HasError());
-    CHECK(failed.ErrorValue().code == PrefabSceneCookErrors::Invalid.code);
+    CHECK(failed.ErrorValue().code.Value() == PrefabSceneCookErrors::Invalid.code.Value());
     const auto snapshot = operations.SnapshotIfChanged(0);
     REQUIRE(snapshot);
     REQUIRE(snapshot->operations.size() == 1);

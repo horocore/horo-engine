@@ -80,18 +80,18 @@ namespace Horo::Application {
                                                        : (error ? "Prefab cook preparation failed" : "Prefab cook inputs prepared");
             try {
                 if (id_) {
-                    const std::optional<Error> safeError =
-                        error ? std::optional<Error>{{.code = error->code,
-                                                     .domain = error->domain,
-                                                     .severity = error->severity,
-                                                     .message = std::string{summary}}}
-                              : std::nullopt;
-                    static_cast<void>(operations_->Update(
-                        *id_, {.state = cancelled ? OperationState::Cancelled : (error ? OperationState::Failed : OperationState::Succeeded),
-                               .phase = std::string{phase_},
-                               .message = std::string{summary},
-                               .progress = error ? std::nullopt : std::optional<float>{1.0F},
-                               .error = safeError}));
+                    const std::optional<Error> safeError = error ? std::optional<Error>{{.code = error->code,
+                                                                                         .domain = error->domain,
+                                                                                         .severity = error->severity,
+                                                                                         .message = std::string{summary}}}
+                                                                 : std::nullopt;
+                    static_cast<void>(
+                        operations_->Update(*id_, {.state = cancelled ? OperationState::Cancelled
+                                                                      : (error ? OperationState::Failed : OperationState::Succeeded),
+                                                   .phase = std::string{phase_},
+                                                   .message = std::string{summary},
+                                                   .progress = error ? std::nullopt : std::optional<float>{1.0F},
+                                                   .error = safeError}));
                 }
             } catch (...) {
                 // Optional history sinks cannot change the cook result.
@@ -108,7 +108,7 @@ namespace Horo::Application {
                                      .stage = std::string{phase_},
                                      .code = DiagnosticCode{error->code.Value()},
                                      .message = failedSource ? std::format("{} [{}] {}", summary, failedSource->id.ToString(),
-                                                                          failedSource->sourcePath.String())
+                                                                           failedSource->sourcePath.String())
                                                              : std::string{summary}});
                 }
             } catch (...) {
@@ -197,7 +197,7 @@ namespace Horo::Application {
                 auto effective = request;
                 effective.prefabPolicy = validated.profile->Policy();
                 return CookWithProjectLease(effective, *validated.profile, cancellation, releasePlan, diagnostics,
-                                                std::move(projectLease).Value());
+                                            std::move(projectLease).Value());
             }
         }();
         if (result.HasError())
@@ -206,12 +206,9 @@ namespace Horo::Application {
     }
 
     /** @copydoc PrefabSceneCookHost::CookWithProjectLease */
-    Result<Assets::AssetCookReport> PrefabSceneCookHost::CookWithProjectLease(const PrefabSceneCookRequest &request,
-                                                                              const Prefab::PrefabLimitProfile &limits,
-                                                                              const CancellationToken &cancellation,
-                                                                              const Release::ReleaseExecutionPlan *releasePlan,
-                                                                              PreparationDiagnostics &diagnostics,
-                                                                              Editor::ProjectMutationLease) {
+    Result<Assets::AssetCookReport> PrefabSceneCookHost::CookWithProjectLease(
+        const PrefabSceneCookRequest &request, const Prefab::PrefabLimitProfile &limits, const CancellationToken &cancellation,
+        const Release::ReleaseExecutionPlan *releasePlan, PreparationDiagnostics &diagnostics, Editor::ProjectMutationLease) {
         if (const auto recovery = migrations_.InspectPendingRecovery(request.assets.sourceRoot);
             recovery.action != Editor::MigrationRecoveryAction::None)
             return Result<Assets::AssetCookReport>::Failure(recovery.diagnostic.value_or(MakeError(PrefabSceneCookErrors::Invalid)));
@@ -232,7 +229,7 @@ namespace Horo::Application {
             return Result<Assets::AssetCookReport>::Failure(replaced.ErrorValue());
         diagnostics.Stage("prefab.validate_sources", 0.5F);
         auto composed = PrefabCookDetail::PrepareCatalog(request, host.Value(), *inputs, limits, *catalog_, cancellation, expansion_,
-                                                          diagnostics.failedSource);
+                                                         diagnostics.failedSource);
         if (auto closed = expansion_.CloseDocument(sourceJoin); closed.HasError())
             return Result<Assets::AssetCookReport>::Failure(closed.ErrorValue());
         if (composed.HasError())

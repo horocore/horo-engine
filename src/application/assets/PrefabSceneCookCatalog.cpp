@@ -563,7 +563,8 @@ namespace Horo::Application::PrefabCookDetail {
     Result<PreparedCatalog> PrepareCatalog(const PrefabSceneCookRequest &request, const HostCapture &host,
                                            const Assets::AssetCookInputSnapshot &inputs, const Prefab::PrefabLimitProfile &limits,
                                            const Assets::CookerCatalogSnapshot &catalog, const CancellationToken &cancellation,
-                                           SceneSource::ScenePrefabExpansionOwner &expansion, std::optional<Assets::AssetRecord> &failedSource) {
+                                           SceneSource::ScenePrefabExpansionOwner &expansion,
+                                           std::optional<Assets::AssetRecord> &failedSource) {
         auto sources = PrefabSources(inputs, host, limits, cancellation, request.schemas, request.metrics, failedSource);
         if (sources.HasError())
             return Result<PreparedCatalog>::Failure(sources.ErrorValue());
