@@ -291,6 +291,23 @@ Developer deployment selects a device explicitly. Install, launch, log capture,
 termination, timeout, and disconnect use argv-based process APIs and bounded
 output. Multiple connected devices never cause implicit target selection.
 
+For the qualification packages, `python scripts/project.py android-deploy`
+takes the existing signed package output directory, declared profile, Android
+SDK and a specific ADB serial. It verifies the staged APK, the activity
+component and the installed byte digest before launching. It selects the
+device's current Android user explicitly for install and launch. Missing,
+unauthorized, disconnected or incompatible targets return portable failure
+codes and no automatic device retry or downgrade.
+
+The command emits one JSON record. Process evidence is restricted to the
+matching package UID and PID. Its bounded log query projects Horo lifecycle
+and renderer counters and a crash marker without writing raw message text,
+serials, personal paths or unrelated logs. Cancellation, unverifiable
+installation, missing evidence and crashes retain a partial result. The
+renderer declaration comes from the package. Renderer counters describe
+observed acceptance, with GPU and physical presentation completion outside
+this diagnostic contract.
+
 ## Diagnostics And Crash Evidence
 
 Android diagnostics may collect:

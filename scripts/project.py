@@ -13,12 +13,14 @@ import os
 import pathlib
 import platform as host_platform
 import re
+from queue import Empty, Queue
 import shutil
 import signal
 import struct
 import subprocess
 import sys
 import tempfile
+from threading import Thread
 import time
 import urllib.request
 import zipfile
@@ -517,7 +519,7 @@ def apk_manifest(profile: dict) -> str:
   <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
   <application android:label="Horo Package Qualification" android:theme="@style/Theme.AppCompat.NoActionBar"
                android:extractNativeLibs="false" android:allowBackup="false">
-    <activity android:name="{application}.PackageActivity" android:exported="true" android:configChanges="orientation|screenSize|keyboardHidden">
+    <activity android:name="{application}.{PACKAGE_ACTIVITY}" android:exported="true" android:configChanges="orientation|screenSize|keyboardHidden">
       <meta-data android:name="android.app.lib_name" android:value="{library}" />
       <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
     </activity>
@@ -771,6 +773,280 @@ def apk_main(argv=None) -> int:
         print(f"Android preflight: {error}", file=sys.stderr)
         return 1
     return 0
+
+
+# Android developer deployment
+
+PACKAGE_ACTIVITY = "PackageActivity"
+DEPLOY_CAPTURE_BYTES = 256 * 1024
+
+
+class AndroidDeployError(AndroidError):
+    """Stable portable deployment diagnostic with no child output."""
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+def stop_deploy_process(process: subprocess.Popen) -> None:
+    """Stop only the admitted host child and its isolated POSIX process group."""
+    if process.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            process.kill()
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        raise AndroidDeployError("host_process_stop_unconfirmed") from None
+
+
+def deploy_process(command: list[str], deadline: float) -> tuple[int, str]:
+    """Collect at most one bounded output buffer before a shared absolute deadline."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise AndroidDeployError("deadline_exceeded")
+    process = subprocess.Popen(
+        admitted_command(command), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+        shell=False, start_new_session=True, env=execution_environment())
+    output: Queue[bytes | OSError] = Queue(maxsize=1)
+
+    def capture() -> None:
+        try:
+            with process.stdout as pipe:
+                output.put(pipe.read(DEPLOY_CAPTURE_BYTES + 1))
+        except OSError as error:
+            output.put(error)
+
+    reader = Thread(target=capture, daemon=True)
+    try:
+        reader.start()
+        captured = output.get(timeout=max(0, deadline - time.monotonic()))
+        if isinstance(captured, OSError):
+            raise AndroidDeployError("host_output_unavailable") from None
+        if len(captured) > DEPLOY_CAPTURE_BYTES:
+            raise AndroidDeployError("host_output_limit")
+        status = process.wait(timeout=max(0, deadline - time.monotonic()))
+        return status, captured.decode("utf-8", errors="replace")
+    except (Empty, subprocess.TimeoutExpired):
+        raise AndroidDeployError("deadline_exceeded") from None
+    finally:
+        stop_deploy_process(process)
+
+
+def deploy_tool(sdk: Path, name: str) -> str:
+    """Select a native Android SDK executable without implicit cwd or shell resolution."""
+    return str((sdk / (name + (".exe" if os.name == "nt" else ""))).absolute())
+
+
+def deploy_artifact(artifact: Path, stage: Path, sdk: Path, profile_name: str,
+                    java: str, deadline: float) -> tuple[Path, dict, str, set[str]]:
+    """Recheck the exact signed package bytes and expected launch component before touching a device."""
+    declared = json.loads(bounded_bytes(input_path(artifact, "provenance.json"), 1024 * 1024))
+    inspection = json.loads(bounded_bytes(input_path(artifact, "inspection.json"), 8 * 1024 * 1024))
+    abis = set(declared["abis"])
+    tools, profile = load_contract(profile_name, sorted(abis))
+    if (declared["schema"] != 1 or declared["profile"] != profile or declared.get("toolchain") != tools
+            or inspection.get("signed") is not True):
+        raise AndroidDeployError("artifact_contract_mismatch")
+    names = sorted(profile["nativeLibraries"])
+    assets = sorted([*profile["assets"], *profile["generatedAssets"]])
+    if (any(sorted(record["name"] for record in declared["abis"][abi]) != names for abi in abis)
+            or sorted(record["name"] for record in declared["assets"]) != assets):
+        raise AndroidDeployError("artifact_contract_mismatch")
+    package = stage / "signed.apk"
+    package.write_bytes(bounded_bytes(input_path(artifact, "signed.apk")))
+    actual = inspect_package(package, declared)
+    if actual | {"signed": True} != inspection:
+        raise AndroidDeployError("artifact_inspection_mismatch")
+    build_tools = sdk / "build-tools" / tools["buildTools"]
+    require_revision(build_tools, tools["buildTools"], "Build tools")
+    signing_verifier = input_path(build_tools, "lib/apksigner.jar")
+    status, _ = deploy_process([java, "-jar", str(signing_verifier.absolute()), "verify", str(package)], deadline)
+    if status:
+        raise AndroidDeployError("artifact_signature_invalid")
+    status, badging = deploy_process([deploy_tool(build_tools, "aapt2"), "dump", "badging", str(package)], deadline)
+    if status:
+        raise AndroidDeployError("artifact_manifest_unavailable")
+    verify_manifest(badging, profile)
+    activity = profile["applicationId"] + "." + PACKAGE_ACTIVITY
+    if re.findall(r"^launchable-activity: name='([^']+)'", badging, re.MULTILINE) != [activity]:
+        raise AndroidDeployError("artifact_activity_mismatch")
+    return package, profile, actual["apkSha256"], abis
+
+
+@dataclass(frozen=True)
+class AdmittedAdbDevice:
+    """One explicitly selected transport, shared by every command in the operation."""
+
+    executable: str
+    serial: str
+    deadline: float
+
+    def run(self, *arguments: str) -> str:
+        status, output = deploy_process([self.executable, "-s", self.serial, *arguments], self.deadline)
+        if status:
+            lower = output.lower()
+            if "unauthorized" in lower:
+                raise AndroidDeployError("device_unauthorized")
+            if "offline" in lower or "not found" in lower or "no devices" in lower or "disconnected" in lower:
+                raise AndroidDeployError("device_disconnected")
+            raise AndroidDeployError("device_command_failed")
+        return "\n".join(line for line in output.splitlines() if not line.startswith(
+            ("* daemon not running; starting now at tcp:", "* daemon started successfully"))).strip()
+
+
+def deploy_number(output: str, maximum: int, code: str) -> int:
+    """Admit bounded decimal fields without forwarding device text."""
+    if not re.fullmatch(r"[0-9]{1,20}", output) or int(output) > maximum:
+        raise AndroidDeployError(code)
+    return int(output)
+
+
+def deploy_device_identity(device: AdmittedAdbDevice, minimum_api: int, abis: set[str]) -> tuple[int, int, str]:
+    if device.run("get-state") != "device":
+        raise AndroidDeployError("device_unavailable")
+    user = deploy_number(device.run("shell", "am", "get-current-user"), 2**31 - 1, "device_user_unavailable")
+    api = deploy_number(device.run("shell", "getprop", "ro.build.version.sdk"), 9999, "device_api_unavailable")
+    abi = device.run("shell", "getprop", "ro.product.cpu.abi")
+    if api < minimum_api or abi not in abis:
+        raise AndroidDeployError("device_profile_unsupported")
+    return user, api, abi
+
+
+def deploy_verified_install(device: AdmittedAdbDevice, application: str, user: str, digest_value: str) -> None:
+    """Fence launch against an absent, differently installed or unverifiable package."""
+    reported = device.run("shell", "pm", "path", "--user", user, application)
+    match = re.fullmatch(r"package:(/[A-Za-z0-9_./=~+@-]{1,1024}/base\.apk)", reported)
+    if not match or any(part in (".", "..") for part in match.group(1).split("/")):
+        raise AndroidDeployError("installed_artifact_unverifiable")
+    filename = match.group(1)
+    checksum = device.run("shell", "toybox", "sha256sum", filename)
+    if re.fullmatch(r"[a-f0-9]{64}  " + re.escape(filename), checksum) is None:
+        raise AndroidDeployError("installed_artifact_unverifiable")
+    if checksum.split()[0] != digest_value:
+        raise AndroidDeployError("installed_artifact_stale")
+
+
+STATE_FIELDS = ("lifecycleRevision", "activity", "state", "process", "window", "presentation", "factsRevision")
+STATE_FLAGS = ("nativeAvailable", "ready", "hasWindow", "hasPresentation")
+FRAME_FIELDS = ("attempts", "presentAccepted", "beginPending", "executePending", "presentPending")
+STATE_LINE = re.compile(
+    r"host-state " + " ".join(fr"{name}=(?P<{name}>[0-9]{{1,20}})" for name in STATE_FIELDS)
+    + r" extent=(?P<width>[0-9]{1,8})x(?P<height>[0-9]{1,8}) "
+    + " ".join(fr"{name}=(?P<{name}>[01])" for name in STATE_FLAGS)
+    + r" attempts=(?P<attempts>[0-9]{1,20}) presentAccepted=(?P<presentAccepted>[0-9]{1,20})")
+FRAME_LINE = re.compile(
+    r"host-frame stage=(?P<stage>begin|execute|present) outcome=(?P<outcome>accepted|backpressure|failed) "
+    + " ".join(fr"{name}=(?P<{name}>[0-9]{{1,20}})" for name in FRAME_FIELDS) + r" completion=unobserved")
+
+
+def package_log_evidence(log: str, pid: int) -> dict:
+    """Project only exact numeric Horo telemetry and a fatal-exception marker; discard all free text."""
+    evidence = {"crashObserved": False}
+    for line in log.splitlines():
+        header = re.fullmatch(r"([IWEF])/(HoroPackageQualification|AndroidRuntime)\s*\(\s*([0-9]{1,10})\): (.*)", line)
+        if not header or int(header.group(3)) != pid:
+            continue
+        _, tag, _, message = header.groups()
+        if tag == "AndroidRuntime":
+            evidence["crashObserved"] |= message.startswith("FATAL EXCEPTION:")
+            continue
+        for category, pattern in (("lifecycle", STATE_LINE), ("renderer", FRAME_LINE)):
+            if match := pattern.fullmatch(message):
+                fields = {name: (int(value) if value.isdecimal() else value) for name, value in match.groupdict().items()}
+                if all(not isinstance(value, int) or value < 2**64 for value in fields.values()):
+                    evidence[category] = fields
+    return evidence
+
+
+def deploy_diagnostics(device: AdmittedAdbDevice, application: str, user: str) -> dict:
+    """Collect typed markers from the single live process for the specified package and Android user."""
+    inventory = device.run("shell", "cmd", "package", "list", "packages", "--user", user, "-U", application)
+    matches = re.findall(r"^package:" + re.escape(application) + r" uid:([0-9]{1,10})$", inventory, re.MULTILINE)
+    if len(matches) != 1:
+        raise AndroidDeployError("installed_identity_unverifiable")
+    expected_uid = deploy_number(matches[0], 2**32 - 1, "installed_identity_unverifiable")
+    pid = deploy_number(device.run("shell", "pidof", application), 2**31 - 1, "application_process_unavailable")
+    if not pid:
+        raise AndroidDeployError("application_process_unavailable")
+    process_query = ("shell", "toybox", "ps", "-p", str(pid), "-o", "UID,STIME:19")
+    identity = device.run(*process_query)
+    matched = re.fullmatch(r"UID\s+STIME\n\s*([0-9]{1,10})\s+([0-9-]{10} [0-9:]{8})", identity)
+    if not matched:
+        raise AndroidDeployError("application_process_unavailable")
+    if expected_uid != int(matched.group(1)):
+        raise AndroidDeployError("application_process_identity_mismatch")
+    raw = device.run("logcat", f"--pid={pid}", "-v", "brief", "-t", "200", "-s", "HoroPackageQualification:I", "AndroidRuntime:E")
+    facts = package_log_evidence(raw, pid)
+    if facts["crashObserved"]:
+        return facts
+    if device.run("shell", "pidof", application) != str(pid) or device.run(*process_query) != identity:
+        raise AndroidDeployError("application_process_changed")
+    return facts
+
+
+def android_deploy_main(argv=None) -> int:
+    """Install and launch one declared signed Android artifact, then emit a redacted JSON result."""
+    parser = argparse.ArgumentParser(description=android_deploy_main.__doc__)
+    parser.add_argument("--artifact", required=True, type=Path, help="Completed Android package output directory.")
+    parser.add_argument("--profile", required=True, help="Exact profile used to assemble the artifact.")
+    parser.add_argument("--sdk", required=True, type=Path, help="Explicit Android SDK root.")
+    parser.add_argument("--device", required=True, help="Explicit connected ADB serial; no default selection.")
+    parser.add_argument("--java", default="java", help="Native Java executable for the locked signature verifier.")
+    parser.add_argument("--timeout", type=int, default=120, help="Total host command deadline in seconds (1-300).")
+    arguments = parser.parse_args(argv)
+    if not re.fullmatch(r"[A-Za-z0-9\[][A-Za-z0-9_.:@%+\[\]-]{0,127}", arguments.device) or not 1 <= arguments.timeout <= 300:
+        parser.error("Supply a valid explicit ADB serial and a deadline of 1-300 seconds.")
+    deadline = time.monotonic() + arguments.timeout
+    report = {"schema": 1, "status": "partial", "stage": "artifact"}
+    exit_code = 1
+    try:
+        with tempfile.TemporaryDirectory(prefix="horo-android-deploy-") as directory:
+            package, profile, digest_value, abis = deploy_artifact(
+                arguments.artifact, Path(directory), arguments.sdk, arguments.profile, arguments.java, deadline)
+            application = profile["applicationId"]
+            report["artifact"] = {"profile": arguments.profile, "applicationId": application,
+                                  "apkSha256": digest_value, "declaredRenderer": profile["renderer"]}
+            report["stage"] = "device"
+            device = AdmittedAdbDevice(deploy_tool(arguments.sdk / "platform-tools", "adb"), arguments.device, deadline)
+            current_user, api, abi = deploy_device_identity(device, profile["minimumApi"], abis)
+            report["device"] = {"androidApi": api, "abi": abi}
+            user = str(current_user)
+            report["stage"] = "install"
+            installed = device.run("install", "-r", "--user", user, str(package)).splitlines()
+            if installed not in (["Success"], ["Performing Streamed Install", "Success"], ["Performing Push Install", "Success"]):
+                raise AndroidDeployError("install_unconfirmed")
+            report["stage"] = "verify_install"
+            deploy_verified_install(device, application, user, digest_value)
+            report["stage"] = "launch"
+            component = f"{application}/{application}.{PACKAGE_ACTIVITY}"
+            launched = device.run("shell", "am", "start", "-W", "--user", user, "-n", component)
+            if re.findall(r"^Status: ([a-z]+)$", launched, re.MULTILINE) != ["ok"]:
+                raise AndroidDeployError("launch_unconfirmed")
+            report["stage"] = "diagnostics"
+            observed = deploy_diagnostics(device, application, user)
+            report["observed"] = observed
+            if observed["crashObserved"]:
+                raise AndroidDeployError("application_crashed")
+            if "lifecycle" not in observed and "renderer" not in observed:
+                raise AndroidDeployError("application_evidence_unavailable")
+            report["status"] = "complete"
+            exit_code = 0
+    except KeyboardInterrupt:
+        report["error"] = "cancelled"
+        exit_code = 130
+    except AndroidDeployError as error:
+        report["error"] = error.code
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, zipfile.BadZipFile):
+        report["error"] = "artifact_invalid" if report["stage"] == "artifact" else "host_operation_failed"
+    print(canonical_json(report).decode("utf-8"), end="")
+    return exit_code
 
 
 # Bootstrap
@@ -2579,7 +2855,7 @@ def verify_shader_tool_main(argv=None) -> None:
     print(verify_shader_tool_executable(args.root, args.relative_path, args.sha256))
 
 
-TOOL_COMMANDS = {'verify-shader-tool': verify_shader_tool_main, 'imgui-vulkan-slots': imgui_vulkan_slots_main, 'android': apk_main, 'extension-bootstrap': bootstrap_main, 'extension-ci': author_main, 'extension': scaffold_main, 'gameplay': gameplay_main, 'migrations': migration_main, 'compatibility': compatibility_main}
+TOOL_COMMANDS = {'verify-shader-tool': verify_shader_tool_main, 'imgui-vulkan-slots': imgui_vulkan_slots_main, 'android': apk_main, 'android-deploy': android_deploy_main, 'extension-bootstrap': bootstrap_main, 'extension-ci': author_main, 'extension': scaffold_main, 'gameplay': gameplay_main, 'migrations': migration_main, 'compatibility': compatibility_main}
 
 
 def main(argv=None) -> int:
