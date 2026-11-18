@@ -25,8 +25,8 @@ namespace Horo::XR::OpenXRInternal {
             using enum Render::RenderTextureUsage;
             XrSwapchainUsageFlags usage{};
             if (HasTextureUsage(request.texture.usage, RenderAttachment))
-                usage |= request.role == NativeSwapchainRole::Depth ? XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
-                                                                    : XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
+                usage |= IsDepthSwapchain(request.role) ? XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
+                                                        : XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
             if (HasTextureUsage(request.texture.usage, Sampled))
                 usage |= XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
             if (HasTextureUsage(request.texture.usage, Storage))
@@ -47,8 +47,8 @@ namespace Horo::XR::OpenXRInternal {
             return request.target.IsValid() && request.role < NativeSwapchainRole::Count &&
                    request.foveation < NativeSwapchainFoveation::Count && request.texture.IsValid() &&
                    request.texture.dimension == Render::RenderTextureDimension::TwoD && request.texture.mipCount == 1 &&
-                   request.texture.layerCount <= XRViewRenderHardLimits::MaximumArrayLayers &&
-                   depth == (request.role == NativeSwapchainRole::Depth);
+                   request.texture.layerCount <= XRViewRenderHardLimits::MaximumArrayLayers && depth == IsDepthSwapchain(request.role) &&
+                   request.reprojection.has_value() == IsReprojectionSwapchain(request.role);
         }
     }  // namespace
 
@@ -152,6 +152,35 @@ namespace Horo::XR::OpenXRInternal {
         return Result<void>::Success();
     }
 
+    /** @copydoc OpenXRSwapchain::AdmitReprojectionAllocation */
+    Result<void> OpenXRSwapchain::AdmitReprojectionAllocation(const NativeSwapchainRequest &request) const {
+        using Render::RenderTextureUsage;
+        using enum Render::RenderTextureFormat;
+        const auto &descriptor = request.texture;
+        const bool motion = request.role == NativeSwapchainRole::Motion;
+        const bool format = motion ? descriptor.format == Rgba16Float || descriptor.format == Rgba32Float
+                                   : descriptor.format == Depth16Unorm || descriptor.format == Depth32Float;
+        if (!format || request.foveation != NativeSwapchainFoveation::None || descriptor.sampleCount != 1 ||
+            !Render::HasTextureUsage(descriptor.usage, RenderTextureUsage::RenderAttachment | RenderTextureUsage::Sampled))
+            return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
+        const auto &selection = *request.reprojection;
+        const auto offer = session_->DiscoverReprojection(selection.attempt, request.target.session);
+        if (offer.HasError())
+            return Result<void>::Failure(offer.ErrorValue());
+        const auto &observed = offer.Value();
+        if (selection.route == NativeReprojectionRoute::None || selection.route != observed.route ||
+            !std::ranges::all_of(observed.extents, [](const auto &extent) {
+            return extent.IsValid();
+        }))
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
+        const auto &left = observed.extents.front();
+        const auto &right = observed.extents.back();
+        const Render::FramebufferExtent storage{std::max(left.width, right.width), std::max(left.height, right.height)};
+        if (descriptor.layerCount != observed.extents.size() || descriptor.extent != storage || selection.eyeExtents != observed.extents)
+            return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
+        return Result<void>::Success();
+    }
+
     /** @copydoc OpenXRSwapchain::AdmitCreate */
     Result<NativeSessionBorrow> OpenXRSwapchain::AdmitCreate(const NativeSwapchainRequest &request) const {
         using Outcome = Result<NativeSessionBorrow>;
@@ -166,6 +195,10 @@ namespace Horo::XR::OpenXRInternal {
         if (request.role == NativeSwapchainRole::Depth && !session_->HasExtension("XR_KHR_composition_layer_depth"))
             return Outcome::Failure(
                 MakeError(XRErrors::OperationUnsupported, "Projection depth requires negotiated XR_KHR_composition_layer_depth."));
+        if (request.reprojection) {
+            if (auto synthesis = AdmitReprojectionAllocation(request); synthesis.HasError())
+                return Outcome::Failure(std::move(synthesis).ErrorValue());
+        }
         if (auto device = images_->Validate(request); device.HasError())
             return Outcome::Failure(std::move(device).ErrorValue());
         return session;
@@ -241,6 +274,19 @@ namespace Horo::XR::OpenXRInternal {
         if (phase_ != NativeSwapchainPhase::Imported)
             return Result<NativeSwapchainAcquisition>::Failure(MakeError(XRErrors::OperationUnavailable));
         return Result<NativeSwapchainAcquisition>::Success(acquisition_);
+    }
+
+    /** @copydoc OpenXRSwapchain::CurrentReprojection */
+    Result<NativeReprojectionAcquisition> OpenXRSwapchain::CurrentReprojection() const {
+        using Outcome = Result<NativeReprojectionAcquisition>;
+        const auto current = Current();
+        if (current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        if (!IsReprojectionSwapchain(request_.role))
+            return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
+        const auto &acquisition = current.Value();
+        const auto kind = request_.role == NativeSwapchainRole::Motion ? XRReprojectionImageKind::Motion : XRReprojectionImageKind::Depth;
+        return Outcome::Success({{acquisition.image, kind, request_.texture}, acquisition.texture, request_.reprojection->eyeExtents});
     }
 
     /** @copydoc OpenXRSwapchain::ReleaseReady */

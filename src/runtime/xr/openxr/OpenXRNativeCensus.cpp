@@ -290,10 +290,31 @@ namespace Horo::XR::OpenXRInternal {
         return census;
     }
 
+    /** @copydoc OpenXRNativeSession::BorrowReprojectionOwner */
+    Result<NativeDiscoveryBorrow> OpenXRNativeSession::BorrowReprojectionOwner(const XRLoaderPreflightAttempt attempt,
+                                                                               const std::optional<XRSessionId> &session) const {
+        using Outcome = Result<NativeDiscoveryBorrow>;
+        if (!session)
+            return BorrowDiscovery(attempt);
+        if (controlThread_ != std::this_thread::get_id())
+            return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
+        if (!discovery_ || discovery_->phase != DiscoveryPhase::Active || discovery_->selection.attempt != attempt)
+            return Outcome::Failure(MakeError(XRErrors::LoaderPreflightStale));
+        const auto owner = Borrow(*session);
+        if (owner.HasError())
+            return Outcome::Failure(owner.ErrorValue());
+        return Outcome::Success({owner.Value().instance,
+                                 owner.Value().system,
+                                 dispatch_.getProc,
+                                 {names_.extensions.data(), names_.extensionCount},
+                                 discovery_->acceptedApi});
+    }
+
     /** @copydoc OpenXRNativeSession::DiscoverReprojection */
-    Result<NativeReprojectionOffer> OpenXRNativeSession::DiscoverReprojection(const XRLoaderPreflightAttempt attempt) const {
+    Result<NativeReprojectionOffer> OpenXRNativeSession::DiscoverReprojection(const XRLoaderPreflightAttempt attempt,
+                                                                              const std::optional<XRSessionId> session) const {
         using Outcome = Result<NativeReprojectionOffer>;
-        const auto owner = BorrowDiscovery(attempt);
+        const auto owner = BorrowReprojectionOwner(attempt, session);
         if (owner.HasError())
             return Outcome::Failure(owner.ErrorValue());
         NativeReprojectionOffer offer;
@@ -313,7 +334,7 @@ namespace Horo::XR::OpenXRInternal {
         }
         if (priority == OfferPriority::Enabled)
             offer.availabilityWithoutProducer = ReadReprojectionExtents(owner.Value(), offer);
-        if (const auto current = BorrowDiscovery(attempt); current.HasError())
+        if (const auto current = BorrowReprojectionOwner(attempt, session); current.HasError())
             return Outcome::Failure(current.ErrorValue());
         return Outcome::Success(offer);
     }

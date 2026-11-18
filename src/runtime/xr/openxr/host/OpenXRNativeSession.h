@@ -258,9 +258,11 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] bool HasExtension(std::string_view name) const noexcept;
         /** @brief Inspects actual native synthesis offers without enabling them or claiming a Renderer producer.
          * @param attempt Exact retained discovery attempt.
+         * @param session Exact published owner when checking a proposed swapchain on the active session.
          * @return Bounded native-only evidence or the original stale/owner error. Optional query errors become offer state.
          */
-        [[nodiscard]] Result<NativeReprojectionOffer> DiscoverReprojection(XRLoaderPreflightAttempt attempt) const;
+        [[nodiscard]] Result<NativeReprojectionOffer> DiscoverReprojection(XRLoaderPreflightAttempt attempt,
+                                                                           std::optional<XRSessionId> session = std::nullopt) const;
         /** @brief Copies extension evidence while the exact discovered owner is current on the control thread.
          * @param attempt Exact discovery attempt. @param name Known extension policy name or advertised native name.
          * @return Owned observation or typed invalid, stale or wrong-thread failure.
@@ -296,6 +298,9 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<NativeSessionBorrow> Borrow(const XRSessionId &session) const;
 
     private:
+        /** @brief Checks either prepared discovery or an exact active session before native sizing queries. */
+        [[nodiscard]] Result<NativeDiscoveryBorrow> BorrowReprojectionOwner(XRLoaderPreflightAttempt attempt,
+                                                                            const std::optional<XRSessionId> &session) const;
         /** @brief Finds the bounded host-requested policy slot for this exact extension name. */
         [[nodiscard]] std::size_t ExtensionSlot(std::string_view name) const noexcept;
         /** @brief Checks the exact generation before lending or revoking a provider. */

@@ -7,6 +7,7 @@
 #include "TypedIdentityTestSupport.h"
 #include "VulkanExternalGraphBackendTestSupport.h"
 #include "runtime/renderer/modules/vulkan/VulkanRenderBackendErrors.h"
+#include "support/OpenXRCensusTestSupport.h"
 
 namespace {
     using Horo::Result;
@@ -55,19 +56,29 @@ namespace {
 
     struct NativeXRSessionFixture {
         XRTest::Script script;
+        XRTest::CensusScript census;
         NativeVulkanGraphics graphics;
         XRTest::Fence fence;
         Horo::XR::XRLoaderPreflightSnapshot preflight{XRTest::Preflight()};
         Horo::XR::XRCapabilitySnapshot capabilities{XRTest::Capabilities()};
         Horo::XR::XRFeaturePlan plan{XRTest::Plan(capabilities)};
-        std::shared_ptr<XRTest::Library> library{std::make_shared<XRTest::Library>()};
+        std::shared_ptr<XRTest::CensusLibrary> library{std::make_shared<XRTest::CensusLibrary>()};
         NativeXR::OpenXRNativeSession owner{library, graphics, fence};
         Horo::XR::XRSessionId identity{capabilities.System(), {.index = 1, .generation = 1}};
 
-        explicit NativeXRSessionFixture(bool depth) {
-            script.depthExtension = depth;
-            script.extensionCount = depth ? 2 : 1;
-            const std::array extensions{NativeXR::NativeExtensionRequest{"XR_KHR_composition_layer_depth", depth}};
+        explicit NativeXRSessionFixture(const bool depth,
+                                        const NativeXR::NativeReprojectionRoute route = NativeXR::NativeReprojectionRoute::None,
+                                        const bool enable = true) {
+            script.depthExtension = depth && route == NativeXR::NativeReprojectionRoute::None;
+            script.synthesisExtension = route == NativeXR::NativeReprojectionRoute::FrameSynthesisExt;
+            script.spaceWarpExtension = route == NativeXR::NativeReprojectionRoute::SpaceWarpFb;
+            script.extensionCount = 1 + script.depthExtension + script.synthesisExtension + script.spaceWarpExtension;
+            std::vector<NativeXR::NativeExtensionRequest> extensions;
+            if (script.depthExtension)
+                extensions.push_back({XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME, true});
+            if (enable && route != NativeXR::NativeReprojectionRoute::None)
+                extensions.push_back(
+                    {script.synthesisExtension ? XR_EXT_FRAME_SYNTHESIS_EXTENSION_NAME : XR_FB_SPACE_WARP_EXTENSION_NAME, true});
             REQUIRE(owner
                         .Create({.candidate = identity,
                                  .preflight = preflight,
@@ -100,9 +111,11 @@ namespace {
         }
 
         explicit XRBridgeFixture(const bool depth,
-                                 const Detail::VulkanExternalViewDispatch views = {&FakeCreateImageView, &FakeDestroyImageView})
-            : session(depth), frontend(CreateFrontend(native)), images(*frontend, session.graphics, session.graphics.binding, {1}, views),
-              swapchain(session.owner, images),
+                                 const Detail::VulkanExternalViewDispatch views = {&FakeCreateImageView, &FakeDestroyImageView},
+                                 const NativeXR::NativeReprojectionRoute route = NativeXR::NativeReprojectionRoute::None,
+                                 const bool enable = true)
+            : session(depth, route, enable), frontend(CreateFrontend(native)),
+              images(*frontend, session.graphics, session.graphics.binding, {1}, views), swapchain(session.owner, images),
               request{.target = {session.identity, {.index = 1, .generation = 1}},
                       .texture = {.extent = {640, 480},
                                   .format = depth ? RenderTextureFormat::Depth32Float : RenderTextureFormat::Rgba8Unorm,
@@ -110,6 +123,18 @@ namespace {
                                   .usage = RenderTextureUsage::RenderAttachment},
                       .role = depth ? NativeXR::NativeSwapchainRole::Depth : NativeXR::NativeSwapchainRole::Color} {
             xr.format = depth ? VK_FORMAT_D32_SFLOAT : VK_FORMAT_R8G8B8A8_UNORM;
+            if (route != NativeXR::NativeReprojectionRoute::None) {
+                const std::uint32_t right = route == NativeXR::NativeReprojectionRoute::FrameSynthesisExt ? 800 : 640;
+                request.reprojection =
+                    NativeXR::NativeReprojectionAllocation{session.preflight.Attempt(), route, {{{640, 512}, {right, 512}}}};
+                request.role = depth ? NativeXR::NativeSwapchainRole::ReprojectionDepth : NativeXR::NativeSwapchainRole::Motion;
+                request.texture.extent = {right, 512};
+                request.texture.usage = RenderTextureUsage::RenderAttachment | RenderTextureUsage::Sampled;
+                if (!depth) {
+                    request.texture.format = RenderTextureFormat::Rgba16Float;
+                    xr.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+                }
+            }
             REQUIRE(images.Bind(swapchain).HasValue());
         }
 
@@ -134,7 +159,7 @@ namespace {
         }
 
         ExternalGraphPacket Packet() const {
-            const bool depth = request.role == NativeXR::NativeSwapchainRole::Depth;
+            const bool depth = NativeXR::IsDepthSwapchain(request.role);
             const RenderGraphLogicalState final{RenderGraphSynchronizationAccess::ReadWrite,
                                                 depth ? RenderGraphSynchronizationOperation::DepthStencilAttachment
                                                       : RenderGraphSynchronizationOperation::ColorAttachment,
@@ -179,12 +204,39 @@ namespace {
     TEST_CASE("OpenXR production swapchain adapter renders through frontend graph and releases only after native retirement",
               "[unit][xr][vulkan][external][integration]") {
         bool depth{};
+        auto route = NativeXR::NativeReprojectionRoute::None;
         SECTION("projection color") {}
         SECTION("projection depth") {
             depth = true;
         }
-        XRBridgeFixture fixture{depth};
+        SECTION("EXT motion uses signed floating color and asymmetric native bounds") {
+            route = NativeXR::NativeReprojectionRoute::FrameSynthesisExt;
+        }
+        SECTION("FB synthesis depth without KHR projection depth") {
+            route = NativeXR::NativeReprojectionRoute::SpaceWarpFb;
+            depth = true;
+        }
+        XRBridgeFixture fixture{depth, {&FakeCreateImageView, &FakeDestroyImageView}, route};
+        CHECK(fixture.session.owner.DiscoverReprojection(fixture.session.preflight.Attempt()).HasError());
+        CHECK(fixture.swapchain.CurrentReprojection().HasError());
         fixture.Acquire();
+        if (route != NativeXR::NativeReprojectionRoute::None) {
+            const auto evidence = fixture.swapchain.CurrentReprojection();
+            REQUIRE(evidence.HasValue());
+            const auto &acquisition = evidence.Value();
+            CHECK(acquisition.evidence.image == fixture.acquired.image);
+            CHECK(acquisition.evidence.kind ==
+                  (depth ? Horo::XR::XRReprojectionImageKind::Depth : Horo::XR::XRReprojectionImageKind::Motion));
+            CHECK(acquisition.evidence.allocation.extent == fixture.request.texture.extent);
+            CHECK(acquisition.texture == fixture.acquired.texture);
+            CHECK(acquisition.eyeExtents == fixture.request.reprojection->eyeExtents);
+            CHECK(fixture.xr.created.format == fixture.xr.format);
+            CHECK(fixture.xr.created.usageFlags ==
+                  (XR_SWAPCHAIN_USAGE_SAMPLED_BIT |
+                   (depth ? XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT)));
+        } else {
+            CHECK(fixture.swapchain.CurrentReprojection().HasError());
+        }
         CHECK(fixture.native.resourceState.state.createViewCount == static_cast<int>(fixture.xr.imageCount * 3));
         auto packet = fixture.Packet();
         fixture.Render(packet);
@@ -192,6 +244,8 @@ namespace {
         REQUIRE(pending.HasValue());
         CHECK_FALSE(pending.Value());
         CHECK(fixture.swapchain.Current().HasError());
+        CHECK(fixture.swapchain.CurrentReprojection().HasError());
+        CHECK(fixture.swapchain.BorrowReleased(fixture.acquired.image).HasError());
         CHECK(fixture.xr.releases == 0);
         CHECK(fixture.native.resourceState.state.destroyViewCount == 0);
         fixture.Complete();
@@ -200,6 +254,7 @@ namespace {
         REQUIRE(released.HasValue());
         CHECK(released.Value());
         CHECK(fixture.xr.releases == 1);
+        CHECK(fixture.swapchain.BorrowReleased(fixture.acquired.image).HasValue());
         CHECK(fixture.native.resourceState.state.destroyImageCount == 0);
         CHECK(fixture.native.commandState.state.waitCalls == 0);
         fixture.RejectReacquiredStaleGraph(packet);
@@ -207,6 +262,54 @@ namespace {
         CHECK(fixture.xr.destroys == 1);
         CHECK(fixture.native.resourceState.state.createViewCount == static_cast<int>(fixture.xr.imageCount * 3));
         CHECK(fixture.native.resourceState.state.destroyViewCount == static_cast<int>(fixture.xr.imageCount * 3));
+    }
+
+    TEST_CASE("OpenXR auxiliary allocation rejects unnegotiated, stale or mismatched native sizing before swapchain dispatch",
+              "[unit][xr][vulkan][reprojection]") {
+        bool enable = true;
+        bool staleAttempt = false;
+        bool wrongRoute = false;
+        bool wrongEyeBounds = false;
+        bool missingWriterUsage = false;
+        SECTION("only advertised") {
+            enable = false;
+        }
+        SECTION("stale loader attempt") {
+            staleAttempt = true;
+        }
+        SECTION("unselected route") {
+            wrongRoute = true;
+        }
+        SECTION("wrong scale for either eye") {
+            wrongEyeBounds = true;
+        }
+        SECTION("missing sampled usage") {
+            missingWriterUsage = true;
+        }
+        XRBridgeFixture fixture{false,
+                                {&FakeCreateImageView, &FakeDestroyImageView},
+                                NativeXR::NativeReprojectionRoute::FrameSynthesisExt,
+                                enable};
+        if (staleAttempt)
+            fixture.request.reprojection->attempt = {};
+        if (wrongRoute)
+            fixture.request.reprojection->route = NativeXR::NativeReprojectionRoute::SpaceWarpFb;
+        if (wrongEyeBounds)
+            fixture.request.reprojection->eyeExtents.front().width += 1;
+        if (missingWriterUsage)
+            fixture.request.texture.usage = RenderTextureUsage::RenderAttachment;
+        CHECK(fixture.swapchain.Create(fixture.request, XRTest::SwapchainScript::GetProc).HasError());
+        CHECK(fixture.xr.calls.empty());
+        CHECK(fixture.swapchain.Phase() == NativeXR::NativeSwapchainPhase::Empty);
+    }
+
+    TEST_CASE("OpenXR auxiliary allocation cannot select an unadvertised native Vulkan format", "[unit][xr][vulkan][reprojection]") {
+        XRBridgeFixture fixture{false, {&FakeCreateImageView, &FakeDestroyImageView}, NativeXR::NativeReprojectionRoute::SpaceWarpFb};
+        fixture.xr.format = VK_FORMAT_R8G8B8A8_UNORM;
+        CHECK(fixture.swapchain.Create(fixture.request, XRTest::SwapchainScript::GetProc).HasError());
+        CHECK(fixture.xr.creates == 0);
+        CHECK(fixture.xr.destroys == 0);
+        CHECK(fixture.xr.calls == std::vector<std::string_view>{"formats", "formats"});
     }
 
     std::vector<VkImageViewCreateInfo> coldViewRequests;

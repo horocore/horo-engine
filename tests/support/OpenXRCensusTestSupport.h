@@ -147,4 +147,16 @@ namespace Horo::Tests::OpenXR {
             return XR_SUCCESS;
         }
     };
+
+    /** @brief Exposes official census dispatch while retaining the shared native owner script. */
+    class CensusLibrary final : public Platform::DynamicLibrary {
+    public:
+        void *GetSymbol(const std::string_view name) const noexcept override {
+            if (name == "xrGetInstanceProcAddr")
+                return std::bit_cast<void *>(&CensusScript::GetProc);
+            if (name == "xrDestroyInstance")
+                return std::bit_cast<void *>(&Script::DestroyInstance);
+            return nullptr;
+        }
+    };
 }  // namespace Horo::Tests::OpenXR

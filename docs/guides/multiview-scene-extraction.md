@@ -132,10 +132,17 @@ NDC. Current position drives fixed-function depth in the same pass. Invalid
 previous samples keep current depth and write alpha zero so foreground geometry
 still occludes farther geometry. This alpha is an engine validity marker.
 
+The OpenXR Vulkan image bridge can import sampled floating motion and depth
+allocations for an enabled native route. It checks both observed eye rectangles
+against the exact retained attempt and packs separate array layers within the
+smallest combined allocation. Imported registrations retire through the same
+queue and final attachment layouts as projection images. They expose a typed
+frame-registration input only for the current live native acquisition.
+
 The selected Play frame currently uses a color shader and internal depth.
-Activation requires negotiated external motion and depth imports, completion
-and release through the exact native frame owner, and a disocclusion policy for
-the native provider's format. EXT ignores the engine validity alpha.
+Activation still requires same-frame coordination of both auxiliary
+acquisitions and a disocclusion policy for the provider's format. EXT ignores
+the engine validity alpha.
 [OpenXR frame synthesis contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrFrameSynthesisInfoEXT.html)
 
 ## Public contract migration and evidence

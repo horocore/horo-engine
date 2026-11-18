@@ -38,6 +38,8 @@ namespace Horo::XR::OpenXRInternal {
                     return VK_FORMAT_B8G8R8A8_SRGB;
                 case Rgba16Float:
                     return VK_FORMAT_R16G16B16A16_SFLOAT;
+                case Rgba32Float:
+                    return VK_FORMAT_R32G32B32A32_SFLOAT;
                 case Depth16Unorm:
                     return VK_FORMAT_D16_UNORM;
                 case Depth32Float:
@@ -93,7 +95,7 @@ namespace Horo::XR::OpenXRInternal {
 
         /** @brief Creates the exact immutable array/eye views cold, before acquisition publication. */
         Result<void> PrepareViews() {
-            const bool depth = request.role == NativeSwapchainRole::Depth;
+            const bool depth = IsDepthSwapchain(request.role);
             const VkImageAspectFlags aspects = depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
             VkImageViewCreateInfo info{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
                                        .image = native,
@@ -154,7 +156,7 @@ namespace Horo::XR::OpenXRInternal {
         }
 
         Render::RenderGraphLogicalState AcquiredState() const noexcept override {
-            const bool depth = request.role == NativeSwapchainRole::Depth;
+            const bool depth = IsDepthSwapchain(request.role);
             return {Render::RenderGraphSynchronizationAccess::ReadWrite,
                     depth ? Render::RenderGraphSynchronizationOperation::DepthStencilAttachment
                           : Render::RenderGraphSynchronizationOperation::ColorAttachment,
@@ -201,9 +203,11 @@ namespace Horo::XR::OpenXRInternal {
             !queue_.IsValid() || binding_->queueIndex != 0 || !request.texture.IsValid() || !views_.create || !views_.destroy)
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
         if (request.foveation != NativeSwapchainFoveation::None ||
-            (request.role != NativeSwapchainRole::Color && request.role != NativeSwapchainRole::Depth) ||
-            !NativeFormat(request.texture.format).has_value() || request.texture.sampleCount != 1 ||
-            request.texture.layerCount > Render::Detail::VulkanExternalNativeViews::MaximumLayers ||
+            (request.role != NativeSwapchainRole::Color && !IsDepthSwapchain(request.role) &&
+             request.role != NativeSwapchainRole::Motion) ||
+            !NativeFormat(request.texture.format).has_value() ||
+            (request.texture.format == Render::RenderTextureFormat::Rgba32Float && request.role != NativeSwapchainRole::Motion) ||
+            request.texture.sampleCount != 1 || request.texture.layerCount > Render::Detail::VulkanExternalNativeViews::MaximumLayers ||
             request.texture.dimension != Render::RenderTextureDimension::TwoD || request.texture.mipCount != 1 ||
             !Render::HasTextureUsage(request.texture.usage, Render::RenderTextureUsage::RenderAttachment))
             return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));

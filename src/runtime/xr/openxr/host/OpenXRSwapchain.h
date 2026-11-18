@@ -5,10 +5,12 @@
  */
 
 #include "Horo/Runtime/Render/RenderResourceDescriptors.h"
-#include "Horo/XR/XRViewRenderPlan.h"
+#include "Horo/XR/XRReprojection.h"
 #include "OpenXRNativeSession.h"
 
+#include <array>
 #include <bit>
+#include <optional>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -20,8 +22,19 @@ namespace Horo::XR::OpenXRInternal {
         Depth,
         Motion,
         Density,
+        ReprojectionDepth,
         Count
     };
+
+    /** @brief Tests whether this allocation uses a depth attachment aspect. */
+    [[nodiscard]] constexpr bool IsDepthSwapchain(const NativeSwapchainRole role) noexcept {
+        return role == NativeSwapchainRole::Depth || role == NativeSwapchainRole::ReprojectionDepth;
+    }
+
+    /** @brief Tests whether this allocation requires the enabled frame-synthesis owner. */
+    [[nodiscard]] constexpr bool IsReprojectionSwapchain(const NativeSwapchainRole role) noexcept {
+        return role == NativeSwapchainRole::Motion || role == NativeSwapchainRole::ReprojectionDepth;
+    }
 
     /** @brief Explicit requested foveation mechanism; unsupported required mechanisms never silently become None. */
     enum class NativeSwapchainFoveation : std::uint8_t {
@@ -31,12 +44,20 @@ namespace Horo::XR::OpenXRInternal {
         Count
     };
 
+    /** @brief Selected native provider's required route and retained instance attempt. */
+    struct NativeReprojectionAllocation final {
+        XRLoaderPreflightAttempt attempt;
+        NativeReprojectionRoute route{NativeReprojectionRoute::None};
+        std::array<Render::FramebufferExtent, 2> eyeExtents; /**< Exact observed native rectangles in primary stereo order. */
+    };
+
     /** @brief Immutable allocation request; view rectangles/layers belong to the frame's XRViewRenderPlan. */
     struct NativeSwapchainRequest final {
         XRSwapchainTargetId target;
         Render::RenderTextureDescriptor texture;
         NativeSwapchainRole role{NativeSwapchainRole::Color};
         NativeSwapchainFoveation foveation{NativeSwapchainFoveation::None};
+        std::optional<NativeReprojectionAllocation> reprojection;
     };
 
     /** @brief Synchronous, borrowed native enumeration context; adapters must not retain it. */
@@ -147,6 +168,13 @@ namespace Horo::XR::OpenXRInternal {
         Render::RenderTextureHandle texture;
     };
 
+    /** @brief Exact auxiliary evidence from the current import and its renderer resource. */
+    struct NativeReprojectionAcquisition final {
+        XRReprojectionImage evidence;
+        Render::RenderTextureHandle texture;
+        std::array<Render::FramebufferExtent, 2> eyeExtents;
+    };
+
     /** @brief Synchronous compositor borrow, valid only until the next acquisition or Close. */
     struct NativeReleasedSwapchainImage final {
         XrSwapchain swapchain{XR_NULL_HANDLE};
@@ -233,6 +261,11 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<bool> CloseAfterSessionLoss(const XRSessionId &owner);
         /** @brief Returns the exact currently imported publication, or unavailable after revocation/loss/release. */
         [[nodiscard]] Result<NativeSwapchainAcquisition> Current() const;
+        /** @brief Returns same-generation evidence for XRFrameLifecycle and the Renderer from an actual auxiliary import.
+         * @return Exact image, kind, allocation and resource while the import is live, or its original stale/unavailable failure.
+         * @post This operation neither records frame admission nor observes completion.
+         */
+        [[nodiscard]] Result<NativeReprojectionAcquisition> CurrentReprojection() const;
         /** @brief Fences one exact ready/imported acquisition before backend import or graph admission.
          * @param image Exact owner-issued identity. @return Success or stale/unavailable without native work. */
         [[nodiscard]] Result<void> ValidateAcquisition(const XRSwapchainImageId &image) const;
@@ -248,6 +281,8 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> CheckThread() const;
         [[nodiscard]] Result<void> CheckCurrent() const;
         [[nodiscard]] Result<NativeSessionBorrow> AdmitCreate(const NativeSwapchainRequest &request) const;
+        /** @brief Admits only exact negotiated stereo allocation geometry for the live native route. */
+        [[nodiscard]] Result<void> AdmitReprojectionAllocation(const NativeSwapchainRequest &request) const;
         [[nodiscard]] static Error DispatchFailure(const char *name, XrResult result);
 
         /** @brief Secures candidate-scoped dispatch before native allocation. */
