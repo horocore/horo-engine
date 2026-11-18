@@ -62,6 +62,14 @@ namespace Horo::AI {
         /** @brief Logical composition-adapter allocation per occurrence; family kernels report their own extents. */
         [[nodiscard]] static std::uint64_t CoreStorageBytes(const DecisionCompiledGraph &graph) noexcept;
         [[nodiscard]] Result<AiTaskState> Step(const DecisionGraphStepInput &input);
+        /** @brief Advances one fully admitted scheduler slice without partially evaluating a tick.
+         * @param input Exact committed observation for the requested tick.
+         * @param budget Scheduler-owned allowance for the current slice.
+         * @return Task state, empty on exhaustion, or an original typed error. Unsupported plan shapes fail admission.
+         * @details The complete flat-tree allowance is charged before provider work. Exhaustion leaves the graph
+         * unchanged. Already revoked work is retired even when the slice has no allowance.
+         */
+        [[nodiscard]] Result<std::optional<AiTaskState>> StepBudgeted(const DecisionGraphStepInput &input, AiWorkBudget &budget);
         /** @brief Advances the same runtime with opt-in bounded, redacted decision evidence.
          * @param input The committed tick and immutable blackboard snapshot used by every occurrence.
          * @param trace Caller-owned destination. Invalid, off-owner or reentrant admission leaves it untouched.

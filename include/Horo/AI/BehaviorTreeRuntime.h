@@ -112,6 +112,11 @@ namespace Horo::AI {
             DecisionClosureAdmission admission, std::shared_ptr<const DecisionAssetPlan> bindings, DecisionNodeId node, TaskId task);
         [[nodiscard]] DecisionKernelStorage Storage() const noexcept;
         [[nodiscard]] std::size_t TaskSlots() const noexcept;
+        /** @brief Returns an upper bound on flat-tree decision work before invoking any callbacks.
+         * @return Units covering the mailbox pump, priority probes, traversal and attached services.
+         * @details Subplan work is separate. This is an admission bound, independent of elapsed time and result.
+         */
+        [[nodiscard]] std::size_t MaximumDecisionWorkUnits() const noexcept;
 
         /** @brief Returns preorder records. @return Immutable contiguous nodes. */
         [[nodiscard]] std::span<const BehaviorTreePlanNode> Nodes() const noexcept {

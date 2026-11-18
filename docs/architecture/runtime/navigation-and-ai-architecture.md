@@ -2845,7 +2845,12 @@ its agent or borrowing future tick capacity. `AiWorkBudget` is cooperative: a pr
 must consume before every bounded node/query/command step and check cancellation
 between steps. It does not preempt arbitrary C++ code or bound the elapsed time
 of a single step. A slice is reserved before invoking callbacks; repeated calls
-in the same tick cannot renew allowances. Incomplete command batches retain their
+in the same tick cannot renew allowances. A single-occurrence cooked Behavior
+Tree can reserve its bounded priority, traversal and service work before
+starting the tick. If the allowance is insufficient, the graph preserves its
+continuations and does not advance its evaluation tick. The scheduler still
+owns cadence. Other cooked shapes need separate budgeting contracts before
+they can use this entry point. Incomplete command batches retain their
 bounded storage and fence further evaluation until drained; no command or decision
 catch-up extends the tick. Hosts provide an executor with immutable frozen inputs
 and preallocated resumable state/intents; its owner-only commit queues Scene

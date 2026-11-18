@@ -9,6 +9,7 @@
 #include "Horo/AI/UtilityDecision.h"
 #include "Horo/Foundation/Sha256.h"
 
+#include <optional>
 #include <variant>
 
 namespace Horo::AI {
@@ -99,6 +100,10 @@ namespace Horo::AI {
         [[nodiscard]] DecisionGraphAssetId Root() const noexcept;
         [[nodiscard]] AiCapabilitySet Capabilities() const noexcept;
         [[nodiscard]] bool IsCurrent() const noexcept;
+        /** @brief Checks support for one all-or-nothing scheduler slice before creating any provider callbacks.
+         * @return Maximum units for a single-occurrence Behavior Tree, otherwise empty until that shape supports bounded slices.
+         */
+        [[nodiscard]] std::optional<std::size_t> MaximumDecisionWorkUnits() const noexcept;
 
     private:
         CookedDecisionPlan() = default;

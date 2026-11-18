@@ -35,6 +35,115 @@ namespace Horo::AI {
             return scene;
         }
 
+        /** @brief Feeds the real scheduler's allowance and exact Scene snapshot to the cooked evaluator. */
+        class ScheduledTreeProbe final : public IAiScheduledDecision {
+        public:
+            ScheduledTreeProbe(const AiSceneRuntime &runtime, std::unique_ptr<DecisionGraphInstance> tree)
+                : runtime_(runtime), tree_(std::move(tree)) {}
+
+            Result<AiSliceOutcome> Evaluate(const AiDecisionSliceContext &context, AiWorkBudget &budget) noexcept override {
+                const auto snapshot = runtime_.CaptureDecisionSnapshotAtSafePoint(context.agent);
+                if (snapshot.HasError())
+                    return Result<AiSliceOutcome>::Failure(snapshot.ErrorValue());
+                const auto stepped = tree_->StepBudgeted({context.tick, snapshot.Value().Binding(), snapshot.Value(), {}}, budget);
+                if (stepped.HasError())
+                    return Result<AiSliceOutcome>::Failure(stepped.ErrorValue());
+                return Result<AiSliceOutcome>::Success(stepped.Value() ? AiSliceOutcome::Complete : AiSliceOutcome::BudgetExhausted);
+            }
+
+            Result<bool> Commit(const AiDecisionSliceContext &, AiWorkBudget &) noexcept override {
+                return Result<bool>::Success(true);
+            }
+
+            void Cancel() noexcept override {
+                static_cast<void>(tree_->Cancel(AiTaskCancellationReason::AgentGenerationRetired));
+            }
+
+        private:
+            const AiSceneRuntime &runtime_;
+            std::unique_ptr<DecisionGraphInstance> tree_;
+        };
+
+        TEST_CASE("Scene scheduler grants a complete cooked tree slice before starting its real provider task",
+                  "[unit][ai][scene][decision_reservation][scheduler]") {
+            Fixture fixture;
+            const std::array sources{TaskTree(11)};
+            const auto compiled = fixture.Compile(sources, 11);
+            const auto encoded = DecisionPlanCodec::EncodeCooked(*compiled);
+            REQUIRE(encoded.HasValue());
+            auto decoded = DecisionPlanCodec::DecodeCooked(encoded.Value(), fixture.Environment());
+            REQUIRE(decoded.HasValue());
+            const auto plan = std::move(decoded).Value().plan;
+            REQUIRE(plan);
+            const auto required = plan->MaximumDecisionWorkUnits();
+            REQUIRE(required);
+            REQUIRE(*required > 1);
+
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+            auto runtime = std::move(AiSceneRuntime::Create()).Value();
+            auto scene = SceneFixture(fixture, *plan);
+            scene.descriptor.cookedPlan = plan;
+            auto publication = TestSupport::Publish(runtime, scene);
+            REQUIRE(runtime.ConfigureTaskSchedulerAtSafePoint(jobs).HasValue());
+            auto scheduler = runtime.TaskSchedulerAtSafePoint();
+            REQUIRE(scheduler.HasValue());
+            const auto agent = runtime.Snapshot().Value().Agents().front().handle;
+            const auto taskDefinition = TestSupport::MakeIdentity<TaskId>(9000);
+            const auto parent = runtime.StartTaskAtSafePoint(agent, taskDefinition);
+            REQUIRE(parent.HasValue());
+            auto reservation = runtime.ReserveDecisionTaskSlotsAtSafePoint(agent, static_cast<std::uint32_t>(plan->Storage().taskSlots));
+            REQUIRE(reservation.HasValue());
+            auto tree = DecisionGraphInstance::Create(plan, fixture.providers, std::move(reservation).Value(),
+                                                      {taskDefinition, parent.Value(), agent});
+            REQUIRE(tree.HasValue());
+
+            const auto snapshot = runtime.CaptureDecisionSnapshotAtSafePoint(agent);
+            REQUIRE(snapshot.HasValue());
+            AiWorkBudget insufficient{*required - 1};
+            const auto denied = tree.Value()->StepBudgeted({1, snapshot.Value().Binding(), snapshot.Value(), {}}, insufficient);
+            REQUIRE(denied.HasValue());
+            CHECK_FALSE(denied.Value());
+            CHECK(insufficient.Exhausted());
+            CHECK(insufficient.Remaining() == *required - 1);
+            CHECK(fixture.probe.starts == 0);
+
+            bool admitted = true;
+            SECTION("scheduler allocates the full bound and evaluates the same untouched tick") {}
+            SECTION("scheduler reports exhaustion without starting, resuming or publishing a task") {
+                admitted = false;
+            }
+            const AiAgentSchedulePolicy policy{.workUnitsPerTick = admitted ? *required : *required - 1};
+            auto executor = std::make_shared<ScheduledTreeProbe>(runtime, std::move(tree).Value());
+            REQUIRE(runtime.RegisterDecisionAtSafePoint(agent, policy, fixture.providerOwner, executor).HasValue());
+            const auto report = scheduler.Value()->EvaluateAtDecision(1);
+            REQUIRE(report.HasValue());
+            CHECK(report.Value().failed == 0);
+            CHECK(report.Value().exhausted == (admitted ? 0 : 1));
+            CHECK(fixture.probe.starts == (admitted ? 1 : 0));
+            CHECK(fixture.probe.resumes == 0);
+            REQUIRE(scheduler.Value()->CommitAtIntentDispatch(1).HasValue());
+            REQUIRE(runtime.DisableAtSafePoint(agent).HasValue());
+            CHECK(fixture.probe.aborts == (admitted ? 1 : 0));
+            CHECK(fixture.probe.cleanups == (admitted ? 1 : 0));
+        }
+
+        TEST_CASE("Budgeted execution rejects a composed decision graph before consuming its scheduler allowance",
+                  "[unit][ai][scene][decision_reservation][scheduler]") {
+            Fixture fixture;
+            const std::array sources{CallTree(1, 2, DecisionPlanKind::BehaviorTree), TaskTree(2)};
+            const auto plan = fixture.Compile(sources, 1);
+            CHECK_FALSE(plan->MaximumDecisionWorkUnits());
+            auto graph = DecisionGraphInstance::Create(plan, fixture.providers, fixture.RuntimeBinding());
+            REQUIRE(graph.HasValue());
+            const auto blackboard = fixture.blackboard->Snapshot();
+            REQUIRE(blackboard.HasValue());
+            AiWorkBudget budget{32};
+            const auto result = graph.Value()->StepBudgeted({1, fixture.binding, blackboard.Value(), {}}, budget);
+            TestSupport::ExpectError(result, AIErrors::CapabilityUnavailable);
+            CHECK(budget.Remaining() == 32);
+            CHECK(fixture.probe.starts == 0);
+        }
+
         TEST_CASE("Cooked controller publication rejects a provider retired after Scene preparation",
                   "[unit][ai][scene][decision_reservation][composition]") {
             Fixture fixture;

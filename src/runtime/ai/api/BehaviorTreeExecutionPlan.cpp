@@ -297,6 +297,13 @@ namespace Horo::AI {
         return Result<void>::Success();
     }
 
+    /** @copydoc BehaviorTreeExecutionPlan::MaximumDecisionWorkUnits */
+    std::size_t BehaviorTreeExecutionPlan::MaximumDecisionWorkUnits() const noexcept {
+        // Priority observation scans all nodes and can inspect each child once. Traversal
+        // has a hard two-visits-per-node ceiling; each attached service can run once per evaluation.
+        return 1 + nodes_.size() + children_.size() + 2 * nodes_.size() + services_.size();
+    }
+
     std::size_t BehaviorTreeExecutionPlan::TaskSlots() const noexcept {
         std::size_t span{};
         for (std::size_t index = 0; index < nodes_.size(); ++index)

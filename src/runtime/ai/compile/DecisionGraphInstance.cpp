@@ -254,6 +254,22 @@ namespace Horo::AI {
         return StepImpl(input, nullptr);
     }
 
+    /** @copydoc DecisionGraphInstance::StepBudgeted */
+    Result<std::optional<AiTaskState>> DecisionGraphInstance::StepBudgeted(const DecisionGraphStepInput &input, AiWorkBudget &budget) {
+        using Outcome = Result<std::optional<AiTaskState>>;
+        const auto work = plan_->MaximumDecisionWorkUnits();
+        if (!work)
+            return Outcome::Failure(MakeError(AIErrors::CapabilityUnavailable, "Cooked decision shape does not support scheduler slices."));
+        if (auto valid = ValidateStep(input); valid.HasError())
+            return Outcome::Failure(valid.ErrorValue());
+        if (Available() && !budget.Consume(*work))
+            return Outcome::Success(std::nullopt);
+        auto evaluated = StepValidated(input, nullptr);
+        if (evaluated.HasError())
+            return Outcome::Failure(evaluated.ErrorValue());
+        return Outcome::Success(evaluated.Value());
+    }
+
     /** @copydoc DecisionGraphInstance::StepWithTrace */
     Result<AiTaskState> DecisionGraphInstance::StepWithTrace(const DecisionGraphStepInput &input, DecisionStepTrace &trace) {
         return StepImpl(input, &trace);
