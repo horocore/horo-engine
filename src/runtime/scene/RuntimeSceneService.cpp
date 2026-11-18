@@ -322,7 +322,9 @@ namespace Horo::Runtime {
                 return validation;
 
             if (definition.AssetDependencies().empty()) {
-                if (const auto staged = StageCandidate(definition, config, {}, {}); staged.HasError())
+                const auto *registry = assetPreparationServices_.registry;
+                const auto revision = registry ? registry->Snapshot().Revision() : Assets::AssetRegistryRevision{};
+                if (const auto staged = StageCandidate(definition, config, revision, {}); staged.HasError())
                     return staged;
                 transition_ = TransitionKind::Activate;
                 return Result<void>::Success();

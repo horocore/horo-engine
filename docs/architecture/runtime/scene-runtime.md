@@ -207,6 +207,10 @@ state. At the owner-thread safe point, the service compares the captured
 revision with the authoritative registry revision. A stale candidate is
 dropped, even when every worker completed successfully.
 
+An assetless Scene captures the configured registry revision when staged, so
+later cell attachments can use the active Scene's admission evidence. A Scene
+service with no configured registry uses the empty registry revision.
+
 An active scene pins immutable payload leases. A replacement at the same
 registry revision reuses each matching AssetId/type payload independently;
 dependency input ordering has no meaning. Reused bytes still count toward the

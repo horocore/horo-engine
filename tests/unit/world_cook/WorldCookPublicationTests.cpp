@@ -433,7 +433,11 @@ namespace Horo::WorldCook {
             REQUIRE(host->Scenes().Startup(cancellation).HasValue());
             REQUIRE(host->QueueInitialScene(definition.Value(), nullptr, cancellation).HasValue());
             CHECK_FALSE(publication->Current().packet);
-            REQUIRE(host->CommitSceneChanges({.frameNumber = 1, .cancellation = cancellation}).HasValue());
+            const auto committed = host->CommitSceneChanges({.frameNumber = 1, .cancellation = cancellation});
+            INFO((committed.HasError() ? committed.ErrorValue().code.Value() + ": " + committed.ErrorValue().message : "Committed"));
+            REQUIRE(committed.HasValue());
+            REQUIRE(host->Scenes().ActiveScene());
+            CHECK(host->Scenes().ActiveScene()->AssetRegistryRevision().value != 0);
             auto packet = publication->Current().packet;
             REQUIRE(packet);
             CHECK(publication->Current().owner == Editor::EditorFirstPlayScene);
