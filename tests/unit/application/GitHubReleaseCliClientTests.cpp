@@ -49,6 +49,7 @@ namespace {
         }
 
         std::map<std::string, std::string> assets;
+        std::filesystem::path sourceToChangeDuringUpload;
         std::uint64_t latestReleaseId{5U};
         int uploads{};
         int commits{};
@@ -93,6 +94,10 @@ namespace {
                 return 1;
             if (arguments[1] == "upload") {
                 const auto file = std::filesystem::path(arguments[3]);
+                if (!sourceToChangeDuringUpload.empty()) {
+                    std::ofstream source(sourceToChangeDuringUpload, std::ios::binary | std::ios::trunc);
+                    source << "changed";
+                }
                 std::ifstream input(file, std::ios::binary);
                 assets[file.filename().string()] = std::string{std::istreambuf_iterator<char>{input}, {}};
                 ++uploads;
@@ -167,5 +172,50 @@ TEST_CASE("GitHub CLI client resolves an interrupted upload only after remote ve
     REQUIRE(release.HasValue());
     const ReleaseArtifactRecord artifact{"bin/editor", ReleaseArtifactRole::Binary, 7U, Digest("payload")};
     CHECK(client.UploadExact(release.Value(), "bin%2Feditor", file.path, artifact).HasValue());
+    CHECK(processes.uploads == 1);
+}
+
+TEST_CASE("GitHub CLI channel commit checks remote manifest and envelope size and digest before PATCH",
+          "[release][github][signed-manifest]") {
+    FakeGitHubProcess processes;
+    GitHubReleaseCliClient client{processes};
+    auto release = client.FindExisting("horocore/horo-engine", "v0.4.2");
+    REQUIRE(release.HasValue());
+    const std::string manifest{"verified manifest"};
+    const std::string envelope{"verified envelope"};
+    const ReleaseChannel channel{ReleaseChannelKind::Stable, {}};
+    const GitHubReleaseFinalMetadata expected{manifest.size(), Digest(manifest),
+                                              ReleaseManifestSignatureIdentity{envelope.size(), Digest(envelope)}};
+    processes.assets[std::string{ReleaseManifestFilename}] = manifest;
+    CHECK(client.CommitVerified(release.Value(), channel, expected).HasError());
+    CHECK(processes.commits == 0);
+
+    processes.assets[std::string{ReleaseManifestSignatureFilename}] = envelope + "!";
+    CHECK(client.CommitVerified(release.Value(), channel, expected).HasError());
+    processes.assets[std::string{ReleaseManifestSignatureFilename}] = std::string(envelope.size(), '!');
+    CHECK(client.CommitVerified(release.Value(), channel, expected).HasError());
+    processes.assets[std::string{ReleaseManifestSignatureFilename}] = envelope;
+    processes.assets[std::string{ReleaseManifestFilename}] = manifest + "!";
+    CHECK(client.CommitVerified(release.Value(), channel, expected).HasError());
+    CHECK(processes.commits == 0);
+
+    processes.assets[std::string{ReleaseManifestFilename}] = manifest;
+    REQUIRE(client.CommitVerified(release.Value(), channel, expected).HasValue());
+    CHECK(processes.commits == 1);
+    CHECK(processes.latestReleaseId == release.Value().releaseId);
+}
+
+TEST_CASE("GitHub CLI uploads a verified private copy of detached final metadata", "[release][github][signed-manifest]") {
+    TemporaryFile file;
+    FakeGitHubProcess processes;
+    processes.sourceToChangeDuringUpload = file.path;
+    GitHubReleaseCliClient client{processes};
+    auto release = client.FindExisting("horocore/horo-engine", "v0.4.2");
+    REQUIRE(release.HasValue());
+    const ReleaseArtifactRecord envelope{std::string{ReleaseManifestSignatureFilename}, ReleaseArtifactRole::Notice, 7U, Digest("payload")};
+    REQUIRE(client.UploadExact(release.Value(), ReleaseManifestSignatureFilename, file.path, envelope).HasValue());
+    CHECK(processes.assets.at(envelope.path) == "payload");
+
+    CHECK(client.UploadExact(release.Value(), ReleaseManifestSignatureFilename, file.path, envelope).HasError());
     CHECK(processes.uploads == 1);
 }

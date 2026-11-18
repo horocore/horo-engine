@@ -3519,7 +3519,9 @@ horo_register_catch_test(HoroReleasePublicationTests LABELS "release;publication
 add_executable(HoroGitHubReleasePublicationTests
         unit/application/GitHubReleasePublicationTests.cpp)
 target_compile_features(HoroGitHubReleasePublicationTests PRIVATE cxx_std_20)
-target_link_libraries(HoroGitHubReleasePublicationTests PRIVATE HoroEngine::ReleaseGitHub nlohmann_json::nlohmann_json)
+target_include_directories(HoroGitHubReleasePublicationTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(HoroGitHubReleasePublicationTests PRIVATE HoroEngine::ReleaseGitHub nlohmann_json::nlohmann_json
+    HoroReleaseManifestSignatureHostInternal HoroHostSignatureDocuments HoroEngine::Security MbedTLS::mbedcrypto)
 horo_register_catch_test(HoroGitHubReleasePublicationTests LABELS "release;github;headless")
 
 add_executable(HoroGitHubReleaseCliClientTests unit/application/GitHubReleaseCliClientTests.cpp)

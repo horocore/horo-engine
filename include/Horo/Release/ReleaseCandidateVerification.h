@@ -28,6 +28,12 @@ namespace Horo::Release {
         /** @brief Returns the checked directory. @return Borrowed immutable path. */
         [[nodiscard]] const std::filesystem::path &Root() const noexcept;
 
+        /** @brief Rechecks the exact authenticated tree bytes for publication using this final verification evidence.
+         * @param manifest Caller-selected canonical manifest bound to this candidate.
+         * @return Success only when every artifact and the exact verified metadata still match.
+         */
+        [[nodiscard]] Result<void> RevalidateTree(const ReleaseArtifactManifest &manifest) const;
+
     private:
         friend Result<VerifiedReleaseCandidate> VerifyReleaseCandidate(const std::filesystem::path &, const ReleaseArtifactManifest &,
                                                                        std::span<const ReleaseCandidateSmokeKind>,

@@ -30,7 +30,7 @@ namespace Horo::Release {
             request.manifest.Data().frozen != request.plan.Identities())
             return Result<ReleasePublicationReceipt>::Failure(MakeError(ReleaseErrors::PipelineInputChanged));
 
-        auto local = VerifyReleaseArtifactTree(request.verified.Root(), request.manifest);
+        auto local = request.verified.RevalidateTree(request.manifest);
         if (local.HasError())
             return Result<ReleasePublicationReceipt>::Failure(local.ErrorValue());
 
@@ -40,12 +40,12 @@ namespace Horo::Release {
         const auto &receipt = uploaded.Value();
         if (receipt.destination != *plan.publicationDestination || receipt.candidate != request.verified.Candidate() ||
             receipt.manifestDigest != request.verified.ManifestDigest() || receipt.artifactCount != request.manifest.Artifacts().size() ||
-            receipt.remoteIdentity.empty())
+            receipt.manifestSignature != request.verified.ManifestSignature() || receipt.remoteIdentity.empty())
             return Result<ReleasePublicationReceipt>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
 
         if (auto remote = adapter.VerifyRemote(request, receipt); remote.HasError())
             return Result<ReleasePublicationReceipt>::Failure(remote.ErrorValue());
-        local = VerifyReleaseArtifactTree(request.verified.Root(), request.manifest);
+        local = request.verified.RevalidateTree(request.manifest);
         if (local.HasError())
             return Result<ReleasePublicationReceipt>::Failure(local.ErrorValue());
 

@@ -34,6 +34,10 @@ namespace Horo::Release {
         [[nodiscard]] Result<void> Commit(const GitHubReleaseIdentity &release, const ReleaseChannel &channel,
                                           const Sha256Digest &manifestDigest) override;
 
+        /** @copydoc IGitHubReleaseClient::CommitVerified */
+        [[nodiscard]] Result<void> CommitVerified(const GitHubReleaseIdentity &release, const ReleaseChannel &channel,
+                                                  const GitHubReleaseFinalMetadata &expected) override;
+
     private:
         IExternalProcessRunner &processes_;
         CancellationToken cancellation_;
@@ -42,5 +46,7 @@ namespace Horo::Release {
         [[nodiscard]] Result<std::string> ResolveSourceCommit(std::string_view repository, std::string_view tag) const;
         [[nodiscard]] Result<std::uint64_t> AssetId(const GitHubReleaseIdentity &release, std::string_view name) const;
         [[nodiscard]] Result<void> ConfirmIdentity(const GitHubReleaseIdentity &release);
+        /** @brief Changes the authorized release to latest and verifies that exact remote ID. */
+        [[nodiscard]] Result<void> CommitLatest(const GitHubReleaseIdentity &release);
     };
 }  // namespace Horo::Release

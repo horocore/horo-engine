@@ -1,11 +1,15 @@
 #include "Horo/Release/GitHubReleasePublication.h"
+#include "HostReleaseManifestSignatureVerifier.h"
+#include "HostSignatureDocument.h"
 #include "ReleaseTestFixtures.h"
+#include "support/OpenXRProductSigningTestSupport.h"
 
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <map>
 #include <span>
+#include <utility>
 
 using namespace Horo;
 using namespace Horo::Release;
@@ -104,7 +108,12 @@ namespace {
                                                                    const std::string_view name) override {
             if (release.releaseId != releaseId || !assets.contains(std::string{name}))
                 return Result<GitHubReleaseAssetEvidence>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
-            return Result<GitHubReleaseAssetEvidence>::Success(assets.at(std::string{name}));
+            auto observed = assets.at(std::string{name});
+            if (name == ReleaseManifestSignatureFilename && !changeLocalOnSignatureRead.empty())
+                WriteFile(changeLocalOnSignatureRead, "changed after upload");
+            if (name == ReleaseManifestSignatureFilename && corruptRemoteSignature)
+                observed.digest = Digest("remote corruption");
+            return Result<GitHubReleaseAssetEvidence>::Success(std::move(observed));
         }
 
         [[nodiscard]] Result<void> Commit(const GitHubReleaseIdentity &release, const ReleaseChannel &, const Sha256Digest &) override {
@@ -114,7 +123,21 @@ namespace {
             return Result<void>::Success();
         }
 
+        Result<void> CommitVerified(const GitHubReleaseIdentity &release, const ReleaseChannel &channel,
+                                    const GitHubReleaseFinalMetadata &expected) override {
+            if (!expected.manifestSignature || legacyCommit)
+                return IGitHubReleaseClient::CommitVerified(release, channel, expected);
+            const auto metadata = ReadAsset(release, ReleaseManifestFilename);
+            const auto envelope = ReadAsset(release, ReleaseManifestSignatureFilename);
+            if (metadata.HasError() || envelope.HasError() || metadata.Value().size != expected.manifestSize ||
+                metadata.Value().digest != expected.manifestDigest || envelope.Value().size != expected.manifestSignature->size ||
+                envelope.Value().digest != expected.manifestSignature->digest)
+                return Result<void>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
+            return Commit(release, channel, expected.manifestDigest);
+        }
+
         std::map<std::string, GitHubReleaseAssetEvidence> assets;
+        std::filesystem::path changeLocalOnSignatureRead;
         std::uint64_t releaseId{72U};
         int lookups{};
         int uploads{};
@@ -123,6 +146,8 @@ namespace {
         bool wrongTag{};
         bool wrongSource{};
         bool wrongBody{};
+        bool corruptRemoteSignature{};
+        bool legacyCommit{};
     };
 }  // namespace
 
@@ -204,4 +229,78 @@ TEST_CASE("GitHub adapter rejects missing, changed, or corrupted remote release 
     CHECK(adapter.VerifyRemote(request, receipt.Value()).HasError());
     CHECK(adapter.CommitChannel(request, receipt.Value()).HasError());
     CHECK(client.commits == 0);
+}
+
+TEST_CASE("GitHub publishes exact verified detached release metadata alongside the manifest", "[release][github][signed-manifest]") {
+    TemporaryCandidate directory;
+    const auto plan = PublicationPlan();
+    const auto manifest = Manifest(plan);
+    const auto &canonical = manifest.CanonicalJson();
+    const auto signaturePath = directory.root / ReleaseManifestSignatureFilename;
+    WriteFile(directory.root / "bin/editor", "editor");
+    WriteFile(directory.root / ReleaseManifestFilename, canonical);
+    Tests::OpenXRProduct::SigningKey signer;
+    auto roots = std::make_shared<Security::TrustedRootStore>();
+    REQUIRE(roots->Add(signer.root).HasValue());
+    const Security::ArtifactVerifier verifier{Security::CreateMbedTlsSignatureProvider(), roots};
+    const Application::Internal::HostReleaseManifestSignatureVerifier host{verifier};
+    const auto detached = Application::Internal::EncodeDetachedSignatureDocument(signer.Sign(std::as_bytes(std::span{canonical})));
+    WriteFile(signaturePath, detached);
+
+    ArchiveProbe probe;
+    IReleaseCandidateSmokeProbe *probes[]{&probe};
+    const ReleaseCandidateSmokeKind required[]{ReleaseCandidateSmokeKind::ArchiveReadable};
+    const auto verified = VerifyReleaseCandidate(directory.root, manifest, required, nullptr, probes, &host);
+    REQUIRE(verified.HasValue());
+    REQUIRE(verified.Value().ManifestSignature());
+    const ReleasePublicationRequest request{plan, verified.Value(), manifest, {ReleaseChannelKind::Stable, {}}};
+    FakeGitHubClient client;
+    GitHubReleasePublicationAdapter adapter{"horocore/horo-engine", client};
+
+    SECTION("Complete remote metadata is checked and exact retry remains idempotent") {
+        const auto published = PublishVerifiedReleaseCandidate(request, adapter);
+        REQUIRE(published.HasValue());
+        CHECK(published.Value().manifestSignature == verified.Value().ManifestSignature());
+        CHECK(published.Value().artifactCount == 1);
+        CHECK(client.assets.size() == 3);
+        const auto &envelope = client.assets.at(std::string{ReleaseManifestSignatureFilename});
+        CHECK(envelope.size == detached.size());
+        CHECK(envelope.digest == Digest(detached));
+        CHECK(PublishVerifiedReleaseCandidate(request, adapter).HasValue());
+        CHECK(client.assets.size() == 3);
+        CHECK(client.commits == 2);
+    }
+    SECTION("Local changes prevent even the first remote lookup") {
+        auto changed = detached;
+        changed.front() = '!';
+        WriteFile(signaturePath, changed);
+        CHECK(PublishVerifiedReleaseCandidate(request, adapter).HasError());
+        CHECK(client.lookups == 0);
+        CHECK(client.uploads == 0);
+    }
+    SECTION("Local changes detected after upload block the channel commit") {
+        client.changeLocalOnSignatureRead = signaturePath;
+        CHECK(PublishVerifiedReleaseCandidate(request, adapter).HasError());
+        CHECK(client.uploads == 3);
+        CHECK(client.commits == 0);
+    }
+    SECTION("Remote envelope corruption blocks the channel commit") {
+        client.corruptRemoteSignature = true;
+        CHECK(PublishVerifiedReleaseCandidate(request, adapter).HasError());
+        CHECK(client.uploads == 3);
+        CHECK(client.commits == 0);
+    }
+    SECTION("A legacy manifest-only transport cannot finalize an authenticated detached candidate") {
+        client.legacyCommit = true;
+        CHECK(PublishVerifiedReleaseCandidate(request, adapter).HasError());
+        CHECK(client.commits == 0);
+    }
+    SECTION("A receipt without the frozen envelope identity cannot verify or finalize") {
+        auto receipt = adapter.Upload(request);
+        REQUIRE(receipt.HasValue());
+        receipt.Value().manifestSignature.reset();
+        CHECK(adapter.VerifyRemote(request, receipt.Value()).HasError());
+        CHECK(adapter.CommitChannel(request, receipt.Value()).HasError());
+        CHECK(client.commits == 0);
+    }
 }

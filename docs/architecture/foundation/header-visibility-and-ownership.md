@@ -421,11 +421,13 @@ public-header consumers verify ownership and transitive dependencies.
 `HoroEngine::ReleaseGitHub` owns the provider-neutral release publication
 adapter's GitHub identity contract. `HoroEngine::ReleaseGitHubCli` owns the
 additive `GitHubReleaseCliClient.h` host adapter and depends on ReleaseGitHub
-and Platform for bounded, shell-free GitHub CLI invocation. Existing release
-application callers have no signature migration. Hosts that opt into this
-destination compose the CLI client with their process runner and authenticated
-`gh` environment; the generated standalone public-header consumer verifies its
-transitive dependency boundary.
+and Platform for bounded, shell-free GitHub CLI invocation. Existing
+manifest-only callers keep their commit interface. A client publishing
+detached final metadata implements `CommitVerified` and verifies both
+finalized metadata identities before channel promotion. Hosts compose the
+CLI client with their process runner and authenticated `gh` environment.
+The generated standalone public-header consumer verifies its transitive
+dependency boundary.
 
 ## MCP-001.2 Session Boundary
 

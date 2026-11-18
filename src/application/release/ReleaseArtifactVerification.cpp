@@ -1,4 +1,4 @@
-#include "Horo/Release/ReleaseArtifactManifest.h"
+#include "Horo/Release/ReleaseCandidateVerification.h"
 #include "Horo/Release/ReleaseErrors.h"
 
 #include <algorithm>
@@ -170,6 +170,14 @@ namespace Horo::Release {
         if (auto tree = VerifyTree(root, manifest.Artifacts(), std::string_view{json}, &signature); tree.HasError())
             return Outcome::Failure(tree.ErrorValue());
         return Outcome::Success(signature);
+    }
+
+    /** @copydoc VerifiedReleaseCandidate::RevalidateTree */
+    Result<void> VerifiedReleaseCandidate::RevalidateTree(const ReleaseArtifactManifest &manifest) const {
+        if (manifest.Digest() != manifestDigest_ || manifest.Data().candidate != candidate_)
+            return Result<void>::Failure(MakeError(ReleaseErrors::PipelineInputChanged));
+        return VerifyTree(root_, manifest.Artifacts(), std::string_view{manifest.CanonicalJson()},
+                          manifestSignature_ ? &*manifestSignature_ : nullptr);
     }
 
     /** @copydoc VerifyReleaseStagedTree */
