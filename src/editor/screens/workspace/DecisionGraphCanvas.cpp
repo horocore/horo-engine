@@ -214,8 +214,8 @@ namespace Horo::Editor {
             }
         }
 
-        /** @brief Offers one complete link gesture to the common typed document owner. */
-        void ReadTopologyIntent(const GraphViewSnapshot &graph, DecisionCanvasInteraction &out) {
+        /** @brief Offers complete topology intents and refuses links that began on a different revision. */
+        void ReadTopologyIntent(const GraphViewSnapshot &graph, bool currentPointerGesture, DecisionCanvasInteraction &out) {
             if (!graph.editable || graph.family != AI::DecisionPlanKind::StateMachine)
                 return;
             const DecisionGraphDocumentFence fence{graph.instance, graph.revision};
@@ -226,8 +226,9 @@ namespace Horo::Editor {
                     const auto from = SnapshotIndex(first, graph.pins.size());
                     const auto to = SnapshotIndex(second, graph.pins.size());
                     const auto request =
-                        from && to ? ResolveDecisionCanvasEdit(graph, {fence, GraphConnectIntent{graph.pins[*from], graph.pins[*to]}})
-                                   : std::nullopt;
+                        currentPointerGesture && from && to
+                            ? ResolveDecisionCanvasEdit(graph, {fence, GraphConnectIntent{graph.pins[*from], graph.pins[*to]}})
+                            : std::nullopt;
                     if (!request)
                         Widget::RejectNewItem();
                     else if (Widget::AcceptNewItem())
@@ -270,6 +271,8 @@ namespace Horo::Editor {
             float scale{};
             std::unique_ptr<Widget::EditorContext, CanvasContextDeleter> context;
             std::optional<std::size_t> revealing;
+            std::optional<std::uint64_t>
+                pointerRevision; /**< Document revision at the start of the vendor's current left-button gesture. */
         };
 
         std::optional<Focus> pendingFocus;
@@ -323,6 +326,10 @@ namespace Horo::Editor {
             return out;
 
         const auto &graph = session.snapshot;
+        const bool focusLost = ImGui::GetIO().AppFocusLost;
+        if (focusLost)
+            session.pointerRevision.reset();
+        const bool currentPointerGesture = session.pointerRevision == graph.revision;
         ScopedCanvasContext current(session.context.get());
         const auto available = ImGui::GetContentRegionAvail();
         const auto &fonts = context.theme.fonts;
@@ -360,7 +367,7 @@ namespace Horo::Editor {
                          secondary ? Theme::Muted() : Theme::Accent(), scale * (secondary ? 1.0F : 2.0F));
         }
         ReadSelection(graph, out);
-        ReadTopologyIntent(graph, out);
+        ReadTopologyIntent(graph, currentPointerGesture, out);
         if (fit || rebuildCanvas) {
             session.revealing.reset();
             Widget::NavigateToContent(0.0F);
@@ -386,12 +393,15 @@ namespace Horo::Editor {
             session.revealing.reset();
         }
         auto moved = ReadCompletedDrag(session.positions, scale);
-        if (!out.edit && !out.layout && document.layoutWritable && !moved.empty() && !ImGui::GetIO().AppFocusLost &&
+        if (currentPointerGesture && !out.edit && !out.layout && document.layoutWritable && !moved.empty() &&
             !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
             out.layout = DecisionGraphLayoutRequest{{document.identity.instance, document.revision},
                                                     DecisionLayoutOperation::Move,
                                                     std::move(moved)};
         Widget::PopStyleColor(5);
+        // The vendor can finish the preceding link on the frame after release.
+        if (!focusLost && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            session.pointerRevision = graph.revision;
         return out;
     }
 }  // namespace Horo::Editor

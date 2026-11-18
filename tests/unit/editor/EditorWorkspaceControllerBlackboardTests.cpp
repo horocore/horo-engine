@@ -12,10 +12,12 @@
 #include "ProjectReplicationTestSupport.h"
 #include "editor/screens/workspace/AiAssetPresentation.h"
 #include "editor/screens/workspace/BlackboardScalarInput.h"
+#include "editor/screens/workspace/DecisionGraphCanvas.h"
 #include "editor/screens/workspace/DecisionGraphCanvasModel.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/WorkspacePathText.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
+#include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 
 #include <algorithm>
 #include <array>
@@ -645,6 +647,116 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
         CHECK(transition(documents.front(), other).priority == 0);
     }
 
+    SECTION("a native canvas drag goes through workspace history and is fenced at mouse-down") {
+        controller.ProcessCommand(*command);
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        const auto &documents = controller.ViewModel().decisionGraphDocuments;
+        REQUIRE(documents.size() == 1);
+        const auto &view = documents.front();
+        REQUIRE(view.layoutWritable);
+        const auto graph = view.graph;
+        const auto instance = view.identity.instance;
+        const auto state = std::get<AI::StateMachineAssetDescriptor>(graph->body).initial;
+
+        Horo::Editor::Tests::EditorGuiContextFixture gui{{1000, 740}};
+        ImGui::GetIO().IniFilename = nullptr;
+        ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
+        Theme::ApplyCurrentTheme();
+        DecisionGraphCanvas canvas;
+        ImVec2 center;
+        const auto draw = [&] {
+            gui.imgui.BeginFrame();
+            ImGui::SetNextWindowPos({0, 0});
+            ImGui::SetNextWindowSize({920, 650});
+            ImGui::Begin("Decision drag", nullptr, ImGuiWindowFlags_NoSavedSettings);
+            const auto gesture = canvas.Draw(view, gui.context, controller.ViewModel().decisionProviderMetadata);
+            const auto low = ImGui::GetItemRectMin();
+            const auto high = ImGui::GetItemRectMax();
+            center = {(low.x + high.x) * 0.5F, (low.y + high.y) * 0.5F};
+            ImGui::End();
+            gui.imgui.EndFrame();
+            return gesture;
+        };
+        for (int frame = 0; frame < 2; ++frame)
+            CHECK_FALSE(draw().layout);
+        canvas.RequestFocus({instance, view.revision}, state);
+        std::optional<AI::DecisionNodeId> revealed;
+        for (int frame = 0; frame < 5; ++frame) {
+            const auto event = draw();
+            if (event.revealed)
+                revealed = event.revealed;
+            CHECK_FALSE(event.layout);
+        }
+        REQUIRE(revealed == state);
+
+        auto &input = ImGui::GetIO();
+        const auto start = center;
+        input.AddMousePosEvent(start.x, start.y);
+        CHECK_FALSE(draw().layout);
+        const auto pressed = view.revision;
+        input.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        CHECK_FALSE(draw().layout);
+        for (const auto delta : {ImVec2{22, 16}, ImVec2{52, 35}}) {
+            input.AddMousePosEvent(start.x + delta.x, start.y + delta.y);
+            CHECK_FALSE(draw().layout);
+        }
+        CHECK(view.revision == pressed);
+        CHECK_FALSE(view.dirty);
+
+        const auto release = [&] {
+            input.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            return draw();
+        };
+        const auto apply = [&](const DecisionGraphLayoutRequest &layout) {
+            controller.ProcessCommand({.command = EditorWorkspaceViewCommand::EditDecisionLayout, .decisionLayoutEdit = layout});
+            REQUIRE_FALSE(view.diagnostic);
+        };
+        SECTION("a release emits one Move accepted by normal undo and redo") {
+            const auto event = release();
+            REQUIRE(event.layout);
+            CHECK(event.layout->fence.instance == instance);
+            CHECK(event.layout->fence.revision == pressed);
+            CHECK(event.layout->operation == DecisionLayoutOperation::Move);
+            REQUIRE(event.layout->placements.size() == 1);
+            CHECK(event.layout->placements.front().node == state);
+            apply(*event.layout);
+            CHECK(view.revision == pressed + 1);
+            CHECK(view.graph == graph);
+            REQUIRE(view.layout->size() == 1);
+            CHECK(view.layout->front() == event.layout->placements.front());
+            CHECK(view.dirty);
+            CHECK(view.canUndo);
+            CHECK_FALSE(draw().layout);
+            const auto moved = view.layout;
+            controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Undo));
+            REQUIRE_FALSE(view.diagnostic);
+            CHECK(view.layout->empty());
+            CHECK_FALSE(view.dirty);
+            controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Redo));
+            REQUIRE_FALSE(view.diagnostic);
+            CHECK(view.layout == moved);
+            CHECK(view.dirty);
+        }
+        SECTION("publishing a different layout while held makes the old release stale") {
+            const DecisionNodePlacement external{state, 245, 102};
+            apply({{instance, pressed}, DecisionLayoutOperation::Move, {external}});
+            REQUIRE(view.revision == pressed + 1);
+            input.AddMousePosEvent(start.x + 76, start.y + 49);
+            CHECK_FALSE(draw().layout);
+            input.AddMousePosEvent(start.x + 103, start.y + 53);
+            CHECK_FALSE(draw().layout);
+            CHECK_FALSE(release().layout);
+            CHECK_FALSE(draw().layout);
+            CHECK(view.revision == pressed + 1);
+            REQUIRE(view.layout->size() == 1);
+            CHECK(view.layout->front() == external);
+            controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Undo));
+            REQUIRE_FALSE(view.diagnostic);
+            CHECK(view.layout->empty());
+            CHECK_FALSE(view.canUndo);
+        }
+    }
+
     SECTION("canvas layout shares document history and saves separately across paired rename") {
         controller.ProcessCommand(*command);
         REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
@@ -938,11 +1050,11 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
 TEST_CASE("Behavior Tree and Utility New use the current registered native task and selected saved schema",
           "[unit][editor][decision][workspace]") {
     BlackboardWorkspaceFixture project;
-    Tests::WriteReplicationProject(project.root);
+    Horo::Tests::WriteReplicationProject(project.root);
     project.Write("Score source", AI::BlackboardKeyPresence::Optional, AI::BlackboardValueKind::Scalar);
-    const auto manifest = Tests::WriteGameplayModuleManifest(project.root, HORO_TEST_AI_MODULE_PATH, "game.ai.tests",
-                                                             Gameplay::CurrentGameplayBuildFingerprint(),
-                                                             Tests::ReadDescriptorRevision(HORO_TEST_AI_MODULE_REVISION_PATH));
+    const auto manifest = Horo::Tests::WriteGameplayModuleManifest(project.root, HORO_TEST_AI_MODULE_PATH, "game.ai.tests",
+                                                                   Gameplay::CurrentGameplayBuildFingerprint(),
+                                                                   Horo::Tests::ReadDescriptorRevision(HORO_TEST_AI_MODULE_REVISION_PATH));
     REQUIRE(std::filesystem::is_regular_file(manifest));
     EditorWorkspaceController controller(project.root, project.runtime, project.registry.Snapshot(),
                                          {.assets = {.mutableAssetRegistry = &project.registry},
@@ -1622,10 +1734,11 @@ TEST_CASE("Decision assets open canonical family tabs even with unavailable task
     bool installed{};
     SECTION("Missing native authoring catalog is distinct from a missing declaration") {}
     SECTION("The installed catalog distinguishes a compatible task, wrong version, and missing declaration") {
-        Tests::WriteReplicationProject(project.root);
-        const auto manifest = Tests::WriteGameplayModuleManifest(project.root, HORO_TEST_AI_MODULE_PATH, "game.ai.tests",
-                                                                 Gameplay::CurrentGameplayBuildFingerprint(),
-                                                                 Tests::ReadDescriptorRevision(HORO_TEST_AI_MODULE_REVISION_PATH));
+        Horo::Tests::WriteReplicationProject(project.root);
+        const auto manifest =
+            Horo::Tests::WriteGameplayModuleManifest(project.root, HORO_TEST_AI_MODULE_PATH, "game.ai.tests",
+                                                     Gameplay::CurrentGameplayBuildFingerprint(),
+                                                     Horo::Tests::ReadDescriptorRevision(HORO_TEST_AI_MODULE_REVISION_PATH));
         REQUIRE(std::filesystem::is_regular_file(manifest));
         installed = true;
     }
@@ -1831,10 +1944,10 @@ TEST_CASE("Blackboard workspace publishes a Project usage review only for an unc
 TEST_CASE("Blackboard workspace reviews the loaded native Decision catalog and rejects its retired stamp",
           "[unit][editor][blackboard][workspace]") {
     BlackboardWorkspaceFixture project;
-    Tests::WriteReplicationProject(project.root);
-    const auto manifest = Tests::WriteGameplayModuleManifest(project.root, HORO_TEST_AI_MODULE_PATH, "game.ai.tests",
-                                                             Gameplay::CurrentGameplayBuildFingerprint(),
-                                                             Tests::ReadDescriptorRevision(HORO_TEST_AI_MODULE_REVISION_PATH));
+    Horo::Tests::WriteReplicationProject(project.root);
+    const auto manifest = Horo::Tests::WriteGameplayModuleManifest(project.root, HORO_TEST_AI_MODULE_PATH, "game.ai.tests",
+                                                                   Gameplay::CurrentGameplayBuildFingerprint(),
+                                                                   Horo::Tests::ReadDescriptorRevision(HORO_TEST_AI_MODULE_REVISION_PATH));
     auto graph = AI::DecisionGraphTestSupport::TaskTree(2, 101);
     graph.blackboard = project.schema;
     const auto encoded = AI::DecisionPlanCodec::EncodeSource(std::span{&graph, 1}, graph.asset);
@@ -1868,7 +1981,7 @@ TEST_CASE("Blackboard workspace reviews the loaded native Decision catalog and r
     bool replaced = false;
     SECTION("the declared node resolves through the real manifest-selected catalog") {}
     SECTION("replacement of the same manifest image still revokes older review output") {
-        Tests::AdvanceLastWriteTime(manifest);
+        Horo::Tests::AdvanceLastWriteTime(manifest);
         controller.UpdateGameplaySources(1.0F);
         replaced = true;
     }
