@@ -16,6 +16,8 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #ifdef _WIN32
@@ -27,6 +29,7 @@
 #endif
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
 
 namespace {
