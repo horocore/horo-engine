@@ -223,24 +223,10 @@ retirement is ready, or through the equivalent explicit shutdown path.
 
 ### 5. Multiple outputs and non-window targets
 
-One primary native output is the current implementation scope; an offscreen
-viewport texture is not a second native surface. The future multi-surface
-contract in RND-008.8 must address every surface explicitly, isolate acquisition,
-generation, extent, configuration, and failure, and bound resources per surface.
-An unavailable secondary output does not stall unrelated ready outputs unless
-the host explicitly selected a grouped-present policy. Grouped atomic display
-presentation is not guaranteed by this baseline.
-
-A **backend-global frame token** is the `FrameToken` returned by
-`IRenderBackend::BeginFrame` in
-[Rendering Architecture](../architecture/runtime/rendering-architecture.md#backend-interface):
-one outstanding acquired frame per backend instance, owned by
-`RenderFrameScope` until present or abort. It is not a per-window identity and
-cannot silently be reused as a multi-window token. RND-008.8 must migrate that
-contract before exposing multi-window presentation; the existing API does not
-already implement this ADR's full target model.
-Similarly, D3D12's future pre-window metadata must describe its DXGI attachment
-requirements; it cannot masquerade as OpenGL or Vulkan to fit existing tags.
+Current desktop hosts admit one primary surface. The
+[desktop multi-surface contract](../architecture/runtime/rendering-architecture.md#multiple-presentation-surfaces)
+defines the decision and migration for RND-008.8, including per-window
+ownership, shared-device quotas, scoped frame admission and failure isolation.
 
 Headless/Null hosts have no native display/surface authority and preserve the
 runtime phases with omitted presentation capability. Offscreen rendering uses
