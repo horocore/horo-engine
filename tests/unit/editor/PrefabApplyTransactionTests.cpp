@@ -17,6 +17,7 @@ namespace Horo::Editor {
             bool failScene{};
             bool failAfterSceneRename{};
             bool failRollback{};
+            std::size_t failReplacement{};
 
             Result<void> WritePrivateDurable(const std::filesystem::path &path, const std::span<const std::byte> bytes, bool &created,
                                              const std::filesystem::perms mode) override {
@@ -26,7 +27,7 @@ namespace Horo::Editor {
             Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
                                               AtomicFileReplacementReceipt &receipt) override {
                 ++replacements;
-                if ((failScene && replacements == 2) || (failRollback && replacements == 3))
+                if ((failScene && replacements == 2) || (failRollback && replacements == 3) || replacements == failReplacement)
                     return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed));
                 auto replaced = native.AtomicReplaceTracked(prepared, destination, receipt);
                 if (replaced.HasValue() && failAfterSceneRename && replacements == 2)
@@ -518,6 +519,114 @@ namespace Horo::Editor {
                 CHECK_FALSE(outcome.recovery[0]);
                 CHECK(diskSource.identity == fixture.sourceBefore.identity);
             }
+        }
+
+        TEST_CASE("Prefab apply compensation survives restart and reconciles only the exact pair", "[editor][prefab][apply][native]") {
+            ApplyFixture fixture;
+            fixture.files.failScene = true;
+            fixture.files.failRollback = true;
+            const auto outcome = fixture.Execute();
+            REQUIRE_FALSE(outcome.committed);
+            REQUIRE(outcome.recovery[0]);
+            REQUIRE_FALSE(outcome.recoveryPersistenceError);
+            const auto &root = fixture.source.project.directory.path;
+            const auto &sourcePath = fixture.source.project.source;
+            const auto installed = fixture.Read(sourcePath);
+            REQUIRE(installed.identity != fixture.sourceBefore.identity);
+            const auto inspected = PrefabApplyTransaction::InspectPendingRecovery(root);
+            REQUIRE(inspected.HasValue());
+            REQUIRE(inspected.Value());
+            CHECK(fixture.Read(sourcePath).identity == installed.identity);
+            CHECK(fixture.Read(fixture.scenePath).identity == fixture.sceneBefore.identity);
+
+            NativeDurableFileSystem restartedFiles;
+            const ProjectMutationCoordinator restartedMutations{restartedFiles};
+            const auto restore = [&](const Assets::AssetSourceIdentity &identity) {
+                return PrefabApplyTransaction::RestorePendingRecovery(root, identity, restartedMutations, restartedFiles);
+            };
+            const auto expected = *inspected.Value();
+            SECTION("unresolved paired apply is fenced and a confirmed restore removes the record") {
+                const auto attempt = fixture.Execute();
+                REQUIRE(attempt.error);
+                CHECK(attempt.error->code.Value() == Assets::AssetSourceErrors::DurabilityUnconfirmed.code.Value());
+                REQUIRE(restore(expected).HasValue());
+                CHECK(fixture.Read(sourcePath).bytes == fixture.sourceBefore.bytes);
+                CHECK(fixture.Read(fixture.scenePath).bytes == fixture.sceneBefore.bytes);
+                const auto cleared = PrefabApplyTransaction::InspectPendingRecovery(root);
+                REQUIRE(cleared.HasValue());
+                CHECK_FALSE(cleared.Value());
+            }
+            SECTION("an external Scene edit prevents even the otherwise owned Prefab rollback") {
+                std::ofstream(fixture.scenePath, std::ios::binary | std::ios::app) << '\n';
+                const auto external = fixture.Read(fixture.scenePath);
+                const auto recovered = restore(expected);
+                REQUIRE(recovered.HasError());
+                CHECK(recovered.ErrorValue().code.Value() == Assets::AssetSourceErrors::Conflict.code.Value());
+                CHECK(fixture.Read(fixture.scenePath).identity == external.identity);
+                CHECK(fixture.Read(sourcePath).identity == installed.identity);
+                const auto pending = PrefabApplyTransaction::InspectPendingRecovery(root);
+                REQUIRE(pending.HasValue());
+                CHECK(pending.Value() == expected);
+            }
+            SECTION("old or corrupted capsule identity cannot authorize a retry") {
+                auto stale = expected;
+                ++stale.bytes;
+                REQUIRE(restore(stale).HasError());
+                auto record = root / ".horo/local/recovery/prefab-apply-pending.bin";
+                std::ofstream(record, std::ios::binary | std::ios::app) << '\n';
+                CHECK(PrefabApplyTransaction::InspectPendingRecovery(root).HasError());
+                REQUIRE(restore(expected).HasError());
+                CHECK(fixture.Read(sourcePath).identity == installed.identity);
+                CHECK(fixture.Read(fixture.scenePath).identity == fixture.sceneBefore.identity);
+            }
+            SECTION("already restored exact bytes can finish a prior retry") {
+                std::ofstream output(sourcePath, std::ios::binary | std::ios::trunc);
+                output.write(reinterpret_cast<const char *>(fixture.sourceBefore.bytes.data()),
+                             static_cast<std::streamsize>(fixture.sourceBefore.bytes.size()));
+                output.close();
+                REQUIRE(restore(expected).HasValue());
+                CHECK(fixture.Read(sourcePath).bytes == fixture.sourceBefore.bytes);
+                const auto cleared = PrefabApplyTransaction::InspectPendingRecovery(root);
+                REQUIRE(cleared.HasValue());
+                CHECK_FALSE(cleared.Value());
+            }
+        }
+
+        TEST_CASE("Prefab apply keeps its recovery record after an interrupted two-source retry", "[editor][prefab][apply][native]") {
+            ApplyFixture fixture;
+            fixture.files.failAfterSceneRename = true;
+            fixture.files.failRollback = true;
+            fixture.files.failReplacement = 4;
+            const auto outcome = fixture.Execute();
+            REQUIRE_FALSE(outcome.committed);
+            REQUIRE(outcome.recovery[0]);
+            REQUIRE(outcome.recovery[1]);
+            REQUIRE_FALSE(outcome.recoveryPersistenceError);
+            const auto &root = fixture.source.project.directory.path;
+            auto inspected = PrefabApplyTransaction::InspectPendingRecovery(root);
+            REQUIRE(inspected.HasValue());
+            REQUIRE(inspected.Value());
+            const auto expected = *inspected.Value();
+
+            ApplyFiles firstRetry;
+            firstRetry.failReplacement = 2;
+            const ProjectMutationCoordinator firstMutations{firstRetry};
+            const auto failed = PrefabApplyTransaction::RestorePendingRecovery(root, expected, firstMutations, firstRetry);
+            REQUIRE(failed.HasError());
+            CHECK(fixture.Read(fixture.scenePath).identity == fixture.sceneBefore.identity);
+            CHECK(fixture.Read(fixture.source.project.source).identity == outcome.recovery[0]->installed);
+            inspected = PrefabApplyTransaction::InspectPendingRecovery(root);
+            REQUIRE(inspected.HasValue());
+            REQUIRE(inspected.Value() == expected);
+
+            NativeDurableFileSystem restartedFiles;
+            const ProjectMutationCoordinator restartedMutations{restartedFiles};
+            REQUIRE(PrefabApplyTransaction::RestorePendingRecovery(root, expected, restartedMutations, restartedFiles).HasValue());
+            CHECK(fixture.Read(fixture.scenePath).bytes == fixture.sceneBefore.bytes);
+            CHECK(fixture.Read(fixture.source.project.source).bytes == fixture.sourceBefore.bytes);
+            const auto cleared = PrefabApplyTransaction::InspectPendingRecovery(root);
+            REQUIRE(cleared.HasValue());
+            CHECK_FALSE(cleared.Value());
         }
     }  // namespace
 }  // namespace Horo::Editor

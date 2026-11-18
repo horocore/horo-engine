@@ -639,6 +639,7 @@ namespace Horo::Editor {
         std::uint64_t m_prefabPublication{};
         std::uint64_t m_prefabObservedDocumentEpoch{};
         std::optional<PrefabHierarchySources> m_prefabSources;
+        bool m_prefabApplyRecoveryPendingOnDisk{};
         std::array<std::optional<PrefabApplyRecovery>, 2> m_prefabApplyRecovery;
         std::optional<Prefab::PrefabValueSchemaSnapshot> m_navigationPrefabSchemas;
         /** @brief Explicitly compose inert built-in navigation topology metadata once for source and edit resolution. */

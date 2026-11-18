@@ -283,7 +283,7 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::RefreshPrefabHierarchy */
     void EditorWorkspaceController::RefreshPrefabHierarchy(const SceneDocumentSnapshot &document) {
         m_viewModel.prefabApplyAvailable = m_defaultScenePath && m_sceneFingerprint && m_sceneFingerprint->exists && m_mutations &&
-                                           m_durableFiles && m_collisionSceneOwner.IsValid() &&
+                                           m_durableFiles && m_collisionSceneOwner.IsValid() && !m_prefabApplyRecoveryPendingOnDisk &&
                                            std::ranges::none_of(m_prefabApplyRecovery, [](const auto &item) {
             return item.has_value();
         });
@@ -509,6 +509,11 @@ namespace Horo::Editor {
                 return item.has_value();
             })) {
                 m_prefabApplyRecovery = std::move(outcome.recovery);
+                if (outcome.recoveryPersistenceError)
+                    LOG_ERROR("editor.prefab", "Paired Prefab recovery could not be persisted: %s",
+                              outcome.recoveryPersistenceError->message.c_str());
+                else
+                    m_prefabApplyRecoveryPendingOnDisk = true;
                 m_viewModel.prefabApplyAvailable = false;
                 m_viewModel.sceneExternalConflict = true;
                 return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed));

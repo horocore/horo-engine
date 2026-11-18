@@ -26,6 +26,7 @@ namespace Horo::Editor {
         std::string sceneChecksum;
         std::optional<Error> error;
         std::array<std::optional<PrefabApplyRecovery>, 2> recovery;
+        std::optional<Error> recoveryPersistenceError;
     };
 
     /** @brief Exact matching owner and disk evidence for one paired undo or redo. */
@@ -61,6 +62,17 @@ namespace Horo::Editor {
                                                         std::shared_ptr<const Prefab::PrefabValueSchemaSnapshot> schemas,
                                                         const Prefab::PrefabLimitProfile &limits,
                                                         const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
+        /** @brief Inspects the exact durable compensation capsule without changing either source. */
+        [[nodiscard]] static Result<std::optional<Assets::AssetSourceIdentity>> InspectPendingRecovery(const std::filesystem::path &root);
+        /** @brief Explicitly retries pending compensation against the inspected capsule in a fresh project session.
+         * @param root Canonical project root. @param expected Exact inspected capsule identity.
+         * @param mutations Shared writer authority. @param files Durable native source owner.
+         * @return Success after both originals are durable, or a typed failure preserving the capsule and foreign edits.
+         */
+        [[nodiscard]] static Result<void> RestorePendingRecovery(const std::filesystem::path &root,
+                                                                 const Assets::AssetSourceIdentity &expected,
+                                                                 const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
+
         /** @brief Returns the next exact coordinated Prefab group from Scene history, if one is at its head. */
         [[nodiscard]] static Result<std::optional<PrefabApplyHistoryGroup>> NextSceneGroup(const SceneDocumentTransactions &scene,
                                                                                            const SceneTransactionContext &context,
