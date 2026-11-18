@@ -253,9 +253,11 @@ TEST_CASE("Native reconstruction constants follow the exact reset and exposure e
     const auto firstConstants =
         PrepareNativeReconstructionDispatch(request, capabilities, tuning, NativeReconstructionHistory{store, first.Value()});
     REQUIRE(firstConstants.HasValue());
-    CHECK((firstConstants.Value().extents == std::array<std::uint32_t, 4>{1280, 720, 1920, 1080}));
-    CHECK((firstConstants.Value().Groups() == FramebufferExtent{240, 135}));
-    CHECK((firstConstants.Value().sample == std::array<float, 4>{request.currentJitterUv.x, request.currentJitterUv.y, 1.0F, 0.0F}));
+    CHECK(firstConstants.Value().entry == NativeReconstructionEntry::TemporalSeed);
+    CHECK((firstConstants.Value().constants.extents == std::array<std::uint32_t, 4>{1280, 720, 1920, 1080}));
+    CHECK((firstConstants.Value().constants.Groups() == FramebufferExtent{240, 135}));
+    CHECK((firstConstants.Value().constants.sample ==
+           std::array<float, 4>{request.currentJitterUv.x, request.currentJitterUv.y, 1.0F, 0.0F}));
     REQUIRE(store.Publish(first.Value()).HasValue());
 
     request = ReconstructionRequest(2, 1);
@@ -266,8 +268,17 @@ TEST_CASE("Native reconstruction constants follow the exact reset and exposure e
     const auto nextConstants =
         PrepareNativeReconstructionDispatch(request, capabilities, tuning, NativeReconstructionHistory{store, second.Value()});
     REQUIRE(nextConstants.HasValue());
-    CHECK(nextConstants.Value().sample[2] == 4.0F);
-    CHECK(nextConstants.Value().sample[3] == tuning.historyWeight);
+    CHECK(nextConstants.Value().entry == NativeReconstructionEntry::TemporalHistory);
+    CHECK(nextConstants.Value().constants.sample[2] == 4.0F);
+    CHECK(nextConstants.Value().constants.sample[3] == tuning.historyWeight);
+    auto noBlend = tuning;
+    noBlend.historyWeight = 0.0F;
+    const auto seed =
+        PrepareNativeReconstructionDispatch(request, capabilities, noBlend, NativeReconstructionHistory{store, second.Value()});
+    REQUIRE(seed.HasValue());
+    CHECK(seed.Value().entry == NativeReconstructionEntry::TemporalSeed);
+    CHECK(seed.Value().constants.sample[2] == 1.0F);
+    CHECK(seed.Value().constants.sample[3] == 0.0F);
     const auto wrong =
         PrepareNativeReconstructionDispatch(request, capabilities, tuning, NativeReconstructionHistory{store, first.Value()});
     REQUIRE(wrong.HasError());
@@ -300,22 +311,29 @@ TEST_CASE("Native reconstruction cook contracts name only the closed entry and b
                                    .maximumBindings = 16,
                                    .supportsCompute = true,
                                    .supportsStorageResources = true};
-    const auto spatial = DescribeNativeReconstructionShader(ReconstructionKind::Spatial, target);
+    const auto spatial = DescribeNativeReconstructionShader(NativeReconstructionEntry::Spatial, target);
     REQUIRE(spatial.HasValue());
     CHECK(spatial.Value().manifest.entryPoints.front().name == "ReconstructSpatial");
     CHECK(spatial.Value().manifest.bindings.size() == 3);
     CHECK(spatial.Value().reflectionNames.back().parameters.size() == 3);
 
-    const auto temporal = DescribeNativeReconstructionShader(ReconstructionKind::Temporal, target);
+    const auto temporal = DescribeNativeReconstructionShader(NativeReconstructionEntry::TemporalHistory, target);
     REQUIRE(temporal.HasValue());
     CHECK(temporal.Value().manifest.entryPoints.front().name == "ReconstructTemporal");
     CHECK(temporal.Value().manifest.bindings.size() == 8);
     CHECK(temporal.Value().reflectionNames[6].name == "ReconstructedDepth");
-    const auto missing = AdmitNativeReconstructionShader(ReconstructionKind::Temporal, target, {});
+    const auto seed = DescribeNativeReconstructionShader(NativeReconstructionEntry::TemporalSeed, target);
+    REQUIRE(seed.HasValue());
+    CHECK(seed.Value().manifest.entryPoints.front().name == "ReconstructTemporalSeed");
+    constexpr std::array seedBindings{1U, 2U, 3U, 7U, 8U};
+    REQUIRE(seed.Value().manifest.bindings.size() == seedBindings.size());
+    for (std::size_t i = 0; i < seedBindings.size(); ++i)
+        CHECK(seed.Value().manifest.bindings[i].id.value == seedBindings[i]);
+    const auto missing = AdmitNativeReconstructionShader(NativeReconstructionEntry::TemporalHistory, target, {});
     REQUIRE(missing.HasError());
     RequireErrorCode(missing.ErrorValue(), NativeReconstructionErrors::InvalidArtifact);
     target.supportsCompute = false;
-    const auto unsupported = DescribeNativeReconstructionShader(ReconstructionKind::Spatial, target);
+    const auto unsupported = DescribeNativeReconstructionShader(NativeReconstructionEntry::Spatial, target);
     REQUIRE(unsupported.HasError());
     RequireErrorCode(unsupported.ErrorValue(), NativeReconstructionErrors::Unsupported);
 }

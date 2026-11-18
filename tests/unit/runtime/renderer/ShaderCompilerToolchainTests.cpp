@@ -319,7 +319,7 @@ TEST_CASE("Locked Linux shader tools produce repeatable validated native artifac
            {Identity(ShaderCompilerTool::Dxc), Identity(ShaderCompilerTool::DxilValidator)});
 }
 
-TEST_CASE("Locked Vulkan shader tools cook and admit both native reconstruction entries",
+TEST_CASE("Locked Vulkan shader tools cook and admit the native reconstruction entries",
           "[runtime][renderer][shader-compiler][toolchain][reconstruction][integration]") {
     auto dxc = Installation(ShaderCompilerTool::Dxc, "HORO_TEST_SHADER_DXC");
     auto spirvTools = Installation(ShaderCompilerTool::SpirvTools, "HORO_TEST_SHADER_SPIRV_VAL");
@@ -335,13 +335,14 @@ TEST_CASE("Locked Vulkan shader tools cook and admit both native reconstruction 
     auto adapter = ExternalShaderCompilerAdapter::Create(std::move(configuration), std::make_shared<NativeExternalProcessRunner>());
     REQUIRE(adapter.HasValue());
 
-    const auto kind = GENERATE(ReconstructionKind::Spatial, ReconstructionKind::Temporal);
-    const auto other = (kind == ReconstructionKind::Spatial) ? ReconstructionKind::Temporal : ReconstructionKind::Spatial;
+    using enum NativeReconstructionEntry;
+    const auto entry = GENERATE(Spatial, TemporalSeed, TemporalHistory);
+    const auto other = (entry == Spatial) ? TemporalHistory : Spatial;
     auto request = Request(ShaderTargetBackend::Vulkan, ShaderPayloadFormat::SpirV16, {dxc->identity, spirvTools->identity});
     auto &target = request.targets.front().requirement;
     target.supportsCompute = true;
     target.supportsStorageResources = true;
-    auto contract = DescribeNativeReconstructionShader(kind, target);
+    auto contract = DescribeNativeReconstructionShader(entry, target);
     REQUIRE(contract.HasValue());
     request.manifest = std::move(contract.Value().manifest);
     request.source = Read(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/shaders/runtime/native_reconstruction.hlsl");
@@ -352,7 +353,7 @@ TEST_CASE("Locked Vulkan shader tools cook and admit both native reconstruction 
     REQUIRE(cooked.Value().artifacts.size() == 1);
     const auto &artifact = cooked.Value().artifacts.front();
     REQUIRE(artifact.reflection);
-    const auto bytes = AdmitNativeReconstructionShader(kind, target, artifact);
+    const auto bytes = AdmitNativeReconstructionShader(entry, target, artifact);
     REQUIRE(bytes.HasValue());
     CHECK_FALSE(bytes.Value().empty());
     CHECK(AdmitNativeReconstructionShader(other, target, artifact).HasError());

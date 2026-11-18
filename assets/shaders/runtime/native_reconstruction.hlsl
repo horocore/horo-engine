@@ -72,30 +72,53 @@ void ReconstructSpatial(uint3 thread : SV_DispatchThreadID) {
         ReconstructedColor[thread.xy] = SampleCurrent(TargetUv(thread.xy) + SampleParameters.xy);
 }
 
+struct TemporalCurrentSample {
+    float4 color;
+    float2 targetUv;
+    int2 texel;
+    float depth;
+};
+
+TemporalCurrentSample SampleTemporalCurrent(uint2 pixel) {
+    TemporalCurrentSample current;
+    current.targetUv = TargetUv(pixel);
+    const float2 sourceUv = saturate(current.targetUv + SampleParameters.xy);
+    current.texel = Texel(int2(sourceUv * float2(Extents.xy)), Extents.xy);
+    const float depth = CurrentDepth.Load(int3(current.texel, 0));
+    current.depth = ValidDepth(depth) ? depth : 0.0f;
+    current.color = SampleCurrent(sourceUv);
+    return current;
+}
+
+[numthreads(8, 8, 1)]
+void ReconstructTemporalSeed(uint3 thread : SV_DispatchThreadID) {
+    if (any(thread.xy >= Extents.zw))
+        return;
+    const TemporalCurrentSample current = SampleTemporalCurrent(thread.xy);
+    ReconstructedColor[thread.xy] = current.color;
+    ReconstructedDepth[thread.xy] = current.depth;
+}
+
 [numthreads(8, 8, 1)]
 void ReconstructTemporal(uint3 thread : SV_DispatchThreadID) {
     if (any(thread.xy >= Extents.zw))
         return;
+    const TemporalCurrentSample current = SampleTemporalCurrent(thread.xy);
+    float4 result = current.color;
+    ReconstructedDepth[thread.xy] = current.depth;
 
-    const float2 targetUv = TargetUv(thread.xy);
-    const float2 sourceUv = saturate(targetUv + SampleParameters.xy);
-    const int2 sourceTexel = Texel(int2(sourceUv * float2(Extents.xy)), Extents.xy);
-    const float depth = CurrentDepth.Load(int3(sourceTexel, 0));
-    float4 result = SampleCurrent(sourceUv);
-    ReconstructedDepth[thread.xy] = ValidDepth(depth) ? depth : 0.0f;
-
-    if (SampleParameters.w > 0.0f && ValidDepth(depth)) {
-        const float2 motion = Motion.Load(int3(sourceTexel, 0));
+    if (SampleParameters.w > 0.0f && current.depth > 0.0f) {
+        const float2 motion = Motion.Load(int3(current.texel, 0));
         // History is stored on the resolved unjittered grid. Motion already excludes both jitter samples.
-        const float2 previousUv = targetUv + motion;
+        const float2 previousUv = current.targetUv + motion;
         if (all(isfinite(previousUv)) && all(previousUv >= 0.0f) && all(previousUv < 1.0f)) {
             const int2 previousTexel = Texel(int2(previousUv * float2(Extents.zw)), Extents.zw);
             const float oldDepth = PreviousDepth.Load(int3(previousTexel, 0));
-            const float limit = max(DepthParameters.x, depth * DepthParameters.y);
-            if (ValidDepth(oldDepth) && abs(oldDepth - depth) <= limit) {
+            const float limit = max(DepthParameters.x, current.depth * DepthParameters.y);
+            if (ValidDepth(oldDepth) && abs(oldDepth - current.depth) <= limit) {
                 const float3 history = SamplePrevious(previousUv).rgb * SampleParameters.z;
                 if (all(isfinite(history)))
-                    result.rgb = lerp(result.rgb, ClampHistory(history, sourceTexel, result.rgb), SampleParameters.w);
+                    result.rgb = lerp(result.rgb, ClampHistory(history, current.texel, result.rgb), SampleParameters.w);
             }
         }
     }

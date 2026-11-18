@@ -295,7 +295,8 @@ Provider adapters admit borrowed scene textures, exposure and graph output throu
 compatibility and resident resource owner before opening a real-frame attempt.
 An explicit reset survives abandonment until the next successful publication.
 
-The Vulkan native shader cook describes separate spatial and temporal entries.
+The Vulkan native shader cook provides spatial, temporal seed and temporal accumulation entries.
+First/reset frames bind only current inputs and resolved destinations.
 The initial compute ABI uses RGBA32F sampled and storage output, R32F resolved
 depth for the temporal entry, and explicit scalar exposure. The cooked interface
 requires exact shader entry, descriptor bindings, storage image formats, constant

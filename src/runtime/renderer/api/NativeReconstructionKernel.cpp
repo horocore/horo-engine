@@ -32,12 +32,15 @@ namespace Horo::Render {
     static_assert(offsetof(NativeReconstructionDispatch, sample) == 16 && offsetof(NativeReconstructionDispatch, depth) == 32);
 
     namespace {
-        /** @brief Identifies the two engine-owned compute entry points. */
-        constexpr std::string_view Entry(ReconstructionKind kind) noexcept {
-            switch (kind) {
-                case ReconstructionKind::Spatial:
+        /** @brief Identifies the engine-owned compute entry points. */
+        constexpr std::string_view EntryName(NativeReconstructionEntry entry) noexcept {
+            using enum NativeReconstructionEntry;
+            switch (entry) {
+                case Spatial:
                     return "ReconstructSpatial";
-                case ReconstructionKind::Temporal:
+                case TemporalSeed:
+                    return "ReconstructTemporalSeed";
+                case TemporalHistory:
                     return "ReconstructTemporal";
             }
             return {};
@@ -80,19 +83,27 @@ namespace Horo::Render {
         struct KernelBinding final {
             ShaderResourceKind kind;
             std::string_view name;
-            bool temporalOnly{};
+            NativeReconstructionEntry minimum{NativeReconstructionEntry::Spatial};
         };
         using enum ShaderResourceKind;
+        using enum NativeReconstructionEntry;
         constexpr std::array KernelBindings{
             KernelBinding{SampledTexture, "CurrentColor"},
             KernelBinding{StorageTexture, "ReconstructedColor"},
-            KernelBinding{SampledTexture, "CurrentDepth", true},
-            KernelBinding{SampledTexture, "Motion", true},
-            KernelBinding{SampledTexture, "PreviousColor", true},
-            KernelBinding{SampledTexture, "PreviousDepth", true},
-            KernelBinding{StorageTexture, "ReconstructedDepth", true},
+            KernelBinding{SampledTexture, "CurrentDepth", TemporalSeed},
+            KernelBinding{SampledTexture, "Motion", TemporalHistory},
+            KernelBinding{SampledTexture, "PreviousColor", TemporalHistory},
+            KernelBinding{SampledTexture, "PreviousDepth", TemporalHistory},
+            KernelBinding{StorageTexture, "ReconstructedDepth", TemporalSeed},
             KernelBinding{UniformBuffer, "type.ReconstructionDispatch"},
         };
+
+        /** @brief Chooses a seed when valid prior color and depth are intentionally unused. */
+        NativeReconstructionEntry SelectEntry(bool temporal, bool readsHistory) noexcept {
+            if (!temporal)
+                return Spatial;
+            return readsHistory ? TemporalHistory : TemporalSeed;
+        }
 
         /** @brief Verifies active final ABI offsets and the exact Vulkan descriptor slots. */
         bool ExactLayout(const NormalizedShaderReflection &reflected) noexcept {
@@ -110,11 +121,11 @@ namespace Horo::Render {
     }  // namespace
 
     /** @copydoc PrepareNativeReconstructionDispatch */
-    Result<NativeReconstructionDispatch> PrepareNativeReconstructionDispatch(const ReconstructionFrameRequest &request,
-                                                                             const RenderCapabilitySnapshot &capabilities,
-                                                                             const NativeReconstructionTemporalSettings &tuning,
-                                                                             const std::optional<NativeReconstructionHistory> history) {
-        using Outcome = Result<NativeReconstructionDispatch>;
+    Result<NativeReconstructionDispatchPlan> PrepareNativeReconstructionDispatch(const ReconstructionFrameRequest &request,
+                                                                                 const RenderCapabilitySnapshot &capabilities,
+                                                                                 const NativeReconstructionTemporalSettings &tuning,
+                                                                                 const std::optional<NativeReconstructionHistory> history) {
+        using Outcome = Result<NativeReconstructionDispatchPlan>;
         if (const auto valid = ValidateReconstructionFrame(request, capabilities); valid.HasError())
             return Outcome::Failure(valid.ErrorValue());
         if (!SupportsDispatch(request, capabilities))
@@ -127,34 +138,36 @@ namespace Horo::Render {
                 return Outcome::Failure(pending.ErrorValue());
         }
         const auto &exposure = std::get<ReconstructionExposureScales>(request.exposure);
-        const bool readsHistory = history && history->frame.canReadPrevious;
+        const bool readsHistory = history && history->frame.canReadPrevious && tuning.historyWeight > 0.0F;
         const auto render = request.compatibility.renderExtent;
         const auto target = request.compatibility.targetExtent;
-        return Outcome::Success(
-            {.extents = {render.width, render.height, target.width, target.height},
-             .sample = {request.currentJitterUv.x, request.currentJitterUv.y, readsHistory ? exposure.current / exposure.previous : 1.0F,
-                        readsHistory ? tuning.historyWeight : 0.0F},
-             .depth = {temporal ? tuning.absoluteDepthTolerance : 0.0F, temporal ? tuning.relativeDepthTolerance : 0.0F, 0.0F, 0.0F}});
+        return Outcome::Success({.entry = SelectEntry(temporal, readsHistory),
+                                 .constants = {.extents = {render.width, render.height, target.width, target.height},
+                                               .sample = {request.currentJitterUv.x, request.currentJitterUv.y,
+                                                          readsHistory ? exposure.current / exposure.previous : 1.0F,
+                                                          readsHistory ? tuning.historyWeight : 0.0F},
+                                               .depth = {readsHistory ? tuning.absoluteDepthTolerance : 0.0F,
+                                                         readsHistory ? tuning.relativeDepthTolerance : 0.0F, 0.0F, 0.0F}}});
     }
 
     /** @copydoc DescribeNativeReconstructionShader */
-    Result<NativeReconstructionShaderContract> DescribeNativeReconstructionShader(ReconstructionKind kind,
+    Result<NativeReconstructionShaderContract> DescribeNativeReconstructionShader(NativeReconstructionEntry entry,
                                                                                   const ShaderTargetRequirement &target) {
         using Outcome = Result<NativeReconstructionShaderContract>;
-        const auto entry = Entry(kind);
-        if (entry.empty() || target.backend != ShaderTargetBackend::Vulkan || target.payloadFormat != ShaderPayloadFormat::SpirV16 ||
+        const auto name = EntryName(entry);
+        if (name.empty() || target.backend != ShaderTargetBackend::Vulkan || target.payloadFormat != ShaderPayloadFormat::SpirV16 ||
             !target.supportsCompute || !target.supportsStorageResources)
             return Outcome::Failure(MakeError(NativeReconstructionErrors::Unsupported));
         NativeReconstructionShaderContract result;
         auto &manifest = result.manifest;
         manifest.schemaVersion = 1;
         manifest.sourceIdentity = "horo/runtime/native_reconstruction.hlsl";
-        manifest.sourceRevision = 1;
-        manifest.entryPoints = {{ShaderStage::Compute, std::string{entry}}};
+        manifest.sourceRevision = 2;
+        manifest.entryPoints = {{ShaderStage::Compute, std::string{name}}};
         manifest.targets = {target};
         for (std::uint32_t slot = 0; slot < KernelBindings.size(); ++slot) {
             const auto &binding = KernelBindings[slot];
-            if (binding.temporalOnly && kind == ReconstructionKind::Spatial)
+            if (entry < binding.minimum)
                 continue;
             const ShaderBindingId id{slot + 1};
             const auto access = binding.kind == StorageTexture ? ShaderResourceAccess::ReadWrite : ShaderResourceAccess::ReadOnly;
@@ -173,10 +186,11 @@ namespace Horo::Render {
     }
 
     /** @copydoc AdmitNativeReconstructionShader */
-    Result<std::span<const std::uint8_t>> AdmitNativeReconstructionShader(ReconstructionKind kind, const ShaderTargetRequirement &target,
+    Result<std::span<const std::uint8_t>> AdmitNativeReconstructionShader(NativeReconstructionEntry entry,
+                                                                          const ShaderTargetRequirement &target,
                                                                           const CompiledShaderArtifact &artifact) {
         using Outcome = Result<std::span<const std::uint8_t>>;
-        const auto contract = DescribeNativeReconstructionShader(kind, target);
+        const auto contract = DescribeNativeReconstructionShader(entry, target);
         if (contract.HasError())
             return Outcome::Failure(contract.ErrorValue());
         if (!artifact.reflection || artifact.backend != target.backend || artifact.payloadFormat != target.payloadFormat)
@@ -188,7 +202,7 @@ namespace Horo::Render {
         if (decoded.HasError())
             return Outcome::Failure(decoded.ErrorValue());
         const auto &package = decoded.Value();
-        if (package.stageCount != 1 || package.stages[0].stage != ShaderStage::Compute || package.stages[0].entryPoint != Entry(kind))
+        if (package.stageCount != 1 || package.stages[0].stage != ShaderStage::Compute || package.stages[0].entryPoint != EntryName(entry))
             return Outcome::Failure(MakeError(NativeReconstructionErrors::InvalidArtifact));
         const auto &reflection = artifact.reflection->reflection;
         const ShaderReflectionCandidate candidate{reflection.backend,    reflection.interfaceSchemaVersion, reflection.bindings,

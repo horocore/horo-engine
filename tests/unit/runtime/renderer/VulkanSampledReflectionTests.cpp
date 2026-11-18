@@ -106,7 +106,7 @@ TEST_CASE("Vulkan sampled reflection rejects ambiguous foreign and unsupported r
 
 TEST_CASE("Vulkan reconstruction reflection proves the closed storage image ABI", "[renderer][shader-cook][reconstruction]") {
     const ShaderTargetRequirement target{ShaderTargetBackend::Vulkan, ShaderPayloadFormat::SpirV16, 1, 1, 8, 0, true, true};
-    const auto contract = DescribeNativeReconstructionShader(ReconstructionKind::Temporal, target);
+    const auto contract = DescribeNativeReconstructionShader(NativeReconstructionEntry::TemporalHistory, target);
     REQUIRE(contract.HasValue());
     auto manifest = contract.Value().manifest;
     auto names = contract.Value().reflectionNames;

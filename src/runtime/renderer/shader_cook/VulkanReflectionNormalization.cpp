@@ -90,7 +90,8 @@ namespace Horo::Render {
                                             std::span<const ShaderReflectionBindingName> names) {
             if (stages.size() != 1 || stages.front().stage != ShaderStage::Compute || manifest.entryPoints.size() != 1)
                 return false;
-            for (const auto kind : {ReconstructionKind::Spatial, ReconstructionKind::Temporal}) {
+            for (const auto kind : {NativeReconstructionEntry::Spatial, NativeReconstructionEntry::TemporalSeed,
+                                    NativeReconstructionEntry::TemporalHistory}) {
                 const auto canonical = DescribeNativeReconstructionShader(kind, target);
                 if (canonical.HasError())
                     return false;

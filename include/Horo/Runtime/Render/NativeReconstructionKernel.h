@@ -11,6 +11,13 @@
 #include <vector>
 
 namespace Horo::Render {
+    /** @brief Closed image roles represented by each compiled native shader entry. */
+    enum class NativeReconstructionEntry : std::uint8_t {
+        Spatial,         /**< Reads current color and writes resolved color. */
+        TemporalSeed,    /**< Writes resolved color/depth without motion or prior-history descriptors. */
+        TemporalHistory, /**< Uses motion and exact previous resolved color/depth. */
+    };
+
     /** @brief Exact native reconstruction kernel constants shared with native_reconstruction.hlsl. */
     struct alignas(16) NativeReconstructionDispatch final {
         std::array<std::uint32_t, 4> extents{}; /**< Render width/height followed by resolved target width/height. */
@@ -26,6 +33,12 @@ namespace Horo::Render {
                 return {};
             return {(extents[2] - 1) / GroupExtent + 1, (extents[3] - 1) / GroupExtent + 1};
         }
+    };
+
+    /** @brief Selected shader entry with its exact bounded packed constants. */
+    struct NativeReconstructionDispatchPlan final {
+        NativeReconstructionEntry entry{NativeReconstructionEntry::Spatial};
+        NativeReconstructionDispatch constants;
     };
 
     /** @brief Explicit provider tuning for a temporal mode. Spatial filtering ignores these fields. */
@@ -58,28 +71,29 @@ namespace Horo::Render {
      * @param capabilities Selected device resource and compute capabilities.
      * @param tuning Explicit temporal blending and depth rejection policy.
      * @param history Borrowed history owner and pending attempt, required only for Temporal.
-     * @return Bounded constants or a typed input/unsupported result.
+     * @return Exact shader entry and bounded constants, or a typed input/unsupported result.
      * @details The initial kernel uses RGBA32F target color, separate R32F temporal depth, and fixed exposure scale
      * inputs. Masks and buffer exposure require a separately qualified variant. History reads are gated by the existing
-     * owner's exact attempt. This function grants no native submission or provider availability.
+     * owner's exact attempt. First/reset frames use a separate entry without prior descriptors. This function grants no native submission
+     * or provider availability.
      */
-    [[nodiscard]] Result<NativeReconstructionDispatch> PrepareNativeReconstructionDispatch(
+    [[nodiscard]] Result<NativeReconstructionDispatchPlan> PrepareNativeReconstructionDispatch(
         const ReconstructionFrameRequest &request, const RenderCapabilitySnapshot &capabilities,
         const NativeReconstructionTemporalSettings &tuning, std::optional<NativeReconstructionHistory> history = std::nullopt);
 
     /** @brief Describes one exact native shader entry for real offline compilation.
-     * @param kind Spatial or temporal operation. @param target Explicit Vulkan SPIR-V target.
+     * @param entry Exact spatial, history seed, or history accumulation shader entry. @param target Explicit Vulkan SPIR-V target.
      * @return Canonical manifest and reflection names, or typed unsupported failure.
      */
-    [[nodiscard]] Result<NativeReconstructionShaderContract> DescribeNativeReconstructionShader(ReconstructionKind kind,
+    [[nodiscard]] Result<NativeReconstructionShaderContract> DescribeNativeReconstructionShader(NativeReconstructionEntry entry,
                                                                                                 const ShaderTargetRequirement &target);
 
     /** @brief Revalidates a real cook-bound artifact before a concrete renderer can realize it.
-     * @param kind Selected closed kernel. @param target Exact target used for cooking.
+     * @param entry Selected closed kernel entry. @param target Exact target used for cooking.
      * @param artifact Owned cooked bytes and bound final-target reflection.
      * @return Borrowed compute program bytes, or typed unsupported/stale/incorrect layout failure.
      */
-    [[nodiscard]] Result<std::span<const std::uint8_t>> AdmitNativeReconstructionShader(ReconstructionKind kind,
+    [[nodiscard]] Result<std::span<const std::uint8_t>> AdmitNativeReconstructionShader(NativeReconstructionEntry entry,
                                                                                         const ShaderTargetRequirement &target,
                                                                                         const CompiledShaderArtifact &artifact);
 }  // namespace Horo::Render
