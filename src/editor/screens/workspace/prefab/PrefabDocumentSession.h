@@ -101,6 +101,18 @@ namespace Horo::Editor {
             return identity_.instance;
         }
 
+        /** @brief Reports whether a workspace tab currently presents this owner. */
+        [[nodiscard]] bool HasPresentation() const noexcept {
+            return presented_;
+        }
+
+        /** @brief Tests whether a retained group still needs the source owner after closing its tab. */
+        [[nodiscard]] bool HasApplyHistory() const noexcept;
+        /** @brief Suspends only workspace presentation, keeping the clean source and its existing paired history. */
+        void SuspendPresentation() noexcept;
+        /** @brief Attaches a fresh registry-issued identity for the same authorized source key. */
+        void ResumePresentation(DocumentIdentity identity) noexcept;
+
         /** @brief Applies one semantic transaction. @param fence Exact source admission. @param edit Source-owned edit.
          * @return Success or zero-mutation validation/history/stale error. */
         [[nodiscard]] Result<void> Execute(const PrefabDocumentFence &fence, const PrefabSourceEdit &edit);
@@ -261,6 +273,7 @@ namespace Horo::Editor {
 
         std::uint64_t revision_{1};
         std::uint64_t recoveryRevision_{};
+        bool presented_{true};
         bool conflict_{};
         bool closed_{};
         bool busy_{};

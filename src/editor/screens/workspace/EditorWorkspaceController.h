@@ -902,6 +902,8 @@ namespace Horo::Editor {
         [[nodiscard]] Result<SceneTransactionContext> CapturePrefabSceneContext();
         /** @brief Applies the selected Scene overrides using the already open canonical Prefab source owner. */
         [[nodiscard]] Result<void> ApplyPrefabHierarchyOverrides(const PrefabHierarchyCommand &request, const PrefabHierarchyEntry &entry);
+        /** @brief Settles unreachable paired history before reporting either document's current replay actions. */
+        void ReconcilePrefabApplyHistory();
         /** @brief Routes a coordinated head from either document, or false when ordinary history owns the command. */
         [[nodiscard]] Result<bool> ReplayPrefabApply(bool redo, PrefabDocumentSession *source = nullptr);
         /** @brief Publishes the paired completion and retains any unresolved native rollback evidence. */

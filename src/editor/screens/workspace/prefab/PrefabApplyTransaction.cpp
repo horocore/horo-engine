@@ -173,6 +173,45 @@ namespace Horo::Editor {
             PrefabApplyHistoryGroup{context.session.owner, context.session.generation, *state.Value()});
     }
 
+    /** @copydoc PrefabApplyTransaction::ReconcileHistory */
+    void PrefabApplyTransaction::ReconcileHistory(SceneDocumentTransactions &scene, const SceneTransactionContext &context,
+                                                  const std::span<const std::unique_ptr<PrefabDocumentSession>> sources) {
+        if (scene.Admit(context).HasError() || std::ranges::any_of(sources, [](const auto &source) {
+            return source->busy_;
+        }))
+            return;
+        const std::function<bool(std::uint64_t, bool)> unavailable = [&](const std::uint64_t state, const bool redo) {
+            const PrefabApplyHistoryGroup group{context.session.owner, context.session.generation, state};
+            return std::ranges::none_of(sources, [&](const auto &source) {
+                return !source->closed_ && source->history_.Contains(redo, [&](const auto &entry) {
+                    return entry.applyGroup == group;
+                });
+            });
+        };
+        bool retired;
+        do {
+            retired = scene.RetirePrefabValueHistory(unavailable);
+            for (const auto &source : sources) {
+                const bool retiredSource = source->history_.RetireUnavailable([&](const auto &entry, const bool redo) {
+                    const auto &group = entry.applyGroup;
+                    return group && (group->sceneOwner != context.session.owner || group->sceneOpening != context.session.generation ||
+                                     !scene.HasPrefabValueHistory(group->sceneState, redo));
+                });
+                retired = retired || retiredSource;
+            }
+        } while (retired);
+    }
+
+    /** @copydoc PrefabApplyTransaction::InspectSource */
+    Result<void> PrefabApplyTransaction::InspectSource(PrefabDocumentSession &source) {
+        auto inspected = source.InspectExternal();
+        if (inspected.HasValue() && source.conflict_)
+            source.history_.RetireUnavailable([](const auto &entry, bool) {
+                return entry.applyGroup.has_value();
+            });
+        return inspected;
+    }
+
     /** @copydoc PrefabApplyTransaction::Replay */
     PrefabApplyOutcome PrefabApplyTransaction::Replay(SceneDocumentTransactions &scene, PrefabDocumentSession &prefab,
                                                       const PrefabApplyReplayRequest &request, const ProjectMutationCoordinator &mutations,

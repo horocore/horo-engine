@@ -403,6 +403,14 @@ namespace Horo::Editor {
         return Return::Success(std::move(prepared));
     }
 
+    namespace {
+        /** @brief Identifies only the Scene half of a scoped Prefab Apply. */
+        bool IsPrefabValueHistory(const SceneDocumentDetail::HistoryRecord &record) noexcept {
+            const auto *delta = std::get_if<SceneDocumentDetail::SceneObjectsReplacedDelta>(&record.delta);
+            return record.coordinated && delta && !delta->prefabValues.empty();
+        }
+    }  // namespace
+
     /** @copydoc SceneDocumentTransactions::NextPrefabValueState */
     Result<std::optional<std::uint64_t>> SceneDocumentTransactions::NextPrefabValueState(const SceneTransactionContext &context,
                                                                                          const bool redo) const {
@@ -410,11 +418,34 @@ namespace Horo::Editor {
         if (auto admitted = Admit(context); admitted.HasError())
             return Return::Failure(admitted.ErrorValue());
         const auto &history = redo ? state_->history->m_impl->redo : state_->history->m_impl->undo;
-        if (history.empty() || !history.back().coordinated)
+        if (history.empty() || !IsPrefabValueHistory(history.back()))
             return Return::Success(std::nullopt);
-        const auto &entry = history.back();
-        const auto *delta = std::get_if<SceneObjectsReplacedDelta>(&entry.delta);
-        return Return::Success(delta && !delta->prefabValues.empty() ? std::optional{entry.afterState.value} : std::nullopt);
+        return Return::Success(history.back().afterState.value);
+    }
+
+    /** @copydoc SceneDocumentTransactions::HasPrefabValueHistory */
+    bool SceneDocumentTransactions::HasPrefabValueHistory(const std::uint64_t state, const bool redo) const noexcept {
+        const auto &history = redo ? state_->history->m_impl->redo : state_->history->m_impl->undo;
+        return std::ranges::any_of(history, [state](const auto &record) {
+            return IsPrefabValueHistory(record) && record.afterState.value == state;
+        });
+    }
+
+    /** @copydoc SceneDocumentTransactions::RetirePrefabValueHistory */
+    bool SceneDocumentTransactions::RetirePrefabValueHistory(const std::function<bool(std::uint64_t, bool)> &unavailable) noexcept {
+        auto &history = *state_->history->m_impl;
+        const auto retire = [&](auto &records, const bool redo) {
+            const auto boundary = std::find_if(records.rbegin(), records.rend(), [&](const auto &record) {
+                return IsPrefabValueHistory(record) && unavailable(record.afterState.value, redo);
+            }).base();
+            for (auto record = records.begin(); record != boundary; ++record)
+                history.memoryBytes -= record->memoryBytes;
+            const bool retired = boundary != records.begin();
+            records.erase(records.begin(), boundary);
+            return retired;
+        };
+        const bool undoRetired = retire(history.undo, false);
+        return retire(history.redo, true) || undoRetired;
     }
 
     /** @copydoc SceneDocumentTransactions::EncodePreparedScene */

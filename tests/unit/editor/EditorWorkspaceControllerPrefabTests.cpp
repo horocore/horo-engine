@@ -110,21 +110,109 @@ namespace Horo::Editor {
         CHECK_FALSE(model.isDirty);
         CHECK_FALSE(model.prefabDocuments.front().dirty);
 
-        owner.ProcessCommand({.command = EditorWorkspaceViewCommand::UndoScene});
-        INFO((model.prefabOverrideError ? model.prefabOverrideError->message : std::string{}));
-        REQUIRE_FALSE(model.prefabOverrideError);
-        CHECK(model.prefabHierarchy->entries.front().hasOverrides);
-        CHECK(sourceTransform() == original);
-        CHECK_FALSE(model.isDirty);
+        const auto focusScene = [&] {
+            owner.ProcessCommand(
+                {.command = EditorWorkspaceViewCommand::ChangeActivePanel, .targetIndex = 3, .stringPayload = "horo.viewport"});
+        };
+        const auto closeSource = [&] {
+            owner.ProcessCommand({.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = prefabTab});
+            REQUIRE(model.prefabDocuments.empty());
+        };
+        const auto renameSceneObject = [&] {
+            owner.ProcessCommand({.command = EditorWorkspaceViewCommand::UpdateObjectName,
+                                  .objectPayload = SceneObjectId{11},
+                                  .stringPayload = "Independent Scene edit"});
+            REQUIRE(model.objects.front().name == "Independent Scene edit");
+        };
 
-        owner.ProcessCommand({.command = EditorWorkspaceViewCommand::FocusWorkspaceDocument, .documentInstance = prefabTab});
-        workspace.Action(PrefabDocumentAction::Redo);
-        INFO((model.prefabDocumentError ? model.prefabDocumentError->message : std::string{}));
-        REQUIRE_FALSE(model.prefabDocumentError);
-        CHECK(sourceTransform() == Math::Transform{{1, 2, 3}});
-        CHECK_FALSE(model.prefabHierarchy->entries.front().hasOverrides);
-        CHECK_FALSE(model.isDirty);
-        CHECK_FALSE(model.prefabDocuments.front().dirty);
+        SECTION("either presented owner can replay the same publication") {
+            owner.ProcessCommand({.command = EditorWorkspaceViewCommand::UndoScene});
+            INFO((model.prefabOverrideError ? model.prefabOverrideError->message : std::string{}));
+            REQUIRE_FALSE(model.prefabOverrideError);
+            CHECK(model.prefabHierarchy->entries.front().hasOverrides);
+            CHECK(sourceTransform() == original);
+            CHECK_FALSE(model.isDirty);
+
+            owner.ProcessCommand({.command = EditorWorkspaceViewCommand::FocusWorkspaceDocument, .documentInstance = prefabTab});
+            workspace.Action(PrefabDocumentAction::Redo);
+            INFO((model.prefabDocumentError ? model.prefabDocumentError->message : std::string{}));
+            REQUIRE_FALSE(model.prefabDocumentError);
+            CHECK(sourceTransform() == Math::Transform{{1, 2, 3}});
+            CHECK_FALSE(model.prefabHierarchy->entries.front().hasOverrides);
+            CHECK_FALSE(model.isDirty);
+            CHECK_FALSE(model.prefabDocuments.front().dirty);
+        }
+
+        SECTION("Scene history can still replay with the source tab closed") {
+            const auto oldFence = model.prefabDocuments.front().fence;
+            closeSource();
+            owner.ProcessCommand({.command = EditorWorkspaceViewCommand::UndoScene});
+            REQUIRE_FALSE(model.prefabOverrideError);
+            CHECK(model.prefabHierarchy->entries.front().hasOverrides);
+            CHECK(model.canRedo);
+
+            workspace.OpenPrefab();
+            const auto reopened = model.prefabDocuments.front().fence;
+            CHECK(reopened.instance != oldFence.instance);
+            CHECK(sourceTransform() == original);
+            owner.ProcessCommand({.command = EditorWorkspaceViewCommand::PrefabDocument,
+                                  .prefabFence = oldFence,
+                                  .prefabAction = PrefabDocumentAction::Redo});
+            CHECK(model.prefabHierarchy->entries.front().hasOverrides);
+            workspace.Action(PrefabDocumentAction::Redo);
+            REQUIRE_FALSE(model.prefabDocumentError);
+            CHECK(sourceTransform() == Math::Transform{{1, 2, 3}});
+            CHECK_FALSE(model.prefabHierarchy->entries.front().hasOverrides);
+        }
+
+        SECTION("external replacement retires both halves without discarding later Scene edits") {
+            renameSceneObject();
+            closeSource();
+            workspace.project.WriteSource("External Prefab edit");
+            workspace.OpenPrefab();
+            CHECK(model.prefabDocuments.front().source->Data().objects.front().name == "External Prefab edit");
+            CHECK_FALSE(model.prefabDocuments.front().canUndo);
+            focusScene();
+            CHECK(model.canUndo);
+            owner.ProcessCommand({.command = EditorWorkspaceViewCommand::UndoScene});
+            CHECK(model.objects.front().name == "Authored parent");
+            CHECK_FALSE(model.canUndo);
+            CHECK(model.canRedo);
+            CHECK(model.prefabDocuments.front().source->Data().objects.front().name == "External Prefab edit");
+        }
+
+        SECTION("Scene undo cannot overwrite a closed source that changed externally") {
+            closeSource();
+            workspace.project.WriteSource("External Prefab edit");
+            const auto revisionBeforeUndo = model.documentRevision;
+            owner.ProcessCommand({.command = EditorWorkspaceViewCommand::UndoScene});
+            REQUIRE(model.prefabOverrideError);
+            CHECK(model.prefabOverrideError->code.Value() == Assets::AssetSourceErrors::Conflict.code.Value());
+            CHECK(model.documentRevision == revisionBeforeUndo);
+            CHECK_FALSE(model.canUndo);
+            workspace.OpenPrefab();
+            CHECK(model.prefabDocuments.front().source->Data().objects.front().name == "External Prefab edit");
+        }
+
+        SECTION("explicit source reload retires the group at the original state boundary") {
+            renameSceneObject();
+            workspace.Action(PrefabDocumentAction::Reload);
+            REQUIRE_FALSE(model.prefabDocumentError);
+            CHECK_FALSE(model.prefabDocuments.front().canUndo);
+            owner.ProcessCommand({.command = EditorWorkspaceViewCommand::UndoScene});
+            CHECK(model.objects.front().name == "Authored parent");
+            CHECK_FALSE(model.canUndo);
+        }
+
+        SECTION("shutdown releases a suspended owner while preserving newer Scene history") {
+            renameSceneObject();
+            closeSource();
+            REQUIRE(owner.ShutdownPrefabDocuments(true).HasValue());
+            REQUIRE(model.canUndo);
+            owner.ProcessCommand({.command = EditorWorkspaceViewCommand::UndoScene});
+            CHECK(model.objects.front().name == "Authored parent");
+            CHECK_FALSE(model.canUndo);
+        }
     }
 
     TEST_CASE("Workspace prefab selection and source navigation retain exact ownership without ordinary mutation",

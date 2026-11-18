@@ -14,7 +14,7 @@ namespace Horo::Editor {
         const auto &opened = *result.document;
         if (const auto existing = std::ranges::find_if(m_prefabDocuments,
                                                        [&](const auto &entry) {
-            return entry->Snapshot().identity.instance == opened.identity.instance;
+            return entry->HasPresentation() && entry->Instance() == opened.identity.instance;
         });
             existing != m_prefabDocuments.end()) {
             static_cast<void>(m_viewModel.workspacePanelHost.FocusDocument(opened.identity.instance));
@@ -28,7 +28,35 @@ namespace Horo::Editor {
         };
         const auto *asset = m_assetRegistry.FindByPath(result.location.document.Value());
         auto limits = PrefabLimits();
-        if (!asset || asset->type.Value() != "core.prefab" || m_prefabDocuments.size() >= 16 || limits.HasError()) {
+        if (!asset || asset->type.Value() != "core.prefab" || limits.HasError()) {
+            fail(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
+            return;
+        }
+        const auto suspended = std::ranges::find_if(m_prefabDocuments, [&](const auto &entry) {
+            if (entry->HasPresentation())
+                return false;
+            const auto snapshot = entry->Snapshot();
+            return snapshot.identity.key == opened.identity.key && snapshot.source->Data().assetId == asset->id;
+        });
+        if (suspended != m_prefabDocuments.end()) {
+            auto &source = **suspended;
+            if (auto inspected = PrefabApplyTransaction::InspectSource(source); inspected.HasError()) {
+                fail(inspected.ErrorValue());
+                return;
+            }
+            if (!source.Snapshot().externalConflict) {
+                auto identity = opened.identity;
+                if (auto tab = m_viewModel.workspacePanelHost.OpenDocument(opened.identity.key); tab.HasError()) {
+                    fail(tab.ErrorValue());
+                    return;
+                }
+                source.ResumePresentation(std::move(identity));
+                m_viewModel.prefabDocumentError.reset();
+                return;
+            }
+            ReconcilePrefabApplyHistory();
+        }
+        if (m_prefabDocuments.size() >= 16) {
             fail(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
             return;
         }
@@ -141,10 +169,11 @@ namespace Horo::Editor {
         };
 
         RefreshGuard guard(m_prefabRefreshing);
+        ReconcilePrefabApplyHistory();
 
         const auto active = m_viewModel.workspacePanelHost.ActiveDocument();
         auto found = std::ranges::find_if(m_prefabDocuments, [active](const auto &entry) {
-            return entry->Snapshot().identity.instance == active;
+            return entry->HasPresentation() && entry->Instance() == active;
         });
         const std::optional<DocumentInstanceId> next = found == m_prefabDocuments.end() ? std::nullopt : active;
         for (const auto &entry : m_prefabDocuments)
@@ -166,6 +195,8 @@ namespace Horo::Editor {
         }
         m_viewModel.prefabDocuments.clear();
         for (const auto &entry : m_prefabDocuments) {
+            if (!entry->HasPresentation())
+                continue;
             auto snapshot = entry->Snapshot();
             static_cast<void>(m_viewModel.workspacePanelHost.SetDocumentDirty(snapshot.identity.instance, snapshot.dirty));
             m_viewModel.prefabDocuments.push_back(std::move(snapshot));
@@ -175,7 +206,7 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::ClosePrefabDocument */
     Result<void> EditorWorkspaceController::ClosePrefabDocument(const DocumentInstanceId instance, const bool discard) {
         auto found = std::ranges::find_if(m_prefabDocuments, [instance](const auto &entry) {
-            return entry->Snapshot().identity.instance == instance;
+            return entry->HasPresentation() && entry->Instance() == instance;
         });
         if (found == m_prefabDocuments.end())
             return Result<void>::Failure(MakeError(SourceDocumentErrors::Stale));
@@ -185,6 +216,12 @@ namespace Horo::Editor {
         if (discard && m_mutations && m_durableFiles) {
             if (auto discarded = (*found)->DiscardOwnedRecovery(*m_mutations, *m_durableFiles); discarded.HasError())
                 return discarded;
+        }
+        if (!discard && (*found)->HasApplyHistory()) {
+            auto closedTab = m_viewModel.workspacePanelHost.CloseDocument(instance);
+            if (closedTab.HasValue())
+                (*found)->SuspendPresentation();
+            return closedTab;
         }
         if (auto closed = (*found)->Close(snapshot.fence, discard); closed.HasError())
             return closed;
@@ -197,7 +234,7 @@ namespace Horo::Editor {
     bool EditorWorkspaceController::ProcessPrefabDocumentCommand(const EditorWorkspaceViewCommandData &command) {
         if (command.command == EditorWorkspaceViewCommand::CloseWorkspaceDocument && command.documentInstance &&
             std::ranges::any_of(m_prefabDocuments, [&](const auto &entry) {
-            return entry->Snapshot().identity.instance == *command.documentInstance;
+            return entry->HasPresentation() && entry->Instance() == *command.documentInstance;
         })) {
             if (const auto result = ClosePrefabDocument(*command.documentInstance, false); result.HasError())
                 m_viewModel.prefabDocumentError = result.ErrorValue();
@@ -208,7 +245,7 @@ namespace Horo::Editor {
         if (!command.prefabFence)
             return true;
         auto found = std::ranges::find_if(m_prefabDocuments, [&](const auto &entry) {
-            return entry->Snapshot().identity.instance == command.prefabFence->instance;
+            return entry->HasPresentation() && entry->Instance() == command.prefabFence->instance;
         });
         if (found == m_prefabDocuments.end())
             return true;
@@ -352,16 +389,30 @@ namespace Horo::Editor {
             }
             // Recovery is durable; retire memory without discarding that recovery candidate.
             for (const auto &entry : m_prefabDocuments) {
-                if (auto result = entry->Close(entry->Snapshot().fence, true); result.HasError())
+                if (auto result = entry->Close(entry->Snapshot().fence, true); result.HasError()) {
+                    ReconcilePrefabApplyHistory();
                     return result;
+                }
             }
             m_prefabDocuments.clear();
         } else {
             while (!m_prefabDocuments.empty()) {
-                if (auto result = ClosePrefabDocument(m_prefabDocuments.back()->Snapshot().identity.instance, true); result.HasError())
-                    return result;
+                auto &source = *m_prefabDocuments.back();
+                if (source.HasPresentation()) {
+                    if (auto result = ClosePrefabDocument(source.Instance(), true); result.HasError()) {
+                        ReconcilePrefabApplyHistory();
+                        return result;
+                    }
+                } else {
+                    if (auto result = source.Close(source.Snapshot().fence, true); result.HasError()) {
+                        ReconcilePrefabApplyHistory();
+                        return result;
+                    }
+                    m_prefabDocuments.pop_back();
+                }
             }
         }
+        ReconcilePrefabApplyHistory();
         m_activePrefabDocument.reset();
         m_prefabViewportScene = {};
         m_viewModel.prefabDocuments.clear();

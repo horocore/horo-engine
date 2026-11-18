@@ -69,6 +69,39 @@ namespace Horo::Editor {
             redo ? ++cursor_ : --cursor_;
         }
 
+        /** @brief Tests retained entries in one direction without advancing either history boundary. */
+        template <typename Predicate> [[nodiscard]] bool Contains(const bool redo, Predicate matches) const {
+            const auto end = redo ? entries_.size() : cursor_;
+            for (auto index = redo ? cursor_ : 0; index < end; ++index)
+                if (matches(entries_[index]))
+                    return true;
+            return false;
+        }
+
+        /** @brief Retires unavailable transitions and everything beyond them in each direction.
+         * @details A skipped transition could make older deltas replay against the wrong root.
+         * @param unavailable Pure nonthrowing predicate over an entry and its replay direction.
+         * @return Whether retention changed. The current document state is untouched.
+         */
+        template <typename Predicate> bool RetireUnavailable(Predicate unavailable) noexcept {
+            auto first = cursor_;
+            while (first > 0 && !unavailable(entries_[first - 1], false))
+                --first;
+            auto last = cursor_;
+            while (last < entries_.size() && !unavailable(entries_[last], true))
+                ++last;
+            if (first == 0 && last == entries_.size())
+                return false;
+            for (std::size_t index = 0; index < first; ++index)
+                bytes_ -= entries_[index].bytes;
+            for (auto index = last; index < entries_.size(); ++index)
+                bytes_ -= entries_[index].bytes;
+            entries_.erase(entries_.begin() + static_cast<std::ptrdiff_t>(last), entries_.end());
+            entries_.erase(entries_.begin(), entries_.begin() + static_cast<std::ptrdiff_t>(first));
+            cursor_ -= first;
+            return true;
+        }
+
         /** @brief Releases history at explicit replacement/close without changing authored state. */
         void Clear() noexcept {
             entries_.clear();

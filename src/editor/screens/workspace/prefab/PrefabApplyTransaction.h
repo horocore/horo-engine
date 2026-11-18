@@ -66,6 +66,12 @@ namespace Horo::Editor {
                                                                                            const SceneTransactionContext &context,
                                                                                            bool redo);
 
+        /** @brief Retires unreachable paired boundaries on both owners, preserving contiguous reachable history. */
+        static void ReconcileHistory(SceneDocumentTransactions &scene, const SceneTransactionContext &context,
+                                     std::span<const std::unique_ptr<PrefabDocumentSession>> sources);
+        /** @brief Audits accepted source bytes. A confirmed external replacement retires dependent source history. */
+        [[nodiscard]] static Result<void> InspectSource(PrefabDocumentSession &source);
+
         /** @brief Replays the same matched group in both owners and writes both resulting files together. */
         [[nodiscard]] static PrefabApplyOutcome Replay(SceneDocumentTransactions &scene, PrefabDocumentSession &prefab,
                                                        const PrefabApplyReplayRequest &request, const ProjectMutationCoordinator &mutations,

@@ -175,7 +175,7 @@ namespace Horo::Editor {
         ReconcileContentBrowserNavigation();
         RefreshPrefabHierarchy(m_document.Snapshot());
         for (const auto &entry : m_prefabDocuments) {
-            if (const auto inspected = entry->InspectExternal(); inspected.HasError())
+            if (const auto inspected = PrefabApplyTransaction::InspectSource(*entry); inspected.HasError())
                 m_viewModel.prefabDocumentError = inspected.ErrorValue();
             entry->ReleaseStage();
         }

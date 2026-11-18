@@ -175,6 +175,65 @@ namespace Horo::Editor {
             CHECK(fixture.Read(fixture.source.project.source).bytes == initialSource.bytes);
         }
 
+        TEST_CASE("Prefab apply retires both history boundaries when one owner evicts its entry", "[editor][prefab][apply][native]") {
+            ApplyFixture fixture;
+            const auto applied = fixture.Execute();
+            REQUIRE(applied.committed);
+            REQUIRE(applied.group);
+            const auto reconcile = [&] {
+                const auto snapshot = fixture.scene.Snapshot().Value();
+                const SceneTransactionContext context{snapshot.session, snapshot.revision, snapshot.state, true};
+                PrefabApplyTransaction::ReconcileHistory(fixture.scene, context, std::span{&fixture.source.document, 1});
+            };
+
+            SECTION("Source history eviction retains the newer Scene transitions") {
+                SceneDocumentCommandExecutor sceneCommands{fixture.document, fixture.history};
+                REQUIRE(sceneCommands.Execute(CreateSceneObjectCommand{.name = "Later Scene object"}).HasValue());
+                for (unsigned index = 0; index < 128; ++index) {
+                    REQUIRE(fixture.source.document
+                                ->Execute(fixture.source.document->Snapshot().fence, RenamePrefabObject{{0}, index % 2 == 0 ? "A" : "B"})
+                                .HasValue());
+                }
+                REQUIRE_FALSE(fixture.source.document->HasApplyHistory());
+                reconcile();
+                REQUIRE(sceneCommands.Undo().HasValue());
+                CHECK_FALSE(fixture.history.CanUndo());
+                CHECK(fixture.history.CanRedo());
+                CHECK(fixture.source.document->Snapshot().canUndo);
+                CHECK(fixture.source.document->Snapshot().dirty);
+            }
+
+            SECTION("Scene history eviction releases the unmatched source transition") {
+                SceneDocumentCommandExecutor sceneCommands{fixture.document, fixture.history};
+                const auto created = sceneCommands.Execute(CreateSceneObjectCommand{.name = "Later Scene object"});
+                REQUIRE(created.HasValue());
+                for (unsigned index = 0; index < 256; ++index) {
+                    REQUIRE(sceneCommands.Execute(RenameSceneObjectCommand{created.Value().object, index % 2 == 0 ? "A" : "B"}).HasValue());
+                }
+                reconcile();
+                CHECK_FALSE(fixture.source.document->HasApplyHistory());
+                CHECK_FALSE(fixture.source.document->Snapshot().canUndo);
+                CHECK(fixture.history.CanUndo());
+                CHECK(fixture.source.document->Snapshot().source->Data().objects.front().localTransform == fixture.desired);
+            }
+            SECTION("a new Scene edit discards the entire paired Source redo range") {
+                const auto snapshot = fixture.scene.Snapshot().Value();
+                const SceneTransactionContext context{snapshot.session, snapshot.revision, snapshot.state, true};
+                const auto undone = PrefabApplyTransaction::Replay(fixture.scene, *fixture.source.document,
+                                                                   {context, fixture.source.document->Snapshot().fence, fixture.scenePath,
+                                                                    applied.sceneIdentity, *applied.group, false},
+                                                                   fixture.mutations, fixture.files);
+                REQUIRE(undone.committed);
+                REQUIRE(fixture.source.document->Snapshot().canRedo);
+                SceneDocumentCommandExecutor sceneCommands{fixture.document, fixture.history};
+                REQUIRE(sceneCommands.Execute(CreateSceneObjectCommand{.name = "New Scene branch"}).HasValue());
+                reconcile();
+                CHECK_FALSE(fixture.source.document->HasApplyHistory());
+                CHECK_FALSE(fixture.source.document->Snapshot().canRedo);
+                CHECK(fixture.history.CanUndo());
+            }
+        }
+
         TEST_CASE("Prefab apply compensates each owned write before reporting failure or recovery", "[editor][prefab][apply][native]") {
             ApplyFixture fixture;
             const auto source = fixture.source.document->Snapshot();

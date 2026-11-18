@@ -214,6 +214,26 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @copydoc PrefabDocumentSession::HasApplyHistory */
+    bool PrefabDocumentSession::HasApplyHistory() const noexcept {
+        const auto paired = [](const Delta &entry) {
+            return entry.applyGroup.has_value();
+        };
+        return history_.Contains(false, paired) || history_.Contains(true, paired);
+    }
+
+    /** @copydoc PrefabDocumentSession::SuspendPresentation */
+    void PrefabDocumentSession::SuspendPresentation() noexcept {
+        ReleaseStage();
+        presented_ = false;
+    }
+
+    /** @copydoc PrefabDocumentSession::ResumePresentation */
+    void PrefabDocumentSession::ResumePresentation(DocumentIdentity identity) noexcept {
+        identity_ = std::move(identity);
+        presented_ = true;
+    }
+
     /** @copydoc PrefabDocumentSession::NextApplyGroup */
     std::optional<PrefabApplyHistoryGroup> PrefabDocumentSession::NextApplyGroup(const bool redo) const noexcept {
         if (thread_ != std::this_thread::get_id() || !source_)

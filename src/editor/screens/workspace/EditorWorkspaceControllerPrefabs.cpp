@@ -356,7 +356,7 @@ namespace Horo::Editor {
         if (!selection || !root)
             return Result<void>::Failure(MakeError(Prefab::PrefabErrors::AddressInvalid));
         const auto source = std::ranges::find_if(m_prefabDocuments, [asset = root->source](const auto &document) {
-            return document->Snapshot().source->Data().assetId == asset;
+            return document->HasPresentation() && document->Snapshot().source->Data().assetId == asset;
         });
         if (source == m_prefabDocuments.end())
             return Result<void>::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
@@ -389,6 +389,25 @@ namespace Horo::Editor {
                                    DocumentChangeKind::PrefabInstanceValuesChanged);
     }
 
+    /** @copydoc EditorWorkspaceController::ReconcilePrefabApplyHistory */
+    void EditorWorkspaceController::ReconcilePrefabApplyHistory() {
+        if (m_prefabSceneTransaction.CheckCurrent().HasError() && std::ranges::none_of(m_prefabDocuments, [](const auto &document) {
+            return document->HasApplyHistory();
+        }))
+            return;
+        const auto context = CapturePrefabSceneContext();
+        if (context.HasError())
+            return;
+        auto maintenance = context.Value();
+        maintenance.cancellation = {};
+        PrefabApplyTransaction::ReconcileHistory(m_prefabSceneTransaction, maintenance, m_prefabDocuments);
+        std::erase_if(m_prefabDocuments, [](const auto &document) {
+            return !document->HasPresentation() && !document->HasApplyHistory();
+        });
+        m_viewModel.canUndo = m_history.CanUndo();
+        m_viewModel.canRedo = m_history.CanRedo();
+    }
+
     /** @copydoc EditorWorkspaceController::ReplayPrefabApply */
     Result<bool> EditorWorkspaceController::ReplayPrefabApply(const bool redo, PrefabDocumentSession *source) {
         using Return = Result<bool>;
@@ -418,6 +437,12 @@ namespace Horo::Editor {
         if (!m_viewModel.prefabApplyAvailable || m_viewModel.sceneExternalConflict || m_viewModel.recoveryAvailable ||
             m_playSession.IsActive())
             return Return::Failure(MakeError(SceneTransactionError(SceneTransactionFailure::Unauthorized)));
+        if (auto inspected = PrefabApplyTransaction::InspectSource(*source); inspected.HasError())
+            return Return::Failure(std::move(inspected).ErrorValue());
+        if (source->Snapshot().externalConflict) {
+            ReconcilePrefabApplyHistory();
+            return Return::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+        }
         const auto disk = CreationSceneSourceFence(m_defaultScenePath, m_sceneFingerprint);
         if (disk.HasError() || !disk.Value())
             return Return::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
