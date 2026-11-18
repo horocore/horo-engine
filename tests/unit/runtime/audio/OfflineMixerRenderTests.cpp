@@ -147,7 +147,7 @@ namespace {
         ++source.initialClock.observedAt.clockDomain;
         const auto invalid = RenderOfflineAudio(offline.Request(7), source);
         REQUIRE(invalid.HasError());
-        CHECK(invalid.ErrorValue().code == AudioErrors::CommandBufferInvalid.code);
+        CHECK(invalid.ErrorValue().code.Value() == AudioErrors::CommandBufferInvalid.code.Value());
         CHECK(offline.voice->Cursor().frame == 0);
         CHECK(RenderOfflineAudio(offline.Request(7), offline.Source()).HasValue());
     }
@@ -174,15 +174,21 @@ namespace {
         CHECK(receipt.publication.WasCommitted());
         CHECK(result.Value().tailFrames == pcm.Value().tailFrames);
         CHECK(fileOwner.voice->Cursor().frame == ContentFrames);
-        const auto read = files.ReadFileBounded(request.destination, 1'024 * 1'024);
-        REQUIRE(read.HasValue());
-        const auto &bytes = read.Value();
         constexpr std::size_t WaveDataOffset = 80;
-        REQUIRE(bytes.size() == WaveDataOffset + pcm.Value().interleaved.size() * sizeof(float));
+        const auto expectedBytes = WaveDataOffset + pcm.Value().interleaved.size() * sizeof(float);
+        const auto read = files.ReadFileBounded(request.destination, expectedBytes);
+        if (read.HasError())
+            FAIL(read.ErrorValue().message);
+        const auto &bytes = read.Value();
+        REQUIRE(bytes.size() == expectedBytes);
         for (std::size_t sample = 0; sample < pcm.Value().interleaved.size(); ++sample) {
-            const auto bits = std::bit_cast<std::uint32_t>(pcm.Value().interleaved[sample]);
-            for (std::size_t byte = 0; byte < sizeof(bits); ++byte)
-                CHECK(bytes[WaveDataOffset + sample * sizeof(bits) + byte] == ((bits >> (byte * 8)) & 0xffu));
+            std::uint32_t encoded{};
+            for (std::size_t byte = 0; byte < sizeof(encoded); ++byte)
+                encoded |= static_cast<std::uint32_t>(bytes[WaveDataOffset + sample * sizeof(encoded) + byte]) << (byte * 8);
+            if (encoded != std::bit_cast<std::uint32_t>(pcm.Value().interleaved[sample])) {
+                CAPTURE(sample);
+                FAIL("WAVE sample differs from the offline mixer PCM");
+            }
         }
     }
 }  // namespace

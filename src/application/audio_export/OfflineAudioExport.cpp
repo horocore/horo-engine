@@ -239,6 +239,7 @@ namespace Horo::Application::Internal {
         auto prepared = Audio::Backend::OfflineMixerSession::Prepare(request.render, source);
         if (prepared.HasError())
             return Outcome::Failure(prepared.ErrorValue());
-        return ExportOfflineAudioWave(request, prepared.Value().Port(), files, receipt);
+        auto session = std::move(prepared).Value();
+        return ExportOfflineAudioWave(request, session.Port(), files, receipt);
     }
 }  // namespace Horo::Application::Internal

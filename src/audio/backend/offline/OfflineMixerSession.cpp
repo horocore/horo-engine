@@ -110,6 +110,7 @@ namespace Horo::Audio::Backend {
         auto prepared = OfflineMixerSession::Prepare(request, source);
         if (prepared.HasError())
             return Result<OfflineAudioRenderOutput>::Failure(prepared.ErrorValue());
-        return RenderOfflineAudio(request, prepared.Value().Port());
+        auto session = std::move(prepared).Value();
+        return RenderOfflineAudio(request, session.Port());
     }
 }  // namespace Horo::Audio::Backend
