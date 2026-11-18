@@ -90,6 +90,7 @@ namespace Horo::Application::Internal {
         class PreparationScope final {
         public:
             PreparationScope(OpenXRPlayHost &owner, const std::shared_ptr<SceneState> &state) noexcept : owner_(owner), state_(state) {}
+
             PreparationScope(const PreparationScope &) = delete;
             PreparationScope &operator=(const PreparationScope &) = delete;
 
