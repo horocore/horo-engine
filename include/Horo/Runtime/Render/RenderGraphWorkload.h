@@ -43,7 +43,8 @@ namespace Horo::Render {
 
     /** @brief Copies one tightly packed whole RGBA8 base level from a registered host-visible buffer to a registered texture.
      * @details Source requires CopySource and exactly byteCount bytes. Destination requires CopyDestination and exactly extent,
-     * TwoD, one mip, one layer, one sample and Rgba8Unorm. No offsets, row padding, partial uploads, allocation or wait is implied.
+     * TwoD, one mip, one layer, one sample and the declared format (Rgba8Unorm, R32Float or Rgba32Float).
+     * No offsets, row padding, partial uploads, allocation or wait is implied.
      * Graph uses are source Read/CopySource and destination Write/CopyDestination. Submission leases retain both resources;
      * subsequent compiled graph uses establish the final layout. This operation does not implement CreateTexture(initialData).
      */
@@ -52,6 +53,7 @@ namespace Horo::Render {
         RenderGraphResourceId destination;
         FramebufferExtent extent;
         std::size_t byteCount{};
+        RenderTextureFormat format{RenderTextureFormat::Rgba8Unorm}; /**< Exact tightly packed source and destination pixel format. */
     };
 
     /** @brief One bounded cooked light-culling dispatch over four distinct whole graph buffers.

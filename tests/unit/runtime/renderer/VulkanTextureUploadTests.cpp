@@ -16,7 +16,7 @@ namespace {
     /** @brief Creates actual registered owner instances and host-uploaded bytes through the existing resource path. */
     UploadResources CreateUploadResources(NativeGraphFixture &fixture, bool initialize = true, std::size_t bytes = 16,
                                           RenderTextureFormat format = RenderTextureFormat::Rgba8Unorm) {
-        std::array<std::byte, 20> pixels{};
+        std::array<std::byte, 64> pixels{};
         const RenderBufferDescriptor buffer{bytes, RenderBufferUsage::CopySource, RenderBufferAccess::HostVisible};
         const auto bufferPlan = fixture.resources.QueryBufferMemoryCost(buffer);
         REQUIRE(bufferPlan.HasValue());
@@ -44,7 +44,8 @@ namespace {
     };
 
     /** @brief Authors the real closed copy workload with exact imported-state and submission evidence. */
-    UploadPacket MakeUploadPacket(UploadResources resources) {
+    UploadPacket MakeUploadPacket(UploadResources resources, std::size_t bytes = 16,
+                                  RenderTextureFormat format = RenderTextureFormat::Rgba8Unorm) {
         using SubmissionTest::Take;
         auto builder = Take(RenderGraphBuilder::Create({.maxPasses = 1, .maxResources = 2, .maxUsages = 2, .maxDependencies = 1}));
         const auto pass = Take(builder.AddPass(RenderPassKind::Copy, RenderQueueRole::Graphics));
@@ -65,7 +66,7 @@ namespace {
         const auto synchronization = Take(SynthesizeRenderGraphSynchronization(authored, schedule, queues, initial));
         auto graph = Take(CompileRenderGraphExecution(authored, schedule, synchronization, queues));
         return {std::move(graph),
-                {RenderGraphPassWorkload{pass, RenderGraphTextureUpload{buffer, texture, {2, 2}, 16}}},
+                {RenderGraphPassWorkload{pass, RenderGraphTextureUpload{buffer, texture, {2, 2}, bytes, format}}},
                 {RenderGraphResourceInstance{buffer, resources.buffer}, RenderGraphResourceInstance{texture, resources.texture}},
                 {RenderGraphQueueSubmission{{{1}, {1}, {}, {{1}, 1}}, {0, 1}}}};
     }
@@ -111,6 +112,28 @@ TEST_CASE("Vulkan texture upload protocol retains registered resources until act
     CHECK(fixture.commandState.state.waitCalls == 0);
 }
 
+TEST_CASE("Vulkan texture upload records the two exact analytic float layouts", "[renderer][vulkan][texture-upload][protocol-fake]") {
+    NativeGraphFixture fixture;
+    auto format = RenderTextureFormat::R32Float;
+    std::size_t bytes = 16;
+    SECTION("Single-channel float") {}
+    SECTION("Four-channel float") {
+        format = RenderTextureFormat::Rgba32Float;
+        bytes = 64;
+    }
+    const auto resources = CreateUploadResources(fixture, true, bytes, format);
+    auto packet = MakeUploadPacket(resources, bytes, format);
+    RenderGraphLeaseTransfer transfer;
+    REQUIRE(fixture.graph.BeginFrame({1}).HasValue());
+    REQUIRE(fixture.graph.ExecuteGraph(Request(packet, fixture, transfer)).HasValue());
+    CHECK(std::ranges::count(fixture.encoded.operations, "upload-image") == 1);
+    fixture.graph.AbortFrame({1});
+    REQUIRE(fixture.graph.BeginShutdown().HasValue());
+    REQUIRE(fixture.graph.PollDrain().Value() == RenderBackendDrainProgress::Drained);
+    fixture.resources.DestroyBuffer(resources.buffer);
+    fixture.resources.DestroyTexture(resources.texture);
+}
+
 TEST_CASE("Vulkan texture upload protocol rejects undefined or mismatched native resources before recording",
           "[renderer][vulkan][texture-upload][protocol-fake]") {
     NativeGraphFixture fixture;
@@ -123,8 +146,8 @@ TEST_CASE("Vulkan texture upload protocol rejects undefined or mismatched native
     SECTION("padded source differs from exact payload") {
         bytes = 20;
     }
-    SECTION("native format differs from closed RGBA8") {
-        format = RenderTextureFormat::Rgba16Float;
+    SECTION("native format differs from authored RGBA8 despite equal byte length") {
+        format = RenderTextureFormat::R32Float;
     }
     const auto resources = CreateUploadResources(fixture, initialize, bytes, format);
     auto packet = MakeUploadPacket(resources);
