@@ -1,6 +1,11 @@
 #include "../runtime/world_streaming/WorldArtifactCodecTestSupport.h"
 #include "AllocationProbe.h"
+#include "HeadlessWorldMount.h"
+#include "Horo/Assets/AssetProvider.h"
+#include "Horo/Foundation/JobSystem.h"
+#include "Horo/Runtime/Scene/RuntimeScene.h"
 #include "Horo/WorldCook/WorldCookPublication.h"
+#include "Horo/WorldStreaming/WorldArtifactErrors.h"
 #include "assets/AssetCookOutputFixture.h"
 
 #include <fstream>
@@ -184,6 +189,54 @@ namespace Horo::WorldCook {
             }
         };
     }  // namespace
+
+    TEST_CASE("Headless World mount pins a committed release and retires its origin with the Scene owner",
+              "[world_cook][native][mounted_world]") {
+        using Application::Internal::HeadlessWorldMount;
+        using Application::Internal::HeadlessWorldSelection;
+        Fixture fixture;
+        auto published = fixture.Publish();
+        REQUIRE(published.HasValue());
+        REQUIRE(published.Value().publication);
+        const auto release = fixture.Release();
+        const HeadlessWorldSelection selection{release.targetRoot,
+                                               release.target,
+                                               published.Value().publication->manifestDigest,
+                                               release.indexArtifact,
+                                               release.dependencyArtifact,
+                                               Math::WorldCoordinate64::FromMillimeters(20'000'000'001, -500, 180)};
+        JobSystem jobs{JobSystemConfig{1, 4}};
+        A::MemoryAssetProvider provider;
+        A::AssetLoadService loads{jobs, provider};
+        A::AssetRegistry registry;
+        S::RuntimeSceneService scene{registry, loads, S::RuntimeSceneAssetLimits{}, S::SceneRuntimeId{101}};
+        const NativeDurableFileSystem files;
+        auto admitted = HeadlessWorldMount::Prepare(files, selection, 5, scene);
+        REQUIRE(admitted.HasValue());
+        auto mount = std::move(admitted).Value();
+        const auto lease = mount->Origin().Lease().Value();
+        CHECK(lease.Get().Value().Origin() == selection.origin);
+        CHECK(lease.Get().Value().Binding().identity == IdentityFrom<W::OriginFrameId>(5));
+
+        auto stale = selection;
+        stale.manifest = {};
+        W::TestSupport::RequireError(HeadlessWorldMount::Prepare(files, stale, 6, scene), W::WorldArtifactErrors::Stale);
+        stale = selection;
+        stale.dependencies = Asset(4);  // Committed cell ID cannot satisfy the exact sibling role.
+        W::TestSupport::RequireError(HeadlessWorldMount::Prepare(files, stale, 6, scene), W::WorldArtifactErrors::Invalid);
+        CancellationSource cancellation;
+        cancellation.RequestCancellation();
+        W::TestSupport::RequireError(HeadlessWorldMount::Prepare(files, selection, 6, scene, cancellation.Token()),
+                                     W::WorldArtifactErrors::Cancelled);
+        REQUIRE(lease.Get().HasValue());
+
+        auto replacement = HeadlessWorldMount::Prepare(files, selection, 6, scene);
+        REQUIRE(replacement.HasValue());
+        auto replacementLease = replacement.Value()->Origin().Lease().Value();
+        mount.reset();
+        CHECK(lease.Get().HasError());
+        CHECK(replacementLease.Get().Value().Binding().identity == IdentityFrom<W::OriginFrameId>(6));
+    }
 
     TEST_CASE("Cook test directory collisions preserve existing roots and bound exclusive admission", "[world_cook][native]") {
         T::TempDir parent;

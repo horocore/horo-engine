@@ -344,7 +344,10 @@ namespace Horo::Application::Internal {
                                                .animationTarget = animationTarget,
                                                .animationIdentities = animationTarget.IsValid() ? std::move(animationIdentities) : nullptr,
                                                .navigation = resources->navigation,
-                                               .navigationPath = launch.navigationPath};
+                                               .navigationPath = launch.navigationPath,
+                                               .mountedWorld = launch.sceneInput.world ? std::make_shared<const HeadlessWorldSelection>(
+                                                                                             *launch.sceneInput.world)
+                                                                                       : nullptr};
             if (!launch.cookedDecisionBindings.empty()) {
                 if (!resources->committed)
                     return Result<NetworkProductComposition>::Failure(

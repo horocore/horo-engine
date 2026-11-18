@@ -9,6 +9,7 @@
 #include "Horo/Prefab/PrefabLimits.h"
 #include "Horo/Runtime/Scene/RuntimeSceneDefinition.h"
 #include "Horo/Runtime/Scene/SceneAnimationRuntime.h"
+#include "Horo/WorldStreaming/OriginFrame.h"
 #include "NetworkProductComposition.h"
 #include "ScenePhysicsHost.h"
 
@@ -22,6 +23,7 @@ namespace Horo::Vfx {
 namespace Horo::Application::Internal {
     struct ProjectSceneNavigationSelection;
     struct HeadlessPerceptionPolicy;
+    struct HeadlessWorldSelection;
 
     /** @brief Selects the sole descriptor authority for an authored Perception policy. */
     enum class HeadlessPerceptionProvider {
@@ -91,6 +93,7 @@ namespace Horo::Application::Internal {
             perceptionExecution; /**< Frozen native producer and explicit authoritative spatial execution policy. */
         std::optional<HeadlessPerceptionProjectAdmission>
             perceptionProject; /**< Explicit project-backed endpoint and coordinate policy for the selected cooked definition. */
+        std::shared_ptr<const HeadlessWorldSelection> mountedWorld; /**< Optional exact standalone World cook selection. */
     };
 
     /** @brief Composes actual project Scene services and their sole aggregate-owned Physics/Character pair.
@@ -129,6 +132,11 @@ namespace Horo::Application::Internal {
     [[nodiscard]] std::optional<Runtime::RuntimeSceneView> InspectHeadlessScene(const Network::INetworkModeService &service) noexcept;
     [[nodiscard]] std::optional<Runtime::EntityRef> InspectHeadlessAnimationEntity(const Network::INetworkModeService &service,
                                                                                    Runtime::SceneObjectId object) noexcept;
+
+    /** @brief Observe the committed World origin through an exact active Scene service.
+     * @param service Actual headless Scene owner. @return Generation lease when the selected mount is active.
+     */
+    [[nodiscard]] std::optional<WorldStreaming::OriginFrameLease> InspectHeadlessWorldOrigin(const Network::INetworkModeService &service);
 
     /** @brief Reads the already-bound native path scope on its owner lane, when explicitly selected. */
     [[nodiscard]] std::shared_ptr<const Gameplay::GameplayNavigationContext> InspectHeadlessNavigationContext(

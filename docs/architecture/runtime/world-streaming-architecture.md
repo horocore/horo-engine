@@ -2200,3 +2200,24 @@ failed preparation preserves the active mount. Source changes withdraw actual
 registrations before recomputation. Document replacement, close, workspace
 teardown and explicit stop revoke the bridge before native shutdown. No packaged
 artifact or policy is edited by inspection.
+
+### Standalone committed World admission
+
+The headless standalone project Scene host accepts an explicit
+`--world-mount <absolute-cook-root> <cook-target> <manifest-sha256> <index-asset-id>
+<dependency-asset-id> <x-mm> <y-mm> <z-mm>` launch selection. It pins one committed
+Assets generation and accepts only the selected `world.index`, its matching
+`world.dependencies` and every corresponding `world.cell` envelope. The runtime
+mount owns the verified cell payload provider, partition registry, source planner,
+scheduler and residency ledgers. Its lifecycle is scoped to the private Scene
+candidate and retires before that Scene service. Missing content and mismatched
+targets, manifests, dependency siblings or cell identities fail startup without
+publishing a partial mount.
+
+The standalone host requires the Horo axis convention. It takes its origin from
+the three explicitly selected signed millimeter coordinates. Those coordinates
+grant no camera, entity or geometry authority to the ordinary Scene. A read-only
+origin observation requires a live Scene service and expires when the mount
+retires. This route uses the committed cook store during cold startup and travel.
+Archive installation, runtime cell scheduling and activation, gameplay focal
+positions and XR view projection require separate host composition.

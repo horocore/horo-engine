@@ -53,6 +53,16 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             return record_->scenes->ActiveScene();
         }
 
+        /** @brief Returns one revocable exact mounted-world origin lease to the active Scene's consumers. */
+        std::optional<WorldStreaming::OriginFrameLease> WorldOrigin() const {
+            if (!ActiveScene() || request_.service != Network::NetworkModeServiceKind::Scene || !record_->mountedWorld)
+                return {};
+            auto lease = record_->mountedWorld->Origin().Lease();
+            if (lease.HasError())
+                return {};
+            return std::move(lease).Value();
+        }
+
         std::optional<Runtime::EntityRef> AnimationEntity(Runtime::SceneObjectId object) const noexcept {
             const auto scene = ActiveScene();
             return scene ? scene->Find(object) : std::nullopt;
@@ -279,7 +289,29 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return vfx;
             if (auto prepared = PrepareHeadlessSceneAtLoadBoundary(*record_->scenes, *owners_->definition, boundary); prepared.HasError())
                 return Result<void>::Failure(prepared.ErrorValue());
-            return PrepareConfiguredTemplates();
+            if (auto templates = PrepareConfiguredTemplates(); templates.HasError())
+                return templates;
+            return PrepareConfiguredWorldMount();
+        }
+
+        /** @brief Attaches verified World authority only to the exact live standalone Scene candidate. */
+        Result<void> PrepareConfiguredWorldMount() const {
+            const auto &input = *owners_->configured;
+            if (!input.mountedWorld)
+                return Result<void>::Success();
+            if (request_.world != Network::NetworkModeWorldKind::Standalone)
+                return Result<void>::Failure(
+                    MakeError(Network::NetworkErrors::NetworkModeInvalid, "Committed World mounting requires standalone authority."));
+            if (std::chrono::steady_clock::now() >= input.load.deadline)
+                return Result<void>::Failure(MakeError(HeadlessSceneLoadErrors::Deadline));
+            auto world = HeadlessWorldMount::Prepare(NativeDurableFileSystem{}, *input.mountedWorld, record_->generation, *record_->scenes,
+                                                     record_->sceneCancellation);
+            if (world.HasError())
+                return Result<void>::Failure(world.ErrorValue());
+            if (std::chrono::steady_clock::now() >= input.load.deadline)
+                return Result<void>::Failure(MakeError(HeadlessSceneLoadErrors::Deadline));
+            record_->mountedWorld = std::move(world).Value();
+            return Result<void>::Success();
         }
 
         Result<void> PrepareConfiguredNative() const {

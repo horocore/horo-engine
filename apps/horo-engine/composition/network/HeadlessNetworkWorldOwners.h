@@ -4,6 +4,7 @@
  */
 #include "HeadlessNavigationPathScope.h"
 #include "HeadlessNetworkServices.h"
+#include "HeadlessWorldMount.h"
 #include "Horo/AI/PerceptionSpatialBroadphase.h"
 #include "Horo/Gameplay/GameplayVfxScene.h"
 #include "Horo/Network/NetworkErrors.h"
@@ -50,6 +51,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             preparedGameplay;                                        /**< Retained through metadata qualification and scoped activation. */
         std::vector<AI::AiControllerDescriptor> admittedControllers; /**< Outlives the Scene participant's immutable borrow. */
         std::unique_ptr<Runtime::RuntimeSceneService> scenes;
+        std::unique_ptr<HeadlessWorldMount> mountedWorld;          /**< Retires before the Scene service it binds. */
         std::unique_ptr<Prefab::PrefabTemplateProvider> templates; /**< Retired before Scene, borrowing its real loader. */
     };
 
@@ -181,6 +183,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             record.navigationPath->Revoke();
         if (record.navigation)
             record.navigation->coordinator.BeginShutdown();
+        record.mountedWorld.reset();
         if (record.scenes)
             record.scenes->Shutdown();
         if (record.ai)

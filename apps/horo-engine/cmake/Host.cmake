@@ -14,6 +14,7 @@ add_library(HoroNetworkProductHost STATIC
     horo-engine/composition/network/NetworkProductComposition.h
     horo-engine/composition/network/HeadlessSceneLoadBoundary.cpp
     horo-engine/composition/network/HeadlessProjectScene.cpp
+    horo-engine/composition/network/HeadlessWorldMount.cpp
     horo-engine/composition/network/GameplayWorldComposition.cpp
 )
 target_compile_features(HoroNetworkProductHost PUBLIC cxx_std_20)
@@ -27,7 +28,7 @@ target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::NetworkRuntime H
     HoroEngine::Physics HoroEngine::Runtime HoroEngine::GameplayModuleHost HoroEngine::GameplayLua
     HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::GameplayNavigationIntegration HoroEngine::PrefabRuntime HoroEngine::NetworkDebuggerApplication
     HoroEngine::ProjectCollisionSettings HoroEngine::PlatformProjectReadFiles HoroEngine::SceneRuntimeConversion HoroEngine::AISceneIntegration)
-target_link_libraries(HoroNetworkProductHost PUBLIC HoroScenePhysicsHost)
+target_link_libraries(HoroNetworkProductHost PUBLIC HoroScenePhysicsHost HoroEngine::WorldStreaming)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::AnimationSceneIntegration HoroAnimationHostIdentityInternal)
 if(HORO_BUILD_NETWORK_GNS)
     target_sources(HoroNetworkProductHost PRIVATE horo-engine/composition/network/NetworkProductGnsSelection.cpp)

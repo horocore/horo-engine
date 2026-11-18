@@ -1,5 +1,6 @@
 #include "NetworkProductLaunchOptions.h"
 
+#include "Horo/Foundation/Sha256.h"
 #include "Horo/Gameplay/GameModuleRetirement.h"
 #include "Horo/Network/NetworkErrors.h"
 
@@ -291,6 +292,36 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Parses one exact committed World launch selection and canonical integer-millimeter origin. */
+        Result<void> ReadWorldMount(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch) {
+            constexpr std::size_t ArgumentCount = 9;
+            if (launch.sceneInput.world || arguments.size() - index < ArgumentCount)
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                                       "Use --world-mount <root> <target> <manifest SHA-256> <index "
+                                                       "AssetId> <dependency AssetId> <x-mm> <y-mm> <z-mm> once."));
+            auto root = ParseSceneHostAbsolutePath(arguments[index + 1]);
+            auto target = Assets::AssetCookTargetId::Parse(arguments[index + 2]);
+            const auto manifest = ParseSha256(arguments[index + 3]);
+            const auto artifact = Assets::AssetId::Parse(arguments[index + 4]);
+            const auto dependencies = Assets::AssetId::Parse(arguments[index + 5]);
+            if (root.HasError() || target.HasError() || manifest.HasError() || artifact.HasError() || dependencies.HasError())
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                                       "Invalid committed World root, target, manifest digest or artifact identity."));
+            std::array<std::int64_t, 3> mm{};
+            for (std::size_t axis = 0; axis < mm.size(); ++axis) {
+                const std::string_view text{arguments[index + 6 + axis]};
+                const auto parsed = std::from_chars(text.data(), text.data() + text.size(), mm[axis]);
+                if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size())
+                    return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                                           "World origin must use three signed integer millimeter coordinates."));
+            }
+            const auto origin = Math::WorldCoordinate64::FromMillimeters(mm[0], mm[1], mm[2]);
+            launch.sceneInput.world.emplace(HeadlessWorldSelection{std::move(root).Value(), std::move(target).Value(), manifest.Value(),
+                                                                   artifact.Value(), dependencies.Value(), origin});
+            index += ArgumentCount;
+            return Result<void>::Success();
+        }
+
         /** @brief Reads the one project-relative policy path without resolving an executable or source file. */
         Result<void> ReadPerceptionPolicy(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch) {
             if (!launch.sceneInput.perceptionPolicyPath.empty() || arguments.size() - index < 2)
@@ -372,6 +403,11 @@ namespace Horo::Application::Internal {
                         return policy;
                     continue;
                 }
+                if (key == "--world-mount") {
+                    if (auto world = ReadWorldMount(arguments, index, launch); world.HasError())
+                        return world;
+                    continue;
+                }
                 if (key == "--game-perception-policy") {
                     if (auto policy = ReadPerceptionPolicy(arguments, index, launch); policy.HasError())
                         return policy;
@@ -397,6 +433,10 @@ namespace Horo::Application::Internal {
                 return permission;
             if (auto valid = ValidateSceneOptions(seen, launch.sceneInput); valid.HasError())
                 return valid;
+            if (launch.sceneInput.world && (launch.role != Net::NetworkProjectRole::Standalone || launch.sceneInput.scene.empty() ||
+                                            launch.purpose != Net::NetworkWorldCompositionPurpose::Gameplay))
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "Committed World mounting requires a standalone project Scene."));
             if (auto ai = ValidateCookedDecisions(launch); ai.HasError())
                 return ai;
             return ValidateNavigationPathPolicy(launch);

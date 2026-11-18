@@ -270,6 +270,12 @@ namespace Horo::Application::Internal {
         return world ? world->ActiveScene() : std::nullopt;
     }
 
+    /** @copydoc InspectHeadlessWorldOrigin */
+    std::optional<WorldStreaming::OriginFrameLease> InspectHeadlessWorldOrigin(const Network::INetworkModeService &service) {
+        const auto *world = dynamic_cast<const WorldService *>(&service);
+        return world ? world->WorldOrigin() : std::nullopt;
+    }
+
     std::optional<Runtime::EntityRef> InspectHeadlessAnimationEntity(const Network::INetworkModeService &service,
                                                                      Runtime::SceneObjectId object) noexcept {
         const auto *world = dynamic_cast<const WorldService *>(&service);
