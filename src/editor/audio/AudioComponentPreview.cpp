@@ -35,4 +35,9 @@ namespace Horo::Editor::AudioComponentPreviewErrors {
                                     .defaultSeverity = ErrorSeverity::Error,
                                     .summary = "The preview capture no longer matches the workspace.",
                                     .remediationHint = "Refresh the current selection and source revision."};
+    const ErrorCodeDescriptor UnsupportedSwitch{.domain = Domain,
+                                                .code = ErrorCode{"editor.audio_preview.unsupported_switch"},
+                                                .defaultSeverity = ErrorSeverity::Error,
+                                                .summary = "The selected output switch policy is unavailable.",
+                                                .remediationHint = "Request an explicit restart on a supported output role."};
 }  // namespace Horo::Editor::AudioComponentPreviewErrors

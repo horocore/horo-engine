@@ -2654,6 +2654,23 @@ transitions. Device loss, reopen, and reconfigure events are reported by the
 middleware backend so that Horo's `AudioRuntime` remains in a typed state even
 when the middleware owns the device.
 
+### Explicit Editor Preview Output Replacement
+
+The editor preview owner admits a switch only for the selected object, current
+document revision and exact active device/format/callback epoch. The request
+chooses a backend-local default role and a restart or preserve policy. Restart
+retires the old output and resolves the requested role in the selected backend's
+fresh catalog. It then creates a new runtime and restarts the originally
+admitted clip from its beginning. The host retains one bounded decoded source
+off the callback so later file changes cannot alter the restarted preview.
+
+The preview publishes one receipt per accepted switch. Application requires the
+replacement callback's exact Start receipt. The workspace can revoke a pending
+switch through its normal preview stop or selection/revision invalidation. An
+unsupported preserve policy leaves current playback running, since this
+composition has no exact fractional cursor transfer contract. A native device
+notification alone does not authorize a replacement.
+
 ## Platform Focus And Suspension Policy
 
 Audio focus behavior is explicit per host/profile:

@@ -464,6 +464,7 @@ namespace Horo::Editor {
         std::optional<Runtime::CharacterControllerComponent> characterPayload = std::nullopt;
         std::optional<Runtime::AudioListenerComponent> audioListenerPayload;
         std::optional<DocumentRevision> audioPreviewRevision;
+        std::optional<AudioComponentPreviewOutputSwitch> audioPreviewOutputSwitch;
         std::optional<SceneObjectEditorState> editorStatePayload = std::nullopt;
         std::optional<ComponentType> componentTypePayload = std::nullopt;
         std::optional<Gameplay::BehaviorTypeId> behaviorTypePayload = std::nullopt;

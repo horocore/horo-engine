@@ -185,8 +185,10 @@ namespace Horo::Editor {
         /** @brief Host must call before destroying the borrowed world owner; retained reader leases remain immutable and valid. */
         void DetachWorldSourceOwner() noexcept;
         /** @brief Starts captured audio through the injected host, never through a widget/backend bypass.
-         * @param object Exact selected authored source. @param revision Expected document revision. @return Typed admission/failure. */
-        [[nodiscard]] Result<void> StartAudioPreview(SceneObjectId object, DocumentRevision revision);
+         * @param object Exact selected authored source. @param revision Expected document revision.
+         * @param outputSwitch Explicit replacement intent, if supplied. @return Typed admission/failure. */
+        [[nodiscard]] Result<void> StartAudioPreview(SceneObjectId object, DocumentRevision revision,
+                                                     std::optional<AudioComponentPreviewOutputSwitch> outputSwitch = std::nullopt);
         /** @brief Revokes only this workspace's output, retaining native ownership in the application. */
         void StopAudioPreview() noexcept;
         /** @brief Reconciles authoring/selection changes and copies current typed preview facts. */

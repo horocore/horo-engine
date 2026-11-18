@@ -9,7 +9,7 @@ namespace Horo::Editor {
         switch (cmd.command) {
             case EditorWorkspaceViewCommand::StartAudioComponentPreview:
                 if (cmd.objectPayload && cmd.audioPreviewRevision)
-                    static_cast<void>(StartAudioPreview(*cmd.objectPayload, *cmd.audioPreviewRevision));
+                    static_cast<void>(StartAudioPreview(*cmd.objectPayload, *cmd.audioPreviewRevision, cmd.audioPreviewOutputSwitch));
                 break;
             case EditorWorkspaceViewCommand::StopAudioComponentPreview:
                 StopAudioPreview();
@@ -35,7 +35,8 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorWorkspaceController::StartAudioPreview */
-    Result<void> EditorWorkspaceController::StartAudioPreview(const SceneObjectId object, const DocumentRevision revision) {
+    Result<void> EditorWorkspaceController::StartAudioPreview(const SceneObjectId object, const DocumentRevision revision,
+                                                              std::optional<AudioComponentPreviewOutputSwitch> outputSwitch) {
         const auto fail = [this](const Error &error) {
             m_viewModel.audioPreviewFailure = error;
             return Result<void>::Failure(error);
@@ -46,6 +47,17 @@ namespace Horo::Editor {
         if (revision != m_document.Revision() || m_viewModel.primarySelection != object || !scene ||
             m_activeRuntimeRevision.value != m_document.State().value)
             return fail(MakeError(AudioComponentPreviewErrors::Stale));
+        if (outputSwitch) {
+            if (auto switched = m_audioPreview->Start({.workspace = m_audioPreviewWorkspace,
+                                                       .revision = revision.value,
+                                                       .object = object.value,
+                                                       .outputSwitch = std::move(outputSwitch)});
+                switched.HasError())
+                return fail(switched.ErrorValue());
+            m_viewModel.audioPreviewFailure.reset();
+            ReconcileAudioPreview();
+            return Result<void>::Success();
+        }
         const auto entity = scene->Find(Runtime::SceneObjectId{object.value});
         if (!entity)
             return fail(MakeError(AudioComponentPreviewErrors::Stale));
