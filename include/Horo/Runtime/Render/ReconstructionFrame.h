@@ -88,7 +88,8 @@ namespace Horo::Render {
     struct ReconstructionFrameRequest final {
         ReconstructionKind kind{ReconstructionKind::Temporal};
         ReconstructionColorStage colorStage{ReconstructionColorStage::PreExposed};
-        TemporalHistoryCompatibility compatibility;
+        TemporalHistoryCompatibility
+            compatibility; /**< Spatial requires view, source/target extents and device only. Temporal requires the complete identity. */
         RenderResourceOwnerId resourceOwner;
         ReconstructionTiming timing;
         RenderProjectionDescriptor projection;

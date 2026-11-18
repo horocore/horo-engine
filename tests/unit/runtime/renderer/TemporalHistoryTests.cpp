@@ -120,6 +120,54 @@ TEST_CASE("Reconstruction accepts typed temporal and spatial input on the admitt
     RequireErrorCode(rejected.ErrorValue(), ReconstructionErrors::InvalidFrame);
 }
 
+TEST_CASE("Spatial current-frame admission does not invent temporal identity", "[runtime][renderer][reconstruction][native]") {
+    auto capabilities = ReconstructionCapabilities();
+    capabilities.features.Enable(RenderCapability::Compute);
+    capabilities.queues.compute = true;
+    auto request = ReconstructionRequest();
+    const auto full = request.compatibility;
+    request.compatibility = {.view = full.view,
+                             .renderExtent = full.renderExtent,
+                             .targetExtent = full.targetExtent,
+                             .deviceGeneration = capabilities.deviceIncarnation};
+    request.kind = ReconstructionKind::Spatial;
+    request.positiveLinearDepth.reset();
+    request.motion.reset();
+    request.masks = {};
+    request.output = {.descriptor = {.extent = full.targetExtent,
+                                     .format = RenderTextureFormat::Rgba32Float,
+                                     .usage = RenderTextureUsage::Storage | RenderTextureUsage::Sampled},
+                      .lifetime = RenderGraphResourceClass::Persistent,
+                      .writeUsage = RenderGraphUsageKind::Storage,
+                      .resident = RenderTextureHandle{{9}, 7, 1}};
+    const auto dispatch = PrepareNativeReconstructionDispatch(request, capabilities, {});
+    REQUIRE(dispatch.HasValue());
+    CHECK(dispatch.Value().entry == NativeReconstructionEntry::Spatial);
+    CHECK(dispatch.Value().constants.Groups() == FramebufferExtent{240, 135});
+    SECTION("Temporal keeps the full compatibility contract") {
+        request.kind = ReconstructionKind::Temporal;
+    }
+    SECTION("Color must be from the current frame") {
+        ++request.color.frameId;
+    }
+    SECTION("Color must be from the same view") {
+        request.color.view = {99};
+    }
+    SECTION("Device generation must be current") {
+        ++request.compatibility.deviceGeneration;
+    }
+    SECTION("Projection must be valid") {
+        request.projection.nearPlane = 0;
+    }
+    SECTION("Storage targets cannot alias the input") {
+        request.output.resident = request.color.texture;
+    }
+    SECTION("Current-frame spatial GPU exposure still requires an exact generation") {
+        request.exposure = ReconstructionExposureBuffers{request.compatibility.view, 0, {{9}, 8, 1}};
+    }
+    CHECK(ValidateReconstructionFrame(request, capabilities).HasError());
+}
+
 TEST_CASE("Reconstruction rejects malformed or unsupported data independently of provider", "[runtime][renderer][reconstruction]") {
     auto capabilities = ReconstructionCapabilities();
     auto request = ReconstructionRequest(2, 1);

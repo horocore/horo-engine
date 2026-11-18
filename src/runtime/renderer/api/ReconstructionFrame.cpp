@@ -51,12 +51,21 @@ namespace Horo::Render {
                    std::ranges::find(formats, image.format) != formats.end();
         }
 
+        /** @brief Spatial shares view, extent and device facts without requiring a temporal history generation. */
+        bool MatchesView(const ReconstructionFrameRequest &request, const RenderCapabilitySnapshot &capabilities) noexcept {
+            const auto &view = request.compatibility;
+            if (!capabilities.IsValid() || view.deviceGeneration != capabilities.deviceIncarnation)
+                return false;
+            if (request.kind == ReconstructionKind::Temporal)
+                return view.IsValid();
+            return view.view.IsValid() && view.renderExtent.IsValid() && view.targetExtent.IsValid();
+        }
+
         /** @brief Admits only the selected device and exact real-frame timing and projection. */
         bool MatchesFrame(const ReconstructionFrameRequest &request, const RenderCapabilitySnapshot &capabilities) noexcept {
             const auto &time = request.timing;
             return request.kind <= ReconstructionKind::Temporal && request.colorStage <= ReconstructionColorStage::PreExposed &&
-                   request.resourceOwner.IsValid() && request.compatibility.IsValid() && capabilities.IsValid() &&
-                   request.compatibility.deviceGeneration == capabilities.deviceIncarnation && request.projection.IsValid() &&
+                   request.resourceOwner.IsValid() && MatchesView(request, capabilities) && request.projection.IsValid() &&
                    time.frameId != 0 && time.predecessorFrameId < time.frameId && time.realFrameDelta.count() >= 0 &&
                    Math::IsFinite(request.currentJitterUv) && Math::IsFinite(request.previousJitterUv) &&
                    request.motionConvention == RenderMotionVectorConvention::PreviousUvMinusCurrentUv;
@@ -72,7 +81,7 @@ namespace Horo::Render {
                 return std::isfinite(ratio) && ratio > 0.0F;
             }
             const auto *buffers = std::get_if<ReconstructionExposureBuffers>(&request.exposure);
-            if (!buffers || buffers->view != request.compatibility.view ||
+            if (!buffers || buffers->view != request.compatibility.view || buffers->generation == 0 ||
                 buffers->generation != request.compatibility.exposureGeneration || !buffers->current.IsValid() ||
                 buffers->current.owner != request.resourceOwner)
                 return false;
