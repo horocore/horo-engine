@@ -33,6 +33,7 @@ namespace Horo::Application::Internal {
             return filter.IsValid() && deadlineTicks != 0 && deadlineTicks <= MaximumDeadlineTicks;
         }
     };
+
     // Installs the real gameplay-world participants shared by standalone and dedicated products.
     // Network and presentation factories remain explicit application decisions.
     [[nodiscard]] Network::NetworkModeFactories ComposeHeadlessNetworkServices(
