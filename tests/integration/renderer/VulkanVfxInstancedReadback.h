@@ -120,12 +120,12 @@ namespace Horo::Render::Test::VfxInstanced {
             return rendered_;
         }
 
-        /** @brief Returns the only captured reconstruction storage output marked for diagnostic transfer. */
-        Image ReconstructedColor() const {
+        /** @brief Returns the only captured reconstruction storage output of the exact format marked for transfer. */
+        Image ReconstructedImage(VkFormat format) const {
             REQUIRE_FALSE(invalid_);
-            const auto candidate = [](const Image &image) {
+            const auto candidate = [format](const Image &image) {
                 constexpr auto required = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-                return image.image && image.format == VK_FORMAT_R32G32B32A32_SFLOAT && (image.usage & required) == required;
+                return image.image && image.format == format && (image.usage & required) == required;
             };
             REQUIRE(std::ranges::count_if(images_, candidate) == 1);
             return *std::ranges::find_if(images_, candidate);
@@ -259,7 +259,7 @@ namespace Horo::Render::Test::VfxInstanced {
             if (info.extent.width != 64 || info.extent.height != 32 || info.samples != VK_SAMPLE_COUNT_1_BIT)
                 return;
             if (info.format != VK_FORMAT_R16G16B16A16_SFLOAT && info.format != VK_FORMAT_D32_SFLOAT &&
-                info.format != VK_FORMAT_R32G32B32A32_SFLOAT)
+                info.format != VK_FORMAT_R32G32B32A32_SFLOAT && info.format != VK_FORMAT_R32_SFLOAT)
                 return;
             const auto free = std::ranges::find(images_, VkImage{}, &Image::image);
             if (free == images_.end()) {
@@ -369,8 +369,14 @@ namespace Horo::Render::Test::VfxInstanced {
     class NativeReadback final {
     public:
         /** @brief Borrows the actual live backend observer after ordinary frontend completion has been proved. */
-        explicit NativeReadback(const ObservedLoader &loader, bool reconstructed = false) noexcept
-            : loader_(loader), byteCount_(reconstructed ? ReconstructedBytes : TotalBytes) {}
+        enum class Capture {
+            VfxAttachments,
+            ReconstructionColor,
+            ReconstructionDepth
+        };
+
+        explicit NativeReadback(const ObservedLoader &loader, Capture capture = Capture::VfxAttachments) noexcept
+            : loader_(loader), capture_(capture), byteCount_(ByteCount(capture)) {}
 
         /** @brief Contains every native wait to five seconds and destroys partial children before the frontend/device parent. */
         ~NativeReadback() {
@@ -431,19 +437,20 @@ namespace Horo::Render::Test::VfxInstanced {
             return Mapped();
         }
 
-        /** @brief Reads exact native RGBA32F pixels after canonical graph completion, restoring General layout. */
+        /** @brief Reads native color or depth floats after canonical graph completion and restores General layout. */
         std::vector<float> ReadReconstructed() {
-            REQUIRE(byteCount_ == ReconstructedBytes);
-            const auto image = loader_.ReconstructedColor();
+            REQUIRE(capture_ != Capture::VfxAttachments);
+            const auto format = capture_ == Capture::ReconstructionColor ? VK_FORMAT_R32G32B32A32_SFLOAT : VK_FORMAT_R32_SFLOAT;
+            const auto image = loader_.ReconstructedImage(format);
             Begin();
             Copy(image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, 0, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                  VK_ACCESS_SHADER_WRITE_BIT);
             Submit();
-            std::vector<float> result(64 * 32 * 4);
+            std::vector<float> result(byteCount_ / sizeof(float));
             void *mapped{};
             REQUIRE(loader_.DeviceFunction<PFN_vkMapMemory>("vkMapMemory")(loader_.Device(), memory_, 0, VK_WHOLE_SIZE, 0, &mapped) ==
                     VK_SUCCESS);
-            std::memcpy(result.data(), mapped, ReconstructedBytes);
+            std::memcpy(result.data(), mapped, byteCount_);
             loader_.DeviceFunction<PFN_vkUnmapMemory>("vkUnmapMemory")(loader_.Device(), memory_);
             return result;
         }
@@ -479,7 +486,18 @@ namespace Horo::Render::Test::VfxInstanced {
         }
 
         static constexpr VkDeviceSize ColorBytes = 64 * 32 * 8, TotalBytes = ColorBytes + 64 * 32 * 4;
-        static constexpr VkDeviceSize ReconstructedBytes = 64 * 32 * 4 * sizeof(float);
+
+        static constexpr VkDeviceSize ByteCount(Capture capture) noexcept {
+            switch (capture) {
+                case Capture::VfxAttachments:
+                    return TotalBytes;
+                case Capture::ReconstructionColor:
+                    return 64 * 32 * 4 * sizeof(float);
+                case Capture::ReconstructionDepth:
+                    return 64 * 32 * sizeof(float);
+            }
+            return 0;
+        }
 
         /** @brief Chooses only a real host-visible/coherent memory type allowed by this exact native allocation. */
         std::uint32_t MemoryType(std::uint32_t bits) const {
@@ -535,6 +553,7 @@ namespace Horo::Render::Test::VfxInstanced {
         }
 
         const ObservedLoader &loader_;
+        const Capture capture_;
         const VkDeviceSize byteCount_;
         VkBuffer buffer_{};
         VkDeviceMemory memory_{};
