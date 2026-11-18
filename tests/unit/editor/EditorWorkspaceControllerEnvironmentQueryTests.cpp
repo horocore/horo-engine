@@ -240,13 +240,28 @@ TEST_CASE("Environment Query workspace previews the saved native lattice from an
     using enum EnvironmentQueryPreviewStatus;
     auto expected = Ready;
     std::optional<QueryStageId> distanceStage;
+    std::optional<QueryStageId> filterStage;
     SECTION("the saved native test filters and reports the actual distance contribution") {
         const auto small = CreateBuiltinLatticeQuery(query.Value().Id(), query.Value().Stages().front().id, query.Value().ResultSchema().id,
                                                      "Distance points", {.stepMillimeters = 1000, .outerSteps = 2}, 7);
         REQUIRE(small.HasValue());
         distanceStage = QueryStageId::Create(12).Value();
-        const auto scored = AddBuiltinPointDistanceTest(small.Value(), *distanceStage, {1500, true});
+        auto scored = AddBuiltinPointDistanceTest(small.Value(), *distanceStage, {1500, true});
         REQUIRE(scored.HasValue());
+        SECTION("one distance stage") {}
+        SECTION("a second filter contributes independently to ranking and debug samples") {
+            filterStage = QueryStageId::Create(13).Value();
+            const auto filtered = AddBuiltinPointDistanceTest(small.Value(), *filterStage, {1100, false});
+            REQUIRE(filtered.HasValue());
+            QueryAssetSource authored{.id = scored.Value().Id(),
+                                      .displayName = scored.Value().DisplayName(),
+                                      .result = scored.Value().ResultSchema(),
+                                      .stages = {scored.Value().Stages().begin(), scored.Value().Stages().end()}};
+            authored.stages.push_back(filtered.Value().Stages().back());
+            authored.stages.back().executionOrder = 2;
+            scored = EnvironmentQueryAsset::Capture(authored);
+            REQUIRE(scored.HasValue());
+        }
         project.WriteAsset(scored.Value());
         Project::Open(controller, Project::Path);
         auto edited = pinned;
@@ -290,6 +305,25 @@ TEST_CASE("Environment Query workspace previews the saved native lattice from an
     }
     REQUIRE(document.preview.snapshot);
     const auto &preview = *document.preview.snapshot;
+    if (filterStage) {
+        REQUIRE(preview.candidates.size() == 25);
+        REQUIRE(preview.stages.size() == 50);
+        CHECK(preview.winnerCount == 5);
+        const auto &diagonalScore = preview.stages[12];
+        CHECK(diagonalScore.candidateIndex == 6);
+        CHECK(diagonalScore.score.stage == *distanceStage);
+        CHECK(diagonalScore.score.status == QueryScoreStatus::Eligible);
+        const auto &diagonalFilter = preview.stages[13];
+        CHECK(diagonalFilter.candidateIndex == 6);
+        CHECK(diagonalFilter.score.stage == *filterStage);
+        CHECK(diagonalFilter.score.status == QueryScoreStatus::Filtered);
+        REQUIRE_FALSE(preview.winners.empty());
+        CHECK(preview.winners.front().itemIndex == 12);
+        CHECK(preview.winners.front().scoreKey == QueryScoringPlan::ScoreKeyScale);
+        CHECK(model.documentRevision == pinned.scene);
+        CHECK(active->IsCurrent());
+        return;
+    }
     if (distanceStage) {
         REQUIRE(preview.candidates.size() == 25);
         REQUIRE(preview.stages.size() == 25);

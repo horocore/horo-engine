@@ -52,10 +52,99 @@ namespace Horo::Editor {
                                    {.querier = *entity, .querierLocation = coordinate.Value(), .executionRevision = pin.document.value});
         }
 
-        /** @brief Evaluates the native generator and optional distance stage through canonical scoring using frozen inputs only. */
+        /** @brief Detached native test programs and their canonical query ranking rules. */
+        struct LatticePreviewScoring final {
+            AI::QueryScoringPlan plan;
+            std::vector<AI::BuiltinPointDistanceQuery> tests;
+        };
+
+        /** @brief Admits every authored preview test before a worker can observe the Scene capture. */
+        Result<LatticePreviewScoring> CaptureLatticePreviewScoring(const AI::EnvironmentQueryPlan &plan,
+                                                                   const AI::QuerySchemaRegistry &schema) {
+            using Output = Result<LatticePreviewScoring>;
+            const auto authored = plan.Stages().subspan(1);
+            std::vector<AI::BuiltinPointDistanceQuery> tests;
+            std::vector<AI::QueryScoreRule> rules;
+            tests.reserve(authored.size());
+            rules.reserve(authored.size());
+            for (const auto &stage : authored) {
+                auto test = AI::BuiltinPointDistanceQuery::Capture(stage, schema);
+                if (test.HasError())
+                    return Output::Failure(test.ErrorValue());
+                rules.push_back(test.Value().Rule());
+                tests.push_back(std::move(test).Value());
+            }
+            auto scoring = AI::QueryScoringPlan::Capture(plan, schema, rules, AI::QueryScoreTieBreak::StableIndex);
+            if (scoring.HasError())
+                return Output::Failure(scoring.ErrorValue());
+            return Output::Success({std::move(scoring).Value(), std::move(tests)});
+        }
+
+        /** @brief Evaluates one bounded set of native stages without consulting mutable Scene state. */
+        Result<void> EvaluateLatticeTests(std::span<const AI::BuiltinPointDistanceQuery> tests, Math::WorldCoordinate64 origin,
+                                          Math::WorldCoordinate64 point, std::span<AI::QueryTestSample> facts) {
+            for (std::size_t index = 0; index < tests.size(); ++index) {
+                const auto evaluated = tests[index].Evaluate(origin, point);
+                if (evaluated.HasError())
+                    return Result<void>::Failure(evaluated.ErrorValue());
+                facts[index] = evaluated.Value();
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Retains a selected point and all of its stage contributions under the preview sample cap. */
+        void RecordLatticePreviewSample(AI::QueryDebugSnapshot &snapshot, const AI::QueryScoringPlan &scoring,
+                                        const AI::QueryCandidateScore &score, Math::WorldCoordinate64 point,
+                                        std::span<const AI::QueryTestSample> facts) {
+            snapshot.candidates.push_back({.index = score.itemIndex, .point = point, .score = score});
+            for (const auto &fact : facts)
+                if (const auto stage = scoring.DescribeSample(fact))
+                    snapshot.stages.push_back({score.itemIndex, *stage});
+        }
+
+        /** @brief Shows every retained test fact for a candidate, using disclosure for multi-stage results. */
+        void DrawQueryPreviewCandidate(const AI::QueryDebugSnapshot &snapshot, const AI::QueryDebugCandidate &candidate,
+                                       const ILocalizationService &localization, const Theme::Fonts &fonts) {
+            const auto stages = std::ranges::equal_range(snapshot.stages, candidate.index, {}, &AI::QueryDebugStage::candidateIndex);
+            const auto title = [&] {
+                if (!candidate.point)
+                    return std::format("#{}", candidate.index);
+                const auto point = candidate.point->Millimeters();
+                return std::format("#{}  ({}, {}, {})", candidate.index, point[0], point[1], point[2]);
+            }();
+            const auto text = [&](std::string_view key) {
+                return localization.Get("editor", key);
+            };
+            const auto label = [&](std::string_view value, const auto &color) {
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, value, color, fonts);
+            };
+            const auto drawTest = [&](const AI::QueryDebugStage &stage, std::string_view prefix) {
+                const bool passed = stage.score.status == AI::QueryScoreStatus::Eligible;
+                const auto status =
+                    text(passed ? "workspace.environment_query.preview_passed" : "workspace.environment_query.preview_filtered");
+                label(std::format("{}{} {} / {} / {} {:.3f}", prefix, text("workspace.environment_query.test"), stage.score.stage.Value(),
+                                  status, text("workspace.environment_query.preview_contribution"), stage.score.contribution),
+                      passed ? Theme::Text() : Theme::Warn());
+            };
+            if (stages.empty()) {
+                label(title, Theme::Text());
+                return;
+            }
+            if (stages.size() == 1) {
+                drawTest(stages.front(), title + " / ");
+                return;
+            }
+            const auto id = std::format("##query-preview-{}-{}", snapshot.query.Value(), candidate.index);
+            Ui::Card card({.id = id.c_str(), .defaultExpanded = false});
+            card.DrawTitleBar({.id = "##stages", .title = title.c_str(), .fonts = fonts});
+            if (card.BeginBody())
+                for (const auto &stage : stages)
+                    drawTest(stage, {});
+        }
+
+        /** @brief Evaluates the native generator and admitted tests through canonical scoring using frozen inputs only. */
         Result<AI::QueryDebugSnapshot> EvaluateLatticePreview(const AI::EnvironmentQueryPlan &plan, const AI::QueryContextSnapshot &context,
-                                                              const AI::QueryScoringPlan &scoring,
-                                                              const std::optional<AI::BuiltinPointDistanceQuery> &distance,
+                                                              const LatticePreviewScoring &scoring,
                                                               const AI::QueryGeneratorProvenance &provenance,
                                                               const CancellationToken &cancel) {
             using Preview = Result<AI::QueryDebugSnapshot>;
@@ -76,35 +165,27 @@ namespace Horo::Editor {
                                             .invalidCoordinates = generated.Value().invalidCoordinateCount};
             const auto samples = std::min(snapshot.generated, AI::QueryDebugCaptureSettings::MaximumSamples);
             snapshot.candidates.reserve(samples);
-            if (distance)
-                snapshot.stages.reserve(samples);
+            snapshot.stages.reserve(samples * scoring.tests.size());
             const auto *center = context.Find(AI::BuiltinQueryContextId(AI::BuiltinQueryContext::QuerierLocation));
             if (!center || !std::holds_alternative<Math::WorldCoordinate64>(center->value))
                 return Preview::Failure(MakeError(AI::AIErrors::EnvironmentQueryContextMissing));
             const auto origin = std::get<Math::WorldCoordinate64>(center->value);
             std::vector<AI::QueryCandidateScore> scores;
             scores.reserve(snapshot.generated);
+            std::array<AI::QueryTestSample, AI::EnvironmentQuerySchemaLimits::Stages> scratch;
+            auto facts = std::span{scratch}.first(scoring.tests.size());
             for (std::uint32_t index = 0; index < snapshot.generated; ++index) {
                 if (cancel.IsCancellationRequested())
                     return cancelled();
                 const auto point = std::get<Math::WorldCoordinate64>(items[index]);
-                AI::QueryTestSample fact;
-                if (distance) {
-                    const auto evaluated = distance->Evaluate(origin, point);
-                    if (evaluated.HasError())
-                        return Preview::Failure(evaluated.ErrorValue());
-                    fact = evaluated.Value();
-                }
-                const auto facts = distance ? std::span<const AI::QueryTestSample>{&fact, 1} : std::span<const AI::QueryTestSample>{};
-                scores.push_back(scoring.Evaluate(index, 0, facts));
+                if (const auto evaluated = EvaluateLatticeTests(scoring.tests, origin, point, facts); evaluated.HasError())
+                    return Preview::Failure(evaluated.ErrorValue());
+                scores.push_back(scoring.plan.Evaluate(index, 0, facts));
                 const auto sampled = snapshot.candidates.size();
-                if (sampled < samples && index == sampled * (snapshot.generated - 1) / std::max<std::size_t>(1, samples - 1)) {
-                    snapshot.candidates.push_back({.index = index, .point = point, .score = scores.back()});
-                    if (const auto stage = scoring.DescribeSample(fact))
-                        snapshot.stages.push_back({index, *stage});
-                }
+                if (sampled < samples && index == sampled * (snapshot.generated - 1) / std::max<std::size_t>(1, samples - 1))
+                    RecordLatticePreviewSample(snapshot, scoring.plan, scores.back(), point, facts);
             }
-            const auto winners = scoring.SelectBest(scores, plan.ResultSchema().maximumResults);
+            const auto winners = scoring.plan.SelectBest(scores, plan.ResultSchema().maximumResults);
             if (winners.HasError())
                 return Preview::Failure(winners.ErrorValue());
             snapshot.winnerCount = winners.Value().size();
@@ -243,23 +324,13 @@ namespace Horo::Editor {
             return Result<void>::Failure(plan.ErrorValue());
         const auto stages = plan.Value().Stages();
         const auto required = plan.Value().RequiredContexts();
-        if (stages.empty() || stages.size() > 2 || stages.front().kind != AI::QueryStageKind::Generator || required.size() != 1 ||
+        if (stages.empty() || stages.front().kind != AI::QueryStageKind::Generator || required.size() != 1 ||
             required.front().id != AI::BuiltinQueryContextId(AI::BuiltinQueryContext::QuerierLocation))
             return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
         const auto *generator = m_querySchema->Find(stages.front().generator);
         if (!generator)
             return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
-        std::optional<AI::BuiltinPointDistanceQuery> distance;
-        std::optional<AI::QueryScoreRule> rule;
-        if (stages.size() == 2) {
-            auto supported = AI::BuiltinPointDistanceQuery::Capture(stages.back(), *m_querySchema);
-            if (supported.HasError())
-                return Result<void>::Failure(supported.ErrorValue());
-            distance = std::move(supported).Value();
-            rule = distance->Rule();
-        }
-        const auto rules = rule ? std::span<const AI::QueryScoreRule>{&*rule, 1} : std::span<const AI::QueryScoreRule>{};
-        auto scoring = AI::QueryScoringPlan::Capture(plan.Value(), *m_querySchema, rules, AI::QueryScoreTieBreak::StableIndex);
+        auto scoring = CaptureLatticePreviewScoring(plan.Value(), *m_querySchema);
         if (scoring.HasError())
             return Result<void>::Failure(scoring.ErrorValue());
 
@@ -269,11 +340,11 @@ namespace Horo::Editor {
         const AI::QueryGeneratorProvenance origin{stages.front().id, generator->id, generator->origin.provider,
                                                   contexts.Value()->Revision()};
         auto output = std::make_shared<std::shared_ptr<const AI::QueryDebugSnapshot>>();
-        auto job = m_sourceRecoveryJobs->SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Cpu},
-                                                      [plan = std::move(plan).Value(), contexts = std::move(contexts).Value(),
-                                                       scoring = std::move(scoring).Value(), distance, origin,
-                                                       output](const CancellationToken &cancel) {
-            auto evaluated = EvaluateLatticePreview(plan, *contexts, scoring, distance, origin, cancel);
+        auto job =
+            m_sourceRecoveryJobs->SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Cpu},
+                                               [plan = std::move(plan).Value(), contexts = std::move(contexts).Value(),
+                                                scoring = std::move(scoring).Value(), origin, output](const CancellationToken &cancel) {
+            auto evaluated = EvaluateLatticePreview(plan, *contexts, scoring, origin, cancel);
             if (evaluated.HasError())
                 return Result<void>::Failure(std::move(evaluated).ErrorValue());
             *output = std::make_shared<const AI::QueryDebugSnapshot>(std::move(evaluated).Value());
@@ -584,21 +655,8 @@ namespace Horo::Editor {
                           text("workspace.environment_query.preview_ranked"), snapshot.winnerCount,
                           text("workspace.environment_query.preview_invalid_coordinates"), snapshot.invalidCoordinates),
               Theme::Text());
-        for (const auto &candidate : snapshot.candidates) {
-            const auto point = candidate.point->Millimeters();
-            const auto stage = std::ranges::lower_bound(snapshot.stages, candidate.index, {}, &AI::QueryDebugStage::candidateIndex);
-            if (stage == snapshot.stages.end() || stage->candidateIndex != candidate.index) {
-                label(std::format("#{}  ({}, {}, {})", candidate.index, point[0], point[1], point[2]), Theme::Text());
-                continue;
-            }
-            const bool passed = stage->score.status == AI::QueryScoreStatus::Eligible;
-            const auto status =
-                text(passed ? "workspace.environment_query.preview_passed" : "workspace.environment_query.preview_filtered");
-            label(std::format("#{}  ({}, {}, {}) / {} {} / {} / {} {:.3f}", candidate.index, point[0], point[1], point[2],
-                              text("workspace.environment_query.test"), stage->score.stage.Value(), status,
-                              text("workspace.environment_query.preview_contribution"), stage->score.contribution),
-                  passed ? Theme::Text() : Theme::Warn());
-        }
+        for (const auto &candidate : snapshot.candidates)
+            DrawQueryPreviewCandidate(snapshot, candidate, m_context.localization, m_context.theme.fonts);
         return true;
     }
 }  // namespace Horo::Editor
