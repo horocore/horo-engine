@@ -1560,6 +1560,19 @@ namespace Horo::Editor {
             static_cast<void>(m_decisionGraphCanvas.Draw(*opened, m_context));
             return true;
         }
+        AI::DecisionNodeId selected;
+        const auto instance = opened->identity.instance;
+        if (opened->family == AI::DecisionPlanKind::StateMachine && m_stateMachineSelection.instance == instance)
+            selected = m_stateMachineSelection.state;
+        else if (opened->family == AI::DecisionPlanKind::BehaviorTree && m_behaviorTreeSelection.instance == instance)
+            selected = m_behaviorTreeSelection.node;
+        else if (opened->family == AI::DecisionPlanKind::Utility && m_utilityGraphSelection.instance == instance)
+            selected = m_utilityGraphSelection.option;
+        if (Ui::Button({.label = text("workspace.decision_canvas.locate_selection").c_str(),
+                        .enabled = selected.IsValid(),
+                        .font = m_context.theme.fonts.sans}))
+            m_decisionGraphCanvas.RequestFocus({instance, opened->revision}, selected);
+
         const auto canvas = m_decisionGraphCanvas.Draw(*opened, m_context);
         ApplyDecisionCanvasInteraction(*opened, canvas, outCommand);
         if (canvas.edit || canvas.layout)

@@ -886,6 +886,7 @@
     "workspace.decision_canvas.unknown": {"text": "Unknown Node"},
     "workspace.decision_canvas.layout_unavailable": {"text": "The saved layout could not be read for this asset."},
     "workspace.decision_canvas.auto_layout": {"text": "Auto-Layout"},
+    "workspace.decision_canvas.locate_selection": {"text": "Locate Selected Node"},
     "workspace.decision_canvas.fit": {"text": "Fit Graph"},
     "workspace.decision_graph.subtree_cycle": {"text": "This subtree would create a dependency cycle."},
     "workspace.decision_graph.subtree_missing": {"text": "A registered saved subtree source is missing."},

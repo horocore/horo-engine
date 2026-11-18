@@ -731,7 +731,16 @@ both the Asset Registry and graph identities. It has its own accepted file
 identity and publication receipt under the Project mutation lease. Saving
 placement alone leaves runtime source bytes untouched. Each durable receipt
 advances its own saved baseline, so a failed second write keeps its changes
-pending. Canvas pan and zoom are session presentation state.
+pending. Canvas pan and zoom are session presentation state. Locate Selected
+Node routes the current authored selection and document revision to the native
+viewport, so operators can reach distant nodes at a usable zoom.
+
+The canvas inherits the supported source ceilings of 1,024 Behavior Tree
+nodes, 4,096 authored pins, 256 State Machine states, 512 transitions and 64
+Utility options. Placement adds at most 1,024 finite logical coordinates. The
+viewport regression uses a connected 1,024-node tree with 4,096 pins and
+1,023 edges, and checks that selections can reach widely separated canvas
+positions at narrow and wide sizes.
 
 A supported Behavior Tree subtree is a typed call on an intrinsic Subplan
 leaf. The selected composite can append that leaf, and the selected leaf can

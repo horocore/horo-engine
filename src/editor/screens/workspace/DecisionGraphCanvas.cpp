@@ -115,8 +115,10 @@ namespace Horo::Editor {
             const auto pos = ImGui::GetCursorScreenPos();
             const float box = 12.0F * scale;
             ImGui::Dummy({box, box});
-            ImGui::GetWindowDrawList()->AddCircleFilled({pos.x + box * 0.5F, pos.y + box * 0.5F}, box * 0.28F,
-                                                        Theme::U32(pin.output ? Theme::Accent() : Theme::Muted()));
+            if (ImGui::IsItemVisible()) {
+                ImGui::GetWindowDrawList()->AddCircleFilled({pos.x + box * 0.5F, pos.y + box * 0.5F}, box * 0.28F,
+                                                            Theme::U32(pin.output ? Theme::Accent() : Theme::Muted()));
+            }
             Widget::EndPin();
         }
 
@@ -150,6 +152,19 @@ namespace Horo::Editor {
             }
             ImGui::PopID();
             Widget::EndNode();
+        }
+
+        /** @brief Confirms the selected node's center is actually inside the displayed native canvas. */
+        bool WidgetNodeInView(std::size_t index, ImVec2 origin, ImVec2 viewport) {
+            const auto widget = WidgetId<Widget::NodeId>(index);
+            const auto position = Widget::GetNodePosition(widget);
+            const auto size = Widget::GetNodeSize(widget);
+            if (size.x <= 0.0F || size.y <= 0.0F)
+                return false;
+            const auto center = Widget::CanvasToScreen({position.x + size.x * 0.5F, position.y + size.y * 0.5F});
+            const auto right = Widget::CanvasToScreen({position.x + size.x, position.y + size.y * 0.5F});
+            return right.x - center.x >= ImGui::GetFontSize() * 0.5F && center.x >= origin.x && center.x <= origin.x + viewport.x &&
+                   center.y >= origin.y && center.y <= origin.y + viewport.y;
         }
 
         /** @brief Reads exact selection using only current native indices and immutable authored identities. */
@@ -221,13 +236,21 @@ namespace Horo::Editor {
     }  // namespace
 
     struct DecisionGraphCanvas::Impl final {
+        struct Focus final {
+            DecisionGraphDocumentFence fence;
+            AI::DecisionNodeId node;
+        };
+
         struct Session final {
             GraphViewSnapshot snapshot;
             std::shared_ptr<const AI::DecisionGraphSource> source;
             DecisionGraphLayout positions;
             float scale{};
             std::unique_ptr<Widget::EditorContext, CanvasContextDeleter> context;
+            std::optional<std::size_t> revealing;
         };
+
+        std::optional<Focus> pendingFocus;
 
         std::map<DocumentInstanceId, Session> sessions;
     };
@@ -235,6 +258,11 @@ namespace Horo::Editor {
     DecisionGraphCanvas::DecisionGraphCanvas() : state_(std::make_unique<Impl>()) {}
 
     DecisionGraphCanvas::~DecisionGraphCanvas() = default;
+
+    /** @copydoc DecisionGraphCanvas::RequestFocus */
+    void DecisionGraphCanvas::RequestFocus(DecisionGraphDocumentFence fence, AI::DecisionNodeId node) {
+        state_->pendingFocus = Impl::Focus{fence, node};
+    }
 
     /** @copydoc DecisionGraphCanvas::Retain */
     void DecisionGraphCanvas::Retain(std::span<const DecisionGraphWorkspaceDocument> documents) {
@@ -257,10 +285,12 @@ namespace Horo::Editor {
             session.source = document.graph;
             session.scale = scale;
             session.context = CreateCanvasContext();
+            session.revealing.reset();
         }
         if (replacePositions) {
             session.snapshot.revision = document.revision;
             session.positions = CanvasPositions(session.snapshot, document.layout.get());
+            session.revealing.reset();
         }
         if (!session.context)
             return out;
@@ -285,8 +315,9 @@ namespace Horo::Editor {
         Widget::PushStyleColor(Widget::StyleColor_NodeBg, Theme::Bg1());
         Widget::PushStyleColor(Widget::StyleColor_NodeBorder, Theme::Border());
         Widget::PushStyleColor(Widget::StyleColor_SelNodeBorder, Theme::Accent());
-        Widget::Begin("##DecisionGraphCanvas",
-                      {std::max(1.0F, available.x), std::clamp(available.y * 0.42F, 160.0F * scale, 420.0F * scale)});
+        const auto origin = ImGui::GetCursorScreenPos();
+        const ImVec2 viewport{std::max(1.0F, available.x), std::clamp(available.y * 0.42F, 160.0F * scale, 420.0F * scale)};
+        Widget::Begin("##DecisionGraphCanvas", viewport);
         if (replacePositions) {
             for (std::size_t i = 0; i < session.positions.size(); ++i) {
                 const auto &placement = session.positions[i];
@@ -303,9 +334,30 @@ namespace Horo::Editor {
         }
         ReadSelection(graph, out);
         ReadTopologyIntent(graph, out);
-        if (fit || rebuildCanvas)
+        if (fit || rebuildCanvas) {
+            session.revealing.reset();
             Widget::NavigateToContent(0.0F);
+        }
+        if (state_->pendingFocus) {
+            const auto focus = *state_->pendingFocus;
+            state_->pendingFocus.reset();
+            session.revealing.reset();
+            if (focus.fence.instance == graph.instance && focus.fence.revision == graph.revision) {
+                const auto node = std::ranges::find(graph.nodes, focus.node, &GraphNodeView::id);
+                if (node != graph.nodes.end()) {
+                    const auto index = static_cast<std::size_t>(node - graph.nodes.begin());
+                    Widget::SelectNode(WidgetId<Widget::NodeId>(index), false);
+                    Widget::NavigateToSelection(true, 0.0F);
+                    session.revealing = index;
+                    out.node = node->id;
+                }
+            }
+        }
         Widget::End();
+        if (session.revealing && WidgetNodeInView(*session.revealing, origin, viewport)) {
+            out.revealed = graph.nodes[*session.revealing].id;
+            session.revealing.reset();
+        }
         auto moved = ReadCompletedDrag(session.positions, scale);
         if (!out.edit && !out.layout && document.layoutWritable && !moved.empty() && !ImGui::GetIO().AppFocusLost &&
             !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))

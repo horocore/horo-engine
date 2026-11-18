@@ -15,6 +15,7 @@ namespace Horo::Editor {
     struct DecisionCanvasInteraction final {
         std::optional<AI::DecisionNodeId> node;
         std::optional<AI::DecisionNodeId> transition;
+        std::optional<AI::DecisionNodeId> revealed; /**< Focus destination confirmed in the visible native canvas. */
         std::optional<StateMachineEditRequest> edit;
         std::optional<DecisionGraphLayoutRequest> layout;
     };
@@ -29,6 +30,8 @@ namespace Horo::Editor {
 
         /** @brief Renders one immutable graph using its revision-correlated native presentation session. */
         [[nodiscard]] DecisionCanvasInteraction Draw(const DecisionGraphWorkspaceDocument &document, const EditorGuiContext &context);
+        /** @brief Reveals one stable selected node in the exact current document revision. */
+        void RequestFocus(DecisionGraphDocumentFence fence, AI::DecisionNodeId node);
         /** @brief Retires presentation sessions for closed document instances. */
         void Retain(std::span<const DecisionGraphWorkspaceDocument> documents);
 
