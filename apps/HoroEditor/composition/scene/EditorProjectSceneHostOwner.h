@@ -1,4 +1,6 @@
 #pragma once
+
+#include "ProjectSceneNavigationComposition.h"
 /** @file EditorProjectSceneHostOwner.h
  * @brief Target-private single Scene lifetime owner and project resource capture contract.
  */
@@ -209,6 +211,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 return prepared;
             if (const auto animation = PrepareAnimation(policy); animation.HasError())
                 return animation;
+            if (const auto navigation = PrepareNavigation(root, jobs, policy, definition); navigation.HasError())
+                return navigation;
             if (policy.prefabGranted) {
                 if (auto prepared = PreparePrefabServices(std::move(*prefabLimits), policy); prepared.HasError())
                     return prepared;
@@ -241,6 +245,10 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         Runtime::SceneAnimationRuntime *AnimationRuntime() noexcept override {
             return animation_.get();
         }
+
+        /** @brief Admits the exact selected cooked profile/scope only when the authored Play projection still matches it. */
+        Result<void> PrepareNavigation(const std::filesystem::path &root, JobSystem &jobs, const EditorProjectScenePolicy &policy,
+                                       const Runtime::RuntimeSceneDefinition *definition);
 
         /** @brief Composes the one shared provider and Scene-owned service participant before presentation seals. */
         Result<void> PreparePrefabServices(Prefab::PrefabLimitProfile limits, const EditorProjectScenePolicy &policy) {
@@ -492,6 +500,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         void ShutdownSceneOwners() noexcept {
             if (prefab_.templates)
                 prefab_.templates->Shutdown();
+            if (navigation_)
+                navigation_->coordinator.BeginShutdown();
             if (scenes_)
                 scenes_->Shutdown();
             animationLifetime_.RequestCancellation();
@@ -515,6 +525,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         std::unique_ptr<AI::AiSceneRuntime> ai_;
         CancellationSource animationLifetime_;
         std::unique_ptr<Runtime::SceneAnimationRuntime> animation_;
+        std::unique_ptr<ProjectSceneNavigationWorld> navigation_;
         std::unique_ptr<Runtime::RuntimeSceneService> scenes_;
 
         /** @brief Owns the projector/provider/spawn chain and its shared gameplay borrow in their required lifetime order. */

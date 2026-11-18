@@ -300,11 +300,11 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             const auto &selection = owners_->configured->navigation;
             if (!selection || !IsAuthoritativeWorld())
                 return Result<void>::Success();
-            auto world = CreateHeadlessNavigationWorld(*selection);
+            auto world = CreateProjectSceneNavigationWorld(*selection);
             if (world.HasError())
                 return Result<void>::Failure(world.ErrorValue());
             record_->navigation = std::move(world).Value();
-            return RegisterHeadlessNavigation(*record_->scenes, *record_->navigation, selection);
+            return RegisterProjectSceneNavigation(*record_->scenes, *record_->navigation, selection);
         }
 
         /** @brief Identifies the local world that owns authoritative simulation. */

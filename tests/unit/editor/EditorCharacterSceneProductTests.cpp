@@ -2,6 +2,7 @@
 #include "EditorProjectSceneHost.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "editor/gameplay/EditorPlaySessionController.h"
+#include "navigation/ProjectSceneNavigationFixture.h"
 
 #include <chrono>
 #include <thread>
@@ -100,6 +101,76 @@ namespace Horo::Application::CharacterSceneProductTest {
         CHECK(play.LastError()->code.Value() == Physics::PhysicsErrors::CapabilityUnavailable.code.Value());
         CHECK_FALSE(play.SceneView());
         CHECK(authored.objects.front().localTransform.translation.y == 0.495F);
+    }
+
+    TEST_CASE("Editor Play admits exact cooked scoped Navigation alongside actual Scene startup and retirement",
+              "[navigation][scene][editor][product]") {
+        NavigationProductFixture fixture;
+        using Input = NavigationProductFixture::Input;
+        Input input = Input::Valid;
+        bool modifyDocument = false;
+        std::optional<Assets::AssetId> selected = fixture.project.sceneId;
+        bool expected = HORO_TEST_NAVIGATION_NATIVE != 0;
+        SECTION("a matching document plays with the admitted provider") {}
+        SECTION("a foreign scoped artifact has no local world") {
+            input = Input::ForeignScope;
+            expected = false;
+        }
+        SECTION("a stale cooked project profile fails the aggregate") {
+            input = Input::StalePolicy;
+            expected = false;
+        }
+        SECTION("a missing surface cannot activate as an empty world") {
+            input = Input::MissingSurface;
+            expected = false;
+        }
+        SECTION("an uncommitted document change cannot admit old topology") {
+            modifyDocument = true;
+            expected = false;
+        }
+        SECTION("the selected asset must be a committed Scene") {
+            selected = fixture.definitionId;
+            expected = false;
+        }
+        fixture.Publish(input);
+        Editor::SceneDocumentSnapshot authored{{3}, {1}, fixture.source.objects};
+        if (modifyDocument)
+            authored.objects.front().localTransform.translation.x = 5;
+        const Internal::EditorProjectScenePolicy policy{.cooked = Internal::SceneCookSelection{fixture.project.cooked.path,
+                                                                                               fixture.project.request.assets.target},
+                                                        .playNavigationScene = selected};
+        auto projectFactory = Internal::MakeEditorProjectSceneFactory(fixture.project.jobs, policy);
+        const Editor::EditorPlaySceneFactory factory = [&projectFactory, &fixture](const Runtime::SceneRuntimeId identity,
+                                                                                   const Runtime::RuntimeSceneDefinition &definition) {
+            return projectFactory(fixture.project.project.dir.path, identity, definition);
+        };
+        Gameplay::BehaviorRegistry registry;
+        REQUIRE(registry.Freeze().HasValue());
+        Editor::EditorPlaySessionController play;
+        const auto started = play.Start(authored, registry, factory);
+        FinishPlayPreparation(play);
+        if (!expected) {
+            CHECK((started.HasError() || play.State() == Editor::EditorPlaySessionState::Failed));
+            REQUIRE(play.LastError());
+            if (modifyDocument)
+                CHECK(play.LastError()->code.Value() == Navigation::NavigationErrors::StaleSnapshot.code.Value());
+            CHECK_FALSE(play.SceneView());
+            return;
+        }
+        RequirePlayStarted(started);
+        REQUIRE(play.State() == Editor::EditorPlaySessionState::Playing);
+        REQUIRE(play.SceneView());
+        CHECK(play.SceneView()->Find({3}).has_value());
+        const auto first = play.SceneView()->RuntimeId();
+        play.Stop();
+        CHECK_FALSE(play.SceneView());
+        RequirePlayStarted(play.Start(authored, registry, factory));
+        FinishPlayPreparation(play);
+        REQUIRE(play.State() == Editor::EditorPlaySessionState::Playing);
+        REQUIRE(play.SceneView());
+        CHECK(play.SceneView()->RuntimeId().value > first.value);
+        play.Stop();
+        CHECK_FALSE(play.SceneView());
     }
 
     TEST_CASE("Canonical preview project scope cannot reuse another project's immutable capture", "[character][scene][editor][scope]") {

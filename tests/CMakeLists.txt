@@ -3039,12 +3039,15 @@ target_include_directories(HoroEditorPlaySessionControllerTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/unit/application
         ${CMAKE_CURRENT_SOURCE_DIR}/support
         ${PROJECT_SOURCE_DIR}/src/runtime/assets/cooker/builtin)
-target_compile_definitions(HoroEditorPlaySessionControllerTests PRIVATE HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>)
+target_compile_definitions(HoroEditorPlaySessionControllerTests PRIVATE
+        HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>
+        HORO_TEST_NAVIGATION_NATIVE=$<BOOL:${HORO_BUILD_NAVIGATION_RECAST_DETOUR}>)
 target_link_libraries(HoroEditorPlaySessionControllerTests PRIVATE HoroEditorPlayXrHostInterface HoroEngine::EditorRenderExtraction HoroEditorSceneProductHost
         HoroEngine::PhysicsTriggerVolumeHost nlohmann_json::nlohmann_json miniz)
 target_compile_features(HoroEditorPlaySessionControllerTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorPlaySessionControllerTests PRIVATE HoroEngine::EditorServices)
-target_link_libraries(HoroEditorPlaySessionControllerTests PRIVATE HoroEngine::ProjectSurfaceSettings)
+target_link_libraries(HoroEditorPlaySessionControllerTests PRIVATE HoroEngine::ProjectSurfaceSettings HoroEngine::ProjectSettings
+        HoroEngine::NavigationApi)
 add_executable(HoroEditorAnimationProductTests
         support/AllocationProbe.cpp unit/editor/EditorAnimationSceneProductTests.cpp)
 target_compile_features(HoroEditorAnimationProductTests PRIVATE cxx_std_20)

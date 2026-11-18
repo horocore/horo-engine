@@ -210,11 +210,13 @@ set(HORO_EDITOR_PROJECT_SCENE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_projec
 file(MAKE_DIRECTORY "${HORO_EDITOR_PROJECT_SCENE_HEADERS}")
 configure_file(HoroEditor/composition/scene/EditorProjectSceneHost.h "${HORO_EDITOR_PROJECT_SCENE_HEADERS}/EditorProjectSceneHost.h" COPYONLY)
 add_library(HoroEditorSceneProductHost STATIC
+    HoroEditor/composition/scene/EditorPlayNavigationComposition.cpp
     HoroEditor/composition/scene/EditorProjectSceneHost.cpp
     HoroEditor/composition/scene/EditorProjectSceneHostResources.cpp)
 target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroEditorPlaySaveHostInternal)
 target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroAnimationSceneHostInternal)
 target_link_libraries(HoroEditorSceneProductHost PRIVATE HoroEngine::PrefabProjectSettings HoroEngine::ProjectSurfaceSettings)
+target_link_libraries(HoroEditorSceneProductHost PRIVATE HoroProjectSceneNavigationHostInternal)
 target_compile_features(HoroEditorSceneProductHost PUBLIC cxx_std_20)
 target_include_directories(HoroEditorSceneProductHost PUBLIC "${HORO_EDITOR_PROJECT_SCENE_HEADERS}")
 target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroEditorPlayXrHostInterface HoroEditorPlaySceneHostInternal HoroScenePhysicsHost

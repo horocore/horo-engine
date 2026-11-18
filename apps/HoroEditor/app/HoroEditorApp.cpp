@@ -342,6 +342,8 @@ namespace Horo::Editor {
             std::string cookedRoot;
             std::string cookTarget;
             bool cookOptionsValid{true};
+            std::optional<Assets::AssetId> playNavigationScene;
+            bool playNavigationSceneValid{true};
             std::optional<Render::DirectionalShadowProfile> directionalShadows;
             std::optional<EditorViewportLightingProfile> lighting;
             Detail::EditorColorOptions color;
@@ -672,6 +674,7 @@ namespace Horo::Editor {
         Prefab,
         CookedRoot,
         CookTarget,
+        PlayNavigationScene,
         FrameRateLimit,
         ExitAfterFrames,
         XrTrackingRoot
@@ -707,6 +710,14 @@ namespace Horo::Editor {
                 opts.cookTarget = value;
                 opts.cookOptionsValid = !value.empty();
                 return true;
+            case PlayNavigationScene: {
+                const auto selected = Assets::AssetId::Parse(value);
+                opts.playNavigationSceneValid =
+                    opts.playNavigationSceneValid && !opts.playNavigationScene && selected.HasValue() && selected.Value().IsValid();
+                if (opts.playNavigationSceneValid)
+                    opts.playNavigationScene = selected.Value();
+                return true;
+            }
             case FrameRateLimit:
                 opts.frameRateLimit = ParseFrameRateLimit(value);
                 return true;
@@ -766,7 +777,13 @@ namespace Horo::Editor {
             pending = CookedRoot;
         else if (argument == "--cook-target")
             pending = CookTarget;
-        else if (argument.starts_with("--cooked-root="))
+        else if (argument == "--play-navigation-scene")
+            pending = PlayNavigationScene;
+        else if (argument.starts_with("--play-navigation-scene=")) {
+            pending = PlayNavigationScene;
+            static_cast<void>(
+                ConsumeEditorOptionValue(argument.substr(std::string_view{"--play-navigation-scene="}.size()), pending, opts));
+        } else if (argument.starts_with("--cooked-root="))
             opts.cookedRoot = argument.substr(std::string_view{"--cooked-root="}.size());
         else if (argument.starts_with("--cook-target="))
             opts.cookTarget = argument.substr(std::string_view{"--cook-target="}.size());
@@ -809,6 +826,8 @@ namespace Horo::Editor {
             opts.prefabGranted.reset();
         if (pending == XrTrackingRoot)
             opts.xrTrackingRootValid = false;
+        if (pending == PlayNavigationScene)
+            opts.playNavigationSceneValid = false;
         if (pending == CookedRoot || pending == CookTarget || opts.cookedRoot.empty() != opts.cookTarget.empty())
             opts.cookOptionsValid = false;
         return opts;
@@ -885,6 +904,8 @@ namespace Horo::Editor {
             if (!options.cookedRoot.empty()) {
                 arguments.insert(arguments.end(), {"--cooked-root", options.cookedRoot, "--cook-target", options.cookTarget});
             }
+            if (options.playNavigationScene)
+                arguments.insert(arguments.end(), {"--play-navigation-scene", options.playNavigationScene->ToString()});
             std::vector<char *> nativeArguments;
             nativeArguments.reserve(arguments.size() + 1);
             for (std::string &argument : arguments) {
@@ -3203,6 +3224,7 @@ namespace Horo::Editor {
             auto runtimeScene = std::move(preview.scenes);
             Runtime::RuntimeSceneService *runtimeSceneService = runtimeScene.get();
             auto playPolicy = scenePolicy;
+            playPolicy.playNavigationScene = p.options.playNavigationScene;
             playPolicy.aiSettings.missingController = AI::AiMissingControllerPolicy::Reject;
             Application::Internal::ConfigureEditorPlaySavePolicy(playPolicy, p.background.jobs, p.operationServices.operationStore, clock,
                                                                  wallClock);
@@ -3431,6 +3453,12 @@ namespace Horo::Editor {
 
     /** @brief Validates explicit application Physics selection before project/native frontend creation. */
     [[nodiscard]] static bool ValidateEditorPhysicsOptions(const EditorGuiOptions &options) {
+        if (!options.playNavigationSceneValid ||
+            (options.playNavigationScene && (options.projectRoot.empty() || options.cookedRoot.empty()))) {
+            LOG_CRITICAL("editor.runtime",
+                         "--play-navigation-scene requires an exact Scene AssetId, --project, --cooked-root and --cook-target.");
+            return false;
+        }
         if (!options.physicsMode || !options.prefabGranted.has_value() || !options.cookOptionsValid ||
             (*options.physicsMode == Physics::PhysicsRuntimeMode::Canonical && options.projectRoot.empty())) {
             const auto error =

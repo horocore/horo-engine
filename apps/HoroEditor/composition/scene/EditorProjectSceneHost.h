@@ -30,6 +30,7 @@ namespace Horo::Application::Internal {
         std::vector<AI::AiControllerDescriptor> aiControllers; /**< Owned inert catalog copied with the app policy. */
         AI::AiSceneRuntimeSettings aiSettings;                 /**< Explicit descriptor readiness policy for this host. */
         std::optional<SceneAnimationHostSelection> animation;
+        std::optional<Assets::AssetId> playNavigationScene; /**< Exact selected committed Scene UUID for Play-only Detour startup. */
         std::optional<Physics::PhysicsWorldSettings> physicsSettings; /**< Captured host override, never inferred from current occupancy.
             Canonical Save setup installs its explicit bounded default only when this field is absent. */
     };

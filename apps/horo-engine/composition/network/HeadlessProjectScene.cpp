@@ -1,6 +1,5 @@
 #include "HeadlessProjectScene.h"
 
-#include "HeadlessNavigationComposition.h"
 #include "Horo/Application/PrefabProjectSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Application/ProjectSurfaceSettings.h"
@@ -9,6 +8,7 @@
 #include "Horo/Platform/NativeProjectIoOwners.h"
 #include "Horo/Platform/NativeProjectReadFiles.h"
 #include "Horo/Scene/SceneRuntimeConversion.h"
+#include "ProjectSceneNavigationComposition.h"
 
 #include <utility>
 
@@ -177,7 +177,13 @@ namespace Horo::Application::Internal {
                           "This Scene requires committed asset payloads; provide --cooked-root and --cook-target."));
         resources->definition = std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(definition).Value());
         if (launch.navigationMode == HeadlessNavigationMode::RecastDetour) {
-            auto navigation = CaptureHeadlessNavigation(launch, *resources);
+            const auto *artifact = resources->committed ? resources->committed->Find(resources->sceneAsset) : nullptr;
+            if (!artifact)
+                return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(
+                    MakeError(Navigation::NavigationErrors::NoNavigationData));
+            auto navigation =
+                CaptureProjectSceneNavigation({*resources->sourceFiles, resources->sourceContext, resources->registry.Snapshot(),
+                                               *resources->definition, resources->sceneAsset, artifact->target, resources->jobs});
             if (navigation.HasError())
                 return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(navigation.ErrorValue());
             resources->navigation = std::move(navigation).Value();

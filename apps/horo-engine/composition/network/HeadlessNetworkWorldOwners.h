@@ -2,7 +2,6 @@
 /** @file HeadlessNetworkWorldOwners.h
  * @brief Target-private generation-owned Scene, Physics and fixed-participant lifetimes.
  */
-#include "HeadlessNavigationComposition.h"
 #include "HeadlessNetworkServices.h"
 #include "Horo/AI/PerceptionSpatialBroadphase.h"
 #include "Horo/Gameplay/GameplayVfxScene.h"
@@ -12,6 +11,7 @@
 #include "Horo/Physics/PhysicsWorld.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 #include "PhysicsStateHostLifecycle.h"
+#include "ProjectSceneNavigationComposition.h"
 
 #include <algorithm>
 #include <array>
@@ -42,7 +42,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         std::unique_ptr<AI::AiSceneRuntime> ai;
         AI::PerceptionSpatialBroadphase perception;
         std::uint64_t perceptionRevision{};
-        std::unique_ptr<HeadlessNavigationWorld> navigation;
+        std::unique_ptr<ProjectSceneNavigationWorld> navigation;
         std::unique_ptr<Runtime::RuntimeSceneService> scenes;
         std::unique_ptr<Prefab::PrefabTemplateProvider> templates; /**< Retired before Scene, borrowing its real loader. */
     };

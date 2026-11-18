@@ -180,6 +180,14 @@ Scene. This path installs logical registration and retirement along with the
 provider world. Character movement and gameplay query publication require their
 own host composition.
 
+Editor Play can opt into the same provider with `--play-navigation-scene <Scene AssetId>`
+alongside `--project`, `--cooked-root`, and `--cook-target`. The application
+compares the active Play projection with that committed Scene before using its
+full UUID for Navigation admission. Unsaved runtime differences, missing committed
+content, and unsupported topology fail Play preparation. The Play session
+owns the world through shutdown and a later Play session prepares a new
+world. This option applies to Play only.
+
 Private runtime and build source groups are separate. A runtime-only provider composition
 excludes Recast voxelization/build objects and their private link dependencies; enabling
 the bake capability adds them for tools. Runtime topology/crowd support retains only its

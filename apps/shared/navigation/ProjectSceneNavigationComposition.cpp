@@ -1,6 +1,5 @@
-#include "HeadlessNavigationComposition.h"
+#include "ProjectSceneNavigationComposition.h"
 
-#include "HeadlessProjectScene.h"
 #include "Horo/Application/NavigationProjectSettings.h"
 #include "Horo/Assets/NavMeshAssetType.h"
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
@@ -21,14 +20,14 @@ namespace Horo::Application::Internal {
             const Runtime::NavigationSurfaceComponent *selected = nullptr;
             for (const auto &entity : scene.Entities()) {
                 if (entity.components.navigationLink && entity.components.navigationLink->enabled)
-                    return Surface::Failure(
-                        MakeError(Nav::NavigationErrors::OperationUnsupported, "Headless Detour cannot activate authored off-mesh links."));
+                    return Surface::Failure(MakeError(Nav::NavigationErrors::OperationUnsupported,
+                                                      "The selected Detour provider cannot activate authored off-mesh links."));
                 const auto &surface = entity.components.navigationSurface;
                 if (!surface || !surface->enabled)
                     continue;
                 if (selected || surface->profiles.size() != 1)
                     return Surface::Failure(MakeError(Nav::NavigationErrors::OperationUnsupported,
-                                                      "Headless Detour requires one enabled surface and one profile."));
+                                                      "The selected Detour provider requires one enabled surface and one profile."));
                 selected = std::addressof(*surface);
             }
             if (!selected)
@@ -38,13 +37,12 @@ namespace Horo::Application::Internal {
 
         /** @brief Reads one registered definition through canonical project file and source codecs. */
         [[nodiscard]] Result<Nav::NavigationDefinition> ReadCatalog(const Assets::AssetId id,
-                                                                    const HeadlessProjectSceneResources &resources) {
+                                                                    const ProjectSceneNavigationSource &workspace) {
             using Catalog = Result<Nav::NavigationDefinition>;
-            const auto registry = resources.registry.Snapshot();
-            const auto *record = registry.Find(id);
+            const auto *record = workspace.registry.Find(id);
             if (!record || record->type.Value() != Assets::NavMeshAssetTypeName)
                 return Catalog::Failure(MakeError(Nav::NavigationErrors::NoNavigationData));
-            const auto source = resources.sourceFiles->SourceText(record->sourcePath.String(), resources.sourceContext, {});
+            const auto source = workspace.files.SourceText(record->sourcePath.String(), workspace.context, {});
             if (source.HasError())
                 return Catalog::Failure(source.ErrorValue());
             const std::array support{Nav::NavigationDefinitionRecordSupport()};
@@ -59,10 +57,11 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Uses the one immutable catalog to admit resident agents and later prefab additions. */
-        [[nodiscard]] Result<void> AdmitAgent(const HeadlessNavigationSelection &selection, const Nav::NavigationAgentDescriptor &agent) {
+        [[nodiscard]] Result<void> AdmitAgent(const ProjectSceneNavigationSelection &selection,
+                                              const Nav::NavigationAgentDescriptor &agent) {
             if (agent.profile != selection.profile)
                 return Result<void>::Failure(
-                    MakeError(Nav::NavigationErrors::AgentDescriptorInvalid, "Agent profile has no admitted headless Detour surface."));
+                    MakeError(Nav::NavigationErrors::AgentDescriptorInvalid, "Agent profile has no admitted Detour surface."));
             const auto filter = selection.catalog->Registry().ResolveFilter(agent.filter);
             if (filter.HasError())
                 return Result<void>::Failure(filter.ErrorValue());
@@ -70,7 +69,7 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Materializes only the selected exact decoded partition through the production native factory. */
-        [[nodiscard]] Result<Nav::NavigationPreparedAssetBackend> PrepareBackend(const HeadlessNavigationSelection &selection,
+        [[nodiscard]] Result<Nav::NavigationPreparedAssetBackend> PrepareBackend(const ProjectSceneNavigationSelection &selection,
                                                                                  const Nav::NavigationWorldActivationDescriptor &world,
                                                                                  std::span<const Nav::NavigationLoadedSurface> surfaces,
                                                                                  const std::size_t budget) {
@@ -79,8 +78,8 @@ namespace Horo::Application::Internal {
                 return Prepared::Failure(MakeError(Nav::NavigationErrors::OperationUnsupported));
             const auto &partition = *surfaces.front().partition;
             if (partition.tiles.size() != 1 || !partition.tiles.front())
-                return Prepared::Failure(
-                    MakeError(Nav::NavigationErrors::OperationUnsupported, "Headless Detour requires one tile for the admitted surface."));
+                return Prepared::Failure(MakeError(Nav::NavigationErrors::OperationUnsupported,
+                                                   "The selected Detour provider requires one tile for the admitted surface."));
             if (partition.tiles.front()->StorageBytes() > selection.policy.Capacities().maximumBytesPerResidentTile)
                 return Prepared::Failure(MakeError(Nav::NavigationErrors::CapacityExceeded));
             const auto &geometry = partition.descriptor.geometry;
@@ -120,17 +119,17 @@ namespace Horo::Application::Internal {
         }
     }  // namespace
 
-    /** @copydoc CaptureHeadlessNavigation */
-    Result<std::shared_ptr<const HeadlessNavigationSelection>> CaptureHeadlessNavigation(const HeadlessProjectSceneOptions &options,
-                                                                                         HeadlessProjectSceneResources &resources) {
-        using Selection = Result<std::shared_ptr<const HeadlessNavigationSelection>>;
-        if (!resources.committed || !resources.sceneAsset.IsValid())
+    /** @copydoc CaptureProjectSceneNavigation */
+    Result<std::shared_ptr<const ProjectSceneNavigationSelection>> CaptureProjectSceneNavigation(
+        const ProjectSceneNavigationSource &workspace) {
+        using Selection = Result<std::shared_ptr<const ProjectSceneNavigationSelection>>;
+        const auto *selected = workspace.registry.Find(workspace.scene);
+        if (!selected || selected->type.Value() != "core.scene" || !workspace.target.IsValid())
             return Selection::Failure(MakeError(Nav::NavigationErrors::NoNavigationData));
-        const auto surface = SelectedSurface(*resources.definition);
+        const auto surface = SelectedSurface(workspace.definition);
         if (surface.HasError())
             return Selection::Failure(surface.ErrorValue());
-        const auto source =
-            resources.sourceFiles->SourceText(".horo/navigation.json", resources.sourceContext, {.maximumFileBytes = 64U * 1024U});
+        const auto source = workspace.files.SourceText(".horo/navigation.json", workspace.context, {.maximumFileBytes = 64U * 1024U});
         if (source.HasError())
             return Selection::Failure(source.ErrorValue());
         const auto settings = DecodeNavigationProjectSettings(*source.Value().text);
@@ -140,25 +139,25 @@ namespace Horo::Application::Internal {
         if (input.defaultProvider != "recast_detour" || input.definition != surface.Value()->definition)
             return Selection::Failure(MakeError(Nav::NavigationErrors::OperationUnsupported,
                                                 "Selected Scene surface must use the explicitly configured Recast definition."));
-        auto catalog = ReadCatalog(input.definition, resources);
+        auto catalog = ReadCatalog(input.definition, workspace);
         if (catalog.HasError())
             return Selection::Failure(catalog.ErrorValue());
-        const auto scope = Nav::NavigationBakeScopeId::ForScene(resources.sceneAsset.Bytes());
-        const auto target = AssetCookTargetId::Parse(options.cookTarget);
-        if (scope.HasError() || target.HasError())
-            return Selection::Failure(scope.HasError() ? scope.ErrorValue() : target.ErrorValue());
-        return Selection::Success(std::make_shared<const HeadlessNavigationSelection>(
-            HeadlessNavigationSelection{{surface.Value()->id, scope.Value()},
-                                        surface.Value()->profiles.front(),
-                                        target.Value(),
-                                        settings.Value().RuntimeProfile(),
-                                        std::make_shared<const Nav::NavigationDefinition>(std::move(catalog).Value()),
-                                        resources.jobs}));
+        const auto scope = Nav::NavigationBakeScopeId::ForScene(workspace.scene.Bytes());
+        if (scope.HasError())
+            return Selection::Failure(scope.ErrorValue());
+        return Selection::Success(std::make_shared<const ProjectSceneNavigationSelection>(
+            ProjectSceneNavigationSelection{{surface.Value()->id, scope.Value()},
+                                            surface.Value()->profiles.front(),
+                                            workspace.target,
+                                            settings.Value().RuntimeProfile(),
+                                            std::make_shared<const Nav::NavigationDefinition>(std::move(catalog).Value()),
+                                            workspace.jobs}));
     }
 
-    /** @copydoc CreateHeadlessNavigationWorld */
-    Result<std::unique_ptr<HeadlessNavigationWorld>> CreateHeadlessNavigationWorld(const HeadlessNavigationSelection &selection) {
-        using World = Result<std::unique_ptr<HeadlessNavigationWorld>>;
+    /** @copydoc CreateProjectSceneNavigationWorld */
+    Result<std::unique_ptr<ProjectSceneNavigationWorld>> CreateProjectSceneNavigationWorld(
+        const ProjectSceneNavigationSelection &selection) {
+        using World = Result<std::unique_ptr<ProjectSceneNavigationWorld>>;
         const auto &capacity = selection.policy.Capacities();
         if (capacity.maximumConcurrentQueries > Nav::RecastDetourProviderHardLimits::ConcurrentQueries ||
             capacity.maximumResidentMemoryBytes > std::numeric_limits<std::size_t>::max() ||
@@ -174,13 +173,13 @@ namespace Horo::Application::Internal {
         auto coordinator = Nav::NavigationCoordinator::Create(selection.jobs, CoordinatorLimits(selection.policy));
         if (coordinator.HasError())
             return World::Failure(coordinator.ErrorValue());
-        return World::Success(std::make_unique<HeadlessNavigationWorld>(
-            HeadlessNavigationWorld{std::move(cache).Value(), std::move(agents).Value(), std::move(coordinator).Value()}));
+        return World::Success(std::make_unique<ProjectSceneNavigationWorld>(
+            ProjectSceneNavigationWorld{std::move(cache).Value(), std::move(agents).Value(), std::move(coordinator).Value()}));
     }
 
-    /** @copydoc RegisterHeadlessNavigation */
-    Result<void> RegisterHeadlessNavigation(Runtime::RuntimeSceneService &scene, HeadlessNavigationWorld &world,
-                                            std::shared_ptr<const HeadlessNavigationSelection> selection) {
+    /** @copydoc RegisterProjectSceneNavigation */
+    Result<void> RegisterProjectSceneNavigation(Runtime::RuntimeSceneService &scene, ProjectSceneNavigationWorld &world,
+                                                std::shared_ptr<const ProjectSceneNavigationSelection> selection) {
         const auto &capacity = selection->policy.Capacities();
         auto assets =
             std::make_unique<Nav::NavigationAssetSceneActivationParticipant>(*world.cache, selection->target,
@@ -195,13 +194,13 @@ namespace Horo::Application::Internal {
                                                                              std::nullopt,
                                                                              Nav::NavigationAssetSceneSelection{selection->surface.scope,
                                                                                                                 selection->policy});
-        world.assets = assets.get();
+        const auto *assetOwner = assets.get();
         const auto admission = [selection](const Nav::NavigationAgentDescriptor &agent) {
             return AdmitAgent(*selection, agent);
         };
         auto agents = std::make_unique<Nav::NavigationSceneActivationParticipant>(world.agents, admission);
-        auto groups = agents->MakeStructuralParticipant([assets = world.assets] {
-            return assets->ActiveWorld();
+        auto groups = agents->MakeStructuralParticipant([assetOwner] {
+            return assetOwner->ActiveWorld();
         }, world.coordinator, admission);
         if (auto added = scene.AddActivationParticipant(std::move(assets)); added.HasError())
             return added;
