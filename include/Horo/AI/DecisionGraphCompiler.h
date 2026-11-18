@@ -23,7 +23,7 @@ namespace Horo::AI {
         BlackboardSchemaId blackboard;
         DecisionVersionRange blackboardVersion;
         SourceLocation location;
-        TaskId executionTask; /**< Persistent HSM runner task definition; BT and Utility actions own authored task definitions. */
+        TaskId executionTask; /**< Persistent runner task definition; required for HSM and for Scene-scheduled flat BT roots. */
         std::variant<std::shared_ptr<const BehaviorTreeAsset>, StateMachineAssetDescriptor, UtilityDecisionSource> body;
     };
 

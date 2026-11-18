@@ -217,8 +217,17 @@ namespace Horo::Application::PrefabAtomicTest {
 
         explicit Fixture(bool aiFirst = false, Fault fault = Fault::None, const AI::AiSceneRuntimeSettings &aiSettings = {},
                          std::shared_ptr<const AI::AiControllerPerceptionEndpoints> endpoints = {},
-                         std::optional<AI::AiScenePerceptionGroupInput> perception = std::nullopt)
-            : ai(std::move(AI::AiSceneRuntime::Create(aiSettings)).Value()) {
+                         std::optional<AI::AiScenePerceptionGroupInput> perception = std::nullopt,
+                         const AI::TestSupport::ActivationFixture *cookedController = nullptr,
+                         const AI::AiTaskSchedulerSettings &schedulerSettings = {})
+            : ai(std::move(cookedController
+                               ? AI::AiSceneRuntime::Create(aiSettings, AI::AiSceneCookedDecisionExecution{jobs, schedulerSettings, {}})
+                               : AI::AiSceneRuntime::Create(aiSettings))
+                     .Value()) {
+            if (cookedController) {
+                controller = *cookedController;
+                catalog.front() = controller.descriptor;
+            }
             if (endpoints) {
                 controller.descriptor.perceptionEndpoints = std::move(endpoints);
                 controller.agent.controller->requiredCapabilities =

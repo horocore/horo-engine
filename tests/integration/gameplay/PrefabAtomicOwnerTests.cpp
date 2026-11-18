@@ -403,24 +403,51 @@ namespace Horo::Application::PrefabAtomicTest {
             sceneService.Shutdown();
         }
 
+        /** @brief Reuses the compiler's exact immutable bindings as a normal Scene controller descriptor. */
+        AI::TestSupport::ActivationFixture CookedController(const AI::DecisionGraphTestSupport::Fixture &fixture,
+                                                            const std::shared_ptr<const AI::CookedDecisionPlan> &plan) {
+            auto controller = AI::TestSupport::MakeFixture(1, 11, 1, 0);
+            controller.schema = fixture.schema;
+            controller.plan = plan->Graphs()[plan->Occurrences().front().plan].bindings;
+            controller.agent.controller->decisionAsset = plan->Root();
+            controller.agent.controller->blackboardSchema = fixture.schema->Identity();
+            controller.descriptor.decisionAsset = plan->Root();
+            controller.descriptor.blackboardSchema = fixture.schema;
+            controller.descriptor.decisionPlan = controller.plan;
+            controller.descriptor.cookedPlan = plan;
+            return controller;
+        }
+
         TEST_CASE("Configured headless Scene admits exact committed cooked AI plans before publishing its controller",
                   "[prefab][integration][ai][decisions][host]") {
             using namespace Network;
             namespace Decisions = AI::DecisionGraphTestSupport;
             namespace Output = Assets::OutputTestSupport;
             Decisions::Fixture ai;
-            const auto graphSource = Decisions::TaskTree(41);
-            const auto plan = ai.Compile(std::span{&graphSource, 1}, 41);
-            auto encoded = AI::DecisionPlanCodec::EncodeCooked(*plan);
-            REQUIRE(encoded.HasValue());
-            auto payload = std::move(encoded).Value();
+            auto graphSource = Decisions::TaskTree(41);
+            graphSource.executionTask = Decisions::MakeIdentity<AI::TaskId>(879);
             const auto artifactId = Assets::AssetId::Parse("5c881920-450f-4ca7-b938-d151696ea419").Value();
             const auto target = Output::Target("headless-null");
             auto artifactType = Output::Type("core.behavior_tree");
             auto requestedId = artifactId;
             auto declaredRoot = graphSource.asset;
             const ErrorCodeDescriptor *expected = nullptr;
+            std::optional<std::size_t> executionBudget;
+            bool malformed = false;
+            bool staleProvider = false;
             SECTION("exact cooked root") {}
+            SECTION("owner runs opted-in decision through the product fixed tick") {
+                executionBudget = 64;
+            }
+            SECTION("missing authored parent task") {
+                executionBudget = 64;
+                graphSource.executionTask = {};
+                expected = &AI::AIErrors::TaskContextInvalid;
+            }
+            SECTION("insufficient host work allowance rejects startup") {
+                executionBudget = 1;
+                expected = &AI::AIErrors::SchedulerBudgetExhausted;
+            }
             SECTION("foreign project asset identity") {
                 requestedId = Assets::AssetId::Parse("5c881920-450f-4ca7-b938-d151696ea428").Value();
                 expected = &AI::AIErrors::ControllerDescriptorMissing;
@@ -434,13 +461,22 @@ namespace Horo::Application::PrefabAtomicTest {
                 expected = &AI::AIErrors::ControllerDescriptorIncompatible;
             }
             SECTION("malformed authenticated semantic payload") {
-                payload.resize(3);
+                malformed = true;
                 expected = &AI::AIErrors::DecisionAssetSchemaInvalid;
             }
             SECTION("stale providers from the committed compile environment") {
-                ai.admission->store(false);
+                staleProvider = true;
                 expected = &AI::AIErrors::RuntimeUnavailable;
             }
+
+            const auto plan = ai.Compile(std::span{&graphSource, 1}, 41);
+            auto encoded = AI::DecisionPlanCodec::EncodeCooked(*plan);
+            REQUIRE(encoded.HasValue());
+            auto payload = std::move(encoded).Value();
+            if (malformed)
+                payload.resize(3);
+            if (staleProvider)
+                ai.admission->store(false);
 
             Assets::MemoryAssetProvider raw;
             const auto digest = Put(raw, artifactId, artifactType, target, std::move(payload));
@@ -459,12 +495,11 @@ namespace Horo::Application::PrefabAtomicTest {
                 Internal::CommittedSceneAssets::Capture(NativeDurableFileSystem{}, {directory.path, target}, registry.Snapshot());
             REQUIRE(committed.HasValue());
 
-            auto controller = AI::TestSupport::MakeFixture(1, 11, 1, 0);
+            auto controller = CookedController(ai, plan);
             controller.agent.controller->decisionAsset = declaredRoot;
-            controller.agent.controller->blackboardSchema = ai.schema->Identity();
             controller.descriptor.decisionAsset = declaredRoot;
-            controller.descriptor.blackboardSchema = ai.schema;
             controller.descriptor.decisionPlan.reset();
+            controller.descriptor.cookedPlan.reset();
             Runtime::SceneDefinitionBuilder source{{7}, {1}};
             source.Add({.object = {1}, .components = {.aiAgent = controller.agent.agent, .aiController = controller.agent.controller}});
             auto definition = std::move(source).Build();
@@ -473,10 +508,12 @@ namespace Horo::Application::PrefabAtomicTest {
             Assets::AssetLoadService loader{jobs, committed.Value()->SceneProvider()};
             const Internal::HeadlessSceneLoadBoundary load{{}, std::chrono::steady_clock::now() + std::chrono::seconds{5}};
             const std::array catalog{controller.descriptor};
-            const auto decisions = std::make_shared<const Internal::HeadlessCookedDecisionInput>(
-                Internal::HeadlessCookedDecisionInput{*committed.Value(),
-                                                      ai.Environment(),
-                                                      {{controller.descriptor.controller, requestedId}}});
+            auto selected = Internal::HeadlessCookedDecisionInput{*committed.Value(),
+                                                                  ai.Environment(),
+                                                                  {{controller.descriptor.controller, requestedId}}};
+            if (executionBudget)
+                selected.execution.emplace(AI::AiSceneCookedDecisionExecution{jobs, {}, {.workUnitsPerTick = *executionBudget}});
+            const auto decisions = std::make_shared<const Internal::HeadlessCookedDecisionInput>(std::move(selected));
             const auto composed = Internal::ComposeHeadlessSceneNetworkServices(std::make_shared<const Runtime::RuntimeSceneDefinition>(
                                                                                     std::move(definition).Value()),
                                                                                 {.mode = Physics::PhysicsRuntimeMode::Canonical,
@@ -501,10 +538,24 @@ namespace Horo::Application::PrefabAtomicTest {
                 REQUIRE(physics.HasValue());
                 REQUIRE(physics.Value()->Prepare().HasValue());
                 REQUIRE(physics.Value()->Activate().HasValue());
+                if (executionBudget) {
+                    CHECK(ai.probe.factories == 1);
+                    CHECK(ai.probe.starts == 0);
+                    CancellationSource cancellation;
+                    const auto token = cancellation.Token();
+                    const Runtime::FixedStepContext fixed{1, Duration::FromNanoseconds(16'666'667), token};
+                    const auto result = physics.Value()->RunFixedTick(fixed);
+                    INFO((result.HasError() ? result.ErrorValue().code.Value() + ": " + result.ErrorValue().message : "success"));
+                    REQUIRE(result.HasValue());
+                    CHECK(ai.probe.starts == 1);
+                    CHECK(ai.probe.resumes == 0);
+                }
                 physics.Value()->Shutdown();
             }
-            CHECK(ai.probe.factories == 0);
+            CHECK(ai.probe.factories == (executionBudget && !expected ? 1 : 0));
             built.Value()->Shutdown();
+            CHECK(ai.probe.aborts == (executionBudget && !expected ? 1 : 0));
+            CHECK(ai.probe.cleanups == (executionBudget && !expected ? 1 : 0));
         }
 
         TEST_CASE("Cooked prefab Perception endpoint positions publish within the actual aggregate Scene lifecycle",
@@ -676,6 +727,68 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(replacement.Value().Find(agent->handle).HasError());
             CHECK(replacement.Value().Find(resident).HasValue());
             CHECK(probe->cancellations == 1);
+        }
+
+        TEST_CASE("Native prefab decisions publish with the group and retire their exact runnable tasks",
+                  "[prefab][integration][atomic][ai][decisions]") {
+            namespace Decisions = AI::DecisionGraphTestSupport;
+            Decisions::Fixture decisions;
+            decisions.probe.succeedTick = 99;
+            auto source = Decisions::TaskTree(51);
+            source.executionTask = Decisions::MakeIdentity<AI::TaskId>(879);
+            const auto plan = decisions.Compile(std::span{&source, 1}, 51);
+            const auto controller = CookedController(decisions, plan);
+            AI::AiTaskSchedulerSettings settings;
+            bool admit = true;
+            SECTION("running prefabs retire before the next decision") {}
+            SECTION("an oversubscribed group preserves the resident decision and task identities") {
+                admit = false;
+                settings.maximumAgents = 1;
+                settings.evaluationsPerTick = 1;
+            }
+            Fixture fixture{false, Fault::None, {}, {}, std::nullopt, &controller, settings};
+            auto scheduler = fixture.ai.TaskSchedulerAtSafePoint();
+            REQUIRE(scheduler.HasValue());
+            auto &owner = *scheduler.Value();
+            REQUIRE(owner.EvaluateAtDecision(1).HasValue());
+            REQUIRE(owner.CommitAtIntentDispatch(1).HasValue());
+            REQUIRE(decisions.probe.starts == 1);
+            const auto resident = fixture.ai.Snapshot().Value().Agents().front().handle;
+
+            fixture.Tick(1);
+            if (admit) {
+                fixture.Reach(3);
+            } else {
+                const auto rejected = fixture.AwaitRejection();
+                REQUIRE(rejected.Failure());
+                bool capacityError = false;
+                for (const Error *error = rejected.Failure(); error; error = error->cause.Get())
+                    capacityError = capacityError || error->code.Value() == AI::AIErrors::AgentCapacityExceeded.code.Value();
+                CHECK(capacityError);
+            }
+
+            REQUIRE(owner.EvaluateAtDecision(2).HasValue());
+            REQUIRE(owner.CommitAtIntentDispatch(2).HasValue());
+            CHECK(decisions.probe.starts == (admit ? 3 : 1));
+            CHECK(decisions.probe.resumes == 1);
+            if (!admit) {
+                CHECK(fixture.Count() == 1);
+                const auto next = fixture.ai.ReserveDecisionTaskSlotsAtSafePoint(resident, 1);
+                REQUIRE(next.HasValue());
+                CHECK(next.Value().FirstSlot() == plan->Storage().taskSlots + 1);
+                CHECK(decisions.probe.aborts == 0);
+                return;
+            }
+
+            fixture.Tick(2);
+            fixture.Reach(1);
+            CHECK(decisions.probe.aborts == 2);
+            CHECK(decisions.probe.cleanups == 2);
+            REQUIRE(owner.EvaluateAtDecision(3).HasValue());
+            REQUIRE(owner.CommitAtIntentDispatch(3).HasValue());
+            CHECK(decisions.probe.starts == 3);
+            CHECK(decisions.probe.resumes == 2);
+            CHECK(decisions.probe.aborts == 2);
         }
 
         TEST_CASE("Cancelling accepted prefab work or unloading its actual module never publishes a partial aggregate",

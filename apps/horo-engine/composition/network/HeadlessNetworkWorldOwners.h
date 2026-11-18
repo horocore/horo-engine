@@ -29,6 +29,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
 
         Network::NetworkModeServiceRequest request;
         std::uint64_t generation{};
+        std::uint64_t decisionTick{}; /**< Last completed AI dispatch; a downstream same-tick retry does not replay it. */
         std::shared_ptr<Runtime::RuntimeScene> scene;
         std::weak_ptr<const Gameplay::GameplayPhysicsContext> gameplay;
         GameplayWorldComposition *activeGameplay{};

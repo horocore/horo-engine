@@ -2819,8 +2819,20 @@ and provider generation against the captured compiler environment. The shared
 initial and structural Scene owners retain the executable closure with its root
 bindings and recheck provider currentness at publication. A missing selected
 artifact rejects startup. An invalid authenticated payload preserves the codec
-error. The configured selection admits the immutable plan; it does not create
-an evaluator or participate in fixed-tick dispatch.
+error. An additional deterministic execution policy turns admitted flat
+Behavior Trees with an authored execution task into Scene-owned scheduled
+decisions. Initial activation and prefab creation reserve the exact agent's
+blackboard, task slots, evaluator and slice allowance within the aggregate
+publication. Rollback leaves the live scheduler and task-slot allocator
+unchanged. Prefab retirement revokes the task scope at publication and
+cancels running work after Scene commit.
+
+The configured authoritative headless owner evaluates and dispatches those
+decisions on its actual fixed clock before Gameplay. A same-tick downstream
+retry does not replay a completed AI slice. The current flat-tree executor
+has no Scene command writer, so its dispatch commits no typed gameplay
+intents. Other cooked graph shapes require an execution contract before
+admission.
 
 Each registration owns one coalesced wake slot. Existing `DecisionWakePolicy`
 requests can be forwarded as typed `DecisionWakeReasons`; activation, blackboard,

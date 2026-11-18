@@ -122,6 +122,7 @@ namespace Horo::AI {
 
     namespace Detail {
         struct AiSceneRuntimeState;
+        struct AgentRuntimeState;
         class AiSceneStructuralParticipant;
         struct AiSceneRestoreState;
     }  // namespace Detail
@@ -220,6 +221,13 @@ namespace Horo::AI {
         }
     };
 
+    /** @brief Opt-in fixed-tick execution for flat cooked Behavior Trees owned by this Scene. */
+    struct AiSceneCookedDecisionExecution final {
+        JobSystem &jobs; /**< Process executor must outlive the scene scheduler and its worker image pins. */
+        AiTaskSchedulerSettings scheduler;
+        AiAgentSchedulePolicy agent; /**< Maximum per-agent allowances; compiled plans reserve only required work units. */
+    };
+
     /**
      * @brief Owner-thread AI runtime bound to one exact RuntimeScene publication.
      * @details All active state is detached before publication. Handles include an AI incarnation and never outlive replacement,
@@ -227,12 +235,18 @@ namespace Horo::AI {
      */
     class AiSceneRuntime final {
     public:
-        /**
-         * @brief Creates an empty bounded AI scene runtime.
-         * @param settings Host capability and capacity policy.
-         * @return Runtime or AIErrors::AgentCapacityExceeded for invalid settings.
+        /** @brief Creates an empty bounded AI scene runtime.
+         * @param settings Host capability and capacity policy. @return Runtime or typed policy error.
          */
         [[nodiscard]] static Result<AiSceneRuntime> Create(AiSceneRuntimeSettings settings = {});
+
+        /** @brief Creates an empty runtime with opted-in transactional cooked decision execution.
+         * @param settings Host capability and capacity policy.
+         * @param decisionExecution Deterministic scheduler policy and longer-lived process jobs.
+         * @return Runtime or typed policy error.
+         */
+        [[nodiscard]] static Result<AiSceneRuntime> Create(AiSceneRuntimeSettings settings,
+                                                           AiSceneCookedDecisionExecution decisionExecution);
 
         /** @brief Issues weak access to this exact publication on its simulation safe-point thread.
          * @return Empty/unavailable access when inactive; replacement permanently invalidates retained access. */
@@ -375,7 +389,14 @@ namespace Horo::AI {
         friend class AiSceneActivationCandidate;
         friend class Detail::AiSceneStructuralParticipant;
 
-        explicit AiSceneRuntime(AiSceneRuntimeSettings settings) noexcept;
+        explicit AiSceneRuntime(AiSceneRuntimeSettings settings, std::optional<AiSceneCookedDecisionExecution> execution) noexcept;
+
+        /** @brief Prepares decisions and exact task ranges in detached storage for a scene or structural transaction. */
+        [[nodiscard]] Result<std::vector<AiScheduledDecisionRegistration>> PrepareCookedDecisionRegistrations(
+            const std::shared_ptr<Detail::AiSceneRuntimeState> &state, std::span<const Detail::AgentRuntimeState> agents,
+            std::uint32_t &nextTaskSlot) const;
+        /** @brief Composes the opt-in scheduler on the entirely detached initial population. */
+        [[nodiscard]] Result<void> PrepareCookedDecisionScheduler(const std::shared_ptr<Detail::AiSceneRuntimeState> &state) const;
 
         [[nodiscard]] Result<void> ValidateCandidate(const AiSceneActivationBinding &binding) const;
         [[nodiscard]] bool PublishCandidate(std::shared_ptr<Detail::AiSceneRuntimeState> &state, const AiSceneActivationBinding &binding,
@@ -384,6 +405,7 @@ namespace Horo::AI {
         void RetirePublication(std::uint64_t publicationToken) noexcept;
 
         AiSceneRuntimeSettings settings_;
+        std::optional<AiSceneCookedDecisionExecution> decisionExecution_;
         std::shared_ptr<Detail::AiSceneRuntimeState> active_;
         std::uint64_t nextPublicationToken_{1};
         std::uint64_t activePublicationToken_{};

@@ -371,14 +371,24 @@ namespace Horo::AI {
     Result<AiSceneRuntime> AiSceneRuntime::Create(const AiSceneRuntimeSettings settings) {
         if (!settings.IsValid())
             return Failure<AiSceneRuntime>(AIErrors::AgentCapacityExceeded, "AI scene runtime settings exceed a bounded product limit.");
-        return Result<AiSceneRuntime>::Success(AiSceneRuntime{settings});
+        return Result<AiSceneRuntime>::Success(AiSceneRuntime{settings, std::nullopt});
     }
 
-    AiSceneRuntime::AiSceneRuntime(const AiSceneRuntimeSettings settings) noexcept : settings_(settings) {}
+    Result<AiSceneRuntime> AiSceneRuntime::Create(const AiSceneRuntimeSettings settings, AiSceneCookedDecisionExecution execution) {
+        if (!settings.IsValid())
+            return Failure<AiSceneRuntime>(AIErrors::AgentCapacityExceeded, "AI scene runtime settings exceed a bounded product limit.");
+        if (execution.scheduler.mode != AiSchedulingMode::Deterministic)
+            return Failure<AiSceneRuntime>(AIErrors::SchedulerPolicyInvalid, "Cooked scene decisions require deterministic scheduling.");
+        return Result<AiSceneRuntime>::Success(AiSceneRuntime{settings, std::move(execution)});
+    }
+
+    AiSceneRuntime::AiSceneRuntime(const AiSceneRuntimeSettings settings, std::optional<AiSceneCookedDecisionExecution> execution) noexcept
+        : settings_(settings), decisionExecution_(std::move(execution)) {}
 
     AiSceneRuntime::AiSceneRuntime(AiSceneRuntime &&other) noexcept
-        : settings_(other.settings_), active_(std::move(other.active_)), nextPublicationToken_(other.nextPublicationToken_),
-          activePublicationToken_(other.activePublicationToken_), shutdown_(other.shutdown_) {
+        : settings_(other.settings_), decisionExecution_(std::move(other.decisionExecution_)), active_(std::move(other.active_)),
+          nextPublicationToken_(other.nextPublicationToken_), activePublicationToken_(other.activePublicationToken_),
+          shutdown_(other.shutdown_) {
         other.activePublicationToken_ = 0;
         other.shutdown_ = true;
     }
@@ -416,6 +426,8 @@ namespace Horo::AI {
         const std::uint64_t publicationToken = nextPublicationToken_++;
         try {
             std::shared_ptr<Detail::AiSceneRuntimeState> retainedState = std::move(ownedState);
+            if (auto scheduled = PrepareCookedDecisionScheduler(retainedState); scheduled.HasError())
+                return Result<std::unique_ptr<AiSceneActivationCandidate>>::Failure(scheduled.ErrorValue());
             auto candidate = std::make_unique<AiSceneActivationCandidate>(*this, binding, std::move(retainedState), publicationToken);
             return Result<std::unique_ptr<AiSceneActivationCandidate>>::Success(std::move(candidate));
         } catch (const std::bad_alloc &) {

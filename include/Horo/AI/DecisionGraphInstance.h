@@ -59,6 +59,14 @@ namespace Horo::AI {
                                                                                    std::shared_ptr<const DecisionNodeGeneration> providers,
                                                                                    AiDecisionTaskReservation reservation,
                                                                                    AiTaskOperationContext operation);
+        /** @brief Creates a Scene graph using the exact provider generation already retained by its cooked closure.
+         * @param plan Complete current closure. @param reservation Actual Scene owner's exclusive task range.
+         * @param operation Admitted parent operation.
+         * @return Same binding and lifecycle result as the explicit provider overload.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<DecisionGraphInstance>> Create(std::shared_ptr<const CookedDecisionPlan> plan,
+                                                                                   AiDecisionTaskReservation reservation,
+                                                                                   AiTaskOperationContext operation);
         /** @brief Logical composition-adapter allocation per occurrence; family kernels report their own extents. */
         [[nodiscard]] static std::uint64_t CoreStorageBytes(const DecisionCompiledGraph &graph) noexcept;
         [[nodiscard]] Result<AiTaskState> Step(const DecisionGraphStepInput &input);

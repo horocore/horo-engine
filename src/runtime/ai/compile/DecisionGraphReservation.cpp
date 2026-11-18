@@ -26,4 +26,13 @@ namespace Horo::AI {
         created.Value()->reservation_.emplace(std::move(reservation));
         return created;
     }
+
+    /** @copydoc DecisionGraphInstance::Create(std::shared_ptr<const CookedDecisionPlan>,AiDecisionTaskReservation,AiTaskOperationContext)
+     */
+    Result<std::unique_ptr<DecisionGraphInstance>> DecisionGraphInstance::Create(std::shared_ptr<const CookedDecisionPlan> plan,
+                                                                                 AiDecisionTaskReservation reservation,
+                                                                                 AiTaskOperationContext operation) {
+        auto providers = plan ? plan->providers_ : nullptr;
+        return Create(std::move(plan), std::move(providers), std::move(reservation), std::move(operation));
+    }
 }  // namespace Horo::AI

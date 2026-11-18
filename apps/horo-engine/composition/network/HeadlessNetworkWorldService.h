@@ -291,7 +291,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 record_->cookedControllers = std::move(prepared).Value();
                 catalog = record_->cookedControllers;
             }
-            auto ai = AI::AiSceneRuntime::Create(settings);
+            auto ai = OwnsCookedDecisionExecution() ? AI::AiSceneRuntime::Create(settings, *input.cookedDecisions->execution)
+                                                    : AI::AiSceneRuntime::Create(settings);
             if (ai.HasError())
                 return Result<void>::Failure(ai.ErrorValue());
             record_->ai = std::make_unique<AI::AiSceneRuntime>(std::move(ai).Value());
@@ -326,6 +327,12 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         bool IsAuthoritativeWorld() const noexcept {
             const auto world = request_.world;
             return world == Network::NetworkModeWorldKind::Standalone || world == Network::NetworkModeWorldKind::AuthorityServer;
+        }
+
+        /** @brief The runtime routes AI phases only for explicit authoritative execution. */
+        bool OwnsCookedDecisionExecution() const noexcept {
+            const auto &selection = owners_->configured->cookedDecisions;
+            return IsAuthoritativeWorld() && selection && selection->execution;
         }
 
         /** @brief Only an authoritative host with explicit global positions owns a Perception publication. */
@@ -420,10 +427,31 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             return gameplay_->FixedTick(context);
         }
 
+        /** @brief Executes the opted-in canonical AI phases before configured gameplay on the same fixed clock. */
+        Result<void> RunConfiguredDecisions(const Runtime::FixedStepContext &context) const {
+            if (!OwnsCookedDecisionExecution())
+                return Result<void>::Success();
+            if (context.cancellation.IsCancellationRequested())
+                return JobCancelled();
+            if (record_->decisionTick != 0 && record_->decisionTick == context.simulationTick)
+                return Result<void>::Success();
+            const auto scheduler = record_->ai->TaskSchedulerAtSafePoint();
+            if (scheduler.HasError())
+                return Result<void>::Failure(scheduler.ErrorValue());
+            if (const auto evaluated = scheduler.Value()->EvaluateAtDecision(context.simulationTick); evaluated.HasError())
+                return Result<void>::Failure(evaluated.ErrorValue());
+            if (const auto committed = scheduler.Value()->CommitAtIntentDispatch(context.simulationTick); committed.HasError())
+                return Result<void>::Failure(committed.ErrorValue());
+            record_->decisionTick = context.simulationTick;
+            return Result<void>::Success();
+        }
+
         /** @brief Uses ordinary fixed stages only after readiness; load progress never dispatches a tick. */
         Result<void> RunConfiguredTick(const Runtime::FixedStepContext &context) {
             if (!configuredActivated_ || !record_ || record_->closeRequested)
                 return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
+            if (const auto decisions = RunConfiguredDecisions(context); decisions.HasError())
+                return decisions;
             if (const auto gameplay = RunConfiguredGameplay(context); gameplay.HasError())
                 return gameplay;
             if (record_->animation) {

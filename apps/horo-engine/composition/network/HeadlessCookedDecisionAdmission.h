@@ -2,6 +2,7 @@
 /** @file HeadlessCookedDecisionAdmission.h
  * @brief Exact application-owned mapping between controller identities and committed decision assets.
  */
+#include "Horo/AI/AISceneActivation.h"
 #include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/Assets/AssetId.h"
 
@@ -20,6 +21,7 @@ namespace Horo::Application::Internal {
         AI::DecisionCompilationEnvironment environment;
         std::vector<HeadlessCookedDecisionBinding> bindings;
         AI::DecisionCodecLimits limits; /**< Per-plan codec limits; compiled bytes also bound total retained unique plans. */
+        std::optional<AI::AiSceneCookedDecisionExecution> execution; /**< Explicit authority scheduler; empty only admits assets. */
     };
 
     /** @brief Builds an immutable staged descriptor catalog from authenticated plans and the exact compiler environment.

@@ -25,6 +25,7 @@ namespace Horo::AI::Detail {
             Runtime::RuntimeSceneView scene;
             std::uint64_t revision{};
             std::uint64_t lastAgentIdentity{};
+            std::uint32_t nextTaskSlot{};
             std::vector<Runtime::SceneAgentIdentityProjection> identities;
             std::vector<AgentRuntimeState> additions;
             std::vector<Horo::Handle<AgentHandleTag>> slots;
@@ -84,6 +85,7 @@ namespace Horo::AI::Detail {
                 if (decisions)
                     decisions->Publish();
                 state->lastAgentIdentity = lastAgentIdentity;
+                state->nextTaskSlot = nextTaskSlot;
                 ++state->revision;
                 if (perception)
                     perception->Publish();
@@ -192,17 +194,24 @@ namespace Horo::AI::Detail {
             return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Success(std::move(candidate));
         }
 
-        /** @brief Stages retirement of registered decisions without arming callbacks before the aggregate fence. */
-        static Result<void> PrepareDecisionPopulation(StructuralCandidate &candidate) {
+        /** @brief Stages new executions and exact retirements before the same Scene publication fence. */
+        Result<void> PrepareDecisionPopulation(StructuralCandidate &candidate) const {
             const auto &state = *candidate.state;
             candidate.scheduler = state.scheduler.get();
-            if (!candidate.scheduler || candidate.removals.empty())
+            candidate.nextTaskSlot = state.nextTaskSlot;
+            auto additions = runtime_->PrepareCookedDecisionRegistrations(candidate.state, candidate.additions, candidate.nextTaskSlot);
+            if (additions.HasError())
+                return Result<void>::Failure(additions.ErrorValue());
+            if (!candidate.scheduler)
+                return additions.Value().empty() ? Result<void>::Success() : Result<void>::Failure(MakeError(AIErrors::RuntimeUnavailable));
+            if (additions.Value().empty() && candidate.removals.empty())
                 return Result<void>::Success();
+
             std::vector<AgentHandle> removals;
             removals.reserve(candidate.removals.size());
             for (const auto index : candidate.removals)
                 removals.push_back(state.agents[index].record.handle);
-            auto staged = candidate.scheduler->PreparePopulationChange({}, removals);
+            auto staged = candidate.scheduler->PreparePopulationChange(additions.Value(), removals);
             if (staged.HasError())
                 return Result<void>::Failure(staged.ErrorValue());
             candidate.decisions = std::move(staged).Value();
