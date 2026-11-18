@@ -4,6 +4,7 @@
 #include "Horo/Application/BlackboardUsageReview.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Assets/AssetRegistry.h"
+#include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Gameplay/GameModule.h"
 #include "ProjectReplicationTestSupport.h"
@@ -264,7 +265,10 @@ TEST_CASE("Recent AI assets resolve current registered identity after an ordinar
         CHECK(controller.ViewModel().workspacePanelHost.DocumentTabs().empty());
         CHECK(controller.ViewModel().blackboardDocuments.empty());
     }
-    SECTION("the registry cache cannot authorize a removed live identity sidecar") {
+    SECTION("missing identity leaves the visible untyped source unchanged") {
+        const auto sourcePath = project.root / project.Path;
+        const auto original = Assets::CaptureAssetSource(project.root, sourcePath);
+        REQUIRE(original.HasValue());
         REQUIRE(std::filesystem::remove(project.root / (std::string{project.Path} + ".horo")));
         REQUIRE(project.registry.Snapshot().Find(project.asset));
         controller.ProcessCommand(recent);
@@ -275,6 +279,18 @@ TEST_CASE("Recent AI assets resolve current registered identity after an ordinar
         REQUIRE(rebuilt.Value().status == Assets::AssetRegistryBuildStatus::Degraded);
         controller.RefreshAssets(project.registry.Snapshot());
         CHECK_FALSE(history.front().available);
+        const auto &entries = controller.ViewModel().contentBrowser.entries;
+        const auto visible = std::ranges::find(entries, WorkspacePathText(sourcePath), &ContentBrowserEntry::absolutePath);
+        REQUIRE(visible != entries.end());
+        CHECK_FALSE(visible->registered);
+        CHECK_FALSE(visible->registeredType.has_value());
+
+        controller.ProcessCommand(project.Open());
+        CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.blackboard.invalid");
+        CHECK(controller.ViewModel().blackboardDocuments.empty());
+        const auto preserved = Assets::CaptureAssetSource(project.root, sourcePath);
+        REQUIRE(preserved.HasValue());
+        CHECK(preserved.Value().bytes == original.Value().bytes);
     }
 }
 
