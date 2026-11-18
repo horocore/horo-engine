@@ -21,6 +21,17 @@ target_compile_features(HoroHostSignatureDocuments PUBLIC cxx_std_20)
 target_include_directories(HoroHostSignatureDocuments PUBLIC "${HORO_HOST_SIGNATURE_HEADERS}")
 target_link_libraries(HoroHostSignatureDocuments PUBLIC HoroEngine::PackageSecurity PRIVATE HoroFoundationJsonInternal)
 
+# The cold release trust policy bridges the Application and host crypto boundaries.
+set(HORO_RELEASE_MANIFEST_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/release_manifest_host_headers")
+file(MAKE_DIRECTORY "${HORO_RELEASE_MANIFEST_HOST_HEADERS}")
+configure_file(shared/security/HostReleaseManifestSignatureVerifier.h
+    "${HORO_RELEASE_MANIFEST_HOST_HEADERS}/HostReleaseManifestSignatureVerifier.h" COPYONLY)
+add_library(HoroReleaseManifestSignatureHostInternal STATIC shared/security/HostReleaseManifestSignatureVerifier.cpp)
+target_compile_features(HoroReleaseManifestSignatureHostInternal PUBLIC cxx_std_20)
+target_include_directories(HoroReleaseManifestSignatureHostInternal PUBLIC "${HORO_RELEASE_MANIFEST_HOST_HEADERS}")
+target_link_libraries(HoroReleaseManifestSignatureHostInternal PUBLIC HoroEngine::Application
+    PRIVATE HoroHostSignatureDocuments HoroEngine::Security)
+
 add_library(HoroHostModuleComposition STATIC
     shared/modules/HostModuleComposition.cpp
 )

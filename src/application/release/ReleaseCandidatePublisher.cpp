@@ -115,6 +115,52 @@ namespace Horo::Release {
             }
             return !error && status.type() != std::filesystem::file_type::not_found;
         }
+
+        /** @brief Verifies the same caller-selected detached envelope on initial promotion and retry. */
+        [[nodiscard]] Result<void> VerifyPromotionTree(const std::filesystem::path &root, const ReleaseArtifactManifest &manifest,
+                                                       const ReleaseManifestSigningInput *signing) {
+            if (!signing)
+                return VerifyReleaseArtifactTree(root, manifest);
+            const auto tree = VerifySignedReleaseArtifactTree(root, manifest, signing->verifier);
+            if (tree.HasError())
+                return Result<void>::Failure(tree.ErrorValue());
+            const ReleaseManifestSignatureIdentity expected{signing->envelope.size(), ComputeSha256(signing->envelope)};
+            if (tree.Value() != expected)
+                return Result<void>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
+            return Result<void>::Success();
+        }
+
+        /** @brief Checks explicit publisher trust before any staged final metadata write. */
+        [[nodiscard]] Result<void> VerifyPromotionEnvelope(const ReleaseArtifactManifest &manifest,
+                                                           const ReleaseManifestSigningInput &signing) {
+            if (signing.envelope.empty() || signing.envelope.size() > MaximumReleaseManifestSignatureBytes)
+                return Result<void>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
+            return signing.verifier.Verify(std::as_bytes(std::span{manifest.CanonicalJson()}), signing.envelope);
+        }
+
+        /** @brief Exclusively prepares only the two caller-owned final metadata files. */
+        [[nodiscard]] Result<void> WritePromotionMetadata(DurableFileSystem &files, const std::filesystem::path &root,
+                                                          const ReleaseArtifactManifest &manifest,
+                                                          const ReleaseManifestSigningInput *signing) {
+            const auto manifestPath = root / ReleaseManifestFilename;
+            const auto signaturePath = root / ReleaseManifestSignatureFilename;
+            std::error_code error;
+            if (ExistsIncludingSymlink(manifestPath, error) || error)
+                return Result<void>::Failure(StagingError());
+            if (ExistsIncludingSymlink(signaturePath, error) || error)
+                return Result<void>::Failure(StagingError());
+            const auto canonical = std::as_bytes(std::span{manifest.CanonicalJson()});
+            if (!signing)
+                return files.WriteDurable(manifestPath, canonical);
+            using enum std::filesystem::perms;
+            constexpr auto metadataPermissions = owner_read | owner_write | group_read | others_read;
+            bool envelopeCreated = false;
+            if (auto envelope = files.WritePrivateDurable(signaturePath, signing->envelope, envelopeCreated, metadataPermissions);
+                envelope.HasError())
+                return envelope;
+            bool manifestCreated = false;
+            return files.WritePrivateDurable(manifestPath, canonical, manifestCreated, metadataPermissions);
+        }
     }  // namespace
 
     ReleaseStagingArea::ReleaseStagingArea(std::filesystem::path stageRoot, std::filesystem::path finalRoot,
@@ -169,32 +215,31 @@ namespace Horo::Release {
 
     /** @copydoc NativeReleaseCandidatePublisher::Promote */
     Result<void> NativeReleaseCandidatePublisher::Promote(const ReleaseExecutionPlan &plan, const ReleaseStagingArea &stage,
-                                                          const ReleaseArtifactManifest &manifest) {
+                                                          const ReleaseArtifactManifest &manifest,
+                                                          const ReleaseManifestSigningInput *signing) {
         const auto expectedFinal = plan.OutputRoot() / OutputName(plan);
         if (const auto expectedStage =
                 plan.OutputRoot() / ".horo-staging" / std::format("{}.candidate-{}", OutputName(plan), stage.Candidate().value);
             stage.FinalRoot() != expectedFinal || stage.StageRoot() != expectedStage || stage.Candidate() != manifest.Data().candidate ||
             !MatchesPlan(plan, manifest))
             return Result<void>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
+        if (signing)
+            if (auto trusted = VerifyPromotionEnvelope(manifest, *signing); trusted.HasError())
+                return trusted;
         std::error_code error;
         if (ExistsIncludingSymlink(expectedFinal, error)) {
             if (ExistsIncludingSymlink(stage.StageRoot(), error))
                 return Result<void>::Failure(CollisionError());
             if (error)
                 return Result<void>::Failure(StagingError());
-            if (VerifyReleaseArtifactTree(expectedFinal, manifest).HasError())
+            if (VerifyPromotionTree(expectedFinal, manifest, signing).HasError())
                 return Result<void>::Failure(CollisionError());
             return files_.SyncDirectory(plan.OutputRoot()).HasError() ? Result<void>::Failure(StagingError()) : Result<void>::Success();
         }
-        if (error)
+        if (error || !std::filesystem::is_directory(std::filesystem::symlink_status(stage.StageRoot(), error)) || error)
             return Result<void>::Failure(StagingError());
-        if (ExistsIncludingSymlink(stage.StageRoot() / "manifest.json", error))
-            return Result<void>::Failure(StagingError());
-        if (error)
-            return Result<void>::Failure(StagingError());
-        if (const auto &json = manifest.CanonicalJson();
-            files_.WriteDurable(stage.StageRoot() / "manifest.json", std::as_bytes(std::span{json})).HasError() ||
-            VerifyReleaseArtifactTree(stage.StageRoot(), manifest).HasError() || files_.SyncDirectory(stage.StageRoot()).HasError() ||
+        if (WritePromotionMetadata(files_, stage.StageRoot(), manifest, signing).HasError() ||
+            VerifyPromotionTree(stage.StageRoot(), manifest, signing).HasError() || files_.SyncDirectory(stage.StageRoot()).HasError() ||
             files_.SyncDirectory(stage.StageRoot().parent_path()).HasError())
             return Result<void>::Failure(StagingError());
         if (const std::error_code moved = PromoteNoReplace(stage.StageRoot(), stage.FinalRoot()); moved)

@@ -3,6 +3,7 @@
 #include "EditorNativeReconstructionReleaseLayout.h"
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
+#include "HostReleaseManifestSignatureVerifier.h"
 #include "HostSignatureDocument.h"
 
 #include <algorithm>
@@ -45,24 +46,23 @@ namespace Horo::Editor {
                                                               const EditorProviderProductIdentity &expected, const DurableFileSystem &files,
                                                               const Security::ArtifactVerifier &verifier) {
             using Outcome = Result<Release::ReleaseArtifactManifest>;
-            const auto signature =
-                files.ReadFileBounded(request.productRoot / "manifest.signature.json", MaximumHostSignatureDocumentBytes);
+            const auto signature = files.ReadFileBounded(request.productRoot / Release::ReleaseManifestSignatureFilename,
+                                                         Release::MaximumReleaseManifestSignatureBytes);
             if (signature.HasError())
                 return Outcome::Failure(signature.ErrorValue());
-            const auto detached = DecodeDetachedSignatureDocument(std::as_bytes(std::span{signature.Value()}));
-            if (detached.HasError())
-                return Outcome::Failure(detached.ErrorValue());
-            const auto bytes = files.ReadFileBounded(request.productRoot / "manifest.json", MaximumManifestBytes);
+            const auto bytes = files.ReadFileBounded(request.productRoot / Release::ReleaseManifestFilename, MaximumManifestBytes);
             if (bytes.HasError())
                 return Outcome::Failure(bytes.ErrorValue());
-            const auto verified = verifier.Verify(std::as_bytes(std::span{bytes.Value()}), detached.Value());
+            const HostReleaseManifestSignatureVerifier manifestVerifier{verifier};
+            const auto verified =
+                manifestVerifier.Verify(std::as_bytes(std::span{bytes.Value()}), std::as_bytes(std::span{signature.Value()}));
             if (verified.HasError())
                 return Outcome::Failure(verified.ErrorValue());
             const auto json = std::string_view{std::bit_cast<const char *>(bytes.Value().data()), bytes.Value().size()};
             auto manifest = Release::ReleaseArtifactManifest::ParseCanonical(json);
             if (manifest.HasError())
                 return manifest;
-            if (!IsSelectedProduct(manifest.Value().Data(), expected) || manifest.Value().Digest() != verified.Value().ArtifactDigest())
+            if (!IsSelectedProduct(manifest.Value().Data(), expected))
                 return Outcome::Failure(MakeError(InvalidInventory));
             return manifest;
         }

@@ -356,11 +356,9 @@ The new stage contains the three canonical payload/reflection pairs. Standard
 output carries the canonical pre-sign inventory with a size and SHA-256 for
 each exact file. Release assembly includes those records alongside the other
 Editor product records and passes the complete stage through the existing
-release verification and signing boundary. The release host must provide
-the product identity, final manifest and detached signature. The current exact
-release tree verifier expects only `manifest.json` as metadata. A host that
-packages a detached envelope alongside it needs an envelope-aware final
-verification and publication policy.
+release verification and signing boundary. The release host supplies the
+product identity, final manifest, detached envelope and independent publisher
+trust used during staging and final verification.
 
 [ADR-040](../../adr/040-reconstruction-frame-generation-and-latency-providers.md)
 replaces the legacy single upscaler interface with four sealed frontend-owned

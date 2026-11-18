@@ -408,10 +408,13 @@ facts provider and worker factory, and query the service's typed snapshots;
 presentation sessions do not own a job. `HoroEngine::ReleaseProcess` owns
 `ReleaseProcess.h` and adapts stage-scoped child invocations to the existing
 Platform process runner. Existing preflight, profile and target-matrix callers
-have no signature migration. New stage workers implement the typed handoffs and
-keep their temporary resources until the attempt completes or cancellation is
-acknowledged. The three generated standalone public-header consumers verify
-ownership and transitive dependencies.
+retain their existing input contracts. Final detached release verification is
+opt-in at the Application manifest and candidate boundaries. The host supplies
+publisher trust explicitly, and the installed host shares the same signature
+document and cryptographic owners. Application has no dependency on Security or
+Platform. Stage workers implement typed handoffs and keep temporary resources
+until completion or acknowledged cancellation. The generated standalone
+public-header consumers verify ownership and transitive dependencies.
 
 ## REL-001.22 GitHub Releases Host Boundary
 

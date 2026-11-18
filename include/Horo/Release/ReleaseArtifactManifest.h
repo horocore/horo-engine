@@ -153,13 +153,51 @@ namespace Horo::Release {
         Sha256Digest digest_;
     };
 
+    /** @brief Reserved root filename for the exact canonical release inventory. */
+    inline constexpr std::string_view ReleaseManifestFilename = "manifest.json";
+    /** @brief Reserved root filename for the detached release publisher envelope. */
+    inline constexpr std::string_view ReleaseManifestSignatureFilename = "manifest.signature.json";
+    /** @brief Upper bound for the detached signature document before parsing. */
+    inline constexpr std::size_t MaximumReleaseManifestSignatureBytes = 1U << 20U;
+
+    /** @brief Host-supplied cryptographic admission for the canonical manifest and its exact detached envelope bytes. */
+    class IReleaseManifestSignatureVerifier {
+    public:
+        virtual ~IReleaseManifestSignatureVerifier() = default;
+
+        /** @brief Verifies one exact manifest against independently supplied publisher trust.
+         * @param canonicalManifest Expected canonical final manifest bytes.
+         * @param detachedEnvelope Bounded exact candidate envelope document.
+         * @return Success only for an authentic authorized publisher signature over these manifest bytes.
+         */
+        [[nodiscard]] virtual Result<void> Verify(std::span<const std::byte> canonicalManifest,
+                                                  std::span<const std::byte> detachedEnvelope) const = 0;
+    };
+
+    /** @brief Identity of the separately authenticated envelope, outside the manifest's artifact list. */
+    struct ReleaseManifestSignatureIdentity final {
+        std::uint64_t size{};
+        Sha256Digest digest;
+        bool operator==(const ReleaseManifestSignatureIdentity &) const noexcept = default;
+    };
+
     /**
      * @brief Verifies exact final file bytes and rejects undeclared files or symbolic links in a private staging tree.
      * @param root Private, quiescent staging directory containing manifest.json and every declared artifact.
      * @param manifest Expected immutable final manifest.
+     * @details Use this entry point when the host does not require a detached manifest signature. A detached envelope is undeclared here.
      * @return Success only when all recorded sizes, hashes, and canonical manifest bytes match the tree.
      */
     [[nodiscard]] Result<void> VerifyReleaseArtifactTree(const std::filesystem::path &root, const ReleaseArtifactManifest &manifest);
+
+    /** @brief Verifies one signed final tree with its sole detached metadata role.
+     * @param root Quiescent final stage with the canonical manifest, detached envelope and every declared artifact.
+     * @param manifest Exact caller-selected canonical manifest.
+     * @param verifier Host trust boundary whose publisher roots are established independently of the candidate.
+     * @return Immutable envelope byte identity after authenticating the manifest and verifying the complete tree.
+     */
+    [[nodiscard]] Result<ReleaseManifestSignatureIdentity> VerifySignedReleaseArtifactTree(
+        const std::filesystem::path &root, const ReleaseArtifactManifest &manifest, const IReleaseManifestSignatureVerifier &verifier);
 
     /**
      * @brief Verifies every unsigned staged file and rejects undeclared files and symbolic links.

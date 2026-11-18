@@ -427,6 +427,21 @@ The manifest uses a canonical serialization format before hashing or signing.
 Unknown required manifest fields cause validation failure. Optional extensions
 are namespaced and versioned.
 
+A host that requires detached manifest authentication supplies its independently
+trusted publisher verifier explicitly. The final directory contains one
+canonical `manifest.json` and one `manifest.signature.json` envelope for those
+exact bytes. Both root metadata names are reserved outside the artifact list.
+Keeping the envelope outside the list lets it sign the final manifest without
+creating a digest cycle. The existing exact-tree path for hosts without
+detached manifest policy still rejects any undeclared envelope. Declared
+platform signing and notarization requirements remain a separate check.
+
+Private staging promotion verifies both metadata files before the atomic rename.
+Final candidate verification checks the entire directory before and after smoke
+probes and binds the exact envelope byte identity to its result. Publication
+adapters that only implement the existing manifest-only transport cannot
+publish a detached-manifest candidate.
+
 Checksum metadata is a deterministic projection of post-sign artifact records.
 It lists each final artifact's SHA-256 digest in portable path order, before
 `checksums.txt` and `manifest.json` are written. Neither metadata file may list

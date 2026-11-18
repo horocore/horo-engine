@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 namespace Horo::Release {
@@ -20,7 +21,7 @@ namespace Horo::Release {
         }
 
         /** @brief Streams a regular file into SHA-256 and compares the exact declared byte count. */
-        [[nodiscard]] bool MatchesFile(const std::filesystem::path &path, const ReleaseArtifactRecord &artifact) {
+        [[nodiscard]] bool MatchesFile(const std::filesystem::path &path, std::uint64_t expectedSize, const Sha256Digest &expectedDigest) {
             std::ifstream input(path, std::ios::binary);
             if (!input)
                 return false;
@@ -30,11 +31,11 @@ namespace Horo::Release {
             while (input) {
                 input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
                 const auto count = static_cast<std::size_t>(input.gcount());
-                if (count > artifact.size - bytes || !hash.Update(std::as_bytes(std::span{buffer.data(), count})))
+                if (count > expectedSize - bytes || !hash.Update(std::as_bytes(std::span{buffer.data(), count})))
                     return false;
                 bytes += count;
             }
-            return input.eof() && bytes == artifact.size && hash.Finalize() == artifact.digest;
+            return input.eof() && bytes == expectedSize && hash.Finalize() == expectedDigest;
         }
 
         /** @brief Compares the canonical metadata file byte-for-byte without accepting extra content. */
@@ -48,13 +49,40 @@ namespace Horo::Release {
                    input.peek() == std::char_traits<char>::eof();
         }
 
-        /** @brief Tracks exact declared files independently from filesystem traversal. */
+        /** @brief Reads only the bounded ordinary metadata file in the caller's quiescent directory. */
+        [[nodiscard]] Result<std::vector<std::byte>> ReadSignatureEnvelope(const std::filesystem::path &root) {
+            using Bytes = Result<std::vector<std::byte>>;
+            std::error_code error;
+            if (!std::filesystem::is_directory(std::filesystem::symlink_status(root, error)) || error)
+                return Bytes::Failure(InvalidTree().ErrorValue());
+            const auto path = root / ReleaseManifestSignatureFilename;
+            if (!std::filesystem::is_regular_file(std::filesystem::symlink_status(path, error)) || error)
+                return Bytes::Failure(InvalidTree().ErrorValue());
+            const auto size = std::filesystem::file_size(path, error);
+            if (error || size == 0 || size > MaximumReleaseManifestSignatureBytes)
+                return Bytes::Failure(InvalidTree().ErrorValue());
+            std::vector<std::byte> data(static_cast<std::size_t>(size));
+            std::ifstream input(path, std::ios::binary);
+            input.read(reinterpret_cast<char *>(data.data()), static_cast<std::streamsize>(data.size()));
+            if (!input || input.peek() != std::char_traits<char>::eof() || input.bad())
+                return Bytes::Failure(InvalidTree().ErrorValue());
+            return Bytes::Success(std::move(data));
+        }
+
+        /** @brief Tracks exact declared files and separately authenticated metadata. */
         struct InventoryScan final {
-            InventoryScan(const std::span<const ReleaseArtifactRecord> expected, const std::optional<std::string_view> metadata)
-                : artifacts(expected), manifestJson(metadata), seen(expected.size(), false) {}
+            InventoryScan(const std::span<const ReleaseArtifactRecord> expected, const std::optional<std::string_view> metadata,
+                          const ReleaseManifestSignatureIdentity *const signedEnvelope)
+                : artifacts(expected), manifestJson(metadata), envelope(signedEnvelope), seen(expected.size(), false) {}
 
             [[nodiscard]] bool Accept(const std::filesystem::path &path, const std::string &relative) {
-                if (relative == "manifest.json") {
+                if (relative == ReleaseManifestSignatureFilename) {
+                    if (!envelope || envelopeSeen || !MatchesFile(path, envelope->size, envelope->digest))
+                        return false;
+                    envelopeSeen = true;
+                    return true;
+                }
+                if (relative == ReleaseManifestFilename) {
                     if (!manifestJson.has_value() || manifestSeen || !MatchesManifest(path, *manifestJson))
                         return false;
                     manifestSeen = true;
@@ -64,31 +92,35 @@ namespace Horo::Release {
                 if (match == artifacts.end() || match->path != relative)
                     return false;
                 const auto index = static_cast<std::size_t>(match - artifacts.begin());
-                if (seen[index] || !MatchesFile(path, *match))
+                if (seen[index] || !MatchesFile(path, match->size, match->digest))
                     return false;
                 seen[index] = true;
                 return true;
             }
 
             [[nodiscard]] bool Complete() const {
-                return (!manifestJson.has_value() || manifestSeen) && std::ranges::all_of(seen, [](const bool value) {
+                return (!manifestJson.has_value() || manifestSeen) && (!envelope || envelopeSeen) &&
+                       std::ranges::all_of(seen, [](const bool value) {
                     return value;
                 });
             }
 
             std::span<const ReleaseArtifactRecord> artifacts;
             std::optional<std::string_view> manifestJson;
+            const ReleaseManifestSignatureIdentity *envelope;
             std::vector<bool> seen;
             bool manifestSeen{};
+            bool envelopeSeen{};
         };
 
         /** @brief Walks one quiescent tree against an exact pre-sign or final inventory. */
         [[nodiscard]] Result<void> VerifyTree(const std::filesystem::path &root, const std::span<const ReleaseArtifactRecord> artifacts,
-                                              const std::optional<std::string_view> manifestJson) {
+                                              const std::optional<std::string_view> manifestJson,
+                                              const ReleaseManifestSignatureIdentity *envelope = nullptr) {
             std::error_code error;
             if (const auto rootStatus = std::filesystem::symlink_status(root, error); error || !std::filesystem::is_directory(rootStatus))
                 return InvalidTree();
-            InventoryScan scan{artifacts, manifestJson};
+            InventoryScan scan{artifacts, manifestJson, envelope};
             std::filesystem::recursive_directory_iterator entry{root, error};
             if (error)
                 return InvalidTree();
@@ -119,6 +151,25 @@ namespace Horo::Release {
     /** @copydoc VerifyReleaseArtifactTree */
     Result<void> VerifyReleaseArtifactTree(const std::filesystem::path &root, const ReleaseArtifactManifest &manifest) {
         return VerifyTree(root, manifest.Artifacts(), std::string_view{manifest.CanonicalJson()});
+    }
+
+    /** @copydoc VerifySignedReleaseArtifactTree */
+    Result<ReleaseManifestSignatureIdentity> VerifySignedReleaseArtifactTree(const std::filesystem::path &root,
+                                                                             const ReleaseArtifactManifest &manifest,
+                                                                             const IReleaseManifestSignatureVerifier &verifier) {
+        using Outcome = Result<ReleaseManifestSignatureIdentity>;
+        const auto detached = ReadSignatureEnvelope(root);
+        if (detached.HasError())
+            return Outcome::Failure(detached.ErrorValue());
+        const auto &json = manifest.CanonicalJson();
+        const auto trusted = verifier.Verify(std::as_bytes(std::span{json}), detached.Value());
+        if (trusted.HasError())
+            return Outcome::Failure(trusted.ErrorValue());
+
+        const ReleaseManifestSignatureIdentity signature{detached.Value().size(), ComputeSha256(detached.Value())};
+        if (auto tree = VerifyTree(root, manifest.Artifacts(), std::string_view{json}, &signature); tree.HasError())
+            return Outcome::Failure(tree.ErrorValue());
+        return Outcome::Success(signature);
     }
 
     /** @copydoc VerifyReleaseStagedTree */
