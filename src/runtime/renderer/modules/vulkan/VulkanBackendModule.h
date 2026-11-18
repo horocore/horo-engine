@@ -206,6 +206,8 @@ namespace Horo::Render {
         [[nodiscard]] virtual Result<bool> PollPresentationAvailability(FramebufferExtent extent);
         /** @brief Realizes an explicit idle output transition; DrawableUnavailable retains its native debt for retry. */
         [[nodiscard]] virtual Result<void> ResizePresentation(FramebufferExtent extent, PresentMode mode);
+        /** @brief Observes the realized unmanaged SDR output. @return Exact attachment facts or typed unavailable/unsupported. */
+        [[nodiscard]] virtual Result<RenderPresentationOutput> ObservePresentationOutput() const;
         /** @brief Starts an offscreen frame in preallocated native storage. */
         [[nodiscard]] virtual Result<FrameToken> BeginFrame(const FrameDescriptor &descriptor) = 0;
         /** @brief Encodes exact typed graph submissions, retaining the frontend's one completion lease. */

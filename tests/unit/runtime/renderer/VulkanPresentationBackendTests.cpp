@@ -26,6 +26,12 @@ namespace {
             return Result<bool>::Success(extent == output && available);
         }
 
+        Result<RenderPresentationOutput> ObservePresentationOutput() const override {
+            if (!output.IsValid())
+                return Result<RenderPresentationOutput>::Failure(MakeError(RenderPresentationErrors::OutputUnavailable));
+            return Result<RenderPresentationOutput>::Success({.display = {.revision = 1, .attached = true}, .revision = 1});
+        }
+
         Result<FrameToken> BeginFrame(const FrameDescriptor &) override {
             return Result<FrameToken>::Success({1});
         }
@@ -68,7 +74,12 @@ TEST_CASE("Vulkan backend delegates realized output and nonblocking acquisition 
     auto backend = CreateBackend(port);
     REQUIRE(backend->Initialize({.requirePresentation = true, .presentMode = PresentMode::Fifo}).HasValue());
     CHECK(backend->Capabilities().presentsToWindow);
+    const auto unrealized = backend->PresentationOutput();
+    REQUIRE(unrealized.HasError());
+    CHECK(unrealized.ErrorValue().code.Value() == RenderPresentationErrors::OutputUnavailable.code.Value());
     REQUIRE(backend->Resize({640, 480}).HasValue());
+    REQUIRE(backend->PresentationOutput().HasValue());
+    CHECK(backend->PresentationOutput().Value().revision == 1);
     CHECK(port.policy == PresentMode::Fifo);
     REQUIRE_FALSE(backend->PollPresentationAvailability({640, 480}).Value());
     port.available = true;
@@ -91,6 +102,9 @@ TEST_CASE("Vulkan headless command owner does not turn interactive runtime suppo
     auto backend = CreateBackend(port);
     REQUIRE(backend->Initialize({}).HasValue());
     CHECK_FALSE(backend->Capabilities().presentsToWindow);
+    const auto unsupported = backend->PresentationOutput();
+    REQUIRE(unsupported.HasError());
+    CHECK(unsupported.ErrorValue().code.Value() == RenderPresentationErrors::OutputUnsupported.code.Value());
     CHECK(backend->Resize({640, 480}).HasError());
     CHECK(backend->PollPresentationAvailability({640, 480}).Value());
     CHECK(port.resizes == 0);

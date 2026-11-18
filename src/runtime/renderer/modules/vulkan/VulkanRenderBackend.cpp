@@ -299,6 +299,15 @@ namespace Horo::Render {
                 return requirePresentation_ ? commandPort_->PollPresentationAvailability(extent) : Result<bool>::Success(true);
             }
 
+            /** @copydoc IRenderBackend::PresentationOutput */
+            Result<RenderPresentationOutput> PresentationOutput() const override {
+                if (!requirePresentation_)
+                    return Result<RenderPresentationOutput>::Failure(MakeError(RenderPresentationErrors::OutputUnsupported));
+                if (const auto access = CommandAccess(); access.HasError())
+                    return Result<RenderPresentationOutput>::Failure(access.ErrorValue());
+                return commandPort_->ObservePresentationOutput();
+            }
+
             Result<bool> ObserveSubmission(const RenderCpuWait &wait) override {
                 if (ownerThread_ == std::thread::id{})
                     return Result<bool>::Failure(MakeError(VulkanBackendErrors::NotInitialized));

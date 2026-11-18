@@ -244,6 +244,18 @@ namespace Horo::Tests::VulkanEditor {
         Host host;
         INFO("Vulkan / SDL window and swapchain / " << SDL_GetCurrentVideoDriver());
         host.RecordCapabilities();
+        const auto device = host.bridge->Port()->QueryDevice();
+        Check(device, "query realized native attachment");
+        const auto initialOutput = host.frontend->PresentationOutput();
+        if (device.Value().outputFormat == VK_FORMAT_B8G8R8A8_UNORM) {
+            Check(initialOutput, "observe unmanaged SDR attachment");
+            CHECK(initialOutput.Value().active == RenderOutputColor{});
+            CHECK(initialOutput.Value().display.attached);
+            CHECK(initialOutput.Value().display.hdr == RenderDisplayHdrSupport::Unknown);
+        } else {
+            REQUIRE(initialOutput.HasError());
+            CHECK(initialOutput.ErrorValue().code.Value() == RenderPresentationErrors::OutputUnsupported.code.Value());
+        }
         const std::array passes{RenderPassDescriptor{.kind = RenderPassKind::Graphics, .primaryOutput = PrimaryOutputAttachment{}}};
         {
             auto initial = host.Frame(1);
@@ -290,6 +302,12 @@ namespace Horo::Tests::VulkanEditor {
                 REQUIRE(std::chrono::steady_clock::now() < deadline);
                 SDL_PumpEvents();
                 std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+            if (initialOutput.HasValue()) {
+                const auto resizedOutput = host.frontend->PresentationOutput();
+                Check(resizedOutput, "observe replacement SDR attachment");
+                CHECK(resizedOutput.Value().revision > initialOutput.Value().revision);
+                CHECK(resizedOutput.Value().active == initialOutput.Value().active);
             }
             const auto retiredExtent = host.frontend->PollPresentationAvailability(host.extent);
             Check(retiredExtent, "poll the superseded pixel extent");

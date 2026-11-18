@@ -447,6 +447,11 @@ namespace Horo::Render {
                 return presentation_ ? presentation_->PollAvailability(extent) : IVulkanCommandPort::PollPresentationAvailability(extent);
             }
 
+            /** @copydoc IVulkanCommandPort::ObservePresentationOutput */
+            Result<RenderPresentationOutput> ObservePresentationOutput() const override {
+                return presentation_ ? presentation_->ObserveOutput() : IVulkanCommandPort::ObservePresentationOutput();
+            }
+
             Result<void> ResizePresentation(const FramebufferExtent extent, const PresentMode mode) override {
                 return presentation_ ? presentation_->Resize(extent, mode) : IVulkanCommandPort::ResizePresentation(extent, mode);
             }
