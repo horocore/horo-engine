@@ -897,12 +897,20 @@ namespace Horo::Tests::OpenXRApplication {
                                    false,        installAuthority ? permission : nullptr};
         constexpr std::array<std::string_view, 1> extensions{XR_FB_PASSTHROUGH_EXTENSION_NAME};
         fixture.script.native.extraExtensions = extensions;
-        fixture.script.native.extraExtensionVersion = XR::OpenXRInternal::NativePassthroughPropertiesVersion;
+        const auto provider = XR::OpenXRInternal::NativePassthroughExtensionRequest();
+        fixture.script.native.extraExtensionVersion = provider ? provider->minimumVersion : 3;
         ++fixture.script.native.extensionCount;
         fixture.script.native.resolveExtra = &OpenXR::PassthroughScript::Resolve;
         fixture.script.census.passthroughCapabilities = XR_PASSTHROUGH_CAPABILITY_BIT_FB;
         fixture.script.census.maximumLayers = layerLimit;
         fixture.CreatePlay();
+        if (!provider) {
+            CHECK(std::ranges::find(fixture.script.native.enabledExtensions, XR_FB_PASSTHROUGH_EXTENSION_NAME) ==
+                  fixture.script.native.enabledExtensions.end());
+            CHECK(fixture.play->ArmPassthrough().HasError());
+            CHECK(native.featuresCreated == 0);
+            return;
+        }
         CHECK((std::ranges::find(fixture.script.native.enabledExtensions, XR_FB_PASSTHROUGH_EXTENSION_NAME) !=
                fixture.script.native.enabledExtensions.end()) == installAuthority);
         if (arm)

@@ -501,6 +501,15 @@ foveation, refresh-rate selection and visibility-mask optimization; it does not
 execute the missing feature. `AdmitXRPlannedFeature` rechecks current publication and
 rejects disabled, unrequested, stale and post-one paths before an adapter is called.
 
+The first-party Meta Quest provider is a separate build target under
+`src/runtime/xr/openxr/modules/meta_quest/`. It supplies native passthrough
+negotiation metadata, dispatch, and handling of its runtime events. The shared
+OpenXR backend retains session and frame ownership, and the application still
+requires the platform permission and operator grant. A product can build with
+`HORO_BUILD_XR_META_QUEST=OFF` and keep ordinary OpenXR projection, input, and
+tracking. The module is selected in the product build and has no runtime
+discovery or general ExtensionHost activation.
+
 ## Views And Coordinate Spaces
 
 Horo uses metres, a documented handedness, and explicit local/stage/view space

@@ -10,7 +10,7 @@ namespace Horo::Tests::OpenXR {
             auto world = f.local;
             world.kind = XRSpaceKind::World;
             XRPassthroughScope scope{f.session, world, IdentityValue<XRPassthroughGrant>(1)};
-            if (!selected) {
+            if (!selected || !NativePassthroughExtensionRequest()) {
                 RequireFailureIdentity(f.native.owner.StartPassthrough(scope), XRErrors::OperationUnsupported);
                 CHECK(f.passthrough.featuresCreated == 0);
                 return;
@@ -39,6 +39,8 @@ namespace Horo::Tests::OpenXR {
 
         TEST_CASE("Current native passthrough precedes the premultiplied projection on the exact released frame",
                   "[unit][xr][compositor][passthrough]") {
+            if (!NativePassthroughExtensionRequest())
+                SKIP("This test requires the Meta Quest provider.");
             const std::uint32_t maximumLayers = GENERATE(1U, 2U);
             CompositorFixture f{false, false, false, NativeReprojectionRoute::None, true, maximumLayers};
             f.Bind();
@@ -117,6 +119,8 @@ namespace Horo::Tests::OpenXR {
         }
 
         TEST_CASE("Passthrough rollback redacts immediately and retains exact teardown debt", "[unit][xr][compositor][passthrough]") {
+            if (!NativePassthroughExtensionRequest())
+                SKIP("This test requires the Meta Quest provider.");
             CompositorFixture f{false, false, false, NativeReprojectionRoute::None, true, 2};
             const XRPassthroughScope scope{f.session, f.local, IdentityValue<XRPassthroughGrant>(1)};
             f.passthrough.resumeResult = XR_ERROR_NOT_PERMITTED_PASSTHROUGH_FB;

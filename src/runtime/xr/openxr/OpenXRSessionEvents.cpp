@@ -255,12 +255,6 @@ namespace Horo::XR::OpenXRInternal {
             // Missing state transitions cannot authorize continued frames or a later Ready restart.
             // Logical loss retains native frame/image debt; it does not manufacture end/release success.
             return RecordLoss(NativeSessionEventLoss::EventHistory);
-        } else if (buffer.type == XR_TYPE_EVENT_DATA_PASSTHROUGH_STATE_CHANGED_FB) {
-            XrEventDataPassthroughStateChangedFB event;
-            std::memcpy(&event, &buffer, sizeof(event));
-            // Recovery requires a new grant. Unknown or adverse flags cannot preserve an existing one.
-            if (event.next || event.flags != XR_PASSTHROUGH_STATE_CHANGED_RESTORED_ERROR_BIT_FB)
-                native_->RevokePassthrough();
         } else if (buffer.type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED) {
             XrEventDataInteractionProfileChanged event;
             std::memcpy(&event, &buffer, sizeof(event));
@@ -276,6 +270,8 @@ namespace Horo::XR::OpenXRInternal {
                 if (evidence.Value())
                     observation.referenceChange = evidence.Value();
             }
+        } else {
+            native_->ObservePassthroughEvent(buffer);
         }
         return Result<void>::Success();
     }

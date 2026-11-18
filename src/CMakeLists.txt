@@ -2550,11 +2550,15 @@ if(HORO_BUILD_XR_OPENXR)
         HoroEngine::XRRuntime HoroEngine::XRInputBindings HoroEngine::Platform HoroOpenXRHeaders)
     target_compile_features(HoroXROpenXRHostInterface INTERFACE cxx_std_20)
 
+    if(HORO_BUILD_XR_META_QUEST)
+        add_library(HoroXRMetaQuestInternal OBJECT runtime/xr/openxr/modules/meta_quest/MetaQuestPassthrough.cpp)
+        target_link_libraries(HoroXRMetaQuestInternal PRIVATE HoroXROpenXRHostInterface)
+    endif()
+
     add_library(HoroXROpenXR STATIC runtime/xr/openxr/OpenXRNativeSession.cpp runtime/xr/openxr/OpenXRNativePreparation.cpp
         runtime/xr/openxr/OpenXRNativeRetirement.cpp
         runtime/xr/openxr/OpenXRNativeCensus.cpp
         runtime/xr/openxr/OpenXRLightEstimation.cpp
-        runtime/xr/openxr/OpenXRPassthrough.cpp
         runtime/xr/openxr/OpenXRPlaneSnapshot.cpp
         runtime/xr/openxr/OpenXRPlaneCapture.cpp
         runtime/xr/openxr/OpenXRHandTracking.cpp
@@ -2567,6 +2571,11 @@ if(HORO_BUILD_XR_OPENXR)
         runtime/xr/openxr/OpenXRPoseSampling.cpp
         runtime/xr/openxr/OpenXRSwapchain.cpp runtime/xr/openxr/OpenXRFrameCompositor.cpp
         runtime/xr/openxr/OpenXRSessionEvents.cpp)
+    if(TARGET HoroXRMetaQuestInternal)
+        target_link_libraries(HoroXROpenXR PRIVATE HoroXRMetaQuestInternal)
+    else()
+        target_sources(HoroXROpenXR PRIVATE runtime/xr/openxr/OpenXRPassthroughUnavailable.cpp)
+    endif()
     add_library(HoroEngine::XROpenXR ALIAS HoroXROpenXR)
     target_link_libraries(HoroXROpenXR PRIVATE HoroXROpenXRHostInterface)
     target_compile_features(HoroXROpenXR PRIVATE cxx_std_20)

@@ -82,6 +82,7 @@ if(HORO_BUILD_AUDIO_PIPEWIRE AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 option(HORO_BUILD_NETWORK_GNS "Build the optional production GameNetworkingSockets transport" OFF)
 option(HORO_BUILD_XR_OPENXR "Build the optional privately dispatched OpenXR session backend" OFF)
+option(HORO_BUILD_XR_META_QUEST "Include the Meta Quest feature provider when OpenXR is built" ON)
 
 if(HORO_ENABLE_IMGUI_UI_TESTS AND NOT BUILD_TESTING)
     message(FATAL_ERROR "HORO_ENABLE_IMGUI_UI_TESTS requires BUILD_TESTING=ON")

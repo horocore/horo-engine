@@ -1,10 +1,12 @@
-#include "host/OpenXRNativeSession.h"
+#include "OpenXRNativeSession.h"
 
 #include <bit>
+#include <cstring>
 
 namespace Horo::XR::OpenXRInternal {
     namespace {
         constexpr std::string_view Extension = XR_FB_PASSTHROUGH_EXTENSION_NAME;
+        constexpr std::uint32_t NativePassthroughPropertiesVersion = 3; /**< First version with capability flags. */
 
         /** @brief Fences a synchronous native borrow against reentrant retirement. */
         struct PassthroughOperation final {
@@ -77,6 +79,22 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Success();
         }
     }  // namespace
+
+    /** @copydoc NativePassthroughExtensionRequest */
+    std::optional<NativeExtensionRequest> NativePassthroughExtensionRequest() noexcept {
+        return NativeExtensionRequest{.name = Extension, .minimumVersion = NativePassthroughPropertiesVersion};
+    }
+
+    /** @copydoc OpenXRNativeSession::ObservePassthroughEvent */
+    void OpenXRNativeSession::ObservePassthroughEvent(const XrEventDataBuffer &buffer) noexcept {
+        if (buffer.type != XR_TYPE_EVENT_DATA_PASSTHROUGH_STATE_CHANGED_FB)
+            return;
+        XrEventDataPassthroughStateChangedFB event;
+        std::memcpy(&event, &buffer, sizeof(event));
+        // Recovery requires a new grant. Unknown or adverse flags cannot preserve an existing one.
+        if (event.next || event.flags != XR_PASSTHROUGH_STATE_CHANGED_RESTORED_ERROR_BIT_FB)
+            RevokePassthrough();
+    }
 
     /** @copydoc OpenXRNativeSession::StartPassthrough */
     Result<void> OpenXRNativeSession::StartPassthrough(const XRPassthroughScope &scope) {

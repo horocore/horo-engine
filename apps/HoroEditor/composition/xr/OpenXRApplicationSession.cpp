@@ -95,14 +95,15 @@ namespace Horo::Application::Internal {
             Selection{{XR_EXT_FUTURE_EXTENSION_NAME}, planePreview},
             Selection{{.name = XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME, .dependencies = spatialDependencies}, planePreview},
             Selection{{.name = XR_EXT_SPATIAL_PLANE_TRACKING_EXTENSION_NAME, .dependencies = planeDependencies}, planePreview},
-            Selection{{.name = XR_FB_PASSTHROUGH_EXTENSION_NAME, .minimumVersion = NativePassthroughPropertiesVersion},
-                      policy_.passthroughPermission && policy_.passthroughPermission->SupportsReconstruction()},
         };
-        std::array<NativeExtensionRequest, routes.size()> extensions{};
+        std::array<NativeExtensionRequest, routes.size() + 1> extensions{};
         std::size_t count{};
         for (const auto &route : routes)
             if (route.selected)
                 extensions[count++] = route.request;
+        if (const auto provider = NativePassthroughExtensionRequest();
+            provider && policy_.passthroughPermission && policy_.passthroughPermission->SupportsReconstruction())
+            extensions[count++] = *provider;
         const auto requested = std::span{extensions}.first(count);
         const NativeDiscoveryRequest request{selection_,
                                              std::min(compiled, selection_.admittedLoaderVersions.maximum),
@@ -141,11 +142,12 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRApplicationSession::MayArmPassthrough */
     bool OpenXRApplicationSession::MayArmPassthrough() const {
-        if (!policy_.passthroughPermission || !policy_.passthroughPermission->SupportsReconstruction() || !native_)
+        const auto provider = NativePassthroughExtensionRequest();
+        if (!provider || !policy_.passthroughPermission || !policy_.passthroughPermission->SupportsReconstruction() || !native_)
             return false;
-        const auto evidence = native_->ReadExtensionAdmission(selection_.attempt, XR_FB_PASSTHROUGH_EXTENSION_NAME);
+        const auto evidence = native_->ReadExtensionAdmission(selection_.attempt, provider->name);
         return evidence.HasValue() && evidence.Value().state == NativeExtensionState::Enabled &&
-               evidence.Value().discoveredVersion >= NativePassthroughPropertiesVersion;
+               evidence.Value().discoveredVersion >= provider->minimumVersion;
     }
 
     /** @copydoc OpenXRApplicationSession::AllowsPassthrough */

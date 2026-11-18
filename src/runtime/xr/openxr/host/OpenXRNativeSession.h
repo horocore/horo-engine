@@ -22,7 +22,6 @@ namespace Horo::XR::OpenXRInternal {
     inline constexpr std::size_t MaximumNativeExtensions = 128;
     inline constexpr std::size_t MaximumNativeLayers = 32;
     inline constexpr std::size_t MaximumEnabledExtensions = 16;
-    inline constexpr std::uint32_t NativePassthroughPropertiesVersion = 3; /**< First version with capability flags. */
 
     /** @brief Current selected native ownership for one exact passthrough scope. */
     enum class NativePassthroughState : std::uint8_t {
@@ -47,6 +46,10 @@ namespace Horo::XR::OpenXRInternal {
         std::optional<XRLoaderApiVersion> promotedToCore{}; /**< Earliest usable core API when the host implements that route. */
         NativeExtensionEligibility eligibility{};           /**< Selected host/platform support and policy admission. */
     };
+
+    /** @brief Returns passthrough negotiation metadata supplied by the product's linked provider.
+     * @return The optional extension request. A backend without a provider returns an empty value. */
+    [[nodiscard]] std::optional<NativeExtensionRequest> NativePassthroughExtensionRequest() noexcept;
 
     /** @brief Native extension evidence retained for the exact selected discovery attempt. */
     enum class NativeExtensionState : std::uint8_t {
@@ -442,6 +445,9 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Revokes evidence and retires the light child, retaining failed native retirement for retry. */
         [[nodiscard]] Result<void> RetireLightEstimation();
 
+        /** @brief Passes an otherwise unhandled OpenXR event to the linked passthrough provider.
+         * @param buffer Exact native event borrowed during the owner-lane poll. */
+        void ObservePassthroughEvent(const XrEventDataBuffer &buffer) noexcept;
         /** @brief Cleans up the current passthrough child before native session retirement. */
         [[nodiscard]] Result<void> RetirePassthrough();
         /** @brief Redacts the layer and attempts native pause on consent/focus/origin/runtime loss. */
