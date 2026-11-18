@@ -364,7 +364,8 @@ TEST_CASE("Registered Query settings use shared history and tracked source publi
     const auto &documents = controller.ViewModel().environmentQueryDocuments;
     REQUIRE(documents.size() == 1);
     const auto &document = documents.front();
-    REQUIRE(document.settings && document.settings->distance);
+    REQUIRE(document.settings);
+    REQUIRE(document.settings->distance);
     const auto original = document.query;
     const auto instance = document.identity.instance;
     using enum EnvironmentQueryEditAction;
@@ -420,7 +421,8 @@ TEST_CASE("Registered Query settings use shared history and tracked source publi
         Project::Open(controller, Project::Path);
         REQUIRE(documents.size() == 1);
         const auto &reopened = documents.front();
-        REQUIRE(reopened.settings && reopened.settings->distance);
+        REQUIRE(reopened.settings);
+        REQUIRE(reopened.settings->distance);
         CHECK(reopened.identity.instance != instance);
         CHECK(reopened.asset == project.asset);
         CHECK(reopened.query->Id() == original->Id());
