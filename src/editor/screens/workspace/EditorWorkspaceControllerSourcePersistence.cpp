@@ -35,6 +35,8 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::SaveSourceDocuments */
     Result<void> EditorWorkspaceController::SaveSourceDocuments() {
+        if (auto drained = DrainPrefabRecovery(); drained.HasError())
+            return drained;
         if (auto drained = DrainUiCanvasRecovery(); drained.HasError())
             return drained;
         NativeDurableFileSystem files;

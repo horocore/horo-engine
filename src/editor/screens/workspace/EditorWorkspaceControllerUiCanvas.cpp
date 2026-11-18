@@ -259,7 +259,7 @@ namespace Horo::Editor {
         if (!captured.Value())
             return;
         auto checkpoint = std::make_shared<const UiCanvasRecoveryCheckpoint>(std::move(captured).Value().value());
-        auto submitted = m_uiCanvasRecoveryJobs->SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Io},
+        auto submitted = m_sourceRecoveryJobs->SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Io},
                                                               [root = std::filesystem::path(ProjectRoot()), mutations = m_mutations,
                                                                files = m_durableFiles, checkpoint](const CancellationToken &cancellation) {
             DocumentRecoveryService recovery(root, *mutations, *files);
@@ -274,7 +274,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::UpdateUiCanvasAutosave */
     void EditorWorkspaceController::UpdateUiCanvasAutosave(const float seconds, const int minutes) {
-        if (!ObserveUiCanvasRecovery() || !m_mutations || !m_durableFiles || !m_uiCanvasRecoveryJobs || minutes <= 0 || seconds < 0 ||
+        if (!ObserveUiCanvasRecovery() || !m_mutations || !m_durableFiles || !m_sourceRecoveryJobs || minutes <= 0 || seconds < 0 ||
             !std::isfinite(seconds))
             return;
         m_uiCanvasAutosaveSeconds += seconds;

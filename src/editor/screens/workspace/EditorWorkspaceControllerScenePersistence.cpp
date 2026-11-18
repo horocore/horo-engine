@@ -37,7 +37,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::FlushAutosave */
     void EditorWorkspaceController::FlushAutosave() {
-        UpdatePrefabAutosave(0, 0);
+        FlushPrefabAutosave();
         if (auto graphRecovery = m_pcgDocumentsShutdown ? Result<void>::Success() : m_pcgDocuments.FlushRecovery();
             graphRecovery.HasError() && !m_pcgAutosaveErrorPresented) {
             m_pcgAutosaveErrorPresented = true;
@@ -99,6 +99,10 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::SaveScene */
     void EditorWorkspaceController::SaveScene(const bool overwriteConflict) {
+        if (auto drained = DrainPrefabRecovery(); drained.HasError()) {
+            LOG_ERROR("editor.scene_document", "Prefab recovery is still active: %s", drained.ErrorValue().message.c_str());
+            return;
+        }
         if (m_navigationSettings) {
             if (const auto saved = SaveNavigationDocuments(); saved.HasError())
                 LOG_ERROR("editor.navigation_document", "Coordinated save failed: %s", saved.ErrorValue().message.c_str());

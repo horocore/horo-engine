@@ -213,6 +213,8 @@ namespace Horo::Editor {
         const auto snapshot = (*found)->Snapshot();
         if (snapshot.dirty && !discard)
             return Result<void>::Failure(MakeError(WorkspaceDocumentErrors::DirtyDocument));
+        if (auto drained = DrainPrefabRecovery(instance); drained.HasError())
+            return drained;
         if (discard && m_mutations && m_durableFiles) {
             if (auto discarded = (*found)->DiscardOwnedRecovery(*m_mutations, *m_durableFiles); discarded.HasError())
                 return discarded;
@@ -276,6 +278,8 @@ namespace Horo::Editor {
     Result<void> EditorWorkspaceController::ApplyPrefabDocumentAction(PrefabDocumentSession &document,
                                                                       const EditorWorkspaceViewCommandData &command) {
         const auto fence = *command.prefabFence;
+        if (auto drained = DrainPrefabRecovery(); drained.HasError())
+            return drained;
         switch (command.prefabAction) {
             using enum PrefabDocumentAction;
             case Undo:
@@ -325,6 +329,8 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::SavePrefabDocuments */
     Result<void> EditorWorkspaceController::SavePrefabDocuments() {
+        if (auto drained = DrainPrefabRecovery(); drained.HasError())
+            return drained;
         UpdatePrefabSettingsProjection();
         Result<void> outcome = Result<void>::Success();
         bool savedAny{};
@@ -351,33 +357,117 @@ namespace Horo::Editor {
         return outcome;
     }
 
+    /** @copydoc EditorWorkspaceController::ObservePrefabRecovery */
+    bool EditorWorkspaceController::ObservePrefabRecovery() {
+        if (!m_prefabRecoveryWork)
+            return true;
+        const auto snapshot = m_prefabRecoveryWork->job.Snapshot();
+        if (!snapshot || !snapshot->terminalResult)
+            return false;
+        const auto checkpoint = std::move(m_prefabRecoveryWork->checkpoint);
+        m_prefabRecoveryWork.reset();
+        const auto instance = checkpoint->record.sessionGeneration;
+        if (snapshot->state == JobState::Succeeded) {
+            const auto owner = std::ranges::find_if(m_prefabDocuments, [instance](const auto &entry) {
+                return entry->HasPresentation() && entry->Instance().Value() == instance;
+            });
+            if (owner != m_prefabDocuments.end()) {
+                (*owner)->AcknowledgeRecovery(*checkpoint);
+                const auto entry = std::ranges::find_if(m_viewModel.prefabDocuments, [instance](const auto &item) {
+                    return item.identity.instance.Value() == instance;
+                });
+                if (entry != m_viewModel.prefabDocuments.end())
+                    entry->recoveryRevision = (*owner)->Snapshot().recoveryRevision;
+                if (m_activePrefabDocument == (*owner)->Instance() && checkpoint->acceptedRecovery) {
+                    m_viewModel.prefabRecoveryAvailable = false;
+                    m_viewModel.prefabRecovery.reset();
+                }
+            }
+        } else if (snapshot->state != JobState::Cancelled && snapshot->terminalResult->error) {
+            m_viewModel.prefabDocumentError = snapshot->terminalResult->error;
+        }
+        return true;
+    }
+
+    /** @copydoc EditorWorkspaceController::DrainPrefabRecovery */
+    Result<void> EditorWorkspaceController::DrainPrefabRecovery(const std::optional<DocumentInstanceId> instance) {
+        if (!m_prefabRecoveryWork || (instance && m_prefabRecoveryWork->checkpoint->record.sessionGeneration != instance->Value()))
+            return Result<void>::Success();
+        static_cast<void>(m_prefabRecoveryWork->job.RequestCancel());
+        const auto joined = m_prefabRecoveryWork->job.Wait();
+        if (!ObservePrefabRecovery())
+            return joined;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorWorkspaceController::SchedulePrefabRecovery */
+    void EditorWorkspaceController::SchedulePrefabRecovery(PrefabDocumentSession &document) {
+        auto captured = document.CaptureRecovery();
+        if (captured.HasError()) {
+            m_viewModel.prefabDocumentError = captured.ErrorValue();
+            return;
+        }
+        if (!captured.Value())
+            return;
+        auto checkpoint = std::make_shared<const PrefabRecoveryCheckpoint>(std::move(captured).Value().value());
+        auto submitted = m_sourceRecoveryJobs->SubmitResult(
+            {.priority = JobPriority::Background, .resource = JobResource::Io},
+            [root = std::filesystem::path(ProjectRoot()), mutations = m_mutations, files = m_durableFiles,
+             checkpoint](const CancellationToken &cancellation) {
+                DocumentRecoveryService recovery(root, *mutations, *files);
+                return WritePrefabRecovery(*checkpoint, recovery, cancellation);
+            });
+        if (submitted.HasError()) {
+            m_viewModel.prefabDocumentError = submitted.ErrorValue();
+            return;
+        }
+        m_prefabRecoveryWork.emplace(PrefabRecoveryWork{std::move(submitted).Value(), std::move(checkpoint)});
+    }
+
     /** @copydoc EditorWorkspaceController::UpdatePrefabAutosave */
     void EditorWorkspaceController::UpdatePrefabAutosave(const float seconds, const int minutes) {
-        if (!std::isfinite(seconds) || seconds < 0 || minutes < 0)
+        if (!ObservePrefabRecovery() || !m_mutations || !m_durableFiles || !m_sourceRecoveryJobs || minutes <= 0 || seconds < 0 ||
+            !std::isfinite(seconds))
             return;
-        if (minutes > 0) {
-            m_prefabAutosaveSeconds += seconds;
-            if (m_prefabAutosaveSeconds < static_cast<float>(minutes) * 60)
-                return;
-        } else if (seconds != 0)
+        m_prefabAutosaveSeconds += seconds;
+        if (m_prefabRecoveryQueue.empty() && m_prefabAutosaveSeconds >= static_cast<float>(minutes) * 60) {
+            m_prefabAutosaveSeconds = 0;
+            for (const auto &entry : m_prefabDocuments)
+                if (entry->HasPresentation() && entry->Snapshot().dirty)
+                    m_prefabRecoveryQueue.push_back(entry->Instance());
+        }
+        if (m_prefabRecoveryQueue.empty())
             return;
+        const auto instance = m_prefabRecoveryQueue.back();
+        m_prefabRecoveryQueue.pop_back();
+        const auto owner = std::ranges::find_if(m_prefabDocuments, [instance](const auto &entry) {
+            return entry->HasPresentation() && entry->Instance() == instance;
+        });
+        if (owner != m_prefabDocuments.end())
+            SchedulePrefabRecovery(**owner);
+    }
+
+    /** @copydoc EditorWorkspaceController::FlushPrefabAutosave */
+    void EditorWorkspaceController::FlushPrefabAutosave() {
+        if (auto drained = DrainPrefabRecovery(); drained.HasError()) {
+            m_viewModel.prefabDocumentError = drained.ErrorValue();
+            return;
+        }
+        m_prefabRecoveryQueue.clear();
         m_prefabAutosaveSeconds = 0;
         if (!m_mutations || !m_durableFiles)
             return;
         for (const auto &entry : m_prefabDocuments) {
             if (auto result = entry->Autosave(*m_mutations, *m_durableFiles); result.HasError())
                 m_viewModel.prefabDocumentError = result.ErrorValue();
-            const auto snapshot = entry->Snapshot();
-            for (auto &published : m_viewModel.prefabDocuments)
-                if (published.identity.instance == snapshot.identity.instance)
-                    published = snapshot;
-            if (snapshot.identity.instance == m_activePrefabDocument)
-                RefreshPrefabRecovery(snapshot);
         }
     }
 
     /** @copydoc EditorWorkspaceController::ShutdownPrefabDocuments */
     Result<void> EditorWorkspaceController::ShutdownPrefabDocuments(const bool discard) {
+        if (auto drained = DrainPrefabRecovery(); drained.HasError())
+            return drained;
+        m_prefabRecoveryQueue.clear();
         if (!discard) {
             for (const auto &entry : m_prefabDocuments) {
                 if (!entry->Snapshot().dirty)

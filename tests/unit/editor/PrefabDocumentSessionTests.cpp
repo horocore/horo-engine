@@ -1,6 +1,7 @@
 #include "../../support/NativePublicationFiles.h"
 #include "Horo/Editor/SourceDocumentService.h"
 #include "Horo/Editor/SourceFileOpenService.h"
+#include "Horo/Foundation/JobSystem.h"
 #include "PrefabDocumentSessionTestSupport.h"
 
 #include <cstddef>
@@ -393,6 +394,48 @@ namespace Horo::Editor {
                                          Prefab::PrefabHardLimits::SourceDocumentBytes)
                   .Value()
                   .identity != Assets::AssetSourceIdentity{});
+    }
+
+    TEST_CASE("Detached prefab recovery checkpoints retain the captured state while the owner continues editing", "[editor][prefab][session]") {
+        Fixture fixture;
+        fixture.Rename("Scheduled intent");
+        const auto original = fixture.document->Snapshot();
+        const auto checkpoint = fixture.document->CaptureRecovery();
+        REQUIRE(checkpoint.HasValue());
+        REQUIRE(checkpoint.Value().has_value());
+        DocumentRecoveryService recovery(fixture.project.directory.path, fixture.project.mutations, fixture.project.files);
+        CHECK_FALSE(recovery.Inspect(fixture.project.asset, original.identity.key).Value().has_value());
+
+        CancellationSource cancelled;
+        cancelled.RequestCancellation();
+        const auto cancelledWrite = WritePrefabRecovery(*checkpoint.Value(), recovery, cancelled.Token());
+        REQUIRE(cancelledWrite.HasError());
+        CHECK(IsJobCancelled(cancelledWrite.ErrorValue()));
+        CHECK_FALSE(recovery.Inspect(fixture.project.asset, original.identity.key).Value().has_value());
+
+        fixture.Rename("Later intent");
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
+        auto submitted = jobs.SubmitResult({.resource = JobResource::Io},
+                                          [&checkpoint, &recovery](const CancellationToken &token) {
+            return WritePrefabRecovery(*checkpoint.Value(), recovery, token);
+        });
+        REQUIRE(submitted.HasValue());
+        REQUIRE(submitted.Value().Wait().HasValue());
+        fixture.document->AcknowledgeRecovery(*checkpoint.Value());
+        const auto newer = fixture.document->Snapshot();
+        CHECK(newer.source->Data().objects.front().name == "Later intent");
+        CHECK(newer.recoveryRevision == original.fence.revision);
+        CHECK(newer.dirty);
+        const auto persisted = recovery.Inspect(fixture.project.asset, original.identity.key);
+        REQUIRE(persisted.HasValue());
+        REQUIRE(persisted.Value().has_value());
+        CHECK(persisted.Value()->revision == original.fence.revision);
+        CHECK(persisted.Value()->acceptedSource == original.acceptedSource);
+        fixture.Autosave();
+        fixture.document->AcknowledgeRecovery(*checkpoint.Value());
+        CHECK(fixture.document->Snapshot().recoveryRevision == newer.fence.revision);
+        CHECK(Assets::CaptureAssetSource(fixture.project.directory.path, fixture.project.source, Prefab::PrefabHardLimits::SourceDocumentBytes)
+                  .Value().identity == original.acceptedSource);
     }
 
     TEST_CASE("Explicit prefab recovery discard preserves edits and refuses a replaced candidate", "[editor][prefab][session]") {

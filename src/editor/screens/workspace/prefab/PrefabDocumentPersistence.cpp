@@ -1,5 +1,6 @@
 #include "Horo/Editor/SourceDocumentService.h"
 #include "Horo/Editor/WorkspacePanelHost.h"
+#include "Horo/Foundation/JobSystem.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
 
@@ -63,36 +64,63 @@ namespace Horo::Editor {
         return published;
     }
 
-    /** @copydoc PrefabDocumentSession::Autosave */
-    Result<void> PrefabDocumentSession::Autosave(const ProjectMutationCoordinator &mutations, DurableFileSystem &files) {
+    /** @copydoc PrefabDocumentSession::CaptureRecovery */
+    Result<std::optional<PrefabRecoveryCheckpoint>> PrefabDocumentSession::CaptureRecovery() const {
+        using Return = Result<std::optional<PrefabRecoveryCheckpoint>>;
         if (auto admitted = Admit({owner_, identity_.instance, revision_}); admitted.HasError())
-            return admitted;
-        if (state_ == saved_)
-            return Result<void>::Success();
-        if (const auto validated = source_->ValidateLimits(limits_); validated.HasError())
-            return Result<void>::Failure(validated.ErrorValue());
-        auto encoded = source_->SerializeCanonical();
+            return Return::Failure(admitted.ErrorValue());
+        if (state_ == saved_ || (recoveryRevision_ == revision_ && !acceptedRecovery_))
+            return Return::Success(std::nullopt);
+        const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+        DocumentRecoveryRecord record{source_->Data().assetId, identity_.key, owner_, identity_.instance.Value(),
+                                      revision_, static_cast<std::uint64_t>(seconds), accepted_, state_, {}};
+        return Return::Success(PrefabRecoveryCheckpoint{std::move(record), source_, limits_, acceptedRecovery_});
+    }
+
+    /** @copydoc WritePrefabRecovery */
+    Result<void> WritePrefabRecovery(const PrefabRecoveryCheckpoint &checkpoint, DocumentRecoveryService &recovery,
+                                     const CancellationToken &cancellation) {
+        if (cancellation.IsCancellationRequested())
+            return JobCancelled();
+        if (auto validated = checkpoint.source->ValidateLimits(checkpoint.limits); validated.HasError())
+            return validated;
+        auto encoded = checkpoint.source->SerializeCanonical();
         if (encoded.HasError())
             return Result<void>::Failure(encoded.ErrorValue());
-        const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-        DocumentRecoveryRecord record{source_->Data().assetId,
-                                      identity_.key,
-                                      owner_,
-                                      identity_.instance.Value(),
-                                      revision_,
-                                      static_cast<std::uint64_t>(seconds),
-                                      accepted_,
-                                      state_,
-                                      {}};
+        if (cancellation.IsCancellationRequested())
+            return JobCancelled();
+        auto record = checkpoint.record;
         const auto bytes = std::as_bytes(std::span(encoded.Value()));
         record.payload.assign(bytes.begin(), bytes.end());
+        return checkpoint.acceptedRecovery ? recovery.ReplaceAccepted(record, *checkpoint.acceptedRecovery, cancellation)
+                                           : recovery.Write(record, cancellation);
+    }
+
+    /** @copydoc PrefabDocumentSession::AcknowledgeRecovery */
+    void PrefabDocumentSession::AcknowledgeRecovery(const PrefabRecoveryCheckpoint &checkpoint) noexcept {
+        const auto &record = checkpoint.record;
+        if (closed_ || thread_ != std::this_thread::get_id() || record.sessionOwner != owner_ ||
+            record.sessionGeneration != identity_.instance.Value() || record.document != identity_.key ||
+            record.acceptedSource != accepted_ || record.revision < recoveryRevision_ || record.revision > revision_ ||
+            checkpoint.acceptedRecovery != acceptedRecovery_)
+            return;
+        recoveryRevision_ = record.revision;
+        acceptedRecovery_.reset();
+    }
+
+    /** @copydoc PrefabDocumentSession::Autosave */
+    Result<void> PrefabDocumentSession::Autosave(const ProjectMutationCoordinator &mutations, DurableFileSystem &files) {
+        auto captured = CaptureRecovery();
+        if (captured.HasError())
+            return Result<void>::Failure(captured.ErrorValue());
+        if (!captured.Value())
+            return Result<void>::Success();
+        const auto &checkpoint = *captured.Value();
         PublicationGuard guard(busy_);
         DocumentRecoveryService recovery(root_, mutations, files);
-        auto result = acceptedRecovery_ ? recovery.ReplaceAccepted(record, *acceptedRecovery_) : recovery.Write(record);
-        if (result.HasValue()) {
-            recoveryRevision_ = revision_;
-            acceptedRecovery_.reset();
-        }
+        auto result = WritePrefabRecovery(checkpoint, recovery);
+        if (result.HasValue())
+            AcknowledgeRecovery(checkpoint);
         return result;
     }
 
@@ -159,7 +187,7 @@ namespace Horo::Editor {
         if (parsed.Value().Data().assetId != record.asset || ComputeSha256(std::as_bytes(std::span(encoded.Value()))) != record.state)
             return Result<void>::Failure(MakeError(Prefab::PrefabErrors::DocumentInvalid));
         auto replacement = std::make_shared<const Prefab::PrefabDocument>(std::move(parsed).Value());
-        std::optional<DocumentRecoveryRecord> acceptedRecord{record};
+        auto acceptedRecord = std::make_shared<const DocumentRecoveryRecord>(record);
         PublicationGuard guard(busy_);
         DocumentRecoveryService recovery(root_, mutations, files);
         const auto currentRecord = recovery.Inspect(record.asset, record.document);

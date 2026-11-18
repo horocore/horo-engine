@@ -61,6 +61,18 @@ namespace Horo::Editor {
         bool stageActive{};
     };
 
+    /** @brief Detached immutable source and exact recovery metadata owned until its I/O attempt settles. */
+    struct PrefabRecoveryCheckpoint final {
+        DocumentRecoveryRecord record;
+        std::shared_ptr<const Prefab::PrefabDocument> source;
+        Prefab::PrefabLimitProfile limits;
+        std::shared_ptr<const DocumentRecoveryRecord> acceptedRecovery;
+    };
+
+    /** @brief Encodes and persists only the captured recovery slot, without borrowing a live document session. */
+    [[nodiscard]] Result<void> WritePrefabRecovery(const PrefabRecoveryCheckpoint &checkpoint, DocumentRecoveryService &recovery,
+                                                  const CancellationToken &cancellation = {});
+
     /** @brief Owner-thread session. Source edits use exact semantic history; the stage owns no save authority.
      * @details Load/command time only. Caller serializes requests on the creating thread. The shared
      * project lease and canonical source publisher protect persistence. Destruction only releases preview
@@ -152,6 +164,12 @@ namespace Horo::Editor {
          * @param mutations Shared writer. @param files Durable service. @return Success or retained candidate on failure.
          */
         [[nodiscard]] Result<void> DiscardOwnedRecovery(const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
+        /** @brief Freezes recovery inputs on the owner thread without formatting source or accessing files.
+         * @return Immutable dirty checkpoint, absence for a clean/already checkpointed revision, or a typed owner error. */
+        [[nodiscard]] Result<std::optional<PrefabRecoveryCheckpoint>> CaptureRecovery() const;
+        /** @brief Acknowledges completed recovery only for the exact owner, source authority and still-relevant revision. */
+        void AcknowledgeRecovery(const PrefabRecoveryCheckpoint &checkpoint) noexcept;
+
         /** @brief Discards an exact inspected candidate after an explicit user decision, including a foreign/stale session.
          * @param fence Current source admission. @param record Exact displayed candidate, never a guessed record path.
          * @param mutations Shared writer. @param files Durable service.
@@ -257,7 +275,7 @@ namespace Horo::Editor {
         Sha256Digest state_;
         Sha256Digest saved_;
         SemanticDocumentHistory<Delta> history_;
-        std::optional<DocumentRecoveryRecord> acceptedRecovery_;
+        std::shared_ptr<const DocumentRecoveryRecord> acceptedRecovery_;
 
         /** @brief Owns one preview incarnation while retaining its successful publication counter across retirement. */
         struct PreviewState final {

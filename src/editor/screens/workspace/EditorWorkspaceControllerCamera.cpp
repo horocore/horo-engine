@@ -47,6 +47,7 @@ namespace Horo::Editor {
 
     EditorWorkspaceController::~EditorWorkspaceController() {
         static_cast<void>(DrainUiCanvasRecovery());
+        static_cast<void>(DrainPrefabRecovery());
         static_cast<void>(ShutdownTerrainDocuments(true));
         ShutdownTerrainCook();
         static_cast<void>(ShutdownPrefabSettings(true));

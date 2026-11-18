@@ -437,6 +437,8 @@ namespace Horo::Editor {
         if (!m_viewModel.prefabApplyAvailable || m_viewModel.sceneExternalConflict || m_viewModel.recoveryAvailable ||
             m_playSession.IsActive())
             return Return::Failure(MakeError(SceneTransactionError(SceneTransactionFailure::Unauthorized)));
+        if (auto drained = DrainPrefabRecovery(); drained.HasError())
+            return Return::Failure(drained.ErrorValue());
         if (auto inspected = PrefabApplyTransaction::InspectSource(*source); inspected.HasError())
             return Return::Failure(std::move(inspected).ErrorValue());
         if (source->Snapshot().externalConflict) {
@@ -524,7 +526,8 @@ namespace Horo::Editor {
         if (m_viewModel.sceneExternalConflict || m_playSession.IsActive())
             return true;
         if (request.action == PrefabHierarchyAction::ApplyOverrides) {
-            auto applied = ApplyPrefabHierarchyOverrides(request, *admitted.Value());
+            auto drained = DrainPrefabRecovery();
+            auto applied = drained.HasError() ? std::move(drained) : ApplyPrefabHierarchyOverrides(request, *admitted.Value());
             if (applied.HasError())
                 m_viewModel.prefabOverrideError = std::move(applied).ErrorValue();
             return true;

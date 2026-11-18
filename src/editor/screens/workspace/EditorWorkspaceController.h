@@ -315,8 +315,10 @@ namespace Horo::Editor {
         void SaveScene(bool overwriteConflict = false);
         /** @brief Flushes recovery or explicitly discards before releasing prefab owners. */
         [[nodiscard]] Result<void> ShutdownPrefabDocuments(bool discard = false);
-        /** @brief Advances bounded recovery cadence; zero requests an immediate flush. */
+        /** @brief Advances background recovery cadence without serializing or accessing native files. */
         void UpdatePrefabAutosave(float seconds, int minutes);
+        /** @brief Drains queued recovery and flushes exact dirty prefab revisions for an explicit owner operation. */
+        void FlushPrefabAutosave();
         /** @brief Replaces detached preview input and cancels all old overlays/work without changing graph or Scene.
          * @param inputs New immutable provider/schema/evaluation admission. @return Success or invalid input rejection. */
         [[nodiscard]] Result<void> ReplacePCGPreviewInputs(PCGPreviewInputs inputs);
@@ -589,6 +591,12 @@ namespace Horo::Editor {
         EditorViewportSceneSnapshot m_prefabViewportScene;
         std::uint64_t m_nextPrefabRuntime{EditorFirstPrefabStage.value};
         float m_prefabAutosaveSeconds{};
+        struct PrefabRecoveryWork final {
+            JobHandle job;
+            std::shared_ptr<const PrefabRecoveryCheckpoint> checkpoint;
+        };
+        std::optional<PrefabRecoveryWork> m_prefabRecoveryWork;
+        std::vector<DocumentInstanceId> m_prefabRecoveryQueue;
         std::uint64_t m_prefabStageAttemptRevision{};
         bool m_prefabRefreshing{};
         bool m_prefabStagePending{};
@@ -630,7 +638,7 @@ namespace Horo::Editor {
 
         Assets::AssetRegistry *m_mutableAssetRegistry{};
         UiInspectorResources *m_uiInspectorResources{};
-        JobSystem *m_uiCanvasRecoveryJobs{};
+        JobSystem *m_sourceRecoveryJobs{};
         CollisionInventoryEvidence *m_collisionInventory{};
         CollisionActivationEvidence *m_collisionActivation{};
         const EditorPreviewCollisionReceiptSource *m_previewCollisionReceipt{};
@@ -1123,6 +1131,12 @@ namespace Horo::Editor {
         void PreparePrefabStage(PrefabDocumentSession &document);
         /** @brief Publishes the exact durable recovery candidate for an active prefab source. */
         void RefreshPrefabRecovery(const PrefabDocumentSnapshot &snapshot);
+        /** @brief Acknowledges the completed immutable recovery checkpoint on the document owner thread. */
+        bool ObservePrefabRecovery();
+        /** @brief Cancels/joins borrowed persistence work before save, reload or source owner retirement. */
+        [[nodiscard]] Result<void> DrainPrefabRecovery(std::optional<DocumentInstanceId> instance = {});
+        /** @brief Hands the exact detached checkpoint to the existing shared recovery I/O lane. */
+        void SchedulePrefabRecovery(PrefabDocumentSession &document);
         /** @brief Advances bounded preparation and extracts only a newly ready generation. */
         void ExtractPrefabStage(PrefabDocumentSession &document);
         /** @brief Executes an admitted durable or history action on its sole source owner. */
