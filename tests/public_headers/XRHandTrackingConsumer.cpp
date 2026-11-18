@@ -1,5 +1,6 @@
 #include "Horo/XR/XRHandTracking.h"
 #include "Horo/XR/XRInteraction.h"
+#include "Horo/XR/XRLightEstimate.h"
 #include "Horo/XR/XRPlaneTracking.h"
 #include "Horo/XR/XRSpatialHitTest.h"
 #include "Horo/XR/XRTrackingSnapshot.h"

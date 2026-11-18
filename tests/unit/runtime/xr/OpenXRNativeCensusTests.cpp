@@ -5,6 +5,7 @@
 #include <bit>
 #include <catch2/catch_approx.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include <limits>
 
 namespace Horo::Tests::OpenXR {
     namespace {
@@ -31,7 +32,275 @@ namespace Horo::Tests::OpenXR {
             }
         };
 
+        /** @brief Models only exact v1 dispatch and per-slot validity; native session ownership is real. */
+        struct LightScript final {
+            static inline LightScript *active{};
+            static constexpr XrTime InitialTime = 100;
+            XrTime sampleTime{InitialTime};
+            XrResult createResult{XR_SUCCESS};
+            XrResult sampleResult{XR_SUCCESS};
+            std::uint32_t createCalls{};
+            std::uint32_t sampleCalls{};
+            bool ambientValid{true};
+            bool directionalValid{true};
+            bool malformedDirection{};
+            bool failRetirement{};
+            bool live{};
+            std::uint32_t retireCalls{};
+
+            LightScript() {
+                active = this;
+            }
+
+            ~LightScript() {
+                active = nullptr;
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL Create(XrSession session, XrLightEstimatorCreateInfoANDROID *info,
+                                                         XrLightEstimatorANDROID *handle) {
+                CHECK(session != XR_NULL_HANDLE);
+                CHECK(info->type == XR_TYPE_LIGHT_ESTIMATOR_CREATE_INFO_ANDROID);
+                CHECK(info->next == nullptr);
+                ++active->createCalls;
+                if (active->createResult == XR_SUCCESS) {
+                    CHECK_FALSE(active->live);
+                    active->live = true;
+                    *handle = NativeHandle<XrLightEstimatorANDROID>(73);
+                }
+                return active->createResult;
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL Destroy(XrLightEstimatorANDROID handle) {
+                CHECK(handle == NativeHandle<XrLightEstimatorANDROID>(73));
+                CHECK(active->live);
+                ++active->retireCalls;
+                if (active->failRetirement)
+                    return XR_ERROR_RUNTIME_FAILURE;
+                active->live = false;
+                return XR_SUCCESS;
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL Sample(XrLightEstimatorANDROID handle, const XrLightEstimateGetInfoANDROID *info,
+                                                         XrLightEstimateANDROID *estimate) {
+                CHECK(active->live);
+                CHECK(handle == NativeHandle<XrLightEstimatorANDROID>(73));
+                CHECK(info->type == XR_TYPE_LIGHT_ESTIMATE_GET_INFO_ANDROID);
+                CHECK(info->space == NativeHandle<XrSpace>(15));
+                CHECK(info->time > 0);
+                ++active->sampleCalls;
+                if (active->sampleResult != XR_SUCCESS)
+                    return active->sampleResult;
+                estimate->state = XR_LIGHT_ESTIMATE_STATE_VALID_ANDROID;
+                estimate->lastUpdatedTime = active->sampleTime;
+                auto &ambient = *static_cast<XrAmbientLightANDROID *>(estimate->next);
+                CHECK(ambient.type == XR_TYPE_AMBIENT_LIGHT_ANDROID);
+                const auto invalid = std::numeric_limits<float>::quiet_NaN();
+                if (active->ambientValid) {
+                    ambient.state = XR_LIGHT_ESTIMATE_STATE_VALID_ANDROID;
+                    ambient.intensity = {1.0F, 3.0F, 2.0F};
+                } else {
+                    ambient.intensity = {invalid, invalid, invalid};
+                }
+                auto &direction = *static_cast<XrDirectionalLightANDROID *>(ambient.next);
+                CHECK(direction.type == XR_TYPE_DIRECTIONAL_LIGHT_ANDROID);
+                if (active->directionalValid) {
+                    direction.state = XR_LIGHT_ESTIMATE_STATE_VALID_ANDROID;
+                    direction.intensity = {4.0F, 2.0F, 3.0F};
+                }
+                direction.direction = {0.0F, active->malformedDirection ? invalid : -2.0F, 0.0F};
+                return XR_SUCCESS;
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL GetProc(XrInstance, const char *name, PFN_xrVoidFunction *function) {
+                const std::string_view symbol{name};
+                if (symbol == "xrCreateLightEstimatorANDROID")
+                    *function = std::bit_cast<PFN_xrVoidFunction>(&Create);
+                else if (symbol == "xrDestroyLightEstimatorANDROID")
+                    *function = std::bit_cast<PFN_xrVoidFunction>(&Destroy);
+                else if (symbol == "xrGetLightEstimateANDROID")
+                    *function = std::bit_cast<PFN_xrVoidFunction>(&Sample);
+                else
+                    return XR_ERROR_FUNCTION_UNSUPPORTED;
+                return XR_SUCCESS;
+            }
+        };
+
+        /** @brief Keeps the scripted dispatch alive through the real owner's cleanup. */
+        struct LightFixture final {
+            LightScript script;
+            CensusFixture native;
+            const XRCapabilitySnapshot capabilities{Capabilities()};
+            const XRFeaturePlan plan{Plan(capabilities)};
+            const XRSessionId session{capabilities.System(), {1, 1}};
+            const XRLightEstimateScope scope{session,
+                                             {{session, {2, 1}}, XRSpaceKind::World, IdentityValue<XRWorldOriginRevision>(1)},
+                                             IdentityValue<XRLightEstimateGrant>(1)};
+            const XRLightEstimateLimits limits{Duration::FromNanoseconds(10), Duration::FromNanoseconds(30)};
+
+            void Create(bool enabled = true) {
+                static constexpr std::array<std::string_view, 1> extensions{XR_ANDROID_LIGHT_ESTIMATION_EXTENSION_NAME};
+                const std::array routes{NativeExtensionRequest{extensions.front()}};
+                native.native.extraExtensions = extensions;
+                native.native.extensionCount += static_cast<std::uint32_t>(extensions.size());
+                native.census.extraProc = &LightScript::GetProc;
+                const auto attempt = native.preflight.Attempt();
+                REQUIRE(native.owner
+                            .Create({.candidate = session,
+                                     .preflight = native.preflight,
+                                     .capabilities = capabilities,
+                                     .plan = plan,
+                                     .activeAttempt = attempt,
+                                     .extensions = enabled ? std::span<const NativeExtensionRequest>{routes}
+                                                           : std::span<const NativeExtensionRequest>{}})
+                            .HasValue());
+            }
+
+            static XRRuntimeTime Time(const XrTime tick) {
+                return XRRuntimeTime::Create(tick).Value();
+            }
+
+            Result<bool> Advance(const XrTime tick) {
+                return native.owner.AdvanceLightEstimation(scope, NativeHandle<XrSpace>(15), Time(tick));
+            }
+
+            Result<XRLightEstimate> Read(const XrTime tick) const {
+                return native.owner.ReadLightEstimation(scope, Time(tick));
+            }
+        };
+
     }  // namespace
+
+    TEST_CASE("OpenXR light estimator requires an enabled route, scope and system support", "[unit][xr][native][lighting]") {
+        LightFixture fixture;
+        auto expected = &XRErrors::OperationUnsupported;
+        bool enabled = true;
+        bool expectsCreate = false;
+        SECTION("advertised light route was not enabled") {
+            enabled = false;
+            fixture.native.census.lightEstimationSupport = XR_TRUE;
+        }
+        SECTION("enabled extension provides no system light support") {}
+        SECTION("an invalid system support flag fails closed") {
+            fixture.native.census.lightEstimationSupport = 9;
+            expected = &XRErrors::OperationInvalid;
+        }
+        SECTION("native Android policy denied creation") {
+            fixture.native.census.lightEstimationSupport = XR_TRUE;
+            fixture.script.createResult = XR_ERROR_PERMISSION_INSUFFICIENT;
+            expected = &XRErrors::PermissionDenied;
+            expectsCreate = true;
+        }
+        fixture.Create(enabled);
+        RequireFailureIdentity(fixture.native.owner.StartLightEstimation(fixture.scope, fixture.limits), *expected);
+        CHECK(fixture.script.createCalls == (expectsCreate ? 1U : 0U));
+        CHECK(fixture.script.sampleCalls == 0);
+        CHECK_FALSE(fixture.script.live);
+        REQUIRE(fixture.native.owner.Close().HasValue());
+    }
+
+    TEST_CASE("OpenXR samples bounded light lobes for an exact World grant and retires them before the session",
+              "[unit][xr][native][lighting]") {
+        LightFixture fixture;
+        fixture.native.census.lightEstimationSupport = XR_TRUE;
+        fixture.Create();
+        auto &owner = fixture.native.owner;
+        REQUIRE(owner.StartLightEstimation(fixture.scope, fixture.limits).HasValue());
+        auto second = fixture.scope;
+        second.grant = IdentityValue<XRLightEstimateGrant>(2);
+        RequireFailureIdentity(owner.StartLightEstimation(second, fixture.limits), XRErrors::CapacityExceeded);
+        CHECK(fixture.script.createCalls == 1);
+        const auto first = fixture.Advance(100);
+        REQUIRE(first.HasValue());
+        CHECK(first.Value());
+        const auto reading = fixture.Read(100);
+        REQUIRE(reading.HasValue());
+        CHECK(reading.Value().scope == fixture.scope);
+        CHECK(reading.Value().sampledAt == LightFixture::Time(100));
+        CHECK(reading.Value().provenance == XRLightEstimateProvenance::AndroidOpenXR);
+        REQUIRE(reading.Value().ambient);
+        CHECK(reading.Value().ambient->relativeRgb.y == 3.0F);
+        CHECK(reading.Value().ambient->confidence == XRLightEstimateConfidence::ProviderValid);
+        REQUIRE(reading.Value().directional);
+        CHECK(reading.Value().directional->providerDirection.y == -1.0F);
+        CHECK(reading.Value().directional->intensity.relativeRgb.x == 4.0F);
+
+        SECTION("cadence and a repeated runtime sample do not renew expiry") {
+            const auto bounded = fixture.Advance(109);
+            REQUIRE(bounded.HasValue());
+            CHECK_FALSE(bounded.Value());
+            CHECK(fixture.script.sampleCalls == 1);
+            const auto repeated = fixture.Advance(110);
+            REQUIRE(repeated.HasValue());
+            CHECK_FALSE(repeated.Value());
+            CHECK(fixture.script.sampleCalls == 2);
+            CHECK(fixture.Read(130).HasValue());
+            RequireFailureIdentity(fixture.Read(131), XRErrors::TrackingSnapshotStale);
+            RequireFailureIdentity(fixture.Advance(131), XRErrors::TrackingSnapshotStale);
+            RequireFailureIdentity(fixture.Read(131), XRErrors::OperationUnavailable);
+        }
+        SECTION("independent native validity ignores undefined channels in a missing lobe") {
+            fixture.script.ambientValid = false;
+            fixture.script.sampleTime = 110;
+            REQUIRE(fixture.Advance(110).Value());
+            const auto partial = fixture.Read(110);
+            REQUIRE(partial.HasValue());
+            CHECK_FALSE(partial.Value().ambient);
+            REQUIRE(partial.Value().directional);
+            fixture.script.malformedDirection = true;
+            fixture.script.sampleTime = 120;
+            RequireFailureIdentity(fixture.Advance(120), XRErrors::OperationInvalid);
+            RequireFailureIdentity(fixture.Read(120), XRErrors::OperationUnavailable);
+        }
+        SECTION("revoked lobe is cleared even if the provider repeats a timestamp") {
+            fixture.script.ambientValid = false;
+            const auto duplicate = fixture.Advance(110);
+            REQUIRE(duplicate.HasValue());
+            CHECK_FALSE(duplicate.Value());
+            const auto partial = fixture.Read(110);
+            REQUIRE(partial.HasValue());
+            CHECK_FALSE(partial.Value().ambient);
+            REQUIRE(partial.Value().directional);
+        }
+        SECTION("different native space cannot reuse the same scoped grant") {
+            RequireFailureIdentity(owner.AdvanceLightEstimation(fixture.scope, NativeHandle<XrSpace>(16), LightFixture::Time(110)),
+                                   XRErrors::CoordinateSpaceIncompatible);
+            CHECK(fixture.script.sampleCalls == 1);
+            RequireFailureIdentity(fixture.Read(110), XRErrors::OperationUnavailable);
+        }
+        SECTION("sensor permission loss invalidates and prevents another native query") {
+            fixture.script.sampleResult = XR_ERROR_PERMISSION_INSUFFICIENT;
+            RequireFailureIdentity(fixture.Advance(110), XRErrors::PermissionDenied);
+            RequireFailureIdentity(fixture.Read(110), XRErrors::OperationUnavailable);
+            RequireFailureIdentity(fixture.Advance(120), XRErrors::OperationUnavailable);
+            CHECK(fixture.script.sampleCalls == 2);
+        }
+        SECTION("origin replacement needs a new grant and cannot consume old observations") {
+            auto replacement = fixture.scope;
+            replacement.space.worldOriginRevision = IdentityValue<XRWorldOriginRevision>(2);
+            RequireFailureIdentity(owner.StopLightEstimation(replacement), XRErrors::IdentityStale);
+            RequireFailureIdentity(owner.ReadLightEstimation(replacement, LightFixture::Time(100)), XRErrors::IdentityStale);
+            REQUIRE(owner.StopLightEstimation(fixture.scope).HasValue());
+            RequireFailureIdentity(owner.StartLightEstimation(replacement, fixture.limits), XRErrors::IdentityStale);
+            replacement.grant = IdentityValue<XRLightEstimateGrant>(2);
+            REQUIRE(owner.StartLightEstimation(replacement, fixture.limits).HasValue());
+            RequireFailureIdentity(owner.ReadLightEstimation(replacement, LightFixture::Time(100)), XRErrors::OperationUnavailable);
+            RequireFailureIdentity(fixture.Read(100), XRErrors::IdentityStale);
+        }
+        SECTION("a failed child retirement fences reads and blocks parent destruction until retry") {
+            fixture.script.failRetirement = true;
+            const auto failed = owner.RetireSession();
+            fixture.script.failRetirement = false;
+            RequireFailureIdentity(failed, XRErrors::OperationUnavailable);
+            CHECK(fixture.script.live);
+            CHECK(fixture.script.retireCalls == 1);
+            CHECK(fixture.native.native.liveSessions == 1);
+            RequireFailureIdentity(fixture.Read(110), XRErrors::OperationUnavailable);
+        }
+
+        REQUIRE(owner.Close().HasValue());
+        CHECK_FALSE(fixture.script.live);
+        CHECK(fixture.native.native.liveSessions == 0);
+    }
 
     TEST_CASE("OpenXR discovery observes actual pre-session system views and distinct runtime implementation version",
               "[unit][xr][native]") {

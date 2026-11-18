@@ -2551,6 +2551,7 @@ if(HORO_BUILD_XR_OPENXR)
     add_library(HoroXROpenXR STATIC runtime/xr/openxr/OpenXRNativeSession.cpp runtime/xr/openxr/OpenXRNativePreparation.cpp
         runtime/xr/openxr/OpenXRNativeRetirement.cpp
         runtime/xr/openxr/OpenXRNativeCensus.cpp
+        runtime/xr/openxr/OpenXRLightEstimation.cpp
         runtime/xr/openxr/OpenXRPlaneSnapshot.cpp
         runtime/xr/openxr/OpenXRPlaneCapture.cpp
         runtime/xr/openxr/OpenXRHandTracking.cpp

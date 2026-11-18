@@ -17,6 +17,7 @@ namespace Horo::Tests::OpenXR {
         bool handsSupported{};
         XrBool32 gazeSupport{XR_FALSE};
         XrResult gazeResult{XR_SUCCESS};
+        XrBool32 lightEstimationSupport{XR_FALSE};
         bool spatialPlanes{true};
         bool spatialBounds{true};
         bool spatialLabels{true};
@@ -59,6 +60,11 @@ namespace Horo::Tests::OpenXR {
                     eyes.supportsEyeGazeInteraction = active->gazeSupport;
                     active->calls.push_back("eye-gaze-properties");
                     return active->gazeResult;
+                }
+                if (header->type == XR_TYPE_SYSTEM_LIGHT_ESTIMATION_PROPERTIES_ANDROID) {
+                    auto &light = *static_cast<XrSystemLightEstimationPropertiesANDROID *>(value->next);
+                    light.supportsLightEstimation = active->lightEstimationSupport;
+                    return Record("light-estimation-properties");
                 }
                 if (header->type == XR_TYPE_SYSTEM_SPACE_WARP_PROPERTIES_FB) {
                     auto &warp = *static_cast<XrSystemSpaceWarpPropertiesFB *>(value->next);

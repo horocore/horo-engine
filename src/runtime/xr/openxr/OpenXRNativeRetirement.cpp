@@ -23,6 +23,8 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRNativeSession::DestroySession */
     Result<void> OpenXRNativeSession::DestroySession() {
+        if (auto retired = RetireLightEstimation(); retired.HasError())
+            return retired;
         if (session_ != XR_NULL_HANDLE) {
             if (!dispatch_.destroySession)
                 return Result<void>::Failure(MakeError(XRErrors::LoaderIncompatible, "Native session has no retirement dispatch"));
@@ -42,7 +44,7 @@ namespace Horo::XR::OpenXRInternal {
     Result<void> OpenXRNativeSession::Close() {
         if (controlThread_ != std::this_thread::get_id())
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible, "XR native owner requires its control thread"));
-        if (retirementCall_)
+        if (retirementCall_ || lightCall_)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable, "Native retirement is already in progress"));
         const RetirementOperation operation{retirementCall_};
         if (discovery_)
@@ -72,7 +74,7 @@ namespace Horo::XR::OpenXRInternal {
         using enum Horo::XR::OpenXRInternal::OpenXRNativeSession::DiscoveryPhase;
         if (controlThread_ != std::this_thread::get_id())
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
-        if (retirementCall_ || !discovery_ || discovery_->phase == Retiring || discovery_->phase == Preparing ||
+        if (retirementCall_ || lightCall_ || !discovery_ || discovery_->phase == Retiring || discovery_->phase == Preparing ||
             discovery_->phase == PreparingSession)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         const RetirementOperation operation{retirementCall_};

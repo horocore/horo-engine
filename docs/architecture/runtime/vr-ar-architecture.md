@@ -851,6 +851,16 @@ persisted or reused by the host.
 Hit tests cannot invoke
 UI/gameplay/editor actions, and light estimates cannot rewrite authored lights/exposure.
 
+The Android OpenXR light estimator can be created only on the exact session
+that enabled the light-estimation extension, after application consent and
+platform scene-understanding permission. The native session owner retires the
+estimator before destroying its parent session. It publishes at most one ambient
+and one directional observation, with validity, the provider's update time
+and the exact World origin. Repeated samples do not extend their lifetime.
+Native intensity channels are provider-relative. Renderer admission requires
+an explicit conversion and lighting policy before these observations may
+influence scene lighting.
+
 ## Android And Standalone XR
 
 Standalone Android-class headsets require the Android runtime host in addition

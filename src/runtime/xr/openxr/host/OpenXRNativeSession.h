@@ -4,6 +4,7 @@
  * @brief Non-installed explicit host composition and native session ownership contract.
  */
 
+#include "Horo/XR/XRLightEstimate.h"
 #include "Horo/XR/XRLoaderPreflight.h"
 #include "OpenXRHostBindings.h"
 #include "OpenXRNativeCensus.h"
@@ -330,6 +331,30 @@ namespace Horo::XR::OpenXRInternal {
          */
         [[nodiscard]] Result<NativeSessionBorrow> Borrow(const XRSessionId &session) const;
 
+        /** @brief Creates an estimator on the exact enabled session after separate app and OS approval.
+         * @param scope Already consented purpose and calibrated World scope. @param limits Explicit cadence and expiry.
+         * @return Success, or typed capability, permission, identity, resource or validation failure.
+         * @pre App must check focus and actual OS clearance and provide a fresh grant on the native control lane.
+         */
+        [[nodiscard]] Result<void> StartLightEstimation(const XRLightEstimateScope &scope, const XRLightEstimateLimits &limits);
+        /** @brief Samples one bounded native result after the minimum cadence.
+         * @param scope Exact still-approved scope. @param world Synchronous borrow of the same calibrated World child.
+         * @param now Current runtime-clock cutoff for request, admission and freshness.
+         * @return True for a new publication, false for cadence or the same provider update, or a typed failure.
+         * @pre The application must suspend this producer and retire the grant on focus loss, origin replacement or privacy revocation.
+         */
+        [[nodiscard]] Result<bool> AdvanceLightEstimation(const XRLightEstimateScope &scope, XrSpace world, XRRuntimeTime now);
+        /** @brief Copies current estimate evidence without calling the native feature.
+         * @param scope Exact still-approved scope. @param now Cutoff in the same runtime clock.
+         * @return Current estimate, or a typed stale, incompatible or unavailable result.
+         */
+        [[nodiscard]] Result<XRLightEstimate> ReadLightEstimation(const XRLightEstimateScope &scope, XRRuntimeTime now) const;
+        /** @brief Revokes exact publication and retires the native child before its parent.
+         * @param scope Exact scope to revoke; stale scopes cannot revoke a current grant.
+         * @return Success or a retryable typed error retaining native cleanup debt.
+         */
+        [[nodiscard]] Result<void> StopLightEstimation(const XRLightEstimateScope &scope);
+
     private:
         friend class OpenXRHandTracking;
         friend class OpenXRPlaneCapture;
@@ -388,6 +413,8 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> CheckPreparation(const NativeSessionPreparation &request) const;
         /** @brief Destroys a native session and releases its graphics binding only after native success. */
         [[nodiscard]] Result<void> DestroySession();
+        /** @brief Revokes evidence and retires the light child, retaining failed native retirement for retry. */
+        [[nodiscard]] Result<void> RetireLightEstimation();
         /** @brief Preserves the existing native phase/result-to-Horo mapping across split retirement implementation. */
         [[nodiscard]] static Error NativeFailure(const char *operation, XrResult result);
 
@@ -474,6 +501,22 @@ namespace Horo::XR::OpenXRInternal {
         std::uint32_t discoveredExtensionCount_{};
         std::size_t extensionEvidenceCount_{};
 
+        struct LightEstimator final {
+            XrLightEstimatorANDROID handle{XR_NULL_HANDLE};
+            PFN_xrDestroyLightEstimatorANDROID destroy{};
+            PFN_xrGetLightEstimateANDROID get{};
+            XrSpace world{XR_NULL_HANDLE};
+            XRLightEstimateScope scope;
+            XRLightEstimateLimits limits;
+            XRRuntimeTime lastRequest;
+            XRRuntimeTime lastSample;
+            std::optional<XRLightEstimate> current;
+            bool active{};
+        };
+
+        LightEstimator light_;
+        XRLightEstimateGrant lastLightGrant_;
+        mutable bool lightCall_{}; /**< Rejects teardown or reentrant use while a native light operation borrows the owner. */
         bool graphicsPrepared_{};
         bool retirementCall_{}; /**< Rejects reentrant native destruction while preserving explicit retry after return. */
     };
