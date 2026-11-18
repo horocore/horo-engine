@@ -85,6 +85,10 @@ namespace Horo::Application::Internal {
         auto frame = source->animation->Acquire();
         if (frame.HasError())
             return Extracted::Failure(frame.ErrorValue());
+        const auto published = frame.Value().Attachments();
+        const auto exact = std::ranges::find(published, attachment, &UiAnimationAttachmentFrame::attachment);
+        if (exact == published.end() || !exact->layout)
+            return Extracted::Failure(MakeError(UiErrors::PresentationProfileSourceStale));
         return view->projection->Extract(state_->service, frame.Value());
     }
 

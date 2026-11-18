@@ -81,6 +81,21 @@ TEST_CASE("Application paint extracts isolated read-only views from one source",
     CHECK(fixture.port.ExtractSnapshotView(instance, previewAttachment).HasError());
     CHECK(fixture.port.UpdateSnapshotView(instance, previewAttachment, viewport).HasError());
     CHECK(fixture.port.ExtractSnapshotView(instance, thumbnailAttachment).HasValue());
+
+    viewport.constraints.maximum.width = viewport.content.extent.width = 90;
+    const auto replacement = Take(fixture.port.AttachSnapshotView(instance, preview, viewport));
+    CHECK(replacement != previewAttachment);
+    const auto beforePublication = fixture.port.ExtractSnapshotView(instance, replacement);
+    REQUIRE(beforePublication.HasError());
+    CHECK(beforePublication.ErrorValue().code.Value() == UiErrors::PresentationProfileSourceStale.code.Value());
+    CHECK(fixture.port.ExtractSnapshotView(instance, thumbnailAttachment).HasValue());
+    fixture.Frame();
+    const auto replacementSnapshot = Take(fixture.port.ExtractSnapshotView(instance, replacement));
+    REQUIRE_FALSE(replacementSnapshot.Commands().empty());
+    CHECK(replacementSnapshot.Commands().front().rect.extent.width < previewSnapshot.Commands().front().rect.extent.width);
+    CHECK(replacementSnapshot.Commands().front().rect.extent.width > thumbnailSnapshot.Commands().front().rect.extent.width);
+    CHECK(fixture.port.ExtractSnapshotView(instance, previewAttachment).HasError());
+
     fixture.host->Shutdown();
     CHECK(fixture.port.ExtractSnapshotView(instance, thumbnailAttachment).HasError());
     CHECK_FALSE(previewSnapshot.Commands().empty());
