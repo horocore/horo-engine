@@ -979,7 +979,13 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(unplugged.released);
 
         RequireValue(fixture.play->PollEvents());
-        CHECK(fixture.script.native.liveSessions == 0);
+        CHECK(fixture.script.events.exits == 1);
+        CHECK(fixture.script.native.liveSessions == 1);
+        fixture.script.events.Push(XR_SESSION_STATE_STOPPING);
+        fixture.script.events.Push(XR_SESSION_STATE_IDLE);
+        RequireValue(fixture.play->PollEvents());
+        CHECK(fixture.script.events.ends == 1);
+        REQUIRE(fixture.script.native.liveSessions == 0);
         RequireValue(fixture.play->SetPlayState(Editor::EditorPlayState::Idle));
         fixture.script.actions.currentProfiles[0] = fixture.script.actions.Find(profilePath);
         auto replacement = RequireValue(Runtime::RuntimeScene::Create(fixture.definition, {2}));

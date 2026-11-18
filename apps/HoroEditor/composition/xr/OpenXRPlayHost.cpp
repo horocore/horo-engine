@@ -264,7 +264,10 @@ namespace Horo::Application::Internal {
     bool OpenXRPlayHost::RetireIfInputProfileChanged(const Error &error) {
         if (!ErrorChainContains(error, XRErrors::ActionProfileChanged.domain, XRErrors::ActionProfileChanged.code))
             return false;
-        RevokeEventAdmission();
+        if (scene_)
+            scene_->Retire(*this);
+        else
+            RevokeSource();
         LOG_WARN("editor.xr", "Controller profile changed. Start a new XR Play session to use the current profile.");
         return true;
     }
@@ -351,10 +354,16 @@ namespace Horo::Application::Internal {
         }
         auto frame = std::move(opened).Value();
         const auto sampled = AppendInput(context, frame);
+        const bool profileChanged = sampled.HasError() && RetireIfInputProfileChanged(sampled.ErrorValue());
         if (pendingRevoke_) {
             if (const auto canceled = frame.Cancel(); canceled.HasError())
                 return canceled;
+            // The native call has returned. Retire registration before committing its neutral cutoff.
+            pendingRevoke_ = false;
+            composition_.session.RevokeInput();
             input_.router->BeginFrame(raw);
+            if (profileChanged)
+                return Result<void>::Success();
             return sampled.HasError() ? sampled : Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
         }
         // One empty-source commit on native failure preserves physical edges and neutralizes old XR values.
@@ -363,8 +372,6 @@ namespace Horo::Application::Internal {
             return committed;
         }
         if (sampled.HasError()) {
-            if (RetireIfInputProfileChanged(sampled.ErrorValue()))
-                return Result<void>::Success();
             RevokeSource();
             return sampled;
         }
