@@ -295,12 +295,12 @@ namespace Horo::AI {
         const auto radius = UnsignedProperty(stage, QueryPropertyId::Create(DistanceRadius).Value());
         const auto weight =
             UnsignedProperty(stage, QueryPropertyId::Create(DistanceScoreWeight).Value(), QueryPointDistanceTest{}.scoreWeight);
-        const auto scoring =
+        const auto scoringProperty =
             std::ranges::find(stage.properties, QueryPropertyId::Create(DistancePreferNearer).Value(), &QueryPropertyValue::id);
-        if (!radius || *radius == 0 || !weight || *weight == 0 || scoring == stage.properties.end() ||
-            !std::holds_alternative<bool>(scoring->value))
+        const auto *scoring = scoringProperty == stage.properties.end() ? nullptr : std::get_if<bool>(&scoringProperty->value);
+        if (radius.value_or(0) == 0 || weight.value_or(0) == 0 || !scoring)
             return Captured::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-        return Captured::Success(BuiltinPointDistanceQuery{stage.id, {*radius, std::get<bool>(scoring->value), *weight}});
+        return Captured::Success(BuiltinPointDistanceQuery{stage.id, {*radius, *scoring, *weight}});
     }
 
     /** @copydoc BuiltinPointDistanceQuery::Rule */

@@ -183,12 +183,23 @@ namespace Horo::AI {
                 ExpectError(EditBuiltinPointQuerySettings(source.Value(), schema.Value(), settings),
                             AIErrors::EnvironmentQuerySchemaInvalid);
             }
-            SECTION("a saved weight outside the supported integer range is rejected") {
-                authored.stages.front().properties.back().value = std::numeric_limits<std::uint64_t>::max();
-                const auto oversized = EnvironmentQueryAsset::Capture(authored);
-                REQUIRE(oversized.HasValue());
-                ExpectError(ReadBuiltinPointQuerySettings(oversized.Value(), schema.Value()), AIErrors::EnvironmentQuerySchemaInvalid);
-            }
+        }
+
+        TEST_CASE("EQS rejects restored distance weights outside the supported range", "[unit][ai][eqs][generator]") {
+            const auto schema = CaptureBuiltinQuerySchema();
+            REQUIRE(schema.HasValue());
+            const auto query = CreateBuiltinLatticeQuery(MakeIdentity<QueryId>(2), MakeIdentity<QueryStageId>(3),
+                                                         MakeIdentity<QueryResultSchemaId>(4), "Points", {50, 1}, 4);
+            REQUIRE(query.HasValue());
+            const auto weighted = AddBuiltinPointDistanceTest(query.Value(), MakeIdentity<QueryStageId>(5), {100, true, 3});
+            REQUIRE(weighted.HasValue());
+            QueryAssetSource authored{.id = weighted.Value().Id(),
+                                      .result = weighted.Value().ResultSchema(),
+                                      .stages = {weighted.Value().Stages().begin(), weighted.Value().Stages().end()}};
+            authored.stages.back().properties.back().value = std::numeric_limits<std::uint64_t>::max();
+            const auto oversized = EnvironmentQueryAsset::Capture(authored);
+            REQUIRE(oversized.HasValue());
+            ExpectError(ReadBuiltinPointQuerySettings(oversized.Value(), schema.Value()), AIErrors::EnvironmentQuerySchemaInvalid);
         }
 
         TEST_CASE("EQS copies bounded provider points in declared order", "[unit][ai][eqs][generator]") {
