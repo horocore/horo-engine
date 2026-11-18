@@ -161,8 +161,8 @@ namespace ReconstructionSmoke {
 
 TEST_CASE("Vulkan scene history publishes only from its retained completed frame", "[integration][renderer][vulkan][gpu][reconstruction]") {
     using namespace ReconstructionSmoke;
-    const auto seedShader = CookEntry(Entry::TemporalSeed);
-    const auto historyShader = CookEntry(Entry::TemporalHistory);
+    const auto seedShader = CookScene(Entry::TemporalSeed).reconstruction;
+    const auto historyShader = CookScene(Entry::TemporalHistory).reconstruction;
     Owner owner;
     REQUIRE(RegisterVulkanRenderBackend(owner.registry, owner.observed).HasValue());
     REQUIRE(owner.registry.Seal().HasValue());
