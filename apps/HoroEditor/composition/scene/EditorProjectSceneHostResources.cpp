@@ -1,13 +1,54 @@
 #include "EditorProjectSceneHostOwner.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "Horo/WorldStreaming/WorldArtifactErrors.h"
 
 #include <new>
 
 namespace Horo::Application::Internal::EditorProjectSceneDetail {
+    /** @copydoc ProjectPlaySceneHost::SelectWorldStartup */
+    Result<void> ProjectPlaySceneHost::SelectWorldStartup(const std::filesystem::path &root, const EditorProjectScenePolicy &policy,
+                                                          const Runtime::RuntimeSceneDefinition *definition) {
+        if (!policy.world)
+            return Result<void>::Success();
+        if (!definition || policy.xrHost || policy.playNavigationScene || policy.world->committed.initialCell)
+            return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Unsupported,
+                                                   "Editor mounted World startup requires desktop Play. Startup cells, XR and Navigation "
+                                                   "need canonical World presentation and activation."));
+        std::error_code error;
+        if (root.empty() || !std::filesystem::equivalent(root, policy.world->projectRoot, error) || error)
+            return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale,
+                                                   "A committed World startup is scoped to its selected launch project."));
+        worldSelection_ = policy.world->committed;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ProjectPlaySceneHost::WorldOrigin */
+    std::optional<WorldStreaming::OriginFrameLease> ProjectPlaySceneHost::WorldOrigin() const {
+        if (std::this_thread::get_id() != ownerLane_ || sceneClosed_ || !mountedWorld_ || !scenes_->ActiveScene())
+            return {};
+        auto lease = mountedWorld_->Origin().Lease();
+        if (lease.HasError())
+            return {};
+        return std::move(lease).Value();
+    }
+
     /** @copydoc ProjectPlaySceneHost::QueueInitialScene */
     Result<void> ProjectPlaySceneHost::QueueInitialScene(const Runtime::RuntimeSceneDefinition &definition,
                                                          const Editor::EditorPlayChildSceneSource *source,
                                                          const CancellationToken &cancellation) {
+        if (worldSelection_) {
+            if (source)
+                return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Unsupported,
+                                                       "Mounted World startup does not admit a separate activated child Scene batch."));
+            auto mounted = MountedWorld::Prepare(NativeDurableFileSystem{}, *worldSelection_, identity_.value, *scenes_, cancellation);
+            if (mounted.HasError())
+                return Result<void>::Failure(mounted.ErrorValue());
+            const auto queued = Editor::EditorPlaySceneHost::QueueInitialScene(definition, nullptr, cancellation);
+            if (queued.HasError())
+                return queued;
+            mountedWorld_ = std::move(mounted).Value();
+            return Result<void>::Success();
+        }
         if (!source)
             return Editor::EditorPlaySceneHost::QueueInitialScene(definition, nullptr, cancellation);
         if (cancellation.IsCancellationRequested())

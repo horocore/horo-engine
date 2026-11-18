@@ -192,10 +192,19 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         ProjectPlaySceneHost(ProjectPlaySceneHost &&) = delete;
         ProjectPlaySceneHost &operator=(ProjectPlaySceneHost &&) = delete;
 
+        /** @brief Validates exact World ingress and admits it only for the currently supported Play composition. */
+        Result<void> SelectWorldStartup(const std::filesystem::path &root, const EditorProjectScenePolicy &policy,
+                                        const Runtime::RuntimeSceneDefinition *definition);
+
+        /** @brief Borrows this published Scene owner's canonical mounted origin lease. */
+        [[nodiscard]] std::optional<WorldStreaming::OriginFrameLease> WorldOrigin() const;
+
         Result<void> Prepare(const std::filesystem::path &root, JobSystem &jobs, const EditorProjectScenePolicy &policy,
                              const Runtime::RuntimeSceneDefinition *definition) {
             if (!ValidPreparation(identity_, root, policy))
                 return Result<void>::Failure(MakeError(InvalidProjectScene));
+            if (auto selected = SelectWorldStartup(root, policy, definition); selected.HasError())
+                return selected;
             std::optional<Prefab::PrefabLimitProfile> prefabLimits;
             if (policy.prefabGranted) {
                 const auto captured = LoadPrefabProjectSettings(root);
@@ -299,6 +308,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         /** @copydoc Editor::EditorPlaySceneHost::ConfigureSaveSession */
         Result<void> ConfigureSaveSession(std::vector<Editor::PlaySaveGameplayBinding> bindings,
                                           std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner) override {
+            if (mountedWorld_)
+                return Result<void>::Failure(MakeError(Runtime::SaveErrors::CompositionUnsupported,
+                                                       "Mounted World state requires its own capture and restore authority."));
             if (hasActivatedChildren_)
                 return Result<void>::Failure(
                     MakeError(Runtime::SaveErrors::CompositionUnsupported, "Save requires independent child Scene capture and restore."));
@@ -510,6 +522,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 prefab_.templates->Shutdown();
             if (navigation_)
                 navigation_->coordinator.BeginShutdown();
+            mountedWorld_.reset();
             if (scenes_)
                 scenes_->Shutdown();
             animationLifetime_.RequestCancellation();
@@ -536,6 +549,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         std::unique_ptr<Runtime::SceneAnimationRuntime> animation_;
         std::unique_ptr<ProjectSceneNavigationWorld> navigation_;
         std::unique_ptr<Runtime::RuntimeSceneService> scenes_;
+        std::optional<CommittedWorldSelection> worldSelection_;
+        std::unique_ptr<MountedWorld> mountedWorld_;
 
         /** @brief Owns the projector/provider/spawn chain and its shared gameplay borrow in their required lifetime order. */
         struct PrefabState final {

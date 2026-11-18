@@ -277,14 +277,14 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc CaptureHeadlessWorldRenderGeometry */
-    Result<HeadlessWorldRenderPacket> CaptureHeadlessWorldRenderGeometry(const Network::INetworkModeService &service,
-                                                                         const Runtime::SceneObjectId camera,
-                                                                         std::span<const Runtime::SceneObjectId> meshes,
-                                                                         Runtime::PrimitiveMeshCache &primitives,
-                                                                         Render::RenderOriginSceneAdapter &renderer) {
+    Result<MountedWorldRenderPacket> CaptureHeadlessWorldRenderGeometry(const Network::INetworkModeService &service,
+                                                                        const Runtime::SceneObjectId camera,
+                                                                        std::span<const Runtime::SceneObjectId> meshes,
+                                                                        Runtime::PrimitiveMeshCache &primitives,
+                                                                        Render::RenderOriginSceneAdapter &renderer) {
         const auto *world = dynamic_cast<const WorldService *>(&service);
         if (!world)
-            return Result<HeadlessWorldRenderPacket>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
+            return Result<MountedWorldRenderPacket>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
         return world->CaptureWorldRenderGeometry(camera, meshes, primitives, renderer);
     }
 

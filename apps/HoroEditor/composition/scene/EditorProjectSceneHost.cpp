@@ -61,6 +61,12 @@ namespace Horo::Application::Internal {
         return Result<void>::Success();
     }
 
+    /** @copydoc ObserveEditorPlayMountedWorld */
+    std::optional<WorldStreaming::OriginFrameLease> ObserveEditorPlayMountedWorld(const Editor::EditorPlaySceneHost &host) {
+        const auto *selected = dynamic_cast<const ProjectPlaySceneHost *>(&host);
+        return selected ? selected->WorldOrigin() : std::nullopt;
+    }
+
     /** @copydoc MakeEditorProjectSceneFactory */
     Editor::EditorProjectPlaySceneFactory MakeEditorProjectSceneFactory(JobSystem &jobs, EditorProjectScenePolicy policy) {
         return ProjectFactory(jobs, std::move(policy), {Editor::EditorFirstPlayScene, {std::numeric_limits<std::uint64_t>::max()}});
@@ -68,6 +74,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc MakeEditorProjectPrefabStageFactory */
     Editor::EditorProjectPrefabStageFactory MakeEditorProjectPrefabStageFactory(JobSystem &jobs, EditorProjectScenePolicy policy) {
+        policy.world.reset();
         return {ProjectFactory(jobs, std::move(policy), {Editor::EditorFirstPrefabStage, Editor::EditorLastPrefabStage})};
     }
 

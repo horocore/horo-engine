@@ -1,6 +1,5 @@
 #include "NetworkProductLaunchOptions.h"
 
-#include "Horo/Foundation/Sha256.h"
 #include "Horo/Gameplay/GameModuleRetirement.h"
 #include "Horo/Network/NetworkErrors.h"
 
@@ -292,61 +291,30 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
-        /** @brief Parses one exact committed World launch selection and canonical integer-millimeter origin. */
+        /** @brief Reads one explicit committed World selection from this launch's option list. */
         Result<void> ReadWorldMount(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch) {
-            constexpr std::size_t ArgumentCount = 9;
-            if (launch.sceneInput.world || arguments.size() - index < ArgumentCount)
+            if (launch.sceneInput.world || arguments.size() - index <= CommittedWorldSelectionArgumentCount)
                 return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
                                                        "Use --world-mount <root> <target> <manifest SHA-256> <index "
                                                        "AssetId> <dependency AssetId> <x-mm> <y-mm> <z-mm> once."));
-            auto root = ParseSceneHostAbsolutePath(arguments[index + 1]);
-            auto target = Assets::AssetCookTargetId::Parse(arguments[index + 2]);
-            const auto manifest = ParseSha256(arguments[index + 3]);
-            const auto artifact = Assets::AssetId::Parse(arguments[index + 4]);
-            const auto dependencies = Assets::AssetId::Parse(arguments[index + 5]);
-            if (root.HasError() || target.HasError() || manifest.HasError() || artifact.HasError() || dependencies.HasError())
-                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
-                                                       "Invalid committed World root, target, manifest digest or artifact identity."));
-            std::array<std::int64_t, 3> mm{};
-            for (std::size_t axis = 0; axis < mm.size(); ++axis) {
-                const std::string_view text{arguments[index + 6 + axis]};
-                const auto parsed = std::from_chars(text.data(), text.data() + text.size(), mm[axis]);
-                if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size())
-                    return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
-                                                           "World origin must use three signed integer millimeter coordinates."));
-            }
-            const auto origin = Math::WorldCoordinate64::FromMillimeters(mm[0], mm[1], mm[2]);
-            launch.sceneInput.world.emplace(HeadlessWorldSelection{std::move(root).Value(), std::move(target).Value(), manifest.Value(),
-                                                                   artifact.Value(), dependencies.Value(), origin});
-            index += ArgumentCount;
+            auto selected = ParseCommittedWorldSelection(arguments.subspan(index + 1, CommittedWorldSelectionArgumentCount));
+            if (selected.HasError())
+                return Result<void>::Failure(selected.ErrorValue());
+            launch.sceneInput.world.emplace(std::move(selected).Value());
+            index += CommittedWorldSelectionArgumentCount + 1;
             return Result<void>::Success();
         }
 
-        /** @brief Captures the single independently pinned startup occurrence and exact typed source identity. */
-        Result<HeadlessWorldInitialCell> ReadWorldInitialCell(const std::span<char *> arguments, std::size_t &index) {
-            using Output = Result<HeadlessWorldInitialCell>;
-            constexpr std::size_t ArgumentCount = 9;
-            if (arguments.size() - index < ArgumentCount)
-                return Output::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
-                                                 "Use --world-start-cell <x> <y> <z> <lod> <layer> <occurrence> <definition> <revision>."));
-            const auto parse = [](const std::string_view text, auto &value) {
-                const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
-                return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size();
-            };
-            HeadlessWorldInitialCell cell;
-            std::uint16_t layer{};
-            if (!parse(arguments[index + 1], cell.cell.x) || !parse(arguments[index + 2], cell.cell.y) ||
-                !parse(arguments[index + 3], cell.cell.z) || !parse(arguments[index + 4], cell.cell.lod) ||
-                !parse(arguments[index + 5], layer) || !parse(arguments[index + 6], cell.occurrence.value) ||
-                !parse(arguments[index + 7], cell.definition.value) || !parse(arguments[index + 8], cell.revision.value) ||
-                !cell.occurrence.IsValid() || !cell.definition.IsValid() || cell.revision.value == 0)
-                return Output::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, "Invalid World startup cell or Scene identity."));
-            const auto typedLayer = WorldStreaming::StreamingLayerId::Create(layer);
-            if (typedLayer.HasError())
-                return Output::Failure(typedLayer.ErrorValue());
-            cell.cell.layer = typedLayer.Value();
-            index += ArgumentCount;
-            return Output::Success(cell);
+        /** @brief Reads one exact cell selection without admitting a mounted world or Scene. */
+        Result<CommittedWorldInitialCell> ReadWorldInitialCell(const std::span<char *> arguments, std::size_t &index) {
+            if (arguments.size() - index <= CommittedWorldCellArgumentCount)
+                return Result<CommittedWorldInitialCell>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                              "Use --world-start-cell <x> <y> <z> <lod> <layer> <occurrence> <definition> <revision>."));
+            auto selected = ParseCommittedWorldInitialCell(arguments.subspan(index + 1, CommittedWorldCellArgumentCount));
+            if (selected.HasValue())
+                index += CommittedWorldCellArgumentCount + 1;
+            return selected;
         }
 
         /** @brief Reads the one project-relative policy path without resolving an executable or source file. */
@@ -406,7 +374,7 @@ namespace Horo::Application::Internal {
         Result<void> ParseSceneOptions(const std::span<char *> arguments, ProductLaunch &launch) {
             SeenSceneOptions seen{};
             std::optional<bool> prefabGrant;
-            std::optional<HeadlessWorldInitialCell> initialCell;
+            std::optional<CommittedWorldInitialCell> initialCell;
             for (std::size_t index = 0; index < arguments.size();) {
                 const std::string_view key{arguments[index]};
                 if (key == "--transport-qualification") {

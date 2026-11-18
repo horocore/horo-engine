@@ -1,12 +1,13 @@
 #include "../runtime/world_streaming/WorldArtifactCodecTestSupport.h"
 #include "AllocationProbe.h"
+#include "EditorProjectSceneHost.h"
 #include "HeadlessSceneLoadBoundary.h"
-#include "HeadlessWorldMount.h"
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 #include "Horo/WorldCook/WorldCookPublication.h"
 #include "Horo/WorldStreaming/WorldArtifactErrors.h"
+#include "MountedWorldHost.h"
 #include "assets/AssetCookOutputFixture.h"
 
 #include <catch2/generators/catch_generators.hpp>
@@ -198,26 +199,26 @@ namespace Horo::WorldCook {
 
     TEST_CASE("Headless World mount pins a committed release and retires its origin with the Scene owner",
               "[world_cook][native][mounted_world]") {
-        using Application::Internal::HeadlessWorldMount;
-        using Application::Internal::HeadlessWorldSelection;
+        using Application::Internal::CommittedWorldSelection;
+        using Application::Internal::MountedWorld;
         Fixture fixture;
         auto published = fixture.Publish();
         REQUIRE(published.HasValue());
         REQUIRE(published.Value().publication);
         const auto release = fixture.Release();
-        const HeadlessWorldSelection selection{release.targetRoot,
-                                               release.target,
-                                               published.Value().publication->manifestDigest,
-                                               release.indexArtifact,
-                                               release.dependencyArtifact,
-                                               Math::WorldCoordinate64::FromMillimeters(20'000'000'001, -500, 180)};
+        const CommittedWorldSelection selection{release.targetRoot,
+                                                release.target,
+                                                published.Value().publication->manifestDigest,
+                                                release.indexArtifact,
+                                                release.dependencyArtifact,
+                                                Math::WorldCoordinate64::FromMillimeters(20'000'000'001, -500, 180)};
         JobSystem jobs{JobSystemConfig{1, 4}};
         A::MemoryAssetProvider provider;
         A::AssetLoadService loads{jobs, provider};
         A::AssetRegistry registry;
         S::RuntimeSceneService scene{registry, loads, S::RuntimeSceneAssetLimits{}, S::SceneRuntimeId{101}};
         const NativeDurableFileSystem files;
-        auto admitted = HeadlessWorldMount::Prepare(files, selection, 5, scene);
+        auto admitted = MountedWorld::Prepare(files, selection, 5, scene);
         REQUIRE(admitted.HasValue());
         auto mount = std::move(admitted).Value();
         const auto lease = mount->Origin().Lease().Value();
@@ -226,17 +227,17 @@ namespace Horo::WorldCook {
 
         auto stale = selection;
         stale.manifest = {};
-        W::TestSupport::RequireError(HeadlessWorldMount::Prepare(files, stale, 6, scene), W::WorldArtifactErrors::Stale);
+        W::TestSupport::RequireError(MountedWorld::Prepare(files, stale, 6, scene), W::WorldArtifactErrors::Stale);
         stale = selection;
         stale.dependencies = Asset(4);  // Committed cell ID cannot satisfy the exact sibling role.
-        W::TestSupport::RequireError(HeadlessWorldMount::Prepare(files, stale, 6, scene), W::WorldArtifactErrors::Invalid);
+        W::TestSupport::RequireError(MountedWorld::Prepare(files, stale, 6, scene), W::WorldArtifactErrors::Invalid);
         CancellationSource cancellation;
         cancellation.RequestCancellation();
-        W::TestSupport::RequireError(HeadlessWorldMount::Prepare(files, selection, 6, scene, cancellation.Token()),
+        W::TestSupport::RequireError(MountedWorld::Prepare(files, selection, 6, scene, cancellation.Token()),
                                      W::WorldArtifactErrors::Cancelled);
         REQUIRE(lease.Get().HasValue());
 
-        auto replacement = HeadlessWorldMount::Prepare(files, selection, 6, scene);
+        auto replacement = MountedWorld::Prepare(files, selection, 6, scene);
         REQUIRE(replacement.HasValue());
         auto replacementLease = replacement.Value()->Origin().Lease().Value();
         mount.reset();
@@ -264,15 +265,15 @@ namespace Horo::WorldCook {
         REQUIRE(published.Value().publication);
         const auto release = fixture.Release();
         const auto selected = fixture.inputs.front().expected;
-        HeadlessWorldInitialCell request{selected.cell, {900}, selected.scene, selected.revision};
-        const HeadlessWorldSelection selection{release.targetRoot,
-                                               release.target,
-                                               published.Value().publication->manifestDigest,
-                                               release.indexArtifact,
-                                               release.dependencyArtifact,
-                                               Math::WorldCoordinate64::FromMillimeters(cameraPosition[0], cameraPosition[1],
-                                                                                        cameraPosition[2]),
-                                               request};
+        CommittedWorldInitialCell request{selected.cell, {900}, selected.scene, selected.revision};
+        const CommittedWorldSelection selection{release.targetRoot,
+                                                release.target,
+                                                published.Value().publication->manifestDigest,
+                                                release.indexArtifact,
+                                                release.dependencyArtifact,
+                                                Math::WorldCoordinate64::FromMillimeters(cameraPosition[0], cameraPosition[1],
+                                                                                         cameraPosition[2]),
+                                                request};
 
         S::RuntimeSceneService parent{S::SceneRuntimeId{101}};
         auto definition = std::move(S::SceneDefinitionBuilder{{99}, {1}}).Build();
@@ -280,7 +281,7 @@ namespace Horo::WorldCook {
         HeadlessSceneLoadBoundary boundary{{}, std::chrono::steady_clock::now() + std::chrono::seconds(5)};
         REQUIRE(PrepareHeadlessSceneAtLoadBoundary(parent, std::move(definition).Value(), boundary).HasValue());
         const NativeDurableFileSystem files;
-        auto admitted = HeadlessWorldMount::Prepare(files, selection, 5, parent);
+        auto admitted = MountedWorld::Prepare(files, selection, 5, parent);
         REQUIRE(admitted.HasValue());
         auto mount = std::move(admitted).Value();
         const auto lease = mount->Origin().Lease().Value();
@@ -290,7 +291,8 @@ namespace Horo::WorldCook {
         CHECK(mount->Anchors(*parent.ActiveScene()).empty());
 
         if (hasHardDependency) {
-            W::TestSupport::RequireError(mount->ActivateInitialCell(request, boundary), W::WorldArtifactErrors::Unsupported);
+            W::TestSupport::RequireError(mount->ActivateInitialCell(request, {boundary.cancellation, boundary.deadline}),
+                                         W::WorldArtifactErrors::Unsupported);
             CHECK_FALSE(S::FindStreamedSceneInstance(*parent.ActiveScene(), address, selected, epoch));
             return;
         }
@@ -298,16 +300,17 @@ namespace Horo::WorldCook {
             CancellationSource cancellation;
             cancellation.RequestCancellation();
             boundary.cancellation = cancellation.Token();
-            W::TestSupport::RequireError(mount->ActivateInitialCell(request, boundary), HeadlessSceneLoadErrors::Cancelled);
+            W::TestSupport::RequireError(mount->ActivateInitialCell(request, {boundary.cancellation, boundary.deadline}),
+                                         W::WorldArtifactErrors::Cancelled);
             CHECK_FALSE(S::FindStreamedSceneInstance(*parent.ActiveScene(), address, selected, epoch));
         }
         SECTION("Foreign revision cannot activate a committed baseline") {
             ++request.revision.value;
-            CHECK(mount->ActivateInitialCell(request, boundary).HasError());
+            CHECK(mount->ActivateInitialCell(request, {boundary.cancellation, boundary.deadline}).HasError());
             CHECK_FALSE(S::FindStreamedSceneInstance(*parent.ActiveScene(), address, selected, epoch));
         }
         SECTION("Success exposes the exact authored occurrence until actual parent shutdown") {
-            REQUIRE(mount->ActivateInitialCell(request, boundary).HasValue());
+            REQUIRE(mount->ActivateInitialCell(request, {boundary.cancellation, boundary.deadline}).HasValue());
             const auto live = parent.ActiveScene();
             REQUIRE(live);
             REQUIRE(S::FindStreamedSceneInstance(*live, address, selected, epoch));
@@ -316,7 +319,7 @@ namespace Horo::WorldCook {
             CHECK(mountedAnchors.front() == anchors.front());
             CHECK(mount->Anchors({}).empty());
             CHECK_FALSE(S::FindStreamedSceneInstance(*live, address, selected, IdentityFrom<W::PartitionEpoch>(6)));
-            CHECK(mount->ActivateInitialCell(request, boundary).HasError());
+            CHECK(mount->ActivateInitialCell(request, {boundary.cancellation, boundary.deadline}).HasError());
 
             const W::OriginRebaseParticipantRequirement participant{IdentityFrom<W::OriginRebaseParticipantId>(1),
                                                                     IdentityFrom<W::OriginRebaseParticipantRevision>(1)};
@@ -365,6 +368,70 @@ namespace Horo::WorldCook {
             CHECK_FALSE(live->IsCurrent());
             CHECK(lease.Get().HasError());
             CHECK(gameFrame.Scene().HasError());
+        }
+    }
+
+    TEST_CASE("Editor Play mounts an explicit committed World for one project and revokes its origin on Stop",
+              "[world_cook][native][mounted_world][editor_play]") {
+        using namespace Application::Internal;
+        Fixture world;
+        const auto published = world.Publish();
+        REQUIRE(published.HasValue());
+        REQUIRE(published.Value().publication);
+        const auto release = world.Release();
+        T::TempDir project;
+        REQUIRE(std::filesystem::create_directory(project.path / "assets"));
+        const auto origin = Math::WorldCoordinate64::FromMillimeters(9'007'199'254'740'993, -400, 700);
+        EditorProjectScenePolicy policy;
+        policy.world.emplace(EditorPlayWorldSelection{project.path,
+                                                      {release.targetRoot, release.target, published.Value().publication->manifestDigest,
+                                                       release.indexArtifact, release.dependencyArtifact, origin}});
+        JobSystem jobs{JobSystemConfig{1, 8}};
+        const auto definition = S::SceneDefinitionBuilder{{200}, {1}}.Build();
+        REQUIRE(definition.HasValue());
+
+        SECTION("Actual Scene factory publishes the mount only with ready Play") {
+            auto factory = MakeEditorProjectSceneFactory(jobs, policy);
+            auto created = factory(project.path, Editor::EditorFirstPlayScene, definition.Value());
+            REQUIRE(created.HasValue());
+            auto host = std::move(created).Value();
+            const CancellationToken cancellation;
+            REQUIRE(host->Scenes().Startup(cancellation).HasValue());
+            REQUIRE(host->QueueInitialScene(definition.Value(), nullptr, cancellation).HasValue());
+            CHECK_FALSE(ObserveEditorPlayMountedWorld(*host));
+            REQUIRE(host->CommitSceneChanges({.frameNumber = 1, .cancellation = cancellation}).HasValue());
+            REQUIRE(host->Scenes().ActiveScene());
+            auto lease = ObserveEditorPlayMountedWorld(*host);
+            REQUIRE(lease);
+            CHECK(lease->Get().Value().Origin() == origin);
+            host->Shutdown();
+            CHECK_FALSE(ObserveEditorPlayMountedWorld(*host));
+            CHECK(lease->Get().HasError());
+        }
+        SECTION("A different workspace cannot reuse the launch World") {
+            T::TempDir foreign;
+            auto factory = MakeEditorProjectSceneFactory(jobs, policy);
+            W::TestSupport::RequireError(factory(foreign.path, Editor::EditorFirstPlayScene, definition.Value()),
+                                         W::WorldArtifactErrors::Stale);
+        }
+        SECTION("A request for a cell cannot leak into the Editor float viewport") {
+            const auto selected = world.inputs.front().expected;
+            policy.world->committed.initialCell.emplace(CommittedWorldInitialCell{selected.cell, {900}, selected.scene, selected.revision});
+            auto factory = MakeEditorProjectSceneFactory(jobs, policy);
+            W::TestSupport::RequireError(factory(project.path, Editor::EditorFirstPlayScene, definition.Value()),
+                                         W::WorldArtifactErrors::Unsupported);
+        }
+        SECTION("A superseded committed manifest rejects before any Scene is published") {
+            policy.world->committed.manifest = {};
+            auto factory = MakeEditorProjectSceneFactory(jobs, policy);
+            auto created = factory(project.path, Editor::EditorFirstPlayScene, definition.Value());
+            REQUIRE(created.HasValue());
+            auto host = std::move(created).Value();
+            const CancellationToken cancellation;
+            REQUIRE(host->Scenes().Startup(cancellation).HasValue());
+            W::TestSupport::RequireError(host->QueueInitialScene(definition.Value(), nullptr, cancellation), W::WorldArtifactErrors::Stale);
+            CHECK_FALSE(host->Scenes().ActiveScene());
+            CHECK_FALSE(ObserveEditorPlayMountedWorld(*host));
         }
     }
 

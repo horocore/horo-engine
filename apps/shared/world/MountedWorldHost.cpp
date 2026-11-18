@@ -1,6 +1,5 @@
-#include "HeadlessWorldMount.h"
+#include "MountedWorldHost.h"
 
-#include "HeadlessSceneLoadBoundary.h"
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Runtime/Scene/SceneCellPayloadCodec.h"
 #include "Horo/WorldStreaming/StreamingCellInspection.h"
@@ -8,15 +7,26 @@
 #include "Horo/WorldStreaming/StreamingSourcePlanner.h"
 #include "Horo/WorldStreaming/WorldArtifactErrors.h"
 #include "Horo/WorldStreaming/WorldDependencyArtifact.h"
+#include "ScenePhysicsHost.h"
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <initializer_list>
 #include <optional>
 #include <utility>
 
 namespace Horo::Application::Internal {
     namespace WS = WorldStreaming;
+
+    const ErrorCodeDescriptor MountedWorldErrors::Deadline{ErrorDomainId{"application.world"},
+                                                           ErrorCode{"application.world.startup_deadline"},
+                                                           ErrorSeverity::Error,
+                                                           "Mounted World startup deadline expired.",
+                                                           "Select a bounded starting cell and restart Play.",
+                                                           false,
+                                                           false,
+                                                           {}};
 
     namespace {
         constexpr std::uint32_t MaximumCells = 4096;
@@ -116,11 +126,11 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Shared cold load cancellation/deadline check before touching the private Scene. */
-        Result<void> CheckBoundary(const HeadlessSceneLoadBoundary &boundary) {
+        Result<void> CheckBoundary(const MountedWorldStartup &boundary) {
             if (boundary.cancellation.IsCancellationRequested())
-                return Result<void>::Failure(MakeError(HeadlessSceneLoadErrors::Cancelled));
+                return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Cancelled));
             if (std::chrono::steady_clock::now() >= boundary.deadline)
-                return Result<void>::Failure(MakeError(HeadlessSceneLoadErrors::Deadline));
+                return Result<void>::Failure(MakeError(MountedWorldErrors::Deadline));
             return Result<void>::Success();
         }
 
@@ -128,7 +138,7 @@ namespace Horo::Application::Internal {
         Result<WS::StreamingSourceRegistration> PlanInitialCell(WS::StreamingSourcePlanner &planner,
                                                                 const WS::WorldPartitionRegistrySnapshot &partition,
                                                                 const WS::WorldPartitionCellHandle &cell,
-                                                                const HeadlessSceneLoadBoundary &boundary) {
+                                                                const MountedWorldStartup &boundary) {
             using Output = Result<WS::StreamingSourceRegistration>;
             const auto bounds = partition.CellBounds(cell);
             if (bounds.HasError())
@@ -225,8 +235,7 @@ namespace Horo::Application::Internal {
 
             const auto fail = [&](const Error &error) -> Result<void> {
                 const auto code = error.code.Value();
-                const bool cancelled = code == HeadlessSceneLoadErrors::Cancelled.code.Value() ||
-                                       code == Runtime::SceneCellPayloadErrors::Cancelled.code.Value() ||
+                const bool cancelled = code == Runtime::SceneCellPayloadErrors::Cancelled.code.Value() ||
                                        code == WS::WorldArtifactErrors::Cancelled.code.Value();
                 auto current = scheduler.Inspect(reservation);
                 if (current.HasError())
@@ -362,7 +371,58 @@ namespace Horo::Application::Internal {
         }
     }  // namespace
 
-    struct HeadlessWorldMount::State final {
+    /** @copydoc ParseCommittedWorldSelection */
+    Result<CommittedWorldSelection> ParseCommittedWorldSelection(const std::span<char *const> arguments) {
+        using Output = Result<CommittedWorldSelection>;
+        if (arguments.size() != CommittedWorldSelectionArgumentCount)
+            return Output::Failure(MakeError(WS::WorldArtifactErrors::Invalid,
+                                             "Select a World cook root, target, manifest digest, index and dependency "
+                                             "artifact IDs, and three origin coordinates."));
+        auto root = ParseSceneHostAbsolutePath(arguments[0]);
+        auto target = Assets::AssetCookTargetId::Parse(arguments[1]);
+        auto manifest = ParseSha256(arguments[2]);
+        auto index = Assets::AssetId::Parse(arguments[3]);
+        auto dependencies = Assets::AssetId::Parse(arguments[4]);
+        if (root.HasError() || target.HasError() || manifest.HasError() || index.HasError() || dependencies.HasError() ||
+            index.Value() == dependencies.Value() || !index.Value().IsValid() || !dependencies.Value().IsValid())
+            return Output::Failure(MakeError(WS::WorldArtifactErrors::Invalid,
+                                             "World mount root, target, manifest digest or artifact identities are invalid."));
+        std::array<std::int64_t, 3> mm{};
+        for (std::size_t axis = 0; axis < mm.size(); ++axis) {
+            const std::string_view value{arguments[axis + 5]};
+            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), mm[axis]);
+            if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size())
+                return Output::Failure(MakeError(WS::WorldArtifactErrors::Invalid, "World origin must use signed integer millimeters."));
+        }
+        return Output::Success({std::move(root).Value(), std::move(target).Value(), manifest.Value(), index.Value(), dependencies.Value(),
+                                Math::WorldCoordinate64::FromMillimeters(mm[0], mm[1], mm[2])});
+    }
+
+    /** @copydoc ParseCommittedWorldInitialCell */
+    Result<CommittedWorldInitialCell> ParseCommittedWorldInitialCell(const std::span<char *const> arguments) {
+        using Output = Result<CommittedWorldInitialCell>;
+        if (arguments.size() != CommittedWorldCellArgumentCount)
+            return Output::Failure(
+                MakeError(WS::WorldArtifactErrors::Invalid, "Select exactly the World startup cell, occurrence, definition and revision."));
+        const auto parse = [](const std::string_view value, auto &number) {
+            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), number);
+            return parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size();
+        };
+        CommittedWorldInitialCell source;
+        std::uint16_t layer{};
+        if (!parse(arguments[0], source.cell.x) || !parse(arguments[1], source.cell.y) || !parse(arguments[2], source.cell.z) ||
+            !parse(arguments[3], source.cell.lod) || !parse(arguments[4], layer) || !parse(arguments[5], source.occurrence.value) ||
+            !parse(arguments[6], source.definition.value) || !parse(arguments[7], source.revision.value) || !source.occurrence.IsValid() ||
+            !source.definition.IsValid() || source.revision.value == 0)
+            return Output::Failure(MakeError(WS::WorldArtifactErrors::Invalid, "Invalid World startup cell or Scene identity."));
+        const auto typedLayer = WS::StreamingLayerId::Create(layer);
+        if (typedLayer.HasError())
+            return Output::Failure(typedLayer.ErrorValue());
+        source.cell.layer = typedLayer.Value();
+        return Output::Success(source);
+    }
+
+    struct MountedWorld::State final {
         explicit State(Runtime::RuntimeSceneService &scene) noexcept : scene(scene) {}
 
         Runtime::RuntimeSceneService &scene;
@@ -387,13 +447,11 @@ namespace Horo::Application::Internal {
         bool initialAttempted{};
     };
 
-    /** @copydoc HeadlessWorldMount::Prepare */
-    Result<std::unique_ptr<HeadlessWorldMount>> HeadlessWorldMount::Prepare(const DurableFileSystem &files,
-                                                                            const HeadlessWorldSelection &selection,
-                                                                            const std::uint64_t generation,
-                                                                            Runtime::RuntimeSceneService &scene,
-                                                                            const CancellationToken &cancellation) {
-        using Output = Result<std::unique_ptr<HeadlessWorldMount>>;
+    /** @copydoc MountedWorld::Prepare */
+    Result<std::unique_ptr<MountedWorld>> MountedWorld::Prepare(const DurableFileSystem &files, const CommittedWorldSelection &selection,
+                                                                const std::uint64_t generation, Runtime::RuntimeSceneService &scene,
+                                                                const CancellationToken &cancellation) {
+        using Output = Result<std::unique_ptr<MountedWorld>>;
         if (generation == 0 || !selection.targetRoot.is_absolute() || !selection.target.IsValid() || !selection.index.IsValid() ||
             !selection.dependencies.IsValid() || selection.index == selection.dependencies)
             return Output::Failure(MakeError(WS::WorldArtifactErrors::Invalid));
@@ -482,12 +540,11 @@ namespace Horo::Application::Internal {
         if (composition.HasError())
             return Output::Failure(composition.ErrorValue());
         state->composition.emplace(std::move(composition).Value());
-        return Output::Success(std::unique_ptr<HeadlessWorldMount>{new HeadlessWorldMount{std::move(state)}});
+        return Output::Success(std::unique_ptr<MountedWorld>{new MountedWorld{std::move(state)}});
     }
 
-    /** @copydoc HeadlessWorldMount::ActivateInitialCell */
-    Result<void> HeadlessWorldMount::ActivateInitialCell(const HeadlessWorldInitialCell &selected,
-                                                         const HeadlessSceneLoadBoundary &boundary) {
+    /** @copydoc MountedWorld::ActivateInitialCell */
+    Result<void> MountedWorld::ActivateInitialCell(const CommittedWorldInitialCell &selected, const MountedWorldStartup &boundary) {
         if (auto ready = CheckBoundary(boundary); ready.HasError())
             return ready;
         const auto parent = state_->scene.ActiveScene();
@@ -601,8 +658,8 @@ namespace Horo::Application::Internal {
         return Result<void>::Success();
     }
 
-    /** @copydoc HeadlessWorldMount::Anchors */
-    std::span<const Runtime::SceneCellWorldAnchor> HeadlessWorldMount::Anchors(const Runtime::RuntimeSceneView &parent) const noexcept {
+    /** @copydoc MountedWorld::Anchors */
+    std::span<const Runtime::SceneCellWorldAnchor> MountedWorld::Anchors(const Runtime::RuntimeSceneView &parent) const noexcept {
         if (!parent.IsCurrent() || !state_->activeCell)
             return {};
         const auto current = state_->scene.ActiveScene();
@@ -613,13 +670,13 @@ namespace Horo::Application::Internal {
         return active.anchors;
     }
 
-    /** @copydoc HeadlessWorldMount::CaptureGeometry */
-    Result<HeadlessWorldRenderPacket> HeadlessWorldMount::CaptureGeometry(const Runtime::RuntimeSceneView &parent,
-                                                                          const Runtime::SceneObjectId camera,
-                                                                          const std::span<const Runtime::SceneObjectId> meshes,
-                                                                          Runtime::PrimitiveMeshCache &primitives,
-                                                                          Render::RenderOriginSceneAdapter &renderer) const {
-        using Output = Result<HeadlessWorldRenderPacket>;
+    /** @copydoc MountedWorld::CaptureGeometry */
+    Result<MountedWorldRenderPacket> MountedWorld::CaptureGeometry(const Runtime::RuntimeSceneView &parent,
+                                                                   const Runtime::SceneObjectId camera,
+                                                                   const std::span<const Runtime::SceneObjectId> meshes,
+                                                                   Runtime::PrimitiveMeshCache &primitives,
+                                                                   Render::RenderOriginSceneAdapter &renderer) const {
+        using Output = Result<MountedWorldRenderPacket>;
         constexpr std::size_t MaximumSelectedMeshes = 64;
         if (meshes.size() > MaximumSelectedMeshes)
             return Output::Failure(MakeError(WS::WorldArtifactErrors::CapacityExceeded));
@@ -688,30 +745,30 @@ namespace Horo::Application::Internal {
         auto frame = renderer.Capture({originCamera.Value(), instances, {}, parent.RuntimeId().value});
         if (frame.HasError())
             return Output::Failure(frame.ErrorValue());
-        return Output::Success(HeadlessWorldRenderPacket{parent, std::move(frame).Value(), std::move(leases), std::move(resources)});
+        return Output::Success(MountedWorldRenderPacket{parent, std::move(frame).Value(), std::move(leases), std::move(resources)});
     }
 
-    HeadlessWorldRenderPacket::HeadlessWorldRenderPacket(Runtime::RuntimeSceneView parent, Render::RenderOriginFrame frame,
-                                                         std::vector<Runtime::PrimitiveMeshLease> leases,
-                                                         std::vector<Render::RenderMeshResourceView> resources) noexcept
+    MountedWorldRenderPacket::MountedWorldRenderPacket(Runtime::RuntimeSceneView parent, Render::RenderOriginFrame frame,
+                                                       std::vector<Runtime::PrimitiveMeshLease> leases,
+                                                       std::vector<Render::RenderMeshResourceView> resources) noexcept
         : parent_(std::move(parent)), frame_(std::move(frame)), leases_(std::move(leases)), resources_(std::move(resources)) {}
 
-    /** @copydoc HeadlessWorldRenderPacket::Scene */
-    Result<Render::RenderSceneView> HeadlessWorldRenderPacket::Scene() const {
+    /** @copydoc MountedWorldRenderPacket::Scene */
+    Result<Render::RenderSceneView> MountedWorldRenderPacket::Scene() const {
         if (!parent_.IsCurrent())
             return Result<Render::RenderSceneView>::Failure(MakeError(WS::WorldArtifactErrors::Stale));
         return frame_.Scene(resources_);
     }
 
-    HeadlessWorldMount::HeadlessWorldMount(std::unique_ptr<State> state) noexcept : state_(std::move(state)) {}
+    MountedWorld::MountedWorld(std::unique_ptr<State> state) noexcept : state_(std::move(state)) {}
 
-    /** @copydoc HeadlessWorldMount::Origin */
-    const WS::OriginFrameOwner &HeadlessWorldMount::Origin() const noexcept {
+    /** @copydoc MountedWorld::Origin */
+    const WS::OriginFrameOwner &MountedWorld::Origin() const noexcept {
         return *state_->composition->Origin();
     }
 
-    /** @copydoc HeadlessWorldMount::~HeadlessWorldMount */
-    HeadlessWorldMount::~HeadlessWorldMount() {
+    /** @copydoc MountedWorld::~MountedWorld */
+    MountedWorld::~MountedWorld() {
         if (state_->activeCell) {
             using enum WS::StreamingCellOperationTransition;
             const auto &fence = state_->activeCell->fence;

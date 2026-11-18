@@ -43,6 +43,7 @@
 #include "Horo/Extensions/EditorSurfaceContext.h"
 #include "Horo/Gameplay/GameModuleRetirement.h"
 #include "Horo/Physics/PhysicsErrors.h"
+#include "Horo/WorldStreaming/WorldArtifactErrors.h"
 #include "ScenePhysicsHost.h"
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
 #include "EditorSurfaceLifecycleQualification.h"
@@ -349,6 +350,8 @@ namespace Horo::Editor {
             std::string cookTarget;
             bool cookOptionsValid{true};
             std::optional<Assets::AssetId> playNavigationScene;
+            std::optional<Application::Internal::CommittedWorldSelection> playWorld;
+            std::optional<Error> playWorldError;
             bool playNavigationSceneValid{true};
             std::optional<Render::DirectionalShadowProfile> directionalShadows;
             std::optional<EditorViewportLightingProfile> lighting;
@@ -837,10 +840,28 @@ namespace Horo::Editor {
             return std::string_view{value} == "--xr-simulator";
         });
         PendingEditorOption pending = None;
-        for (const char *rawArgument : args.subspan(std::min<std::size_t>(1, args.size()))) {
-            const std::string_view argument{rawArgument};
-            if (!ConsumeEditorOptionValue(argument, pending, opts))
+        for (std::size_t index = 1; index < args.size(); ++index) {
+            const std::string_view argument{args[index]};
+            if (ConsumeEditorOptionValue(argument, pending, opts))
+                continue;
+            if (argument != "--play-world-mount") {
                 ApplyEditorOptionFlag(argument, pending, opts);
+                continue;
+            }
+            using namespace Application::Internal;
+            if (opts.playWorld || args.size() - index <= CommittedWorldSelectionArgumentCount) {
+                opts.playWorldError = MakeError(WorldStreaming::WorldArtifactErrors::Invalid,
+                                                "Use --play-world-mount <root> <target> <manifest SHA-256> <index AssetId> <dependency "
+                                                "AssetId> <x-mm> <y-mm> <z-mm> once.");
+                break;
+            }
+            auto selected = ParseCommittedWorldSelection(args.subspan(index + 1, CommittedWorldSelectionArgumentCount));
+            if (selected.HasError()) {
+                opts.playWorldError = selected.ErrorValue();
+                break;
+            }
+            opts.playWorld.emplace(std::move(selected).Value());
+            index += CommittedWorldSelectionArgumentCount;
         }
         if (pending == FrameRateLimit)
             opts.frameRateLimit = 1001;
@@ -912,6 +933,13 @@ namespace Horo::Editor {
 
         [[nodiscard]] int RelaunchEditorForProject(const char *executable, const EditorRendererRestartRequest &request,
                                                    const EditorGuiOptions &options) {
+            if (options.playWorld) {
+                const auto error = MakeError(WorldStreaming::WorldArtifactErrors::Unsupported,
+                                             "Restart with the same explicitly authorized project and committed World selection to "
+                                             "preserve mounted World Play.");
+                std::fprintf(stderr, "[%s/%s] %s\n", error.domain.Value().c_str(), error.code.Value().c_str(), error.message.c_str());
+                return 1;
+            }
             if (options.color.root || options.color.lookRoot || options.color.settingsRequested || options.lightingRoot) {
                 const auto error = MakeError(Render::ColorPipelineErrors::IncompatibleInput,
                                              "Project restart would replace an explicitly requested color/lighting profile. Start the "
@@ -3368,6 +3396,8 @@ namespace Horo::Editor {
             Runtime::RuntimeSceneService *runtimeSceneService = runtimeScene.get();
             auto playPolicy = scenePolicy;
             playPolicy.playNavigationScene = p.options.playNavigationScene;
+            if (p.options.playWorld)
+                playPolicy.world.emplace(Application::Internal::EditorPlayWorldSelection{previewProjectRoot, *p.options.playWorld});
             playPolicy.aiSettings.missingController = AI::AiMissingControllerPolicy::Reject;
             Application::Internal::ConfigureEditorPlaySavePolicy(playPolicy, p.background.jobs, p.operationServices.operationStore, clock,
                                                                  wallClock);
@@ -3606,6 +3636,12 @@ namespace Horo::Editor {
 
     /** @brief Validates explicit application Physics selection before project/native frontend creation. */
     [[nodiscard]] static bool ValidateEditorPhysicsOptions(const EditorGuiOptions &options) {
+        if (options.playWorldError || (options.playWorld && options.projectRoot.empty())) {
+            LOG_CRITICAL("editor.runtime", "%s",
+                         options.playWorldError ? options.playWorldError->message.c_str()
+                                                : "Mounted World Play requires an explicit --project root.");
+            return false;
+        }
         if (!options.playNavigationSceneValid ||
             (options.playNavigationScene && (options.projectRoot.empty() || options.cookedRoot.empty()))) {
             LOG_CRITICAL("editor.runtime",

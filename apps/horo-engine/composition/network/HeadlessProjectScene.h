@@ -7,11 +7,11 @@
 #include "CommittedSceneAssets.h"
 #include "HeadlessNetworkServices.h"
 #include "HeadlessPerceptionPolicy.h"
-#include "HeadlessWorldMount.h"
 #include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Platform/ProjectReadFiles.h"
 #include "Horo/Scene/SceneSource.h"
+#include "MountedWorldHost.h"
 
 namespace Horo::Application::Internal {
     enum class HeadlessNavigationMode : std::uint8_t {
@@ -29,8 +29,8 @@ namespace Horo::Application::Internal {
         std::chrono::milliseconds loadTimeout{30'000};
         std::string publicationNamespace; /**< Empty preserves read-only hosts; explicit derived output selected by the application. */
         HeadlessNavigationMode navigationMode{HeadlessNavigationMode::Disabled};
-        std::optional<HeadlessWorldSelection> world; /**< Explicit independent committed World selection. */
-        std::string perceptionPolicyPath;            /**< Explicit project-relative source for one selected committed Scene. */
+        std::optional<CommittedWorldSelection> world; /**< Explicit independent committed World selection. */
+        std::string perceptionPolicyPath;             /**< Explicit project-relative source for one selected committed Scene. */
     };
 
     /** @brief Owns all borrowed assets/jobs/project captures until every world service has retired.

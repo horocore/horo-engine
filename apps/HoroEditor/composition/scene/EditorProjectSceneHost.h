@@ -9,6 +9,7 @@
 #include "EditorPlayXrHost.h"
 #include "Horo/AI/AISceneActivation.h"
 #include "Horo/Prefab/PrefabMetrics.h"
+#include "MountedWorldHost.h"
 #include "SceneAnimationHostSelection.h"
 #include "ScenePhysicsHost.h"
 
@@ -16,6 +17,12 @@
 
 namespace Horo::Application::Internal {
     class RuntimeUiPaintProjectSources;
+
+    /** @brief An explicit committed World startup bound to one authorized native project root. */
+    struct EditorPlayWorldSelection final {
+        std::filesystem::path projectRoot;
+        CommittedWorldSelection committed;
+    };
 
     /** @brief Application policy captured before workspace creation; no backend inference or fallback. */
     struct EditorProjectScenePolicy final {
@@ -33,7 +40,14 @@ namespace Horo::Application::Internal {
         std::optional<Assets::AssetId> playNavigationScene; /**< Exact selected committed Scene UUID for Play-only Detour startup. */
         std::optional<Physics::PhysicsWorldSettings> physicsSettings; /**< Captured host override, never inferred from current occupancy.
             Canonical Save setup installs its explicit bounded default only when this field is absent. */
+        std::optional<EditorPlayWorldSelection> world;                /**< Play-only mount, scoped to its launch project. */
     };
+
+    /** @brief Observes the exact committed World origin through a ready Editor Play Scene owner.
+     * @param host Live product Scene host on its owning lane.
+     * @return Revocable generation lease or absence before publication and after shutdown.
+     */
+    [[nodiscard]] std::optional<WorldStreaming::OriginFrameLease> ObserveEditorPlayMountedWorld(const Editor::EditorPlaySceneHost &host);
 
     /** @brief Selects the native user-state root and real entropy explicitly at application startup; preserves original errors for Manager.
      */

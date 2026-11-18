@@ -31,8 +31,8 @@ namespace Horo::Vfx {
 namespace Horo::Application::Internal {
     struct ProjectSceneNavigationSelection;
     struct HeadlessPerceptionPolicy;
-    struct HeadlessWorldSelection;
-    class HeadlessWorldRenderPacket;
+    struct CommittedWorldSelection;
+    class MountedWorldRenderPacket;
 
     /** @brief Selects the sole descriptor authority for an authored Perception policy. */
     enum class HeadlessPerceptionProvider {
@@ -102,7 +102,7 @@ namespace Horo::Application::Internal {
             perceptionExecution; /**< Frozen native producer and explicit authoritative spatial execution policy. */
         std::optional<HeadlessPerceptionProjectAdmission>
             perceptionProject; /**< Explicit project-backed endpoint and coordinate policy for the selected cooked definition. */
-        std::shared_ptr<const HeadlessWorldSelection> mountedWorld; /**< Optional exact standalone World cook selection. */
+        std::shared_ptr<const CommittedWorldSelection> mountedWorld; /**< Optional exact standalone World cook selection. */
     };
 
     /** @brief Composes actual project Scene services and their sole aggregate-owned Physics/Character pair.
@@ -153,13 +153,13 @@ namespace Horo::Application::Internal {
      * @param meshes Required mounted procedural object identities in ascending order.
      * @param primitives Existing CPU primitive cache.
      * @param renderer Exact mounted World's portable renderer adapter.
-     * @return Owned packet or typed failure. The private HeadlessWorldMount header defines the owning packet type.
+     * @return Owned packet or typed failure. The private MountedWorld header defines the owning packet type.
      */
-    [[nodiscard]] Result<HeadlessWorldRenderPacket> CaptureHeadlessWorldRenderGeometry(const Network::INetworkModeService &service,
-                                                                                       Runtime::SceneObjectId camera,
-                                                                                       std::span<const Runtime::SceneObjectId> meshes,
-                                                                                       Runtime::PrimitiveMeshCache &primitives,
-                                                                                       Render::RenderOriginSceneAdapter &renderer);
+    [[nodiscard]] Result<MountedWorldRenderPacket> CaptureHeadlessWorldRenderGeometry(const Network::INetworkModeService &service,
+                                                                                      Runtime::SceneObjectId camera,
+                                                                                      std::span<const Runtime::SceneObjectId> meshes,
+                                                                                      Runtime::PrimitiveMeshCache &primitives,
+                                                                                      Render::RenderOriginSceneAdapter &renderer);
 
     /** @brief Reads the already-bound native path scope on its owner lane, when explicitly selected. */
     [[nodiscard]] std::shared_ptr<const Gameplay::GameplayNavigationContext> InspectHeadlessNavigationContext(

@@ -4,7 +4,6 @@
  */
 #include "HeadlessNavigationPathScope.h"
 #include "HeadlessNetworkServices.h"
-#include "HeadlessWorldMount.h"
 #include "Horo/AI/PerceptionSpatialBroadphase.h"
 #include "Horo/Gameplay/GameplayVfxScene.h"
 #include "Horo/Network/NetworkErrors.h"
@@ -12,6 +11,7 @@
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Physics/PhysicsWorld.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
+#include "MountedWorldHost.h"
 #include "PhysicsStateHostLifecycle.h"
 #include "ProjectSceneNavigationComposition.h"
 
@@ -51,7 +51,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             preparedGameplay;                                        /**< Retained through metadata qualification and scoped activation. */
         std::vector<AI::AiControllerDescriptor> admittedControllers; /**< Outlives the Scene participant's immutable borrow. */
         std::unique_ptr<Runtime::RuntimeSceneService> scenes;
-        std::unique_ptr<HeadlessWorldMount> mountedWorld;          /**< Retires before the Scene service it binds. */
+        std::unique_ptr<MountedWorld> mountedWorld;                /**< Retires before the Scene service it binds. */
         std::unique_ptr<Prefab::PrefabTemplateProvider> templates; /**< Retired before Scene, borrowing its real loader. */
     };
 

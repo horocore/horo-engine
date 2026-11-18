@@ -2232,3 +2232,19 @@ and unsupported providers reject startup before mode publication.
 
 Archive installation, ongoing gameplay-driven scheduling, multi-cell activation,
 gameplay focal positions and XR view projection require separate host composition.
+
+### Editor Play committed World ingress
+
+`HoroEditor --project <root> --play-world-mount <cook-root> <cook-target>
+<manifest-sha256> <index-asset-id> <dependency-asset-id> <x-mm> <y-mm> <z-mm>`
+selects a committed World for the exact startup project. The Play Scene owner
+uses the same mounted World adapter and shared typed option parser as standalone.
+A failed manifest or project check prevents Scene publication for that Play
+attempt. The canonical origin is readable after the selected Scene publishes
+and its leases expire when Play ends. Preview, prefab authoring and ordinary
+Play without this selection keep independent Scene ownership.
+
+The Editor currently admits an origin mount alongside desktop Play. Startup
+cell attachment, Navigation, XR and Save require their canonical World
+composition. The ordinary viewport has no authority to draw a mounted cell's
+global geometry using legacy local translations.

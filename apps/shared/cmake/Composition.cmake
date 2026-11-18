@@ -81,6 +81,17 @@ target_include_directories(HoroScenePhysicsHost PUBLIC "${HORO_SCENE_PHYSICS_HOS
 target_link_libraries(HoroScenePhysicsHost PUBLIC HoroPhysicsSceneHostInternal HoroEngine::SceneCook HoroEngine::Assets
         HoroEngine::ProjectPhysicsCapture)
 
+# The installed standalone and Editor Play hosts share a canonical mounted-World adapter.
+set(HORO_MOUNTED_WORLD_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/mounted_world_host_headers")
+file(MAKE_DIRECTORY "${HORO_MOUNTED_WORLD_HOST_HEADERS}")
+configure_file(shared/world/MountedWorldHost.h "${HORO_MOUNTED_WORLD_HOST_HEADERS}/MountedWorldHost.h" COPYONLY)
+add_library(HoroMountedWorldHostInternal STATIC shared/world/MountedWorldHost.cpp)
+target_compile_features(HoroMountedWorldHostInternal PUBLIC cxx_std_20)
+target_include_directories(HoroMountedWorldHostInternal PUBLIC "${HORO_MOUNTED_WORLD_HOST_HEADERS}")
+target_link_libraries(HoroMountedWorldHostInternal
+    PUBLIC HoroEngine::SceneRenderExtraction HoroEngine::WorldStreaming HoroEngine::RuntimeScene HoroEngine::Assets
+    PRIVATE HoroEngine::SceneCellPayload HoroScenePhysicsHost)
+
 set(HORO_PROJECT_NAVIGATION_SCENE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/project_navigation_scene_headers")
 file(GENERATE OUTPUT "${HORO_PROJECT_NAVIGATION_SCENE_HEADERS}/ProjectSceneNavigationComposition.h"
     CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/shared/navigation/ProjectSceneNavigationComposition.h\"\n")

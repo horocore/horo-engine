@@ -65,13 +65,13 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         }
 
         /** @brief Captures only geometry from the exact active mounted Scene service on this lane. */
-        Result<HeadlessWorldRenderPacket> CaptureWorldRenderGeometry(const Runtime::SceneObjectId camera,
-                                                                     std::span<const Runtime::SceneObjectId> meshes,
-                                                                     Runtime::PrimitiveMeshCache &primitives,
-                                                                     Render::RenderOriginSceneAdapter &renderer) const {
+        Result<MountedWorldRenderPacket> CaptureWorldRenderGeometry(const Runtime::SceneObjectId camera,
+                                                                    std::span<const Runtime::SceneObjectId> meshes,
+                                                                    Runtime::PrimitiveMeshCache &primitives,
+                                                                    Render::RenderOriginSceneAdapter &renderer) const {
             const auto scene = ActiveScene();
             if (!scene || request_.service != Network::NetworkModeServiceKind::Scene || !record_->mountedWorld)
-                return Result<HeadlessWorldRenderPacket>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
+                return Result<MountedWorldRenderPacket>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
             return record_->mountedWorld->CaptureGeometry(*scene, camera, meshes, primitives, renderer);
         }
 
@@ -316,14 +316,15 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                     MakeError(Network::NetworkErrors::NetworkModeInvalid, "Committed World mounting requires standalone authority."));
             if (std::chrono::steady_clock::now() >= input.load.deadline)
                 return Result<void>::Failure(MakeError(HeadlessSceneLoadErrors::Deadline));
-            auto world = HeadlessWorldMount::Prepare(NativeDurableFileSystem{}, *input.mountedWorld, record_->generation, *record_->scenes,
-                                                     record_->sceneCancellation);
+            auto world = MountedWorld::Prepare(NativeDurableFileSystem{}, *input.mountedWorld, record_->generation, *record_->scenes,
+                                               record_->sceneCancellation);
             if (world.HasError())
                 return Result<void>::Failure(world.ErrorValue());
             if (std::chrono::steady_clock::now() >= input.load.deadline)
                 return Result<void>::Failure(MakeError(HeadlessSceneLoadErrors::Deadline));
             if (input.mountedWorld->initialCell) {
-                const auto activated = world.Value()->ActivateInitialCell(*input.mountedWorld->initialCell, input.load);
+                const auto activated =
+                    world.Value()->ActivateInitialCell(*input.mountedWorld->initialCell, {input.load.cancellation, input.load.deadline});
                 if (activated.HasError())
                     return activated;
             }
