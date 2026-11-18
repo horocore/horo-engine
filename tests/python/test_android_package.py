@@ -95,6 +95,40 @@ class AndroidPackageTests(unittest.TestCase):
                        "org.jetbrains.kotlin:kotlin-stdlib:1.8.22", "org.jetbrains.kotlinx:kotlinx-coroutines-bom:1.6.4"):
             self.assertIn(module + "=debugRuntimeClasspath,releaseRuntimeClasspath", lock)
 
+    def test_dependency_resolution_retries_throttling_and_preserves_logs(self):
+        log = self.root / "java-dependencies.log"
+        responses = iter(("Received status code 429 from server: Too Many Requests", "BUILD SUCCESSFUL"))
+
+        def gradle(command, directory, output):
+            self.assertEqual(command[-1], "writeDependencyProvenance")
+            self.assertEqual(directory, self.root)
+            response = next(responses)
+            output.write_text(response, encoding="utf-8")
+            if "429" in response:
+                raise android_package.AndroidCommandFailed("dependency download failed")
+
+        with patch.object(android_package, "android_run", side_effect=gradle) as run, patch.object(
+                android_package.time, "sleep") as sleep:
+            android_package.resolve_java_dependencies(self.root / "gradle", self.root, log)
+        self.assertEqual(run.call_count, 2)
+        sleep.assert_called_once_with(20)
+        self.assertEqual(log.read_text(encoding="utf-8"), "BUILD SUCCESSFUL")
+        self.assertIn("429", (self.root / "java-dependencies-attempt-1.log").read_text(encoding="utf-8"))
+
+    def test_dependency_resolution_fails_immediately_for_lock_error(self):
+        log = self.root / "java-dependencies.log"
+
+        def gradle(_command, _directory, output):
+            output.write_text("Dependency lock state does not match", encoding="utf-8")
+            raise android_package.AndroidCommandFailed("dependency lock error")
+
+        with patch.object(android_package, "android_run", side_effect=gradle) as run, patch.object(
+                android_package.time, "sleep") as sleep, self.assertRaisesRegex(AndroidError, "dependency lock error"):
+            android_package.resolve_java_dependencies(self.root / "gradle", self.root, log)
+        run.assert_called_once()
+        sleep.assert_not_called()
+        self.assertEqual(log.read_text(encoding="utf-8"), "Dependency lock state does not match")
+
     def test_vulkan_development_profile_preserves_declared_effective_constraints(self):
         _, profile = load_contract("qualification-vulkan-development", ["arm64-v8a", "x86_64"])
         self.assertEqual(profile["renderer"], "vulkan-android")

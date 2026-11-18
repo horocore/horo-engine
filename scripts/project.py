@@ -19,6 +19,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 import zipfile
 
@@ -32,6 +33,10 @@ MAXIMUM_FILE = 256 * 1024 * 1024
 # D203 and D211 conflict; retain the PEP-257 no-blank class docstring style.
 class AndroidError(ValueError):  # noqa: D203
     """Actionable Android preflight or assembly failure."""
+
+
+class AndroidCommandFailed(AndroidError):  # noqa: D203
+    """An admitted command ran to completion and reported failure."""
 
 
 def bounded_bytes(path: Path, maximum: int = MAXIMUM_FILE) -> bytes:
@@ -205,7 +210,27 @@ def android_run(command: list[str], directory: Path, log: Path, timeout: int = 1
             process.wait()
             raise AndroidError(f"Android command timed out; inspect {log.name} and retry explicitly.") from error
     if return_code:
-        raise AndroidError(f"Android command failed ({return_code}); inspect {log.name}.")
+        raise AndroidCommandFailed(f"Android command failed ({return_code}); inspect {log.name}.")
+
+
+def resolve_java_dependencies(gradle: Path, stage: Path, log: Path) -> None:
+    """Retry observed repository throttling while preserving each attempt's log."""
+    command = [str(gradle.resolve()), "--no-daemon", "--console=plain", "writeDependencyProvenance"]
+    delays = (20, 60)
+    for attempt, delay in enumerate(delays, start=1):
+        try:
+            android_run(command, stage, log)
+            return
+        except AndroidCommandFailed:
+            with log.open("rb") as output:
+                output.seek(max(0, log.stat().st_size - 65536))
+                throttled = b"Received status code 429 from server: Too Many Requests" in output.read(65536)
+            if not throttled:
+                raise
+            log.replace(log.with_name(f"{log.stem}-attempt-{attempt}{log.suffix}"))
+            print(f"Android Java dependency repository rate limited the request. Retrying in {delay} seconds.", file=sys.stderr)
+            time.sleep(delay)
+    android_run(command, stage, log)
 
 
 def version_output(command: list[str]) -> str:
@@ -659,8 +684,7 @@ def assemble(arguments: argparse.Namespace) -> None:
     apk_write_project(stage, tools, profile, arguments.abi, arguments.game_activity)
     os.environ["ANDROID_HOME"] = str(arguments.sdk.resolve())
     os.environ["SOURCE_DATE_EPOCH"] = "315532800"
-    android_run([str(arguments.gradle.resolve()), "--no-daemon", "--console=plain", "writeDependencyProvenance"],
-        stage, workspace / "java-dependencies.log")
+    resolve_java_dependencies(arguments.gradle, stage, workspace / "java-dependencies.log")
     dependencies = stage / "assets/horo-java-dependencies.json"
     assets.append({"name": dependencies.name, "sha256": digest(dependencies), "size": dependencies.stat().st_size})
     evidence = provenance(tools, profile, native, assets)
