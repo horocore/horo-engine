@@ -23,11 +23,16 @@ namespace Horo::AI {
         constexpr std::uint64_t PointDistanceTest = LatticeProvider + 6;
         constexpr std::uint64_t DistanceRadius = LatticeProvider + 7;
         constexpr std::uint64_t DistancePreferNearer = LatticeProvider + 8;
+        constexpr std::uint64_t DistanceScoreWeight = LatticeProvider + 9;
 
         /** @brief Encodes only the native editable controls for one distance stage. */
         std::vector<QueryPropertyValue> DistanceProperties(const QueryPointDistanceTest settings) {
-            return {{QueryPropertyId::Create(DistanceRadius).Value(), std::uint64_t{settings.radiusMillimeters}},
-                    {QueryPropertyId::Create(DistancePreferNearer).Value(), settings.preferNearer}};
+            std::vector<QueryPropertyValue> properties{{QueryPropertyId::Create(DistanceRadius).Value(),
+                                                        std::uint64_t{settings.radiusMillimeters}},
+                                                       {QueryPropertyId::Create(DistancePreferNearer).Value(), settings.preferNearer}};
+            if (settings.scoreWeight != QueryPointDistanceTest{}.scoreWeight)
+                properties.push_back({QueryPropertyId::Create(DistanceScoreWeight).Value(), std::uint64_t{settings.scoreWeight}});
+            return properties;
         }
 
         /** @brief Native origin shared by the inert registration and its exact kernels. */
@@ -42,10 +47,11 @@ namespace Horo::AI {
         }
 
         /** @brief Projects an admitted unsigned source property without narrowing unchecked values. */
-        std::optional<std::uint32_t> UnsignedProperty(const QueryPlanStage &stage, const QueryPropertyId id) {
+        std::optional<std::uint32_t> UnsignedProperty(const QueryPlanStage &stage, const QueryPropertyId id,
+                                                      const std::optional<std::uint32_t> whenAbsent = {}) {
             const auto entry = std::ranges::find(stage.properties, id, &QueryPropertyValue::id);
             if (entry == stage.properties.end())
-                return {};
+                return whenAbsent;
             const auto *value = std::get_if<std::uint64_t>(&entry->value);
             if (!value || *value > std::numeric_limits<std::uint32_t>::max())
                 return {};
@@ -167,7 +173,8 @@ namespace Horo::AI {
             .inputItemVersion = LatticeVersion,
             .contexts = {{BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation), LatticeVersion}},
             .properties = {{QueryPropertyId::Create(DistanceRadius).Value(), QueryPropertyKind::Unsigned64, true},
-                           {QueryPropertyId::Create(DistancePreferNearer).Value(), QueryPropertyKind::Boolean, true}},
+                           {QueryPropertyId::Create(DistancePreferNearer).Value(), QueryPropertyKind::Boolean, true},
+                           {QueryPropertyId::Create(DistanceScoreWeight).Value(), QueryPropertyKind::Unsigned64, false}},
         }};
         return QuerySchemaRegistry::Capture({items, contexts, generators, tests});
     }
@@ -198,7 +205,7 @@ namespace Horo::AI {
     /** @copydoc AddBuiltinPointDistanceTest */
     Result<EnvironmentQueryAsset> AddBuiltinPointDistanceTest(const EnvironmentQueryAsset &lattice, QueryStageId stage,
                                                               QueryPointDistanceTest settings) {
-        if (!stage.IsValid() || settings.radiusMillimeters == 0 || lattice.Stages().size() != 1 ||
+        if (!stage.IsValid() || settings.radiusMillimeters == 0 || settings.scoreWeight == 0 || lattice.Stages().size() != 1 ||
             lattice.Stages().front().generator != QueryGeneratorId::Create(LatticeGenerator).Value() ||
             lattice.ResultSchema().itemType != QueryItemTypeId::Create(PointItem).Value())
             return Result<EnvironmentQueryAsset>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
@@ -286,18 +293,23 @@ namespace Horo::AI {
             !descriptor || descriptor->origin != BuiltinOrigin())
             return Captured::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
         const auto radius = UnsignedProperty(stage, QueryPropertyId::Create(DistanceRadius).Value());
+        const auto weight =
+            UnsignedProperty(stage, QueryPropertyId::Create(DistanceScoreWeight).Value(), QueryPointDistanceTest{}.scoreWeight);
         const auto scoring =
             std::ranges::find(stage.properties, QueryPropertyId::Create(DistancePreferNearer).Value(), &QueryPropertyValue::id);
-        if (!radius || *radius == 0 || scoring == stage.properties.end() || !std::holds_alternative<bool>(scoring->value))
+        if (!radius || *radius == 0 || !weight || *weight == 0 || scoring == stage.properties.end() ||
+            !std::holds_alternative<bool>(scoring->value))
             return Captured::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-        return Captured::Success(BuiltinPointDistanceQuery{stage.id, {*radius, std::get<bool>(scoring->value)}});
+        return Captured::Success(BuiltinPointDistanceQuery{stage.id, {*radius, std::get<bool>(scoring->value), *weight}});
     }
 
     /** @copydoc BuiltinPointDistanceQuery::Rule */
     QueryScoreRule BuiltinPointDistanceQuery::Rule() const {
         QueryScoreRule rule{.stage = stage_, .requiredFilterValue = true};
         if (settings_.preferNearer)
-            rule.score = QueryScoreRange{.maximum = settings_.radiusMillimeters / 1000.0, .direction = QueryScoreDirection::Lower};
+            rule.score = QueryScoreRange{.maximum = settings_.radiusMillimeters / 1000.0,
+                                         .weight = static_cast<double>(settings_.scoreWeight),
+                                         .direction = QueryScoreDirection::Lower};
         return rule;
     }
 

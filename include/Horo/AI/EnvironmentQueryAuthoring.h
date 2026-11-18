@@ -23,6 +23,7 @@ namespace Horo::AI {
     struct QueryPointDistanceTest final {
         std::uint32_t radiusMillimeters{};
         bool preferNearer{};
+        std::uint32_t scoreWeight{1}; /**< Positive relative weight when nearest-first scoring is enabled. */
     };
 
     /** @brief Existing distance stage and its editable controls, keyed by durable identity. */

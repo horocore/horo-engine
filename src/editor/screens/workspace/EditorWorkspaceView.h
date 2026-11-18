@@ -154,6 +154,7 @@ namespace Horo::Editor {
                 AI::QueryStageId stage;
                 std::uint64_t radius{};
                 bool preferNearer{};
+                std::uint64_t weight{};
             };
 
             EnvironmentQueryDocumentFence fence;

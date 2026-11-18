@@ -548,7 +548,7 @@ namespace Horo::Editor {
                       .widgetId = std::format("##EqsSettings/{}/{}", fence.instance.Value(), fence.revision)};
             fields.distances.reserve(current.distanceTests.size());
             for (const auto &entry : current.distanceTests)
-                fields.distances.push_back({entry.stage, entry.test.radiusMillimeters, entry.test.preferNearer});
+                fields.distances.push_back({entry.stage, entry.test.radiusMillimeters, entry.test.preferNearer, entry.test.scoreWeight});
         }
         ImGui::PushID(fields.widgetId.c_str());
         const auto number = [&](std::string_view label, const char *id, std::uint64_t &value) {
@@ -567,16 +567,20 @@ namespace Horo::Editor {
             number("workspace.environment_query.create_radius", "##radius", distance.radius);
             static_cast<void>(
                 Ui::CheckboxControl(text("workspace.environment_query.create_prefer_nearer").c_str(), &distance.preferNearer, fonts));
+            number("workspace.environment_query.score_weight", "##weight", distance.weight);
             ImGui::PopID();
         }
 
         constexpr auto maximum = std::numeric_limits<std::uint32_t>::max();
-        const bool distancesValid = std::ranges::all_of(fields.distances, [](const auto &distance) {
-            return distance.radius > 0 && distance.radius <= std::numeric_limits<std::uint32_t>::max();
+        const auto positiveUint32 = [](std::uint64_t value) {
+            return value > 0 && value <= maximum;
+        };
+        const bool distancesValid = std::ranges::all_of(fields.distances, [positiveUint32](const auto &distance) {
+            return positiveUint32(distance.radius) && positiveUint32(distance.weight);
         });
-        const bool valid = distancesValid && fields.step > 0 && fields.step <= maximum &&
-                           fields.outer <= AI::MaximumQueryLatticeOuterSteps && (!fields.annulus || fields.inner <= fields.outer) &&
-                           fields.maximum > 0 && fields.maximum <= AI::EnvironmentQuerySchemaLimits::MaximumResults;
+        const bool valid = distancesValid && positiveUint32(fields.step) && fields.outer <= AI::MaximumQueryLatticeOuterSteps &&
+                           (!fields.annulus || fields.inner <= fields.outer) && fields.maximum > 0 &&
+                           fields.maximum <= AI::EnvironmentQuerySchemaLimits::MaximumResults;
         const auto button = [&](std::string_view key, bool enabled) {
             return Ui::Button({.label = text(key).c_str(), .enabled = enabled, .font = fonts.sans});
         };
@@ -587,7 +591,9 @@ namespace Horo::Editor {
                 changed.lattice.innerSteps = static_cast<std::uint32_t>(fields.inner);
             changed.distanceTests.reserve(fields.distances.size());
             for (const auto &distance : fields.distances)
-                changed.distanceTests.push_back({distance.stage, {static_cast<std::uint32_t>(distance.radius), distance.preferNearer}});
+                changed.distanceTests.push_back(
+                    {distance.stage,
+                     {static_cast<std::uint32_t>(distance.radius), distance.preferNearer, static_cast<std::uint32_t>(distance.weight)}});
             outCommand = MakeEnvironmentQueryEditCommand(document, Apply, changed);
         }
         if (button("workspace.decision_graph.edit_save", document.dirty))

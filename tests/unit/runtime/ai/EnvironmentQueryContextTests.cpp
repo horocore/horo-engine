@@ -146,7 +146,7 @@ namespace Horo::AI {
             const auto nearStage = MakeIdentity<QueryStageId>(5);
             const auto farStage = MakeIdentity<QueryStageId>(6);
             const auto near = AddBuiltinPointDistanceTest(query.Value(), nearStage, {100, true});
-            const auto far = AddBuiltinPointDistanceTest(query.Value(), farStage, {200, false});
+            const auto far = AddBuiltinPointDistanceTest(query.Value(), farStage, {200, false, 3});
             REQUIRE(near.HasValue());
             REQUIRE(far.HasValue());
             QueryAssetSource authored{.id = query.Value().Id(),
@@ -163,6 +163,8 @@ namespace Horo::AI {
             REQUIRE(settings.distanceTests.size() == 2);
             REQUIRE(settings.distanceTests[0].stage == nearStage);
             REQUIRE(settings.distanceTests[1].stage == farStage);
+            CHECK(settings.distanceTests[0].test.scoreWeight == 1);
+            CHECK(settings.distanceTests[1].test.scoreWeight == 3);
             settings.distanceTests[0].test.radiusMillimeters = 150;
             SECTION("edits keep source order, authored stage order and metadata") {
                 const auto edited = EditBuiltinPointQuerySettings(source.Value(), schema.Value(), settings);
@@ -174,11 +176,18 @@ namespace Horo::AI {
                 REQUIRE(saved.HasValue());
                 CHECK(saved.Value().distanceTests[0].test.radiusMillimeters == 150);
                 CHECK(saved.Value().distanceTests[1].test.radiusMillimeters == 200);
+                CHECK(saved.Value().distanceTests[1].test.scoreWeight == 3);
             }
             SECTION("reordered inputs cannot rebind edit control values to a different stage") {
                 std::swap(settings.distanceTests[0], settings.distanceTests[1]);
                 ExpectError(EditBuiltinPointQuerySettings(source.Value(), schema.Value(), settings),
                             AIErrors::EnvironmentQuerySchemaInvalid);
+            }
+            SECTION("a saved weight outside the supported integer range is rejected") {
+                authored.stages.front().properties.back().value = std::numeric_limits<std::uint64_t>::max();
+                const auto oversized = EnvironmentQueryAsset::Capture(authored);
+                REQUIRE(oversized.HasValue());
+                ExpectError(ReadBuiltinPointQuerySettings(oversized.Value(), schema.Value()), AIErrors::EnvironmentQuerySchemaInvalid);
             }
         }
 

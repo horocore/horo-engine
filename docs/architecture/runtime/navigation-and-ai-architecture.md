@@ -2321,6 +2321,11 @@ reads the corresponding `QueryPointDistanceStageSettings` entry by its
 so undo, redo and source publication preserve each stage and its authored order.
 Existing query files retain the same serialized layout.
 
+Each native distance stage can store a positive integer relative score weight.
+An omitted weight means `1` and keeps existing source payloads valid. The scorer
+normalizes enabled scoring stages by their total weight. A filter-only stage
+retains its weight for future edits and contributes only its filter result.
+
 1. **Pure Semantic Graph Assets**:
    - Persisted graph identity is established by typed assets: `BehaviorTreeAsset` (`.horo_bt`), `StateMachineAsset` (`.horo_sm`), and `UtilityAiAsset` (`.horo_utility`).
    - Assets contain only semantic topology: stable `GraphId`, `NodeId`, `PinId`, `PropertyId`, schema versions, node type identifiers, property bindings, and blackboard key bindings.

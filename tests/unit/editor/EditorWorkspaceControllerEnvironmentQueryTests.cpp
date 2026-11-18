@@ -251,7 +251,7 @@ TEST_CASE("Environment Query workspace previews the saved native lattice from an
         SECTION("one distance stage") {}
         SECTION("a second filter contributes independently to ranking and debug samples") {
             filterStage = QueryStageId::Create(13).Value();
-            const auto filtered = AddBuiltinPointDistanceTest(small.Value(), *filterStage, {1100, false});
+            const auto filtered = AddBuiltinPointDistanceTest(small.Value(), *filterStage, {1100, true, 3});
             REQUIRE(filtered.HasValue());
             QueryAssetSource authored{.id = scored.Value().Id(),
                                       .displayName = scored.Value().DisplayName(),
@@ -317,6 +317,8 @@ TEST_CASE("Environment Query workspace previews the saved native lattice from an
         CHECK(diagonalFilter.candidateIndex == 6);
         CHECK(diagonalFilter.score.stage == *filterStage);
         CHECK(diagonalFilter.score.status == QueryScoreStatus::Filtered);
+        CHECK(preview.stages[24].score.contribution == 0.25);
+        CHECK(preview.stages[25].score.contribution == 0.75);
         REQUIRE_FALSE(preview.winners.empty());
         CHECK(preview.winners.front().itemIndex == 12);
         CHECK(preview.winners.front().scoreKey == QueryScoringPlan::ScoreKeyScale);
@@ -410,6 +412,8 @@ TEST_CASE("Registered Query settings use shared history and tracked source publi
     const auto &document = documents.front();
     REQUIRE(document.settings);
     REQUIRE(document.settings->distanceTests.size() == 2);
+    CHECK(document.settings->distanceTests[0].test.scoreWeight == 1);
+    CHECK(document.settings->distanceTests[1].test.scoreWeight == 1);
     const auto original = document.query;
     const auto instance = document.identity.instance;
     using enum EnvironmentQueryEditAction;
@@ -425,8 +429,13 @@ TEST_CASE("Registered Query settings use shared history and tracked source publi
     CHECK_FALSE(document.canUndo);
     changed.lattice = {.stepMillimeters = 800, .outerSteps = 4, .innerSteps = 1};
     changed.maximumResults = 7;
-    changed.distanceTests[0].test = {2400, false};
-    changed.distanceTests[1].test = {1900, true};
+    changed.distanceTests[0].test = {2400, false, 2};
+    changed.distanceTests[1].test = {1900, true, 3};
+    auto invalidWeight = changed;
+    invalidWeight.distanceTests[1].test.scoreWeight = 0;
+    issue(Apply, invalidWeight);
+    REQUIRE(document.diagnostic);
+    CHECK(document.query == original);
     auto foreign = changed;
     foreign.distanceTests[1].stage = QueryStageId::Create(99).Value();
     issue(Apply, foreign);
@@ -483,9 +492,11 @@ TEST_CASE("Registered Query settings use shared history and tracked source publi
         CHECK(reopened.settings->distanceTests[0].stage == native.Value().Stages()[1].id);
         CHECK(reopened.settings->distanceTests[0].test.radiusMillimeters == 2400);
         CHECK_FALSE(reopened.settings->distanceTests[0].test.preferNearer);
+        CHECK(reopened.settings->distanceTests[0].test.scoreWeight == 2);
         CHECK(reopened.settings->distanceTests[1].stage == native.Value().Stages()[2].id);
         CHECK(reopened.settings->distanceTests[1].test.radiusMillimeters == 1900);
         CHECK(reopened.settings->distanceTests[1].test.preferNearer);
+        CHECK(reopened.settings->distanceTests[1].test.scoreWeight == 3);
         CHECK_FALSE(reopened.canUndo);
     }
     SECTION("changing the sidecar bytes refuses the source write even when the stable ID still matches") {
