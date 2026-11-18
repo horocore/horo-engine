@@ -8,6 +8,14 @@
 namespace Horo::Runtime {
     /** @brief CoreEcs wire version carrying required portable trigger migration proof; older payloads require recook. */
     inline constexpr std::uint32_t SceneCellPayloadCodecVersion = 3;
+    /** @brief CoreEcs wire version for explicitly anchored World cell content. */
+    inline constexpr std::uint32_t SceneCellWorldAnchorsCodecVersion = 4;
+
+    /** @brief Returns the canonical provider header version for the given content. */
+    [[nodiscard]] std::uint32_t SceneCellPayloadWireVersion(const RuntimeSceneCellPayload &payload) noexcept;
+
+    /** @brief Checks an enclosing provider version against a supported inner CoreEcs version. */
+    [[nodiscard]] bool MatchesSceneCellPayloadWireVersion(std::span<const std::byte> bytes, std::uint32_t version) noexcept;
 
     /** @brief Independent wire and allocation ceilings alongside the existing semantic payload bounds. */
     struct SceneCellPayloadCodecLimits final {
@@ -21,7 +29,7 @@ namespace Horo::Runtime {
      * @param payload Existing owner-admitted complete baseline.
      * @param limits Explicit wire/allocation/semantic bounds.
      * @param cancellation Borrowed observer checked between bounded encoding units.
-     * @return Complete version-two CoreEcs bytes or typed payload failure, without publication or live Scene access.
+     * @return Complete versioned CoreEcs bytes or typed payload failure, without publication or live Scene access.
      * @details Uses the existing canonical Scene field mapping for all core, authored Physics, AI, navigation,
      * behavior and opaque gameplay components. Capability/schema approval is never serialized as authority.
      * @throws std::bad_alloc on bounded output allocation.

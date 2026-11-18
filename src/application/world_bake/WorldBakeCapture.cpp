@@ -35,6 +35,12 @@ namespace Horo::Application::WorldBakeDetail {
             if (!budget.objects.insert(projected.object.value).second)
                 return Result<void>::Failure(MakeError(WorldBakeErrors::Conflict, "Stable world object identity collision."));
             PlacedEntity output{source->descriptor.address, std::move(projected), std::move(placed), {}, sceneIndex};
+            if (source->anchor) {
+                const auto &authored = *source->anchor;
+                output.anchor.emplace(Runtime::SceneCellWorldAnchor{output.entity.object, authored.position.Millimeters(), {}});
+                if (authored.cameraTarget)
+                    output.anchor->cameraTargetMillimeters = authored.cameraTarget->Millimeters();
+            }
             for (const auto &evidence : scene.TriggerVolumeEvidence())
                 if (evidence.object == entity.object) {
                     auto remapped = evidence;

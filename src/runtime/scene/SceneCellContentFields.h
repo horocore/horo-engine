@@ -58,6 +58,12 @@ namespace Horo::Runtime::CellCookDetail {
     }
 
     template <class T>
+        requires std::same_as<std::remove_cv_t<T>, SceneCellWorldAnchor>
+    inline auto ContentFields(T &v) {
+        return std::tie(v.object, v.positionMillimeters, v.cameraTargetMillimeters);
+    }
+
+    template <class T>
         requires std::same_as<std::remove_cv_t<T>, CameraComponent>
     inline auto ContentFields(T &v) {
         return std::tie(v.projection, v.verticalFieldOfViewRadians, v.orthographicHeight, v.nearPlane, v.farPlane, v.enabled);

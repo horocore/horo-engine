@@ -78,3 +78,22 @@ Version-one and version-two provider payloads require recook and are rejected; e
 silently discarded. `SceneCellPayloadCodecVersion` is the one provider-version
 authority used by the Scene writer/reader and WorldCook envelope validation.
 Runtime/filter activation generations and process leases are not serialized.
+
+### Authored World anchors
+
+Partitioned World source version 2 admits an optional `worldAnchor` on each
+page-owned object. Its `position` is three signed integer millimeters. Its
+nullable `cameraTarget` uses the same units and requires that exact cooked
+object to own a Camera. WorldBake remaps the anchor together with the object's
+page-qualified identity. Local Scene translation and spatial coverage bounds
+do not supply global positions.
+
+Anchored CoreEcs payloads use provider version 4 and append one nonempty table
+in strictly ascending cooked object identity order. Each row stores exact
+signed millimeter triples for the object and its optional camera target.
+Foreign objects, duplicate identities, malformed tables, mismatched provider
+versions and a target on a non-camera object reject the cell. The complete
+anchor data participates in the incremental cell content key. Unanchored
+cells keep the existing version 3 byte layout and grant no global anchor
+authority. Runtime storage and scene projection stay owned by their respective
+subsystems.

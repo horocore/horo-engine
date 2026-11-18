@@ -80,6 +80,7 @@ namespace Horo::Editor {
         WorldStreaming::StreamingLayerId layer{};
         std::uint8_t assignmentLod{};
         std::optional<WorldStreaming::WorldSpanningObjectDirective> spanning; /**< Exact source override, never widget state. */
+        std::optional<WorldStreaming::WorldObjectAnchor> anchor; /**< Explicit canonical position, independent of local Scene transforms. */
         [[nodiscard]] auto operator<=>(const PartitionedWorldObject &) const noexcept = default;
     };
 

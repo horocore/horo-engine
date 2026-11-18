@@ -297,14 +297,13 @@ namespace Horo::Application::Internal {
             const auto header = inspected.Value().Header();
             if (header.compression != WS::StreamingCellCompression::None || header.payloads.size() != 1 ||
                 header.payloads.front().provider != WS::StreamingCellProvider::CoreEcs ||
-                header.payloads.front().requirement != WS::StreamingCellPayloadRequirement::Required ||
-                header.payloads.front().version != Runtime::SceneCellPayloadCodecVersion)
+                header.payloads.front().requirement != WS::StreamingCellPayloadRequirement::Required)
                 return Output::Failure(MakeError(Runtime::SceneCellPayloadErrors::Unsupported));
             const auto &core = header.payloads.front();
-            return Runtime::DecodeSceneCellPayload(partition,
-                                                   artifact.subspan(static_cast<std::size_t>(core.offset),
-                                                                    static_cast<std::size_t>(core.compressedSize)),
-                                                   identity, {}, {},
+            const auto body = artifact.subspan(static_cast<std::size_t>(core.offset), static_cast<std::size_t>(core.compressedSize));
+            if (!Runtime::MatchesSceneCellPayloadWireVersion(body, core.version))
+                return Output::Failure(MakeError(Runtime::SceneCellPayloadErrors::Unsupported));
+            return Runtime::DecodeSceneCellPayload(partition, body, identity, {}, {},
                                                    {MaximumCellBytes, MaximumCellBytes, {65536, MaximumCells, MaximumCellBytes}},
                                                    cancellation);
         }
@@ -322,7 +321,15 @@ namespace Horo::Application::Internal {
         std::optional<WS::DecodedWorldDependencies> dependencies;
         std::optional<WS::WorldStreamingRuntimeComposition> composition;
         std::optional<WS::StreamingSourceRegistration> initialSource;
-        std::optional<WS::StreamingFence> activeCell;
+
+        struct ActiveCell final {
+            WS::StreamingFence fence;
+            Runtime::SceneInstanceAddress address;
+            Runtime::SceneCellPayloadIdentity identity;
+            std::vector<Runtime::SceneCellWorldAnchor> anchors;
+        };
+
+        std::optional<ActiveCell> activeCell;
         bool initialAttempted{};
     };
 
@@ -484,6 +491,8 @@ namespace Horo::Application::Internal {
 
         const Runtime::SceneInstanceAddress address{parent->RuntimeId(), selected.occurrence, selected.definition,
                                                     Runtime::SceneInstanceMode::Streamed};
+        const auto authored = payload->WorldAnchors();
+        State::ActiveCell active{fence, address, identity, {authored.begin(), authored.end()}};
         const Runtime::SceneCellAttachmentRequest request{.runtime = address.parent,
                                                           .fence = fence,
                                                           .registry = parent->AssetRegistryRevision(),
@@ -529,8 +538,20 @@ namespace Horo::Application::Internal {
         }
 
         state_->initialSource.emplace(std::move(source).Value());
-        state_->activeCell = fence;
+        state_->activeCell.emplace(std::move(active));
         return Result<void>::Success();
+    }
+
+    /** @copydoc HeadlessWorldMount::Anchors */
+    std::span<const Runtime::SceneCellWorldAnchor> HeadlessWorldMount::Anchors(const Runtime::RuntimeSceneView &parent) const noexcept {
+        if (!state_->activeCell || !parent.IsCurrent())
+            return {};
+        const auto current = state_->scene.ActiveScene();
+        const auto &active = *state_->activeCell;
+        if (!current || !parent.SameIncarnation(*current) ||
+            !Runtime::FindStreamedSceneInstance(parent, active.address, active.identity, active.fence.epoch))
+            return {};
+        return active.anchors;
     }
 
     HeadlessWorldMount::HeadlessWorldMount(std::unique_ptr<State> state) noexcept : state_(std::move(state)) {}
@@ -544,7 +565,7 @@ namespace Horo::Application::Internal {
     HeadlessWorldMount::~HeadlessWorldMount() {
         if (state_->activeCell) {
             using enum WS::StreamingCellOperationTransition;
-            const auto &fence = *state_->activeCell;
+            const auto &fence = state_->activeCell->fence;
             auto retired =
                 RunCellOperation(state_->composition->Scheduler(), *state_->residency, {Identity<WS::StreamingCellOperationId>(3), fence},
                                  WS::StreamingCellOperationKind::Retire, {BeginRetirement}, AcknowledgeRetirement, [&](const auto &) {

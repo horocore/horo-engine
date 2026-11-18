@@ -6,6 +6,8 @@
 #include "Horo/Runtime/Scene/SceneInstances.h"
 #include "Horo/WorldStreaming/WorldPartitionDescriptor.h"
 
+#include <array>
+
 namespace Horo::Runtime {
     namespace SceneCellPayloadErrors {
         /** @brief Malformed cell identity, revision, limits or source. */
@@ -48,6 +50,14 @@ namespace Horo::Runtime {
         std::uint32_t version{};
     };
 
+    /** @brief Immutable global position authority tied to one exact object in the same cooked baseline. */
+    struct SceneCellWorldAnchor final {
+        SceneObjectId object;
+        std::array<std::int64_t, 3> positionMillimeters;
+        std::optional<std::array<std::int64_t, 3>> cameraTargetMillimeters;
+        [[nodiscard]] auto operator<=>(const SceneCellWorldAnchor &) const noexcept = default;
+    };
+
     /** @brief Borrowed complete offline-expanded runtime input for one cell, with no editor state or nested prefab loads. */
     struct SceneCellPayloadSource final {
         SceneCellPayloadIdentity identity;
@@ -56,6 +66,7 @@ namespace Horo::Runtime {
         std::span<const SceneCellComponentSchema> componentSchemas;
         std::span<const SceneCellBehaviorSchema> behaviorSchemas;
         std::span<const TriggerVolumeMigrationEvidence> triggerVolumeEvidence; /**< Complete portable binding constraints. */
+        std::span<const SceneCellWorldAnchor> worldAnchors; /**< Explicit authored authority. An empty list grants no global positions. */
     };
 
     /** @brief Owned immutable CoreEcs semantic baseline; encoding remains the Scene provider's responsibility. */
@@ -71,16 +82,20 @@ namespace Horo::Runtime {
         [[nodiscard]] const RuntimeSceneDefinition &Definition() const noexcept;
         /** @brief Returns host logical owned storage charge. @return Bytes checked against the captured cook ceiling. */
         [[nodiscard]] std::size_t RetainedBytes() const noexcept;
+        /** @brief Returns explicit global anchors in object identity order. @return Borrowed immutable owner evidence. */
+        [[nodiscard]] std::span<const SceneCellWorldAnchor> WorldAnchors() const noexcept;
 
     private:
         friend Result<RuntimeSceneCellPayload> CookRuntimeSceneCellPayload(const WorldStreaming::WorldPartitionDescriptor &,
                                                                            const SceneCellPayloadSource &, const SceneCellPayloadIdentity &,
                                                                            SceneCellPayloadLimits, const CancellationToken &);
         /** @brief Owns the complete validated baseline and checked logical storage charge. */
-        RuntimeSceneCellPayload(SceneCellPayloadIdentity identity, RuntimeSceneDefinition definition, std::size_t retainedBytes) noexcept;
+        RuntimeSceneCellPayload(SceneCellPayloadIdentity identity, RuntimeSceneDefinition definition, std::size_t retainedBytes,
+                                std::vector<SceneCellWorldAnchor> worldAnchors) noexcept;
         SceneCellPayloadIdentity identity_;
         RuntimeSceneDefinition definition_;
         std::size_t retainedBytes_{};
+        std::vector<SceneCellWorldAnchor> worldAnchors_;
     };
 
     /**

@@ -249,6 +249,8 @@ namespace Horo::WorldCook {
         using namespace Application::Internal;
         const bool hasHardDependency = GENERATE(false, true);
         Fixture fixture{false, hasHardDependency};
+        const std::array anchors{S::SceneCellWorldAnchor{{11}, {9'007'199'254'740'993, -500, 180}, {}}};
+        fixture.inputs.front().source.worldAnchors = anchors;
         const auto published = fixture.Publish();
         REQUIRE(published.HasValue());
         REQUIRE(published.Value().publication);
@@ -276,6 +278,7 @@ namespace Horo::WorldCook {
         const auto address = S::SceneInstanceAddress{{101}, request.occurrence, request.definition, S::SceneInstanceMode::Streamed};
         const auto epoch = IdentityFrom<W::PartitionEpoch>(5);
         REQUIRE_FALSE(S::FindStreamedSceneInstance(*parent.ActiveScene(), address, selected, epoch));
+        CHECK(mount->Anchors(*parent.ActiveScene()).empty());
 
         if (hasHardDependency) {
             W::TestSupport::RequireError(mount->ActivateInitialCell(request, boundary), W::WorldArtifactErrors::Unsupported);
@@ -299,6 +302,10 @@ namespace Horo::WorldCook {
             const auto live = parent.ActiveScene();
             REQUIRE(live);
             REQUIRE(S::FindStreamedSceneInstance(*live, address, selected, epoch));
+            const auto mountedAnchors = mount->Anchors(*live);
+            REQUIRE(mountedAnchors.size() == 1);
+            CHECK(mountedAnchors.front() == anchors.front());
+            CHECK(mount->Anchors({}).empty());
             CHECK_FALSE(S::FindStreamedSceneInstance(*live, address, selected, IdentityFrom<W::PartitionEpoch>(6)));
             CHECK(mount->ActivateInitialCell(request, boundary).HasError());
             mount.reset();

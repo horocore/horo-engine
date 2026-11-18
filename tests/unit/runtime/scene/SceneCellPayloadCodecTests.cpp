@@ -92,6 +92,48 @@ namespace Horo::Runtime {
         CHECK(encodedAgain.Value() == bytes);
     }
 
+    TEST_CASE("CoreEcs retains independently authored 64-bit pivots and exact camera targets",
+              "[scene][world_artifact][cell_codec][world_anchor]") {
+        const Fixture fixture;
+        constexpr std::array<std::int64_t, 3> pivot{9'007'199'254'740'993, -1, 14};
+        constexpr std::array<std::int64_t, 3> target{9'007'199'254'740'994, -1, 14};
+        std::array anchors{SceneCellWorldAnchor{{2}, {300, 0, 0}, {}}, SceneCellWorldAnchor{{1}, pivot, target}};
+        const SceneCellPayloadSource input{.identity = Identity(),
+                                           .entities = fixture.entities,
+                                           .componentSchemas = fixture.schemas,
+                                           .worldAnchors = anchors};
+        const auto legacy =
+            DecodeSceneCellPayload(fixture.manifest.Descriptor(), fixture.Bytes(), Identity(), fixture.schemas, {}, Limits());
+        REQUIRE(legacy.HasValue());
+        CHECK(legacy.Value().WorldAnchors().empty());
+        SECTION("World rows are canonical and retain exact signed values") {
+            const auto payload = CookRuntimeSceneCellPayload(fixture.manifest.Descriptor(), input, Identity(), Limits().semantic);
+            REQUIRE(payload.HasValue());
+            const auto encoded = EncodeSceneCellPayload(payload.Value(), Limits());
+            REQUIRE(encoded.HasValue());
+            CHECK(MatchesSceneCellPayloadWireVersion(encoded.Value(), SceneCellWorldAnchorsCodecVersion));
+            CHECK_FALSE(MatchesSceneCellPayloadWireVersion(encoded.Value(), SceneCellPayloadCodecVersion));
+            const auto decoded =
+                DecodeSceneCellPayload(fixture.manifest.Descriptor(), encoded.Value(), Identity(), fixture.schemas, {}, Limits());
+            REQUIRE(decoded.HasValue());
+            const auto rows = decoded.Value().WorldAnchors();
+            REQUIRE(rows.size() == 2);
+            CHECK(rows.front() == anchors[1]);
+            CHECK(rows.back() == anchors[0]);
+            CHECK(EncodeSceneCellPayload(decoded.Value(), Limits()).Value() == encoded.Value());
+        }
+        SECTION("An orphan world pivot cannot survive a matching outer cell fence") {
+            anchors.front().object = {43};
+            RequireError(CookRuntimeSceneCellPayload(fixture.manifest.Descriptor(), input, Identity(), Limits().semantic),
+                         SceneCellPayloadErrors::Invalid);
+        }
+        SECTION("A non-camera entity cannot grant camera-target authority") {
+            anchors.front().cameraTargetMillimeters = target;
+            RequireError(CookRuntimeSceneCellPayload(fixture.manifest.Descriptor(), input, Identity(), Limits().semantic),
+                         SceneCellPayloadErrors::Invalid);
+        }
+    }
+
     TEST_CASE("Scene CoreEcs wire cannot approve opaque schemas or replace captured revision authority",
               "[scene][world_artifact][cell_codec]") {
         const Fixture fixture;

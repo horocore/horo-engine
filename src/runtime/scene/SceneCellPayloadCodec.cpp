@@ -8,8 +8,7 @@
 
 namespace Horo::Runtime {
     namespace {
-        // Version two retains the shared canonical field order, eight-byte little-endian
-        // scalar/count representation and explicit variant/optional tags. No native ABI bytes.
+        // Preserve existing field order and portable little-endian scalar/count representation.
         constexpr std::array Header{std::byte{'H'}, std::byte{'O'}, std::byte{'C'},
                                     std::byte{'O'}, std::byte{'R'}, std::byte{'E'},
                                     std::byte{'C'}, std::byte{'S'}, std::byte{SceneCellPayloadCodecVersion},
@@ -25,9 +24,13 @@ namespace Horo::Runtime {
 
         /** @brief Emits the same immutable fields in both measurement and output passes. */
         void WritePayload(CellCookDetail::PayloadWriter &writer, const RuntimeSceneCellPayload &payload) {
-            writer.Bytes(Header);
+            auto header = Header;
+            header[8] = static_cast<std::byte>(SceneCellPayloadWireVersion(payload));
+            writer.Bytes(header);
             writer.Fields(payload.Identity(), payload.Definition().Entities(), payload.Definition().AssetDependencies(),
                           payload.Definition().TriggerVolumeEvidence());
+            if (!payload.WorldAnchors().empty())
+                writer.Add(payload.WorldAnchors());
         }
 
         /** @brief Validates the exact supported header before constructing typed component storage. */
@@ -35,8 +38,8 @@ namespace Horo::Runtime {
             if (bytes.size() < Header.size() || !std::ranges::equal(bytes.first(8), std::span{Header}.first(8)))
                 return Result<void>::Failure(
                     MakeError(SceneCellPayloadErrors::Invalid, "CoreEcs provider header is truncated or invalid."));
-            if (bytes[8] != std::byte{SceneCellPayloadCodecVersion} || bytes[9] != std::byte{0} || bytes[10] != std::byte{0} ||
-                bytes[11] != std::byte{0})
+            if (!MatchesSceneCellPayloadWireVersion(bytes, std::to_integer<std::uint32_t>(bytes[8])) || bytes[9] != std::byte{0} ||
+                bytes[10] != std::byte{0} || bytes[11] != std::byte{0})
                 return Result<void>::Failure(MakeError(SceneCellPayloadErrors::Unsupported, "CoreEcs provider version is unsupported."));
             if (!std::ranges::all_of(bytes.subspan(12, 4), [](const auto byte) {
                 return byte == std::byte{0};
@@ -45,6 +48,17 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
     }  // namespace
+
+    /** @copydoc SceneCellPayloadWireVersion */
+    std::uint32_t SceneCellPayloadWireVersion(const RuntimeSceneCellPayload &payload) noexcept {
+        return payload.WorldAnchors().empty() ? SceneCellPayloadCodecVersion : SceneCellWorldAnchorsCodecVersion;
+    }
+
+    /** @copydoc MatchesSceneCellPayloadWireVersion */
+    bool MatchesSceneCellPayloadWireVersion(const std::span<const std::byte> bytes, const std::uint32_t version) noexcept {
+        return bytes.size() >= Header.size() && (version == SceneCellPayloadCodecVersion || version == SceneCellWorldAnchorsCodecVersion) &&
+               std::to_integer<std::uint32_t>(bytes[8]) == version;
+    }
 
     /** @copydoc EncodeSceneCellPayload */
     Result<std::vector<std::byte>> EncodeSceneCellPayload(const RuntimeSceneCellPayload &payload, const SceneCellPayloadCodecLimits &limits,
@@ -91,13 +105,20 @@ namespace Horo::Runtime {
         std::vector<RuntimeEntityDefinition> entities;
         std::vector<SceneAssetDependency> dependencies;
         std::vector<TriggerVolumeMigrationEvidence> migration;
+        std::vector<SceneCellWorldAnchor> anchors;
         reader.Fields(identity);
         reader.Sequence(entities, limits.semantic.maximumEntities);
         reader.Sequence(dependencies, limits.semantic.maximumDependencies);
         reader.Sequence(migration, entities.size());
+        const bool anchored = MatchesSceneCellPayloadWireVersion(bytes, SceneCellWorldAnchorsCodecVersion);
+        if (anchored)
+            reader.Sequence(anchors, entities.size());
         if (const auto read = reader.Finish(); read.HasError())
             return Result<RuntimeSceneCellPayload>::Failure(read.ErrorValue());
-        return CookRuntimeSceneCellPayload(partition, {identity, entities, dependencies, componentSchemas, behaviorSchemas, migration},
+        if (anchored && (anchors.empty() || !std::ranges::is_sorted(anchors, {}, &SceneCellWorldAnchor::object)))
+            return Result<RuntimeSceneCellPayload>::Failure(MakeError(SceneCellPayloadErrors::Invalid));
+        return CookRuntimeSceneCellPayload(partition,
+                                           {identity, entities, dependencies, componentSchemas, behaviorSchemas, migration, anchors},
                                            expected, limits.semantic, cancellation);
     }
 }  // namespace Horo::Runtime

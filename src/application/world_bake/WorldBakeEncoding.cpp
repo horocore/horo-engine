@@ -14,7 +14,7 @@ namespace Horo::Application::WorldBakeDetail {
                 return Result<void>::Failure(encoded.ErrorValue());
             const auto payload = std::move(encoded).Value();
             const W::StreamingCellPayloadBytes provider{W::StreamingCellProvider::CoreEcs, W::StreamingCellPayloadRequirement::Required,
-                                                        S::SceneCellPayloadCodecVersion, payload};
+                                                        S::SceneCellPayloadWireVersion(*output.cells[index]), payload};
             const W::StreamingCellEncodingLimits limits{1, request.limits.maximumOutputBytes - bytes,
                                                         request.limits.codec.maximumEncodedBytes};
             auto artifact =

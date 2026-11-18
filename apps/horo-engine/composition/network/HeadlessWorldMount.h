@@ -11,10 +11,13 @@
 
 #include <memory>
 #include <optional>
+#include <span>
 
 namespace Horo::Runtime {
     class RuntimeSceneService;
-}
+    class RuntimeSceneView;
+    struct SceneCellWorldAnchor;
+}  // namespace Horo::Runtime
 
 namespace Horo::Application::Internal {
     struct HeadlessSceneLoadBoundary;
@@ -62,6 +65,12 @@ namespace Horo::Application::Internal {
          * @pre The parent is privately prepared. On a post-queue failure, it is shut down before retiring scheduler work.
          */
         [[nodiscard]] Result<void> ActivateInitialCell(const HeadlessWorldInitialCell &selected, const HeadlessSceneLoadBoundary &boundary);
+
+        /** @brief Observe authored global anchors for the exact current parent and mounted Scene occurrence.
+         * @param parent Active Scene borrow on the owning lane.
+         * @return Synchronous mounted storage borrow, empty for legacy, foreign, stale or retired Scene evidence.
+         */
+        [[nodiscard]] std::span<const Runtime::SceneCellWorldAnchor> Anchors(const Runtime::RuntimeSceneView &parent) const noexcept;
 
         /** @brief Observe the exact mounted World frame; the caller keeps this complete mount alive. */
         [[nodiscard]] const WorldStreaming::OriginFrameOwner &Origin() const noexcept;
