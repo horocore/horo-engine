@@ -96,7 +96,8 @@ namespace Horo::Tests::UiPaintHostTesting {
             return result;
         }
 
-        explicit Fixture(const bool paintAvailable = true, const UiLogicalPoint initialScroll = {}, const bool contrastVariants = false)
+        explicit Fixture(const bool paintAvailable = true, const UiLogicalPoint initialScroll = {}, const bool contrastVariants = false,
+                         const bool compactControl = false)
             : frontend(Frontend(paintAvailable)), source(false, false, true, initialScroll) {
             std::array<std::byte, 64> pixels;
             pixels.fill(std::byte{128});
@@ -106,12 +107,16 @@ namespace Horo::Tests::UiPaintHostTesting {
             authoredCanvas = admitted.Get()->Instance().Canvases().front();
             auto resources = Runtime::Ui::AnimationTests::Resources(admitted.Get()->Canvases().front(), false, 1'000'000'000, false, false,
                                                                     contrastVariants);
-            if (initialScroll != UiLogicalPoint{})
-                for (auto &element : resources.definition.elements)
-                    if (element.element == Source::Stable<UiElementId>(11)) {
-                        element.layout.positioning = UiLayoutPositioning::Absolute;
-                        element.layout.offsets.top = NestedEffectChildOffset;
-                    }
+            for (auto &element : resources.definition.elements) {
+                if (element.element != Source::Stable<UiElementId>(11))
+                    continue;
+                if (initialScroll != UiLogicalPoint{} || compactControl) {
+                    element.layout.positioning = UiLayoutPositioning::Absolute;
+                    element.layout.offsets.top = compactControl ? 40 * UiScalarUnitsPerDip : NestedEffectChildOffset;
+                }
+                if (compactControl)
+                    element.layout.width = UiLength::Dip(5 * UiScalarUnitsPerDip);
+            }
             auto composition = Take(RuntimeUiPaintHost::Compose(*frontend, host->DispatchSource(), std::move(source.service)));
             port = composition.port;
             const UiRenderExtractorDescriptor extraction{view, {8, 2, 16, 8, 4, 8, 4, 4}, 8};

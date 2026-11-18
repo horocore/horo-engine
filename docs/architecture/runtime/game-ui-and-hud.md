@@ -335,7 +335,21 @@ by screen hit testing. UI scale is folded into the resolved physical-pixels-per-
 DIP ratio; font scale is carried into intrinsic text measurement and shaping but
 does not change non-text layout geometry. Resize, monitor/DPI, safe-area, or
 viewport changes produce a new immutable resolution input; consumers replace
-layout and render generations at their normal safe point.
+layout and render generations at their normal safe point. The application
+projects the exact user scale ratio into the same viewport evidence. It
+multiplies the authored and user geometry scales once, preserving the
+independent text-only factor. Reduced logical viewport width feeds the existing
+responsive selection and intrinsic text reflow. Input remains fenced until
+that layout has a matching presentation receipt.
+
+The view policy can reserve a minimum control target before layout measures
+text and places elements. The product uses a 24-DIP logical floor in the
+runtime UI view. Fixed/clipped lanes can still restrict the visible and
+interactive part of a target, which layout reports without enlarging hit
+boxes outside their paint and clip. A live focus graph binds its own scroll
+policy to the candidate layout. Reveal uses that view's scroll limits before
+paint and hit testing, and leaves non-scroll clipping and explicit no-reveal
+policies in force.
 
 Physical pixel snapping is downstream derived render data. `Edges` snapping uses
 the resolved safe content rectangle and ties-to-even conversion, and may only

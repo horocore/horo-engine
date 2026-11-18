@@ -38,6 +38,8 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Requires strictly newer explicit evidence when any admitted viewport facts change. */
         bool NewEvidence(const UiAnimationViewport &old, const UiAnimationViewport &next) noexcept {
+            if (old.minimumControlTargetDips != next.minimumControlTargetDips && next.policy <= old.policy)
+                return false;
             return old == next || !old.presentation || (next.presentation && next.presentation->revision > old.presentation->revision);
         }
     }  // namespace
@@ -90,8 +92,9 @@ namespace Horo::Runtime::Ui {
                                             owner.presentation.attachmentGenerations[index] + 1};
         if (const auto evidence = Evidence(canvas->tree, owner.definition.canvas, id, viewport, owner.presentation.revision);
             !viewport.constraints.IsValid() || !viewport.content.IsValid() || !viewport.fontScale.IsValid() ||
-            !viewport.intrinsic.IsValid() || !viewport.canvas.IsValid() || !viewport.policy.IsValid() ||
-            viewport.inlineDirection > UiLayoutInlineDirection::RightToLeft || !evidence.IsValid())
+            viewport.minimumControlTargetDips > MaximumUiAccessibleTargetDips || !viewport.intrinsic.IsValid() ||
+            !viewport.canvas.IsValid() || !viewport.policy.IsValid() || viewport.inlineDirection > UiLayoutInlineDirection::RightToLeft ||
+            !evidence.IsValid())
             return Result<UiPresentationAttachmentId>::Failure(MakeError(UiErrors::PresentationProfileMalformed));
         return AdoptAttachment(owner, index, id, view, std::move(viewport));
     }
@@ -148,8 +151,8 @@ namespace Horo::Runtime::Ui {
             return Result<void>::Failure(MakeError(UiErrors::PresentationProfileSourceStale));
         if (const auto *canvas = owner.publisher.Current()->Canvas(owner.definition.canvas);
             !viewport.constraints.IsValid() || !viewport.content.IsValid() || !viewport.fontScale.IsValid() ||
-            !viewport.intrinsic.IsValid() || !viewport.canvas.IsValid() || !viewport.policy.IsValid() ||
-            viewport.inlineDirection > UiLayoutInlineDirection::RightToLeft ||
+            viewport.minimumControlTargetDips > MaximumUiAccessibleTargetDips || !viewport.intrinsic.IsValid() ||
+            !viewport.canvas.IsValid() || !viewport.policy.IsValid() || viewport.inlineDirection > UiLayoutInlineDirection::RightToLeft ||
             !Evidence(canvas->tree, owner.definition.canvas, attachment, viewport, owner.presentation.revision).IsValid())
             return Result<void>::Failure(MakeError(UiErrors::PresentationProfileMalformed));
         if ((*found)->viewport == viewport)
@@ -195,10 +198,10 @@ namespace Horo::Runtime::Ui {
         storage.candidate.presentation.viewport = viewport;
         storage.candidate.presentation.selection.reset();
         storage.candidate.presentation.revision = {};
-        if (!responsive)
-            return Result<void>::Success();
         if (storage.presentation.publishedViewport && !NewEvidence(*storage.presentation.publishedViewport, viewport))
             return Result<void>::Failure(MakeError(UiErrors::PresentationProfileSourceStale));
+        if (!responsive)
+            return Result<void>::Success();
         auto revision = storage.presentation.revision;
         if (storage.presentation.attachmentDirty ||
             (storage.presentation.publishedViewport && *storage.presentation.publishedViewport != viewport)) {
@@ -255,6 +258,7 @@ namespace Horo::Runtime::Ui {
             auto selection = PrepareAttachmentStyles(storage, index);
             if (selection.HasError())
                 return Result<void>::Failure(selection.ErrorValue());
+            ApplyControlTargetPolicy(storage, attachment.viewport.minimumControlTargetDips);
             auto evaluator =
                 UiDeclarativeLayoutEvaluator::Create(storage.work.layoutDescriptors, storage.definition.intrinsicProvider.get());
             if (evaluator.HasError())
@@ -273,7 +277,7 @@ namespace Horo::Runtime::Ui {
             attachment.preparedLayout.emplace(std::move(layout).Value());
             attachment.selection = selection.Value();
             if (attachment.clipping) {
-                auto clipped = attachment.clipping->Prepare(tree, attachment.preparedLayout->Candidate(), {canvas->clipPolicies, {}});
+                auto clipped = PrepareClipping(storage, *attachment.clipping, attachment.preparedLayout->Candidate());
                 if (clipped.HasError())
                     return Result<void>::Failure(clipped.ErrorValue());
                 attachment.preparedClipping.emplace(std::move(clipped).Value());

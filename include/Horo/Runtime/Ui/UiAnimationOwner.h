@@ -74,6 +74,7 @@ namespace Horo::Runtime::Ui {
         UiLayoutPolicyRevision policy;
         std::optional<UiAnimationPresentationEvidence> presentation;
         UiLayoutInlineDirection inlineDirection{UiLayoutInlineDirection::LeftToRight}; /**< Physical placement direction for this view. */
+        std::uint32_t minimumControlTargetDips{}; /**< View policy for control geometry; zero leaves legacy layout unchanged. */
         [[nodiscard]] auto operator<=>(const UiAnimationViewport &) const noexcept = default;
     };
 
@@ -573,6 +574,11 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] static Result<void> PreparePresentation(Storage &storage, const UiAnimationViewport &viewport);
         /** @brief Stages dependent clipping, focus, attachments and control identities after the primary layout candidate. */
         [[nodiscard]] static Result<void> PrepareDerivedPresentation(Storage &storage);
+        /** @brief Adds the active view floor to actual admitted value controls after responsive style resolution. */
+        static void ApplyControlTargetPolicy(Storage &storage, std::uint32_t minimumDips);
+        /** @brief Prepares the exact view's scroll and clipping without mutating any admitted focus/scroll state. */
+        [[nodiscard]] static Result<UiLayoutClipEngine::PreparedUpdate> PrepareClipping(Storage &storage, UiLayoutClipEngine &engine,
+                                                                                        const UiLayoutSnapshot &layout);
         /** @brief Resolves exact route-incarnation or canvas operation ownership for one retained control. */
         [[nodiscard]] static UiActionRouter *ControlActionOwner(Storage &storage, UiElementHandle element);
         /** @brief Checks bounded actual retained-tree lineage against an authored route root. */

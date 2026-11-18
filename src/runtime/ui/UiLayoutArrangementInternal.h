@@ -28,6 +28,7 @@ namespace Horo::Runtime::Ui::LayoutInternal {
         std::int32_t desired;
         std::int32_t pivot;
         std::int32_t cursor;
+        std::int32_t interactiveMinimum;
     };
 
     struct ChildAxisBounds final {

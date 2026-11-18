@@ -131,6 +131,8 @@ namespace Horo::Application::Internal::Detail {
             return owner == std::this_thread::get_id() && !revoked && !sceneSealed && !scenePreparing;
         }
 
+        /** @brief Transactionally validates and queues the latest effective viewport for every admitted source. */
+        [[nodiscard]] Result<void> QueueOutput(const Runtime::Ui::UiCanvasViewportEvidence &evidence);
         /** @brief Stops admission, releases CPU observations and retains the actual stopped child for explicit drain. */
         [[nodiscard]] Result<void> Retire();
         /** @brief Copies a bounded borrow inventory; normal work excludes stopped and retired children. */

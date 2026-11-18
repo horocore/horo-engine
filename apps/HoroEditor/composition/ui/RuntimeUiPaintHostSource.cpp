@@ -66,6 +66,9 @@ namespace Horo::Application::Internal {
                                                                                               std::move(preparation.kernel),
                                                                                               preparation.runtime.viewport},
                                                            std::move(preparation.allocatorLifetime));
+        candidate->output.pending = state_->output;
+        if (const auto output = candidate->ApplyOutput(); output.HasError())
+            return output;
         if (const auto resources = candidate->AdmitResources(); resources.HasError())
             return resources;
         if (state_->started) {
@@ -101,8 +104,9 @@ namespace Horo::Application::Internal {
         if (arena.HasError())
             return Reloaded::Failure(arena.ErrorValue());
         const auto canvas = projected.Value()->Canvas();
-        if (source.output.current) {
-            const auto output = ResolveUiScreenCanvasWithEvidence(canvas, *source.output.current);
+        const auto evidence = source.output.pending ? source.output.pending : source.output.current;
+        if (evidence) {
+            const auto output = ResolveUiScreenCanvasWithEvidence(canvas, *evidence);
             if (output.HasError())
                 return Reloaded::Failure(output.ErrorValue());
         }
@@ -117,7 +121,7 @@ namespace Horo::Application::Internal {
         source.resources = std::move(resources);
         source.textures = std::move(inventory).Value();
         source.output.canvas = canvas;
-        source.output.pending = source.output.current;
+        source.output.pending = evidence;
         source.output.awaitingPresentation = true;
         source.refresh = true;
         ++state_->sourceRevision;

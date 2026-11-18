@@ -335,7 +335,8 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiLayoutElementDescriptor::IsValid */
     bool UiLayoutElementDescriptor::IsValid() const noexcept {
-        return element.IsValid() && style.IsValid() && intrinsic.IsValid();
+        return element.IsValid() && style.IsValid() && intrinsic.IsValid() && minimumInteractiveExtent >= 0 &&
+               minimumInteractiveExtent <= static_cast<std::int32_t>(MaximumUiAccessibleTargetDips) * UiScalarUnitsPerDip;
     }
 
     /** @copydoc UiLayoutIntrinsicMeasurement::IsValid */

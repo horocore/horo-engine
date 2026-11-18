@@ -384,9 +384,10 @@ namespace Horo::Runtime::Ui {
 
     /** @brief Immutable authored-style and intrinsic source descriptor for one current element handle. */
     struct UiLayoutElementDescriptor final {
-        UiElementHandle element;           /**< Exact generation-safe retained element. */
-        UiLayoutStyle style;               /**< Typed sizing and placement semantics. */
-        UiLayoutIntrinsicSource intrinsic; /**< Optional text/image measurement source. */
+        UiElementHandle element;                 /**< Exact generation-safe retained element. */
+        UiLayoutStyle style;                     /**< Typed sizing and placement semantics. */
+        UiLayoutIntrinsicSource intrinsic;       /**< Optional text/image measurement source. */
+        std::int32_t minimumInteractiveExtent{}; /**< View-owned logical floor on both axes, used only when the layout permits. */
         /** @brief Checks handle, style, and source evidence. @return Whether the descriptor is valid. */
         [[nodiscard]] bool IsValid() const noexcept;
         [[nodiscard]] auto operator<=>(const UiLayoutElementDescriptor &) const noexcept = default;

@@ -123,6 +123,31 @@ namespace Horo::Runtime::Ui {
             }
         };
 
+        TEST_CASE("Focus reveal binds a live policy to a newer layout and rejects superseded evidence",
+                  "[runtime_ui][focus][accessibility]") {
+            Fixture f;
+            f.nodes[1].bringIntoView = UiFocusBringIntoViewPolicy::Center;
+            f.nodes[2].bringIntoView = UiFocusBringIntoViewPolicy::None;
+            auto graph = f.Graph();
+            const auto original = f.Publish(1);
+            const auto reflow = f.Publish(2);
+            REQUIRE(original.HasValue());
+            REQUIRE(reflow.HasValue());
+            const auto reveal = graph.RevealInLayout(reflow.Value());
+            REQUIRE(reveal.HasValue());
+            REQUIRE(reveal.Value());
+            CHECK(reveal.Value()->owner.interaction == reflow.Value().Descriptor().interaction);
+            CHECK(reveal.Value()->target.element == f.nodes[1].element);
+            CHECK(reveal.Value()->policy == UiFocusBringIntoViewPolicy::Center);
+            CHECK(graph.Owner().interaction != reveal.Value()->owner.interaction);
+            REQUIRE(graph.UpdateLayout(reflow.Value()).HasValue());
+            REQUIRE(graph.RevealInLayout(original.Value()).HasError());
+            REQUIRE(graph.SetFocus(f.nodes[2].element).HasValue());
+            CHECK_FALSE(graph.RevealInLayout(reflow.Value()).Value());
+            graph.Shutdown();
+            CHECK(graph.RevealInLayout(reflow.Value()).HasError());
+        }
+
         TEST_CASE("Spatial focus ranks actual layout beams and stable identities", "[runtime_ui][focus][spatial]") {
             Fixture f;
             f.evaluator.boxes[1] = {{0, 0}, {20, 20}};

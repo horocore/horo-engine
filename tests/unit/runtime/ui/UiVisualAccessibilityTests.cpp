@@ -22,6 +22,7 @@ namespace Horo::Runtime::Ui {
         const auto second = UiVisualAccessibilitySnapshot::Capture(ConfigurationResolver::Resolve(schema, inputs, 2).Value());
         REQUIRE(second.HasValue());
         REQUIRE(second.Value().UiScale() == 0.5F);
+        CHECK(second.Value().ScaleFactor() == UiCanvasScaleFactor{1, 2});
         REQUIRE(second.Value().HighContrast());
         REQUIRE(second.Value().TextSize(18).Value() == 16);
         REQUIRE(second.Value().TextSize(40).Value() == 20);

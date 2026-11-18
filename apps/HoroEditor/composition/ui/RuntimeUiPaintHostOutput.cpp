@@ -9,9 +9,17 @@ namespace Horo::Application::Internal {
     Result<void> RuntimeUiPaintPort::UpdateOutput(const UiCanvasViewportEvidence &evidence) const {
         if (!state_ || !state_->Available() || state_->dispatching)
             return Result<void>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
+        auto effective = evidence;
+        effective.userUiScale = state_->accessibility.scale;
+        effective.minimumControlTargetDips = state_->accessibility.minimumControlTargetDips;
+        return state_->QueueOutput(effective);
+    }
+
+    /** @copydoc Detail::RuntimeUiPaintHostState::QueueOutput */
+    Result<void> Detail::RuntimeUiPaintHostState::QueueOutput(const UiCanvasViewportEvidence &evidence) {
         if (!evidence.IsValid())
             return Result<void>::Failure(MakeError(UiErrors::CanvasSpaceInvalid));
-        const auto sources = state_->Sources();
+        const auto sources = Sources();
         for (const auto *source : sources) {
             if (!source)
                 continue;
@@ -19,7 +27,7 @@ namespace Horo::Application::Internal {
             if (resolved.HasError())
                 return Result<void>::Failure(resolved.ErrorValue());
         }
-        state_->output = evidence;
+        output = evidence;
         for (auto *source : sources) {
             if (!source || source->output.pending == evidence || (!source->output.pending && source->output.current == evidence))
                 continue;
@@ -47,6 +55,7 @@ namespace Horo::Application::Internal {
             viewport.constraints = {{0, 0}, {canvas.logicalExtent.width, canvas.logicalExtent.height}};
             viewport.content = {{0, 0}, {canvas.logicalExtent.width, canvas.logicalExtent.height}};
             viewport.fontScale = canvas.fontScale;
+            viewport.minimumControlTargetDips = output.pending->minimumControlTargetDips;
             viewport.canvas = UiLayoutCanvasRevision::Create(viewport.canvas.Value() + 1).Value();
             viewport.policy = UiLayoutPolicyRevision::Create(viewport.policy.Value() + 1).Value();
             if (viewport.presentation)

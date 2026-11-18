@@ -194,6 +194,7 @@ namespace Horo::Runtime::Ui::AnimationTests {
         bool decorativeMotion{};
         bool contrastVariants{};
         bool focusAccess{}; /**< Test-only quiescent borrow; never exposed by a production owner contract. */
+        bool reflowText{};  /**< Let the explicit intrinsic provider determine the test control's block extent. */
     };
 
     inline UiAnimationOwner OwnerAggregate(UiElementSlotAllocator &allocator, const HostOptions &options,
@@ -229,6 +230,8 @@ namespace Horo::Runtime::Ui::AnimationTests {
         if (options.intrinsicProvider) {
             resources.definition.intrinsicProvider = options.intrinsicProvider;
             resources.definition.elements.back().intrinsic = {UiLayoutIntrinsicKind::Text, true, {}};
+            if (options.reflowText)
+                resources.definition.elements.back().layout.height = UiLength::Auto();
         }
         auto owner = UiAnimationOwner::Create(std::move(initial), allocator, std::move(resources.registry), std::move(resources.styles),
                                               std::move(resources.definition));

@@ -141,3 +141,58 @@ TEST_CASE("Application UI coalesces actual resize DPI and insets before new nati
     current = {};
     fixture.Stop();
 }
+
+TEST_CASE("Application user scale resizes the derived canvas and keeps the focused control reachable",
+          "[application][runtime_ui][paint][accessibility]") {
+    Fixture fixture{true, {}, false, true};
+    REQUIRE(fixture.port.UpdateOutput({{100, 100}, {1, 1}, {}}).HasValue());
+    fixture.Frame();
+    fixture.Frame();
+    REQUIRE(fixture.port.InputEligible(fixture.view));
+    auto before = Take(fixture.port.AcquireFrame());
+    const auto child = before.Controls().front().source.element;
+    REQUIRE(Take(before.Layout().Get(child)).arrangement.hitTest.extent.width == 5 * UiScalarUnitsPerDip);
+
+    REQUIRE(fixture.port.UpdateVisualAccessibility({2, false, false, {3, 1}, DefaultUiAccessibleTargetDips}).HasValue());
+    CHECK_FALSE(fixture.port.InputEligible(fixture.view));
+    CHECK(fixture.port.UpdateVisualAccessibility({1, false, false, {1, 1}}).HasError());
+    CHECK(fixture.port.UpdateVisualAccessibility({3, false, false, {4, 1}}).HasError());
+    fixture.Frame();
+    CHECK_FALSE(fixture.port.InputEligible(fixture.view));
+    fixture.Frame();
+    REQUIRE(fixture.port.InputEligible(fixture.view));
+    auto scaled = Take(fixture.port.AcquireFrame());
+    const auto root = scaled.Layout().Records().front();
+    REQUIRE(root.constraints.maximum.width == 2133);
+    REQUIRE(Take(scaled.Layout().Get(child)).arrangement.hitTest.extent.width >= DefaultUiAccessibleTargetDips * UiScalarUnitsPerDip);
+    REQUIRE(scaled.Clipping());
+    REQUIRE_FALSE(scaled.Clipping()->Scrolls().empty());
+    CHECK(scaled.Clipping()->Scrolls().front().offset.y > 0);
+    CHECK(HasFocusOutline());
+    CHECK(Take(before.Layout().Get(child)).arrangement.hitTest.extent.width == 5 * UiScalarUnitsPerDip);
+
+    const auto revision = std::max(scaled.Layout().Descriptor().sources.tree.Value(), scaled.Layout().Descriptor().interaction.Value());
+    before = {};
+    scaled = {};
+    REQUIRE(fixture.port.UpdateVisualAccessibility({3, false, false, {1, 1}, DefaultUiAccessibleTargetDips}).HasValue());
+    auto replacement = fixture.source.Make(2, revision + 1);
+    auto inputs = Runtime::Ui::AnimationTests::Resources(replacement.Canvases().front());
+    REQUIRE(fixture.port
+                .Reload({std::move(replacement),
+                         fixture.source.slots,
+                         std::move(inputs.registry),
+                         std::move(inputs.styles),
+                         std::move(inputs.definition),
+                         {UiAnimationReloadPolicy::Cancel, Tests::UiAccess::Lifecycle}},
+                        fixture.Declaration(2), fixture.Assets())
+                .HasValue());
+    CHECK_FALSE(fixture.port.InputEligible(fixture.view));
+    fixture.Frame();
+    fixture.Frame();
+    auto reset = Take(fixture.port.AcquireFrame());
+    CHECK(reset.Layout().Descriptor().sources.document.Value() == 2);
+    CHECK(reset.Layout().Records().front().constraints.maximum.width == 6400);
+    reset = {};
+    fixture.Stop();
+    CHECK(fixture.port.UpdateVisualAccessibility({4, false, false, {2, 1}}).HasError());
+}

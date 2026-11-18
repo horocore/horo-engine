@@ -52,6 +52,28 @@ namespace Horo::Runtime::Ui {
         return Result<void>::Success();
     }
 
+    /** @copydoc UiFocusGraph::RevealInLayout */
+    Result<std::optional<UiFocusBringIntoViewRequest>> UiFocusGraph::RevealInLayout(const UiLayoutSnapshot &layout) const {
+        using Reveal = Result<std::optional<UiFocusBringIntoViewRequest>>;
+        if (!storage_ || storage_->lifecycle != UiFocusGraphState::Active)
+            return Reveal::Failure(MakeError(UiErrors::FocusLifecycleUnavailable));
+        const auto &source = layout.Descriptor();
+        auto owner = storage_->descriptor.owner;
+        if (source.instance != owner.instance || source.canvas != owner.canvas || source.document != owner.document)
+            return Reveal::Failure(MakeError(UiErrors::FocusScopeMismatch));
+        if (!source.interaction.IsValid() || source.sources.document != owner.documentRevision ||
+            source.sources.tree != owner.treeRevision || source.interaction.Compare(owner.interaction) == UiRevisionRelation::Older)
+            return Reveal::Failure(MakeError(UiErrors::FocusSourceStale));
+        const auto target = storage_->CurrentTarget();
+        if (!target)
+            return Reveal::Success(std::nullopt);
+        const auto policy = storage_->nodes[*storage_->focusedIndex].descriptor.bringIntoView;
+        if (policy == UiFocusBringIntoViewPolicy::None)
+            return Reveal::Success(std::nullopt);
+        owner.interaction = source.interaction;
+        return Reveal::Success(UiFocusBringIntoViewRequest{owner, *target, policy});
+    }
+
     /** @copydoc UiFocusGraph::PrepareLayout */
     Result<void> UiFocusGraph::PrepareLayout(const UiLayoutSnapshot &layout, const std::span<const UiLogicalRect> projected,
                                              const std::span<const std::uint8_t> eligibility) {

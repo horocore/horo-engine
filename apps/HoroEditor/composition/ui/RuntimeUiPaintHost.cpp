@@ -95,6 +95,14 @@ namespace Horo::Application::Internal {
             return Unavailable();
         if (auto valid = policy.ValidateReplacement(state_->accessibility); valid.HasError())
             return valid;
+        if (state_->output && (policy.scale != state_->accessibility.scale ||
+                               policy.minimumControlTargetDips != state_->accessibility.minimumControlTargetDips)) {
+            auto evidence = *state_->output;
+            evidence.userUiScale = policy.scale;
+            evidence.minimumControlTargetDips = policy.minimumControlTargetDips;
+            if (const auto queued = state_->QueueOutput(evidence); queued.HasError())
+                return queued;
+        }
         state_->accessibility = policy;
         return Result<void>::Success();
     }

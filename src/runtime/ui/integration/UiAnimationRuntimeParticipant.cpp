@@ -13,7 +13,8 @@ namespace Horo::Runtime {
                  (static_cast<std::uint8_t>(view.presentation->available) & 240U) != 0))
                 return false;
             return config.application <= UiAnimationApplication::Manual && config.clockCommands > 0 && config.clockCommands <= 4'096 &&
-                   view.constraints.IsValid() && view.content.IsValid() && view.fontScale.IsValid() && view.intrinsic.IsValid() &&
+                   view.constraints.IsValid() && view.content.IsValid() && view.fontScale.IsValid() &&
+                   view.minimumControlTargetDips <= Ui::MaximumUiAccessibleTargetDips && view.intrinsic.IsValid() &&
                    view.canvas.IsValid() && view.policy.IsValid() && view.inlineDirection <= Ui::UiLayoutInlineDirection::RightToLeft;
         }
 
@@ -178,8 +179,11 @@ namespace Horo::Runtime {
         config.viewport = viewport;
         if (!ValidConfig(config))
             return Result<void>::Failure(MakeError(Ui::UiErrors::PresentationProfileMalformed));
-        if (storage_->config.viewport.presentation && storage_->config.viewport != viewport &&
-            (!viewport.presentation || viewport.presentation->revision <= storage_->config.viewport.presentation->revision))
+        const auto &current = storage_->config.viewport;
+        if (current.minimumControlTargetDips != viewport.minimumControlTargetDips && viewport.policy <= current.policy)
+            return Result<void>::Failure(MakeError(Ui::UiErrors::PresentationProfileSourceStale));
+        if (current.presentation && current != viewport &&
+            (!viewport.presentation || viewport.presentation->revision <= current.presentation->revision))
             return Result<void>::Failure(MakeError(Ui::UiErrors::PresentationProfileSourceStale));
         storage_->config.viewport = std::move(viewport);
         return Result<void>::Success();

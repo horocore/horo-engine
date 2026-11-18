@@ -29,6 +29,18 @@ namespace {
         }
     };
 
+    class ReflowTextMetrics final : public UiLayoutIntrinsicProvider {
+    public:
+        Result<UiLayoutIntrinsicMeasurement> MeasureText(const UiLayoutIntrinsicRequest &request) const override {
+            const auto height = request.available.width < 50 ? 40 : 20;
+            return Result<UiLayoutIntrinsicMeasurement>::Success({{request.available.width, height}, NoUiBaseline, true, false});
+        }
+
+        Result<UiLayoutIntrinsicMeasurement> MeasureImage(const UiLayoutIntrinsicRequest &request) const override {
+            return MeasureText(request);
+        }
+    };
+
     UiDocumentPresentationProfiles CompactProfiles() {
         UiLayoutStyle compact;
         compact.width = UiLength::Dip(80);
@@ -124,6 +136,32 @@ TEST_CASE("Actual owner selects durable alternatives per attachment before compu
     REQUIRE(participant.UpdateAttachment(attached.Value(), changed).HasError());
     fixture.host->Shutdown();
     REQUIRE(derived.layout->Get(child).HasValue());
+}
+
+TEST_CASE("Responsive owner remeasures text at the narrowed scaled viewport before publishing",
+          "[runtime_ui][responsive][integration][accessibility]") {
+    HostOptions options;
+    options.intrinsicProvider = std::make_shared<ReflowTextMetrics>();
+    options.explicitLayoutOrigins = true;
+    options.reflowText = true;
+    HostFixture fixture{options};
+    auto &participant = *fixture.participant;
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    const auto ordinary = Frame(participant);
+    const auto child = ordinary.Controls().front().source.element;
+    REQUIRE(ordinary.Layout().Get(child).Value().measurement.desired.height == 20);
+
+    auto viewport = Config().viewport;
+    viewport.constraints.maximum.width = viewport.content.extent.width = 70;
+    viewport.canvas = Revision<UiLayoutCanvasRevision>(2);
+    REQUIRE(participant.SetViewport(viewport).HasValue());
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    const auto compact = Frame(participant);
+    CHECK(compact.Layout().Get(child).Value().measurement.desired.height == 40);
+    CHECK(compact.Layout().Descriptor().interaction > ordinary.Layout().Descriptor().interaction);
+    CHECK(ordinary.Layout().Get(child).Value().measurement.desired.height == 20);
+    fixture.host->Shutdown();
+    CHECK(participant.SetViewport(viewport).HasError());
 }
 
 TEST_CASE("Unchanged responsive frames retain interaction while later attachments join the actual primary fence",

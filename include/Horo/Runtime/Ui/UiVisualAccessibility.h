@@ -4,6 +4,7 @@
  * @brief UI-owned immutable scale/contrast preferences and readable typography projection.
  */
 #include "Horo/Foundation/ModuleHost.h"
+#include "Horo/Runtime/Ui/UiCanvasSpace.h"
 
 #include <span>
 
@@ -43,6 +44,8 @@ namespace Horo::Runtime::Ui {
         ConfigurationRevision revision{};
         bool highContrast{};
         bool reduceMotion{};
+        UiCanvasScaleFactor scale;                /**< Exact bounded per-user uniform presentation scale. */
+        std::uint32_t minimumControlTargetDips{}; /**< Positive view target preference, or zero before composition. */
         /** @brief Validates a new policy against one exact current value, where revision zero is unconfigured.
          * @param current Last admitted value.
          * @return Success for newer or exactly equal evidence, typed malformed, conflicting or stale failure otherwise.
@@ -63,6 +66,8 @@ namespace Horo::Runtime::Ui {
          * @return Scale in [0.5,3]; capturing alone does not rebuild a font atlas or change native geometry.
          */
         [[nodiscard]] float UiScale() const noexcept;
+        /** @brief Returns exact captured scale for DPI and responsive canvas resolution. @return Positive reduced ratio. */
+        [[nodiscard]] UiCanvasScaleFactor ScaleFactor() const noexcept;
         /** @brief Returns desired high contrast. @return Same-revision UI preference. */
         [[nodiscard]] bool HighContrast() const noexcept;
         /** @brief Projects one authored visible text role with the editor's readable floor.
@@ -75,9 +80,9 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] ConfigurationRevision Revision() const noexcept;
 
     private:
-        UiVisualAccessibilitySnapshot(ConfigurationSnapshot snapshot, float scale, bool highContrast) noexcept;
+        UiVisualAccessibilitySnapshot(ConfigurationSnapshot snapshot, UiCanvasScaleFactor scale, bool highContrast) noexcept;
         ConfigurationSnapshot snapshot_;
-        float scale_{1};
+        UiCanvasScaleFactor scale_;
         bool highContrast_{};
     };
 

@@ -8,6 +8,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <numeric>
 
 namespace Horo::Runtime::Ui::UiErrors {
     /** @copydoc VisualAccessibilityInvalid */
@@ -155,7 +156,8 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiVisualPresentationPolicy::ValidateReplacement */
     Result<void> UiVisualPresentationPolicy::ValidateReplacement(const UiVisualPresentationPolicy &current) const {
-        if (revision == 0 || (revision == current.revision && *this != current))
+        if (revision == 0 || !scale.IsValid() || 2 * scale.numerator < scale.denominator || scale.numerator > 3 * scale.denominator ||
+            minimumControlTargetDips > MaximumUiAccessibleTargetDips || (revision == current.revision && *this != current))
             return Result<void>::Failure(MakeError(UiErrors::VisualAccessibilityInvalid));
         if (revision < current.revision)
             return Result<void>::Failure(MakeError(UiErrors::RevisionStale));
@@ -188,18 +190,23 @@ namespace Horo::Runtime::Ui {
         const auto *contrast = contrastEntry ? std::get_if<bool>(&contrastEntry->value) : nullptr;
         if (!scale || !contrast || *scale < 500 || *scale > 3000)
             return Result<UiVisualAccessibilitySnapshot>::Failure(MakeError(UiErrors::VisualAccessibilityInvalid));
-        const float multiplier = static_cast<float>(*scale) / 1000;
-        const bool highContrast = *contrast;
-        return Result<UiVisualAccessibilitySnapshot>::Success(UiVisualAccessibilitySnapshot{std::move(snapshot), multiplier, highContrast});
+        const auto divisor = std::gcd(*scale, std::int64_t{1000});
+        const UiCanvasScaleFactor multiplier{static_cast<std::uint32_t>(*scale / divisor), static_cast<std::uint32_t>(1000 / divisor)};
+        return Result<UiVisualAccessibilitySnapshot>::Success(UiVisualAccessibilitySnapshot{std::move(snapshot), multiplier, *contrast});
     }
 
     /** @copydoc UiVisualAccessibilitySnapshot::UiVisualAccessibilitySnapshot */
-    UiVisualAccessibilitySnapshot::UiVisualAccessibilitySnapshot(ConfigurationSnapshot snapshot, const float scale,
+    UiVisualAccessibilitySnapshot::UiVisualAccessibilitySnapshot(ConfigurationSnapshot snapshot, const UiCanvasScaleFactor scale,
                                                                  const bool highContrast) noexcept
         : snapshot_(std::move(snapshot)), scale_(scale), highContrast_(highContrast) {}
 
     /** @copydoc UiVisualAccessibilitySnapshot::UiScale */
     float UiVisualAccessibilitySnapshot::UiScale() const noexcept {
+        return static_cast<float>(scale_.numerator) / static_cast<float>(scale_.denominator);
+    }
+
+    /** @copydoc UiVisualAccessibilitySnapshot::ScaleFactor */
+    UiCanvasScaleFactor UiVisualAccessibilitySnapshot::ScaleFactor() const noexcept {
         return scale_;
     }
 
@@ -217,6 +224,6 @@ namespace Horo::Runtime::Ui {
     Result<float> UiVisualAccessibilitySnapshot::TextSize(const float authoredDips) const {
         if (!std::isfinite(authoredDips) || authoredDips <= 0 || authoredDips > std::numeric_limits<float>::max() / 3)
             return Result<float>::Failure(MakeError(UiErrors::VisualAccessibilityInvalid));
-        return Result<float>::Success(std::max(16.0F, authoredDips * scale_));
+        return Result<float>::Success(std::max(16.0F, authoredDips * UiScale()));
     }
 }  // namespace Horo::Runtime::Ui

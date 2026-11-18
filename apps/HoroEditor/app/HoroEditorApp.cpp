@@ -1473,7 +1473,8 @@ namespace Horo::Editor {
             if (safety.HasError())
                 return Result<void>::Failure(safety.ErrorValue());
             const auto update =
-                port.UpdateVisualAccessibility({config.Revision(), visual.Value().HighContrast(), safety.Value().ReduceMotion()});
+                port.UpdateVisualAccessibility({config.Revision(), visual.Value().HighContrast(), safety.Value().ReduceMotion(),
+                                                visual.Value().ScaleFactor(), Runtime::Ui::DefaultUiAccessibleTargetDips});
             if (update.HasValue())
                 applied = config.Revision();
             return update;

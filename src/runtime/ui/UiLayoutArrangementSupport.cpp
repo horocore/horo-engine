@@ -90,7 +90,7 @@ namespace Horo::Runtime::Ui::LayoutInternal {
 
         [[nodiscard]] Result<std::int32_t> ResolveAnchorExtent(const AxisPlacementRequest &request, const std::int32_t segment) {
             if (!IsExplicit(request.preferred))
-                return Result<std::int32_t>::Success(segment);
+                return Result<std::int32_t>::Success(std::max(segment, request.interactiveMinimum));
             if (request.anchors.alignment == UiLayoutAlignment::Stretch && !request.anchors.preserveSize)
                 return Failure<std::int32_t>(UiErrors::LayoutConstraintConflict);
             return Result<std::int32_t>::Success(request.desired);
@@ -156,7 +156,7 @@ namespace Horo::Runtime::Ui::LayoutInternal {
                 return Failure<AxisPlacement>(UiErrors::LayoutInvalid);
             std::int32_t extent = request.desired;
             if (!IsExplicit(request.preferred) && request.flowAlignment == UiLayoutAlignment::Stretch)
-                extent = available.Value();
+                extent = std::max(available.Value(), request.interactiveMinimum);
             const auto remaining = CheckedCast(std::max<std::int64_t>(0, static_cast<std::int64_t>(available.Value()) - extent));
             if (remaining.HasError())
                 return Failure<AxisPlacement>(UiErrors::LayoutInvalid);
@@ -261,7 +261,8 @@ namespace Horo::Runtime::Ui::LayoutInternal {
                                               parentContent.extent.width,
                                               measurement.measurement.desired.width,
                                               style.pivot.x,
-                                              parentContent.origin.x};
+                                              parentContent.origin.x,
+                                              child.minimumInteractiveExtent};
         const AxisPlacementRequest vertical{style.anchors.vertical,
                                             style.height,
                                             {margins.top, 0, margins.bottom, 0},
@@ -270,7 +271,8 @@ namespace Horo::Runtime::Ui::LayoutInternal {
                                             parentContent.extent.height,
                                             measurement.measurement.desired.height,
                                             style.pivot.y,
-                                            parentContent.origin.y};
+                                            parentContent.origin.y,
+                                            child.minimumInteractiveExtent};
         const auto horizontalPlacement = PlaceAxis(horizontal);
         const auto verticalPlacement = PlaceAxis(vertical);
         if (horizontalPlacement.HasError() || verticalPlacement.HasError())

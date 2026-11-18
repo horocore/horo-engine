@@ -38,7 +38,8 @@ namespace Horo::Runtime::Ui::LayoutInternal {
                                                   parentContent.extent.width,
                                                   measurement.measurement.desired.width,
                                                   style.pivot.x,
-                                                  parentContent.origin.x};
+                                                  parentContent.origin.x,
+                                                  child.minimumInteractiveExtent};
             const AxisPlacementRequest vertical{style.anchors.vertical,
                                                 style.height,
                                                 {margins.top, 0, margins.bottom, 0},
@@ -47,7 +48,8 @@ namespace Horo::Runtime::Ui::LayoutInternal {
                                                 parentContent.extent.height,
                                                 measurement.measurement.desired.height,
                                                 style.pivot.y,
-                                                placementCursorY};
+                                                placementCursorY,
+                                                child.minimumInteractiveExtent};
             const auto horizontalPlacement = PlaceAxis(horizontal);
             const auto verticalPlacement = PlaceAxis(vertical);
             if (horizontalPlacement.HasError() || verticalPlacement.HasError())
@@ -195,7 +197,9 @@ namespace Horo::Runtime::Ui::LayoutInternal {
                                                  request.constraints.maximum.height);
             if (width.HasError() || height.HasError())
                 return Failure(UiErrors::LayoutInvalid);
-            output[index] = {{width.Value().minimum, height.Value().minimum}, {width.Value().maximum, height.Value().maximum}};
+            const auto floor = descriptor->minimumInteractiveExtent;
+            output[index] = {{std::max(width.Value().minimum, floor), std::max(height.Value().minimum, floor)},
+                             {std::max(width.Value().maximum, floor), std::max(height.Value().maximum, floor)}};
         }
         return Result<void>::Success();
     }
