@@ -190,9 +190,11 @@ namespace Horo::Editor {
         if (found != m_prefabDocuments.end()) {
             auto &document = **found;
             const auto snapshot = document.Snapshot();
-            if (!snapshot.externalConflict && !document.HasStage() && m_prefabStageAttemptRevision != snapshot.fence.revision)
-                PreparePrefabStage(document);
-            ExtractPrefabStage(document);
+            if (!snapshot.externalConflict) {
+                if (!document.HasStage() && m_prefabStageAttemptRevision != snapshot.fence.revision)
+                    PreparePrefabStage(document);
+                ExtractPrefabStage(document);
+            }
         }
         m_viewModel.prefabDocuments.clear();
         for (const auto &entry : m_prefabDocuments) {
@@ -408,6 +410,7 @@ namespace Horo::Editor {
             }
         }
         if (m_activePrefabDocument == instance) {
+            m_prefabStagePending = false;
             m_prefabViewportScene = {};
             ++m_viewportSceneRevision;
             if (!snapshot.externalConflict)

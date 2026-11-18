@@ -99,7 +99,7 @@ namespace Horo::Editor {
                 conflict_,
                 history_.UndoCount() != 0,
                 history_.RedoCount() != 0,
-                StageView().has_value(),
+                !conflict_ && StageView().has_value(),
                 externalComparison_,
                 keepExternalDraft_};
     }
@@ -323,8 +323,7 @@ namespace Horo::Editor {
         conflict_ = comparison != nullptr;
         externalComparison_ = std::move(comparison);
         keepExternalDraft_ = false;
-        if (conflict_)
-            ReleaseStage();
+        // Presentation retires immediately. Native stage teardown remains on explicit document routes.
         return true;
     }
 
