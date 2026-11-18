@@ -2,6 +2,7 @@
 #include "Horo/Application/BlackboardUsageReview.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/LocalizedGui.h"
+#include "editor/screens/workspace/BlackboardKeyWidgets.h"
 #include "editor/screens/workspace/BlackboardScalarInput.h"
 #include "editor/screens/workspace/EditorWorkspaceView.h"
 
@@ -180,8 +181,9 @@ namespace Horo::Editor {
                 current.maximumCollectionElements = static_cast<std::size_t>(selection + minimum);
         }
 
-        /** @brief Renders descriptor fields while leaving durable semantics under the document's reference fence. */
-        void DrawTypeFields(const BlackboardFrame &frame, const AI::BlackboardKeyDescriptor &current, std::string &number, bool draft) {
+        /** @brief Projects a tentative descriptor through shared typed editing controls. */
+        AI::BlackboardKeyDescriptor DrawTypeFields(const BlackboardFrame &frame, const AI::BlackboardKeyDescriptor &current,
+                                                   std::string &number, bool draft) {
             auto changed = current;
             const bool typeChanged =
                 frame.Choice("type", changed.kind, std::to_array({"bool", "integer", "scalar", "entity", "asset", "coordinate"}), draft);
@@ -198,8 +200,7 @@ namespace Horo::Editor {
                 DrawCollectionCapacity(frame, changed, draft);
                 DrawDefaultField(frame, changed, number, draft);
             }
-            if (changed != current)
-                frame.Edit(EditBlackboardKey{std::move(changed)});
+            return changed;
         }
 
         /** @brief Resolves the stable owner category without inspecting arbitrary authored property values. */
@@ -316,6 +317,13 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    /** @copydoc DrawBlackboardDraftKey */
+    void DrawBlackboardDraftKey(const EditorGuiContext &context, AI::BlackboardKeyDescriptor &key, std::string &numericDefault,
+                                EditorWorkspaceViewCommandData &command) {
+        const BlackboardFrame frame{context.localization, context.theme.fonts, {}, command};
+        key = DrawTypeFields(frame, key, numericDefault, true);
+    }
+
     /** @copydoc EditorWorkspaceView::DrawBlackboardDocument */
     bool EditorWorkspaceView::DrawBlackboardDocument(const EditorWorkspaceViewModel &viewModel,
                                                      EditorWorkspaceViewCommandData &outCommand) const {
@@ -392,7 +400,9 @@ namespace Horo::Editor {
             frame.Caption("reference_required");
             DrawUsages(frame, *document, draft.selected, viewModel.assetRegistryRevision, draft.usagePage);
         }
-        DrawTypeFields(frame, row.descriptor, draft.numericDefault, draftKey);
+        auto changed = DrawTypeFields(frame, row.descriptor, draft.numericDefault, draftKey);
+        if (changed != row.descriptor)
+            frame.Edit(EditBlackboardKey{std::move(changed)});
         ImGui::PopID();
         return true;
     }

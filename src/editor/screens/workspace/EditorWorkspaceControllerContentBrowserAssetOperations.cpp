@@ -1,4 +1,6 @@
+#include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
+#include "Horo/Application/ProjectAssetImportCommitter.h"
 #include "Horo/Foundation/Paths.h"
 #include "WorkspacePathText.h"
 #include "editor/menu/EditorMenuPlatform.h"
@@ -76,6 +78,25 @@ namespace Horo::Editor {
         };
     }
 
+    /** @copydoc EditorWorkspaceController::PrepareInitialAiAssetDestination */
+    std::optional<std::filesystem::path> EditorWorkspaceController::PrepareInitialAiAssetDestination(std::string_view directoryPath,
+                                                                                                     std::string_view name,
+                                                                                                     std::string_view extension,
+                                                                                                     std::size_t maximumNameBytes) {
+        const auto directory = NormalizeAbsolute(WorkspaceNativePath(directoryPath));
+        const auto root = ProjectLayout::AssetRoot(ProjectRoot());
+        if (name.size() > maximumNameBytes || !IsPortableEntryName(name) || !IsContentBrowserDirectoryTargetAllowed(root, directory)) {
+            m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.invalid_name";
+            return {};
+        }
+        const auto filename = std::string{name} + std::string{extension};
+        if (DirectoryContainsPortableName(directory, filename) || DirectoryContainsPortableName(directory, filename + ".horo")) {
+            m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.name_exists";
+            return {};
+        }
+        return directory / WorkspaceNativePath(filename);
+    }
+
     /** @copydoc EditorWorkspaceController::CreateContentBrowserEnvironmentQuery */
     void EditorWorkspaceController::CreateContentBrowserEnvironmentQuery(const EnvironmentQueryCreationRequest &request) {
         auto &error = m_viewModel.contentBrowserOperationError;
@@ -84,20 +105,44 @@ namespace Horo::Editor {
             error = "workspace.environment_query.descriptors_unavailable";
             return;
         }
-        const auto directory = NormalizeAbsolute(WorkspaceNativePath(request.directory));
-        const auto root = ProjectLayout::AssetRoot(ProjectRoot());
-        if (!IsPortableEntryName(request.name) || request.name.size() > AI::EnvironmentQuerySchemaLimits::DisplayNameBytes ||
-            !IsContentBrowserDirectoryTargetAllowed(root, directory)) {
-            error = "workspace.content_browser.operation.invalid_name";
+        const auto destination = PrepareInitialAiAssetDestination(request.directory, request.name, AI::EnvironmentQuerySourceExtension,
+                                                                  AI::EnvironmentQuerySchemaLimits::DisplayNameBytes);
+        if (destination)
+            PublishInitialEnvironmentQuery(*destination, request, GenerateRandomAssetId(m_mutableAssetRegistry->Snapshot()));
+    }
+
+    /** @copydoc EditorWorkspaceController::CreateContentBrowserBlackboard */
+    void EditorWorkspaceController::CreateContentBrowserBlackboard(const BlackboardCreationRequest &request) {
+        auto &error = m_viewModel.contentBrowserOperationError;
+        error.clear();
+        if (!m_viewModel.blackboardCreationAvailable) {
+            error = "workspace.content_browser.operation.unavailable";
             return;
         }
-        const auto name = request.name + std::string{AI::EnvironmentQuerySourceExtension};
-        if (DirectoryContainsPortableName(directory, name) || DirectoryContainsPortableName(directory, name + ".horo")) {
-            error = "workspace.content_browser.operation.name_exists";
-            return;
+        const auto destination = PrepareInitialAiAssetDestination(request.directory, request.name, AI::BlackboardSchemaSourceExtension,
+                                                                  AI::BlackboardSchemaAuthoringRow::MaximumLabelBytes);
+        if (destination)
+            PublishInitialBlackboard(*destination, request, GenerateRandomAssetId(m_mutableAssetRegistry->Snapshot()));
+    }
+
+    /** @copydoc EditorWorkspaceController::FinishAuthoredAiPublication */
+    bool EditorWorkspaceController::FinishAuthoredAiPublication(const Application::ProjectAssetImportReceipt &receipt,
+                                                                const Result<void> &outcome, std::string_view failureKey) {
+        if (receipt.registryPublished) {
+            m_assetRegistry = m_mutableAssetRegistry->Snapshot();
+            m_viewModel.assetRegistryRevision = m_assetRegistry.Revision();
+            if (m_collisionInventory)
+                *m_collisionInventory = {};
+            if (m_collisionSettings)
+                static_cast<void>(m_collisionSettings->ObserveInventory({}));
+            RebuildContentBrowserProjection(ProjectRoot(), WorkspaceNativePath(m_viewModel.contentBrowser.absoluteCurrentPath));
         }
-        PublishInitialEnvironmentQuery(directory / WorkspaceNativePath(name), request,
-                                       GenerateRandomAssetId(m_mutableAssetRegistry->Snapshot()));
+        if (outcome.HasValue())
+            return true;
+        m_viewModel.contentBrowserOperationError = receipt.status == Application::ProjectAssetImportStatus::ReconciliationRequired
+                                                       ? "workspace.content_browser.operation.rollback_failed"
+                                                       : failureKey;
+        return false;
     }
 
     bool EditorWorkspaceController::CopyContentBrowserAssetTo(const std::filesystem::path &absoluteSource,

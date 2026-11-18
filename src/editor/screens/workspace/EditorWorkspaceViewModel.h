@@ -246,6 +246,7 @@ namespace Horo::Editor {
         CancelContentBrowserClipboard,
         CreateContentBrowserFolder,
         CreateEnvironmentQuery,
+        CreateBlackboardSchema,
         CreateLuaBehavior,
         CreateNativeBehavior,
         ReimportContentBrowserAsset,
@@ -437,6 +438,14 @@ namespace Horo::Editor {
         std::optional<GyroscopeBindingReplacement> replacement;
     };
 
+    /** @brief Confirmed first Blackboard asset and an explicitly authored initial key. */
+    struct BlackboardCreationRequest final {
+        std::string directory;
+        std::string name;
+        std::string keyName;
+        AI::BlackboardKeyDescriptor key;
+    };
+
     /** @brief Commands emitted by Blackboard presentation for an exact document revision. */
     enum class BlackboardDocumentOperation : std::uint8_t {
         Edit,
@@ -500,6 +509,7 @@ namespace Horo::Editor {
         Runtime::Ui::RuntimeStyleAssetId uiCanvasTheme;
         std::optional<BlackboardWorkspaceRequest> blackboard;
         std::optional<EnvironmentQueryCreationRequest> newEnvironmentQuery;
+        std::optional<BlackboardCreationRequest> newBlackboard;
         std::optional<SequenceTimelineState> sequenceTimeline;
         std::optional<PCGEditorRequest> pcgRequest;
         std::optional<EditorMenuInvocation> menuInvocation = std::nullopt;
@@ -681,6 +691,7 @@ namespace Horo::Editor {
         std::vector<EnvironmentQueryWorkspaceDocument> environmentQueryDocuments;
         bool environmentQueryCreationAvailable{};
         std::vector<BlackboardWorkspaceDocument> blackboardDocuments;
+        bool blackboardCreationAvailable{};
         std::vector<PCGWorkspaceDocument> pcgDocuments;
         std::vector<PCGPaletteEntry> pcgPalette;
         PCG::PCGNodeCatalogSnapshot pcgSchemas;

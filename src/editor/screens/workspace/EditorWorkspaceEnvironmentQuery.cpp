@@ -1,3 +1,4 @@
+#include "AuthoredAiSourceInventory.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/Application/ProjectAssetImportCommitter.h"
@@ -11,7 +12,6 @@
 
 #include <algorithm>
 #include <format>
-#include <random>
 #include <set>
 
 namespace Horo::Editor {
@@ -37,17 +37,8 @@ namespace Horo::Editor {
         Result<QueryNamespace> CaptureQueryNamespace(const std::filesystem::path &root, const Assets::AssetRegistrySnapshot &registry,
                                                      std::optional<Assets::AssetId> selected = {}) {
             using Namespace = Result<QueryNamespace>;
-            std::vector<Assets::AssetId> queries;
-            const Assets::AssetCookLimits limits{.maximumSourceBytes = EnvironmentQuerySourceCodec::MaximumBytes};
-            for (const auto &record : registry.Records()) {
-                if (record.type.Value() != AI::EnvironmentQuerySourceAssetType)
-                    continue;
-                if (queries.size() == limits.maximumAssets)
-                    return Namespace::Failure(MakeError(Assets::AssetSourceErrors::Limit));
-                queries.push_back(record.id);
-            }
-            constexpr std::uint64_t MaximumInventoryBytes = 64ULL * 1024ULL * 1024ULL;
-            const auto inventory = Assets::AssetCookInputSnapshot::CaptureSelected(root, registry, queries, limits, MaximumInventoryBytes);
+            const auto inventory =
+                AuthoredAiSources::Capture(root, registry, AI::EnvironmentQuerySourceAssetType, EnvironmentQuerySourceCodec::MaximumBytes);
             if (inventory.HasError())
                 return Namespace::Failure(inventory.ErrorValue());
 
@@ -69,22 +60,10 @@ namespace Horo::Editor {
             return Namespace::Success(std::move(names));
         }
 
-        /** @brief Issues a nonzero stable identity from the editor's local entropy source. */
-        template <typename Identity> Result<Identity> IssueQueryIdentity(const std::set<Identity> &used = {}) {
-            std::random_device entropy;
-            std::uniform_int_distribution<std::uint64_t> ids;
-            for (unsigned attempt = 0; attempt < 32; ++attempt) {
-                const auto identity = Identity::Create(ids(entropy));
-                if (identity.HasValue() && !used.contains(identity.Value()))
-                    return identity;
-            }
-            return Result<Identity>::Failure(MakeError(AI::AIErrors::EnvironmentQueryIdentityConflict));
-        }
-
         /** @brief Retains the selected source's exact stage and result contracts beneath a new QueryId. */
         Result<std::vector<std::uint8_t>> PrepareQueryCopy(const QueryNamespace &names) {
             using Copy = Result<std::vector<std::uint8_t>>;
-            const auto id = IssueQueryIdentity(names.queries);
+            const auto id = AuthoredAiSources::Issue(names.queries);
             if (id.HasError())
                 return Copy::Failure(id.ErrorValue());
             const auto &original = *names.selected;
@@ -98,16 +77,10 @@ namespace Horo::Editor {
 
         /** @brief Checks current durable pairs under the publisher's Project lease, including other editors' creations. */
         Result<void> AdmitInitialQueryNamespace(const std::filesystem::path &root, AI::QueryId id, AI::QueryResultSchemaId result) {
-            auto current = Assets::PrepareAssetRegistryCandidate(root);
+            const auto current = AuthoredAiSources::CurrentRegistry(root);
             if (current.HasError())
                 return Result<void>::Failure(current.ErrorValue());
-            if (current.Value().status != Assets::AssetRegistryBuildStatus::Complete)
-                return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed));
-            Assets::AssetRegistry detached;
-            const auto rebuilt = detached.Publish(std::move(current).Value());
-            if (rebuilt.status != Assets::AssetRegistryBuildStatus::Complete)
-                return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed));
-            const auto names = CaptureQueryNamespace(root, detached.Snapshot());
+            const auto names = CaptureQueryNamespace(root, current.Value());
             if (names.HasError())
                 return Result<void>::Failure(names.ErrorValue());
             if (names.Value().queries.contains(id) || names.Value().results.contains(result))
@@ -257,7 +230,7 @@ namespace Horo::Editor {
                                                                  {{newId, type.Value(), path.Value(), {bytes.begin(), bytes.end()}}}};
             Application::ProjectAssetImportCommitter writer{*m_mutations, *m_durableFiles, m_mutableAssetRegistry};
             const auto written = writer.CommitAuthored(batch);
-            return FinishEnvironmentQueryPublication(writer.LastReceipt(), written, "workspace.environment_query.copy_failed");
+            return FinishAuthoredAiPublication(writer.LastReceipt(), written, "workspace.environment_query.copy_failed");
         } catch (...) {
             return fail("workspace.environment_query.copy_failed");
         }
@@ -272,9 +245,9 @@ namespace Horo::Editor {
             const auto root = ProjectRoot();
             const auto path = ProjectPath::Parse(WorkspacePortablePathText(destination.lexically_relative(root)));
             const auto type = Assets::AssetTypeId::Parse(AI::EnvironmentQuerySourceAssetType);
-            const auto id = IssueQueryIdentity<AI::QueryId>();
-            const auto stage = IssueQueryIdentity<AI::QueryStageId>();
-            const auto result = IssueQueryIdentity<AI::QueryResultSchemaId>();
+            const auto id = AuthoredAiSources::Issue<AI::QueryId>();
+            const auto stage = AuthoredAiSources::Issue<AI::QueryStageId>();
+            const auto result = AuthoredAiSources::Issue<AI::QueryResultSchemaId>();
             if (!newId.IsValid() || path.HasError() || type.HasError() || id.HasError() || stage.HasError() || result.HasError())
                 return;
             const auto source =
@@ -294,31 +267,11 @@ namespace Horo::Editor {
             const auto written = writer.CommitAuthored(batch, {}, [&] {
                 return AdmitInitialQueryNamespace(root, id.Value(), result.Value());
             });
-            if (FinishEnvironmentQueryPublication(writer.LastReceipt(), written, "workspace.environment_query.create_failed"))
+            if (FinishAuthoredAiPublication(writer.LastReceipt(), written, "workspace.environment_query.create_failed"))
                 OpenSourceFile({.path = destination, .origin = SourceOpenOrigin::Command, .mode = SourceOpenMode::EmbeddedOnly});
         } catch (...) {
             // The publisher contains native and admission failures and returns its durable receipt.
         }
-    }
-
-    /** @copydoc EditorWorkspaceController::FinishEnvironmentQueryPublication */
-    bool EditorWorkspaceController::FinishEnvironmentQueryPublication(const Application::ProjectAssetImportReceipt &receipt,
-                                                                      const Result<void> &outcome, std::string_view failureKey) {
-        if (receipt.registryPublished) {
-            m_assetRegistry = m_mutableAssetRegistry->Snapshot();
-            m_viewModel.assetRegistryRevision = m_assetRegistry.Revision();
-            if (m_collisionInventory)
-                *m_collisionInventory = {};
-            if (m_collisionSettings)
-                static_cast<void>(m_collisionSettings->ObserveInventory({}));
-            RebuildContentBrowserProjection(ProjectRoot(), WorkspaceNativePath(m_viewModel.contentBrowser.absoluteCurrentPath));
-        }
-        if (outcome.HasValue())
-            return true;
-        m_viewModel.contentBrowserOperationError = receipt.status == Application::ProjectAssetImportStatus::ReconciliationRequired
-                                                       ? "workspace.content_browser.operation.rollback_failed"
-                                                       : failureKey;
-        return false;
     }
 
     /** @copydoc EditorWorkspaceView::DrawEnvironmentQueryDocument */

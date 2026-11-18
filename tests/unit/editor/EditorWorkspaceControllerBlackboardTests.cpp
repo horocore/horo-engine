@@ -9,6 +9,8 @@
 #include "ProjectReplicationTestSupport.h"
 #include "editor/screens/workspace/BlackboardScalarInput.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
+#include "editor/screens/workspace/WorkspacePathText.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
 
 #include <algorithm>
 #include <array>
@@ -37,13 +39,16 @@ namespace {
         ProjectMutationCoordinator mutations{files};
         Assets::AssetRegistry registry;
 
-        BlackboardWorkspaceFixture() {
+        explicit BlackboardWorkspaceFixture(bool existing = true) {
             std::filesystem::create_directories(root / "assets");
             root = std::filesystem::canonical(root);
-            Write("Initial");
-            WriteSidecar(Path, asset, AI::BlackboardSchemaAssetType);
+            if (existing) {
+                Write("Initial");
+                WriteSidecar(Path, asset, AI::BlackboardSchemaAssetType);
+            }
             RebuildRegistry();
-            REQUIRE(registry.Snapshot().Find(asset));
+            if (existing)
+                REQUIRE(registry.Snapshot().Find(asset));
         }
 
         ~BlackboardWorkspaceFixture() {
@@ -99,6 +104,92 @@ namespace {
         }
     };
 }  // namespace
+
+TEST_CASE("Blackboard New atomically creates and opens a schema with an authored initial key", "[unit][editor][blackboard][workspace]") {
+    BlackboardWorkspaceFixture project{false};
+    EditorWorkspaceController controller(project.root, project.runtime, project.registry.Snapshot(),
+                                         {.assets = {.mutableAssetRegistry = &project.registry},
+                                          .mutations = &project.mutations,
+                                          .durableFiles = &project.files});
+    REQUIRE(controller.ViewModel().blackboardCreationAvailable);
+    AssetBrowserInteractionSession browser;
+    browser.OpenCreateBlackboard(WorkspacePathText(project.root / "assets"));
+    auto &draft = browser.State().createBlackboard;
+    CHECK_FALSE(AssetBrowserInteractionSession::CanConfirmCreateBlackboard(draft));
+    draft.request.name = "New guard";
+    draft.request.keyName = "Patrol radius";
+    draft.request.key.kind = AI::BlackboardValueKind::SignedInteger;
+    draft.request.key.presence = AI::BlackboardKeyPresence::Required;
+    draft.request.key.access = AI::BlackboardKeyAccess::ReadOnly;
+    CHECK_FALSE(AssetBrowserInteractionSession::ConfirmCreateBlackboard(draft).has_value());
+    draft.request.key.defaultValue = AI::BlackboardScalarValue{std::int64_t{42}};
+    auto command = AssetBrowserInteractionSession::ConfirmCreateBlackboard(draft);
+    REQUIRE(command.has_value());
+
+    constexpr auto path = "assets/New guard.horo_bb";
+    SECTION("normal creation retains assigned identity and complete typed data across close and rename") {
+        controller.ProcessCommand(*command);
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        const auto registry = project.registry.Snapshot();
+        const auto *record = registry.FindByPath(path);
+        REQUIRE(record);
+        CHECK(record->type.Value() == AI::BlackboardSchemaAssetType);
+        CHECK(std::filesystem::is_regular_file(project.root / path));
+        CHECK(std::filesystem::is_regular_file(project.root / (std::string{path} + ".horo")));
+        const auto &opened = project.Snapshot(controller);
+        REQUIRE(opened.source->rows.size() == 1);
+        CHECK(opened.source->asset == record->id);
+        CHECK(opened.source->rows.front().displayName == std::optional<std::string>{"Patrol radius"});
+        CHECK(opened.source->rows.front().descriptor.kind == AI::BlackboardValueKind::SignedInteger);
+        CHECK(opened.source->rows.front().descriptor.access == AI::BlackboardKeyAccess::ReadOnly);
+        CHECK(opened.source->rows.front().descriptor.presence == AI::BlackboardKeyPresence::Required);
+        CHECK(opened.source->rows.front().descriptor.defaultValue == draft.request.key.defaultValue);
+        CHECK_FALSE(controller.HasDirtySourceDocuments());
+        const auto identity = opened.source->schema;
+        const auto firstKey = opened.source->rows.front().descriptor.key;
+        const auto instance = opened.document.instance;
+
+        controller.ProcessCommand(*command);
+        CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.content_browser.operation.name_exists");
+        CHECK(project.registry.Snapshot().Revision() == registry.Revision());
+
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = instance});
+        REQUIRE(controller.ViewModel().blackboardDocuments.empty());
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::RenameContentBrowserEntry,
+                                   .stringPayload = WorkspacePathText(project.root / path),
+                                   .secondaryStringPayload = "Relocated.horo_bb"});
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        controller.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::OpenSourceFile,
+             .sourceOpenRequest = SourceOpenRequest{.path = "assets/Relocated.horo_bb", .origin = SourceOpenOrigin::AssetActivation}});
+        const auto &relocated = project.Snapshot(controller);
+        CHECK(relocated.source->asset == record->id);
+        CHECK(relocated.source->schema == identity);
+        CHECK(relocated.source->rows.front().descriptor.key == firstKey);
+    }
+    SECTION("synthetic requests cannot bypass key and destination validation") {
+        command->newBlackboard->key.defaultValue = AI::BlackboardScalarValue{true};
+        controller.ProcessCommand(*command);
+        CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.blackboard.create_failed");
+        CHECK_FALSE(std::filesystem::exists(project.root / path));
+        CHECK_FALSE(std::filesystem::exists(project.root / (std::string{path} + ".horo")));
+        CHECK(project.registry.Snapshot().Records().empty());
+        CHECK(controller.ViewModel().blackboardDocuments.empty());
+    }
+    SECTION("malformed saved schema leaves the semantic namespace unavailable without replacing it") {
+        {
+            std::ofstream bad(project.root / project.Path, std::ios::binary);
+            bad << "bad source";
+            REQUIRE(static_cast<bool>(bad));
+        }
+        project.WriteSidecar(project.Path, project.asset, AI::BlackboardSchemaAssetType);
+        controller.ProcessCommand(*command);
+        CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.blackboard.create_failed");
+        CHECK_FALSE(std::filesystem::exists(project.root / path));
+        CHECK_FALSE(std::filesystem::exists(project.root / (std::string{path} + ".horo")));
+        CHECK(std::filesystem::is_regular_file(project.root / project.Path));
+    }
+}
 
 TEST_CASE("Blackboard asset activation saves, reloads and reopens its real workspace tab", "[unit][editor][blackboard][workspace]") {
     BlackboardWorkspaceFixture project;

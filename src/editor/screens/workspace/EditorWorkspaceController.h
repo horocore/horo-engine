@@ -1250,14 +1250,24 @@ namespace Horo::Editor {
         /** @brief Creates a registered EQS source from an explicitly selected existing query. */
         [[nodiscard]] bool CopyEnvironmentQuerySource(const ContentBrowserAssetTransferPlan &plan, Assets::AssetId newId);
 
+        /** @brief Resolves a portable and currently unoccupied destination in the project's actual Assets root. */
+        [[nodiscard]] std::optional<std::filesystem::path> PrepareInitialAiAssetDestination(std::string_view directory,
+                                                                                            std::string_view name,
+                                                                                            std::string_view extension,
+                                                                                            std::size_t maximumNameBytes);
+        /** @brief Validates the browser request and attempts to create an initial authored Blackboard source. */
+        void CreateContentBrowserBlackboard(const BlackboardCreationRequest &request);
+        /** @brief Validates, publishes and opens one initial Blackboard with an explicitly authored first key. */
+        void PublishInitialBlackboard(const std::filesystem::path &destination, const BlackboardCreationRequest &request,
+                                      Assets::AssetId newId);
         /** @brief Validates the browser request and attempts to create an initial authored EQS source. */
         void CreateContentBrowserEnvironmentQuery(const EnvironmentQueryCreationRequest &request);
         /** @brief Creates and opens one registered query using the installed typed provider's authoring factory. */
         void PublishInitialEnvironmentQuery(const std::filesystem::path &destination, const EnvironmentQueryCreationRequest &request,
                                             Assets::AssetId newId);
         /** @brief Resolves the authored publication outcome and refreshes the shared browser and registry projection. */
-        [[nodiscard]] bool FinishEnvironmentQueryPublication(const Application::ProjectAssetImportReceipt &receipt,
-                                                             const Result<void> &outcome, std::string_view failureKey);
+        [[nodiscard]] bool FinishAuthoredAiPublication(const Application::ProjectAssetImportReceipt &receipt, const Result<void> &outcome,
+                                                       std::string_view failureKey);
         [[nodiscard]] bool CopyContentBrowserAssetTo(const std::filesystem::path &absoluteSource,
                                                      const std::filesystem::path &absoluteDestinationDirectory);
         [[nodiscard]] std::optional<ContentBrowserAssetTransferPlan> PrepareContentBrowserAssetTransfer(

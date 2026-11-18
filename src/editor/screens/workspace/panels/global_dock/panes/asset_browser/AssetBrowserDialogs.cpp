@@ -1,9 +1,11 @@
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserDialogs.h"
 
+#include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "editor/screens/workspace/BlackboardKeyWidgets.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserPane.h"
@@ -385,6 +387,56 @@ namespace Horo::Editor {
             PopModalStyle();
         }
 
+        void DrawCreateBlackboardPopup(AssetBrowserInteractionState &state, EditorWorkspaceViewCommandData &command,
+                                       const EditorGuiContext &context) {
+            constexpr const char *popupId = "##ContentBrowserCreateBlackboard";
+            if (state.openCreateBlackboard) {
+                ImGui::OpenPopup(popupId);
+                state.openCreateBlackboard = false;
+            }
+            const ImGuiViewport *viewport = ImGui::GetMainViewport();
+            const float width = std::max(160.0F, std::min(460.0F, viewport->WorkSize.x - 32.0F));
+            ImGui::SetNextWindowPos(viewport->GetWorkCenter(), ImGuiCond_Appearing, {0.5F, 0.5F});
+            ImGui::SetNextWindowSizeConstraints({width, 0.0F}, {width, viewport->WorkSize.y - 48.0F});
+            PushModalStyle();
+            if (ImGui::BeginPopupModal(popupId, nullptr,
+                                       ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar |
+                                           ImGuiWindowFlags_NoSavedSettings)) {
+                const auto text = [&](std::string_view key) -> const std::string & {
+                    return context.localization.Get("editor", key);
+                };
+                auto &draft = state.createBlackboard;
+                const auto &fonts = context.theme.fonts;
+                DrawModalHeading(text("workspace.blackboard.create_title"), context);
+                const auto name = [&](const char *id, std::string_view caption, std::string &value) {
+                    Ui::FieldLabel(text(caption).c_str(), fonts);
+                    static_cast<void>(Ui::InputTextControl(id, value, AI::BlackboardSchemaAuthoringRow::MaximumLabelBytes + 1, fonts));
+                };
+                name("##NewBlackboardName", "workspace.blackboard.create_schema_name", draft.request.name);
+                name("##NewBlackboardKey", "workspace.blackboard.create_key_name", draft.request.keyName);
+                DrawBlackboardDraftKey(context, draft.request.key, draft.numericDefault, command);
+                if (draft.request.key.presence == AI::BlackboardKeyPresence::Required && !draft.request.key.defaultValue)
+                    Ui::ErrorText(text("workspace.blackboard.create_required_default").c_str(), fonts);
+                ImGui::Dummy({0.0F, 12.0F});
+                if (Ui::Button({.label = AssetBrowserPane::kTextScope.Text(context.localization, "action.cancel").c_str(),
+                                .variant = Ui::ButtonVariant::Secondary,
+                                .font = fonts.sans}))
+                    ImGui::CloseCurrentPopup();
+                ImGui::SameLine();
+                if (Ui::Button({.label = text("workspace.blackboard.create_confirm").c_str(),
+                                .variant = Ui::ButtonVariant::Primary,
+                                .enabled = AssetBrowserInteractionSession::CanConfirmCreateBlackboard(draft),
+                                .font = fonts.sans})) {
+                    if (auto confirmed = AssetBrowserInteractionSession::ConfirmCreateBlackboard(draft)) {
+                        command = std::move(*confirmed);
+                        ImGui::CloseCurrentPopup();
+                    }
+                }
+                ImGui::EndPopup();
+            }
+            PopModalStyle();
+        }
+
         void DrawCreateQueryPopup(AssetBrowserInteractionState &state, EditorWorkspaceViewCommandData &command,
                                   const EditorGuiContext &context) {
             constexpr const char *popupId = "##ContentBrowserCreateEnvironmentQuery";
@@ -446,6 +498,7 @@ namespace Horo::Editor {
         DrawRenamePopup(state, command, context);
         DrawDeletePopup(state, command, context);
         DrawCreateFolderPopup(state, directory, command, context);
+        DrawCreateBlackboardPopup(state, command, context);
         DrawCreateQueryPopup(state, command, context);
     }
 }  // namespace Horo::Editor

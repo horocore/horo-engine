@@ -1,5 +1,7 @@
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
 
+#include "Horo/AI/DecisionPlanCodec.h"
+
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
@@ -68,6 +70,30 @@ namespace Horo::Editor {
     void AssetBrowserInteractionSession::OpenCreateFolder() {
         m_state.createFolderBuffer.fill('\0');
         m_state.openCreateFolder = true;
+    }
+
+    /** @copydoc AssetBrowserInteractionSession::OpenCreateBlackboard */
+    void AssetBrowserInteractionSession::OpenCreateBlackboard(std::string_view directory) {
+        m_state.createBlackboard = {
+            .request = {.directory = std::string{directory}, .key = {.presence = AI::BlackboardKeyPresence::Optional}}};
+        m_state.openCreateBlackboard = true;
+    }
+
+    /** @copydoc AssetBrowserInteractionSession::CanConfirmCreateBlackboard */
+    bool AssetBrowserInteractionSession::CanConfirmCreateBlackboard(const BlackboardCreationDraft &draft) noexcept {
+        const auto &request = draft.request;
+        return !request.directory.empty() && AI::IsValidBlackboardDisplayName(request.name) &&
+               AI::IsValidBlackboardDisplayName(request.keyName) &&
+               (request.key.presence != AI::BlackboardKeyPresence::Required || request.key.defaultValue.has_value());
+    }
+
+    /** @copydoc AssetBrowserInteractionSession::ConfirmCreateBlackboard */
+    std::optional<EditorWorkspaceViewCommandData> AssetBrowserInteractionSession::ConfirmCreateBlackboard(
+        const BlackboardCreationDraft &draft) {
+        if (!CanConfirmCreateBlackboard(draft))
+            return {};
+        return EditorWorkspaceViewCommandData{.command = EditorWorkspaceViewCommand::CreateBlackboardSchema,
+                                              .newBlackboard = draft.request};
     }
 
     /** @copydoc AssetBrowserInteractionSession::OpenCreateQuery */

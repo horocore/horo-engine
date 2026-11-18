@@ -1,18 +1,84 @@
+#include "AuthoredAiSourceInventory.h"
+#include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/Application/BlackboardUsageReview.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
+#include "Horo/Application/ProjectAssetImportCommitter.h"
 #include "Horo/Assets/AssetSourcePublication.h"
+#include "WorkspacePathText.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 #include <algorithm>
+#include <array>
 
 namespace Horo::Editor {
     namespace {
+        /** @brief Rejects an already registered schema identity under the Project's authored asset lease. */
+        Result<void> AdmitBlackboardIdentity(const std::filesystem::path &root, AI::BlackboardSchemaId identity) {
+            const auto registry = AuthoredAiSources::CurrentRegistry(root);
+            if (registry.HasError())
+                return Result<void>::Failure(registry.ErrorValue());
+            const auto capture = AuthoredAiSources::Capture(root, registry.Value(), AI::BlackboardSchemaAssetType,
+                                                            AI::BlackboardSchemaSourceCodec::MaximumBytes);
+            if (capture.HasError())
+                return Result<void>::Failure(capture.ErrorValue());
+            for (const auto &source : capture.Value().Sources()) {
+                const auto schema = AI::BlackboardSchemaSourceCodec::Decode(source.bytes);
+                if (schema.HasError())
+                    return Result<void>::Failure(schema.ErrorValue());
+                if (schema.Value().schema.Identity() == identity)
+                    return Result<void>::Failure(MakeError(AI::AIErrors::DescriptorConflict));
+            }
+            return capture.Value().VerifyUnchanged();
+        }
+
         /** @brief Compares generation owners even after the previously observed catalog has retired. */
         bool HasSameProviderMetadata(const Application::BlackboardUsageReview &report,
                                      const std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> &current) noexcept {
             return !report.providers.owner_before(current) && !current.owner_before(report.providers);
         }
     }  // namespace
+
+    /** @copydoc EditorWorkspaceController::PublishInitialBlackboard */
+    void EditorWorkspaceController::PublishInitialBlackboard(const std::filesystem::path &destination,
+                                                             const BlackboardCreationRequest &request, Assets::AssetId newId) {
+        constexpr std::string_view Failed = "workspace.blackboard.create_failed";
+        auto &error = m_viewModel.contentBrowserOperationError;
+        error = Failed;
+        if (!newId.IsValid() || !AI::IsValidBlackboardDisplayName(request.keyName) || request.key.key.IsValid() ||
+            (request.key.presence == AI::BlackboardKeyPresence::Required && !request.key.defaultValue))
+            return;
+        try {
+            const auto root = ProjectRoot();
+            const auto path = ProjectPath::Parse(WorkspacePortablePathText(destination.lexically_relative(root)));
+            const auto type = Assets::AssetTypeId::Parse(AI::BlackboardSchemaAssetType);
+            const auto identity = AuthoredAiSources::Issue<AI::BlackboardSchemaId>();
+            if (path.HasError() || type.HasError() || identity.HasError())
+                return;
+            auto key = request.key;
+            // The first schema-local key starts the document's existing monotonic identity sequence.
+            key.key = AI::BlackboardKeyId::Create(1).Value();
+            const std::array keys{key};
+            const auto schema = AI::BlackboardSchema::Capture({.identity = identity.Value(), .keys = keys});
+            if (schema.HasError())
+                return;
+            const std::array rows{AI::BlackboardSchemaAuthoringRow{key.key, request.keyName}};
+            const auto encoded = AI::BlackboardSchemaSourceCodec::Encode(schema.Value(), rows);
+            if (encoded.HasError())
+                return;
+            const auto bytes = std::as_bytes(std::span{encoded.Value()});
+            const Application::PreparedAuthoredProjectAssetBatch batch{newId.ToString(),
+                                                                       root,
+                                                                       {{newId, type.Value(), path.Value(), {bytes.begin(), bytes.end()}}}};
+            Application::ProjectAssetImportCommitter writer{*m_mutations, *m_durableFiles, m_mutableAssetRegistry};
+            const auto written = writer.CommitAuthored(batch, {}, [&] {
+                return AdmitBlackboardIdentity(root, identity.Value());
+            });
+            if (FinishAuthoredAiPublication(writer.LastReceipt(), written, Failed))
+                OpenSourceFile({.path = destination, .origin = SourceOpenOrigin::Command, .mode = SourceOpenMode::EmbeddedOnly});
+        } catch (...) {
+            // The shared authored publisher contains native failures and retains the existing receipt.
+        }
+    }
 
     /** @copydoc EditorWorkspaceController::FindBlackboardDocument */
     BlackboardSchemaDocument *EditorWorkspaceController::FindBlackboardDocument(DocumentInstanceId instance) noexcept {

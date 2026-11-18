@@ -123,6 +123,7 @@ namespace Horo::Editor {
         m_viewModel.terrainCookAvailable = m_terrainCookFactory && static_cast<bool>(*m_terrainCookFactory);
         m_viewModel.terrainAssetCreationAvailable =
             m_terrainAssetFactory && static_cast<bool>(*m_terrainAssetFactory) && m_mutableAssetRegistry && m_mutations;
+        m_viewModel.blackboardCreationAvailable = m_mutableAssetRegistry && m_mutations && m_durableFiles;
         m_viewModel.environmentQueryCreationAvailable =
             m_latticeQueryFactory && m_querySchema && m_mutableAssetRegistry && m_mutations && m_durableFiles;
         InitializeWorldBake(dependencies);

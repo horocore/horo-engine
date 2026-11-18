@@ -7,6 +7,7 @@
 namespace Horo::AI {
     /** @brief Canonical semantic asset type shared by decision cooking and authoritative runtime admission. */
     inline constexpr std::string_view BlackboardSchemaAssetType = "core.blackboard_schema";
+    inline constexpr std::string_view BlackboardSchemaSourceExtension = ".horo_bb"; /**< Native authored Blackboard schema suffix. */
 
     /** @brief Bounded semantic .horo_bb transport used for source and immutable cooked schema payloads. */
     class BlackboardSchemaCodec final {

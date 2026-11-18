@@ -67,6 +67,12 @@ TEST_CASE("Blackboard workspace controls resolve in both shipped locales", "[uni
         "usage_previous",
         "usage_next",
         "usage_schema_bindings",
+        "create_title",
+        "create_schema_name",
+        "create_key_name",
+        "create_required_default",
+        "create_confirm",
+        "create_failed",
     };
     const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
     const std::array locales{"en-US", "tr-TR"};
@@ -76,6 +82,7 @@ TEST_CASE("Blackboard workspace controls resolve in both shipped locales", "[uni
     for (const auto locale : locales) {
         REQUIRE(service.Prepare({locale}));
         REQUIRE(service.ActivatePrepared());
+        CHECK_FALSE(service.Get("editor", "workspace.content_browser.action.create_blackboard").starts_with("[missing:"));
         for (const auto key : Keys) {
             INFO(locale);
             INFO(key);

@@ -15,6 +15,12 @@ namespace Horo::Editor {
         List,
     };
 
+    /** @brief Unsaved first Blackboard source and its user-authored initial key. */
+    struct BlackboardCreationDraft final {
+        BlackboardCreationRequest request;
+        std::string numericDefault;
+    };
+
     /** @brief Draft of the typed point-lattice creation dialog. Signed controls preserve invalid draft values. */
     struct EnvironmentQueryCreationDraft final {
         std::string directory;
@@ -43,6 +49,8 @@ namespace Horo::Editor {
         bool openCreateFolder{false};
         EnvironmentQueryCreationDraft createQuery;
         bool openCreateQuery{};
+        BlackboardCreationDraft createBlackboard;
+        bool openCreateBlackboard{};
     };
 
     /**
@@ -76,6 +84,15 @@ namespace Horo::Editor {
 
         /** @brief Prepares the create-folder workflow. */
         void OpenCreateFolder();
+
+        /** @brief Captures the selected Assets directory for the first schema modal. */
+        void OpenCreateBlackboard(std::string_view directory);
+
+        /** @brief Checks that required values and initial display labels are authored. */
+        [[nodiscard]] static bool CanConfirmCreateBlackboard(const BlackboardCreationDraft &draft) noexcept;
+
+        /** @brief Reduces a complete Blackboard draft to the normal project command. */
+        [[nodiscard]] static std::optional<EditorWorkspaceViewCommandData> ConfirmCreateBlackboard(const BlackboardCreationDraft &draft);
 
         /** @brief Captures the active asset folder for the independent query creation modal. */
         void OpenCreateQuery(std::string_view directory);
