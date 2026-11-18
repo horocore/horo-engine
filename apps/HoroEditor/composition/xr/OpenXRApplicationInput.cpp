@@ -122,7 +122,7 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRApplicationSession::PrepareInput */
     Result<void> OpenXRApplicationSession::PrepareInput(const Input::InputActionCollection &port, const Input::InputRouter &router,
                                                         const OpenXRApplicationBindings &bindings,
-                                                        const NativeTrackingSpaceRequest &tracking) {
+                                                        const NativeTrackingSpaceRequest &tracking, const bool gazeConsent) {
         // Retain the caller's original tracking plan before admission and loader callbacks can reenter foreign code.
         NativeTrackingSpaceRequest admittedTracking = tracking;
         if (auto current = Current(); current.HasError())
@@ -157,6 +157,13 @@ namespace Horo::Application::Internal {
         const bool stageAvailable = stageObserved && capacity > minimumSpaces;
         input_.stageAvailability = stageAvailable ? XRCapabilityState::Available : XRCapabilityState::Unavailable;
         admittedTracking.alternateReferenceAvailable = wantsStage && stageAvailable;
+        const auto trackingSpaces = minimumSpaces + static_cast<std::size_t>(admittedTracking.alternateReferenceAvailable);
+        if (gazeConsent && MayArmEyeGaze() && capacity > trackingSpaces && !bindings.setLabels.empty() &&
+            bindings.PreparedActionCount() < settings_.Limits().maximumActions)
+            admittedTracking.consentedGazeSet = bindings.setLabels.front().set;
+        else
+            admittedTracking.consentedGazeSet.reset();
+        input_.gazeAllowed = admittedTracking.consentedGazeSet.has_value();
         const auto discovery = native_->BorrowDiscovery(selection_.attempt);
         if (discovery.HasError())
             return Result<void>::Failure(discovery.ErrorValue());
@@ -254,8 +261,10 @@ namespace Horo::Application::Internal {
                                                        RuntimeInternal::XRTrackingPublication &publication, const OpenXRInputClock &clock,
                                                        const Runtime::FrameContext &context, const XRWorldOriginRevision origin,
                                                        const Input::InputCollectionFrame &frame) {
-        // Revoke the prior sample BEFORE any foreign call: failure cannot revive an earlier opportunity.
+        // Revoke prior evidence before foreign calls; a failed cutoff must not revive it.
         publication.Revoke();
+        input_.gaze.reset();
+        input_.gazeRevision = {};
         if (auto current = Current(); current.HasError())
             return current;
         const auto state = sessions.Snapshot();
@@ -323,11 +332,28 @@ namespace Horo::Application::Internal {
             return current;
         if (!bindingsCurrent())
             return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
+        std::optional<XRPoseSample> gaze;
+        if (const auto plan = sessions.AcceptedPlan();
+            input_.gazeAllowed && plan && plan->Decision(XRCapability::EyeGaze).state == XRFeatureDecisionState::OptionalEnabled) {
+            constexpr auto maximumGazeAge = Duration::FromMilliseconds(50);
+            auto observed = input_.native->SampleConsentedGaze(state.session, time.Value(), maximumGazeAge);
+            if (auto current = Current(); current.HasError())
+                return current;
+            if (!bindingsCurrent())
+                return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
+            if (observed.HasValue() && input_.gazeAllowed)
+                gaze = std::move(observed).Value();
+        }
         const auto appended =
             AppendPreparedInput({poses.Value(), actions.Value(), state, time.Value(), origin, bindingRevision, handSample.Value()},
                                 publication, frame);
-        if (appended.HasValue())
+        if (appended.HasValue()) {
             input_.profiles = actions.Value().Profiles();
+            if (input_.gazeAllowed)
+                input_.gaze = std::move(gaze);
+            if (const auto *published = publication.Current(); published && input_.gaze)
+                input_.gazeRevision = published->Revision();
+        }
         return appended;
     }
 
@@ -473,6 +499,22 @@ namespace Horo::Application::Internal {
         return input_.native->LocatePresentation(candidate, time, system_->primaryViewCount);
     }
 
+    /** @copydoc OpenXRApplicationSession::RevokeEyeGaze */
+    void OpenXRApplicationSession::RevokeEyeGaze() noexcept {
+        input_.gazeAllowed = false;
+        input_.gaze.reset();
+        input_.gazeRevision = {};
+    }
+
+    /** @copydoc OpenXRApplicationSession::ReadEyeGaze */
+    std::optional<XRPoseSample> OpenXRApplicationSession::ReadEyeGaze(const XRTrackingSnapshot &snapshot) const noexcept {
+        if (std::this_thread::get_id() != lane_ || !input_.gazeAllowed || !input_.gaze || input_.gazeRevision != snapshot.Revision() ||
+            input_.gaze->Session() != snapshot.Session() || snapshot.Focus() != XRTrackingFocusState::Focused ||
+            snapshot.State() != XRTrackingState::Active)
+            return std::nullopt;
+        return input_.gaze;
+    }
+
     /** @copydoc OpenXRApplicationSession::RevokeInput */
     void OpenXRApplicationSession::RevokeInput() noexcept {
         RetireInputProjection();
@@ -484,6 +526,7 @@ namespace Horo::Application::Internal {
     void OpenXRApplicationSession::RetireInputProjection() noexcept {
         HORO_INVARIANT_MSG(std::this_thread::get_id() == lane_, "XR Input retirement requires its owner lane");
         RequestHapticCancellation();
+        RevokeEyeGaze();
         input_.projection.reset();
         input_.handCutoff.reset();
     }

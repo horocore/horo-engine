@@ -199,13 +199,39 @@ namespace Horo::Editor {
         virtual void CancelHapticPreview(EditorXrHapticPreviewId receipt) noexcept = 0;
     };
 
-    /** @brief Borrowed editor setup and optional haptic preview composition. */
+    /** @brief Redacted operator evidence for one consented gaze preview. */
+    enum class EditorXrEyeGazeState : std::uint8_t {
+        Unavailable,
+        Ready,
+        Armed,
+        WaitingForSample,
+        Tracking
+    };
+
+    /** @brief Owner-lane control limited to the next Play session's eye pointing preview. */
+    class IEditorXrEyeGazePreview {
+    public:
+        virtual ~IEditorXrEyeGazePreview() = default;
+        /** @return Current redacted state, with no coordinates or history. */
+        [[nodiscard]] virtual EditorXrEyeGazeState ReadEyeGazeState() const noexcept = 0;
+        /** @return A one-use in-memory grant, or a typed policy, hardware or lifecycle failure. */
+        [[nodiscard]] virtual Result<void> ArmEyeGaze() = 0;
+        /** @brief Synchronously removes any armed/active grant and discards its latest sample. */
+        virtual void RevokeEyeGaze() noexcept = 0;
+    };
+
+    /** @brief Borrowed editor setup and optional preview composition. */
     class IEditorXrSetup {
     public:
         virtual ~IEditorXrSetup() = default;
 
         /** @return Optional scoped vibration preview available from the selected host composition. */
         [[nodiscard]] virtual IEditorXrHapticPreview *HapticPreview() noexcept {
+            return nullptr;
+        }
+
+        /** @return Optional eye pointing preview protected by an explicit operator grant. */
+        [[nodiscard]] virtual IEditorXrEyeGazePreview *EyeGazePreview() noexcept {
             return nullptr;
         }
 

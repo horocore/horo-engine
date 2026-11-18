@@ -24,12 +24,15 @@ namespace Horo::Editor {
         void DrawInspection(const EditorXrInspectionSnapshot &report) const;
         /** @brief Projects and submits one explicit preview request without invoking native output. */
         void DrawHapticPreview(IEditorXrHapticPreview &preview);
+        /** @brief Shows consent controls and current redacted pointing evidence. */
+        void DrawEyeGazePreview(IEditorXrEyeGazePreview &preview);
         [[nodiscard]] const std::string &Text(const char *key) const;
         const EditorGuiContext &context_;
         IEditorXrSetup *setup_;
         EditorXrSetupTestId request_;
         EditorXrHapticPreviewId previewRequest_;
         bool previewRejected_{};
+        bool gazeRejected_{};
         bool rejected_{};
     };
 }  // namespace Horo::Editor

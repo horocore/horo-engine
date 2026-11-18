@@ -83,7 +83,7 @@ namespace Horo::XR {
 
         TEST_CASE("XR settings defaults are inert and disabled", "[unit][xr][settings]") {
             const auto descriptors = XRProjectSettingDescriptors();
-            REQUIRE(descriptors.size() == 17);
+            REQUIRE(descriptors.size() == 18);
             for (const auto &descriptor : descriptors)
                 REQUIRE(descriptor.reloadPolicy == ReloadPolicy::ProjectReopen);
             const auto resolved = ResolveXRProjectSettings(Configuration());
@@ -136,6 +136,23 @@ namespace Horo::XR {
             const auto missing = ConfigurationResolver::Resolve(empty, {}, 1);
             REQUIRE(missing.HasValue());
             REQUIRE(ResolveXRProjectSettings(missing.Value()).HasError());
+        }
+
+        TEST_CASE("XR project policy can offer optional eye gaze without granting consent", "[unit][xr][settings]") {
+            ConfigurationResolutionRequest request;
+            Project(request, "xr.features.eye_gaze", static_cast<std::int64_t>(XRProjectFeaturePolicy::OptionalDisable));
+            const auto resolved = ResolveXRProjectSettings(Configuration(request));
+            REQUIRE(resolved.HasValue());
+            const auto features = resolved.Value().Features();
+            REQUIRE(features.size() == 1);
+            CHECK(features.front().capability == XRCapability::EyeGaze);
+            CHECK(features.front().kind == XRFeatureRequirementKind::Optional);
+            CHECK(features.front().fallback == XRFeatureFallback::Disable);
+            request.project.clear();
+            Project(request, "xr.features.eye_gaze", static_cast<std::int64_t>(XRProjectFeaturePolicy::Required));
+            const auto required = ResolveXRProjectSettings(Configuration(request));
+            REQUIRE(required.HasError());
+            CHECK(required.ErrorValue().code.Value() == XRErrors::OperationIncompatible.code.Value());
         }
 
         TEST_CASE("XR project feature policy rejects profile and fallback conflicts", "[unit][xr][settings]") {

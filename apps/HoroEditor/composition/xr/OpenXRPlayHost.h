@@ -65,6 +65,7 @@ namespace Horo::Application::Internal {
     class OpenXRPlayHost final : public Editor::IEditorPlayXrHost,
                                  public Editor::IEditorXrSetup,
                                  public Editor::IEditorXrHapticPreview,
+                                 public Editor::IEditorXrEyeGazePreview,
                                  private XR::RuntimeInternal::IXRSessionRetirementResources,
                                  private XR::IXRBindingNeutralizer {
     public:
@@ -108,6 +109,16 @@ namespace Horo::Application::Internal {
         void CancelHapticPreview(Editor::EditorXrHapticPreviewId receipt) noexcept override;
         /** @brief Runs one admitted preview between RuntimeHost frames and progresses its scoped cancellation. */
         void PumpHapticPreview();
+
+        [[nodiscard]] Editor::IEditorXrEyeGazePreview *EyeGazePreview() noexcept override {
+            return this;
+        }
+
+        [[nodiscard]] Editor::EditorXrEyeGazeState ReadEyeGazeState() const noexcept override;
+        [[nodiscard]] Result<void> ArmEyeGaze() override;
+        void RevokeEyeGaze() noexcept override;
+        /** @return Only the exact current Play pointing sample, gated by the focused cutoff and consent. */
+        [[nodiscard]] std::optional<XR::XRPoseSample> ReadEyeGaze() const noexcept;
         /** @brief Supplies bounded, current runtime prerequisites to the separate device qualification runner. */
         [[nodiscard]] Result<OpenXRPackagedPreflight> ReadDeviceQualificationPreflight() const;
         [[nodiscard]] Result<void> AttachInput(const Input::InputActionCollection &input,
@@ -327,6 +338,7 @@ namespace Horo::Application::Internal {
         [[nodiscard]] bool HasCurrentHapticInput() const;
         std::optional<HapticPreviewRecord> hapticPreview_;
         std::uint64_t nextHapticPreview_{};
+        bool gazeArmed_{}; /**< In-memory grant consumed by one actual Play preparation. */
 
         struct InputState final {
             Input::InputRouter *router{};

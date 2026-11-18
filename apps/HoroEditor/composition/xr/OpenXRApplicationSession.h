@@ -225,12 +225,21 @@ namespace Horo::Application::Internal {
          * @param router SAME application router whose live Actions are the sole semantic schema authority.
          * @param bindings Explicit installer-owned immutable physical catalog retained through Play retirement.
          * @param tracking Current canonical origin and native base; snapshotted before foreign admission/loader callbacks.
+         * @param gazeConsent Explicit single-use operator consent for this Play preparation only.
          * @return Resolved declaration/profile/Input outcome; failures retain native debt for explicit Close.
          * @post No Horo session or binding revision is predicted and no snapshot/Input value can be published.
          */
         [[nodiscard]] Result<void> PrepareInput(const Input::InputActionCollection &port, const Input::InputRouter &router,
                                                 const OpenXRApplicationBindings &bindings,
-                                                const XR::OpenXRInternal::NativeTrackingSpaceRequest &tracking);
+                                                const XR::OpenXRInternal::NativeTrackingSpaceRequest &tracking, bool gazeConsent = false);
+        /** @return Whether both signed host policy and observed hardware permit arming the optional gaze preview. */
+        [[nodiscard]] bool MayArmEyeGaze() const noexcept;
+        /** @return Current supported/denied gaze availability, without exposing any pose. */
+        [[nodiscard]] XR::XRCapabilityState EyeGazeAvailability() const noexcept;
+        /** @brief Clears the current purpose grant and sample without invoking the native runtime. */
+        void RevokeEyeGaze() noexcept;
+        /** @return Current consented gaze for the exact immutable cutoff, or empty after loss or replacement. */
+        [[nodiscard]] std::optional<XR::XRPoseSample> ReadEyeGaze(const XR::XRTrackingSnapshot &snapshot) const noexcept;
         /** @brief Binds the same prepared native children/Input reservation during canonical resource preparation.
          * @param candidate Actual candidate issued by XRSessionLifecycle and already activated on the SAME native session.
          * @param coordinator Candidate's sole canonical binding publication/revision owner.
@@ -373,9 +382,8 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> Current() const;
         [[nodiscard]] Result<void> DiscoverRuntime();
         [[nodiscard]] bool WantsHands() const noexcept;
-        /** @brief Projects observed hardware support through current host policy before publishing capability facts.
-         * @return Provider failure or disabled policy. Setup and Play have no gaze consent issuer. */
-        [[nodiscard]] XR::XRCapabilityState EyeGazeAvailability() const noexcept;
+        /** @return Whether product policy explicitly requested optional eye gaze. */
+        [[nodiscard]] bool WantsEyeGaze() const noexcept;
         /** @brief Collects only bounded normalized facts while the exact private native test session exists. */
         [[nodiscard]] Result<OpenXRPackagedCompatibility> CollectPackagedCompatibility(
             const XR::OpenXRInternal::NativeSessionCensus &session);
@@ -472,6 +480,9 @@ namespace Horo::Application::Internal {
             std::optional<HandCutoffObservation> handCutoff;
             std::optional<XR::XRCapabilityState>
                 handSamplingBlocked; /**< A denied or unsupported route stays withdrawn for this session. */
+            std::optional<XR::XRPoseSample> gaze;
+            XR::XRTrackingSnapshotRevision gazeRevision;
+            bool gazeAllowed{};
             XR::XRCapabilityState handAvailability{XR::XRCapabilityState::Unsupported};
             XR::XRCapabilityState stageAvailability{XR::XRCapabilityState::Unsupported};
             std::array<XR::XRActiveInteractionProfile, 2> profiles{}; /**< Actual post-attachment preparation census. */

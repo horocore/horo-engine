@@ -104,7 +104,10 @@ namespace Horo::Application::Internal {
                                                  std::span{views.poses}.first(poses.size()),
                                                  tracking,
                                                  std::span{views.haptics}.first(haptics.size())};
-        const auto maximumActions = static_cast<std::uint32_t>(PreparedActionCount());
+        const auto actionCount = PreparedActionCount() + static_cast<std::size_t>(tracking.consentedGazeSet.has_value());
+        if (actionCount > XRActionBindingLimits::MaximumActions)
+            return Outcome::Failure(MakeError(XRErrors::CapacityExceeded));
+        const auto maximumActions = static_cast<std::uint32_t>(actionCount);
         if (auto prepared = native.PrepareAttempt(preparation, maximumActions, request); prepared.HasError())
             return Outcome::Failure(prepared.ErrorValue());
         auto observed = native.PreparedProfiles(preparation);

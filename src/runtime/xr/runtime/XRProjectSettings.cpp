@@ -14,6 +14,7 @@ namespace Horo::XR {
         constexpr std::array FeatureSettings{
             FeatureSetting{"xr.features.stage_space", XRCapability::StageSpace},
             FeatureSetting{"xr.features.hand_tracking", XRCapability::HandTracking},
+            FeatureSetting{"xr.features.eye_gaze", XRCapability::EyeGaze},
             FeatureSetting{"xr.features.depth_composition", XRCapability::DepthComposition},
             FeatureSetting{"xr.features.fixed_foveation", XRCapability::FixedFoveation},
             FeatureSetting{"xr.features.refresh_rate", XRCapability::RefreshRateSelection},
@@ -66,6 +67,7 @@ namespace Horo::XR {
                     feature.capability == XRCapability::SpaceWarp;
                 (policy == XRProjectFeaturePolicy::OptionalProjection && !projectionFallback) ||
                 (feature.capability == XRCapability::ControllerPresentation && profile != XRFeatureProfile::TrackedInteraction1_0) ||
+                (feature.capability == XRCapability::EyeGaze && policy == XRProjectFeaturePolicy::Required) ||
                 (feature.capability == XRCapability::SpaceWarp && policy != XRProjectFeaturePolicy::OptionalProjection &&
                  policy != XRProjectFeaturePolicy::Disabled))
                 return Result<std::optional<XRFeatureRequest>>::Failure(

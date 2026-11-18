@@ -149,7 +149,9 @@ namespace Horo::Application::Internal {
         static_assert(kinds.size() == Editor::EditorXrInspectionSnapshot::CapabilityCount);
         for (std::size_t index = 0; index < kinds.size(); ++index) {
             const auto kind = kinds[index];
-            report.capabilities[index] = {kind, scene_->projection->capabilities.State(kind), plan->Decision(kind).state};
+            const auto observed =
+                kind == EyeGaze ? composition_.session.EyeGazeAvailability() : scene_->projection->capabilities.State(kind);
+            report.capabilities[index] = {kind, observed, plan->Decision(kind).state};
         }
 
         if (eventsPending_)
@@ -297,6 +299,49 @@ namespace Horo::Application::Internal {
             preview.mayNeedStop = false;
             preview.state = Cancelled;
         }
+    }
+
+    /** @copydoc OpenXRPlayHost::ReadEyeGaze */
+    std::optional<XR::XRPoseSample> OpenXRPlayHost::ReadEyeGaze() const noexcept {
+        if (std::this_thread::get_id() != lane_ || closing_ || busy_ || eventsPending_ || !input_.admitted ||
+            input_.play != Editor::EditorPlayState::Playing || !sessions_.Snapshot().admitsActions)
+            return std::nullopt;
+        const auto *snapshot = tracking_.Current();
+        return snapshot ? composition_.session.ReadEyeGaze(*snapshot) : std::nullopt;
+    }
+
+    /** @copydoc Editor::IEditorXrEyeGazePreview::ReadEyeGazeState */
+    Editor::EditorXrEyeGazeState OpenXRPlayHost::ReadEyeGazeState() const noexcept {
+        using enum Editor::EditorXrEyeGazeState;
+        if (std::this_thread::get_id() != lane_ || closing_ || busy_ || instanceLost_)
+            return Unavailable;
+        if (gazeArmed_)
+            return Armed;
+        if (SetupIdle() && composition_.session.MayArmEyeGaze())
+            return Ready;
+        if (composition_.session.EyeGazeAvailability() == XR::XRCapabilityState::Available)
+            return ReadEyeGaze() ? Tracking : WaitingForSample;
+        return Unavailable;
+    }
+
+    /** @copydoc Editor::IEditorXrEyeGazePreview::ArmEyeGaze */
+    Result<void> OpenXRPlayHost::ArmEyeGaze() {
+        if (auto lane = Lane(); lane.HasError())
+            return lane;
+        if (!SetupIdle())
+            return Result<void>::Failure(MakeError(XR::XRErrors::OperationUnavailable));
+        if (!composition_.session.MayArmEyeGaze())
+            return Result<void>::Failure(MakeError(XR::XRErrors::OperationUnsupported));
+        gazeArmed_ = true;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc Editor::IEditorXrEyeGazePreview::RevokeEyeGaze */
+    void OpenXRPlayHost::RevokeEyeGaze() noexcept {
+        if (std::this_thread::get_id() != lane_)
+            return;
+        gazeArmed_ = false;
+        composition_.session.RevokeEyeGaze();
     }
 
     /** @copydoc Editor::IEditorXrSetup::RequestSetupTest */

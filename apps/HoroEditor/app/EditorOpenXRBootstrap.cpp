@@ -22,6 +22,7 @@ namespace Horo::Editor {
         struct HostArguments final {
             std::array<std::optional<std::filesystem::path>, 3> paths;
             bool requested{};
+            bool allowEyeGazePreview{};
         };
 
         /** @brief Keeps invalid explicit host requests closed, rather than silently continuing as ordinary desktop. */
@@ -70,6 +71,12 @@ namespace Horo::Editor {
                 if (arguments[index] == nullptr)
                     return Result<HostArguments>::Failure(BootstrapError("Explicit XR host input contains a null argument."));
                 const std::string_view argument{arguments[index++]};
+                if (argument == "--xr-enable-eye-gaze") {
+                    if (parsed.allowEyeGazePreview)
+                        return Result<HostArguments>::Failure(BootstrapError("Duplicate XR gaze policy option."));
+                    parsed.allowEyeGazePreview = true;
+                    continue;
+                }
                 if (!argument.starts_with("--xr-host-"))
                     continue;
                 parsed.requested = true;
@@ -90,6 +97,8 @@ namespace Horo::Editor {
             }))
                 return Result<HostArguments>::Failure(
                     BootstrapError("XR host roots, signed catalog and catalog signature must be supplied together."));
+            if (parsed.allowEyeGazePreview && !parsed.requested)
+                return Result<HostArguments>::Failure(BootstrapError("XR gaze policy requires an explicit signed XR host."));
             return Result<HostArguments>::Success(std::move(parsed));
         }
 
@@ -256,7 +265,7 @@ namespace Horo::Editor {
 
         /** @brief Composes ONE canonical package authority, then copies only verified installed physical declarations. */
         Result<void> Initialize(const std::filesystem::path &project, const std::filesystem::path &cache,
-                                const Runtime::SceneObjectId trackingRoot) {
+                                const Runtime::SceneObjectId trackingRoot, const bool allowEyeGazePreview) {
             if (auto prepared = PrepareNativeCacheParents(files, cache); prepared.HasError())
                 return prepared;
             auto platform = Application::Internal::NativePackagePlatform();
@@ -299,6 +308,8 @@ namespace Horo::Editor {
             put("xr.limits.spaces", static_cast<std::int64_t>(catalog.Limits().maximumSpaces));
             put("xr.limits.actions", static_cast<std::int64_t>(catalog.Limits().maximumActions));
             put("xr.limits.devices", static_cast<std::int64_t>(catalog.Limits().maximumDevices));
+            if (allowEyeGazePreview)
+                put("xr.features.eye_gaze", static_cast<std::int64_t>(XR::XRProjectFeaturePolicy::OptionalDisable));
             return Current();
         }
     };
@@ -346,7 +357,8 @@ namespace Horo::Editor {
         if (publishers.HasError())
             return Outcome::Failure(publishers.ErrorValue());
         auto impl = std::make_unique<Impl>(std::move(publishers).Value(), std::move(catalog).Value(), now.Value(), rootExpiry.Value());
-        if (auto initialized = impl->Initialize(projectRoot, cacheRoot, trackingRoot); initialized.HasError())
+        if (auto initialized = impl->Initialize(projectRoot, cacheRoot, trackingRoot, parsed.Value().allowEyeGazePreview);
+            initialized.HasError())
             return Outcome::Failure(initialized.ErrorValue());
         return Outcome::Success(std::make_unique<EditorOpenXRBootstrap>(ConstructionKey{}, std::move(impl)));
     }

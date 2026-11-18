@@ -90,10 +90,18 @@ namespace Horo::Tests::OpenXRApplication {
                                         const XR::XRProjectFeaturePolicy depth = XR::XRProjectFeaturePolicy::Unrequested,
                                         const XR::XRProjectFeaturePolicy hands = XR::XRProjectFeaturePolicy::Unrequested,
                                         const XR::XRProjectFeaturePolicy stage = XR::XRProjectFeaturePolicy::Unrequested,
-                                        const bool synthesis = false, std::optional<std::string> controllerBindings = std::nullopt)
+                                        const bool synthesis = false, std::optional<std::string> controllerBindings = std::nullopt,
+                                        const XR::XRProjectFeaturePolicy gaze = XR::XRProjectFeaturePolicy::Unrequested)
                 : product{HORO_TEST_OPENXR_LOADER, std::move(controllerBindings)} {
                 ConfigurationResolutionRequest request;
                 request.invocation.emplace(SettingKey{"xr.enabled"}, ConfigurationInputValue{true, std::nullopt});
+                if (gaze != XR::XRProjectFeaturePolicy::Unrequested) {
+                    request.invocation.emplace(SettingKey{"xr.features.eye_gaze"},
+                                               ConfigurationInputValue{static_cast<std::int64_t>(gaze), std::nullopt});
+                    script.native.gazeExtension = true;
+                    ++script.native.extensionCount;
+                    script.census.gazeSupport = XR_TRUE;
+                }
                 if (depth != XR::XRProjectFeaturePolicy::Unrequested) {
                     request.invocation.emplace(SettingKey{"xr.features.depth_composition"},
                                                ConfigurationInputValue{static_cast<std::int64_t>(depth), std::nullopt});
@@ -746,9 +754,9 @@ namespace Horo::Tests::OpenXRApplication {
             Input::RawInputSnapshot raw_;
         };
 
-        std::unique_ptr<Runtime::SceneActivationCandidate> PublishPlay(ApplicationFixture &fixture,
-                                                                       const std::optional<Input::PlayerId> player = std::nullopt) {
-            fixture.CreatePlay();
+        std::unique_ptr<Runtime::SceneActivationCandidate> ActivatePlay(ApplicationFixture &fixture,
+                                                                        const std::optional<Input::PlayerId> player) {
+            REQUIRE(fixture.play);
             REQUIRE(fixture.play->SetPlayState(Editor::EditorPlayState::Playing).HasValue());
             const auto input = fixture.InputPort(player);
             REQUIRE(fixture.play->AttachInput(input, fixture.source.Port()).HasValue());
@@ -764,6 +772,12 @@ namespace Horo::Tests::OpenXRApplication {
             fixture.script.events.Push(XR_SESSION_STATE_FOCUSED);
             REQUIRE(fixture.play->PollEvents().HasValue());
             return candidate;
+        }
+
+        std::unique_ptr<Runtime::SceneActivationCandidate> PublishPlay(ApplicationFixture &fixture,
+                                                                       const std::optional<Input::PlayerId> player = std::nullopt) {
+            fixture.CreatePlay();
+            return ActivatePlay(fixture, player);
         }
     }  // namespace
 
@@ -810,6 +824,65 @@ namespace Horo::Tests::OpenXRApplication {
             CHECK(fixture.script.native.liveSessions == 0);
         }
         CHECK(std::ranges::count(fixture.script.census.calls, "eye-gaze-properties") == 1);
+    }
+
+    TEST_CASE("Signed XR Play admits only current consenting eye pointing", "[xr][application][play][gaze]") {
+        using enum XR::XRProjectFeaturePolicy;
+        using enum Editor::EditorXrEyeGazeState;
+        ApplicationFixture fixture{true, 6, Unrequested, Unrequested, Unrequested, false, std::nullopt, OptionalDisable};
+        fixture.CreatePlay();
+        auto &preview = *fixture.play->EyeGazePreview();
+        REQUIRE(preview.ReadEyeGazeState() == Ready);
+        CHECK(fixture.script.actions.gaze.action == XR_NULL_HANDLE);
+
+        const bool grant = GENERATE(false, true);
+        if (grant) {
+            RequireValue(preview.ArmEyeGaze());
+            CHECK(preview.ReadEyeGazeState() == Armed);
+        }
+        auto scene = ActivatePlay(fixture, std::nullopt);
+        REQUIRE((fixture.script.actions.gaze.action != XR_NULL_HANDLE) == grant);
+        auto cutoff = std::make_unique<AppInputSample>(*fixture.play);
+        auto *observed = cutoff.get();
+        RequireValue(fixture.scheduler->AddParticipant(std::move(cutoff)));
+        RequireValue(fixture.scheduler->Startup());
+        const auto sample = [&] {
+            RequireValue(fixture.scheduler->RunFrame());
+            REQUIRE(observed->result.has_value());
+            RequireValue(*observed->result);
+            return fixture.play->ReadEyeGaze();
+        };
+        fixture.script.clock.sample = 100'000'000;
+        auto &source = fixture.script.actions.gaze;
+        source.sampleTime = fixture.script.clock.sample - 1;
+        const auto current = sample();
+        CHECK(current.has_value() == grant);
+        if (grant) {
+            REQUIRE(current);
+            CHECK(current->Time().runtimeSample.Nanoseconds() == source.sampleTime);
+            CHECK(preview.ReadEyeGazeState() == Tracking);
+            source.sampleTime = 1;
+            CHECK_FALSE(sample().has_value());
+            CHECK(preview.ReadEyeGazeState() == WaitingForSample);
+            source.sampleTime = fixture.script.clock.sample;
+            REQUIRE(sample());
+            if (source.locationReads == 0)
+                FAIL("Consented gaze did not reach the native owner.");
+            const auto reads = source.locationReads;
+            fixture.script.events.Push(XR_SESSION_STATE_VISIBLE);
+            fixture.script.events.Push(XR_SESSION_STATE_FOCUSED);
+            RequireValue(fixture.play->PollEvents());
+            CHECK_FALSE(fixture.play->ReadEyeGaze());
+            CHECK_FALSE(sample());
+            CHECK_FALSE(sample());
+            CHECK(source.locationReads == reads);
+        } else {
+            CHECK(source.locationReads == 0);
+        }
+        fixture.scheduler->Shutdown();
+        scene->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+        CHECK_FALSE(fixture.play->ReadEyeGaze());
     }
 
     TEST_CASE("XR inspection bounds action metadata and ignores action payload values", "[xr][application][inspection]") {

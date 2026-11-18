@@ -260,8 +260,9 @@ namespace Horo::Application::Internal {
         const auto cancellation = preparationCancellation.Token();
         if (cancellation.IsCancellationRequested())
             return Result<void>::Failure(MakeError(XRSessionErrors::ActivationCancelled));
-        if (auto prepared =
-                host.composition_.session.PrepareInput(*host.input_.port, *host.input_.router, *host.composition_.bindings, tracking);
+        const bool gazeConsent = std::exchange(host.gazeArmed_, false);
+        if (auto prepared = host.composition_.session.PrepareInput(*host.input_.port, *host.input_.router, *host.composition_.bindings,
+                                                                   tracking, gazeConsent);
             prepared.HasError())
             return Result<void>::Failure(prepared.ErrorValue());
         if (cancellation.IsCancellationRequested())

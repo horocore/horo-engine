@@ -306,6 +306,32 @@ namespace Horo::Editor {
             Ui::WrappedText(ImGui::GetContentRegionAvail().x, Text(keys[index]), Theme::Muted(), fonts);
     }
 
+    /** @copydoc XrSetupModal::DrawEyeGazePreview */
+    void XrSetupModal::DrawEyeGazePreview(IEditorXrEyeGazePreview &preview) {
+        using enum EditorXrEyeGazeState;
+        const auto state = preview.ReadEyeGazeState();
+        if (state == Unavailable && !gazeRejected_)
+            return;
+        const auto &fonts = context_.theme.fonts;
+        constexpr std::array keys{"gaze_rejected", "gaze_scope", "gaze_armed", "gaze_waiting", "gaze_tracking"};
+        const auto index = static_cast<std::size_t>(state);
+        if (index >= keys.size())
+            return;
+        Ui::WrappedText(ImGui::GetContentRegionAvail().x, Text(gazeRejected_ ? "gaze_rejected" : keys[index]), Theme::Muted(), fonts);
+        const bool canArm = state == Ready;
+        if (state != Unavailable && Ui::Button({.label = Text(canArm ? "gaze_allow" : "gaze_revoke").c_str(),
+                                                .variant = Ui::ButtonVariant::Secondary,
+                                                .font = fonts.sans,
+                                                .style = {.width = Ui::StyleWidth::FillAvailable}})) {
+            if (canArm)
+                gazeRejected_ = preview.ArmEyeGaze().HasError();
+            else {
+                preview.RevokeEyeGaze();
+                gazeRejected_ = false;
+            }
+        }
+    }
+
     ModalFrameResult XrSetupModal::Draw() {
         const auto &fonts = context_.theme.fonts;
         Ui::ScopedModalShell shell({.id = "XrSetup",
@@ -334,6 +360,8 @@ namespace Horo::Editor {
         DrawInspection(setup_ ? setup_->ReadInspection() : EditorXrInspectionSnapshot{});
         if (auto *preview = setup_ ? setup_->HapticPreview() : nullptr)
             DrawHapticPreview(*preview);
+        if (auto *preview = setup_ ? setup_->EyeGazePreview() : nullptr)
+            DrawEyeGazePreview(*preview);
         ImGui::EndChild();
 
         shell.BeginFooter({16, 12});

@@ -799,9 +799,17 @@ failure states.
 - Permission revocation removes derived capability state and invalidates
   outstanding work.
 - Signed OpenXR Setup checks eye-gaze hardware support using the selected
-  instance's cold system properties. A supported device remains disabled by
-  policy in Setup and Play until a purpose-bound consent authority exists.
-  This check creates no gaze action or space and retains no eye sample.
+  instance's cold system properties. The installed Editor's explicit
+  `--xr-enable-eye-gaze` invocation makes `xr.features.eye_gaze` optional.
+  Setup can then grant eye pointing for the next Play session only. The
+  invocation and device census never grant consent.
+- A consented Play preparation reserves one action and one space from the
+  admitted budget before attaching action sets. The same Input cutoff samples
+  the dedicated gaze pose with the reported OpenXR sample time. The owner
+  requires both components tracked and at most 50 ms old for pointing.
+  It requests no velocity, retains one current pose privately, and projects
+  only redacted status to Setup. Pause, focus interruption, explicit
+  revocation and session retirement discard the grant and current pose.
 - Persistent anchors identify localization state and failure; they do not imply
   that every runtime supports cross-session restore.
 - Renderer consumes admitted passthrough/composition descriptors without owning
