@@ -239,7 +239,8 @@ add_library(HoroEditorSceneProductHost STATIC
     HoroEditor/composition/scene/EditorProjectSceneHostResources.cpp)
 target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroEditorPlaySaveHostInternal)
 target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroAnimationSceneHostInternal HoroMountedWorldHostInternal)
-target_link_libraries(HoroEditorSceneProductHost PRIVATE HoroEngine::PrefabProjectSettings HoroEngine::ProjectSurfaceSettings)
+target_link_libraries(HoroEditorSceneProductHost PRIVATE HoroEngine::EditorServices HoroEngine::PrefabProjectSettings
+        HoroEngine::ProjectSurfaceSettings)
 target_link_libraries(HoroEditorSceneProductHost PRIVATE HoroProjectSceneNavigationHostInternal)
 target_compile_features(HoroEditorSceneProductHost PUBLIC cxx_std_20)
 target_include_directories(HoroEditorSceneProductHost PUBLIC "${HORO_EDITOR_PROJECT_SCENE_HEADERS}")

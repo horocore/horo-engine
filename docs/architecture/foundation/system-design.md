@@ -77,8 +77,10 @@ Executable-specific adapters and composition live with their host:
 
 - `apps/HoroEditor/composition/` owns Editor Play/Save adaptation, project Scene
   composition, presentation, shader hot reload, terrain preparation and XR host
-  wiring. The shared Save format, capture barrier and Physics restore remain
-  owned by their Runtime/Physics libraries under `src/`.
+  wiring. The Scene product host uses the Editor Services implementation of
+  the default initial Play Scene admission path. The shared Save format,
+  capture barrier and Physics restore remain owned by their Runtime/Physics
+  libraries under `src/`.
 - `apps/HoroEditor/tools/shader_cook/` owns the graphical product's offline tool
   authentication and package publication helpers.
 - `apps/horo-engine/composition/` owns terminal/headless network and Scene
