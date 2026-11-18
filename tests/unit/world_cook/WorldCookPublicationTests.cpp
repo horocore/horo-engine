@@ -374,7 +374,14 @@ namespace Horo::WorldCook {
     TEST_CASE("Editor Play mounts an explicit committed World for one project and revokes its origin on Stop",
               "[world_cook][native][mounted_world][editor_play]") {
         using namespace Application::Internal;
-        Fixture world;
+        Fixture world{false, false};
+        auto &object = world.entities.front();
+        object.components.camera = S::CameraComponent{};
+        object.primitiveMesh = S::PrimitiveMeshDescriptor::Defaults(S::PrimitiveMeshType::Box);
+        const std::array anchors{S::SceneCellWorldAnchor{object.object,
+                                                         {9'007'199'254'740'993, -400, 700},
+                                                         std::array<std::int64_t, 3>{9'007'199'254'741'993, -400, 700}}};
+        world.inputs.front().source.worldAnchors = anchors;
         const auto published = world.Publish();
         REQUIRE(published.HasValue());
         REQUIRE(published.Value().publication);
@@ -407,6 +414,40 @@ namespace Horo::WorldCook {
             host->Shutdown();
             CHECK_FALSE(ObserveEditorPlayMountedWorld(*host));
             CHECK(lease->Get().HasError());
+        }
+        SECTION("A selected World cell publishes the exact canonical graph input and retires it with Play") {
+            const auto selected = world.inputs.front().expected;
+            policy.world->committed.initialCell.emplace(CommittedWorldInitialCell{selected.cell, {900}, selected.scene, selected.revision});
+            auto publication = std::make_shared<EditorMountedWorldViewport>();
+            policy.world->viewport.emplace(EditorMountedWorldViewportSelection{object.object, {object.object}, publication, [] {
+                return Result<Render::RenderViewId>::Success({43});
+            }});
+            S::PrimitiveMeshCache primitives;
+            auto factory = MakeEditorProjectSceneFactory(jobs, policy);
+            auto created = factory(project.path, Editor::EditorFirstPlayScene, definition.Value());
+            REQUIRE(created.HasValue());
+            auto host = std::move(created).Value();
+            REQUIRE(host->UsesMountedViewport());
+            host->BindViewportPrimitiveCache(&primitives);
+            const CancellationToken cancellation;
+            REQUIRE(host->Scenes().Startup(cancellation).HasValue());
+            REQUIRE(host->QueueInitialScene(definition.Value(), nullptr, cancellation).HasValue());
+            CHECK_FALSE(publication->Current().packet);
+            REQUIRE(host->CommitSceneChanges({.frameNumber = 1, .cancellation = cancellation}).HasValue());
+            auto packet = publication->Current().packet;
+            REQUIRE(packet);
+            CHECK(publication->Current().owner == Editor::EditorFirstPlayScene);
+            CHECK(publication->Current().view.value == 43);
+            const auto view = packet->Scene();
+            REQUIRE(view.HasValue());
+            CHECK(view.Value().camera.target.x == 1.0F);
+            CHECK(view.Value().instances.size() == 1);
+            CHECK(view.Value().meshResources.size() == 1);
+            publication->Withdraw({7});
+            CHECK(publication->Current().packet == packet);
+            host->Shutdown();
+            CHECK_FALSE(publication->Current().packet);
+            CHECK(packet->Scene().HasError());
         }
         SECTION("A different workspace cannot reuse the launch World") {
             T::TempDir foreign;

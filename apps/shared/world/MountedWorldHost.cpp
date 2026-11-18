@@ -544,7 +544,8 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc MountedWorld::ActivateInitialCell */
-    Result<void> MountedWorld::ActivateInitialCell(const CommittedWorldInitialCell &selected, const MountedWorldStartup &boundary) {
+    Result<void> MountedWorld::ActivateInitialCell(const CommittedWorldInitialCell &selected, const MountedWorldStartup &boundary,
+                                                   const Runtime::FrameContext *phase) {
         if (auto ready = CheckBoundary(boundary); ready.HasError())
             return ready;
         const auto parent = state_->scene.ActiveScene();
@@ -626,7 +627,7 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(queued.ErrorValue());
 
             const Runtime::FrameContext frame{.frameNumber = 1, .cancellation = boundary.cancellation};
-            const auto advanced = state_->scene.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame);
+            const auto advanced = state_->scene.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, phase ? *phase : frame);
             if (advanced.HasError()) {
                 state_->scene.Shutdown();
                 return advanced;

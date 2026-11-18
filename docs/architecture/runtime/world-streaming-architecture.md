@@ -2244,7 +2244,13 @@ attempt. The canonical origin is readable after the selected Scene publishes
 and its leases expire when Play ends. Preview, prefab authoring and ordinary
 Play without this selection keep independent Scene ownership.
 
-The Editor currently admits an origin mount alongside desktop Play. Startup
-cell attachment, Navigation, XR and Save require their canonical World
-composition. The ordinary viewport has no authority to draw a mounted cell's
-global geometry using legacy local translations.
+Desktop Play can add `--play-world-cell <x> <y> <z> <lod> <layer> <occurrence>
+<definition> <revision> <camera> <draw-ids>`, where draw IDs are ascending,
+comma-separated authored object IDs. The selected cell uses the standalone
+planner and tracked Scene activation. The selected camera and procedural draws
+must all have canonical anchors. Preparation publishes one exact viewport packet
+for the mounted origin and the frontend-issued view. The editor graph uses this
+packet for mesh preparation and its existing static-mesh pass. It withdraws that
+pass on Scene or origin retirement and does not use the local-transform viewport
+extractor for a selected World cell. Navigation, XR and Save still require
+their owning World composition.

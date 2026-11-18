@@ -126,6 +126,9 @@ namespace Horo::Editor {
         std::optional<Error> ValidateViewSelection(const EditorPlayViewSource source, const EditorPlaySceneFactory &factory,
                                                    const IEditorPlayXrHost *host) {
             using enum Horo::Editor::EditorPlayViewSource;
+            if (source == MountedWorld)
+                return factory && !host ? std::nullopt
+                                        : std::optional{InvalidTransition("Mounted World Play requires its actual viewport factory.")};
             if (source > Simulator || (source != AuthoredCamera && (!factory || !host)) || (source == AuthoredCamera && host))
                 return InvalidTransition("Selected XR Play requires its actual application factory and host.");
             if (host && host->ViewSource() != source)
@@ -183,7 +186,8 @@ namespace Horo::Editor {
                                                     const Gameplay::ComponentRegistry &components, const EditorPlaySceneFactory &factory,
                                                     const std::optional<SceneSource::TriggerVolumeConversionContext> &triggerBinding,
                                                     const EditorPlayViewSource viewSource, const IEditorPlayXrHost *selectedXrHost,
-                                                    const std::filesystem::path &projectRelativeSource) {
+                                                    const std::filesystem::path &projectRelativeSource,
+                                                    Runtime::PrimitiveMeshCache *viewportPrimitives) {
         if (state_ != EditorPlaySessionState::Idle && state_ != EditorPlaySessionState::Failed)
             return Result<void>::Failure(InvalidTransition("A play session is already active."));
         Stop();
@@ -245,7 +249,8 @@ namespace Horo::Editor {
             Fail(converted.ErrorValue());
             return Result<void>::Failure(converted.ErrorValue());
         }
-        if (auto prepared = BeginPreparation(std::move(converted).Value(), registry, factory, childSource ? &*childSource : nullptr);
+        if (auto prepared = BeginPreparation(std::move(converted).Value(), registry, factory, childSource ? &*childSource : nullptr,
+                                             viewportPrimitives);
             prepared.HasError()) {
             Fail(prepared.ErrorValue());
             return prepared;
@@ -274,7 +279,8 @@ namespace Horo::Editor {
     Result<void> EditorPlaySessionController::BeginPreparation(Runtime::RuntimeSceneDefinition definition,
                                                                const Gameplay::BehaviorRegistry &registry,
                                                                const EditorPlaySceneFactory &factory,
-                                                               const EditorPlayChildSceneSource *childSource) {
+                                                               const EditorPlayChildSceneSource *childSource,
+                                                               Runtime::PrimitiveMeshCache *viewportPrimitives) {
         if (const auto reserved = ReservePlayOwnership(); reserved.HasError())
             return reserved;
         const Runtime::SceneRuntimeId identity{nextRuntimeId_};
@@ -284,9 +290,12 @@ namespace Horo::Editor {
             return Result<void>::Failure(prepared.ErrorValue());
         if (!prepared.Value())
             return Result<void>::Failure(InvalidTransition("The Play Scene host is unavailable."));
-        if (viewSource_ != EditorPlayViewSource::AuthoredCamera && prepared.Value()->SelectedXrHost() != selectedXrHost_)
+        if ((viewSource_ == EditorPlayViewSource::MountedWorld) != prepared.Value()->UsesMountedViewport())
+            return Result<void>::Failure(InvalidTransition("The selected Play host does not own the requested mounted viewport."));
+        if (selectedXrHost_ && prepared.Value()->SelectedXrHost() != selectedXrHost_)
             return Result<void>::Failure(InvalidTransition("Play factory does not own the selected XR participant."));
         sceneHost_ = std::move(prepared).Value();
+        sceneHost_->BindViewportPrimitiveCache(viewportPrimitives);
         ++nextRuntimeId_;
         preparationCancellation_ = CancellationSource{};
         preparationFrame_ = 1;
@@ -725,6 +734,11 @@ namespace Horo::Editor {
 
     std::optional<EditorSceneCollisionReceipt> EditorPlaySessionController::CollisionReceipt() const noexcept {
         return sceneHost_ ? sceneHost_->CollisionReceipt() : std::nullopt;
+    }
+
+    /** @copydoc EditorPlaySessionController::UsesMountedViewport */
+    bool EditorPlaySessionController::UsesMountedViewport() const noexcept {
+        return sceneHost_ && sceneHost_->UsesMountedViewport();
     }
 
     const std::optional<Error> &EditorPlaySessionController::LastError() const noexcept {

@@ -230,7 +230,10 @@ target_link_libraries(HoroEditorPlaySaveHostInternal PRIVATE HoroEngine::Applica
 set(HORO_EDITOR_PROJECT_SCENE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_project_scene_headers")
 file(MAKE_DIRECTORY "${HORO_EDITOR_PROJECT_SCENE_HEADERS}")
 configure_file(HoroEditor/composition/scene/EditorProjectSceneHost.h "${HORO_EDITOR_PROJECT_SCENE_HEADERS}/EditorProjectSceneHost.h" COPYONLY)
+configure_file(HoroEditor/composition/scene/EditorMountedWorldViewport.h
+    "${HORO_EDITOR_PROJECT_SCENE_HEADERS}/EditorMountedWorldViewport.h" COPYONLY)
 add_library(HoroEditorSceneProductHost STATIC
+    HoroEditor/composition/scene/EditorMountedWorldViewport.cpp
     HoroEditor/composition/scene/EditorPlayNavigationComposition.cpp
     HoroEditor/composition/scene/EditorProjectSceneHost.cpp
     HoroEditor/composition/scene/EditorProjectSceneHostResources.cpp)

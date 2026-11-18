@@ -352,6 +352,9 @@ namespace Horo::Editor {
             std::optional<Assets::AssetId> playNavigationScene;
             std::optional<Application::Internal::CommittedWorldSelection> playWorld;
             std::optional<Error> playWorldError;
+            std::optional<Application::Internal::CommittedWorldInitialCell> playWorldCell;
+            Runtime::SceneObjectId playWorldCamera;
+            std::vector<Runtime::SceneObjectId> playWorldMeshes;
             bool playNavigationSceneValid{true};
             std::optional<Render::DirectionalShadowProfile> directionalShadows;
             std::optional<EditorViewportLightingProfile> lighting;
@@ -829,6 +832,49 @@ namespace Horo::Editor {
         }
     }
 
+    /** @brief Reads the startup cell and exact camera and draw object identities for canonical Play. */
+    static Result<void> ReadEditorPlayWorldCell(const std::span<char *> arguments, std::size_t &index, EditorGuiOptions &options) {
+        using namespace Application::Internal;
+        const auto invalid = [] {
+            return Result<void>::Failure(
+                MakeError(WorldStreaming::WorldArtifactErrors::Invalid,
+                          "Use --play-world-cell <x> <y> <z> <lod> <layer> <occurrence> <definition> <revision> <camera> <draw-ids>."));
+        };
+        constexpr std::size_t Arguments = CommittedWorldCellArgumentCount + 2;
+        if (options.playWorldCell || arguments.size() - index <= Arguments)
+            return invalid();
+        auto cell = ParseCommittedWorldInitialCell(arguments.subspan(index + 1, CommittedWorldCellArgumentCount));
+        if (cell.HasError())
+            return Result<void>::Failure(cell.ErrorValue());
+        const auto object = [](const std::string_view text) {
+            Runtime::SceneObjectId id;
+            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), id.value);
+            return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() ? id : Runtime::SceneObjectId{};
+        };
+        const auto camera = object(arguments[index + Arguments - 1]);
+        std::string_view input{arguments[index + Arguments]};
+        std::vector<Runtime::SceneObjectId> meshes;
+        while (!input.empty()) {
+            const auto separator = input.find(',');
+            const auto id = object(input.substr(0, separator));
+            if (!id.IsValid() || meshes.size() == 64 || (!meshes.empty() && meshes.back() >= id))
+                return invalid();
+            meshes.push_back(id);
+            if (separator == std::string_view::npos)
+                break;
+            input.remove_prefix(separator + 1);
+            if (input.empty())
+                return invalid();
+        }
+        if (!camera.IsValid() || meshes.empty())
+            return invalid();
+        options.playWorldCell = cell.Value();
+        options.playWorldCamera = camera;
+        options.playWorldMeshes = std::move(meshes);
+        index += Arguments;
+        return Result<void>::Success();
+    }
+
     [[nodiscard]] static EditorGuiOptions ParseOptions(const std::span<char *> args) noexcept {
         using enum PendingEditorOption;
         EditorGuiOptions opts;
@@ -844,6 +890,13 @@ namespace Horo::Editor {
             const std::string_view argument{args[index]};
             if (ConsumeEditorOptionValue(argument, pending, opts))
                 continue;
+            if (argument == "--play-world-cell") {
+                if (auto cell = ReadEditorPlayWorldCell(args, index, opts); cell.HasError()) {
+                    opts.playWorldError = cell.ErrorValue();
+                    break;
+                }
+                continue;
+            }
             if (argument != "--play-world-mount") {
                 ApplyEditorOptionFlag(argument, pending, opts);
                 continue;
@@ -1613,6 +1666,7 @@ namespace Horo::Editor {
             Application::Internal::RuntimeUiPaintPort ui;
             Runtime::RuntimeSceneService *scene;
             std::shared_ptr<const Application::INetworkDebuggerQuery> network;
+            std::shared_ptr<Application::Internal::EditorMountedWorldViewport> mountedViewport;
         };
 
         /** @brief Value-owned prepared viewport/GUI workload and the mesh generation used to assemble it. */
@@ -1620,6 +1674,7 @@ namespace Horo::Editor {
             std::array<Render::RenderPassDescriptor, 2> descriptors{};
             std::size_t count{};
             std::uint64_t viewportMeshResourceGeneration{};
+            Application::Internal::EditorMountedWorldViewportView world;
         };
 
         /** @brief Accepts process Quit or Close belonging to the explicitly borrowed primary host window. */
@@ -2355,32 +2410,27 @@ namespace Horo::Editor {
                 qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::Extraction);
 #endif
                 frameState_.preparedPasses.count = 0;
-                const EditorViewportSceneView viewportScene = viewportSceneState_->View();
-                if (const EditorViewportExtent viewportExtent = p_->presentation.viewportRenderer.RequestedExtent();
-                    !UsesXrPresentation() && viewportScene.lightSceneDomain != 0 &&
-                    frameState_.preparedPasses.viewportMeshResourceGeneration == viewportSceneState_->MeshResourceGeneration() &&
+                const auto &preparedWorld = frameState_.preparedPasses.world;
+                const auto currentWorld = CurrentMountedViewport();
+                const auto viewportScene = ReadViewportScene(currentWorld);
+                const bool prepared = currentWorld.owner.IsValid()
+                                          ? currentWorld.packet == preparedWorld.packet
+                                          : !preparedWorld.owner.IsValid() && frameState_.preparedPasses.viewportMeshResourceGeneration ==
+                                                                                  viewportSceneState_->MeshResourceGeneration();
+                if (const auto viewportExtent = p_->presentation.viewportRenderer.RequestedExtent();
+                    !UsesXrPresentation() && viewportScene && viewportScene->lightSceneDomain != 0 && prepared &&
                     CanSubmitViewportPass(viewportExtent)) {
                     if (const Result<void> resized = ResizeLegacyViewportTarget(viewportExtent); resized.HasError())
                         return resized;
                     frameState_.preparedPasses.descriptors[frameState_.preparedPasses.count++] =
                         Render::RenderPassDescriptor{.id = Render::RenderPassId{1},
                                                      .kind = Render::RenderPassKind::Graphics,
-                                                     .staticMesh = Render::
-                                                         StaticMeshPassDescriptor{.target = p_->presentation.viewportTarget,
-                                                                                  .extent = {viewportExtent.width, viewportExtent.height},
-                                                                                  .scene = Render::
-                                                                                      RenderSceneView{.camera = ToRenderCamera(
-                                                                                                          viewportScene.camera),
-                                                                                                      .meshResources =
-                                                                                                          viewportScene.meshResources,
-                                                                                                      .instances = viewportScene.instances,
-                                                                                                      .lights = viewportScene.lights,
-                                                                                                      .lightSceneDomain =
-                                                                                                          viewportScene.lightSceneDomain,
-                                                                                                      .lightSnapshotRevision =
-                                                                                                          viewportScene
-                                                                                                              .lightSnapshotRevision},
-                                                                                  .clearColor = ViewportSceneClearColor()}};
+                                                     .staticMesh =
+                                                         Render::StaticMeshPassDescriptor{.target = p_->presentation.viewportTarget,
+                                                                                          .extent = {viewportExtent.width,
+                                                                                                     viewportExtent.height},
+                                                                                          .scene = *viewportScene,
+                                                                                          .clearColor = ViewportSceneClearColor()}};
                 }
                 frameState_.preparedPasses.descriptors[frameState_.preparedPasses.count++] =
                     Render::RenderPassDescriptor{.id = Render::RenderPassId{2},
@@ -2496,9 +2546,22 @@ namespace Horo::Editor {
                 return pacing_.pacer.Configure({p_->options.frameRateLimit}, observed.Value().snapshot);
             }
 
+            /** @brief Withdraws a frozen World pass if its exact publication retired after extraction. */
+            void DropRetiredMountedViewport() {
+                auto &passes = frameState_.preparedPasses;
+                if (!passes.world.owner.IsValid() || passes.count != 2 || !passes.descriptors.front().staticMesh)
+                    return;
+                if (const auto current = CurrentMountedViewport(); current.packet == passes.world.packet && ReadViewportScene(current))
+                    return;
+                passes.descriptors.front() = std::move(passes.descriptors.back());
+                --passes.count;
+            }
+
             /** @brief Uses the exact post-GUI descriptors while frontend resources are still outside a native frame. */
             Result<void> PrepareViewportLightingFrame() {
-                const auto view = p_->presentation.viewportRenderer.LightingViewIdentity();
+                DropRetiredMountedViewport();
+                const auto &world = frameState_.preparedPasses.world;
+                const auto view = world.owner.IsValid() ? world.view : p_->presentation.viewportRenderer.LightingViewIdentity();
                 for (const auto &descriptor : std::span{frameState_.preparedPasses.descriptors}.first(frameState_.preparedPasses.count)) {
                     if (!descriptor.staticMesh)
                         continue;
@@ -2572,22 +2635,35 @@ namespace Horo::Editor {
 #endif
             }
 
+            /** @brief Reads the app-owned Play publication without substituting a different coordinate frame. */
+            [[nodiscard]] Application::Internal::EditorMountedWorldViewportView CurrentMountedViewport() const {
+                return authorities_.mountedViewport ? authorities_.mountedViewport->Current()
+                                                    : Application::Internal::EditorMountedWorldViewportView{};
+            }
+
+            /** @brief Revalidates the selected origin and Scene at the graph handoff and borrows its exact data. */
+            [[nodiscard]] std::optional<Render::RenderSceneView> ReadViewportScene(
+                const Application::Internal::EditorMountedWorldViewportView &world) const {
+                if (world.owner.IsValid()) {
+                    auto borrowed = world.packet->Scene();
+                    return borrowed.HasValue() ? std::optional{borrowed.Value()} : std::nullopt;
+                }
+                const auto scene = viewportSceneState_->View();
+                return Render::RenderSceneView{ToRenderCamera(scene.camera), scene.meshResources,        scene.instances, scene.lights,
+                                               scene.lightSceneDomain,       scene.lightSnapshotRevision};
+            }
+
             Result<void> PrepareViewportResources() {
                 if (UsesXrPresentation())
                     return Result<void>::Success();
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                 qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::ViewportResources);
 #endif
-                const EditorViewportSceneView viewportScene = viewportSceneState_->View();
-                auto prepared =
-                    p_->presentation.viewportRenderer
-                        .PrepareResources(p_->presentation.renderFrontend,
-                                          Render::RenderSceneView{.camera = ToRenderCamera(viewportScene.camera),
-                                                                  .meshResources = viewportScene.meshResources,
-                                                                  .instances = viewportScene.instances,
-                                                                  .lights = viewportScene.lights,
-                                                                  .lightSceneDomain = viewportScene.lightSceneDomain,
-                                                                  .lightSnapshotRevision = viewportScene.lightSnapshotRevision});
+                frameState_.preparedPasses.world = CurrentMountedViewport();
+                const auto view = ReadViewportScene(frameState_.preparedPasses.world);
+                if (!view)
+                    return Result<void>::Success();
+                auto prepared = p_->presentation.viewportRenderer.PrepareResources(p_->presentation.renderFrontend, *view);
                 if (prepared.HasError())
                     return Result<void>::Failure(prepared.ErrorValue());
                 frameState_.preparedPasses.viewportMeshResourceGeneration = viewportSceneState_->MeshResourceGeneration();
@@ -2664,6 +2740,7 @@ namespace Horo::Editor {
                 } else
 #endif
                 {
+                    DropRetiredMountedViewport();
                     scene = p_->presentation.viewportRenderer
                                 .ExecutePreparedFrame(*frameState_.frame,
                                                       std::span<const Render::RenderPassDescriptor>{frameState_.preparedPasses.descriptors
@@ -3282,6 +3359,7 @@ namespace Horo::Editor {
             EditorNavigationBakeHost &navigationBakes;
             std::optional<UpdateExperienceSession> &updateSession;
             std::shared_ptr<const Application::INetworkDebuggerQuery> network;
+            std::shared_ptr<Application::Internal::EditorMountedWorldViewport> mountedViewport;
 
             /** @brief Transfers the sole Scene/UI participants into the RuntimeHost and retains every borrowed authority through shutdown.
              */
@@ -3309,7 +3387,8 @@ namespace Horo::Editor {
                     std::make_unique<EditorRuntimeParticipant>(p, screenHost, viewportSceneState, settingsSnapshot, liveGui,
                                                                rendererRestart, clock,
                                                                EditorRuntimeAuthorities{nullptr, packages, &navigationBakes,
-                                                                                        runtimeSources.Value(), sceneInspection, network});
+                                                                                        runtimeSources.Value(), sceneInspection, network,
+                                                                                        mountedViewport});
                 participant->BindHost(*runtime);
                 EditorRuntimeParticipant *pacingParticipant = participant.get();
                 Result<void> startup = runtime->AddParticipant(std::move(participant));
@@ -3396,8 +3475,20 @@ namespace Horo::Editor {
             Runtime::RuntimeSceneService *runtimeSceneService = runtimeScene.get();
             auto playPolicy = scenePolicy;
             playPolicy.playNavigationScene = p.options.playNavigationScene;
-            if (p.options.playWorld)
+            std::shared_ptr<Application::Internal::EditorMountedWorldViewport> mountedViewport;
+            if (p.options.playWorld) {
                 playPolicy.world.emplace(Application::Internal::EditorPlayWorldSelection{previewProjectRoot, *p.options.playWorld});
+                if (p.options.playWorldCell) {
+                    mountedViewport = std::make_shared<Application::Internal::EditorMountedWorldViewport>();
+                    playPolicy.world->committed.initialCell = p.options.playWorldCell;
+                    playPolicy.world->viewport.emplace(
+                        Application::Internal::EditorMountedWorldViewportSelection{p.options.playWorldCamera, p.options.playWorldMeshes,
+                                                                                   mountedViewport,
+                                                                                   [&frontend = p.presentation.renderFrontend] {
+                        return frontend.CreateRenderViewIdentity();
+                    }});
+                }
+            }
             playPolicy.aiSettings.missingController = AI::AiMissingControllerPolicy::Reject;
             Application::Internal::ConfigureEditorPlaySavePolicy(playPolicy, p.background.jobs, p.operationServices.operationStore, clock,
                                                                  wallClock);
@@ -3541,6 +3632,9 @@ namespace Horo::Editor {
             screenHost.Services().RegisterConst<WorldStreamingPreviewRuntimePolicy>(streamingPolicy.Value());
             screenHost.Services().Register<Runtime::RuntimeSceneService>(*runtimeSceneService);
             screenHost.Services().Register<EditorProjectPlaySceneFactory>(playSceneFactory);
+            const EditorMountedWorldPlaySelected mountedPlaySelected;
+            if (mountedViewport)
+                screenHost.Services().RegisterConst<EditorMountedWorldPlaySelected>(mountedPlaySelected);
             screenHost.Services().Register<EditorProjectPrefabStageFactory>(prefabStageFactory);
             screenHost.Services().RegisterConst<Prefab::PrefabMetricHandles>(p.telemetry.prefab);
             screenHost.Services().Register<Assets::AssetRegistry>(assetRegistry);
@@ -3570,8 +3664,8 @@ namespace Horo::Editor {
             screenHost.Services().Register<Application::NetworkDebuggerService>(*networkDebugger);
             screenHost.Services().RegisterConst<Application::INetworkDebuggerQuery>(*networkDebugger);
             screenHost.Services().Register<Application::INetworkDebuggerControl>(*networkDebugger);
-            EditorRuntimeSession session{p,     screenHost, viewportSceneState, settingsSnapshot, liveGui,
-                                         clock, packages,   navigationBakes,    updateSession,    networkDebugger};
+            EditorRuntimeSession session{p,        screenHost,      viewportSceneState, settingsSnapshot, liveGui,        clock,
+                                         packages, navigationBakes, updateSession,      networkDebugger,  mountedViewport};
             return session.Run(std::move(createdRuntime).Value(), std::move(runtimeScene), std::move(preparedUi->paint));
         }
     }  // namespace
@@ -3636,10 +3730,10 @@ namespace Horo::Editor {
 
     /** @brief Validates explicit application Physics selection before project/native frontend creation. */
     [[nodiscard]] static bool ValidateEditorPhysicsOptions(const EditorGuiOptions &options) {
-        if (options.playWorldError || (options.playWorld && options.projectRoot.empty())) {
+        if (options.playWorldError || (options.playWorld && options.projectRoot.empty()) || (options.playWorldCell && !options.playWorld)) {
             LOG_CRITICAL("editor.runtime", "%s",
                          options.playWorldError ? options.playWorldError->message.c_str()
-                                                : "Mounted World Play requires an explicit --project root.");
+                                                : "Mounted World Play requires --project and --play-world-mount.");
             return false;
         }
         if (!options.playNavigationSceneValid ||

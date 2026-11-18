@@ -199,6 +199,19 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         /** @brief Borrows this published Scene owner's canonical mounted origin lease. */
         [[nodiscard]] std::optional<WorldStreaming::OriginFrameLease> WorldOrigin() const;
 
+        /** @brief Activates selected World geometry before ordinary Play becomes externally visible. */
+        [[nodiscard]] Result<void> CompleteWorldStartup(const Runtime::FrameContext &frame);
+
+        /** @copydoc Editor::EditorPlaySceneHost::UsesMountedViewport */
+        bool UsesMountedViewport() const noexcept override {
+            return worldViewport_.has_value();
+        }
+
+        /** @copydoc Editor::EditorPlaySceneHost::BindViewportPrimitiveCache */
+        void BindViewportPrimitiveCache(Runtime::PrimitiveMeshCache *cache) noexcept override {
+            viewportPrimitives_ = cache;
+        }
+
         Result<void> Prepare(const std::filesystem::path &root, JobSystem &jobs, const EditorProjectScenePolicy &policy,
                              const Runtime::RuntimeSceneDefinition *definition) {
             if (!ValidPreparation(identity_, root, policy))
@@ -407,6 +420,10 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                     return prepared;
             if (auto committed = scenes_->OnPhase(phase, frame); committed.HasError())
                 return committed;
+            if (auto mounted = CompleteWorldStartup(frame); mounted.HasError()) {
+                Shutdown();
+                return mounted;
+            }
             if (prefab_.services)
                 if (const auto advanced = prefab_.services->Advance(tick_); advanced.HasError())
                     return advanced;
@@ -522,6 +539,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 prefab_.templates->Shutdown();
             if (navigation_)
                 navigation_->coordinator.BeginShutdown();
+            if (worldViewport_)
+                worldViewport_->publication->Withdraw(identity_);
+            worldRenderer_.reset();
             mountedWorld_.reset();
             if (scenes_)
                 scenes_->Shutdown();
@@ -551,6 +571,10 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         std::unique_ptr<Runtime::RuntimeSceneService> scenes_;
         std::optional<CommittedWorldSelection> worldSelection_;
         std::unique_ptr<MountedWorld> mountedWorld_;
+        std::optional<EditorMountedWorldViewportSelection> worldViewport_;
+        std::optional<MountedWorldStartup> worldStartup_;
+        std::unique_ptr<Render::RenderOriginSceneAdapter> worldRenderer_;
+        Runtime::PrimitiveMeshCache *viewportPrimitives_{};
 
         /** @brief Owns the projector/provider/spawn chain and its shared gameplay borrow in their required lifetime order. */
         struct PrefabState final {

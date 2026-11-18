@@ -10,15 +10,22 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                                                           const Runtime::RuntimeSceneDefinition *definition) {
         if (!policy.world)
             return Result<void>::Success();
-        if (!definition || policy.xrHost || policy.playNavigationScene || policy.world->committed.initialCell)
+        if (!definition || policy.xrHost || policy.playNavigationScene)
+            return Result<void>::Failure(
+                MakeError(WorldStreaming::WorldArtifactErrors::Unsupported,
+                          "Editor mounted World startup requires desktop Play. XR and Navigation need canonical World composition."));
+        const bool startsCell = policy.world->committed.initialCell.has_value();
+        const auto &viewport = policy.world->viewport;
+        if (startsCell != viewport.has_value() ||
+            (viewport && (!viewport->camera.IsValid() || viewport->meshes.empty() || !viewport->publication || !viewport->issueView)))
             return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Unsupported,
-                                                   "Editor mounted World startup requires desktop Play. Startup cells, XR and Navigation "
-                                                   "need canonical World presentation and activation."));
+                                                   "A World startup cell requires explicit canonical camera and viewport selection."));
         std::error_code error;
         if (root.empty() || !std::filesystem::equivalent(root, policy.world->projectRoot, error) || error)
             return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale,
                                                    "A committed World startup is scoped to its selected launch project."));
         worldSelection_ = policy.world->committed;
+        worldViewport_ = viewport;
         return Result<void>::Success();
     }
 
@@ -40,6 +47,10 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             if (source)
                 return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Unsupported,
                                                        "Mounted World startup does not admit a separate activated child Scene batch."));
+            if (worldViewport_ && !viewportPrimitives_)
+                return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Unsupported,
+                                                       "Mounted World Play needs the active viewport's primitive-resource owner."));
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
             auto mounted = MountedWorld::Prepare(NativeDurableFileSystem{}, *worldSelection_, identity_.value, *scenes_, cancellation);
             if (mounted.HasError())
                 return Result<void>::Failure(mounted.ErrorValue());
@@ -47,6 +58,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             if (queued.HasError())
                 return queued;
             mountedWorld_ = std::move(mounted).Value();
+            if (worldViewport_)
+                worldStartup_ = MountedWorldStartup{cancellation, deadline};
             return Result<void>::Success();
         }
         if (!source)

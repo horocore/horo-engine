@@ -21,7 +21,8 @@ namespace Horo::Gameplay {
 
 namespace Horo::Runtime {
     class SceneAnimationRuntime;
-}
+    class PrimitiveMeshCache;
+}  // namespace Horo::Runtime
 
 namespace Horo::Editor {
     /** @brief Host-reserved namespace divider; edit preview admission stays strictly below this value. */
@@ -77,6 +78,17 @@ namespace Horo::Editor {
         }
 
         virtual ~EditorPlaySceneHost() = default;
+
+        /** @brief Whether the actual Play host owns a separate canonical viewport publication. */
+        [[nodiscard]] virtual bool UsesMountedViewport() const noexcept {
+            return false;
+        }
+
+        /** @brief Borrows the actual workspace mesh cache through Play preparation.
+         * @param cache The same owner that issues ordinary viewport mesh identities, outliving the Play host.
+         */
+        virtual void BindViewportPrimitiveCache(Runtime::PrimitiveMeshCache *) noexcept {}
+
         /** @brief Borrows the actual single Scene service for preparation, behavior transactions and read-only presentation.
          * @return Service owned by this host until shutdown/destruction.
          */

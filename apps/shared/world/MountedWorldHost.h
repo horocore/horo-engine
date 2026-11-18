@@ -103,10 +103,12 @@ namespace Horo::Application::Internal {
         /** @brief Activate one independent, pinned CoreEcs cell through the private live parent Scene.
          * @param selected Exact authored occurrence and cooked cell identity from host policy.
          * @param boundary Existing cold startup/travel absolute deadline and parent cancellation.
+         * @param phase Synchronously borrowed actual editor cutoff, or null for standalone cold startup.
          * @return Success only after the Scene attachment receipt and Active residency agree.
          * @pre The parent is privately prepared. On a post-queue failure, it is shut down before retiring scheduler work.
          */
-        [[nodiscard]] Result<void> ActivateInitialCell(const CommittedWorldInitialCell &selected, const MountedWorldStartup &boundary);
+        [[nodiscard]] Result<void> ActivateInitialCell(const CommittedWorldInitialCell &selected, const MountedWorldStartup &boundary,
+                                                       const Runtime::FrameContext *phase = nullptr);
 
         /** @brief Observe authored global anchors for the exact current parent and mounted Scene occurrence.
          * @param parent Active Scene borrow on the owning lane.

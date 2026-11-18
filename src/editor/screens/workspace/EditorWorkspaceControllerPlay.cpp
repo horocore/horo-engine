@@ -176,12 +176,13 @@ namespace Horo::Editor {
         m_prePlayDocumentPanelId = m_viewModel.activeDocumentPanelId;
         LoadDocumentAssetMeshes();  // Cold SAME cache preparation before the XR Scene participant captures exact leases.
         BindPlaySaveSources();
+        const auto desktopView = m_mountedWorldPlaySelected ? EditorPlayViewSource::MountedWorld : EditorPlayViewSource::AuthoredCamera;
         const Result<void> started =
             m_playSession.Start(m_document.Snapshot(), m_gameplayRegistry->Registry(), m_gameplayRegistry->Components(), m_playSceneFactory,
-                                m_triggerBinding,
-                                m_selectedXrPlayHost ? m_selectedXrPlayHost->ViewSource() : EditorPlayViewSource::AuthoredCamera,
+                                m_triggerBinding, m_selectedXrPlayHost ? m_selectedXrPlayHost->ViewSource() : desktopView,
                                 m_selectedXrPlayHost,
-                                m_defaultScenePath ? m_defaultScenePath->lexically_relative(ProjectRoot()) : std::filesystem::path{});
+                                m_defaultScenePath ? m_defaultScenePath->lexically_relative(ProjectRoot()) : std::filesystem::path{},
+                                &m_primitiveMeshCache);
         m_viewModel.activeDocumentPanelId = "horo.game";
         SyncPanelHost(WorkspaceDockArea::Document, "horo.game");
         if (started.HasError())
@@ -323,6 +324,11 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::ExtractPlayViewportScene() {
+        if (m_playSession.UsesMountedViewport()) {
+            if (m_viewportScene.runtimeSceneId.IsValid())
+                ClearSimulatorViewport();
+            return;
+        }
         const auto playScene = m_playSession.SceneView();
         if (!playScene)
             return;

@@ -12,8 +12,12 @@ namespace Horo::Editor {
     enum class EditorPlayViewSource {
         AuthoredCamera,
         SelectedXr,
-        Simulator
+        Simulator,
+        MountedWorld
     };
+
+    /** @brief Explicit startup intent. Actual Scene and viewport owners still gate Play readiness. */
+    struct EditorMountedWorldPlaySelected final {};
     /** @brief Presentation projection of the editor play-session lifecycle; never another state authority. */
     enum class EditorPlayState : std::uint8_t {
         Idle,

@@ -158,6 +158,11 @@ namespace Horo::Editor {
         }
 
         /** @brief Selects the actual application XR host; null preserves authored-camera desktop Play. */
+        /** @brief Selects the graph-owned mounted camera policy for the next Play attempt. */
+        void SelectMountedWorldPlay(bool selected) noexcept {
+            m_mountedWorldPlaySelected = selected;
+        }
+
         void SelectXrPlayHost(IEditorPlayXrHost *host) noexcept {
             m_selectedXrPlayHost = host;
             m_viewModel.playViewSource = host ? EditorPlayViewSource::SelectedXr : EditorPlayViewSource::AuthoredCamera;
@@ -805,6 +810,7 @@ namespace Horo::Editor {
         EditorAssetMeshCache m_assetMeshCache;
         EditorXrSceneSourceOwner m_xrSceneSource{m_document, m_primitiveMeshCache, m_assetMeshCache};
         IEditorPlayXrHost *m_selectedXrPlayHost{};
+        bool m_mountedWorldPlaySelected{};
         EditorViewportSceneSnapshot m_viewportScene;
 
         struct CameraPreviewState final {

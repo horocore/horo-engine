@@ -4,6 +4,7 @@
  * @brief Explicit non-installed Editor Play application composition over the canonical Scene owner.
  */
 #include "CommittedSceneAssets.h"
+#include "EditorMountedWorldViewport.h"
 #include "EditorPlaySaveHost.h"
 #include "EditorPlaySceneHost.h"
 #include "EditorPlayXrHost.h"
@@ -22,6 +23,7 @@ namespace Horo::Application::Internal {
     struct EditorPlayWorldSelection final {
         std::filesystem::path projectRoot;
         CommittedWorldSelection committed;
+        std::optional<EditorMountedWorldViewportSelection> viewport;
     };
 
     /** @brief Application policy captured before workspace creation; no backend inference or fallback. */

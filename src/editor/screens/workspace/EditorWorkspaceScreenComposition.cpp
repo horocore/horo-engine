@@ -190,6 +190,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             controller_.reset();
             return Result<void>::Failure(error);
         }
+        controller_->SelectMountedWorldPlay(services_.TryGetConst<EditorMountedWorldPlaySelected>() != nullptr);
         RevokeSimulatorArtifacts();
         simulatorArtifacts_ = std::move(simulatorArtifacts);
         uiInspectorResources_ = std::move(uiInspectorResources);
