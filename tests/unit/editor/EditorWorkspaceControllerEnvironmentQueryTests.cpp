@@ -1,3 +1,4 @@
+#include "Horo/AI/EnvironmentQueryExecution.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "OwnedTestDirectory.h"
@@ -7,8 +8,10 @@
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <format>
 #include <fstream>
+#include <thread>
 
 namespace {
     using namespace Horo;
@@ -179,6 +182,126 @@ TEST_CASE("Environment Query workspace uses the composed native descriptor regis
     REQUIRE(documents.size() == 1);
     CHECK(documents.front().query->Id() == query.Value().Id());
     CHECK(documents.front().descriptors == QueryDescriptorAvailability::Validated);
+}
+
+TEST_CASE("Environment Query workspace previews the saved native lattice from an exact authoring Scene", "[unit][editor][eqs][workspace]") {
+    Project project;
+    const auto registry = CaptureBuiltinQuerySchema();
+    REQUIRE(registry.HasValue());
+    const auto query =
+        CreateBuiltinLatticeQuery(QueryId::Create(9).Value(), QueryStageId::Create(10).Value(), QueryResultSchemaId::Create(11).Value(),
+                                  "Local points", {.stepMillimeters = 500, .outerSteps = MaximumQueryLatticeOuterSteps}, 100);
+    REQUIRE(query.HasValue());
+    project.WriteAsset(query.Value());
+
+    CancellationSource cancellation;
+    REQUIRE(project.runtime.Startup(cancellation.Token()).HasValue());
+    JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 8}};
+    EditorWorkspaceController controller(project.root, project.runtime, project.registry.Snapshot(),
+                                         {.assets = {.mutableAssetRegistry = &project.registry},
+                                          .mutations = &project.mutations,
+                                          .durableFiles = &project.files,
+                                          .jobs = &jobs,
+                                          .querySchema = &registry.Value()});
+    REQUIRE_FALSE(controller.InitializationError());
+    const auto &model = controller.ViewModel();
+    REQUIRE(model.objects.size() == 1);
+    const auto object = model.objects.front().id;
+    auto transform = model.objects.front().localTransform;
+    transform.translation = {2, 3, -4};
+    controller.ProcessCommand({.command = EditorWorkspaceViewCommand::SelectObject, .objectPayload = object});
+    controller.ProcessCommand(
+        {.command = EditorWorkspaceViewCommand::CommitObjectTransform, .objectPayload = object, .transformPayload = transform});
+    for (int frame = 0; frame < 2000; ++frame) {
+        REQUIRE(project.runtime
+                    .OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges,
+                             {static_cast<std::uint64_t>(frame + 1), {}, 0.0, 0, {}, false, cancellation.Token()})
+                    .HasValue());
+        controller.SynchronizeRuntimeScenePreview();
+        if (controller.ViewportScene().documentRevision == model.documentRevision && model.primarySelection == object)
+            break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    REQUIRE(controller.ViewportScene().documentRevision == model.documentRevision);
+    REQUIRE(model.primarySelection == object);
+    const auto active = project.runtime.ActiveScene();
+    REQUIRE(active);
+
+    Project::Open(controller, Project::Path);
+    REQUIRE(model.environmentQueryDocuments.size() == 1);
+    const auto &document = model.environmentQueryDocuments.front();
+    REQUIRE(document.descriptors == QueryDescriptorAvailability::Validated);
+    const auto pinned = EnvironmentQueryPreviewRequest{document.identity.instance, document.source, model.documentRevision, object};
+    const auto submit = [&](EnvironmentQueryPreviewRequest request) {
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::PreviewEnvironmentQuery, .environmentQueryPreview = request});
+    };
+
+    using enum EnvironmentQueryPreviewStatus;
+    auto expected = Ready;
+    SECTION("the retained preview is bounded, stable and leaves the Scene owner unchanged") {
+        submit(pinned);
+        REQUIRE(document.preview.status == Running);
+    }
+    SECTION("a legitimate Scene edit revokes an outstanding preview") {
+        submit(pinned);
+        REQUIRE(document.preview.status == Running);
+        transform.translation.x += 1;
+        controller.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::CommitObjectTransform, .objectPayload = object, .transformPayload = transform});
+        REQUIRE(model.documentRevision != pinned.scene);
+        expected = Stale;
+    }
+    SECTION("an explicit Cancel prevents publication of a retained worker result") {
+        submit(pinned);
+        REQUIRE(document.preview.status == Running);
+        auto cancel = pinned;
+        cancel.action = EnvironmentQueryPreviewAction::Cancel;
+        submit(cancel);
+        expected = Cancelled;
+    }
+    SECTION("stale saved query bytes are refused before a worker is accepted") {
+        project.WriteQuery("Changed query");
+        submit(pinned);
+        expected = Stale;
+    }
+    jobs.Shutdown(ShutdownPolicy::Drain);
+    controller.UpdateEnvironmentQueryPreview();
+    REQUIRE(document.preview.status == expected);
+    CHECK_FALSE(controller.HasDirtySourceDocuments());
+    if (expected != Ready) {
+        CHECK_FALSE(document.preview.snapshot);
+        return;
+    }
+    REQUIRE(document.preview.snapshot);
+    const auto &preview = *document.preview.snapshot;
+    constexpr std::size_t width = MaximumQueryLatticeOuterSteps * 2 + 1;
+    CHECK(preview.query == query.Value().Id());
+    CHECK(preview.generated == width * width);
+    CHECK(preview.evaluated == preview.generated);
+    CHECK(preview.invalidCoordinates == 0);
+    CHECK(preview.winnerCount == 100);
+    CHECK(preview.winners.size() == QueryDebugCaptureSettings::MaximumSamples);
+    CHECK(preview.stages.empty());
+    REQUIRE(preview.candidates.size() == QueryDebugCaptureSettings::MaximumSamples);
+    CHECK(preview.candidates.front().index == 0);
+    CHECK(preview.candidates.back().index == preview.generated - 1);
+    CHECK(preview.candidates.front().point == Math::WorldCoordinate64::FromMillimeters(-13500, 3000, -19500));
+    CHECK(preview.candidates.back().point == Math::WorldCoordinate64::FromMillimeters(17500, 3000, 11500));
+    REQUIRE(preview.candidates.back().score);
+    CHECK(preview.candidates.back().score->status == QueryScoreStatus::Eligible);
+    CHECK(preview.candidates.back().score->scoreKey == 0);
+    CHECK(model.documentRevision == pinned.scene);
+    CHECK(active->IsCurrent());
+    CHECK(document.preview.scene.runtime == active->RuntimeId());
+    CHECK(document.preview.scene.structure == active->StructuralRevision());
+    CHECK(model.playState == EditorPlayState::Idle);
+
+    transform.translation.x += 1;
+    controller.ProcessCommand(
+        {.command = EditorWorkspaceViewCommand::CommitObjectTransform, .objectPayload = object, .transformPayload = transform});
+    controller.UpdateEnvironmentQueryPreview();
+    CHECK(document.preview.status == Stale);
+    CHECK_FALSE(document.preview.snapshot);
 }
 
 TEST_CASE("Environment Query New creates the first registered source from explicit native lattice settings",

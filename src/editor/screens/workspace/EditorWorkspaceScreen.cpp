@@ -145,6 +145,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             controller_->UpdateTerrainCook();
             controller_->UpdateContentBrowser();
             controller_->SynchronizeRuntimeScenePreview();
+            controller_->UpdateEnvironmentQueryPreview();
             controller_->UpdateFps(ImGui::GetIO().Framerate);
         }
     }

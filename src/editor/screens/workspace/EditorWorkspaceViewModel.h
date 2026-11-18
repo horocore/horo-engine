@@ -48,6 +48,7 @@
 namespace Horo::AI {
     class DecisionBlackboardProviderMetadata;
     class EnvironmentQueryAsset;
+    struct QueryDebugSnapshot;
     struct DecisionGraphSource;
     class QuerySchemaRegistry;
 }  // namespace Horo::AI
@@ -260,6 +261,7 @@ namespace Horo::Editor {
         RevealContentBrowserEntry,
         OpenSourceFile,
         OpenRecentAiAsset,
+        PreviewEnvironmentQuery,
         EditDecisionStateMachine,
         EditDecisionBehaviorTree,
         EditDecisionUtilityGraph,
@@ -353,6 +355,47 @@ namespace Horo::Editor {
         Validated
     };
 
+    /** @brief Owner-published state of a read-only Scene preview. */
+    enum class EnvironmentQueryPreviewStatus : std::uint8_t {
+        Idle,
+        Running,
+        Ready,
+        Stale,
+        Cancelled,
+        Failed
+    };
+
+    /** @brief Exact authored Scene and installed preview scene pinned before worker submission. */
+    struct EnvironmentQueryPreviewScene final {
+        DocumentRevision document;
+        SceneObjectId anchor;
+        Runtime::SceneRuntimeId runtime;
+        std::uint64_t structure{};
+    };
+
+    /** @brief Workspace-only evidence, with no runtime apply or navigation capability. */
+    struct EnvironmentQueryPreviewView final {
+        EnvironmentQueryPreviewStatus status{EnvironmentQueryPreviewStatus::Idle};
+        EnvironmentQueryPreviewScene scene;
+        std::shared_ptr<const AI::QueryDebugSnapshot> snapshot;
+        std::optional<Error> diagnostic;
+    };
+
+    /** @brief One workspace-only preview action. */
+    enum class EnvironmentQueryPreviewAction : std::uint8_t {
+        Run,
+        Cancel
+    };
+
+    /** @brief A request correlated to the exact saved query and current authored Scene. */
+    struct EnvironmentQueryPreviewRequest final {
+        DocumentInstanceId instance;
+        Sha256Digest source;
+        DocumentRevision scene;
+        std::optional<SceneObjectId> anchor;
+        EnvironmentQueryPreviewAction action{EnvironmentQueryPreviewAction::Run};
+    };
+
     /** @brief An immutable, registered Environment Query source in a normal workspace document. */
     struct EnvironmentQueryWorkspaceDocument final {
         DocumentIdentity identity;
@@ -360,6 +403,7 @@ namespace Horo::Editor {
         Sha256Digest source;
         std::shared_ptr<const AI::EnvironmentQueryAsset> query;
         QueryDescriptorAvailability descriptors{QueryDescriptorAvailability::RegistryUnavailable};
+        EnvironmentQueryPreviewView preview;
     };
 
     /** @brief Workspace-owned source lease and separate transient presentation state. */
@@ -631,6 +675,7 @@ namespace Horo::Editor {
         std::optional<ContentBrowserAssetTransferRequest> contentBrowserTransfer = std::nullopt;
         std::optional<SourceOpenRequest> sourceOpenRequest = std::nullopt;
         std::optional<Assets::AssetId> recentAiAsset = std::nullopt;
+        std::optional<EnvironmentQueryPreviewRequest> environmentQueryPreview;
         std::optional<StateMachineEditRequest> stateMachineEdit = std::nullopt;
         std::optional<BehaviorTreeEditRequest> behaviorTreeEdit = std::nullopt;
         std::optional<UtilityGraphEditRequest> utilityGraphEdit = std::nullopt;

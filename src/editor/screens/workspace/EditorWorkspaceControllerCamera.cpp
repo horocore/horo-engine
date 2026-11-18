@@ -47,6 +47,7 @@ namespace Horo::Editor {
 
     EditorWorkspaceController::~EditorWorkspaceController() {
         StopBlackboardUsageReview();
+        StopEnvironmentQueryPreview();
         static_cast<void>(DrainUiCanvasRecovery());
         static_cast<void>(DrainPrefabRecovery());
         StopPrefabExternalWatch();

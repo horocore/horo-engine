@@ -508,6 +508,8 @@ namespace Horo::Editor {
         void UpdateSourceAutosave(float elapsedSeconds, int delaySeconds);
         /** @brief Publishes a terminal Project usage review only for its original document and registry revision. */
         void UpdateBlackboardUsageReview();
+        /** @brief Polls one bounded read-only EQS job and invalidates evidence from a retired authored Scene. */
+        void UpdateEnvironmentQueryPreview();
         /**
          * @brief Schedules and drains non-blocking canonical scene identity inspections.
          * @param elapsedSeconds Owner-thread elapsed frame time.
@@ -724,6 +726,15 @@ namespace Horo::Editor {
         const AI::QuerySchemaRegistry *m_querySchema{};
         UiInspectorResources *m_uiInspectorResources{};
         JobSystem *m_sourceRecoveryJobs{};
+
+        /** @brief Detached result slot written by one worker before the JobHandle publishes its terminal state. */
+        struct EnvironmentQueryPreviewWork final {
+            DocumentInstanceId instance;
+            JobHandle job;
+            std::shared_ptr<std::shared_ptr<const AI::QueryDebugSnapshot>> result;
+        };
+
+        std::optional<EnvironmentQueryPreviewWork> m_environmentQueryPreviewWork;
         CollisionInventoryEvidence *m_collisionInventory{};
         CollisionActivationEvidence *m_collisionActivation{};
         const EditorPreviewCollisionReceiptSource *m_previewCollisionReceipt{};
@@ -1281,6 +1292,16 @@ namespace Horo::Editor {
 
         /** @brief Opens one exact registered query source in the normal workspace. */
         void OpenEmbeddedEnvironmentQuerySource(const SourceOpenResult &result);
+        /** @brief Routes a Run or Cancel request for the currently active registered saved query. */
+        bool ProcessEnvironmentQueryPreview(const EditorWorkspaceViewCommandData &command);
+        /** @brief Captures exact authoring inputs and submits pure bounded lattice evaluation. */
+        Result<void> StartEnvironmentQueryPreview(EnvironmentQueryWorkspaceDocument &document,
+                                                  const EnvironmentQueryPreviewRequest &request);
+        /** @brief Cancels the worker and detaches its result before retiring the controller. */
+        void StopEnvironmentQueryPreview();
+        /** @brief Returns true for the same published editor preview Scene and selected query anchor. */
+        [[nodiscard]] bool IsEnvironmentQueryPreviewCurrent(const EnvironmentQueryPreviewScene &pin,
+                                                            const std::optional<Runtime::RuntimeSceneView> &current) const;
 
         /** @brief Closes the matching immutable query source tab if present. */
         bool CloseEnvironmentQuerySource(DocumentInstanceId instance);
