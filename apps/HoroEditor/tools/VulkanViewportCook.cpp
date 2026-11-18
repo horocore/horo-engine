@@ -25,8 +25,19 @@ namespace {
         SceneLinear,
         Multiview,
         Shadow,
-        MultiviewMotion
+        MultiviewMotion,
+        TemporalLinearDepth,
+        TemporalMotion
     };
+
+    std::optional<Editor::EditorVulkanTemporalInput> TemporalInput(CookMode mode) {
+        using enum Editor::EditorVulkanTemporalInput;
+        if (mode == CookMode::TemporalLinearDepth)
+            return LinearDepth;
+        if (mode == CookMode::TemporalMotion)
+            return Motion;
+        return std::nullopt;
+    }
 
     ShaderManifest Manifest(CookMode mode) {
         switch (mode) {
@@ -41,6 +52,9 @@ namespace {
                 return Editor::EditorVulkanShadowShaderManifest();
             case MultiviewMotion:
                 return Editor::EditorVulkanMultiviewMotionShaderManifest();
+            case TemporalLinearDepth:
+            case TemporalMotion:
+                return Editor::EditorVulkanTemporalInputShaderManifest(*TemporalInput(mode));
         }
         return {};
     }
@@ -58,6 +72,9 @@ namespace {
                 return Editor::EditorVulkanShadowReflectionNames();
             case MultiviewMotion:
                 return Editor::EditorVulkanMultiviewMotionReflectionNames();
+            case TemporalLinearDepth:
+            case TemporalMotion:
+                return Editor::EditorVulkanTemporalInputReflectionNames(*TemporalInput(mode));
         }
         return {};
     }
@@ -75,6 +92,10 @@ namespace {
                 return "shadow";
             case MultiviewMotion:
                 return "multiview-motion";
+            case TemporalLinearDepth:
+                return "temporal-linear-depth";
+            case TemporalMotion:
+                return "temporal-motion";
         }
         return "invalid";
     }
@@ -165,6 +186,9 @@ namespace {
                 return Admit(Editor::LoadEditorVulkanShadowCook(artifact.payload, metadata));
             case MultiviewMotion:
                 return Admit(Editor::LoadEditorVulkanMultiviewMotionCook(artifact.payload, metadata));
+            case TemporalLinearDepth:
+            case TemporalMotion:
+                return Admit(Editor::ValidateEditorVulkanTemporalInputCook(*TemporalInput(mode), artifact.payload, metadata));
         }
         return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::InvalidRequest));
     }
@@ -186,6 +210,8 @@ namespace {
                                          .reflection = ShaderCompilerReflectionRequest{tools[2].identity, Names(mode)}};
         if (mode == CookMode::Multiview)
             request.defines = {{"HORO_MULTIVIEW_LAYER_ROUTING", "0"}};
+        if (const auto temporal = TemporalInput(mode))
+            request.defines = {{"HORO_VIEWPORT_TEMPORAL_MOTION", *temporal == Editor::EditorVulkanTemporalInput::Motion ? "1" : "0"}};
         return request;
     }
 
@@ -311,6 +337,10 @@ namespace {
             return Shadow;
         if (std::string_view{argv[7]} == "--multiview-motion")
             return MultiviewMotion;
+        if (std::string_view{argv[7]} == "--temporal-linear-depth")
+            return TemporalLinearDepth;
+        if (std::string_view{argv[7]} == "--temporal-motion")
+            return TemporalMotion;
         return std::nullopt;
     }
 }  // namespace
@@ -325,7 +355,7 @@ int main(int argc, char **argv) {
     const bool manualColorOutput = argc == 9 && std::string_view{argv[7]} == "--color-output-manual";
     if (!mode && !reconstruction && !manualColorOutput) {
         std::cerr << "Usage: HoroEditorVulkanShaderCook source.hlsl output-prefix scratch-root dxc spirv-val spirv-cross "
-                     "[--scene-linear|--multiview|--multiview-motion|--shadow]\n"
+                     "[--scene-linear|--multiview|--multiview-motion|--shadow|--temporal-linear-depth|--temporal-motion]\n"
                      "       HoroEditorVulkanShaderCook source.hlsl absolute-new-stage scratch-root dxc spirv-val spirv-cross "
                      "--native-reconstruction candidate-id [--scene-linear-source viewport.hlsl]\n"
                      "       HoroEditorVulkanShaderCook repository absolute-new-stage scratch-root dxc spirv-val spirv-cross "

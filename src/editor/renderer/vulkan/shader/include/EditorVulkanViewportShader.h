@@ -51,6 +51,24 @@ namespace Horo::Editor {
     [[nodiscard]] Result<EditorVulkanSceneLinearCook> LoadEditorVulkanSceneLinearCook(std::span<const std::uint8_t> payload,
                                                                                       std::span<const std::uint8_t> metadata);
 
+    /** @brief Single-target desktop prepasses providing the exact native temporal input semantics. */
+    enum class EditorVulkanTemporalInput : std::uint8_t {
+        LinearDepth,
+        Motion,
+    };
+
+    /** @brief Describes the selected prepass's separate float attachment and reflected matrix ABI. */
+    [[nodiscard]] Render::ShaderManifest EditorVulkanTemporalInputShaderManifest(EditorVulkanTemporalInput input);
+    /** @brief Names the selected prepass's exact compiler-reflected block and members. */
+    [[nodiscard]] std::vector<Render::ShaderReflectionBindingName> EditorVulkanTemporalInputReflectionNames(
+        EditorVulkanTemporalInput input);
+    /** @brief Checks the selected compiler-bound prepass and its exact vertex/fragment attachment interface.
+     * @param input Selected depth or motion producer. @param payload Actual stage bytes. @param metadata Bound reflection.
+     * @return Exact admitted reflection or a typed target, stage, binding or layout failure. */
+    [[nodiscard]] Result<Render::ReflectedShaderArtifact> ValidateEditorVulkanTemporalInputCook(EditorVulkanTemporalInput input,
+                                                                                                std::span<const std::uint8_t> payload,
+                                                                                                std::span<const std::uint8_t> metadata);
+
     /** @brief Exact canonical runtime multiview interface, consumed through the same compiled/reflected producer. */
     [[nodiscard]] Render::ShaderManifest EditorVulkanMultiviewShaderManifest();
     /** @brief Exact authored member names; offsets and strides always come from actual compiler reflection. */

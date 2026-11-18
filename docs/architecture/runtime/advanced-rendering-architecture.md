@@ -364,6 +364,17 @@ and does not acquire an image, begin a frame, or wait on the GPU. This is the
 resource boundary needed by the viewport exposure and output color owner's
 existing pre-frame ring preparation.
 
+The offline viewport cook accepts `--temporal-linear-depth` and
+`--temporal-motion` with `assets/shaders/editor/viewport_temporal_inputs.hlsl`.
+Each command emits one immutable, reflected program for a single color
+attachment. The depth program writes positive view-space metres and uses zero
+for invalid depth. The motion program writes `previousUv - currentUv` using
+unjittered clip transforms. An invalid predecessor writes a finite offset
+outside the image so reconstruction discards that pixel's history. The host
+must supply the same jittered raster transform and viewport orientation to
+these programs and the scene color pass. Viewport integration must provision the
+attachments and validate producer and consumer on the same native frame.
+
 The same Vulkan offline host can prepare the manual-exposure ColorOutput
 generation with the pinned original analytic processor and SDR encoder:
 

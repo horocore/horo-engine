@@ -96,6 +96,23 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
+        /** @brief Checks the exact stage names encoded in the payload as well as its reflected interface. */
+        Result<void> ValidateViewportStageEntries(const Render::ShaderManifest &manifest, const Render::ShaderTargetRequirement &target,
+                                                  std::span<const std::uint8_t> payload) {
+            const auto stages = Render::DecodeShaderArtifactStages(payload, target.backend, target.payloadFormat, 16U * 1024U * 1024U);
+            if (stages.HasError())
+                return Result<void>::Failure(stages.ErrorValue());
+            if (stages.Value().stageCount != manifest.entryPoints.size())
+                return Result<void>::Failure(MakeError(Render::ShaderReflectionErrors::StageInterfaceMismatch));
+            for (std::size_t index = 0; index < manifest.entryPoints.size(); ++index) {
+                const auto &expected = manifest.entryPoints[index];
+                const auto &native = stages.Value().stages[index];
+                if (native.stage != expected.stage || native.entryPoint != expected.name)
+                    return Result<void>::Failure(MakeError(Render::ShaderReflectionErrors::StageInterfaceMismatch));
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Decodes bound artifacts without duplicating mesh layout policy across the two owned programs. */
         template <typename Cook>
         Result<Cook> LoadViewportProgram(const Render::ShaderManifest &manifest, std::span<const std::uint8_t> payload,
@@ -136,18 +153,78 @@ namespace Horo::Editor {
         using Outcome = Result<EditorVulkanSceneLinearCook>;
         const auto manifest = EditorVulkanSceneLinearShaderManifest();
         const auto target = EditorVulkanViewportShaderTarget();
-        const auto stages = DecodeShaderArtifactStages(payload, target.backend, target.payloadFormat, 16U * 1024U * 1024U);
-        if (stages.HasError())
+        if (const auto stages = ValidateViewportStageEntries(manifest, target, payload); stages.HasError())
             return Outcome::Failure(stages.ErrorValue());
-        if (stages.Value().stageCount != manifest.entryPoints.size())
-            return Outcome::Failure(MakeError(ShaderReflectionErrors::StageInterfaceMismatch));
-        for (std::size_t index = 0; index < manifest.entryPoints.size(); ++index) {
-            const auto &expected = manifest.entryPoints[index];
-            const auto &native = stages.Value().stages[index];
-            if (native.stage != expected.stage || native.entryPoint != expected.name)
-                return Outcome::Failure(MakeError(ShaderReflectionErrors::StageInterfaceMismatch));
-        }
         return LoadViewportProgram<EditorVulkanSceneLinearCook>(manifest, payload, metadata);
+    }
+
+    /** @copydoc EditorVulkanTemporalInputShaderManifest */
+    Render::ShaderManifest EditorVulkanTemporalInputShaderManifest(EditorVulkanTemporalInput input) {
+        using namespace Render;
+        using enum ShaderValueType;
+        const bool motion = input == EditorVulkanTemporalInput::Motion;
+        ShaderManifest manifest{.schemaVersion = 1,
+                                .sourceIdentity = "assets/shaders/editor/viewport_temporal_inputs.hlsl",
+                                .sourceRevision = 1,
+                                .entryPoints = {{ShaderStage::Vertex, "VSMain"},
+                                                {ShaderStage::Fragment, motion ? "PSMotion" : "PSLinearDepth"}},
+                                .bindings = {{{1},
+                                              ShaderResourceKind::UniformBuffer,
+                                              ShaderResourceAccess::ReadOnly,
+                                              1,
+                                              ShaderStageVisibility::Vertex}},
+                                .parameters = {{{1}, {1}, Float32, 4, 4, 1}, {{2}, {1}, Float32, 4, 4, 1}},
+                                .targets = {EditorVulkanViewportShaderTarget()}};
+        if (motion) {
+            manifest.parameters.push_back({{3}, {1}, Float32, 4, 4, 1});
+            manifest.parameters.push_back({{4}, {1}, Uint32, 1, 1, 1});
+        }
+        return manifest;
+    }
+
+    /** @copydoc EditorVulkanTemporalInputReflectionNames */
+    std::vector<Render::ShaderReflectionBindingName> EditorVulkanTemporalInputReflectionNames(EditorVulkanTemporalInput input) {
+        if (input == EditorVulkanTemporalInput::Motion)
+            return {{{1},
+                     "type.ViewportTemporalParameters",
+                     {{{1}, "RasterLocalToClip"}, {{2}, "CurrentLocalToClip"}, {{3}, "PreviousLocalToClip"}, {{4}, "HasPrevious"}}}};
+        return {{{1}, "type.ViewportTemporalParameters", {{{1}, "RasterLocalToClip"}, {{2}, "LocalToView"}}}};
+    }
+
+    /** @copydoc ValidateEditorVulkanTemporalInputCook */
+    Result<Render::ReflectedShaderArtifact> ValidateEditorVulkanTemporalInputCook(EditorVulkanTemporalInput input,
+                                                                                  std::span<const std::uint8_t> payload,
+                                                                                  std::span<const std::uint8_t> metadata) {
+        using namespace Render;
+        using Outcome = Result<ReflectedShaderArtifact>;
+        const auto manifest = EditorVulkanTemporalInputShaderManifest(input);
+        const auto target = EditorVulkanViewportShaderTarget();
+        if (const auto stages = ValidateViewportStageEntries(manifest, target, payload); stages.HasError())
+            return Outcome::Failure(stages.ErrorValue());
+        auto result = DecodeReflectedShaderArtifact(manifest, target, payload, metadata);
+        if (result.HasError())
+            return result;
+        const auto exact = [](const auto &attribute, unsigned columns) {
+            return attribute.location == 0 && attribute.type == ShaderValueType::Float32 && attribute.rows == 1 &&
+                   attribute.columns == columns && attribute.arrayCount == 1;
+        };
+        unsigned vertex{}, fragment{};
+        const unsigned columns = input == EditorVulkanTemporalInput::Motion ? 2U : 1U;
+        for (const auto &attribute : result.Value().reflection.stageInterface) {
+            if (attribute.stage == ShaderStage::Vertex && attribute.direction == ShaderInterfaceDirection::Input) {
+                if (!exact(attribute, 3))
+                    return Outcome::Failure(MakeError(ShaderReflectionErrors::StageInterfaceMismatch));
+                ++vertex;
+            }
+            if (attribute.stage == ShaderStage::Fragment && attribute.direction == ShaderInterfaceDirection::Output) {
+                if (!exact(attribute, columns))
+                    return Outcome::Failure(MakeError(ShaderReflectionErrors::StageInterfaceMismatch));
+                ++fragment;
+            }
+        }
+        if (vertex != 1 || fragment != 1)
+            return Outcome::Failure(MakeError(ShaderReflectionErrors::StageInterfaceMismatch));
+        return result;
     }
 
     Render::ShaderManifest EditorVulkanShadowShaderManifest() {

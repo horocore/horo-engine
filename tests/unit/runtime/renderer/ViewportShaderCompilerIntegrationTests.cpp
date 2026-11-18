@@ -143,6 +143,26 @@ TEST_CASE("Reviewed Vulkan tools cook and separate the linear scene raster from 
     const auto state = EditorVulkanSceneLinearPipelineState();
     CHECK(state.colorFormat == RenderTextureFormat::Rgba16Float);
     CHECK(state.depthFormat == RenderTextureFormat::Depth32Float);
+
+    request.source = Read(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/shaders/editor/viewport_temporal_inputs.hlsl");
+    const std::array inputs{EditorVulkanTemporalInput::LinearDepth, EditorVulkanTemporalInput::Motion};
+    for (const auto input : inputs) {
+        const bool motion = input == EditorVulkanTemporalInput::Motion;
+        request.manifest = EditorVulkanTemporalInputShaderManifest(input);
+        request.reflection = ShaderCompilerReflectionRequest{spirvCross->identity, EditorVulkanTemporalInputReflectionNames(input)};
+        request.defines = {{"HORO_VIEWPORT_TEMPORAL_MOTION", motion ? "1" : "0"}};
+        const auto compiled = CompileShaderTargets(request, adapter.Value(), {});
+        INFO((compiled.HasError() ? compiled.ErrorValue().message : "compiled temporal input recipe"));
+        REQUIRE(compiled.HasValue());
+        REQUIRE(compiled.Value().artifacts.size() == 1);
+        const auto &artifact = compiled.Value().artifacts.front();
+        REQUIRE(artifact.reflection);
+        const auto metadata = EncodeReflectedShaderArtifact(*artifact.reflection);
+        REQUIRE(metadata.HasValue());
+        CHECK(ValidateEditorVulkanTemporalInputCook(input, artifact.payload, metadata.Value()).HasValue());
+        const auto other = motion ? EditorVulkanTemporalInput::LinearDepth : EditorVulkanTemporalInput::Motion;
+        CHECK(ValidateEditorVulkanTemporalInputCook(other, artifact.payload, metadata.Value()).HasError());
+    }
 #endif
 }
 
