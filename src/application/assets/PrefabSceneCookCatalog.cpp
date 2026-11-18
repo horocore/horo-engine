@@ -75,7 +75,8 @@ namespace Horo::Application::PrefabCookDetail {
                                                                           const HostCapture &host, const Prefab::PrefabLimitProfile &limits,
                                                                           const CancellationToken &cancellation,
                                                                           const std::shared_ptr<const PrefabCookSchemaContext> &schemas,
-                                                                          const Prefab::PrefabMetricHandles &metrics) {
+                                                                          const Prefab::PrefabMetricHandles &metrics,
+                                                                          std::optional<Assets::AssetRecord> &failedSource) {
             std::vector<Prefab::PrefabDependencySource> sources;
             for (const auto &input : inputs.Sources()) {
                 if (cancellation.IsCancellationRequested())
@@ -83,8 +84,10 @@ namespace Horo::Application::PrefabCookDetail {
                 if (input.record.type.Value() != "core.prefab")
                     continue;
                 auto source = CapturePrefabSource(input, host, limits, schemas, metrics);
-                if (source.HasError())
+                if (source.HasError()) {
+                    failedSource = input.record;
                     return Result<std::vector<Prefab::PrefabDependencySource>>::Failure(source.ErrorValue());
+                }
                 sources.push_back(std::move(source).Value());
             }
             return Result<std::vector<Prefab::PrefabDependencySource>>::Success(std::move(sources));
@@ -460,7 +463,8 @@ namespace Horo::Application::PrefabCookDetail {
                                                          const Assets::AssetCookInputSnapshot &inputs,
                                                          const Prefab::PrefabSourceResolverSnapshot &resolver,
                                                          const Prefab::PrefabDependencyGraphSnapshot &graph,
-                                                         const Prefab::PrefabLimitProfile &limits, const ScenePreparationContext &context) {
+                                                         const Prefab::PrefabLimitProfile &limits, const ScenePreparationContext &context,
+                                                         std::optional<Assets::AssetRecord> &failedSource) {
             std::vector<PreparedScene> scenes;
             std::uint64_t totalPayloadBytes{};
             std::size_t totalInputReferences{};
@@ -470,8 +474,10 @@ namespace Horo::Application::PrefabCookDetail {
                 if (input.record.type.Value() != "core.scene")
                     continue;
                 auto scene = PrepareScene(input, inputs.Registry(), resolver, graph, limits, context);
-                if (scene.HasError())
+                if (scene.HasError()) {
+                    failedSource = input.record;
                     return Result<std::vector<PreparedScene>>::Failure(scene.ErrorValue());
+                }
                 if (scene.Value().payload.size() > request.maximumCapturedBytes - totalPayloadBytes ||
                     std::ranges::any_of(scenes, [&scene](const PreparedScene &existing) {
                     return existing.id == scene.Value().id;
@@ -557,8 +563,8 @@ namespace Horo::Application::PrefabCookDetail {
     Result<PreparedCatalog> PrepareCatalog(const PrefabSceneCookRequest &request, const HostCapture &host,
                                            const Assets::AssetCookInputSnapshot &inputs, const Prefab::PrefabLimitProfile &limits,
                                            const Assets::CookerCatalogSnapshot &catalog, const CancellationToken &cancellation,
-                                           SceneSource::ScenePrefabExpansionOwner &expansion) {
-        auto sources = PrefabSources(inputs, host, limits, cancellation, request.schemas, request.metrics);
+                                           SceneSource::ScenePrefabExpansionOwner &expansion, std::optional<Assets::AssetRecord> &failedSource) {
+        auto sources = PrefabSources(inputs, host, limits, cancellation, request.schemas, request.metrics, failedSource);
         if (sources.HasError())
             return Result<PreparedCatalog>::Failure(sources.ErrorValue());
         if (cancellation.IsCancellationRequested())
@@ -577,7 +583,7 @@ namespace Horo::Application::PrefabCookDetail {
             return Result<PreparedCatalog>::Failure(std::move(resourceCatalog).ErrorValue());
         const auto &graph = resolver.Value().DependencyGraph();
         auto scenes = PrepareScenes(request, inputs, resolver.Value(), graph, limits,
-                                    {request, settings, inputs, *resourceCatalog.Value(), cancellation, expansion});
+                                    {request, settings, inputs, *resourceCatalog.Value(), cancellation, expansion}, failedSource);
         if (scenes.HasError())
             return Result<PreparedCatalog>::Failure(scenes.ErrorValue());
         auto projection = CaptureSelections(request, inputs, resolver.Value(), scenes.Value(), *resourceCatalog.Value(), cancellation);

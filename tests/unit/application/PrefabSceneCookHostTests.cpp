@@ -104,6 +104,78 @@ namespace {
 
 }  // namespace
 
+TEST_CASE("Host prefab cook exposes redacted preparation failures before AssetCook publication", "[native][prefab-cook][host]") {
+    HostFixture fixture;
+    const auto first = fixture.Cook();
+    REQUIRE(first.HasValue());
+    BuildOutputStore output{16};
+    OperationStore operations{1, 4};
+    fixture.request.assets.buildOutputStore = &output;
+    fixture.request.assets.operationStore = &operations;
+    fixture.WriteText("assets/hierarchy.prefab", "malformed prefab");
+
+    const auto failed = fixture.Cook();
+    REQUIRE(failed.HasError());
+    const auto records = output.SnapshotIfChanged(0);
+    REQUIRE(records);
+    REQUIRE(records->records.size() == 1);
+    const auto &finding = records->records.front();
+    CHECK(finding.result == BuildOutputResult::Failed);
+    CHECK(finding.code.Value() == failed.ErrorValue().code.Value());
+    CHECK(finding.stage == "prefab.validate_sources");
+    CHECK(finding.message.find(fixture.prefabId.ToString()) != std::string::npos);
+    CHECK(finding.message.find("assets/hierarchy.prefab") != std::string::npos);
+    CHECK(finding.message.find(fixture.project.dir.path.string()) == std::string::npos);
+    CHECK(finding.message.find("malformed prefab") == std::string::npos);
+    CHECK_FALSE(finding.source.has_value());
+    CHECK(finding.sessionId.has_value());
+    const auto progress = operations.SnapshotIfChanged(0);
+    REQUIRE(progress);
+    REQUIRE(progress->operations.size() == 1);
+    CHECK(progress->operations.front().state == OperationState::Failed);
+    CHECK(progress->operations.front().id == finding.operationId);
+    fixture.AssertRetained(first.Value().generation);
+
+    fixture.WritePrefab();
+    REQUIRE(fixture.Cook().HasValue());
+    const auto recovered = operations.SnapshotIfChanged(progress->revision);
+    REQUIRE(recovered);
+    REQUIRE(recovered->operations.size() == 3);
+    CHECK(std::ranges::count(recovered->operations, OperationState::Succeeded, &OperationRecord::state) == 2);
+}
+
+TEST_CASE("Host prefab cook handles an operation-store cancellation before source capture", "[native][prefab-cook][host]") {
+    HostFixture fixture;
+    const auto first = fixture.Cook();
+    REQUIRE(first.HasValue());
+    BuildOutputStore output{8};
+    OperationStore operations{1, 2};
+    CancellationSource cancellation;
+    fixture.request.assets.buildOutputStore = &output;
+    fixture.request.assets.operationStore = &operations;
+    fixture.request.assets.requestCancel = [&] { cancellation.RequestCancellation(); };
+    const auto nextPublication = fixture.request.assets.newPublicationOperationId;
+    fixture.request.assets.newPublicationOperationId = [&] {
+        const auto snapshot = operations.SnapshotIfChanged(0);
+        REQUIRE(snapshot);
+        REQUIRE(snapshot->operations.size() == 1);
+        CHECK(snapshot->operations.front().cancellable);
+        REQUIRE(operations.RequestCancel(snapshot->operations.front().id));
+        return nextPublication();
+    };
+    REQUIRE(fixture.Cook(cancellation.Token()).HasError());
+    const auto snapshot = operations.SnapshotIfChanged(0);
+    REQUIRE(snapshot);
+    REQUIRE(snapshot->operations.size() == 1);
+    CHECK(snapshot->operations.front().state == OperationState::Cancelled);
+    const auto records = output.SnapshotIfChanged(0);
+    REQUIRE(records);
+    REQUIRE(records->records.size() == 1);
+    CHECK(records->records.front().result == BuildOutputResult::Cancelled);
+    CHECK(records->records.front().operationId == snapshot->operations.front().id);
+    fixture.AssertRetained(first.Value().generation);
+}
+
 TEST_CASE("Host prefab scene cook publishes expanded source-free scenes and validates cache reuse", "[native][prefab-cook][host]") {
     HostFixture fixture;
     const auto first = fixture.Cook();

@@ -157,6 +157,8 @@ namespace Horo::Application {
                                                                            const CancellationToken &cancellation);
 
     private:
+        class PreparationDiagnostics;
+
         /** @brief Runs one operation with optional validated release semantics included in its immutable cache identity. */
         [[nodiscard]] Result<Assets::AssetCookReport> CookImpl(const PrefabSceneCookRequest &request, const CancellationToken &cancellation,
                                                                const Release::ReleaseExecutionPlan *releasePlan);
@@ -165,6 +167,7 @@ namespace Horo::Application {
          * @param limits Validated prefab bounds.
          * @param cancellation Cooperative stop token.
          * @param releasePlan Optional frozen release identity.
+         * @param diagnostics Progress and failure evidence for host preparation.
          * @param projectLease Owned mutation authority; released only after cook completion or unwinding.
          * @return Committed report or typed failure preserving prior authority.
          */
@@ -172,6 +175,7 @@ namespace Horo::Application {
                                                                            const Prefab::PrefabLimitProfile &limits,
                                                                            const CancellationToken &cancellation,
                                                                            const Release::ReleaseExecutionPlan *releasePlan,
+                                                                           PreparationDiagnostics &diagnostics,
                                                                            Editor::ProjectMutationLease projectLease);
         JobSystem &jobs_;
         std::shared_ptr<const Assets::CookerCatalogSnapshot> catalog_;
