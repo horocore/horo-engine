@@ -240,7 +240,7 @@ namespace {
         const auto unrelated = AssetId::FromBytes({0xc4});
         const auto nestedAsset = AssetId::FromBytes({0xc5});
         const auto variantAsset = AssetId::FromBytes({0xc6});
-        constexpr HoroVersion version{0, 1, 0};
+        const HoroVersion version{0, 1, 0};
         constexpr std::string_view project =
             R"({"horoVersion":"0.1.0","persistentContract":"sha256:0101010101010101010101010101010101010101010101010101010101010101","projectId":"blackboard-review","name":"Review Test","projectVersion":"0.1.0","createdAt":"2026-07-18T00:00:00Z","settings":{"renderBackend":"opengl"}})";
         std::filesystem::create_directories(fixture.source.path / ".horo");
