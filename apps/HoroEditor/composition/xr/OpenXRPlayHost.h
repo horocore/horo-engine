@@ -287,8 +287,15 @@ namespace Horo::Application::Internal {
         struct FrameState;
         /** @brief Drives one cold activation/retirement step on the actual native event cutoff. */
         void ProgressPassthrough();
-        /** @brief Checks current consent, platform authority, focus, calibration and native activation. */
-        [[nodiscard]] bool HasPassthrough(const XR::XRPassthroughScope &scope) const noexcept;
+        /** @brief Checks the exact local grant, Play and World ownership without calling platform authority.
+         * @param scope Frozen session, World and operator grant. @return Whether all three are still current.
+         */
+        [[nodiscard]] bool MatchesPassthroughGrant(const XR::XRPassthroughScope &scope) const noexcept;
+        /** @brief Checks current consent, platform authority, focus, calibration and native activation.
+         * @param scope Owned scope copy that remains valid across the external permission check.
+         * @return Whether the exact native and Play scope is still authorized.
+         */
+        [[nodiscard]] bool HasPassthrough(XR::XRPassthroughScope scope) const noexcept;
         [[nodiscard]] Result<void> ProgressTail();
         [[nodiscard]] Result<void> AbortRenderFrame();
         [[nodiscard]] Result<void> BindRenderFrame(std::uint64_t frameNumber);

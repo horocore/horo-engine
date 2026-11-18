@@ -392,14 +392,18 @@ namespace Horo::Application::Internal {
             native_.RevokePassthrough(*passthroughScope_);
     }
 
-    /** @copydoc OpenXRPlayHost::HasPassthrough */
-    bool OpenXRPlayHost::HasPassthrough(const XR::XRPassthroughScope &scope) const noexcept {
+    /** @copydoc OpenXRPlayHost::MatchesPassthroughGrant */
+    bool OpenXRPlayHost::MatchesPassthroughGrant(const XR::XRPassthroughScope &scope) const noexcept {
         const auto state = sessions_.Snapshot();
         return !closing_ && !eventsPending_ && scene_ && scene_->published && !scene_->retiring && scene_->session == scope.session &&
                scene_->passthroughGrant == scope.grant && input_.admitted && input_.play == Editor::EditorPlayState::Playing &&
-               input_.origin == scope.world.worldOriginRevision && state.session == scope.session && state.admitsActions &&
-               native_.ReadPassthrough(scope) == XR::OpenXRInternal::NativePassthroughState::Active &&
-               composition_.session.AllowsPassthrough(scope);
+               input_.origin == scope.world.worldOriginRevision && state.session == scope.session && state.admitsActions;
+    }
+
+    /** @copydoc OpenXRPlayHost::HasPassthrough */
+    bool OpenXRPlayHost::HasPassthrough(XR::XRPassthroughScope scope) const noexcept {
+        return MatchesPassthroughGrant(scope) && native_.ReadPassthrough(scope) == XR::OpenXRInternal::NativePassthroughState::Active &&
+               composition_.session.AllowsPassthrough(scope) && MatchesPassthroughGrant(scope);
     }
 
     /** @copydoc OpenXRPlayHost::ReadPassthroughState */
@@ -447,6 +451,9 @@ namespace Horo::Application::Internal {
             passthroughState_ = XR::XRCapabilityState::Denied;
             return;
         }
+        // Platform permission is a callback. Its result cannot restore a Play grant revoked during that call.
+        if (!MatchesPassthroughGrant(scope))
+            return;
         // Preserve exact scope even when native creation failed partway and left a cleanup prefix.
         passthroughScope_ = scope;
         const auto started = native_.StartPassthrough(scope);

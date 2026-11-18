@@ -840,6 +840,7 @@ namespace Horo::Tests::OpenXRApplication {
         struct PlatformPermission final : Host::IOpenXRPassthroughPermission {
             bool permitted{true};
             mutable std::optional<XR::XRPassthroughScope> observed;
+            mutable Host::OpenXRPlayHost *revokeOnRead{};
 
             bool SupportsReconstruction() const noexcept override {
                 return true;
@@ -848,6 +849,8 @@ namespace Horo::Tests::OpenXRApplication {
             bool Allows(const XR::XRPassthroughScope &scope) const noexcept override {
                 if (!observed)
                     observed = scope;
+                if (auto *play = std::exchange(revokeOnRead, nullptr))
+                    play->RevokePassthrough();
                 return permitted && observed == scope && scope.session == scope.world.id.session &&
                        scope.world.kind == XR::XRSpaceKind::World;
             }
@@ -856,6 +859,7 @@ namespace Horo::Tests::OpenXRApplication {
         bool installAuthority = true;
         bool arm = true;
         bool revokeInFlight = false;
+        bool revokeBeforeCreate = false;
         bool denyNative = false;
         std::uint32_t layerLimit = 2;
         const auto permission = std::make_shared<PlatformPermission>();
@@ -875,6 +879,9 @@ namespace Horo::Tests::OpenXRApplication {
         }
         SECTION("the exact native system supports only its ordinary projection layer") {
             layerLimit = 1;
+        }
+        SECTION("operator revocation during platform admission prevents native activation") {
+            revokeBeforeCreate = true;
         }
         SECTION("platform revocation prevents an already rendered alpha frame from submitting underlay") {
             revokeInFlight = true;
@@ -904,9 +911,11 @@ namespace Horo::Tests::OpenXRApplication {
             CHECK(fixture.play->ArmPassthrough().HasError());
         CHECK(native.featuresCreated == 0);
         CHECK_FALSE(permission->observed);
+        if (revokeBeforeCreate)
+            permission->revokeOnRead = fixture.play.get();
 
         auto scene = ActivatePlay(fixture, std::nullopt);
-        const bool active = arm && permission->permitted && !denyNative && layerLimit >= 2;
+        const bool active = arm && permission->permitted && !revokeBeforeCreate && !denyNative && layerLimit >= 2;
         CHECK((fixture.play->ReadPassthroughState() == XR::XRCapabilityState::Available) == active);
         CHECK(native.featuresCreated == (active ? 1U : 0U));
         CHECK(native.running == active);
