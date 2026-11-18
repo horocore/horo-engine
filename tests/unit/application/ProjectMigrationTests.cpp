@@ -136,7 +136,7 @@ namespace project_migration_tests {
 
         const auto result = Horo::Application::ProjectMigrationExecutor::VerifiedDryRun(project.root, plan, jobs);
         REQUIRE((result.HasError()));
-        REQUIRE((result.ErrorValue().code == TestFailure.code));
+        REQUIRE((result.ErrorValue().code.Value() == TestFailure.code.Value()));
         REQUIRE((project.Read("assets/a.txt") == before));
         for (const auto &entry : std::filesystem::directory_iterator(project.root))
             REQUIRE((!entry.path().filename().string().starts_with(".horo-migration-dry-run-")));
