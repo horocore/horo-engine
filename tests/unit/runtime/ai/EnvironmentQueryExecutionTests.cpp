@@ -216,12 +216,15 @@ namespace Horo::AI {
             Runtime::RuntimeScene &scene;
             ExecutionProbe probe;
             std::size_t admissions{};
+            CancellationSource *revokeAdmission{};
 
             explicit QueryTaskHost(Runtime::RuntimeScene &value) : scene(value) {}
 
             Result<std::unique_ptr<QueryExecution>> Admit(const DecisionQueryTaskDescriptor &, const AiTaskOperationContext &,
                                                           std::uint64_t, std::uint64_t) override {
                 ++admissions;
+                if (revokeAdmission)
+                    revokeAdmission->RequestCancellation();
                 return Result<std::unique_ptr<QueryExecution>>::Success(MakeExecution(probe, scene));
             }
         };
@@ -304,6 +307,36 @@ namespace Horo::AI {
             const auto tree = fixture.BuildTree(BlackboardValueKind::Boolean);
             ExpectError(fixture.Bind(*tree), AIErrors::BlackboardValueTypeMismatch);
             CHECK(fixture.host.admissions == 0);
+        }
+
+        TEST_CASE("EQS admission revoked by its owner releases the query without publishing a running task", "[unit][ai][eqs][task]") {
+            QueryTaskFixture fixture;
+            const auto tree = fixture.BuildTree(BlackboardValueKind::WorldCoordinate);
+            const auto executor = fixture.Bind(*tree);
+            REQUIRE(executor.HasValue());
+            const auto snapshot = fixture.blackboard->Snapshot();
+            REQUIRE(snapshot.HasValue());
+            const BehaviorTreeEvaluationContext context{fixture.node, tree->Bindings().BindingsForNode(fixture.node), snapshot.Value(), 4};
+            CancellationSource owner;
+            fixture.host.revokeAdmission = &owner;
+            const AiTaskOperationContext operation{.taskDefinition = fixture.task,
+                                                   .task = {fixture.agent.incarnation, {2, 1}},
+                                                   .agent = fixture.agent,
+                                                   .ownerCancellation = owner.Token()};
+            const auto cancelled = executor.Value()->Start(context, operation);
+            REQUIRE(cancelled.HasValue());
+            CHECK(cancelled.Value() == AiTaskState::Cancelled);
+            CHECK(fixture.host.admissions == 1);
+            CHECK(fixture.host.probe.generated == 0);
+
+            fixture.host.revokeAdmission = nullptr;
+            auto replacement = operation;
+            replacement.task.slot.generation++;
+            replacement.ownerCancellation = {};
+            const auto started = executor.Value()->Start(context, replacement);
+            REQUIRE(started.HasValue());
+            CHECK(started.Value() == AiTaskState::Running);
+            CHECK(fixture.host.admissions == 2);
         }
 
         TEST_CASE("Behavior tree EQS task awaits owner phases and commits the winner once", "[unit][ai][eqs][task]") {

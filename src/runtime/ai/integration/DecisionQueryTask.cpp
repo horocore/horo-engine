@@ -121,6 +121,9 @@ namespace Horo::AI {
         try {
             const auto deadline = context.tick + descriptor_.timeoutTicks;
             auto admitted = host_.Admit(descriptor_, operation, context.tick, deadline);
+            // Admission can revoke the task's owner. Release the detached query before retaining any task state.
+            if (operation.IsCancellationRequested())
+                return Result<AiTaskState>::Success(AiTaskState::Cancelled);
             if (admitted.HasError())
                 return Result<AiTaskState>::Failure(std::move(admitted).ErrorValue());
             auto query = std::move(admitted).Value();
