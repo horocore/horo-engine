@@ -21,6 +21,7 @@ namespace Horo::XR::OpenXRInternal {
         std::optional<XRReferenceSpaceChange> referenceChange;
         bool exitRequested{};
         NativeSessionEventLoss loss{NativeSessionEventLoss::None};
+        bool actionsInterrupted{}; /**< Focused action admission ended at least once in this exact batch. */
     };
 
     /** @brief Single-control-lane native protocol adapter; never issues a Horo session or frame identity.

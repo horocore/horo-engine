@@ -240,8 +240,10 @@ namespace Horo::XR::OpenXRInternal {
         if (buffer.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
             XrEventDataSessionStateChanged state;
             std::memcpy(&state, &buffer, sizeof(state));
+            const bool admitted = sessions_->Snapshot().admitsActions;
             if (auto changed = StateChanged(state, session); changed.HasError())
                 return Result<void>::Failure(changed.ErrorValue());
+            observation.actionsInterrupted |= admitted && !sessions_->Snapshot().admitsActions;
             observation.exitRequested |= state.session == session && state.state == XR_SESSION_STATE_EXITING;
         } else if (buffer.type == XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING) {
             return RecordLoss(NativeSessionEventLoss::Instance);

@@ -137,6 +137,28 @@ namespace Horo::Tests::OpenXR {
             REQUIRE(std::ranges::count(f.native.script.calls, "session") == 1);
         }
 
+        TEST_CASE("OpenXR preserves action focus interruption when focus returns in the same native poll", "[xr][native][events]") {
+            EventFixture f;
+            f.script.Push(XR_SESSION_STATE_READY);
+            f.script.Push(XR_SESSION_STATE_VISIBLE);
+            f.script.Push(XR_SESSION_STATE_FOCUSED);
+            const auto started = f.events.Poll(true);
+            REQUIRE(started.HasValue());
+            CHECK_FALSE(started.Value().actionsInterrupted);
+            REQUIRE(f.sessions.Snapshot().admitsActions);
+
+            f.script.Push(XR_SESSION_STATE_VISIBLE);
+            f.script.Push(XR_SESSION_STATE_FOCUSED);
+            const auto interrupted = f.events.Poll(true);
+            REQUIRE(interrupted.HasValue());
+            CHECK(interrupted.Value().actionsInterrupted);
+            CHECK(f.sessions.Snapshot().admitsActions);
+
+            const auto quiet = f.events.Poll(true);
+            REQUIRE(quiet.HasValue());
+            CHECK_FALSE(quiet.Value().actionsInterrupted);
+        }
+
         TEST_CASE("OpenXR native end waits for the canonical frame obligation and rejects reentry", "[xr][native][events]") {
             EventFixture f;
             f.script.Push(XR_SESSION_STATE_READY);
