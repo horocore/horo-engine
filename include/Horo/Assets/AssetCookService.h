@@ -22,6 +22,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Horo::Assets {
@@ -51,6 +52,17 @@ namespace Horo::Assets {
                           No intermediate generation is published; cancellation/failure discards the entire candidate. */
     };
 
+    /** @brief Optional synchronous projection of the existing cook operation onto a tooling protocol.
+     * The host keeps the context
+     * alive through the joined cook and supplies an OperationStore.
+     * Observers consume stable phase text only, do not reenter the
+     * cook, and cannot fail publication.
+     */
+    struct AssetCookProgressSink final {
+        void *context{};
+        void (*report)(void *context, OperationId operation, std::string_view phase, float completion) noexcept {};
+    };
+
     /**
      * @brief All inputs needed to run one cook operation.
      */
@@ -76,6 +88,7 @@ namespace Horo::Assets {
                                                                        Captures must outlive this joined Cook invocation. */
         std::shared_ptr<const AssetCookDependentPhase> dependentPhase; /**< Optional bounded generic extension; requires pinnedInputs.
                                                                       Does not select prefab roots, templates or providers. */
+        AssetCookProgressSink progress; /**< Borrowed same-operation progress, excluded from cook identity. */
     };
 
     /**

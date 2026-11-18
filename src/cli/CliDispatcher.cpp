@@ -2,6 +2,7 @@
 
 #include "Horo/Cli/CliErrors.h"
 #include "Horo/Foundation/String.h"
+#include "Horo/Foundation/Utf8.h"
 
 #include <algorithm>
 #include <cmath>
@@ -306,6 +307,33 @@ namespace Horo::Cli {
             return Result<void>::Failure(MakeError(CliErrors::ExecutionContextInvalid));
         }
         correlation_.operation = operation;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc CliSafeAssetSource::IsValid */
+    bool CliSafeAssetSource::IsValid() const noexcept {
+        if (assetId.size() != 36)
+            return false;
+        bool nonzero{};
+        for (std::size_t position = 0; position < assetId.size(); ++position) {
+            const char character = assetId[position];
+            const bool separator = position == 8 || position == 13 || position == 18 || position == 23;
+            if (separator ? character != '-' : !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')))
+                return false;
+            nonzero |= !separator && character != '0';
+        }
+        const auto &path = projectPath.String();
+        return nonzero && !path.empty() && path.size() <= 4096 && IsValidUtf8ScalarSequence(path) &&
+               std::ranges::none_of(path, [](const unsigned char character) {
+            return character < 32 || character == 127 || character == ':';
+        });
+    }
+
+    /** @copydoc CliExecutionContext::BindAssetSource */
+    Result<void> CliExecutionContext::BindAssetSource(CliSafeAssetSource source) {
+        if (!correlation_.operation || correlation_.assetSource || !source.IsValid())
+            return Result<void>::Failure(MakeError(CliErrors::ExecutionContextInvalid));
+        correlation_.assetSource = std::move(source);
         return Result<void>::Success();
     }
 

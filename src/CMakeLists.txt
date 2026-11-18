@@ -4642,6 +4642,14 @@ endif ()
 
 # Apply the build-tree public/private include contract only after every optional
 # production target has been declared.
+# Deliberate app/test composition seam for built-in, headless asset capabilities.
+set(HORO_BUILTIN_COOKER_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/internal/builtin-cookers")
+file(MAKE_DIRECTORY "${HORO_BUILTIN_COOKER_HOST_HEADERS}")
+configure_file(runtime/assets/cooker/builtin/HeadlessMeshCooker.h "${HORO_BUILTIN_COOKER_HOST_HEADERS}/HeadlessMeshCooker.h" COPYONLY)
+add_library(HoroBuiltinAssetCookerHostInternal INTERFACE)
+target_include_directories(HoroBuiltinAssetCookerHostInternal INTERFACE "${HORO_BUILTIN_COOKER_HOST_HEADERS}")
+target_link_libraries(HoroBuiltinAssetCookerHostInternal INTERFACE HoroEngine::Assets)
+
 add_library(HoroPrefabCookHost STATIC
         application/assets/PrefabCookSchemaContext.cpp
         application/assets/PrefabCookSemanticInputs.cpp

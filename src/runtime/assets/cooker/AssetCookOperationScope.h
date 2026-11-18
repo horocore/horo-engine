@@ -5,7 +5,7 @@
  * @brief Target-private cook operation lifecycle and optional history projection.
  */
 
-#include "Horo/Foundation/BuildOutputStore.h"
+#include "Horo/Assets/AssetCookService.h"
 #include "Horo/Foundation/CancellationToken.h"
 
 #include <optional>
@@ -27,11 +27,10 @@ namespace Horo::Assets::Detail {
          * @param store Optional operation authority that outlives this scope.
          * @param output Optional build-output authority that outlives this scope.
          * @param cancellation Cancellation token retained through preparation and cook.
-         * @param sessionId Previously allocated output identity, or invalid when output is absent.
-         * @param id Previously admitted operation identity, or no value when store is absent.
+         * @param observer Optional protocol projection of this operation.
          */
         CookOperationScope(OperationStore *store, BuildOutputStore *output, const CancellationToken &cancellation,
-                           BuildOutputSessionId sessionId = {}, std::optional<OperationId> id = std::nullopt);
+                           AssetCookProgressSink observer);
 
         /** @brief Attempts the remaining terminal projection without allowing notification exceptions to escape. */
         ~CookOperationScope() noexcept;
@@ -40,7 +39,7 @@ namespace Horo::Assets::Detail {
         CookOperationScope &operator=(const CookOperationScope &) = delete;
 
         /** @brief Records the previously admitted identities without allocating. */
-        void SetIdentities(BuildOutputSessionId sessionId, std::optional<OperationId> id) noexcept;
+        void SetIdentities(BuildOutputSessionId sessionId, std::optional<OperationId> id, std::string_view phase) noexcept;
         /** @brief Tests whether the prepared activity can own the supplied stores' single cook lifecycle. */
         [[nodiscard]] bool CanCook(OperationStore *store, BuildOutputStore *output) const noexcept;
         /** @brief Returns the activity's original cooperative cancellation observer. */
@@ -102,9 +101,13 @@ namespace Horo::Assets::Detail {
         /** @brief Projects precommit cancellation or failure without rewriting committed success. */
         void PublishUncommittedOutcome();
 
+        /** @brief Forward the retained operation and bounded phase without allocating or affecting publication. */
+        void NotifyProgress(std::string_view phase) const noexcept;
+
         OperationStore *store_{};
         BuildOutputStore *output_{};
         CancellationToken cancellation_;
+        AssetCookProgressSink observer_;
         BuildOutputSessionId sessionId_;
         std::optional<OperationId> id_;
         float progress_{};

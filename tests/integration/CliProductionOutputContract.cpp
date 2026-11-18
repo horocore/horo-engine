@@ -1,8 +1,11 @@
 #include "CliOutputContractFixture.h"
 #include "Horo/Application/PlatformServicesProjectCook.h"
 #include "Horo/Application/PlatformServicesProjectSources.h"
+#include "Horo/Assets/AssetCookOutput.h"
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Platform/ExternalProcess.h"
+#include "Horo/Prefab/PrefabDocument.h"
+#include "Horo/Scene/SceneSource.h"
 
 #include <algorithm>
 #include <chrono>
@@ -14,6 +17,7 @@
 #include <miniz.h>
 #include <nlohmann/json.hpp>
 #include <set>
+#include <span>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -500,6 +504,101 @@ namespace {
         PlatformProtocol::LeaseAndRetry(fixture);
     }
 
+    /** @brief Runs the shipped prefab CLI against real sources, cache reuse and the shared writer exclusion. */
+    void PrefabCookCases(ProcessFixture &process) {
+        using namespace Horo;
+        using namespace Horo::Application;
+        TemporaryDirectory directory;
+        const auto root = std::filesystem::canonical(directory.Path());
+        const auto write = [&](const std::string_view path, const std::string_view bytes) {
+            PlatformProtocol::Fixture::WriteAt(root, path, bytes);
+        };
+        write(".horo/project.json", PlatformProtocol::Fixture::Initial().projectSource);
+
+        constexpr std::string_view PrefabId = "00000000-0000-0000-0000-0000000000b1";
+        const auto prefabId = Assets::AssetId::Parse(PrefabId).Value();
+        auto limits = Prefab::PrefabLimitProfile::Create({});
+        Require(limits.HasValue(), "prefab fixture limits failed");
+        auto document = Prefab::PrefabDocument::Create({.projectVersion = CurrentEngineReleaseVersion().value,
+                                                        .assetId = prefabId,
+                                                        .objects = {{.localId = {0}, .name = "Prefab root"}}},
+                                                       limits.Value());
+        Require(document.HasValue(), "prefab fixture creation failed");
+        const auto encoded = document.Value().SerializeCanonical();
+        Require(encoded.HasValue(), "prefab fixture encode failed");
+        write("Assets/hierarchy.prefab", encoded.Value());
+        const std::vector<SceneSource::SceneObjectSnapshot> objects{{.id = {900}, .name = "Scene root"}};
+        const std::vector<SceneSource::ScenePrefabInstance> instances{
+            {.instanceId = Prefab::PrefabInstanceId::Create(7).Value(),
+             .sourcePrefab = Prefab::PrefabAssetReference::Create(prefabId).Value(),
+             .parent = SceneSource::SceneObjectId{900}}};
+        write("Assets/level.horoasset", SceneSource::EncodeSceneSource({objects, instances}));
+        write("Assets/hierarchy.prefab.horo",
+              R"({"schemaVersion":1,"assetId":"00000000-0000-0000-0000-0000000000b1","assetType":"core.prefab"})");
+        write("Assets/level.horoasset.horo",
+              R"({"schemaVersion":1,"assetId":"00000000-0000-0000-0000-0000000000c1","assetType":"core.scene"})");
+
+        auto command = std::vector<std::string>{"prefab", "cook", "--project", Utf8Path(root), "--output", "json"};
+        static_cast<void>(process.Run(command, 2));
+        command.insert(command.end(), {"--target", "headless-null", "--runtime-prefab", std::string{PrefabId}});
+        auto duplicate = command;
+        duplicate.insert(duplicate.end(), {"--runtime-prefab", std::string{PrefabId}});
+        static_cast<void>(process.Run(std::move(duplicate), 2));
+        const auto cookedRoot = root / ".horo/cooked/prefab/headless-null";
+        Require(!std::filesystem::exists(cookedRoot), "rejected prefab command created cooked output");
+
+        const auto first = Json::parse(process.Run(command, 0));
+        Envelope(first);
+        Require(first.at("outputSchema").at("id") == "horo.prefab.cook", "prefab CLI used the wrong schema");
+        Require(first.at("metadata").at("operationId").get<std::uint64_t>() != 0, "prefab cook lost its canonical operation ID");
+        Require(first.at("result").at("committed") == true && first.at("result").at("artifacts") == 2, "prefab cook lost runtime roots");
+        NativeDurableFileSystem files;
+        const auto generation = Assets::ResolveCurrentCookGeneration(files, cookedRoot);
+        Require(generation.HasValue(), "prefab CLI produced no canonical generation");
+        Require(first.at("result").at("manifestDigest") == FormatSha256(generation.Value().manifestDigest),
+                "prefab command result does not match the published manifest");
+
+        const auto repeat = Json::parse(process.Run(command, 0));
+        Require(repeat.at("result").at("cacheHits").get<std::size_t>() > 0, "prefab CLI discarded ordinary cache reuse");
+        Require(repeat.at("result").at("manifestDigest") == first.at("result").at("manifestDigest"),
+                "identical prefab cook changed the manifest commitment");
+
+        {
+            Editor::ProjectMutationCoordinator mutations{files};
+            const auto lease = mutations.TryAcquire({root, Editor::ProjectMutationOwner::Migration, "prefab-cli-boundary"});
+            Require(lease.HasValue(), "prefab CLI fixture could not acquire the existing project mutation lease");
+            const auto blocked = Json::parse(process.Run(command, 5));
+            Require(blocked.at("status") == "failed", "prefab CLI bypassed the existing project writer");
+        }
+
+        auto jsonLines = command;
+        *(std::ranges::find(jsonLines, "--output") + 1) = "jsonl";
+        const auto stream = Records(process.Run(std::move(jsonLines), 0));
+        Require(stream.size() > 1, "prefab JSONL did not emit declared progress");
+        const auto &terminal = stream.back();
+        Envelope(terminal);
+        Require(terminal.at("type") == "result" && terminal.at("metadata").at("operationId").get<std::uint64_t>() != 0,
+                "prefab JSONL lost its canonical operation identity");
+        for (const auto &event : std::span{stream}.first(stream.size() - 1))
+            Require(event.at("type") == "progress" && event.at("command") == terminal.at("command") &&
+                        event.at("invocationId") == terminal.at("invocationId"),
+                    "prefab JSONL progress lost invocation correlation");
+
+        write("Assets/hierarchy.prefab", "private malformed prefab input");
+        const auto malformed = process.Run(command, 3);
+        const auto failure = Json::parse(malformed);
+        Require(failure.at("metadata").at("operationId").get<std::uint64_t>() != 0, "failed prefab cook lost its operation ID");
+        const auto &source = failure.at("metadata").at("assetSource");
+        Require(source.at("assetId").get<std::string>() == PrefabId && source.at("projectPath") == "Assets/hierarchy.prefab",
+                "malformed prefab lost the typed project-relative source identity");
+        Require(malformed.find(Utf8Path(root)) == std::string::npos &&
+                    malformed.find("private malformed prefab input") == std::string::npos,
+                "prefab diagnostic leaked native paths or raw source");
+        const auto retained = Assets::ResolveCurrentCookGeneration(files, cookedRoot);
+        Require(retained.HasValue() && retained.Value().manifestDigest == generation.Value().manifestDigest,
+                "malformed prefab replaced the previously committed generation");
+    }
+
     /** @brief Checks rejected exports emit no collection progress and preserve occupied destinations. */
     void RejectedBundleCases(ProcessFixture &process) {
         TemporaryDirectory directory;
@@ -530,6 +629,7 @@ int main(const int argc, char **argv) {
         JsonCases(process);
         JsonLinesCases(process);
         PlatformServicesCases(process);
+        PrefabCookCases(process);
         RejectedBundleCases(process);
         return 0;
     } catch (const std::exception &error) {

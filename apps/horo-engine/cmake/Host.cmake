@@ -50,6 +50,13 @@ add_executable(HoroXRSimulatorSample horo-engine/tools/XRSimulatorSample.cpp)
 target_compile_features(HoroXRSimulatorSample PRIVATE cxx_std_20)
 target_link_libraries(HoroXRSimulatorSample PRIVATE HoroXRSimulatorProjectWorkflow)
 
+add_library(HoroNativePrefabCookHost STATIC shared/prefab/NativePrefabCookComposition.cpp)
+target_include_directories(HoroNativePrefabCookHost PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/shared/prefab")
+target_compile_features(HoroNativePrefabCookHost PUBLIC cxx_std_20)
+target_link_libraries(HoroNativePrefabCookHost PUBLIC HoroEngine::Assets
+    PRIVATE HoroEngine::PrefabCookHost HoroEngine::ProjectAssetRegistrySource HoroEngine::PlatformProjectIo
+        HoroEngine::ProjectMutationGuard HoroBuiltinAssetCookerHostInternal)
+
 # The terminal/headless composition remains available without GUI or GPU targets.
 add_executable(horo-engine
     horo-engine/main.cpp
@@ -61,6 +68,7 @@ add_executable(horo-engine
     horo-engine/cli_host/PackageCliHost.cpp
     horo-engine/cli_host/NavigationCliHost.cpp
     horo-engine/cli_host/PlatformServicesCliHost.cpp
+    horo-engine/cli_host/PrefabCliHost.cpp
     horo-engine/cli_host/CliHostCommands.cpp
     horo-engine/cli_host/McpServe.cpp
     horo-engine/cli_host/McpStdio.cpp
@@ -84,7 +92,7 @@ target_include_directories(horo-engine PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/shar
 set_property(SOURCE horo-engine/main.cpp horo-engine/NetworkProductLaunch.cpp
     APPEND PROPERTY COMPILE_DEFINITIONS HORO_SOURCE_REVISION="${HORO_SOURCE_REVISION}")
 
-target_link_libraries(horo-engine PRIVATE HoroNativeNavigationBakeHost)
+target_link_libraries(horo-engine PRIVATE HoroNativeNavigationBakeHost HoroNativePrefabCookHost HoroEngine::PrefabCookHost)
 target_link_libraries(horo-engine PRIVATE HoroEngine::PlatformServicesAuthoring)
 target_link_libraries(horo-engine PRIVATE HoroEngine::ProjectMutationGuard)
 

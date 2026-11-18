@@ -123,3 +123,27 @@ filesystem error is checked before another probe can clear it. The source closur
 still uses the exact schema-v1 raw lowercase hex digest recipe; byte-oriented
 formatting does not add a digest prefix or invalidate compatible cache identities.
 A fixed-fixture golden digest regression protects this compatibility.
+
+## Headless terminal cook
+
+Use an explicit authorized project directory and cook target. Each
+`--runtime-prefab` selects one spawnable template by canonical asset ID.
+Omitting it cooks the project's static scenes without publishing templates.
+
+```sh
+horo-engine prefab cook --project /absolute/project --target headless-null --non-interactive --output json
+```
+
+The command scans current asset sidecars through the canonical registry,
+then uses the same prefab preparation, mutation exclusion, dependency keys,
+cache and publication as the application host. The active selector lives in
+`.horo/cooked/prefab/<target>`. Its JSON result includes the exact manifest
+digest and reports whether publication durability was confirmed. Progress
+and terminal output carry the cook operation identity once admission succeeds.
+A rejected source may include its canonical asset ID and project-relative path
+in terminal metadata. Native paths and untrusted error text remain redacted.
+
+The host resolves built-in headless contributions without package activation.
+Projects requiring additional cooker providers or package restore evidence
+need a host that explicitly supplies those capabilities. Complete required
+project migrations before running the command.

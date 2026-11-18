@@ -123,6 +123,8 @@ namespace Horo::Application {
     Result<Assets::AssetCookReport> PrefabSceneCookHost::CookImpl(const PrefabSceneCookRequest &request,
                                                                   const CancellationToken &cancellation,
                                                                   const Release::ReleaseExecutionPlan *releasePlan) {
+        if (request.failedSource)
+            request.failedSource->reset();
         auto activity = Assets::AssetCookActivity::Begin(request.assets, cancellation, "Cook prefabs and scenes", "prefab.preflight");
         if (activity.HasError())
             return Result<Assets::AssetCookReport>::Failure(activity.ErrorValue());
@@ -159,8 +161,11 @@ namespace Horo::Application {
                                             std::move(projectLease).Value());
             }
         }();
-        if (result.HasError())
+        if (result.HasError()) {
             diagnostics.Fail(result.ErrorValue());
+            if (request.failedSource && diagnostics.failedSource)
+                *request.failedSource = std::move(diagnostics.failedSource);
+        }
         return result;
     }
 

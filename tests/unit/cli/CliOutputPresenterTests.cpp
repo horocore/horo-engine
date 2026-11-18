@@ -93,6 +93,30 @@ namespace Horo::Cli {
         CHECK(envelope["error"].is_null());
     }
 
+    TEST_CASE("CLI presentation refuses unbound or nonportable asset diagnostics", "[cli][output]") {
+        CliExecutionCorrelation unsafe{.invocation = {31},
+                                       .operation = {{9}},
+                                       .assetSource = CliSafeAssetSource{"00000000-0000-0000-0000-0000000000b1",
+                                                                         ProjectPath::Parse("Assets/model.prefab").Value()}};
+        SECTION("absent operation") {
+            unsafe.operation.reset();
+        }
+        SECTION("zero asset identity") {
+            unsafe.assetSource->assetId = "00000000-0000-0000-0000-000000000000";
+        }
+        SECTION("native drive path") {
+            unsafe.assetSource->projectPath = ProjectPath::Parse("C:/private/project/Assets/model.prefab").Value();
+        }
+        std::ostringstream output, diagnostics;
+        CliOutputPresenter presenter(Descriptor(), {31}, Translator(), output, diagnostics, CliProgressOutputMode::Json, false);
+        const auto outcome = presenter.Complete(CliTerminalResult::Failure(std::move(unsafe), MakeError(CliErrors::ParseFailed)));
+        CHECK(outcome.exitCode == static_cast<int>(Hosts::ExitCategory::Invariant));
+        const auto envelope = Json::parse(output.str());
+        CHECK_FALSE(envelope.at("metadata").contains("assetSource"));
+        CHECK(envelope.at("error").at("code") == CliErrors::ExecutionContextInvalid.code.Value());
+        CHECK(output.str().find("private/project") == std::string::npos);
+    }
+
     TEST_CASE("JSON CLI failures preserve shared GUI and MCP meaning and every stable exit category") {
         std::ifstream input(HORO_CLI_OUTPUT_FIXTURE);
         REQUIRE(input.good());

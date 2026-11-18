@@ -4,6 +4,7 @@
 #include "Horo/Animation/AnimationErrors.h"
 #include "Horo/Application/PlatformServicesProjectCook.h"
 #include "Horo/Application/PlatformServicesProjectSources.h"
+#include "Horo/Application/PrefabSceneCookHost.h"
 #include "Horo/Application/ProjectErrorDomain.h"
 #include "Horo/Assets/AssetErrorDomain.h"
 #include "Horo/Cli/CliErrors.h"
@@ -18,6 +19,7 @@
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Platform/NativeFileSystemErrors.h"
 #include "Horo/Platform/ProjectReadFiles.h"
+#include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Scene/SceneSource.h"
 #include "Horo/Security/SecurityErrors.h"
 
@@ -382,6 +384,20 @@ namespace Horo::Application::Internal {
                    AddEntries(modules, mappings, "horo.animation", AnimationAssetEntries);
         }
 
+        /** @brief Preserve exact prefab source and host errors exposed by the headless cook adapter. */
+        bool AddPrefabDomains(std::vector<ModuleDescriptor> &modules, std::vector<Hosts::ErrorMapping> &mappings) {
+            const auto descriptors = Prefab::PrefabErrors::Descriptors();
+            ModuleErrorDomainDescriptor prefabDomain{.id = descriptors.front()->domain,
+                                                     .descriptors = {descriptors.begin(), descriptors.end()}};
+            constexpr std::array host{Entry{&PrefabSceneCookErrors::Invalid, Validation}, Entry{&PrefabSceneCookErrors::Stale, Validation},
+                                      Entry{&PrefabSceneCookErrors::Cancelled, Cancelled}};
+            return AddDomain(modules, mappings, "horo.prefab", std::move(prefabDomain), Validation,
+                             {{Prefab::PrefabErrors::Cancelled.code.Value(), Cancelled},
+                              {Prefab::PrefabErrors::MigrationRequired.code.Value(), Capability},
+                              {Prefab::PrefabErrors::DependencyUnavailable.code.Value(), Capability}}) &&
+                   AddEntries(modules, mappings, "horo.host.prefab_cook", host);
+        }
+
         /** @brief Registers closed producer scopes; every resulting mapping is an exact domain/code pair. */
         bool AddSourceDomains(std::vector<ModuleDescriptor> &modules, std::vector<Hosts::ErrorMapping> &mappings) {
             return AddDomain(modules, mappings, "horo.foundation", JobSystemErrorDomain(), Operation,
@@ -465,7 +481,7 @@ namespace Horo::Application::Internal {
         mappings.emplace_back(bundleErrors.id, ErrorCode{"observability.bundle.write_failed"}, Operation);
         mappings.emplace_back(bundleErrors.id, ErrorCode{"observability.bundle.size_exceeded"}, Validation);
         if (!AddEntries(modules, mappings, "horo.navigation", NavigationEntries) || !AddHostDependencies(modules, mappings) ||
-            !AddSourceDomains(modules, mappings))
+            !AddSourceDomains(modules, mappings) || !AddPrefabDomains(modules, mappings))
             return std::nullopt;
         auto registry = BuildErrorCodeRegistry(modules);
         if (registry.HasError())

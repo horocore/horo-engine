@@ -19,8 +19,8 @@ namespace Horo::Assets::Detail {
 
     /** @copydoc CookOperationScope::CookOperationScope */
     CookOperationScope::CookOperationScope(OperationStore *store, BuildOutputStore *output, const CancellationToken &cancellation,
-                                           const BuildOutputSessionId sessionId, const std::optional<OperationId> id)
-        : store_(store), output_(output), cancellation_(cancellation), sessionId_(sessionId), id_(id) {}
+                                           const AssetCookProgressSink observer)
+        : store_(store), output_(output), cancellation_(cancellation), observer_(observer) {}
 
     /** @copydoc CookOperationScope::~CookOperationScope */
     CookOperationScope::~CookOperationScope() noexcept {
@@ -36,9 +36,11 @@ namespace Horo::Assets::Detail {
     }
 
     /** @copydoc CookOperationScope::SetIdentities */
-    void CookOperationScope::SetIdentities(const BuildOutputSessionId sessionId, const std::optional<OperationId> id) noexcept {
+    void CookOperationScope::SetIdentities(const BuildOutputSessionId sessionId, const std::optional<OperationId> id,
+                                           const std::string_view phase) noexcept {
         sessionId_ = sessionId;
         id_ = id;
+        NotifyProgress(phase);
     }
 
     /** @copydoc CookOperationScope::CanCook */
@@ -93,11 +95,17 @@ namespace Horo::Assets::Detail {
                             (domain.empty() || domain == CookErrors::Cancelled.domain.Value()));
     }
 
+    void CookOperationScope::NotifyProgress(const std::string_view phase) const noexcept {
+        if (id_ && observer_.report)
+            observer_.report(observer_.context, *id_, phase, progress_);
+    }
+
     /** @copydoc CookOperationScope::Update */
     void CookOperationScope::Update(std::string phase, std::string message, const float progress) {
         if (completed_)
             return;
         progress_ = std::max(progress_, progress);
+        NotifyProgress(phase);
         if (store_ != nullptr && id_.has_value())
             static_cast<void>(store_->Update(*id_, OperationUpdate{.state = OperationState::Running,
                                                                    .phase = std::move(phase),

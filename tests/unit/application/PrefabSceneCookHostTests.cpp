@@ -150,6 +150,29 @@ TEST_CASE("Host prefab preparation and generation publication share one operatio
     OperationStore operations{1, 4};
     fixture.request.assets.buildOutputStore = &output;
     fixture.request.assets.operationStore = &operations;
+
+    struct Progress final {
+        OperationId id{};
+        float completion{};
+        bool singleOperation{true};
+        bool monotonic{true};
+        bool began{};
+        bool captured{};
+        bool publishing{};
+    } observed;
+
+    fixture.request.assets.progress = {&observed, [](void *context, const OperationId id, const std::string_view phase,
+                                                     const float completion) noexcept {
+        auto &evidence = *static_cast<Progress *>(context);
+        if (evidence.id == 0)
+            evidence.id = id;
+        evidence.singleOperation = evidence.singleOperation && evidence.id == id;
+        evidence.monotonic = evidence.monotonic && evidence.completion <= completion;
+        evidence.completion = completion;
+        evidence.began |= phase == "prefab.preflight";
+        evidence.captured |= phase == "prefab.validate_sources";
+        evidence.publishing |= phase == "publish";
+    }};
     std::optional<OperationId> initial;
     const auto nextPublication = fixture.request.assets.newPublicationOperationId;
     fixture.request.assets.newPublicationOperationId = [&] {
@@ -166,6 +189,12 @@ TEST_CASE("Host prefab preparation and generation publication share one operatio
 
     REQUIRE(fixture.Cook().HasValue());
     REQUIRE(initial);
+    CHECK(observed.id == initial);
+    CHECK(observed.singleOperation);
+    CHECK(observed.monotonic);
+    CHECK(observed.began);
+    CHECK(observed.captured);
+    CHECK(observed.publishing);
     const auto progress = operations.SnapshotIfChanged(0);
     REQUIRE(progress);
     REQUIRE(progress->operations.size() == 1);

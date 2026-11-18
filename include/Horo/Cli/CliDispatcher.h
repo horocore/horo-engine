@@ -9,6 +9,7 @@
 #include "Horo/Cli/CliOptionParser.h"
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Foundation/Configuration.h"
+#include "Horo/Foundation/Paths.h"
 
 #include <atomic>
 #include <chrono>
@@ -69,12 +70,22 @@ namespace Horo::Cli {
         std::string identity; /**< Stable non-secret project identity, never a path or display name. */
     };
 
+    /** @brief Typed diagnostic source from an admitted cook operation. */
+    struct CliSafeAssetSource final {
+        std::string assetId;     /**< Canonical lower-case asset UUID; never an identifier inferred from error text. */
+        ProjectPath projectPath; /**< Canonical project-relative path; native paths are excluded. */
+
+        /** @brief Checks the bounded public metadata shape. @return Whether the source is safe to encode. */
+        [[nodiscard]] bool IsValid() const noexcept;
+    };
+
     /** @brief Correlation copied into every terminal dispatcher outcome. */
     struct CliExecutionCorrelation final {
-        CliInvocationId invocation;                   /**< Required invocation identity. */
-        std::optional<CliOperationId> operation;      /**< Application operation when one was accepted. */
-        std::optional<CliJobId> job;                  /**< Background job when one was accepted. */
-        std::optional<CliSafeProjectContext> project; /**< Safe project context, when available. */
+        CliInvocationId invocation;                    /**< Required invocation identity. */
+        std::optional<CliOperationId> operation;       /**< Application operation when one was accepted. */
+        std::optional<CliJobId> job;                   /**< Background job when one was accepted. */
+        std::optional<CliSafeProjectContext> project;  /**< Safe project context, when available. */
+        std::optional<CliSafeAssetSource> assetSource; /**< Optional safe diagnostic source from the accepted operation. */
     };
 
     /** @brief Bounded presentation-independent progress update from an application use case. */
@@ -301,6 +312,13 @@ namespace Horo::Cli {
         /** @brief Correlates an accepted application operation once. @param operation Non-zero operation identity. @return Success or
          * context error. */
         [[nodiscard]] Result<void> BindOperation(CliOperationId operation);
+        /** @brief Attach a preclassified portable source once without disclosing native error details.
+         * @param source Canonical
+         * asset and project-relative path from the already accepted operation.
+         * @return Success or a typed context/shape failure
+         * that leaves prior correlation intact.
+         */
+        [[nodiscard]] Result<void> BindAssetSource(CliSafeAssetSource source);
         /** @brief Correlates an accepted application job once. @param job Non-zero job identity. @return Success or context error. */
         [[nodiscard]] Result<void> BindJob(CliJobId job);
         /** @brief Returns the current immutable correlation snapshot. @return Invocation and accepted child identities. */

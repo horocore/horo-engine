@@ -9,6 +9,7 @@
 #include "NavigationCliHost.h"
 #include "PackageCliHost.h"
 #include "PlatformServicesCliHost.h"
+#include "PrefabCliHost.h"
 
 #include <algorithm>
 #include <memory>
@@ -250,6 +251,7 @@ namespace Horo::Application::Internal {
         descriptors.push_back(Cli::DescribeNavigationBakeCommand());
         descriptors.push_back(DescribePlatformServicesValidationCommand());
         descriptors.push_back(DescribePlatformServicesCookCommand());
+        descriptors.push_back(DescribePrefabCookCommand());
         return descriptors;
     }
 

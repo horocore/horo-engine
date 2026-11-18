@@ -111,6 +111,7 @@ namespace Horo::Application {
         std::optional<SceneSource::TriggerVolumeConversionContext> triggerBinding; /**< Explicit project sensor/material capture. */
         std::shared_ptr<const Prefab::PrefabValueSchemaSnapshot>
             overrideSchemas; /**< Explicit value/topology permissions; never inferred from opaque component metadata. */
+        std::optional<Assets::AssetRecord> *failedSource{}; /**< Optional invocation-owned portable source evidence from preparation. */
     };
 
     /**

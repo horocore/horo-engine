@@ -556,14 +556,14 @@ namespace Horo::Assets {
     /** @copydoc AssetCookActivity::Begin */
     Result<AssetCookActivity> AssetCookActivity::Begin(const AssetCookRequest &request, const CancellationToken &cancellation,
                                                        std::string title, std::string phase) {
-        auto scope = std::make_unique<CookOperationScope>(request.operationStore, request.buildOutputStore, cancellation);
+        auto scope = std::make_unique<CookOperationScope>(request.operationStore, request.buildOutputStore, cancellation, request.progress);
         auto session = BeginOutputSession(request.buildOutputStore);
         if (session.HasError())
             return Result<AssetCookActivity>::Failure(session.ErrorValue());
-        auto id = BeginCookOperation(request, std::move(title), std::move(phase));
+        auto id = BeginCookOperation(request, std::move(title), phase);
         if (id.HasError())
             return Result<AssetCookActivity>::Failure(id.ErrorValue());
-        scope->SetIdentities(session.Value().value_or(BuildOutputSessionId{}), id.Value());
+        scope->SetIdentities(session.Value().value_or(BuildOutputSessionId{}), id.Value(), phase);
         return Result<AssetCookActivity>::Success(AssetCookActivity{std::move(scope)});
     }
 
@@ -593,8 +593,8 @@ namespace Horo::Assets {
         auto operationId = BeginCookOperation(request, "Cook assets", "prepare", request.registry.Records().size());
         if (operationId.HasError())
             return Result<AssetCookReport>::Failure(operationId.ErrorValue());
-        CookOperationScope operation{request.operationStore, request.buildOutputStore, cancellation,
-                                     session.Value().value_or(BuildOutputSessionId{}), operationId.Value()};
+        CookOperationScope operation{request.operationStore, request.buildOutputStore, cancellation, request.progress};
+        operation.SetIdentities(session.Value().value_or(BuildOutputSessionId{}), operationId.Value(), "prepare");
         return RunCook(jobs_, *catalog_, request, cancellation, operation);
     }
 

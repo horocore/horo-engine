@@ -7078,11 +7078,13 @@ add_test(NAME HoroCliOutputPublicHeaderConsumer COMMAND HoroCliOutputPublicHeade
 set_tests_properties(HoroCliOutputPublicHeaderConsumer PROPERTIES LABELS "cli;headless;sonar-coverage;ci-windows")
 add_executable(HoroNavigationHostErrorTests unit/application/navigation/NavigationHostErrorTests.cpp
     unit/application/PlatformServicesCliHostTests.cpp
+    unit/application/PrefabCliHostTests.cpp
     unit/application/AnimationHostErrorTests.cpp
     unit/extensions/ScriptModuleHostErrorTests.cpp
     "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host/CliHostErrorTranslation.cpp"
     "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host/CliHostInterrupts.cpp"
     "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host/PlatformServicesCliHost.cpp"
+    "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host/PrefabCliHost.cpp"
     "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host/NavigationCliHost.cpp")
 target_compile_features(HoroNavigationHostErrorTests PRIVATE cxx_std_20)
 target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroEngine::AnimationCookedAssets)
@@ -7092,14 +7094,14 @@ target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroNativeNavigationB
     HoroEngine::NavigationBakeAutomation HoroEngine::PlatformProjectReadFiles HoroEngine::PlatformImmutableFileStorage HoroEngine::McpRegistry HoroEngine::Security HoroEngine::NavigationRecastDetour HoroEngine::CliNavigationAdapters HoroEngine::Extensions)
 target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroEngine::PlatformServicesAuthoring)
 target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroEngine::ProjectMutationGuard)
-target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroEngine::ProjectSurfaceSettings)
+target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroEngine::ProjectSurfaceSettings HoroEngine::PrefabCookHost HoroNativePrefabCookHost)
 horo_register_catch_test(HoroNavigationHostErrorTests LABELS "unit;navigation;cli;headless;ci-windows;sonar-coverage")
 
 add_executable(HoroCliProductionOutputContract integration/CliProductionOutputContract.cpp)
 target_compile_features(HoroCliProductionOutputContract PRIVATE cxx_std_20)
 target_link_libraries(HoroCliProductionOutputContract PRIVATE HoroEngine::Platform nlohmann_json::nlohmann_json miniz)
 target_link_libraries(HoroCliProductionOutputContract PRIVATE HoroEngine::PlatformServicesAuthoring)
-target_link_libraries(HoroCliProductionOutputContract PRIVATE HoroEngine::ProjectMutationGuard)
+target_link_libraries(HoroCliProductionOutputContract PRIVATE HoroEngine::ProjectMutationGuard HoroEngine::PrefabCookHost HoroEngine::SceneSource)
 add_dependencies(HoroCliProductionOutputContract horo-engine)
 add_test(NAME HoroCliProductionOutputContract COMMAND HoroCliProductionOutputContract "$<TARGET_FILE:horo-engine>")
 set_tests_properties(HoroCliProductionOutputContract PROPERTIES LABELS "cli;integration;headless;sonar-coverage;ci-windows" TIMEOUT 120)

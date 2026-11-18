@@ -78,6 +78,9 @@ namespace Horo::Cli {
                 metadata["jobId"] = correlation.job->value;
             if (correlation.project)
                 metadata["projectId"] = correlation.project->identity;
+            if (correlation.assetSource)
+                metadata["assetSource"] = {{"assetId", correlation.assetSource->assetId},
+                                           {"projectPath", correlation.assetSource->projectPath.String()}};
             return {{"schemaVersion", 1},
                     {"command", CommandName(descriptor.path)},
                     {"invocationId", std::format("cli-{}", correlation.invocation.value)},
@@ -94,6 +97,7 @@ namespace Horo::Cli {
         bool ValidCorrelation(const CliExecutionCorrelation &correlation, const CliInvocationId invocation) {
             return correlation.invocation == invocation && invocation.IsValid() &&
                    (!correlation.operation || correlation.operation->IsValid()) && (!correlation.job || correlation.job->IsValid()) &&
+                   (!correlation.assetSource || (correlation.operation && correlation.assetSource->IsValid())) &&
                    (!correlation.project ||
                     (correlation.project->identity.size() <= 256 && IsValidUtf8ScalarSequence(correlation.project->identity)));
         }

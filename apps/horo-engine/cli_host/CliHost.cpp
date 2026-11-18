@@ -17,6 +17,7 @@
 #include "NavigationCliHost.h"
 #include "PackageCliHost.h"
 #include "PlatformServicesCliHost.h"
+#include "PrefabCliHost.h"
 
 #include <algorithm>
 #include <new>
@@ -198,14 +199,15 @@ namespace Horo::Application::Internal {
                 MakePlatformServicesValidationCommandAdapter({.profile = PlatformServices::PlatformServicesHostProfile::HeadlessServer}));
             adapters.push_back(MakePlatformServicesCookCommandAdapter({.profile = PlatformServices::PlatformServicesHostProfile::Cook},
                                                                       std::make_shared<NativeDurableFileSystem>()));
+            adapters.push_back(MakePrefabCookCommandAdapter());
             return adapters;
         }
 
         /** @brief Explicit product command grants shared by descriptor and executable admission; package trust stays separate. */
         std::vector<CliCapabilityId> CommandCapabilities() {
-            return {{"horo.extension.module-run"},       {"horo.extension.script-run"},  {"horo.mcp.serve"},
-                    {"horo.observability.smoke"},        {"horo.package.manage"},        {"horo.navigation.bake"},
-                    {"horo.platform-services.validate"}, {"horo.platform-services.cook"}};
+            return {{"horo.extension.module-run"},       {"horo.extension.script-run"},   {"horo.mcp.serve"},
+                    {"horo.observability.smoke"},        {"horo.package.manage"},         {"horo.navigation.bake"},
+                    {"horo.platform-services.validate"}, {"horo.platform-services.cook"}, {"horo.prefab.cook"}};
         }
 
         /** @brief Admits mutation authority before application startup and preserves the same policy for dispatch. */
