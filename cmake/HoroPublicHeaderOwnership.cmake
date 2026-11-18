@@ -1300,6 +1300,7 @@ horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
     Horo/Runtime/Render/GpuParticleLayout.h
     Horo/Runtime/Render/VfxGpuSimulation.h
     Horo/Runtime/Render/VfxGpuKernel.h
+    Horo/Runtime/Render/MultiviewMotionHistory.h
     Horo/Runtime/Render/MultiviewSceneExtraction.h
     Horo/Runtime/Render/MultiviewGraphWorkload.h
     Horo/Runtime/Render/MultiviewShaderParameters.h

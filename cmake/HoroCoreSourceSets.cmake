@@ -56,6 +56,7 @@ set(HORO_RENDER_API_SOURCES
     runtime/renderer/api/VfxShaderParameters.cpp
     runtime/renderer/api/VfxFrameUpload.cpp
     runtime/renderer/api/VfxGraphValidation.cpp
+    runtime/renderer/api/MultiviewMotionHistory.cpp
     runtime/renderer/api/MultiviewSceneExtraction.cpp
     runtime/renderer/api/MultiviewGraphWorkload.cpp
     runtime/renderer/api/MultiviewShaderParameters.cpp

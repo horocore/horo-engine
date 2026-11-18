@@ -110,6 +110,25 @@ pipeline routing. Routing contributes to the pipeline state digest; the existing
 SingleView digest retains its previous reserved-zero encoding. OpenGL and Metal
 reject this new workload/routing until they implement and advertise it explicitly.
 
+## Projection history for runtime frame synthesis
+
+The selected Vulkan Play graph stages its actual immutable view/geometry
+extraction when the optional native frame-synthesis route needs a producer.
+Object correspondence comes from the prepared Scene's stable authored
+identities, independently of instance or draw order, and must match the
+retained mesh generation. Each eye receives its own previous unjittered
+world-to-clip transform. A predecessor is absent when either frame culled
+the object in that eye or when sequence, prediction, origin, view, or renderer
+evidence is incompatible. Bounded storage retains only one candidate and one
+successful projection. The app commits the candidate only after native
+compositor projection succeeds.
+
+These values establish the source for a later motion pass. Vulkan's selected
+frame currently uses a color shader and internal depth allocation. A motion
+and depth producer still needs cooked shader variants, matching external
+attachments, disocclusion policy, and native submission and completion
+qualification.
+
 ## Public contract migration and evidence
 
 The additive headers are owned by RenderApi or XRApi in the ownership registry.

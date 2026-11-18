@@ -4,7 +4,7 @@
 #include "EditorViewportForwardLighting.h"
 #include "EditorVulkanViewportShader.h"
 #include "Horo/Runtime/Render/MaterialBinding.h"
-#include "Horo/Runtime/Render/MultiviewSceneExtraction.h"
+#include "Horo/Runtime/Render/MultiviewMotionHistory.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Render/ShaderHotReloadTarget.h"
 #include "VulkanEditorGraphicsBridge.h"
@@ -49,6 +49,7 @@ namespace Horo::Editor {
          * @param color Fresh imported acquisition. @param eyeViews Exact current per-layer frontend views.
          * @param publication Canonical Scene/frame/origin/view and actual device/capability evidence.
          * @param views Complete actual runtime-ordered view matrices. @param instances SAME canonical geometry projection.
+         * @param motion Optional exact native prediction. @param motionObjects Stable object IDs aligned with instances.
          * @return Success or original stale/capacity/tuple failure; no compilation, heap allocation or native wait.
          * @pre Previous acquisition's scene AND GUI tail references have retired. A failed bind cannot be executed.
          */
@@ -56,7 +57,11 @@ namespace Horo::Editor {
                                                const std::array<Render::RenderTextureViewHandle, 2> &eyeViews,
                                                const Render::MultiviewPublication &publication,
                                                std::span<const Render::MultiviewSceneView> views,
-                                               std::span<const Render::RenderStaticMeshInstance> instances);
+                                               std::span<const Render::RenderStaticMeshInstance> instances,
+                                               const Render::MultiviewMotionFrame *motion,
+                                               std::span<const Render::RenderMotionObjectId> motionObjects);
+        /** @brief Admits exact native-projection completion into the selected graph's transform history. */
+        void CompleteXrMotion(const std::optional<Render::MultiviewMotionFrame> &frame, bool projected) noexcept;
         /** @brief Executes the bound eye scene through the SAME canonical frame and primary-output/UI/GUI tail.
          * @param frame Existing App scope. @param output Existing desktop output preparation; mirror is composed later by GUI.
          * @return Original admission/encoding error, preserving actual external acquisition retirement obligations.

@@ -3,6 +3,7 @@
  */
 #pragma once
 
+#include "Horo/Runtime/Render/MultiviewMotionHistory.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/XR/XRMultiviewScene.h"
 #include "OpenXRFrameCompositor.h"
@@ -26,6 +27,7 @@ namespace Horo::Application::Internal {
         std::optional<XR::OpenXRInternal::NativeSwapchainAcquisition> acquisition;
         std::array<Render::RenderTextureViewHandle, 2> eyeViews{};
         std::optional<XR::XRViewRenderPlan> plan;
+        std::optional<Render::MultiviewMotionFrame> motionFrame;
         std::optional<XR::OpenXRInternal::NativePresentationViews> views;
         std::uint64_t hostFrameNumber{}; /**< Exact successful bind receipt, not another frame issuer. */
         bool guiFinished{};
@@ -60,6 +62,7 @@ namespace Horo::Application::Internal {
             guiFinished = false;
             views.reset();
             plan.reset();
+            motionFrame.reset();
             const auto waited = compositor.Wait();
             if (waited.HasError())
                 return Output::Failure(waited.ErrorValue());
@@ -76,6 +79,7 @@ namespace Horo::Application::Internal {
                 }
                 if (auto ended = compositor.EndEmpty(state.frame); ended.HasError())
                     return Output::Failure(ended.ErrorValue());
+                CompleteMotion(false);
                 return Output::Success(false);
             }
             return Output::Success(true);
@@ -209,6 +213,9 @@ namespace Horo::Application::Internal {
         Result<XrSpace> Borrow(const XR::XRCoordinateSpace &space) const override {
             return host.composition_.session.BorrowPresentationReference(space);
         }
+
+        /** @brief Reports the exact compositor result to the existing selected viewport after successful native end. */
+        void CompleteMotion(bool projected) noexcept;
 
         /** @brief Retires only the exact candidate's frame/image/queue children through the same host.
          * @param host Same retained owner. @param candidate Exact retained Scene candidate.

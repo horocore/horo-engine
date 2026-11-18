@@ -32,8 +32,15 @@ namespace Horo::Editor {
     Result<void> EditorVulkanXrViewportAccess::Bind(EditorViewportRendererVulkan &viewport, RenderTextureHandle color,
                                                     const std::array<RenderTextureViewHandle, 2> &views,
                                                     const MultiviewPublication &publication, std::span<const MultiviewSceneView> cameras,
-                                                    std::span<const RenderStaticMeshInstance> instances) {
-        return viewport.BindXrFrame(color, views, publication, cameras, instances);
+                                                    std::span<const RenderStaticMeshInstance> instances, const MotionInput *motion) {
+        return viewport.BindXrFrame(color, views, publication, cameras, instances, motion ? &motion->frame : nullptr,
+                                    motion ? motion->objects : std::span<const RenderMotionObjectId>{});
+    }
+
+    /** @copydoc EditorVulkanXrViewportAccess::CompleteMotion */
+    void EditorVulkanXrViewportAccess::CompleteMotion(EditorViewportRendererVulkan &viewport,
+                                                      const std::optional<MultiviewMotionFrame> &frame, bool projected) noexcept {
+        viewport.CompleteXrMotion(frame, projected);
     }
 
     /** @copydoc EditorVulkanXrViewportAccess::Execute */
@@ -99,6 +106,9 @@ namespace Horo::Editor {
         const CompiledRenderGraphExecution *bound{};
         EditorVulkanXrMirrorProjection mirror;
         RenderTimelinePoint submitted;
+        MultiviewMotionHistory motion;
+        std::optional<MultiviewMotionFrame> motionFrame;
+        bool motionSubmitted{};
 
         /** @brief Cold-creates depth storage and views, retaining every successful prefix for owner teardown. */
         Result<void> PrepareDepth(RenderFrontend &frontend, const RenderTextureDescriptor &colorDescriptor) {
@@ -351,14 +361,15 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorViewportRendererVulkan::BindXrFrame */
-    Result<void> EditorViewportRendererVulkan::BindXrFrame(RenderTextureHandle color,
-                                                           const std::array<RenderTextureViewHandle, 2> &eyeViews,
-                                                           const MultiviewPublication &publication,
-                                                           std::span<const MultiviewSceneView> views,
-                                                           std::span<const RenderStaticMeshInstance> instances) {
+    Result<void> EditorViewportRendererVulkan::BindXrFrame(
+        RenderTextureHandle color, const std::array<RenderTextureViewHandle, 2> &eyeViews, const MultiviewPublication &publication,
+        std::span<const MultiviewSceneView> views, std::span<const RenderStaticMeshInstance> instances, const MultiviewMotionFrame *motion,
+        std::span<const RenderMotionObjectId> motionObjects) {
         if (owner_ == std::this_thread::get_id() && xrGraph_) {
             xrGraph_->bound = nullptr;
             xrGraph_->mirror.ClearAcquisition();
+            xrGraph_->motionFrame.reset();
+            xrGraph_->motionSubmitted = false;
         }
         if (owner_ != std::this_thread::get_id() || !initialized_ || !xrGraph_ || !xrGraph_->topology || !publication.IsValid() ||
             views.size() != 2 || instances.size() > RenderMaterialPass::MaximumDraws)
@@ -391,6 +402,8 @@ namespace Horo::Editor {
             storage.bound = nullptr;
             return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleTarget));
         }
+        if (motion && storage.motion.Stage(*motion, *storage.scene, motionObjects))
+            storage.motionFrame = *motion;
         return Result<void>::Success();
     }
 
@@ -460,9 +473,29 @@ namespace Horo::Editor {
         auto executed = frame.ExecuteSubmittedGraph(*bound, workloads, std::span{&submission, 1});
         if (executed.HasError())
             frame.Cancel();
-        else
+        else {
             storage.submitted = reserved.Value().signal;
+            storage.motionSubmitted = storage.motionFrame.has_value();
+        }
         return executed;
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::CompleteXrMotion */
+    void EditorViewportRendererVulkan::CompleteXrMotion(const std::optional<MultiviewMotionFrame> &frame, const bool projected) noexcept {
+        if (owner_ != std::this_thread::get_id() || !xrGraph_)
+            return;
+        auto &storage = *xrGraph_;
+        if (!frame) {
+            if (!projected)
+                storage.motion.Reset();
+            return;
+        }
+        if (frame != storage.motionFrame)
+            return;
+        if (!projected || !storage.motionSubmitted || !storage.motion.Publish(*frame))
+            storage.motion.Reset();
+        storage.motionFrame.reset();
+        storage.motionSubmitted = false;
     }
 
     /** @copydoc EditorViewportRendererVulkan::PollXrQueue */

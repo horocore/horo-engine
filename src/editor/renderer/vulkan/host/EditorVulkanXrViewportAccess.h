@@ -3,7 +3,7 @@
  * @brief Non-installed explicit App access to the SAME selected viewport's XR resource/graph owner.
  */
 #include "../../EditorViewportTextureView.h"
-#include "Horo/Runtime/Render/MultiviewSceneExtraction.h"
+#include "Horo/Runtime/Render/MultiviewMotionHistory.h"
 #include "Horo/Runtime/Render/RenderGraphSynchronization.h"
 #include "Horo/Runtime/Render/RenderScene.h"
 #include "VulkanEditorGraphicsBridge.h"
@@ -22,6 +22,12 @@ namespace Horo::Editor {
      */
     class EditorVulkanXrViewportAccess final {
     public:
+        /** @brief Optional compositor evidence, borrowed only while the exact selected viewport stages its real snapshot. */
+        struct MotionInput final {
+            Render::MultiviewMotionFrame frame;
+            std::span<const Render::RenderMotionObjectId> objects;
+        };
+
         /** @brief Borrow the actual selected native device; no creation or selection occurs. */
         [[nodiscard]] static Result<Render::Detail::VulkanEditorDevice> Device(const EditorViewportRendererVulkan &viewport);
         /** @brief Cold-prepare topology over exact canonical meshes and native allocation/release policy.
@@ -37,13 +43,18 @@ namespace Horo::Editor {
         /** @brief Bind one real acquisition before BeginFrame, using fixed owner storage and exact live publications.
          * @param viewport Existing owner. @param color Fresh native import. @param views Exact layer views.
          * @param publication Current Scene/frame/origin/device evidence. @param cameras Actual native view matrices.
-         * @param instances Canonical scene instance values. @return Original typed validation/binding outcome.
+         * @param instances Canonical scene instance values.
+         * @param motion Optional exact compositor prediction and stable object IDs for the selected frame-synthesis route.
+         * @return Original typed validation/binding outcome.
          */
         [[nodiscard]] static Result<void> Bind(EditorViewportRendererVulkan &viewport, Render::RenderTextureHandle color,
                                                const std::array<Render::RenderTextureViewHandle, 2> &views,
                                                const Render::MultiviewPublication &publication,
                                                std::span<const Render::MultiviewSceneView> cameras,
-                                               std::span<const Render::RenderStaticMeshInstance> instances);
+                                               std::span<const Render::RenderStaticMeshInstance> instances, const MotionInput *motion);
+        /** @brief Records the exact projection or zero-layer completion after successful native end only. */
+        static void CompleteMotion(EditorViewportRendererVulkan &viewport, const std::optional<Render::MultiviewMotionFrame> &frame,
+                                   bool projected) noexcept;
         /** @brief Execute through the SAME actual App frame before its existing UI/GUI tail.
          * @param viewport Existing owner. @param frame Existing canonical frame scope. @param output Existing primary output.
          * @return Original admission/encoding outcome; no compositor success is inferred.

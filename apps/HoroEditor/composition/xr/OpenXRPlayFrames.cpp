@@ -235,11 +235,20 @@ namespace Horo::Application::Internal {
         auto converted = render_->ConvertScene(plan.Value(), configuration, revision.Value(), input_.origin, publication);
         if (converted.HasError())
             return Result<void>::Failure(converted.ErrorValue());
-        if (auto bound =
-                Editor::EditorVulkanXrViewportAccess::Bind(composition_.viewport, render_->acquisition->texture, render_->eyeViews,
-                                                           publication, converted.Value().Scene().Views(), scene_->geometry->Instances());
+        const auto motionDecision = scene_->projection->plan.Decision(XRCapability::SpaceWarp);
+        const bool prepareMotion = motionDecision.state == XRFeatureDecisionState::OptionalEnabled ||
+                                   (motionDecision.state == XRFeatureDecisionState::BaselineProjection &&
+                                    motionDecision.observed == XRCapabilityState::DependencyMissing);
+        const Editor::EditorVulkanXrViewportAccess::MotionInput motion{{publication, frame.frame.sequence,
+                                                                        frame.predictedDisplayTime.Nanoseconds()},
+                                                                       scene_->geometry->MotionObjects()};
+        if (auto bound = Editor::EditorVulkanXrViewportAccess::Bind(composition_.viewport, render_->acquisition->texture, render_->eyeViews,
+                                                                    publication, converted.Value().Scene().Views(),
+                                                                    scene_->geometry->Instances(), prepareMotion ? &motion : nullptr);
             bound.HasError())
             return bound;
+        if (prepareMotion)
+            render_->motionFrame = motion.frame;
         render_->plan.emplace(std::move(plan).Value());
         render_->hostFrameNumber = frameNumber;
         return Result<void>::Success();
@@ -321,8 +330,9 @@ namespace Horo::Application::Internal {
         if (render_->acquisitionRecorded && render_->acquisition && state.phase != XRFramePhase::ImagesReleased &&
             frames_.Release(state.frame, render_->acquisition->image) != XRFrameStatus::Ok)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
+        const bool projected = render_->rendered && render_->plan && render_->acquisition;
         Result<void> ended = Result<void>::Success();
-        if (render_->rendered && render_->plan && render_->acquisition) {
+        if (projected) {
             const std::array targets{NativeProjectionTarget{&render_->color, render_->acquisition->image}};
             ended = render_->compositor.EndProjection(state.frame, *render_->plan, targets);
         } else {
@@ -330,10 +340,17 @@ namespace Horo::Application::Internal {
         }
         if (ended.HasError())
             return ended;
+        render_->CompleteMotion(projected);
         render_->acquisition.reset();
         render_->plan.reset();
         render_->views.reset();
         return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRPlayHost::FrameState::CompleteMotion */
+    void OpenXRPlayHost::FrameState::CompleteMotion(const bool projected) noexcept {
+        Editor::EditorVulkanXrViewportAccess::CompleteMotion(host.composition_.viewport, motionFrame, projected);
+        motionFrame.reset();
     }
 
     /** @copydoc OpenXRPlayHost::FrameState::RetireViewsAfterLoss */

@@ -54,6 +54,7 @@ namespace Horo::Editor {
         std::vector<std::optional<Runtime::EntityRef>> slots;
         std::vector<std::size_t> order;
         std::vector<std::size_t> instances;
+        std::vector<Render::RenderMotionObjectId> motionObjects;
         std::vector<Math::Mat4> worlds;
         bool active{true};
 
@@ -96,6 +97,7 @@ namespace Horo::Editor {
         Result<void> MapInstances(const Runtime::RuntimeSceneView &candidate) {
             worlds.resize(nodes.size());
             instances.reserve(snapshot.instanceObjects.size());
+            motionObjects.reserve(snapshot.instanceObjects.size());
             for (std::size_t index = 0; index < snapshot.instanceObjects.size(); ++index) {
                 const auto object = snapshot.instanceObjects[index];
                 if (std::ranges::find(std::span(snapshot.instanceObjects).first(index), object) !=
@@ -108,6 +110,7 @@ namespace Horo::Editor {
                 if (node == nodes.end())
                     return Result<void>::Failure(GeometryError("XR geometry candidate mapping is stale."));
                 instances.push_back(static_cast<std::size_t>(node - nodes.begin()));
+                motionObjects.push_back({object.value});
             }
             return Result<void>::Success();
         }
@@ -139,6 +142,11 @@ namespace Horo::Editor {
     /** @copydoc PreparedEditorXrGeometry::Instances */
     std::span<const Render::RenderStaticMeshInstance> PreparedEditorXrGeometry::Instances() const noexcept {
         return impl_->snapshot.instances;
+    }
+
+    /** @copydoc PreparedEditorXrGeometry::MotionObjects */
+    std::span<const Render::RenderMotionObjectId> PreparedEditorXrGeometry::MotionObjects() const noexcept {
+        return impl_->motionObjects;
     }
 
     /** @copydoc PreparedEditorXrGeometry::Update */
