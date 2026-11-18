@@ -146,6 +146,8 @@ namespace Horo::Editor {
 
         /** @brief Renders an already admitted immutable Environment Query source. */
         bool DrawEnvironmentQueryDocument(const EditorWorkspaceViewModel &viewModel) const;
+        /** @brief Presents the admitted semantic source without retaining a runtime plan. */
+        bool DrawDecisionGraphDocument(const EditorWorkspaceViewModel &viewModel) const;
 
         struct BlackboardViewDraft final {
             BlackboardDocumentFence fence;

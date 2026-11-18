@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <array>
 
-namespace Horo::Application::DecisionCookDetail {
+namespace Horo::Application {
     namespace {
         void RebaseRequirements(std::vector<AI::DecisionBlackboardRequirement> &requirements, const SourceLocation &location) {
             for (auto &requirement : requirements)
@@ -81,6 +81,9 @@ namespace Horo::Application::DecisionCookDetail {
         return Result<AI::DecisionGraphSource>::Success(std::move(source));
     }
 
+}  // namespace Horo::Application
+
+namespace Horo::Application::DecisionCookDetail {
     namespace {
         bool SameRecord(const Assets::AssetRecord &left, const Assets::AssetRecord &right) {
             return left.id == right.id && left.type == right.type && left.sourcePath.String() == right.sourcePath.String() &&

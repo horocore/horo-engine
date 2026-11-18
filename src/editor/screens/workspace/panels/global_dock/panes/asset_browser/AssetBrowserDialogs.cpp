@@ -11,7 +11,9 @@
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserPane.h"
 
 #include <algorithm>
+#include <array>
 #include <format>
+#include <span>
 #include <string>
 
 namespace Horo::Editor {
@@ -387,6 +389,65 @@ namespace Horo::Editor {
             PopModalStyle();
         }
 
+        void DrawCreateStateMachinePopup(AssetBrowserInteractionState &state, std::span<const DecisionSchemaChoice> schemas,
+                                         EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
+            constexpr const char *popupId = "##ContentBrowserCreateStateMachine";
+            if (state.openCreateStateMachine) {
+                ImGui::OpenPopup(popupId);
+                state.openCreateStateMachine = false;
+            }
+            const ImGuiViewport *viewport = ImGui::GetMainViewport();
+            const float width = std::max(160.0F, std::min(460.0F, viewport->WorkSize.x - 32.0F));
+            ImGui::SetNextWindowPos(viewport->GetWorkCenter(), ImGuiCond_Appearing, {0.5F, 0.5F});
+            ImGui::SetNextWindowSizeConstraints({width, 0.0F}, {width, viewport->WorkSize.y - 48.0F});
+            PushModalStyle();
+            if (ImGui::BeginPopupModal(popupId, nullptr,
+                                       ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar |
+                                           ImGuiWindowFlags_NoSavedSettings)) {
+                const auto text = [&](std::string_view key) -> const std::string & {
+                    return context.localization.Get("editor", key);
+                };
+                auto &draft = state.createStateMachine;
+                const auto &fonts = context.theme.fonts;
+                DrawModalHeading(text("workspace.decision_graph.create_title"), context);
+                Ui::FieldLabel(text("workspace.decision_graph.create_name").c_str(), fonts);
+                static_cast<void>(Ui::InputTextControl("##NewStateMachineName", draft.name,
+                                                       AI::BlackboardSchemaAuthoringRow::MaximumLabelBytes + 1, fonts));
+                Ui::FieldLabel(text("workspace.decision_graph.create_schema").c_str(), fonts);
+                const auto current = std::ranges::find(schemas, draft.schema, &DecisionSchemaChoice::asset);
+                int index = current == schemas.end() ? 0 : static_cast<int>(current - schemas.begin()) + 1;
+                const Ui::ComboItemSource choices{.label = [&](int item) {
+                    return item == 0 ? text("workspace.decision_graph.create_select_schema").c_str()
+                                     : schemas[static_cast<std::size_t>(item - 1)].path.c_str();
+                }};
+                if (Ui::ComboControl("##NewStateMachineSchema", &index, static_cast<int>(schemas.size()) + 1, choices, fonts))
+                    draft.schema = index == 0 ? Assets::AssetId{} : schemas[static_cast<std::size_t>(index - 1)].asset;
+                Ui::FieldLabel(text("workspace.decision_graph.create_outcome").c_str(), fonts);
+                const std::array labels{text("workspace.decision_graph.succeeded").c_str(),
+                                        text("workspace.decision_graph.failed").c_str()};
+                int outcome = draft.outcome == AI::DecisionStateTerminal::Failed ? 1 : 0;
+                if (Ui::ComboControl("##NewStateMachineOutcome", &outcome, labels.data(), static_cast<int>(labels.size()), fonts))
+                    draft.outcome = outcome == 0 ? AI::DecisionStateTerminal::Succeeded : AI::DecisionStateTerminal::Failed;
+                ImGui::Dummy({0.0F, 12.0F});
+                if (Ui::Button({.label = AssetBrowserPane::kTextScope.Text(context.localization, "action.cancel").c_str(),
+                                .variant = Ui::ButtonVariant::Secondary,
+                                .font = fonts.sans}))
+                    ImGui::CloseCurrentPopup();
+                ImGui::SameLine();
+                if (Ui::Button({.label = text("workspace.decision_graph.create_confirm").c_str(),
+                                .variant = Ui::ButtonVariant::Primary,
+                                .enabled = index > 0 && AssetBrowserInteractionSession::CanConfirmStateMachine(draft),
+                                .font = fonts.sans})) {
+                    if (auto confirmed = AssetBrowserInteractionSession::ConfirmStateMachine(draft)) {
+                        command = std::move(*confirmed);
+                        ImGui::CloseCurrentPopup();
+                    }
+                }
+                ImGui::EndPopup();
+            }
+            PopModalStyle();
+        }
+
         void DrawCreateBlackboardPopup(AssetBrowserInteractionState &state, EditorWorkspaceViewCommandData &command,
                                        const EditorGuiContext &context) {
             constexpr const char *popupId = "##ContentBrowserCreateBlackboard";
@@ -492,12 +553,13 @@ namespace Horo::Editor {
     }  // namespace
 
     /** @copydoc DrawAssetBrowserDialogs */
-    void DrawAssetBrowserDialogs(AssetBrowserInteractionState &state, const ContentBrowserDirectory &directory,
+    void DrawAssetBrowserDialogs(AssetBrowserInteractionState &state, const EditorWorkspaceViewModel &model,
                                  EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
         DrawInfoPopup(state, context);
         DrawRenamePopup(state, command, context);
         DrawDeletePopup(state, command, context);
-        DrawCreateFolderPopup(state, directory, command, context);
+        DrawCreateFolderPopup(state, model.contentBrowser, command, context);
+        DrawCreateStateMachinePopup(state, model.decisionSchemaChoices, command, context);
         DrawCreateBlackboardPopup(state, command, context);
         DrawCreateQueryPopup(state, command, context);
     }

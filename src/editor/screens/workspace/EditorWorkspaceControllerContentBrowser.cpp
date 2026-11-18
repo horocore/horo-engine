@@ -1,3 +1,4 @@
+#include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/Assets/AssetReimport.h"
 #include "Horo/Editor/ProjectIntegrityValidatorService.h"
 #include "Horo/Foundation/Logging/Logger.h"
@@ -31,6 +32,18 @@ namespace Horo::Editor {
                                                                     const std::filesystem::path &requestedDirectory) {
         RefreshPhysicsMaterials();
         m_viewModel.contentBrowser = BuildContentBrowserDirectory(projectRoot, requestedDirectory, m_assetRegistry, m_importerCatalog);
+        auto &schemas = m_viewModel.decisionSchemaChoices;
+        schemas.clear();
+        for (const auto &record : m_assetRegistry.Records()) {
+            if (record.type.Value() != AI::BlackboardSchemaAssetType)
+                continue;
+            if (schemas.size() == AI::DecisionAssetValidationHardLimits::Schemas) {
+                schemas.clear();
+                break;
+            }
+            schemas.push_back({record.id, std::string{record.sourcePath.String()}});
+        }
+        std::ranges::sort(schemas, {}, &DecisionSchemaChoice::path);
         ScheduleContentBrowserPreviews();
     }
 

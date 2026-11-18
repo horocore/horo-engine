@@ -86,20 +86,19 @@ namespace Horo::Editor {
         const auto &directory = viewModel.contentBrowser;
         const bool canCreateQuery = viewModel.environmentQueryCreationAvailable && directory.rootKind == ContentBrowserRootKind::Assets;
         const bool canCreateBlackboard = viewModel.blackboardCreationAvailable && directory.rootKind == ContentBrowserRootKind::Assets;
+        const bool canCreateStateMachine = canCreateBlackboard && !viewModel.decisionSchemaChoices.empty();
+        constexpr std::string_view createMachineAction = "action.create_state_machine";
         constexpr std::string_view createBlackboardAction = "action.create_blackboard";
         constexpr std::string_view createQueryAction = "action.create_environment_query";
-        constexpr std::array actionKeys{"action.paste_here",
-                                        "action.move_here",
-                                        "action.create_folder",
-                                        createBlackboardAction.data(),
-                                        createQueryAction.data(),
-                                        "action.create_lua_behavior",
-                                        "action.create_native_behavior",
-                                        "action.import_here",
-                                        "action.refresh"};
+        constexpr std::array actionKeys{"action.paste_here",          "action.move_here",
+                                        "action.create_folder",       createBlackboardAction.data(),
+                                        createQueryAction.data(),     createMachineAction.data(),
+                                        "action.create_lua_behavior", "action.create_native_behavior",
+                                        "action.import_here",         "action.refresh"};
         float widestLabel = 0.0F;
         for (const char *key : actionKeys) {
-            if ((!canCreateQuery && key == createQueryAction) || (!canCreateBlackboard && key == createBlackboardAction))
+            if ((!canCreateQuery && key == createQueryAction) || (!canCreateBlackboard && key == createBlackboardAction) ||
+                (!canCreateStateMachine && key == createMachineAction))
                 continue;
             const std::string &label = AssetBrowserPane::kTextScope.Text(localization, key);
             widestLabel =
@@ -124,6 +123,12 @@ namespace Horo::Editor {
                                                            .c_str(),
                                                        nullptr, context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.create")) {
             interactionSession.OpenCreateBlackboard(directory.absoluteCurrentPath);
+        }
+        if (canCreateStateMachine && Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, createMachineAction) +
+                                                          "###content_browser_create_state_machine")
+                                                             .c_str(),
+                                                         nullptr, context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.create")) {
+            interactionSession.OpenCreateStateMachine(directory.absoluteCurrentPath);
         }
         if (canCreateQuery && Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, createQueryAction) +
                                                    "###content_browser_create_environment_query")

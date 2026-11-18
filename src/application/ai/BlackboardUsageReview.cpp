@@ -114,7 +114,7 @@ namespace Horo::Application {
             const auto unresolved = [&](const Error &error) {
                 return AddGap(review, {BlackboardUsageGapKind::DecisionSource, file.record.id, {}, error});
             };
-            const auto graph = DecisionCookDetail::DecodeRegisteredDecisionGraphSource(file, GraphLimits);
+            const auto graph = DecodeRegisteredDecisionGraphSource(file, GraphLimits);
             if (graph.HasError())
                 return unresolved(graph.ErrorValue());
             if (graph.Value().blackboard != review.selection.schema || !graph.Value().blackboardVersion.Contains(review.selection.version))

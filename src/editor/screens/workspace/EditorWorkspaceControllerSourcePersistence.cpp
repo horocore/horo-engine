@@ -243,7 +243,7 @@ namespace Horo::Editor {
             close.command = CloseSequenceDocument;
             close.documentInstance = instance;
             static_cast<void>(ProcessSequenceDocumentCommand(close));
-        } else if (CloseEnvironmentQuerySource(instance)) {
+        } else if (CloseEnvironmentQuerySource(instance) || CloseDecisionGraphSource(instance)) {
             return true;
         } else if (auto *blackboard = FindBlackboardDocument(instance)) {
             const auto snapshot = blackboard->Snapshot();

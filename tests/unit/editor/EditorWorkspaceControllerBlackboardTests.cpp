@@ -68,8 +68,8 @@ namespace {
             REQUIRE(rebuilt.Value().status == Assets::AssetRegistryBuildStatus::Complete);
         }
 
-        void Write(const char *label) const {
-            const std::array keys{AI::BlackboardKeyDescriptor{.key = key}};
+        void Write(const char *label, AI::BlackboardKeyPresence presence = AI::BlackboardKeyPresence::Required) const {
+            const std::array keys{AI::BlackboardKeyDescriptor{.key = key, .presence = presence}};
             const auto captured = AI::BlackboardSchema::Capture({.identity = schema, .keys = keys});
             REQUIRE(captured.HasValue());
             const std::array rows{AI::BlackboardSchemaAuthoringRow{key, label}};
@@ -189,6 +189,134 @@ TEST_CASE("Blackboard New atomically creates and opens a schema with an authored
         CHECK_FALSE(std::filesystem::exists(project.root / (std::string{path} + ".horo")));
         CHECK(std::filesystem::is_regular_file(project.root / project.Path));
     }
+}
+
+TEST_CASE("State Machine New publishes a canonical Decision source bound to the selected saved Blackboard",
+          "[unit][editor][decision][workspace]") {
+    BlackboardWorkspaceFixture project;
+    project.Write("Observer", AI::BlackboardKeyPresence::Optional);
+    EditorWorkspaceController controller(project.root, project.runtime, project.registry.Snapshot(),
+                                         {.assets = {.mutableAssetRegistry = &project.registry},
+                                          .mutations = &project.mutations,
+                                          .durableFiles = &project.files});
+    REQUIRE(controller.ViewModel().decisionSchemaChoices.size() == 1);
+    CHECK(controller.ViewModel().decisionSchemaChoices.front().asset == project.asset);
+    AssetBrowserInteractionSession browser;
+    browser.OpenCreateStateMachine(WorkspacePathText(project.root / "assets"));
+    auto &draft = browser.State().createStateMachine;
+    draft.name = "Terminal state";
+    CHECK_FALSE(AssetBrowserInteractionSession::ConfirmStateMachine(draft).has_value());
+    draft.schema = project.asset;
+    draft.outcome = AI::DecisionStateTerminal::Failed;
+    auto command = AssetBrowserInteractionSession::ConfirmStateMachine(draft);
+    REQUIRE(command.has_value());
+    constexpr auto path = "assets/Terminal state.horo_sm";
+
+    SECTION("the durable source and sidecar open the same stable Decision document") {
+        controller.ProcessCommand(BlackboardWorkspaceFixture::Open());
+        REQUIRE(controller.ViewModel().blackboardDocuments.size() == 1);
+        controller.ProcessCommand(*command);
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        REQUIRE(controller.ViewModel().workspacePanelHost.DocumentTabs().size() == 2);
+        const auto registry = project.registry.Snapshot();
+        const auto *record = registry.FindByPath(path);
+        REQUIRE(record);
+        CHECK(record->type.Value() == Application::DecisionStateMachineSourceType);
+        CHECK(std::filesystem::is_regular_file(project.root / (std::string{path} + ".horo")));
+        REQUIRE(controller.ViewModel().decisionGraphDocuments.size() == 1);
+        const auto &document = controller.ViewModel().decisionGraphDocuments.front();
+        CHECK(document.asset == record->id);
+        CHECK(document.identity.key.kind == DocumentKind::DecisionGraph);
+        CHECK(ParseDocumentKind("decision_graph").Value() == DocumentKind::DecisionGraph);
+        CHECK(document.graph->blackboard == project.schema);
+        CHECK(document.graph->blackboardVersion.Contains(1));
+        CHECK_FALSE(document.graph->blackboardVersion.Contains(2));
+        CHECK(document.graph->executionTask.IsValid());
+        const auto &machine = std::get<AI::StateMachineAssetDescriptor>(document.graph->body);
+        REQUIRE(machine.states.size() == 1);
+        CHECK(machine.initial == machine.states.front().id);
+        CHECK(machine.states.front().terminal == AI::DecisionStateTerminal::Failed);
+        CHECK(document.graph->location.source == path);
+        const auto graph = document.graph->asset;
+
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::RenameContentBrowserEntry,
+                                   .stringPayload = WorkspacePathText(project.root / path),
+                                   .secondaryStringPayload = "Relocated.horo_sm"});
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        controller.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::OpenSourceFile,
+             .sourceOpenRequest = SourceOpenRequest{.path = "assets/Relocated.horo_sm", .origin = SourceOpenOrigin::AssetActivation}});
+        REQUIRE(controller.ViewModel().decisionGraphDocuments.size() == 1);
+        REQUIRE(controller.ViewModel().workspacePanelHost.DocumentTabs().size() == 2);
+        const auto &moved = controller.ViewModel().decisionGraphDocuments.front();
+        CHECK(moved.asset == record->id);
+        CHECK(moved.graph->asset == graph);
+        CHECK(moved.graph->location.source == "assets/Relocated.horo_sm");
+        controller.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = moved.identity.instance});
+        CHECK(controller.ViewModel().decisionGraphDocuments.empty());
+        CHECK(controller.ViewModel().blackboardDocuments.size() == 1);
+    }
+    SECTION("stale synthetic schema selections never publish") {
+        command->newStateMachine->schema = Assets::AssetId::FromBytes({0x99});
+        controller.ProcessCommand(*command);
+        CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.decision_graph.create_failed");
+        CHECK_FALSE(std::filesystem::exists(project.root / path));
+        CHECK_FALSE(std::filesystem::exists(project.root / (std::string{path} + ".horo")));
+        CHECK(project.registry.Snapshot().FindByPath(path) == nullptr);
+    }
+    SECTION("a retained schema that cannot materialize is refused") {
+        project.Write("Missing required default");
+        controller.ProcessCommand(*command);
+        CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.decision_graph.create_failed");
+        CHECK_FALSE(std::filesystem::exists(project.root / path));
+    }
+}
+
+TEST_CASE("Decision assets open canonical family tabs even with unavailable task providers", "[unit][editor][decision][workspace]") {
+    using namespace AI::DecisionGraphTestSupport;
+    BlackboardWorkspaceFixture project;
+    const auto tree = TaskTree(601);
+    const AI::DecisionGraphSource utility{Graph(602),
+                                          1,
+                                          project.schema,
+                                          {1, 1},
+                                          Location(),
+                                          {},
+                                          AI::UtilityDecisionSource{.root = Node(1),
+                                                                    .options = {{.option = {Node(2), MakeIdentity<AI::TaskId>(701)},
+                                                                                 .provider = {.id = Node(2), .type = Type(702)}}}}};
+    const auto write = [&](const AI::DecisionGraphSource &source, const std::string &path, Assets::AssetId id, std::string_view type) {
+        const auto encoded = AI::DecisionPlanCodec::EncodeSource(std::span{&source, 1}, source.asset);
+        REQUIRE(encoded.HasValue());
+        {
+            std::ofstream file(project.root / path, std::ios::binary);
+            file.write(reinterpret_cast<const char *>(encoded.Value().data()), static_cast<std::streamsize>(encoded.Value().size()));
+            REQUIRE(static_cast<bool>(file));
+        }
+        project.WriteSidecar(path, id, type);
+    };
+    write(tree, "assets/guard.horo_bt", Assets::AssetId::FromBytes({0x21}), Application::DecisionBehaviorTreeSourceType);
+    write(utility, "assets/score.horo_utility", Assets::AssetId::FromBytes({0x22}), Application::DecisionUtilitySourceType);
+    write(tree, "assets/wrong.horo_sm", Assets::AssetId::FromBytes({0x23}), Application::DecisionStateMachineSourceType);
+    project.RebuildRegistry();
+    EditorWorkspaceController controller(project.root, project.runtime, project.registry.Snapshot(), {});
+    const auto open = [&](const char *path) {
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::OpenSourceFile,
+                                   .sourceOpenRequest = SourceOpenRequest{.path = path, .origin = SourceOpenOrigin::AssetActivation}});
+    };
+    open("assets/guard.horo_bt");
+    open("assets/score.horo_utility");
+    const auto &documents = controller.ViewModel().decisionGraphDocuments;
+    REQUIRE(documents.size() == 2);
+    CHECK(documents[0].graph->asset == tree.asset);
+    CHECK(documents[1].graph->asset == utility.asset);
+    CHECK(std::holds_alternative<std::shared_ptr<const AI::BehaviorTreeAsset>>(documents[0].graph->body));
+    CHECK(std::holds_alternative<AI::UtilityDecisionSource>(documents[1].graph->body));
+    open("assets/wrong.horo_sm");
+    CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.decision_graph.invalid");
+    CHECK(documents.size() == 2);
+    CHECK(controller.ViewModel().workspacePanelHost.DocumentTabs().size() == 2);
 }
 
 TEST_CASE("Blackboard asset activation saves, reloads and reopens its real workspace tab", "[unit][editor][blackboard][workspace]") {

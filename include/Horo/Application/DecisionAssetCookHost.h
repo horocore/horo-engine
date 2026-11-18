@@ -16,6 +16,10 @@ namespace Horo::Application {
     inline constexpr std::string_view DecisionStateMachineSourceType = AI::DecisionAssetType(AI::DecisionPlanKind::StateMachine);
     inline constexpr std::string_view DecisionUtilitySourceType = AI::DecisionAssetType(AI::DecisionPlanKind::Utility);
 
+    /** @brief Decodes one captured registered graph using the cooker's canonical family and project-path checks. */
+    [[nodiscard]] Result<AI::DecisionGraphSource> DecodeRegisteredDecisionGraphSource(const Assets::AssetCookPinnedSource &file,
+                                                                                      AI::DecisionCompilationLimits limits = {});
+
     struct DecisionAssetCookRequest final {
         Assets::AssetCookRequest assets; /**< Actual pinned registry/files, project lease/fence and durable publication authority. */
         AI::DecisionCompilationEnvironment environment;

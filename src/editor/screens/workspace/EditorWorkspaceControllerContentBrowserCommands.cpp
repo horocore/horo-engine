@@ -36,6 +36,10 @@ namespace Horo::Editor {
             case EditorWorkspaceViewCommand::CancelContentBrowserClipboard:
                 ClearContentBrowserClipboard();
                 break;
+            case EditorWorkspaceViewCommand::CreateStateMachine:
+                if (cmd.newStateMachine)
+                    CreateContentBrowserStateMachine(*cmd.newStateMachine);
+                break;
             case EditorWorkspaceViewCommand::CreateBlackboardSchema:
                 if (cmd.newBlackboard)
                     CreateContentBrowserBlackboard(*cmd.newBlackboard);

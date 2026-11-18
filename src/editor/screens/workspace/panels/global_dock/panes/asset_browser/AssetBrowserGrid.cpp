@@ -418,6 +418,6 @@ namespace Horo::Editor {
                                                    .font = font};
         DrawAssetBrowserViewport(viewport);
 
-        DrawAssetBrowserDialogs(state, directory, command, context);
+        DrawAssetBrowserDialogs(state, viewModel, command, context);
     }
 }  // namespace Horo::Editor

@@ -40,7 +40,7 @@ namespace Horo::Editor {
             (m_uiCanvasView.Draw(viewModel, outCommand) || DrawPrefabDocument(viewModel, outCommand) ||
              DrawSourceDocument(viewModel, outCommand) || DrawNavigationDocument(viewModel) || DrawPCGDocument(viewModel, outCommand) ||
              DrawSequenceDocument(viewModel, outCommand) || DrawBlackboardDocument(viewModel, outCommand) ||
-             DrawEnvironmentQueryDocument(viewModel))) {
+             DrawEnvironmentQueryDocument(viewModel) || DrawDecisionGraphDocument(viewModel))) {
             if (panel)
                 panel->OnPresentationHidden(outCommand);
             return;

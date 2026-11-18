@@ -70,6 +70,9 @@ namespace Horo::Editor {
             case BlackboardSchema:
                 OpenEmbeddedBlackboardSource(result);
                 return true;
+            case DecisionGraph:
+                OpenEmbeddedDecisionGraphSource(result);
+                return true;
             case EnvironmentQuery:
                 OpenEmbeddedEnvironmentQuerySource(result);
                 return true;

@@ -1216,6 +1216,10 @@ namespace Horo::Editor {
         void OpenEmbeddedSequenceSource(const SourceOpenResult &result);
         /** @brief Loads or focuses an exact registry-backed Blackboard schema through the embedded workspace. */
         void OpenEmbeddedBlackboardSource(const SourceOpenResult &result);
+        /** @brief Opens an exact registered decision source independently of runtime admission. */
+        void OpenEmbeddedDecisionGraphSource(const SourceOpenResult &result);
+        /** @brief Releases the matching read-only decision tab if open. */
+        bool CloseDecisionGraphSource(DocumentInstanceId instance);
 
         /** @brief Opens one exact registered query source in the normal workspace. */
         void OpenEmbeddedEnvironmentQuerySource(const SourceOpenResult &result);
@@ -1257,6 +1261,11 @@ namespace Horo::Editor {
                                                                                             std::size_t maximumNameBytes);
         /** @brief Validates the browser request and attempts to create an initial authored Blackboard source. */
         void CreateContentBrowserBlackboard(const BlackboardCreationRequest &request);
+        /** @brief Validates the browser request and attempts to author an initial state machine. */
+        void CreateContentBrowserStateMachine(const StateMachineCreationRequest &request);
+        /** @brief Admits and opens one provider-free State Machine bound to an exact saved schema. */
+        void PublishInitialStateMachine(const std::filesystem::path &destination, const StateMachineCreationRequest &request,
+                                        Assets::AssetId newId);
         /** @brief Validates, publishes and opens one initial Blackboard with an explicitly authored first key. */
         void PublishInitialBlackboard(const std::filesystem::path &destination, const BlackboardCreationRequest &request,
                                       Assets::AssetId newId);

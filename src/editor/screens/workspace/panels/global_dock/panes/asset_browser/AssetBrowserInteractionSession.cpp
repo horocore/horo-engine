@@ -72,6 +72,26 @@ namespace Horo::Editor {
         m_state.openCreateFolder = true;
     }
 
+    /** @copydoc AssetBrowserInteractionSession::OpenCreateStateMachine */
+    void AssetBrowserInteractionSession::OpenCreateStateMachine(std::string_view directory) {
+        m_state.createStateMachine = {.directory = std::string{directory}};
+        m_state.openCreateStateMachine = true;
+    }
+
+    /** @copydoc AssetBrowserInteractionSession::CanConfirmStateMachine */
+    bool AssetBrowserInteractionSession::CanConfirmStateMachine(const StateMachineCreationRequest &draft) noexcept {
+        return !draft.directory.empty() && AI::IsValidBlackboardDisplayName(draft.name) && draft.schema.IsValid() &&
+               (draft.outcome == AI::DecisionStateTerminal::Succeeded || draft.outcome == AI::DecisionStateTerminal::Failed);
+    }
+
+    /** @copydoc AssetBrowserInteractionSession::ConfirmStateMachine */
+    std::optional<EditorWorkspaceViewCommandData> AssetBrowserInteractionSession::ConfirmStateMachine(
+        const StateMachineCreationRequest &draft) {
+        if (!CanConfirmStateMachine(draft))
+            return {};
+        return EditorWorkspaceViewCommandData{.command = EditorWorkspaceViewCommand::CreateStateMachine, .newStateMachine = draft};
+    }
+
     /** @copydoc AssetBrowserInteractionSession::OpenCreateBlackboard */
     void AssetBrowserInteractionSession::OpenCreateBlackboard(std::string_view directory) {
         m_state.createBlackboard = {

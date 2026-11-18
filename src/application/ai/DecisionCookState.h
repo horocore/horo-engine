@@ -38,10 +38,6 @@ namespace Horo::Application::DecisionCookDetail {
         Sha256Digest settings;
     };
 
-    /** @brief Decodes one registered graph source and rebases authored locations to its captured project path. */
-    [[nodiscard]] Result<AI::DecisionGraphSource> DecodeRegisteredDecisionGraphSource(const Assets::AssetCookPinnedSource &file,
-                                                                                      AI::DecisionCompilationLimits limits);
-
     [[nodiscard]] Result<void> Verify(const State &state, const CancellationToken &cancellation);
     [[nodiscard]] Result<void> Capture(State &state, const Assets::AssetRegistrySnapshot &registry, const CancellationToken &cancellation);
     [[nodiscard]] Result<void> PrepareRoots(State &state, const CancellationToken &cancellation);

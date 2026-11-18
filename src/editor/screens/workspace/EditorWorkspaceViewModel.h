@@ -1,6 +1,7 @@
 #pragma once
 
 #include "EditorPlayState.h"
+#include "Horo/AI/DecisionControl.h"
 #include "Horo/AI/EnvironmentQueryAuthoring.h"
 #include "Horo/Editor/ActivityBarLayout.h"
 #include "Horo/Editor/AudioComponentPreview.h"
@@ -44,6 +45,7 @@
 
 namespace Horo::AI {
     class EnvironmentQueryAsset;
+    struct DecisionGraphSource;
     class QuerySchemaRegistry;
 }  // namespace Horo::AI
 
@@ -247,6 +249,7 @@ namespace Horo::Editor {
         CreateContentBrowserFolder,
         CreateEnvironmentQuery,
         CreateBlackboardSchema,
+        CreateStateMachine,
         CreateLuaBehavior,
         CreateNativeBehavior,
         ReimportContentBrowserAsset,
@@ -438,6 +441,28 @@ namespace Horo::Editor {
         std::optional<GyroscopeBindingReplacement> replacement;
     };
 
+    /** @brief One exact saved blackboard option available to the initial decision source author. */
+    struct DecisionSchemaChoice final {
+        Assets::AssetId asset;
+        std::string path;
+    };
+
+    /** @brief Confirmed initial State Machine with an explicit saved schema and terminal outcome. */
+    struct StateMachineCreationRequest final {
+        std::string directory;
+        std::string name;
+        Assets::AssetId schema;
+        AI::DecisionStateTerminal outcome{AI::DecisionStateTerminal::Succeeded};
+    };
+
+    /** @brief Registered immutable source displayed independently from runtime graphs. */
+    struct DecisionGraphWorkspaceDocument final {
+        DocumentIdentity identity;
+        Assets::AssetId asset;
+        Sha256Digest source;
+        std::shared_ptr<const AI::DecisionGraphSource> graph;
+    };
+
     /** @brief Confirmed first Blackboard asset and an explicitly authored initial key. */
     struct BlackboardCreationRequest final {
         std::string directory;
@@ -510,6 +535,7 @@ namespace Horo::Editor {
         std::optional<BlackboardWorkspaceRequest> blackboard;
         std::optional<EnvironmentQueryCreationRequest> newEnvironmentQuery;
         std::optional<BlackboardCreationRequest> newBlackboard;
+        std::optional<StateMachineCreationRequest> newStateMachine;
         std::optional<SequenceTimelineState> sequenceTimeline;
         std::optional<PCGEditorRequest> pcgRequest;
         std::optional<EditorMenuInvocation> menuInvocation = std::nullopt;
@@ -692,6 +718,8 @@ namespace Horo::Editor {
         bool environmentQueryCreationAvailable{};
         std::vector<BlackboardWorkspaceDocument> blackboardDocuments;
         bool blackboardCreationAvailable{};
+        std::vector<DecisionSchemaChoice> decisionSchemaChoices;
+        std::vector<DecisionGraphWorkspaceDocument> decisionGraphDocuments;
         std::vector<PCGWorkspaceDocument> pcgDocuments;
         std::vector<PCGPaletteEntry> pcgPalette;
         PCG::PCGNodeCatalogSnapshot pcgSchemas;

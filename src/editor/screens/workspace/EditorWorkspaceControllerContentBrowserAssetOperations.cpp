@@ -125,6 +125,20 @@ namespace Horo::Editor {
             PublishInitialBlackboard(*destination, request, GenerateRandomAssetId(m_mutableAssetRegistry->Snapshot()));
     }
 
+    /** @copydoc EditorWorkspaceController::CreateContentBrowserStateMachine */
+    void EditorWorkspaceController::CreateContentBrowserStateMachine(const StateMachineCreationRequest &request) {
+        auto &error = m_viewModel.contentBrowserOperationError;
+        error.clear();
+        if (!m_viewModel.blackboardCreationAvailable) {
+            error = "workspace.content_browser.operation.unavailable";
+            return;
+        }
+        const auto destination = PrepareInitialAiAssetDestination(request.directory, request.name, ".horo_sm",
+                                                                  AI::BlackboardSchemaAuthoringRow::MaximumLabelBytes);
+        if (destination)
+            PublishInitialStateMachine(*destination, request, GenerateRandomAssetId(m_mutableAssetRegistry->Snapshot()));
+    }
+
     /** @copydoc EditorWorkspaceController::FinishAuthoredAiPublication */
     bool EditorWorkspaceController::FinishAuthoredAiPublication(const Application::ProjectAssetImportReceipt &receipt,
                                                                 const Result<void> &outcome, std::string_view failureKey) {

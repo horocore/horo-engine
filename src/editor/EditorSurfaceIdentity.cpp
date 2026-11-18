@@ -35,6 +35,7 @@ namespace Horo::Editor {
                 case Prefab:
                 case BlackboardSchema:
                 case EnvironmentQuery:
+                case DecisionGraph:
                 case PCGGraph:
                 case Shader:
                 case Asset:
@@ -253,6 +254,8 @@ namespace Horo::Editor {
                 return "blackboard_schema";
             case EnvironmentQuery:
                 return "environment_query";
+            case DecisionGraph:
+                return "decision_graph";
             case Shader:
                 return "shader";
             case Asset:
@@ -267,8 +270,8 @@ namespace Horo::Editor {
 
     Result<DocumentKind> ParseDocumentKind(const std::string_view value) {
         using enum DocumentKind;
-        for (const DocumentKind kind :
-             {Scene, Source, UiCanvas, Sequence, PCGGraph, Prefab, BlackboardSchema, EnvironmentQuery, Shader, Asset, Project, Custom}) {
+        for (const DocumentKind kind : {Scene, Source, UiCanvas, Sequence, PCGGraph, Prefab, BlackboardSchema, EnvironmentQuery,
+                                        DecisionGraph, Shader, Asset, Project, Custom}) {
             if (ToString(kind) == value) {
                 return Result<DocumentKind>::Success(kind);
             }

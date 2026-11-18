@@ -131,3 +131,28 @@ TEST_CASE("Environment Query workspace labels resolve in both shipped locales", 
         }
     }
 }
+
+TEST_CASE("Decision graph workspace and initial state machine labels resolve in both shipped locales",
+          "[unit][editor][decision][localization]") {
+    using namespace Horo::Editor;
+    constexpr GuiLocalizationScope text{"workspace.decision_graph"};
+    constexpr std::array keys{"behavior_tree",  "state_machine", "utility",      "read_only",      "nodes",         "unknown",
+                              "invalid",        "limit",         "create_title", "create_name",    "create_schema", "create_select_schema",
+                              "create_outcome", "succeeded",     "failed",       "create_confirm", "create_failed"};
+    const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+    const std::array locales{"en-US", "tr-TR"};
+    LocalizationService service{{"en-US"}};
+    for (const auto locale : locales)
+        REQUIRE(service.LoadCatalogFile(root / (std::string{locale} + ".json")));
+    for (const auto locale : locales) {
+        REQUIRE(service.Prepare({locale}));
+        REQUIRE(service.ActivatePrepared());
+        CHECK_FALSE(service.Get("editor", "workspace.content_browser.action.create_state_machine").starts_with("[missing:"));
+        for (const auto key : keys) {
+            INFO(locale);
+            INFO(key);
+            CHECK_FALSE(text.Text(service, key).empty());
+            CHECK_FALSE(text.Text(service, key).starts_with("[missing:"));
+        }
+    }
+}

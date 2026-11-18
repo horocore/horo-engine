@@ -51,6 +51,8 @@ namespace Horo::Editor {
         bool openCreateQuery{};
         BlackboardCreationDraft createBlackboard;
         bool openCreateBlackboard{};
+        StateMachineCreationRequest createStateMachine;
+        bool openCreateStateMachine{};
     };
 
     /**
@@ -84,6 +86,14 @@ namespace Horo::Editor {
 
         /** @brief Prepares the create-folder workflow. */
         void OpenCreateFolder();
+
+        /** @brief Captures the selected folder for the initial State Machine modal. */
+        void OpenCreateStateMachine(std::string_view directory);
+
+        /** @brief Checks that a registered schema and terminal outcome are explicitly selected. */
+        [[nodiscard]] static bool CanConfirmStateMachine(const StateMachineCreationRequest &draft) noexcept;
+        /** @brief Reduces a complete State Machine request to the normal Project command. */
+        [[nodiscard]] static std::optional<EditorWorkspaceViewCommandData> ConfirmStateMachine(const StateMachineCreationRequest &draft);
 
         /** @brief Captures the selected Assets directory for the first schema modal. */
         void OpenCreateBlackboard(std::string_view directory);
