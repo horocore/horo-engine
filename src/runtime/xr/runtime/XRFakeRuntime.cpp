@@ -1,5 +1,7 @@
 #include "Horo/XR/XRFakeRuntime.h"
 
+#include "host/XRFakeRuntimeHostComposition.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -105,7 +107,7 @@ namespace Horo::XR {
             return XRFrameStatus::InvalidInput;
         if (!step.executeFrame && (!step.event || step.actionCount != 0 || step.viewCount != 0 || step.failure != None))
             return XRFrameStatus::InvalidInput;
-        if (!step.shouldRender && step.failure >= Locate && step.failure <= Release)
+        if (!RuntimeInternal::SupportsXRFakeFrameFailure(step.failure, step.shouldRender))
             return XRFrameStatus::Unsupported;
         if (step.executeFrame && !step.prediction.IsValid())
             return XRFrameStatus::InvalidInput;

@@ -1,5 +1,6 @@
 #include "Horo/XR/XRSimulatorScenario.h"
 
+#include "XRFakeRuntimeHostComposition.h"
 #include "XRSimulatorCodecInternal.h"
 
 #include <algorithm>
@@ -195,6 +196,8 @@ namespace Horo::XR {
             return Invalid();
         if (!step.executeFrame)
             return EventOnly(step) ? Result<void>::Success() : Invalid();
+        if (!RuntimeInternal::SupportsXRFakeFrameFailure(step.failure, step.shouldRender))
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
         return ValidateFrame(step);
     }
 

@@ -87,4 +87,40 @@ namespace {
         fingerprint[0] = std::byte{1};
         REQUIRE(XRSimulatorScenario::Create({.steps = steps, .bindings = fingerprint}).HasValue());
     }
+
+    TEST_CASE("Simulator rejects unsupported render faults before changing the owner or loading a scenario",
+              "[xr][simulator][codec][faults]") {
+        auto runtime = Runtime();
+        const auto healthy = runtime->Controls();
+        REQUIRE(runtime->Step(Cutoff(1)).HasValue());
+        REQUIRE(runtime->Tracking() != nullptr);
+        const auto session = runtime->Snapshot().session.session;
+        const auto revision = runtime->Tracking()->Revision();
+
+        auto fault = healthy;
+        fault.failure = XRFakeFailure::Acquire;
+        const std::array steps{fault};
+        const auto encoded = EncodeXRSimulatorScenario(Scenario(steps));
+        REQUIRE(encoded.HasValue());
+        auto text = Text(encoded.Value());
+        const auto rendered = text.find("\"render\":true");
+        REQUIRE(rendered != std::string::npos);
+        text.replace(rendered, std::string_view{"\"render\":true"}.size(), "\"render\":false");
+        const auto imported = Parse(text);
+        REQUIRE(imported.HasError());
+        CHECK(imported.ErrorValue().code.Value() == XRErrors::OperationUnsupported.code.Value());
+
+        fault.shouldRender = false;
+        const auto staged = runtime->SetControls(fault);
+        REQUIRE(staged.HasError());
+        CHECK(staged.ErrorValue().code.Value() == XRErrors::OperationUnsupported.code.Value());
+        CHECK(runtime->Snapshot().session.session == session);
+        CHECK(runtime->Snapshot().cursor == 1);
+        REQUIRE(runtime->Tracking() != nullptr);
+        CHECK(runtime->Tracking()->Revision() == revision);
+        const auto next = runtime->Step(Cutoff(2));
+        REQUIRE(next.HasValue());
+        CHECK(next.Value().frame.status == XRFrameStatus::Ok);
+        CHECK(next.Value().frame.failure == XRFakeFailure::None);
+    }
 }  // namespace
