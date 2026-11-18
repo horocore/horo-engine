@@ -136,9 +136,34 @@ TEST_CASE("Decision graph workspace and initial state machine labels resolve in 
           "[unit][editor][decision][localization]") {
     using namespace Horo::Editor;
     constexpr GuiLocalizationScope text{"workspace.decision_graph"};
-    constexpr std::array keys{"behavior_tree",  "state_machine", "utility",      "read_only",      "nodes",         "unknown",
-                              "invalid",        "limit",         "create_title", "create_name",    "create_schema", "create_select_schema",
-                              "create_outcome", "succeeded",     "failed",       "create_confirm", "create_failed"};
+    constexpr std::array keys{"behavior_tree",
+                              "state_machine",
+                              "utility",
+                              "read_only",
+                              "nodes",
+                              "unknown",
+                              "invalid",
+                              "limit",
+                              "create_title",
+                              "create_name",
+                              "create_schema",
+                              "create_select_schema",
+                              "create_outcome",
+                              "succeeded",
+                              "failed",
+                              "create_confirm",
+                              "create_failed",
+                              "new_tree",
+                              "new_utility",
+                              "create_task",
+                              "select_task",
+                              "open_scoring_schema",
+                              "scoring_key",
+                              "select_scoring_key",
+                              "score_minimum",
+                              "score_maximum",
+                              "create_task_graph",
+                              "catalog_changed"};
     const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
     const std::array locales{"en-US", "tr-TR"};
     LocalizationService service{{"en-US"}};
@@ -147,6 +172,8 @@ TEST_CASE("Decision graph workspace and initial state machine labels resolve in 
     for (const auto locale : locales) {
         REQUIRE(service.Prepare({locale}));
         REQUIRE(service.ActivatePrepared());
+        CHECK_FALSE(service.Get("editor", "workspace.content_browser.action.create_behavior_tree").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.content_browser.action.create_utility").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.content_browser.action.create_state_machine").starts_with("[missing:"));
         for (const auto key : keys) {
             INFO(locale);

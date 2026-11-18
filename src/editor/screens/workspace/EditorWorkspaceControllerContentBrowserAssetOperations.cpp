@@ -139,6 +139,26 @@ namespace Horo::Editor {
             PublishInitialStateMachine(*destination, request, GenerateRandomAssetId(m_mutableAssetRegistry->Snapshot()));
     }
 
+    /** @copydoc EditorWorkspaceController::CreateContentBrowserTaskDecision */
+    void EditorWorkspaceController::CreateContentBrowserTaskDecision(const TaskDecisionCreationRequest &request) {
+        auto &error = m_viewModel.contentBrowserOperationError;
+        error.clear();
+        if (!m_viewModel.blackboardCreationAvailable) {
+            error = "workspace.content_browser.operation.unavailable";
+            return;
+        }
+        if (request.family != AI::DecisionPlanKind::BehaviorTree && request.family != AI::DecisionPlanKind::Utility) {
+            error = "workspace.decision_graph.create_failed";
+            return;
+        }
+        const auto destination =
+            PrepareInitialAiAssetDestination(request.directory, request.name,
+                                             request.family == AI::DecisionPlanKind::Utility ? ".horo_utility" : ".horo_bt",
+                                             AI::BlackboardSchemaAuthoringRow::MaximumLabelBytes);
+        if (destination)
+            PublishInitialTaskDecision(*destination, request, GenerateRandomAssetId(m_mutableAssetRegistry->Snapshot()));
+    }
+
     /** @copydoc EditorWorkspaceController::FinishAuthoredAiPublication */
     bool EditorWorkspaceController::FinishAuthoredAiPublication(const Application::ProjectAssetImportReceipt &receipt,
                                                                 const Result<void> &outcome, std::string_view failureKey) {

@@ -3,8 +3,10 @@
 #include "Horo/AI/DecisionPlanCodec.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 
 namespace Horo::Editor {
     namespace {
@@ -70,6 +72,36 @@ namespace Horo::Editor {
     void AssetBrowserInteractionSession::OpenCreateFolder() {
         m_state.createFolderBuffer.fill('\0');
         m_state.openCreateFolder = true;
+    }
+
+    /** @copydoc AssetBrowserInteractionSession::OpenCreateTaskDecision */
+    void AssetBrowserInteractionSession::OpenCreateTaskDecision(std::string_view directory, AI::DecisionPlanKind family,
+                                                                std::uint64_t catalogRevision) {
+        m_state.createTaskDecision = {.directory = std::string{directory}, .family = family, .catalogRevision = catalogRevision};
+        if (family == AI::DecisionPlanKind::Utility)
+            m_state.createTaskDecision.score.emplace();
+        m_state.utilityMinimum = 0;
+        m_state.utilityMaximum = 1;
+        m_state.openCreateTaskDecision = true;
+    }
+
+    /** @copydoc AssetBrowserInteractionSession::CanConfirmTaskDecision */
+    bool AssetBrowserInteractionSession::CanConfirmTaskDecision(const TaskDecisionCreationRequest &draft) noexcept {
+        if (draft.directory.empty() || !AI::IsValidBlackboardDisplayName(draft.name) || !draft.schema.IsValid() || !draft.task.IsValid() ||
+            !draft.provider.IsValid() || draft.version == 0 || draft.catalogRevision == 0)
+            return false;
+        if (draft.family == AI::DecisionPlanKind::BehaviorTree)
+            return !draft.score && draft.version <= std::numeric_limits<std::uint16_t>::max();
+        return draft.family == AI::DecisionPlanKind::Utility && draft.score && draft.score->key.IsValid() &&
+               std::isfinite(draft.score->maximum - draft.score->minimum) && draft.score->maximum > draft.score->minimum;
+    }
+
+    /** @copydoc AssetBrowserInteractionSession::ConfirmTaskDecision */
+    std::optional<EditorWorkspaceViewCommandData> AssetBrowserInteractionSession::ConfirmTaskDecision(
+        const TaskDecisionCreationRequest &draft) {
+        if (!CanConfirmTaskDecision(draft))
+            return {};
+        return EditorWorkspaceViewCommandData{.command = EditorWorkspaceViewCommand::CreateTaskDecision, .newTaskDecision = draft};
     }
 
     /** @copydoc AssetBrowserInteractionSession::OpenCreateStateMachine */

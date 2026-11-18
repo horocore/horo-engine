@@ -24,7 +24,8 @@
 
 namespace Horo::AI {
     class DecisionBlackboardProviderMetadata;
-}
+    class DecisionNodeGeneration;
+}  // namespace Horo::AI
 
 namespace Horo::Editor {
     /** @brief One gameplay source diagnostic that blocks starting a play session. */
@@ -117,6 +118,10 @@ namespace Horo::Editor {
          * @return Exact immutable metadata, or null when no native authoring catalog was admitted. No executable lease escapes.
          */
         [[nodiscard]] const std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> &DecisionUsageMetadata() const noexcept;
+
+        /** @brief Temporarily acquires the actual current native Decision declarations for source compilation.
+         * @return The admitted generation or a typed unavailable result. Callers release it before returning to the workspace. */
+        [[nodiscard]] Result<std::shared_ptr<const AI::DecisionNodeGeneration>> AcquireDecisionAuthoringGeneration() const;
 
         /** @brief Returns source-addressed compile and registration failures. */
         [[nodiscard]] const std::vector<ProjectGameplayDiagnostic> &Diagnostics() const noexcept;

@@ -1,5 +1,6 @@
 #include "editor/gameplay/ProjectGameplayRegistry.h"
 
+#include "Horo/AI/AIErrors.h"
 #include "Horo/AI/BlackboardUsageInspection.h"
 #include "Horo/Foundation/Paths.h"
 #include "Horo/Gameplay/GameplayErrors.h"
@@ -446,6 +447,13 @@ namespace Horo::Editor {
                                            stat.sourceSize, stat.metadataSize);
         }
         return Result<ProjectLuaGenerationSnapshot>::Success(std::move(snapshot));
+    }
+
+    /** @copydoc ProjectGameplayRegistry::AcquireDecisionAuthoringGeneration */
+    Result<std::shared_ptr<const AI::DecisionNodeGeneration>> ProjectGameplayRegistry::AcquireDecisionAuthoringGeneration() const {
+        if (!nativeModule_ || !decisionUsageMetadata_)
+            return Result<std::shared_ptr<const AI::DecisionNodeGeneration>>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+        return nativeModule_->AcquireDecisionNodes();
     }
 
     /** @copydoc ProjectGameplayRegistry::DecisionUsageMetadata */

@@ -68,8 +68,9 @@ namespace {
             REQUIRE(rebuilt.Value().status == Assets::AssetRegistryBuildStatus::Complete);
         }
 
-        void Write(const char *label, AI::BlackboardKeyPresence presence = AI::BlackboardKeyPresence::Required) const {
-            const std::array keys{AI::BlackboardKeyDescriptor{.key = key, .presence = presence}};
+        void Write(const char *label, AI::BlackboardKeyPresence presence = AI::BlackboardKeyPresence::Required,
+                   AI::BlackboardValueKind kind = AI::BlackboardValueKind::Boolean) const {
+            const std::array keys{AI::BlackboardKeyDescriptor{.key = key, .kind = kind, .presence = presence}};
             const auto captured = AI::BlackboardSchema::Capture({.identity = schema, .keys = keys});
             REQUIRE(captured.HasValue());
             const std::array rows{AI::BlackboardSchemaAuthoringRow{key, label}};
@@ -270,6 +271,98 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
         controller.ProcessCommand(*command);
         CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.decision_graph.create_failed");
         CHECK_FALSE(std::filesystem::exists(project.root / path));
+    }
+}
+
+TEST_CASE("Behavior Tree and Utility New use the current registered native task and selected saved schema",
+          "[unit][editor][decision][workspace]") {
+    BlackboardWorkspaceFixture project;
+    Tests::WriteReplicationProject(project.root);
+    project.Write("Score source", AI::BlackboardKeyPresence::Optional, AI::BlackboardValueKind::Scalar);
+    const auto manifest = Tests::WriteGameplayModuleManifest(project.root, HORO_TEST_AI_MODULE_PATH, "game.ai.tests",
+                                                             Gameplay::CurrentGameplayBuildFingerprint(),
+                                                             Tests::ReadDescriptorRevision(HORO_TEST_AI_MODULE_REVISION_PATH));
+    REQUIRE(std::filesystem::is_regular_file(manifest));
+    EditorWorkspaceController controller(project.root, project.runtime, project.registry.Snapshot(),
+                                         {.assets = {.mutableAssetRegistry = &project.registry},
+                                          .mutations = &project.mutations,
+                                          .durableFiles = &project.files});
+    controller.ProcessCommand(BlackboardWorkspaceFixture::Open());
+    const auto &choices = controller.ViewModel().decisionTaskChoices;
+    const auto providerType = AI::DecisionNodeTypeId::Create(101).Value();
+    const auto provider = std::ranges::find(choices, providerType, &DecisionTaskChoice::type);
+    REQUIRE(provider != choices.end());
+    AssetBrowserInteractionSession browser;
+    const auto make = [&](AI::DecisionPlanKind family, const char *name) {
+        browser.OpenCreateTaskDecision(WorkspacePathText(project.root / "assets"), family,
+                                       controller.ViewModel().availableBehaviorsRevision);
+        auto &draft = browser.State().createTaskDecision;
+        draft.name = name;
+        draft.schema = project.asset;
+        CHECK_FALSE(AssetBrowserInteractionSession::CanConfirmTaskDecision(draft));
+        draft.task = provider->type;
+        draft.provider = provider->provider;
+        draft.version = provider->version;
+        if (draft.score) {
+            const auto &blackboard = project.Snapshot(controller);
+            REQUIRE(blackboard.sourceDigest.has_value());
+            *draft.score = {.key = project.key, .schemaSource = *blackboard.sourceDigest, .minimum = -3, .maximum = 9};
+        }
+        auto command = AssetBrowserInteractionSession::ConfirmTaskDecision(draft);
+        REQUIRE(command.has_value());
+        return *command;
+    };
+
+    SECTION("both graph kinds publish ordinary paired assets and coexist with the saved Blackboard") {
+        controller.ProcessCommand(make(AI::DecisionPlanKind::BehaviorTree, "First tree"));
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        controller.ProcessCommand(make(AI::DecisionPlanKind::Utility, "First utility"));
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        const auto &graphs = controller.ViewModel().decisionGraphDocuments;
+        REQUIRE(graphs.size() == 2);
+        CHECK(controller.ViewModel().workspacePanelHost.DocumentTabs().size() == 3);
+        const auto &tree = std::get<std::shared_ptr<const AI::BehaviorTreeAsset>>(graphs[0].graph->body);
+        REQUIRE(tree->Nodes().size() == 2);
+        const auto task = std::ranges::find(tree->Nodes(), AI::BehaviorTreeNodeKind::Task, &AI::BehaviorTreeNode::kind);
+        REQUIRE(task != tree->Nodes().end());
+        CHECK(task->type.Value() == providerType.Value());
+        CHECK(task->typeVersion.major == provider->version);
+        CHECK(graphs[0].graph->executionTask.IsValid());
+        const auto &utility = std::get<AI::UtilityDecisionSource>(graphs[1].graph->body);
+        REQUIRE(utility.options.size() == 1);
+        CHECK(utility.options.front().provider.type == providerType);
+        CHECK(utility.options.front().provider.descriptorVersion.Contains(provider->version));
+        REQUIRE(utility.options.front().option.considerations.size() == 1);
+        const auto &score = utility.options.front().option.considerations.front();
+        CHECK(score.key == project.key);
+        CHECK(score.minimum == -3);
+        CHECK(score.maximum == 9);
+        CHECK(graphs[0].graph->blackboard == project.schema);
+        CHECK(graphs[1].graph->blackboard == project.schema);
+        const auto live = project.registry.Snapshot();
+        REQUIRE(live.FindByPath("assets/First tree.horo_bt"));
+        REQUIRE(live.FindByPath("assets/First utility.horo_utility"));
+        CHECK(std::filesystem::is_regular_file(project.root / "assets/First tree.horo_bt.horo"));
+        CHECK(std::filesystem::is_regular_file(project.root / "assets/First utility.horo_utility.horo"));
+    }
+    SECTION("wrong native generation and provider identity are refused before publishing") {
+        auto command = make(AI::DecisionPlanKind::BehaviorTree, "First tree");
+        ++command.newTaskDecision->catalogRevision;
+        controller.ProcessCommand(command);
+        CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.decision_graph.create_failed");
+        --command.newTaskDecision->catalogRevision;
+        command.newTaskDecision->provider = AI::DecisionProviderId::Create(987).Value();
+        controller.ProcessCommand(command);
+        CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.decision_graph.create_failed");
+        CHECK_FALSE(std::filesystem::exists(project.root / "assets/First tree.horo_bt"));
+        CHECK(controller.ViewModel().decisionGraphDocuments.empty());
+    }
+    SECTION("the score cannot silently bind to changed durable schema bytes") {
+        const auto command = make(AI::DecisionPlanKind::Utility, "First utility");
+        project.Write("Changed externally", AI::BlackboardKeyPresence::Optional, AI::BlackboardValueKind::Scalar);
+        controller.ProcessCommand(command);
+        CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.decision_graph.create_failed");
+        CHECK_FALSE(std::filesystem::exists(project.root / "assets/First utility.horo_utility"));
     }
 }
 

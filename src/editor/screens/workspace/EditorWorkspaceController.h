@@ -1263,6 +1263,13 @@ namespace Horo::Editor {
         void CreateContentBrowserBlackboard(const BlackboardCreationRequest &request);
         /** @brief Validates the browser request and attempts to author an initial state machine. */
         void CreateContentBrowserStateMachine(const StateMachineCreationRequest &request);
+        /** @brief Refreshes starter Tasks from the actually admitted native gameplay generation. */
+        void RefreshDecisionTaskChoices();
+        /** @brief Checks the authored filename and target folder for a native Task-based Decision source. */
+        void CreateContentBrowserTaskDecision(const TaskDecisionCreationRequest &request);
+        /** @brief Publishes an initial Behavior Tree or Utility source with a real selected native Task. */
+        void PublishInitialTaskDecision(const std::filesystem::path &destination, const TaskDecisionCreationRequest &request,
+                                        Assets::AssetId newId);
         /** @brief Admits and opens one provider-free State Machine bound to an exact saved schema. */
         void PublishInitialStateMachine(const std::filesystem::path &destination, const StateMachineCreationRequest &request,
                                         Assets::AssetId newId);

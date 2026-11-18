@@ -90,15 +90,20 @@ namespace Horo::Editor {
         constexpr std::string_view createMachineAction = "action.create_state_machine";
         constexpr std::string_view createBlackboardAction = "action.create_blackboard";
         constexpr std::string_view createQueryAction = "action.create_environment_query";
+        const bool canCreateTask = canCreateStateMachine && !viewModel.decisionTaskChoices.empty();
+        constexpr std::string_view createTreeAction = "action.create_behavior_tree";
+        constexpr std::string_view createUtilityAction = "action.create_utility";
         constexpr std::array actionKeys{"action.paste_here",          "action.move_here",
                                         "action.create_folder",       createBlackboardAction.data(),
                                         createQueryAction.data(),     createMachineAction.data(),
+                                        createTreeAction.data(),      createUtilityAction.data(),
                                         "action.create_lua_behavior", "action.create_native_behavior",
                                         "action.import_here",         "action.refresh"};
         float widestLabel = 0.0F;
         for (const char *key : actionKeys) {
             if ((!canCreateQuery && key == createQueryAction) || (!canCreateBlackboard && key == createBlackboardAction) ||
-                (!canCreateStateMachine && key == createMachineAction))
+                (!canCreateStateMachine && key == createMachineAction) ||
+                (!canCreateTask && (key == createTreeAction || key == createUtilityAction)))
                 continue;
             const std::string &label = AssetBrowserPane::kTextScope.Text(localization, key);
             widestLabel =
@@ -129,6 +134,15 @@ namespace Horo::Editor {
                                                              .c_str(),
                                                          nullptr, context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.create")) {
             interactionSession.OpenCreateStateMachine(directory.absoluteCurrentPath);
+        }
+        if (canCreateTask) {
+            const auto choice = [&](std::string_view action, AI::DecisionPlanKind kind) {
+                if (Ui::ContextMenuItem(AssetBrowserPane::kTextScope.Text(localization, action).c_str(), nullptr, context.theme.fonts,
+                                        Ui::ContextMenuItemTone::Normal, "action.create"))
+                    interactionSession.OpenCreateTaskDecision(directory.absoluteCurrentPath, kind, viewModel.availableBehaviorsRevision);
+            };
+            choice(createTreeAction, AI::DecisionPlanKind::BehaviorTree);
+            choice(createUtilityAction, AI::DecisionPlanKind::Utility);
         }
         if (canCreateQuery && Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, createQueryAction) +
                                                    "###content_browser_create_environment_query")

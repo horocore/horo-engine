@@ -250,6 +250,7 @@ namespace Horo::Editor {
         CreateEnvironmentQuery,
         CreateBlackboardSchema,
         CreateStateMachine,
+        CreateTaskDecision,
         CreateLuaBehavior,
         CreateNativeBehavior,
         ReimportContentBrowserAsset,
@@ -455,6 +456,35 @@ namespace Horo::Editor {
         AI::DecisionStateTerminal outcome{AI::DecisionStateTerminal::Succeeded};
     };
 
+    /** @brief Label and exact identity of a starter-compatible registered task. */
+    struct DecisionTaskChoice final {
+        AI::DecisionNodeTypeId type;
+        AI::DecisionProviderId provider;
+        std::uint32_t version{};
+        std::string label;
+    };
+
+    /** @brief Explicit first Utility score input from a saved scalar key. */
+    struct InitialUtilityScore final {
+        AI::BlackboardKeyId key;
+        Sha256Digest schemaSource; /**< Exact saved schema shown when the key was offered. */
+        double minimum{};
+        double maximum{1};
+    };
+
+    /** @brief Confirmed first Behavior Tree or Utility with an exact native task and registry revision. */
+    struct TaskDecisionCreationRequest final {
+        std::string directory;
+        std::string name;
+        Assets::AssetId schema;
+        AI::DecisionPlanKind family{AI::DecisionPlanKind::BehaviorTree};
+        AI::DecisionNodeTypeId task;
+        AI::DecisionProviderId provider;
+        std::uint32_t version{};
+        std::uint64_t catalogRevision{};
+        std::optional<InitialUtilityScore> score;
+    };
+
     /** @brief Registered immutable source displayed independently from runtime graphs. */
     struct DecisionGraphWorkspaceDocument final {
         DocumentIdentity identity;
@@ -536,6 +566,7 @@ namespace Horo::Editor {
         std::optional<EnvironmentQueryCreationRequest> newEnvironmentQuery;
         std::optional<BlackboardCreationRequest> newBlackboard;
         std::optional<StateMachineCreationRequest> newStateMachine;
+        std::optional<TaskDecisionCreationRequest> newTaskDecision;
         std::optional<SequenceTimelineState> sequenceTimeline;
         std::optional<PCGEditorRequest> pcgRequest;
         std::optional<EditorMenuInvocation> menuInvocation = std::nullopt;
@@ -719,6 +750,7 @@ namespace Horo::Editor {
         std::vector<BlackboardWorkspaceDocument> blackboardDocuments;
         bool blackboardCreationAvailable{};
         std::vector<DecisionSchemaChoice> decisionSchemaChoices;
+        std::vector<DecisionTaskChoice> decisionTaskChoices;
         std::vector<DecisionGraphWorkspaceDocument> decisionGraphDocuments;
         std::vector<PCGWorkspaceDocument> pcgDocuments;
         std::vector<PCGPaletteEntry> pcgPalette;

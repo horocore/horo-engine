@@ -53,6 +53,10 @@ namespace Horo::Editor {
         bool openCreateBlackboard{};
         StateMachineCreationRequest createStateMachine;
         bool openCreateStateMachine{};
+        TaskDecisionCreationRequest createTaskDecision;
+        float utilityMinimum{};
+        float utilityMaximum{1};
+        bool openCreateTaskDecision{};
     };
 
     /**
@@ -86,6 +90,13 @@ namespace Horo::Editor {
 
         /** @brief Prepares the create-folder workflow. */
         void OpenCreateFolder();
+
+        /** @brief Captures the selected folder and exact task catalog publication for first source creation. */
+        void OpenCreateTaskDecision(std::string_view directory, AI::DecisionPlanKind family, std::uint64_t catalogRevision);
+        /** @brief Checks the explicit native task, schema and Utility score input. */
+        [[nodiscard]] static bool CanConfirmTaskDecision(const TaskDecisionCreationRequest &draft) noexcept;
+        /** @brief Reduces a valid task-based Decision draft to a normal Project command. */
+        [[nodiscard]] static std::optional<EditorWorkspaceViewCommandData> ConfirmTaskDecision(const TaskDecisionCreationRequest &draft);
 
         /** @brief Captures the selected folder for the initial State Machine modal. */
         void OpenCreateStateMachine(std::string_view directory);
