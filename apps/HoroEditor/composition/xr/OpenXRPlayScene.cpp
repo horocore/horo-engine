@@ -268,15 +268,18 @@ namespace Horo::Application::Internal {
     Result<std::shared_ptr<OpenXRPlayHost::SceneState>> OpenXRPlayHost::SceneParticipant::PrepareMounted(
         const Runtime::RuntimeSceneView &candidate) const {
         using Output = Result<std::shared_ptr<SceneState>>;
-        const auto captured = mounted_(candidate);
+        const auto root = host_->composition_.trackingRoot;
+        const auto captured = mounted_(candidate, root);
         if (captured.HasError())
             return Output::Failure(captured.ErrorValue());
-        const auto &geometry = captured.Value();
-        if (!geometry || !candidate.IsCurrent() || geometry->scene.lightSceneDomain != candidate.RuntimeId().value ||
-            !geometry->view.IsValid() || !geometry->scene.IsValid())
+        const auto &[geometry, trackingRoot, originFromLocal] = captured.Value();
+        if (trackingRoot != root || !geometry || !candidate.IsCurrent() ||
+            geometry->scene.lightSceneDomain != candidate.RuntimeId().value || !geometry->view.IsValid() || !geometry->scene.IsValid())
             return Output::Failure(MakeError(XRErrors::IdentityStale));
         if (const auto origin = geometry->origin.Get(); origin.HasError())
             return Output::Failure(origin.ErrorValue());
+        if (originFromLocal.scale != Math::Vec3{1, 1, 1} || originFromLocal.TryToMatrix().HasError())
+            return Output::Failure(MakeError(XRErrors::PoseInvalid, "Mounted World tracking placement must be finite and rigid."));
         return Output::Failure(
             MakeError(XRErrors::OperationIncompatible,
                       "Mounted World XR requires a calibrated native reference-space pose in this exact World origin generation."));
@@ -316,6 +319,10 @@ namespace Horo::Application::Internal {
         if (observedReferences.HasError())
             return Result<void>::Failure(observedReferences.ErrorValue());
         references = std::move(observedReferences).Value();
+        auto observedWorld = host.composition_.session.WorldSpace(session);
+        if (observedWorld.HasError())
+            return Result<void>::Failure(observedWorld.ErrorValue());
+        worldReference = std::move(observedWorld).Value();
         if (auto valid = Validate(host); valid.HasError())
             return Result<void>::Failure(valid.ErrorValue());
         return Result<void>::Success();

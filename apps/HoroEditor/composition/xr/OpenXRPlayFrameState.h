@@ -168,16 +168,28 @@ namespace Horo::Application::Internal {
             return Output::Success(true);
         }
 
+        /** @brief Checks the located relation against the exact bound native references and frame prediction. */
+        Result<XR::XRPoseSample> ReferencePose(const SceneState &scene, const XR::XRFrameSnapshot &frame,
+                                               const XR::XRWorldOriginRevision origin) const {
+            const auto &reference = views->referenceToWorld;
+            const bool selectedBase =
+                reference.source == scene.references.local || (scene.references.stage && reference.source == *scene.references.stage);
+            if (session != frame.frame.session || session != scene.references.session || reference.source != views->reference ||
+                !selectedBase || reference.target != scene.worldReference ||
+                reference.time.renderPrediction != frame.predictedDisplayTime ||
+                reference.purpose != XR::XRPosePurpose::PresentationPrediction)
+                return Result<XR::XRPoseSample>::Failure(MakeError(XR::XRErrors::IdentityStale));
+            return XR::XRPoseSample::Create(reference, session, origin);
+        }
+
         /** @brief Converts the validated same-frame view plan and calibrated reference into the existing scene contract. */
         Result<XR::XRMultiviewScene> ConvertScene(const XR::XRViewRenderPlan &viewPlan, const XR::XRViewConfigurationId &configuration,
                                                   XR::XRViewConfigurationRevision revision, XR::XRWorldOriginRevision origin,
+                                                  const XR::XRPoseSample &reference,
                                                   const Render::MultiviewPublication &publication) const {
             const auto &support = host.composition_.frontend.Capabilities().support;
             const std::array acquiredImages{acquisition->image};
-            auto reference = XR::XRPoseSample::Create(views->referenceToWorld, session, origin);
-            if (reference.HasError())
-                return Result<XR::XRMultiviewScene>::Failure(reference.ErrorValue());
-            const std::array references{reference.Value(), reference.Value()};
+            const std::array references{reference, reference};
             const XR::XRMultiviewOwnerState
                 owner{session, configuration, revision, origin, acquiredImages, publication, Render::ResolveMultiviewCapabilities(support)};
             return XR::XRMultiviewScene::Create({viewPlan,

@@ -384,10 +384,11 @@ namespace Horo::Tests::OpenXRApplication {
         std::shared_ptr<const Render::RenderOriginLocalScene> packet =
             std::make_shared<Render::RenderOriginLocalScene>(RequireValue(frame.OriginScene({})));
         bool read{};
-        auto participant = fixture.play->MakeSceneParticipant([&](const Runtime::RuntimeSceneView &candidate) {
+        auto participant = fixture.play->MakeSceneParticipant([&](const Runtime::RuntimeSceneView &candidate, Runtime::SceneObjectId root) {
             CHECK(candidate.SameIncarnation(fixture.scene->View()));
+            CHECK(root.IsValid());
             read = true;
-            return Result<std::shared_ptr<const Render::RenderOriginLocalScene>>::Success(packet);
+            return Result<Editor::EditorMountedXrScene>::Success({packet, root, {.translation = {1.25F, 0, 0}}});
         });
         const auto prepared = participant->Prepare(fixture.definition, fixture.scene->View());
         REQUIRE(prepared.HasError());
@@ -1822,6 +1823,43 @@ namespace Horo::Tests::OpenXRApplication {
         REQUIRE(RequireValue(fixture.ClosePlay()));
         CHECK_FALSE(hands.live[0]);
         CHECK_FALSE(hands.live[1]);
+    }
+
+    TEST_CASE("Signed Play observes a tracked native reference only for its exact render frame and generation",
+              "[xr][application][play][spaces]") {
+        const bool fullyTracked = GENERATE(true, false);
+        ApplicationFixture fixture{true};
+        if (!fullyTracked)
+            fixture.script.actions.tracking.flags = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+        auto scene = PublishPlay(fixture);
+        const auto session = *fixture.session->RetainedSession();
+        fixture.script.clock.sample = 1;
+        CHECK(fixture.play->ReadTrackedReference(session, 1).HasError());
+        REQUIRE(RequireValue(fixture.play->PrepareRenderFrame(1)));
+        const auto observed = fixture.play->ReadTrackedReference(session, 1);
+        if (fullyTracked) {
+            REQUIRE(observed.HasValue());
+            CHECK(observed.Value().frame.session == session);
+            CHECK(observed.Value().referenceToWorld.Source() == RequireValue(fixture.play->ReadReferences(session)).local);
+            CHECK(observed.Value().referenceToWorld.Target() == RequireValue(fixture.session->WorldSpace(session)));
+            CHECK(observed.Value().referenceToWorld.Purpose() == XR::XRPosePurpose::PresentationPrediction);
+            CHECK(observed.Value().referenceToWorld.Time().renderPrediction.has_value());
+        } else {
+            REQUIRE(observed.HasError());
+            CHECK(observed.ErrorValue().code.Value() == XR::XRErrors::OperationUnavailable.code.Value());
+        }
+        CHECK(fixture.play->ReadTrackedReference(session, 2).HasError());
+
+        XrEventDataReferenceSpaceChangePending change{XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING};
+        change.session = fixture.script.events.session;
+        change.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
+        change.changeTime = fixture.script.clock.sample + 100;
+        fixture.script.events.referenceChange = change;
+        REQUIRE(fixture.play->PollEvents().HasValue());
+        CHECK(fixture.play->ReadTrackedReference(session, 1).HasError());
+        CHECK_FALSE(fixture.play->UsesXrScene());
+        scene->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
     }
 
     TEST_CASE("Real installed Play recenter retires reference identities and replacement rereads Stage bounds",

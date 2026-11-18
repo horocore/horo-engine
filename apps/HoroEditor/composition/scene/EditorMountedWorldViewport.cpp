@@ -55,11 +55,14 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
     }
 
     /** @copydoc ProjectPlaySceneHost::CaptureMountedXrGeometry */
-    Result<std::shared_ptr<const Render::RenderOriginLocalScene>> ProjectPlaySceneHost::CaptureMountedXrGeometry(
-        const Runtime::RuntimeSceneView &candidate) {
-        using Output = Result<std::shared_ptr<const Render::RenderOriginLocalScene>>;
+    Result<Editor::EditorMountedXrScene> ProjectPlaySceneHost::CaptureMountedXrGeometry(const Runtime::RuntimeSceneView &candidate,
+                                                                                        const Runtime::SceneObjectId trackingRoot) {
+        using Output = Result<Editor::EditorMountedXrScene>;
         if (!mountedWorld_ || !worldRenderer_ || !worldViewport_ || !viewportPrimitives_)
             return Output::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
+        const auto placement = mountedWorld_->ResolveInitialTrackingRoot(candidate, trackingRoot);
+        if (placement.HasError())
+            return Output::Failure(placement.ErrorValue());
         auto captured = mountedWorld_->CaptureInitialGeometry(candidate, worldViewport_->camera, worldViewport_->meshes,
                                                               *viewportPrimitives_, *worldRenderer_);
         if (captured.HasError())
@@ -74,8 +77,12 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         auto view = owner->packet.OriginScene();
         if (view.HasError())
             return Output::Failure(view.ErrorValue());
+        const auto geometryOrigin = view.Value().origin.Get();
+        const auto placementOrigin = placement.Value().origin.Get();
+        if (geometryOrigin.HasError() || placementOrigin.HasError() || geometryOrigin.Value() != placementOrigin.Value())
+            return Output::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
         owner->view.emplace(std::move(view).Value());
-        return Output::Success({owner, &*owner->view});
+        return Output::Success({{owner, &*owner->view}, trackingRoot, placement.Value().originFromLocal});
     }
 
     /** @copydoc ProjectPlaySceneHost::CompleteWorldStartup */

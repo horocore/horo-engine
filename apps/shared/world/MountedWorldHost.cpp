@@ -470,6 +470,17 @@ namespace Horo::Application::Internal {
             std::shared_ptr<const InitialCellAuthority> authority;
         };
 
+        /** @brief Returns the exact startup cell only while the Scene service and scheduler still admit this candidate. */
+        [[nodiscard]] Result<const ActiveCell *> InitialCellFor(const Runtime::RuntimeSceneView &candidate) const {
+            using Output = Result<const ActiveCell *>;
+            if (!pendingCell || !scene.IsInitialStreamedCandidate(candidate) || candidate.RuntimeId() != pendingCell->cell.address.parent)
+                return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale));
+            const auto &cell = pendingCell->cell;
+            if (const auto ready = pendingCell->authority->ValidatePublication(cell.identity, cell.fence); ready.HasError())
+                return Output::Failure(ready.ErrorValue());
+            return Output::Success(&cell);
+        }
+
         /** @brief Loads verified Core ECS content through the actual mounted planner and residency ledgers. */
         [[nodiscard]] Result<PreparedCell> PrepareInitialCell(const CommittedWorldInitialCell &selected,
                                                               const MountedWorldStartup &boundary, Runtime::SceneRuntimeId parent);
@@ -852,6 +863,39 @@ namespace Horo::Application::Internal {
                                      GeometryScope::PrivateStartup);
     }
 
+    /** @copydoc MountedWorld::ResolveInitialTrackingRoot */
+    Result<MountedWorldTrackingRoot> MountedWorld::ResolveInitialTrackingRoot(const Runtime::RuntimeSceneView &candidate,
+                                                                              const Runtime::SceneObjectId object) const {
+        using Output = Result<MountedWorldTrackingRoot>;
+        const auto selected = state_->InitialCellFor(candidate);
+        if (selected.HasError())
+            return Output::Failure(selected.ErrorValue());
+        const auto &cell = *selected.Value();
+        const auto baseline = Runtime::FindStreamedSceneInstance(candidate, cell.address, cell.identity, cell.fence.epoch);
+        if (!baseline)
+            return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale));
+        const auto root = FindAnchoredGeometryEntity(candidate, *baseline, cell.anchors, cell.initialLocalPositions, object);
+        if (root.HasError())
+            return Output::Failure(root.ErrorValue());
+        constexpr Math::Vec3 unit{1.0F, 1.0F, 1.0F};
+        const auto &transform = *root.Value().entity.localTransform;
+        if (transform.scale != unit)
+            return Output::Failure(MakeError(WS::WorldArtifactErrors::Unsupported, "A mounted tracking root must be rigid."));
+        const auto orientation = transform.rotation.TryNormalized();
+        if (orientation.HasError())
+            return Output::Failure(orientation.ErrorValue());
+        auto lease = Origin().Lease();
+        if (lease.HasError())
+            return Output::Failure(lease.ErrorValue());
+        const auto frame = lease.Value().Get();
+        if (frame.HasError())
+            return Output::Failure(frame.ErrorValue());
+        const auto position = frame.Value().ToLocal(Global(root.Value().anchor.positionMillimeters));
+        if (position.HasError())
+            return Output::Failure(position.ErrorValue());
+        return Output::Success({{position.Value().Value(), orientation.Value(), unit}, std::move(lease).Value()});
+    }
+
     /** @copydoc MountedWorld::CaptureScopedGeometry */
     Result<MountedWorldRenderPacket> MountedWorld::CaptureScopedGeometry(
         const Runtime::RuntimeSceneView &parent, const Runtime::SceneObjectId camera, const std::span<const Runtime::SceneObjectId> meshes,
@@ -868,12 +912,10 @@ namespace Horo::Application::Internal {
             return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale));
         const State::ActiveCell *scoped = nullptr;
         if (scope == GeometryScope::PrivateStartup) {
-            const auto &pending = state_->pendingCell;
-            if (!pending || !state_->scene.IsInitialStreamedCandidate(parent) || parent.RuntimeId() != pending->cell.address.parent)
-                return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale));
-            scoped = &pending->cell;
-            if (const auto ready = pending->authority->ValidatePublication(scoped->identity, scoped->fence); ready.HasError())
-                return Output::Failure(ready.ErrorValue());
+            const auto initial = state_->InitialCellFor(parent);
+            if (initial.HasError())
+                return Output::Failure(initial.ErrorValue());
+            scoped = initial.Value();
         } else {
             const auto current = state_->scene.ActiveScene();
             if (!current || !parent.SameIncarnation(*current))

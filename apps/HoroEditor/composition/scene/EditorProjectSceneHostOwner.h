@@ -210,8 +210,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                                                        const MountedWorldStartup &boundary);
 
         /** @brief Returns a retained origin-relative borrow for only this Play host's exact startup candidate. */
-        [[nodiscard]] Result<std::shared_ptr<const Render::RenderOriginLocalScene>> CaptureMountedXrGeometry(
-            const Runtime::RuntimeSceneView &candidate);
+        [[nodiscard]] Result<Editor::EditorMountedXrScene> CaptureMountedXrGeometry(const Runtime::RuntimeSceneView &candidate,
+                                                                                    Runtime::SceneObjectId trackingRoot);
 
         /** @copydoc Editor::EditorPlaySceneHost::UsesMountedViewport */
         bool UsesMountedViewport() const noexcept override {
@@ -383,8 +383,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             if (policy.xrHost) {
                 Editor::EditorMountedXrGeometryCapture mounted;
                 if (worldViewport_)
-                    mounted = [this](const Runtime::RuntimeSceneView &candidate) {
-                        return CaptureMountedXrGeometry(candidate);
+                    mounted = [this](const Runtime::RuntimeSceneView &candidate, Runtime::SceneObjectId trackingRoot) {
+                        return CaptureMountedXrGeometry(candidate, trackingRoot);
                     };
                 auto participant = policy.xrHost->MakeSceneParticipant(std::move(mounted));
                 if (auto added = scenes_->AddActivationParticipant(std::move(participant)); added.HasError())

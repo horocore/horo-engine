@@ -573,6 +573,9 @@ Scene activation participant captures the selected camera and meshes in the
 origin-relative basis. The mount verifies the private Scene incarnation,
 streaming reservation and source occurrence before exposing any geometry. The
 capture retains the renderer view, primitive resources and exact origin lease.
+The selected authored tracking root uses its own anchored World position and
+rigid orientation in that same origin. This defines the intended Local
+placement for reference calibration. It carries no measured physical alignment.
 OpenXR currently rejects the uncalibrated startup before allocating Play
 tracking resources. The native calibration owner must bind an observed
 reference-space identity and generation to the exact canonical origin before
@@ -580,6 +583,15 @@ publishing Play input or projection. Reference-space changes and origin
 replacements must invalidate the correspondence before another frame.
 The existing desktop World projection continues through its live viewport
 owner.
+
+For an already prepared session, the OpenXR host can observe the exact native
+reference-to-created-World location from the current bound frame. The read
+requires the tracked position and orientation, matching reference and World
+space generations, matching runtime prediction and admitted frame. A
+reference change retires that read authority before any replacement frame.
+Observation of a runtime-created World only verifies that native relation.
+Admission into the mounted World requires the independent authored placement
+and its canonical origin lease.
 
 ## Rendering And Presentation
 

@@ -25,6 +25,12 @@ scale, shear and reflection are rejected (orthonormality tolerance `1e-5`). The
 retained value maps native Local/Stage base coordinates into authored World. No
 Scene entity/view/component borrow is retained by native frame retirement.
 
+Mounted World startup resolves the selected root from the same verified cell
+and origin as the camera and meshes. Use a cell root with a canonical signed
+World position and unit authored scale. This chooses the intended Local
+placement. Play still requires native reference calibration for that mounted
+origin generation.
+
 OpenXR's `poseInReferenceSpace` instead expresses the new space in its parent base,
 so the actual World reference child is created using the rigid inverse of that
 mapping. World is a distinct native child and receives its own Horo space identity

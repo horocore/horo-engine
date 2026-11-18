@@ -6,6 +6,7 @@
 #include "Horo/Foundation/Time.h"
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Runtime/InputCollection.h"
+#include "Horo/Runtime/Scene/SceneIdentity.h"
 
 #include <array>
 #include <cstdint>
@@ -20,7 +21,7 @@ namespace Horo::Runtime {
 
 namespace Horo::Render {
     struct RenderOriginLocalScene;
-}
+}  // namespace Horo::Render
 
 namespace Horo::XR {
     enum class XRFeatureProfile : std::uint8_t;
@@ -35,11 +36,19 @@ namespace Horo::XR {
 
 namespace Horo::Editor {
     class EditorXrSceneSourcePort;
-    /** @brief Captures one mounted World geometry packet for the exact private Play Scene.
-     * @details The returned shared owner pins both geometry and its canonical origin lease. This source owns no XR reference calibration.
+
+    /** @brief Selected geometry and explicit authored Local reference placement in its exact mounted World origin.
+     * @details The shared owner pins geometry and the canonical origin lease. Native reference observation remains separately owned.
      */
+    struct EditorMountedXrScene final {
+        std::shared_ptr<const Render::RenderOriginLocalScene> geometry;
+        Runtime::SceneObjectId trackingRoot;
+        Math::Transform originFromLocal;
+    };
+
+    /** @brief Captures the exact private Play Scene and explicitly selected authored tracking root. */
     using EditorMountedXrGeometryCapture =
-        std::function<Result<std::shared_ptr<const Render::RenderOriginLocalScene>>(const Runtime::RuntimeSceneView &)>;
+        std::function<Result<EditorMountedXrScene>(const Runtime::RuntimeSceneView &, Runtime::SceneObjectId trackingRoot)>;
 
     /** @brief Explicit local player selected by application startup for the selected XR Play source. */
     struct EditorXrInputPlayerSelection final {

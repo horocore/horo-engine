@@ -3877,7 +3877,7 @@ foreach(header EditorPlayState.h EditorPlayXrHost.h)
 endforeach()
 add_library(HoroEditorPlayXrHostInterface INTERFACE)
 target_include_directories(HoroEditorPlayXrHostInterface INTERFACE "${_horo_editor_play_xr_headers}")
-target_link_libraries(HoroEditorPlayXrHostInterface INTERFACE HoroEngine::Input)
+target_link_libraries(HoroEditorPlayXrHostInterface INTERFACE HoroEngine::Input HoroEngine::SceneIdentity)
 target_compile_features(HoroEditorPlayXrHostInterface INTERFACE cxx_std_20)
 
 # Simulator controls and copied presentation state stay usable without the GUI.

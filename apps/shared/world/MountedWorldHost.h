@@ -41,6 +41,12 @@ namespace Horo::Application::Internal {
         Runtime::SceneDefinitionRevision revision;
     };
 
+    /** @brief Explicit authored native Local placement projected through one exact mounted World origin. */
+    struct MountedWorldTrackingRoot final {
+        Math::Transform originFromLocal;
+        WorldStreaming::OriginFrameLease origin;
+    };
+
     /** @brief Exact project launch selection for one separate generated World cook generation. */
     struct CommittedWorldSelection final {
         std::filesystem::path targetRoot;
@@ -171,6 +177,16 @@ namespace Horo::Application::Internal {
                                                                               std::span<const Runtime::SceneObjectId> meshes,
                                                                               Runtime::PrimitiveMeshCache &primitives,
                                                                               Render::RenderOriginSceneAdapter &renderer) const;
+
+        /** @brief Projects this private cell's explicitly selected tracking root into the canonical origin.
+         * @param candidate Current exact private startup Scene.
+         * @param object Authored root explicitly selected as the native Local placement.
+         * @return Rigid origin-local placement and the exact World origin lease, or typed rejection.
+         * @details Uses the root's canonical signed position and live rigid orientation. Requires unit authored scale.
+         * This is authored placement. Live reference-space observation is separately owned by the native host.
+         */
+        [[nodiscard]] Result<MountedWorldTrackingRoot> ResolveInitialTrackingRoot(const Runtime::RuntimeSceneView &candidate,
+                                                                                  Runtime::SceneObjectId object) const;
 
         /** @brief Observe the exact mounted World frame; the caller keeps this complete mount alive. */
         [[nodiscard]] const WorldStreaming::OriginFrameOwner &Origin() const noexcept;

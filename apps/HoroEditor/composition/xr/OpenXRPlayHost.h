@@ -57,6 +57,12 @@ namespace Horo::Application::Internal {
         Runtime::SceneObjectId trackingRoot;
     };
 
+    /** @brief Fully tracked native reference relation for one exact active presentation frame. */
+    struct OpenXRTrackedReference final {
+        XR::XRFrameId frame;
+        XR::XRPoseSample referenceToWorld;
+    };
+
     /** @brief Committed XR interaction scope of the exact playing Scene and assigned local player. */
     struct OpenXRPlayInteractionScope final {
         XR::XRInteractionCutoff cutoff;
@@ -248,6 +254,14 @@ namespace Horo::Application::Internal {
          * @return Immutable-by-copy evidence or typed stale/unavailable error.
          */
         [[nodiscard]] Result<XR::XRReferenceSpaceSnapshot> ReadReferences(XR::XRSessionId session) const;
+        /** @brief Reads the native reference-to-created-World relation already located for a bound frame.
+         * @param session Exact published session and runtime incarnation.
+         * @param hostFrameNumber Current owner frame issued by the renderer caller.
+         * @return Fully tracked relation or typed pose, stale frame or unavailable failure.
+         * @details No native call or new tracking sample. The value is evidence for this frame only.
+         * It describes the runtime's already-created World space. Canonical mounted origin correspondence requires separate admission.
+         */
+        [[nodiscard]] Result<OpenXRTrackedReference> ReadTrackedReference(XR::XRSessionId session, std::uint64_t hostFrameNumber) const;
         /** @brief Copies the last reference change which triggered retirement of the specified session.
          * @param session Exact old owner of the notification.
          * @return Historical value until a newer Play publication replaces it; never grants space access.
@@ -306,6 +320,7 @@ namespace Horo::Application::Internal {
             std::unique_ptr<Editor::PreparedEditorXrGeometry> geometry;
             std::optional<OpenXRApplicationProjection> projection;
             XR::XRReferenceSpaceSnapshot references; /**< Same cold native preparation as this Scene candidate. */
+            XR::XRCoordinateSpace worldReference;    /**< Exact calibrated native World child from the same candidate. */
             XR::XRSessionId session;
             std::optional<XR::XRPassthroughGrant> passthroughGrant;
             CancellationSource preparationCancellation; /**< Exact unpublished attempt; revocation cannot affect a replacement. */

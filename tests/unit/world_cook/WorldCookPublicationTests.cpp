@@ -275,6 +275,7 @@ namespace Horo::WorldCook {
               "[world_cook][native][mounted_world][initial_cell]") {
         using namespace Application::Internal;
         const bool hasHardDependency = GENERATE(false, true);
+        const bool rigidRoot = GENERATE(true, false);
         Fixture fixture{false, hasHardDependency};
         constexpr std::array<std::int64_t, 3> cameraPosition{9'007'199'254'740'993, -500, 180};
         constexpr std::array<std::int64_t, 3> cameraTarget{9'007'199'254'741'993, -500, 180};
@@ -284,7 +285,7 @@ namespace Horo::WorldCook {
         cameraEntity.primitiveMesh = S::PrimitiveMeshDescriptor::Defaults(S::PrimitiveMeshType::Box);
         cameraEntity.localTransform = {{100.0F, 200.0F, 300.0F},
                                        Math::Quaternion::FromAxisAngle({0.0F, 1.0F, 0.0F}, 0.5F),
-                                       {2.0F, 3.0F, 4.0F}};
+                                       rigidRoot ? Math::Vec3{1.0F, 1.0F, 1.0F} : Math::Vec3{2.0F, 3.0F, 4.0F}};
         fixture.inputs.front().source.worldAnchors = anchors;
         const auto published = fixture.Publish();
         REQUIRE(published.HasValue());
@@ -369,6 +370,16 @@ namespace Horo::WorldCook {
                 CHECK(captured.Value().scene.camera.position == Math::Vec3{1.25F, 0, 0});
                 REQUIRE(captured.Value().scene.instances.size() == 1);
                 CHECK(captured.Value().scene.instances.front().localToWorld.At(0, 3) == 1.25F);
+                const auto root = mount->ResolveInitialTrackingRoot(candidate, cameraEntity.object);
+                if (rigidRoot) {
+                    REQUIRE(root.HasValue());
+                    CHECK(root.Value().origin.Get().Value() == captured.Value().origin.Get().Value());
+                    CHECK(root.Value().originFromLocal.translation == Math::Vec3{1.25F, 0, 0});
+                    CHECK(root.Value().originFromLocal.rotation == cameraEntity.localTransform.rotation.TryNormalized().Value());
+                } else {
+                    W::TestSupport::RequireError(root, W::WorldArtifactErrors::Unsupported);
+                }
+                W::TestSupport::RequireError(mount->ResolveInitialTrackingRoot(candidate, {22}), W::WorldArtifactErrors::Unsupported);
             };
             const auto next = std::move(S::SceneDefinitionBuilder{{100}, {1}}).Build().Value();
             REQUIRE(mount->QueueInitialCell(next, request, {boundary.cancellation, boundary.deadline}, revision).HasValue());

@@ -240,7 +240,11 @@ namespace Horo::Application::Internal {
         const Render::MultiviewPublication publication{scene_->scene.value,       frameNumber,
                                                        input_.origin.Value(),     revision.Value().Value(),
                                                        support.deviceIncarnation, support.capabilityRevision};
-        auto converted = render_->ConvertScene(plan.Value(), configuration, revision.Value(), input_.origin, publication);
+        const auto reference = render_->ReferencePose(*scene_, frame, input_.origin);
+        if (reference.HasError())
+            return Result<void>::Failure(reference.ErrorValue());
+        auto converted =
+            render_->ConvertScene(plan.Value(), configuration, revision.Value(), input_.origin, reference.Value(), publication);
         if (converted.HasError())
             return Result<void>::Failure(converted.ErrorValue());
         const bool prepareMotion = WantsMotionHistory(scene_->projection->plan);
@@ -248,11 +252,8 @@ namespace Horo::Application::Internal {
                                                                         frame.predictedDisplayTime.Nanoseconds()},
                                                                        scene_->geometry->MotionObjects()};
         render_->passthrough.reset();
-        if (passthroughScope_ && HasPassthrough(*passthroughScope_) && observed.referenceToWorld.target == passthroughScope_->world) {
-            auto calibrated = XRPoseSample::Create(observed.referenceToWorld, render_->session, input_.origin);
-            if (calibrated.HasValue())
-                render_->passthrough.emplace(*passthroughScope_, publication, std::move(calibrated).Value());
-        }
+        if (passthroughScope_ && HasPassthrough(*passthroughScope_) && reference.Value().Target() == passthroughScope_->world)
+            render_->passthrough.emplace(*passthroughScope_, publication, reference.Value());
         const auto alpha = render_->passthrough ? Editor::EditorXrProjectionAlpha::Premultiplied : Editor::EditorXrProjectionAlpha::Opaque;
         if (auto bound =
                 Editor::EditorVulkanXrViewportAccess::Bind(composition_.viewport, render_->acquisition->texture, render_->eyeViews,
@@ -283,6 +284,28 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
         render_->submitted = true;
         return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRPlayHost::ReadTrackedReference */
+    Result<OpenXRTrackedReference> OpenXRPlayHost::ReadTrackedReference(const XRSessionId session,
+                                                                        const std::uint64_t hostFrameNumber) const {
+        using Output = Result<OpenXRTrackedReference>;
+        const auto references = ReadReferences(session);
+        if (references.HasError())
+            return Output::Failure(references.ErrorValue());
+        const auto frame = frames_.Snapshot();
+        if (!UsesXrScene() || !sessions_.Snapshot().admitsFrames || !render_ || !render_->views || !render_->plan ||
+            render_->hostFrameNumber != hostFrameNumber || !frame.renderAdmitted || frame.frame.session != session ||
+            !frame.frame.IsValid() || (frame.phase != XRFramePhase::ImagesAcquired && frame.phase != XRFramePhase::RendererSubmitted))
+            return Output::Failure(MakeError(XRErrors::IdentityStale));
+        auto pose = render_->ReferencePose(*scene_, frame, input_.origin);
+        if (pose.HasError())
+            return Output::Failure(pose.ErrorValue());
+        const auto &components = pose.Value().Components();
+        if (components.positionMeters.validity != XRPoseComponentValidity::Tracked ||
+            components.orientation.validity != XRPoseComponentValidity::Tracked || components.loss != XRTrackingLossState::None)
+            return Output::Failure(MakeError(XRErrors::OperationUnavailable));
+        return Output::Success({frame.frame, std::move(pose).Value()});
     }
 
     /** @copydoc OpenXRPlayHost::MirrorView */
