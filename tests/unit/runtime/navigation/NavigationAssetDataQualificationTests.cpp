@@ -13,7 +13,8 @@ namespace Horo::Navigation {
 
         /** @brief Produce the portable closure from decoded authored policy and captured collision using the actual pinned native builder.
          */
-        [[nodiscard]] NavigationCookedTileSet CookCorpus(const NavigationDataQualificationCorpus &corpus) {
+        [[nodiscard]] NavigationCookedTileSet CookCorpus(const NavigationDataQualificationCorpus &corpus,
+                                                         void (*editTopology)(NavigationTileBuildResult &) = nullptr) {
             const auto decoded = DecodeNavigationDefinitionRecord(corpus.Record());
             REQUIRE(decoded.HasValue());
             REQUIRE(decoded.Value().Profiles().size() == 2);
@@ -38,7 +39,10 @@ namespace Horo::Navigation {
                                                          {});
                 REQUIRE(output.HasValue());
                 REQUIRE_FALSE(output.Value().IsEmpty());
-                auto cooked = NavigationCookedTile::Create(input, std::move(output).Value());
+                auto topology = std::move(output).Value();
+                if (editTopology)
+                    editTopology(topology);
+                auto cooked = NavigationCookedTile::Create(input, std::move(topology));
                 REQUIRE(cooked.HasValue());
                 set.tiles.push_back(std::move(cooked).Value());
             }
@@ -122,7 +126,93 @@ namespace Horo::Navigation {
             CHECK(host.cache->Snapshot().retainedPayloadBytes == cached.retainedPayloadBytes);
             CHECK(previous.Backend().FindPath(AssetTestSupport::PathRequest(previous), previous.Cancellation()).HasValue());
         }
+
+        /** @brief Gives native qualification explicit bounds and the admitted authored definition. */
+        [[nodiscard]] RecastDetourCookedProviderCreateInfo CookedProviderInfo(const LoadedNavMeshPartition &partition,
+                                                                              const NavigationDefinition &definition,
+                                                                              const NavigationWorldId world,
+                                                                              const NavigationGeneration topology) {
+            return {.world = world,
+                    .topology = topology,
+                    .surface = {partition.surface, partition.scope},
+                    .profile = partition.profile,
+                    .definition = definition,
+                    .tiles = partition.tiles,
+                    .nearestPointHalfExtents = {2, 4, 2},
+                    .queryLimits = {128, 32, 100},
+                    .maximumConcurrentQueries = 2,
+                    .maximumOwnedBytes = AssetTestSupport::ProviderReservation,
+                    .capabilityRevision = 12};
+        }
     }  // namespace
+
+    TEST_CASE("Cooked native query factory uses exact authored navigation geometry and filters",
+              "[unit][navigation][data_qualification][native][cooked-provider]") {
+        const NavigationDataQualificationCorpus corpus;
+        const auto definition = DecodeNavigationDefinitionRecord(corpus.Record()).Value();
+        const auto set = CookCorpus(corpus);
+        const auto payload = EncodeNavigationCookedTileSet(set, 64U * 1024U).Value();
+        const auto envelope = EnvelopeFor(set, payload);
+        auto cache = Assets::AssetPayloadCache::Create(8, 64U * 1024U).Value();
+        const auto loaded =
+            LoadNavMeshAsset({AssetTestSupport::Asset(), AssetTestSupport::Type()}, {1}, envelope, AssetTestSupport::Target(), *cache);
+        REQUIRE(loaded.HasValue());
+        REQUIRE(loaded.Value().partitions.size() == 2);
+        const auto &partition = loaded.Value().partitions.front();
+        auto info = CookedProviderInfo(partition, definition, Id<NavigationWorldId>(8), Id<NavigationGeneration>(9));
+        SECTION("the exact compiled topology supports the authored filter with declared limits") {
+            const auto backend = CreateRecastDetourCookedNavigationQueryBackend(info);
+            CAPTURE((backend.HasError() ? backend.ErrorValue().message : "admitted"));
+            REQUIRE(backend.HasValue());
+            CHECK(backend.Value()->Capabilities().revision == info.capabilityRevision);
+            CHECK(backend.Value()->Capabilities().maximumConcurrentQueries == info.maximumConcurrentQueries);
+            NavigationPathRequest request{.world = info.world,
+                                          .topology = info.topology,
+                                          .start = {2, 0, 2},
+                                          .destination = {5, 0, 5},
+                                          .filter = definition.Registry().Filters().front().id,
+                                          .requirement = {NavigationQueryKind::Path, NavigationQualityLevel::Balanced, {64, 16, 80}}};
+            const auto accepted = backend.Value()->FindPath(request, {});
+            REQUIRE(accepted.HasValue());
+            CHECK(accepted.Value().status == NavigationPathStatus::Reachable);
+            request.filter = Id<NavigationFilterId>(99);
+            CHECK(backend.Value()->FindPath(request, {}).HasError());
+        }
+        SECTION("complete multi-partition topology cannot be collapsed into one flat native mesh") {
+            info.tiles = set.tiles;
+            RequireError(CreateRecastDetourCookedNavigationQueryBackend(info), NavigationErrors::OperationUnsupported);
+        }
+        SECTION("another authored profile does not select these tiles") {
+            info.profile = loaded.Value().partitions.back().profile;
+            RequireError(CreateRecastDetourCookedNavigationQueryBackend(info), NavigationErrors::StaleSnapshot);
+        }
+        SECTION("another Scene scope does not select these tiles") {
+            std::array<std::uint8_t, 16> identity{};
+            identity.back() = 2;
+            info.surface.scope = NavigationBakeScopeId::ForScene(identity).Value();
+            RequireError(CreateRecastDetourCookedNavigationQueryBackend(info), NavigationErrors::StaleSnapshot);
+        }
+        SECTION("canonical generated off-mesh links cannot be dropped") {
+            const auto linked = CookCorpus(corpus, [](NavigationTileBuildResult &topology) {
+                topology.offMeshLinks.push_back({.start = topology.vertices.front(),
+                                                 .end = topology.vertices.back(),
+                                                 .radiusMeters = 0.5F,
+                                                 .area = topology.polygons.front().area,
+                                                 .bidirectional = true});
+            });
+            info.tiles = std::span{linked.tiles}.first(1);
+            RequireError(CreateRecastDetourCookedNavigationQueryBackend(info), NavigationErrors::OperationUnsupported);
+        }
+        SECTION("canonical topology without an exact edge neighbor table cannot be reconstructed") {
+            const auto unspecified = CookCorpus(corpus, [](NavigationTileBuildResult &topology) {
+                for (auto &polygon : topology.polygons)
+                    polygon.adjacencies = {};
+                topology.polygonAdjacencies.clear();
+            });
+            info.tiles = std::span{unspecified.tiles}.first(1);
+            RequireError(CreateRecastDetourCookedNavigationQueryBackend(info), NavigationErrors::OperationUnsupported);
+        }
+    }
 
     TEST_CASE("Portable cooked corpus preserves authored profile and provenance identities with measured retained loader storage",
               "[unit][navigation][data_qualification][native][allocation]") {
@@ -197,20 +287,28 @@ namespace Horo::Navigation {
     TEST_CASE("Navigation corpus Scene reload rejects missing provider and malformed replacement without partial publication",
               "[unit][navigation][data_qualification][native][reload]") {
         const NavigationDataQualificationCorpus corpus;
+        const auto authored = DecodeNavigationDefinitionRecord(corpus.Record()).Value();
         const auto set = CookCorpus(corpus);
         const auto payload = EncodeNavigationCookedTileSet(set, 64U * 1024U).Value();
         REQUIRE_FALSE(payload.empty());
         bool available = true;
         bool failed = false;
-        const NavigationAssetBackendFactory factory = [&available, &failed](const auto &descriptor, const auto surfaces,
-                                                                            const auto budget) {
+        const NavigationAssetBackendFactory factory = [&available, &failed, &authored](const auto &descriptor, const auto surfaces,
+                                                                                       const auto budget) {
             if (!available)
                 return Result<NavigationPreparedAssetBackend>::Failure(
                     MakeError(NavigationErrors::CapabilityUnavailable, "qualification provider unavailable"));
             if (failed)
                 return Result<NavigationPreparedAssetBackend>::Failure(
                     MakeError(NavigationErrors::ProviderFailed, "qualification provider failed"));
-            return AssetTestSupport::NativeFactory(descriptor, surfaces, budget);
+            using Prepared = Result<NavigationPreparedAssetBackend>;
+            if (surfaces.size() != 1 || budget < AssetTestSupport::ProviderReservation)
+                return Prepared::Failure(MakeError(NavigationErrors::OperationUnsupported));
+            auto backend = CreateRecastDetourCookedNavigationQueryBackend(
+                CookedProviderInfo(*surfaces.front().partition, authored, descriptor.world, descriptor.topology));
+            if (backend.HasError())
+                return Prepared::Failure(backend.ErrorValue());
+            return Prepared::Success({std::move(backend).Value(), AssetTestSupport::ProviderReservation});
         };
         AssetTestSupport::Harness host{{}, factory};
         host.Update(EnvelopeFor(set, payload));
