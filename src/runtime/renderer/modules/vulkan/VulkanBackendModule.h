@@ -279,6 +279,12 @@ namespace Horo::Render {
         [[nodiscard]] virtual Result<void> SubmitFrame(FrameToken frame) = 0;
         /** @brief Discards only unsent active-frame command tickets. */
         virtual void AbortFrame(FrameToken frame) noexcept = 0;
+
+        /** @copydoc IRenderBackend::ObserveGraphSubmissionAcceptance */
+        [[nodiscard]] virtual std::optional<bool> ObserveGraphSubmissionAcceptance(RenderTimelinePoint, std::uint64_t) const noexcept {
+            return std::nullopt;
+        }
+
         [[nodiscard]] virtual Result<bool> ObserveSubmission(const RenderCpuWait &wait) = 0;
         /** @brief Closes native command admission and cancels unsent work. */
         [[nodiscard]] virtual Result<void> BeginShutdownCommands() = 0;

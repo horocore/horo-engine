@@ -441,8 +441,8 @@ namespace Horo::Render {
         [[nodiscard]] MaterialExecutionOutcome ExecuteMaterialPassBoundary(const RenderMaterialPass &pass) noexcept;
         void Abort() noexcept;
         void Release() noexcept;
-        /** @brief Marks admitted views successful or uncertain at the native presentation boundary. */
-        void FinishReconstructionPresentation(bool presented) noexcept;
+        /** @brief Resolves accepted scene graph work separately from the optional GUI and window presentation tail. */
+        void FinishReconstructionSubmission(bool presented) noexcept;
         /** @brief Discards recordings that have not reached native presentation. */
         void CancelReconstructionScene() noexcept;
         /** @brief Enforces the one-shot frame admission gate shared by synchronous and worker routes. */
@@ -471,6 +471,7 @@ namespace Horo::Render {
         std::unique_ptr<Detail::RenderParallelWorkState> parallelWork_;
         std::unique_ptr<Detail::RenderParallelGraphWorkState> parallelGraphWork_;
         std::array<std::shared_ptr<NativeReconstructionViewHistory>, MultiviewExtractionLimits::HardMaximumViews> reconstructionHistories_;
+        RenderTimelinePoint reconstructionGraphTail_; /**< Last scene-graph submission covering the authored final history states. */
         std::size_t reconstructionHistoryCount_{};
     };
 

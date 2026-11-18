@@ -137,6 +137,7 @@ namespace Horo::Render {
           completionLease_(std::exchange(other.completionLease_, nullptr)), uiComposed_(std::exchange(other.uiComposed_, false)),
           uiComposing_(std::exchange(other.uiComposing_, false)), parallelWork_(std::move(other.parallelWork_)),
           parallelGraphWork_(std::move(other.parallelGraphWork_)), reconstructionHistories_(std::move(other.reconstructionHistories_)),
+          reconstructionGraphTail_(std::exchange(other.reconstructionGraphTail_, {})),
           reconstructionHistoryCount_(std::exchange(other.reconstructionHistoryCount_, 0)) {
         if (owner_ != nullptr) {
             owner_->activeFrameScope_ = this;
@@ -159,6 +160,7 @@ namespace Horo::Render {
             parallelWork_ = std::move(other.parallelWork_);
             parallelGraphWork_ = std::move(other.parallelGraphWork_);
             reconstructionHistories_ = std::move(other.reconstructionHistories_);
+            reconstructionGraphTail_ = std::exchange(other.reconstructionGraphTail_, {});
             reconstructionHistoryCount_ = std::exchange(other.reconstructionHistoryCount_, 0);
             if (owner_ != nullptr) {
                 owner_->activeFrameScope_ = this;
@@ -233,15 +235,15 @@ namespace Horo::Render {
         try {
             if (const Result<void> presented = timing != nullptr ? backend_->PresentWithTiming(frame_, *timing) : backend_->Present(frame_);
                 presented.HasError()) {
-                FinishReconstructionPresentation(false);
+                FinishReconstructionSubmission(false);
                 Abort();
                 return Result<void>::Failure(presented.ErrorValue());
             }
-            FinishReconstructionPresentation(true);
+            FinishReconstructionSubmission(true);
             Release();
             return Result<void>::Success();
         } catch (...) {  // NOSONAR(cpp:S2738)
-            FinishReconstructionPresentation(false);
+            FinishReconstructionSubmission(false);
             Abort();
             return Result<void>::Failure(MakeFrontendError(FrontendErrors::FrameException, "Renderer backend frame operation threw."));
         }
@@ -267,13 +269,18 @@ namespace Horo::Render {
         Release();
     }
 
-    /** @copydoc RenderFrameScope::FinishReconstructionPresentation */
-    void RenderFrameScope::FinishReconstructionPresentation(bool presented) noexcept {
+    /** @copydoc RenderFrameScope::FinishReconstructionSubmission */
+    void RenderFrameScope::FinishReconstructionSubmission(bool presented) noexcept {
+        if (reconstructionHistoryCount_ == 0)
+            return;
         using Disposition = NativeReconstructionViewHistory::FrameDisposition;
+        const auto accepted =
+            backend_->ObserveGraphSubmissionAcceptance(reconstructionGraphTail_, backend_->Capabilities().support.deviceIncarnation);
         for (auto &history : std::span{reconstructionHistories_}.first(reconstructionHistoryCount_)) {
-            history->FinishRecording(presented ? Disposition::Presented : Disposition::FailedPresentation);
+            history->FinishRecording(accepted.value_or(presented) ? Disposition::Submitted : Disposition::SubmissionUncertain);
             history.reset();
         }
+        reconstructionGraphTail_ = {};
         reconstructionHistoryCount_ = 0;
     }
 
@@ -283,6 +290,7 @@ namespace Horo::Render {
             history->FinishRecording(NativeReconstructionViewHistory::FrameDisposition::Cancelled);
             history.reset();
         }
+        reconstructionGraphTail_ = {};
         reconstructionHistoryCount_ = 0;
     }
 

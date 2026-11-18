@@ -4,6 +4,8 @@
 #include "Horo/Runtime/Render/UiPaintKernel.h"
 #include "RenderExternalImages.h"
 
+#include <algorithm>
+
 namespace Horo::Tests::RenderFrontendTesting {
     void Check(const bool condition) {
         REQUIRE((condition));
@@ -59,6 +61,7 @@ namespace Horo::Tests::RenderFrontendTesting {
                 capabilities_.support.limits.maxFramesInFlight = config.maxFramesInFlight;
             }
             capabilities_.supportsSubmissionObservation = lifecycleState.supportsSubmissionObservation;
+            capabilities_.supportsExplicitGraphSubmissions = lifecycleState.reconstruction.enabled;
             if (lifecycleState.throwDuringInitialize) {
                 throw InjectedBackendException{"Injected initialization failure."};
             }
@@ -230,7 +233,7 @@ namespace Horo::Tests::RenderFrontendTesting {
 
         Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request) override {
             if (!request.submissions.empty())
-                return IRenderBackend::ExecuteGraph(request);
+                return ExecuteExplicitTestGraph(request);
             if (request.role == RenderGraphExecutionRole::UiComposition) {
                 auto &audit = lifecycleState.uiPaint;
                 ++audit.graphCalls;
@@ -287,7 +290,8 @@ namespace Horo::Tests::RenderFrontendTesting {
         void AbortFrame(const FrameToken frame) noexcept override {
             if (lifecycleState.frameActive && frame == lifecycleState.activeFrame) {
                 ++lifecycleState.abortCount;
-                if (lifecycleState.graphLease != nullptr && !lifecycleState.uiPaint.retainAfterAbort) {
+                if (lifecycleState.graphLease != nullptr && !lifecycleState.uiPaint.retainAfterAbort &&
+                    lifecycleState.reconstruction.acceptedPrefix == 0) {
                     lifecycleState.graphLease->Release();
                     lifecycleState.graphLease = nullptr;
                 }
@@ -299,7 +303,8 @@ namespace Horo::Tests::RenderFrontendTesting {
         void AbortActiveFrame() noexcept override {
             if (lifecycleState.frameActive) {
                 ++lifecycleState.abortCount;
-                if (lifecycleState.graphLease != nullptr && !lifecycleState.uiPaint.retainAfterAbort) {
+                if (lifecycleState.graphLease != nullptr && !lifecycleState.uiPaint.retainAfterAbort &&
+                    lifecycleState.reconstruction.acceptedPrefix == 0) {
                     lifecycleState.graphLease->Release();
                     lifecycleState.graphLease = nullptr;
                 }
@@ -321,6 +326,16 @@ namespace Horo::Tests::RenderFrontendTesting {
                                               {}});
             }
             return Result<void>::Success();
+        }
+
+        std::optional<bool> ObserveGraphSubmissionAcceptance(RenderTimelinePoint signal,
+                                                             std::uint64_t deviceIncarnation) const noexcept override {
+            auto &audit = lifecycleState.reconstruction;
+            if (!audit.enabled || deviceIncarnation != capabilities_.support.deviceIncarnation)
+                return std::nullopt;
+            audit.queried = signal;
+            const auto accepted = std::span{audit.recorded}.first(std::min(audit.acceptedPrefix, audit.recorded.size()));
+            return std::ranges::find(accepted, signal) != accepted.end();
         }
 
         Result<bool> ObserveSubmission(const RenderCpuWait &wait) override {
@@ -368,6 +383,24 @@ namespace Horo::Tests::RenderFrontendTesting {
         }
 
     private:
+        /** @brief Supplies the real frontend with a retained ordered graph and controllable acceptance fault. */
+        Result<void> ExecuteExplicitTestGraph(const RenderGraphExecutionRequest &request) {
+            auto &audit = lifecycleState.reconstruction;
+            if (!audit.enabled)
+                return IRenderBackend::ExecuteGraph(request);
+            const auto validated = ValidateRenderGraphExecutionRequest(request);
+            if (validated.HasError())
+                return validated;
+            if (!request.lease || !request.transfer)
+                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+            audit.recorded.clear();
+            for (const auto &submission : request.submissions)
+                audit.recorded.push_back(submission.submission.signal);
+            lifecycleState.graphLease = request.lease;
+            request.transfer->authority = RenderGraphLeaseAuthority::BackendCompletion;
+            return Execute({request.frame, {}});
+        }
+
         [[nodiscard]] Result<std::uint64_t> CompleteResourceCreation() {
             if (lifecycleState.throwDuringResourceCreation) {
                 throw InjectedBackendException{"Injected resource creation exception."};

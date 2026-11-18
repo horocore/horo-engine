@@ -568,6 +568,18 @@ namespace Horo::Render {
                 }
             }
 
+            /** @copydoc IVulkanCommandPort::ObserveGraphSubmissionAcceptance */
+            std::optional<bool> ObserveGraphSubmissionAcceptance(RenderTimelinePoint signal,
+                                                                 std::uint64_t deviceIncarnation) const noexcept override {
+                try {
+                    const auto accepted = graph_.WasSubmissionAccepted(signal, deviceIncarnation);
+                    if (accepted.HasValue())
+                        return accepted.Value();
+                } catch (...) {  // Retain uncertainty if the backend cannot provide typed acceptance evidence.
+                }
+                return std::nullopt;
+            }
+
             Result<bool> ObserveSubmission(const RenderCpuWait &wait) override {
                 return graph_.ObserveSubmission(wait);
             }

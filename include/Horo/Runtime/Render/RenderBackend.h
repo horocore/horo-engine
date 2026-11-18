@@ -752,6 +752,14 @@ namespace Horo::Render {
         /** @brief Completes the active frame and presents when the backend supports presentation. */
         [[nodiscard]] virtual Result<void> Present(FrameToken frame) = 0;
 
+        /** @brief Observes the selected backend's exact queue acceptance without polling GPU completion or presentation.
+         * @param signal The already issued exact submission point. @param deviceIncarnation Expected selected device.
+         * @return True for accepted, false for known unissued, or empty when this backend cannot prove either.
+         * @details Owner-thread only, immediately after a native submission/presentation attempt. No native wait or new submission.
+         */
+        [[nodiscard]] virtual std::optional<bool> ObserveGraphSubmissionAcceptance(RenderTimelinePoint signal,
+                                                                                   std::uint64_t deviceIncarnation) const noexcept;
+
         /** @brief Observes one exact frontend-issued queue timeline without changing submission authority.
          * @param wait Zero-time Poll, or an explicitly authorized positive finite readback/test/recovery wait.
          * @return Completion, Pending(false), or typed unsupported/invalid/native failure.

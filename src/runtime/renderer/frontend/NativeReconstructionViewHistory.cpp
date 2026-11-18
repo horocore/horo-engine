@@ -228,12 +228,12 @@ namespace Horo::Render {
     }
 
     void NativeReconstructionViewHistory::FinishRecording(FrameDisposition disposition) noexcept {
-        if (disposition == FrameDisposition::Presented) {
+        if (disposition == FrameDisposition::Submitted) {
             phase_ = Phase::Submitted;
             return;
         }
         // A partial native submit can change even older imported image states.
-        requiresReset_ = disposition == FrameDisposition::FailedPresentation;
+        requiresReset_ = disposition == FrameDisposition::SubmissionUncertain;
         phase_ = Phase::Discarding;
         if (leaseRetired_)
             Abandon();

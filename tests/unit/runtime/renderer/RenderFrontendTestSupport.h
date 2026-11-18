@@ -57,8 +57,17 @@ namespace Horo::Tests::RenderFrontendTesting {
         std::array<std::uint64_t, 3> instances{};
     };
 
+    /** @brief Ordered deterministic graph acceptance fault injection; no actual GPU commands or completion are claimed. */
+    struct ReconstructionSubmissionAudit final {
+        bool enabled{};
+        std::size_t acceptedPrefix{};
+        std::vector<RenderTimelinePoint> recorded;
+        RenderTimelinePoint queried;
+    };
+
     struct BackendLifecycleState {  // NOSONAR(cpp:S1820) Flat assertion ledger keeps injected backend transitions directly observable.
         UiPaintUploadAudit uiPaint;
+        ReconstructionSubmissionAudit reconstruction;
         int initializeCount{0};
         int shutdownCount{0};
         int abortCount{0};

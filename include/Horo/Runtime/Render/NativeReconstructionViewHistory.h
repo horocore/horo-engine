@@ -68,8 +68,8 @@ namespace Horo::Render {
         friend class RenderFrameScope;
         enum class FrameDisposition : std::uint8_t {
             Cancelled,
-            Presented,
-            FailedPresentation
+            Submitted,
+            SubmissionUncertain
         };
 
     public:
@@ -100,7 +100,7 @@ namespace Horo::Render {
          */
         [[nodiscard]] Result<void> CancelStaged();
 
-        /** @brief Polls the exact successful frame's native timeline and publishes only in the current scene cache epoch.
+        /** @brief Polls the exact accepted real frame's native timeline and publishes only in the current scene cache epoch.
          * @param frontend Same live renderer.
          * @param current Current scene-origin-stamped view compatibility.
          * @return True when this poll publishes; false for no publishable completion; typed timeline/lifecycle failure otherwise.

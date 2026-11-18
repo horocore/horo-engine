@@ -278,6 +278,7 @@ namespace Horo::Render {
             reconstructionHistories_[i] = histories[i];
             histories[i]->BeginRecording(completions[i].point, completions[i].states);
         }
+        reconstructionGraphTail_ = submissions.back().submission.signal;
         reconstructionHistoryCount_ = histories.size();
         return Result<void>::Success();
     }

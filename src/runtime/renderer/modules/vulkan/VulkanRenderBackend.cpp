@@ -259,6 +259,8 @@ namespace Horo::Render {
                     return Result<void>::Failure(
                         MakeVulkanError(VulkanBackendErrors::InvalidCommandState, "Submission frame identity is stale."));
                 auto submitted = commandPort_->SubmitFrame(frame);
+                if (submitted.HasError())
+                    commandPort_->AbortFrame(frame);
                 activeFrame_ = {};
                 return submitted;
             }
@@ -306,6 +308,14 @@ namespace Horo::Render {
                 if (const auto access = CommandAccess(); access.HasError())
                     return Result<RenderPresentationOutput>::Failure(access.ErrorValue());
                 return commandPort_->ObservePresentationOutput();
+            }
+
+            /** @copydoc IRenderBackend::ObserveGraphSubmissionAcceptance */
+            std::optional<bool> ObserveGraphSubmissionAcceptance(RenderTimelinePoint signal,
+                                                                 std::uint64_t deviceIncarnation) const noexcept override {
+                if (ownerThread_ != std::this_thread::get_id() || !deviceCreated_ || !commandPort_)
+                    return std::nullopt;
+                return commandPort_->ObserveGraphSubmissionAcceptance(signal, deviceIncarnation);
             }
 
             Result<bool> ObserveSubmission(const RenderCpuWait &wait) override {
