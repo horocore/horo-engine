@@ -348,11 +348,12 @@ TEST_CASE("Host cook publishes registered authored UI documents and tracks their
     CHECK(cooked.Value().Dependencies().back() == Ui::UiAssetDependency{missing, mesh.type, false});
 
     const auto scene = emitted(fixture.sceneId);
-    const auto definition = SceneCook::DecodeCookedSceneDefinition(scene.payload);
+    const auto definition =
+        SceneCook::DecodeCookedSceneWithEmbeddedRevision(scene.payload, SceneCook::SceneDefinitionIdForAsset(fixture.sceneId));
     REQUIRE(definition.HasValue());
     REQUIRE(definition.Value().Entities().size() == 1);
-    REQUIRE(definition.Value().Entities().front().uiCanvas);
-    CHECK(definition.Value().Entities().front().uiCanvas->canvas == reference);
+    REQUIRE(definition.Value().Entities().front().components.uiCanvas);
+    CHECK(definition.Value().Entities().front().components.uiCanvas->canvas == reference);
 
     const auto cached = fixture.Cook();
     REQUIRE(cached.HasValue());
