@@ -9,6 +9,12 @@
 #include <openxr/openxr.h>
 
 namespace Horo::XR::OpenXRInternal {
+    /** @brief Cold spatial plane support, independent of permission grants and live observations. */
+    struct NativePlaneCensus final {
+        XRCapabilityState state{XRCapabilityState::Unsupported};
+        bool semanticLabels{};
+    };
+
     /** @brief Finite exact system publications observed from the retained instance/system. */
     struct NativeSystemCensus final {
         XrInstanceProperties runtime{XR_TYPE_INSTANCE_PROPERTIES};
@@ -19,7 +25,8 @@ namespace Horo::XR::OpenXRInternal {
         std::uint32_t primaryViewCount{};
         std::array<XrEnvironmentBlendMode, 16> primaryBlendModes{};
         std::uint32_t primaryBlendModeCount{};
-        XRCapabilityState handTracking{XRCapabilityState::Unsupported};    /**< Observed system support for the admitted EXT route. */
+        XRCapabilityState handTracking{XRCapabilityState::Unsupported}; /**< Observed system support for the admitted EXT route. */
+        NativePlaneCensus planes;
         XRCapabilityState eyeGazeProvider{XRCapabilityState::Unsupported}; /**< Hardware support from the exact native census. */
     };
 

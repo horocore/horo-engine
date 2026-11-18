@@ -92,6 +92,59 @@ namespace Horo::Tests::OpenXR {
         CHECK(fixture.owner.DiscoverSystem(fixture.preflight.Attempt()).HasError());
     }
 
+    TEST_CASE("OpenXR spatial plane census remains cold and follows exact enabled capabilities", "[unit][xr][native][planes]") {
+        using enum XRCapabilityState;
+        CensusFixture fixture;
+        constexpr std::array<std::string_view, 3> extensions{XR_EXT_SPATIAL_PLANE_TRACKING_EXTENSION_NAME,
+                                                             XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME, XR_EXT_FUTURE_EXTENSION_NAME};
+        const std::array routes{NativeExtensionRequest{extensions[0]}, NativeExtensionRequest{extensions[1]},
+                                NativeExtensionRequest{extensions[2]}};
+        fixture.native.extraExtensions = extensions;
+        fixture.native.extensionCount += static_cast<std::uint32_t>(extensions.size());
+        auto discovery = fixture.Discovery();
+        discovery.extensions = routes;
+        auto expected = Available;
+        bool labels = true;
+        SECTION("all required components exist") {}
+        SECTION("semantics are optional") {
+            fixture.census.spatialLabels = false;
+            labels = false;
+        }
+        SECTION("require enabled future and spatial entity dependencies") {
+            discovery.extensions = std::span{routes}.first(2);
+            expected = DependencyMissing;
+        }
+        SECTION("advertising does not enable") {
+            discovery.extensions = {};
+            expected = Unsupported;
+        }
+        SECTION("selected runtime provides another capability set") {
+            fixture.census.spatialPlanes = false;
+            expected = Unsupported;
+        }
+        SECTION("bounded geometry is required") {
+            fixture.census.spatialBounds = false;
+            expected = Incompatible;
+        }
+        SECTION("runtime has denied permission") {
+            fixture.census.spatialComponentsResult = XR_ERROR_PERMISSION_INSUFFICIENT;
+            expected = Denied;
+        }
+        SECTION("large tool publications are not truncated") {
+            fixture.census.spatialComponentsResult = XR_ERROR_SIZE_INSUFFICIENT;
+            expected = Incompatible;
+        }
+        REQUIRE(fixture.owner.PrepareDiscovery(discovery).HasValue());
+        const auto actual = fixture.owner.DiscoverSystem(fixture.preflight.Attempt());
+        REQUIRE(actual.HasValue());
+        CHECK(actual.Value().planes.state == expected);
+        CHECK(actual.Value().planes.semanticLabels == (expected == Available && labels));
+        CHECK(actual.Value().primaryViewCount == 2);
+        CHECK(fixture.native.liveSessions == 0);
+        CHECK(std::ranges::count(fixture.census.calls, "spatial-capabilities") == (discovery.extensions.size() == routes.size()));
+        REQUIRE(fixture.owner.Close().HasValue());
+    }
+
     TEST_CASE("OpenXR reprojection census observes advertised routes without enabling them or issuing sizing calls",
               "[unit][xr][native][reprojection]") {
         CensusFixture fixture;

@@ -17,6 +17,10 @@ namespace Horo::Tests::OpenXR {
         bool handsSupported{};
         XrBool32 gazeSupport{XR_FALSE};
         XrResult gazeResult{XR_SUCCESS};
+        bool spatialPlanes{true};
+        bool spatialBounds{true};
+        bool spatialLabels{true};
+        XrResult spatialComponentsResult{XR_SUCCESS};
         bool invalidReprojectionExtent{};
         std::uint32_t synthesisEyeWidthStep{160};
         std::string_view fail;
@@ -66,6 +70,32 @@ namespace Horo::Tests::OpenXR {
                 }
             }
             return Record("system-properties");
+        }
+
+        static XRAPI_ATTR XrResult XRAPI_CALL SpatialCapabilities(XrInstance, XrSystemId, std::uint32_t capacity, std::uint32_t *count,
+                                                                  XrSpatialCapabilityEXT *values) {
+            CHECK(Script::active->liveSessions == 0);
+            CHECK(capacity > 0);
+            REQUIRE(values != nullptr);
+            *count = active->spatialPlanes ? 1 : 0;
+            if (*count)
+                values[0] = XR_SPATIAL_CAPABILITY_PLANE_TRACKING_EXT;
+            return Record("spatial-capabilities");
+        }
+
+        static XRAPI_ATTR XrResult XRAPI_CALL SpatialComponents(XrInstance, XrSystemId, XrSpatialCapabilityEXT capability,
+                                                                XrSpatialCapabilityComponentTypesEXT *values) {
+            CHECK(capability == XR_SPATIAL_CAPABILITY_PLANE_TRACKING_EXT);
+            REQUIRE(values->componentTypeCapacityInput >= 2);
+            REQUIRE(values->componentTypes != nullptr);
+            if (active->spatialComponentsResult != XR_SUCCESS)
+                return active->spatialComponentsResult;
+            values->componentTypeCountOutput = active->spatialLabels ? 2 : 1;
+            values->componentTypes[0] =
+                active->spatialBounds ? XR_SPATIAL_COMPONENT_TYPE_BOUNDED_2D_EXT : XR_SPATIAL_COMPONENT_TYPE_BOUNDED_3D_EXT;
+            if (active->spatialLabels)
+                values->componentTypes[1] = XR_SPATIAL_COMPONENT_TYPE_PLANE_SEMANTIC_LABEL_EXT;
+            return Record("spatial-components");
         }
 
         static XRAPI_ATTR XrResult XRAPI_CALL Configurations(XrInstance, XrSystemId, const std::uint32_t capacity, std::uint32_t *count,
@@ -146,6 +176,9 @@ namespace Horo::Tests::OpenXR {
 
             const std::array entries{Entry{"xrGetInstanceProperties", std::bit_cast<PFN_xrVoidFunction>(&Instance)},
                                      Entry{"xrGetSystemProperties", std::bit_cast<PFN_xrVoidFunction>(&System)},
+                                     Entry{"xrEnumerateSpatialCapabilitiesEXT", std::bit_cast<PFN_xrVoidFunction>(&SpatialCapabilities)},
+                                     Entry{"xrEnumerateSpatialCapabilityComponentTypesEXT",
+                                           std::bit_cast<PFN_xrVoidFunction>(&SpatialComponents)},
                                      Entry{"xrEnumerateViewConfigurations", std::bit_cast<PFN_xrVoidFunction>(&Configurations)},
                                      Entry{"xrEnumerateViewConfigurationViews", std::bit_cast<PFN_xrVoidFunction>(&Views)},
                                      Entry{"xrEnumerateEnvironmentBlendModes", std::bit_cast<PFN_xrVoidFunction>(&BlendModes)},

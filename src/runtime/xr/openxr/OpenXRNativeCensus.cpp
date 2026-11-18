@@ -73,6 +73,64 @@ namespace Horo::XR::OpenXRInternal {
             return eyes.supportsEyeGazeInteraction == XR_TRUE ? XRCapabilityState::Available : XRCapabilityState::Unsupported;
         }
 
+        /** @brief Maps optional native discovery failures without disabling the baseline XR profile. */
+        XRCapabilityState SpatialCensusFailure(const XrResult result) noexcept {
+            switch (result) {
+                case XR_ERROR_PERMISSION_INSUFFICIENT:
+                    return XRCapabilityState::Denied;
+                case XR_ERROR_FUNCTION_UNSUPPORTED:
+                case XR_ERROR_FEATURE_UNSUPPORTED:
+                    return XRCapabilityState::Unsupported;
+                case XR_ERROR_SIZE_INSUFFICIENT:
+                    return XRCapabilityState::Incompatible;
+                default:
+                    return XRCapabilityState::Unavailable;
+            }
+        }
+
+        /** @brief Reads only spatial capability metadata before any session or authorization exists. */
+        NativePlaneCensus PlaneProvider(const NativeDiscoveryBorrow &owner) {
+            using enum XRCapabilityState;
+            if (!Enabled(owner, XR_EXT_SPATIAL_PLANE_TRACKING_EXTENSION_NAME))
+                return {};
+            if (!Enabled(owner, XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME) || !Enabled(owner, XR_EXT_FUTURE_EXTENSION_NAME))
+                return {DependencyMissing};
+
+            const auto capabilities = Resolve<PFN_xrEnumerateSpatialCapabilitiesEXT>(owner, "xrEnumerateSpatialCapabilitiesEXT");
+            const auto components =
+                Resolve<PFN_xrEnumerateSpatialCapabilityComponentTypesEXT>(owner, "xrEnumerateSpatialCapabilityComponentTypesEXT");
+            if (capabilities.HasError() || components.HasError())
+                return {Incompatible};
+
+            constexpr std::uint32_t maximumNativeFacts = 32;
+            std::array<XrSpatialCapabilityEXT, maximumNativeFacts> available{};
+            std::uint32_t count{};
+            auto result = capabilities.Value()(owner.instance, owner.system, maximumNativeFacts, &count, available.data());
+            if (result != XR_SUCCESS)
+                return {SpatialCensusFailure(result)};
+            if (count > available.size() || !Unique(available, count))
+                return {Incompatible};
+            const auto publishedCapabilities = std::span{available}.first(count);
+            if (std::ranges::find(publishedCapabilities, XR_SPATIAL_CAPABILITY_PLANE_TRACKING_EXT) == publishedCapabilities.end())
+                return {};
+
+            std::array<XrSpatialComponentTypeEXT, maximumNativeFacts> types{};
+            XrSpatialCapabilityComponentTypesEXT publication{XR_TYPE_SPATIAL_CAPABILITY_COMPONENT_TYPES_EXT, nullptr, maximumNativeFacts, 0,
+                                                             types.data()};
+            result = components.Value()(owner.instance, owner.system, XR_SPATIAL_CAPABILITY_PLANE_TRACKING_EXT, &publication);
+            if (result != XR_SUCCESS)
+                return {SpatialCensusFailure(result)};
+            count = publication.componentTypeCountOutput;
+            if (publication.type != XR_TYPE_SPATIAL_CAPABILITY_COMPONENT_TYPES_EXT || publication.next ||
+                publication.componentTypeCapacityInput != maximumNativeFacts || publication.componentTypes != types.data() ||
+                count > types.size() || !Unique(types, count))
+                return {Incompatible};
+            const auto published = std::span{types}.first(count);
+            if (std::ranges::find(published, XR_SPATIAL_COMPONENT_TYPE_BOUNDED_2D_EXT) == published.end())
+                return {Incompatible};
+            return {Available, std::ranges::find(published, XR_SPATIAL_COMPONENT_TYPE_PLANE_SEMANTIC_LABEL_EXT) != published.end()};
+        }
+
         /** @brief Queries observed runtime identity and tracking/graphics system limits independently of any session. */
         Result<void> ReadProperties(const NativeDiscoveryBorrow &owner, NativeSystemCensus &census) {
             const auto instance = Resolve<PFN_xrGetInstanceProperties>(owner, "xrGetInstanceProperties");
@@ -106,6 +164,7 @@ namespace Horo::XR::OpenXRInternal {
                 census.handTracking = XRCapabilityState::Available;
             if (Enabled(owner, XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME))
                 census.eyeGazeProvider = EyeGazeProvider(system.Value(), owner);
+            census.planes = PlaneProvider(owner);
             return Result<void>::Success();
         }
 
