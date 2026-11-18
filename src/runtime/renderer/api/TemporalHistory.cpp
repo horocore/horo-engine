@@ -275,6 +275,12 @@ namespace Horo::Render {
         return Result<void>::Success();
     }
 
+    /** @copydoc TemporalHistoryStore::CheckPending */
+    Result<void> TemporalHistoryStore::CheckPending(const TemporalHistoryFrame &frame) {
+        const auto pending = ResolvePending(frame);
+        return pending.HasValue() ? Result<void>::Success() : Result<void>::Failure(pending.ErrorValue());
+    }
+
     /** @copydoc TemporalHistoryStore::Publish */
     Result<void> TemporalHistoryStore::Publish(const TemporalHistoryFrame &frame) {
         return CompletePending(frame, PendingCompletion::Publish);

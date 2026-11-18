@@ -1,5 +1,7 @@
+#include "Horo/Runtime/Render/NativeReconstructionKernel.h"
 #include "ShaderReflectionCook.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -100,4 +102,55 @@ TEST_CASE("Vulkan sampled reflection rejects ambiguous foreign and unsupported r
     SampledEvidence evidence;
     mutations[GENERATE(0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U)](evidence);
     CHECK(evidence.Normalize().HasError());
+}
+
+TEST_CASE("Vulkan reconstruction reflection proves the closed storage image ABI", "[renderer][shader-cook][reconstruction]") {
+    const ShaderTargetRequirement target{ShaderTargetBackend::Vulkan, ShaderPayloadFormat::SpirV16, 1, 1, 8, 0, true, true};
+    const auto contract = DescribeNativeReconstructionShader(ReconstructionKind::Temporal, target);
+    REQUIRE(contract.HasValue());
+    auto manifest = contract.Value().manifest;
+    auto names = contract.Value().reflectionNames;
+    std::array stages{SpirvReflectionStage{ShaderStage::Compute, "ReconstructTemporal", R"({
+        "entryPoints":[{"name":"ReconstructTemporal","mode":"comp","workgroup_size":[8,8,1],"workgroup_size_is_spec_constant_id":[false,false,false]}],
+        "separate_images":[
+            {"name":"CurrentColor","type":"texture2D","set":0,"binding":0},
+            {"name":"CurrentDepth","type":"texture2D","set":0,"binding":2},
+            {"name":"Motion","type":"texture2D","set":0,"binding":3},
+            {"name":"PreviousColor","type":"texture2D","set":0,"binding":4},
+            {"name":"PreviousDepth","type":"texture2D","set":0,"binding":5}],
+        "images":[
+            {"name":"ReconstructedColor","type":"image2D","format":"rgba32f","set":0,"binding":1},
+            {"name":"ReconstructedDepth","type":"image2D","format":"r32f","set":0,"binding":6}],
+        "ubos":[{"name":"type.ReconstructionDispatch","type":"dispatch","block_size":48,"set":0,"binding":7}],
+        "types":{"dispatch":{"members":[{"name":"Extents","type":"uvec4","offset":0},
+                                       {"name":"SampleParameters","type":"vec4","offset":16},
+                                       {"name":"DepthParameters","type":"vec4","offset":32}]}}})"}};
+
+    SECTION("Canonical reflection is insensitive to authored mapping order") {
+        std::ranges::reverse(names);
+        const auto result = NormalizeVulkanReflection(manifest, target, stages, names);
+        REQUIRE(result.HasValue());
+        REQUIRE(result.Value().bindings.size() == 8);
+        CHECK(result.Value().bindings[1].kind == ShaderResourceKind::StorageTexture);
+        CHECK(result.Value().bindings[6].stages == ShaderStageVisibility::Compute);
+        CHECK(result.Value().targetBindings[6].nativeBinding == 6);
+        CHECK(result.Value().parameters[0].type == ShaderValueType::Uint32);
+        CHECK(result.Value().parameters[2].byteOffset == 32);
+    }
+    SECTION("A borrowed name cannot convert a foreign manifest to the storage profile") {
+        manifest.sourceIdentity = "tests/other-compute.hlsl";
+        CHECK(NormalizeVulkanReflection(manifest, target, stages, names).HasError());
+    }
+    SECTION("Descriptor, format, member and group tampering fail closed") {
+        const auto [before, after] = GENERATE(table<std::string_view, std::string_view>({{"rgba32f", "rgba16f"},
+                                                                                         {"\"binding\":6", "\"binding\":8"},
+                                                                                         {"[8,8,1]", "[4,8,1]"},
+                                                                                         {"[false,false,false]", "[true,false,false]"},
+                                                                                         {"\"offset\":32", "\"offset\":24"},
+                                                                                         {"uvec4", "vec4"},
+                                                                                         {"\"block_size\":48", "\"block_size\":64"},
+                                                                                         {"PreviousDepth", "PreviousColor"}}));
+        Replace(stages[0].json, before, after);
+        CHECK(NormalizeVulkanReflection(manifest, target, stages, names).HasError());
+    }
 }

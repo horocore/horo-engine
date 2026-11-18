@@ -40,7 +40,10 @@ namespace Horo::Render {
      */
     [[nodiscard]] Result<std::vector<std::uint32_t>> RegisterRasterVaryingLocations(const SpirvReflectionStage &stage);
 
-    /** @brief Normalizes bounded official SPIRV-Cross JSON against exact authored IDs and the existing manifest contract. */
+    /** @brief Normalizes bounded official SPIRV-Cross JSON against exact authored IDs and the manifest contract.
+     * @details In addition to the raster profile, the closed native reconstruction compute profile requires the
+     * exact entry, descriptor slots, typed output formats, uniform packing, and fixed thread group dimensions.
+     */
     [[nodiscard]] Result<NormalizedShaderReflection> NormalizeVulkanReflection(const ShaderManifest &manifest,
                                                                                const ShaderTargetRequirement &target,
                                                                                std::span<const SpirvReflectionStage> stages,

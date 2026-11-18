@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Render/NativeReconstructionKernel.h"
 #include "Horo/Runtime/Render/ReconstructionFrame.h"
 #include "Horo/Runtime/Render/TemporalHistory.h"
 #include "Horo/Runtime/Render/TemporalHistoryErrors.h"
@@ -228,6 +229,95 @@ TEST_CASE("Reconstruction history rejects stale input and keeps an abandoned cut
     REQUIRE(store.Retire(history).HasValue());
     REQUIRE(store.Shutdown().HasValue());
     CHECK(BeginTemporalReconstructionFrame(ReconstructionRequest(5, 4), capabilities, store, history).HasError());
+}
+
+TEST_CASE("Native reconstruction constants follow the exact reset and exposure evidence", "[runtime][renderer][reconstruction][native]") {
+    auto capabilities = ReconstructionCapabilities();
+    capabilities.features.Enable(RenderCapability::Compute);
+    capabilities.queues.compute = true;
+    auto request = ReconstructionRequest();
+    const auto enableNativeTarget = [](ReconstructionFrameRequest &frame) {
+        frame.masks = {};
+        frame.output.writeUsage = RenderGraphUsageKind::Storage;
+        frame.output.descriptor.format = RenderTextureFormat::Rgba32Float;
+        frame.output.descriptor.usage = RenderTextureUsage::Storage | RenderTextureUsage::Sampled;
+    };
+    enableNativeTarget(request);
+    const NativeReconstructionTemporalSettings tuning{.historyWeight = 0.75F,
+                                                      .absoluteDepthTolerance = 0.01F,
+                                                      .relativeDepthTolerance = 0.02F};
+    auto store = Store();
+    const auto history = AddHistory(store);
+    const auto first = BeginTemporalReconstructionFrame(request, capabilities, store, history);
+    REQUIRE(first.HasValue());
+    const auto firstConstants =
+        PrepareNativeReconstructionDispatch(request, capabilities, tuning, NativeReconstructionHistory{store, first.Value()});
+    REQUIRE(firstConstants.HasValue());
+    CHECK((firstConstants.Value().extents == std::array<std::uint32_t, 4>{1280, 720, 1920, 1080}));
+    CHECK((firstConstants.Value().Groups() == FramebufferExtent{240, 135}));
+    CHECK((firstConstants.Value().sample == std::array<float, 4>{request.currentJitterUv.x, request.currentJitterUv.y, 1.0F, 0.0F}));
+    REQUIRE(store.Publish(first.Value()).HasValue());
+
+    request = ReconstructionRequest(2, 1);
+    enableNativeTarget(request);
+    request.exposure = ReconstructionExposureScales{2.0F, 0.5F};
+    const auto second = BeginTemporalReconstructionFrame(request, capabilities, store, history);
+    REQUIRE(second.HasValue());
+    const auto nextConstants =
+        PrepareNativeReconstructionDispatch(request, capabilities, tuning, NativeReconstructionHistory{store, second.Value()});
+    REQUIRE(nextConstants.HasValue());
+    CHECK(nextConstants.Value().sample[2] == 4.0F);
+    CHECK(nextConstants.Value().sample[3] == tuning.historyWeight);
+    const auto wrong =
+        PrepareNativeReconstructionDispatch(request, capabilities, tuning, NativeReconstructionHistory{store, first.Value()});
+    REQUIRE(wrong.HasError());
+    RequireErrorCode(wrong.ErrorValue(), NativeReconstructionErrors::InvalidDispatch);
+
+    capabilities.queues.compute = false;
+    const auto unsupported =
+        PrepareNativeReconstructionDispatch(request, capabilities, tuning, NativeReconstructionHistory{store, second.Value()});
+    REQUIRE(unsupported.HasError());
+    RequireErrorCode(unsupported.ErrorValue(), NativeReconstructionErrors::Unsupported);
+    REQUIRE(store.Abandon(second.Value()).HasValue());
+    capabilities.queues.compute = true;
+    const auto retry = BeginTemporalReconstructionFrame(request, capabilities, store, history);
+    REQUIRE(retry.HasValue());
+    const auto stale =
+        PrepareNativeReconstructionDispatch(request, capabilities, tuning, NativeReconstructionHistory{store, second.Value()});
+    REQUIRE(stale.HasError());
+    RequireErrorCode(stale.ErrorValue(), TemporalHistoryErrors::InvalidFrame);
+    CHECK(PrepareNativeReconstructionDispatch(request, capabilities, tuning, NativeReconstructionHistory{store, retry.Value()}).HasValue());
+    REQUIRE(store.Abandon(retry.Value()).HasValue());
+    CHECK((NativeReconstructionDispatch{.extents = {1, 1, 1, 9}}.Groups() == FramebufferExtent{1, 2}));
+}
+
+TEST_CASE("Native reconstruction cook contracts name only the closed entry and binding family",
+          "[runtime][renderer][reconstruction][native]") {
+    ShaderTargetRequirement target{.backend = ShaderTargetBackend::Vulkan,
+                                   .payloadFormat = ShaderPayloadFormat::SpirV16,
+                                   .descriptorVersion = 1,
+                                   .interfaceSchemaVersion = 1,
+                                   .maximumBindings = 16,
+                                   .supportsCompute = true,
+                                   .supportsStorageResources = true};
+    const auto spatial = DescribeNativeReconstructionShader(ReconstructionKind::Spatial, target);
+    REQUIRE(spatial.HasValue());
+    CHECK(spatial.Value().manifest.entryPoints.front().name == "ReconstructSpatial");
+    CHECK(spatial.Value().manifest.bindings.size() == 3);
+    CHECK(spatial.Value().reflectionNames.back().parameters.size() == 3);
+
+    const auto temporal = DescribeNativeReconstructionShader(ReconstructionKind::Temporal, target);
+    REQUIRE(temporal.HasValue());
+    CHECK(temporal.Value().manifest.entryPoints.front().name == "ReconstructTemporal");
+    CHECK(temporal.Value().manifest.bindings.size() == 8);
+    CHECK(temporal.Value().reflectionNames[6].name == "ReconstructedDepth");
+    const auto missing = AdmitNativeReconstructionShader(ReconstructionKind::Temporal, target, {});
+    REQUIRE(missing.HasError());
+    RequireErrorCode(missing.ErrorValue(), NativeReconstructionErrors::InvalidArtifact);
+    target.supportsCompute = false;
+    const auto unsupported = DescribeNativeReconstructionShader(ReconstructionKind::Spatial, target);
+    REQUIRE(unsupported.HasError());
+    RequireErrorCode(unsupported.ErrorValue(), NativeReconstructionErrors::Unsupported);
 }
 
 TEST_CASE("Temporal history identities and capacities are bounded", "[runtime][renderer][temporal-history]") {

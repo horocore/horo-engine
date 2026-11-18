@@ -240,6 +240,12 @@ namespace Horo::Render {
          */
         [[nodiscard]] Result<TemporalHistoryFrame> BeginFrame(const TemporalHistoryFrameRequest &request);
 
+        /** @brief Checks a borrowed pending frame before a consumer records native work.
+         * @param frame Exact snapshot returned by BeginFrame.
+         * @return Success for the current owner-thread attempt or the typed stale/foreign/lifecycle error.
+         */
+        [[nodiscard]] Result<void> CheckPending(const TemporalHistoryFrame &frame);
+
         /**
          * @brief Publishes a successfully completed real frame as the next history generation.
          * @param frame Frame snapshot returned by BeginFrame.

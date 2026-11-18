@@ -295,6 +295,13 @@ Provider adapters admit borrowed scene textures, exposure and graph output throu
 compatibility and resident resource owner before opening a real-frame attempt.
 An explicit reset survives abandonment until the next successful publication.
 
+The Vulkan native shader cook describes separate spatial and temporal entries.
+The initial compute ABI uses RGBA32F sampled and storage output, R32F resolved
+depth for the temporal entry, and explicit scalar exposure. The cooked interface
+requires exact shader entry, descriptor bindings, storage image formats, constant
+packing and group size. Provider availability depends on native graph execution
+and image qualification as specified by ADR-040.
+
 ## Upscaling
 
 [ADR-040](../../adr/040-reconstruction-frame-generation-and-latency-providers.md)

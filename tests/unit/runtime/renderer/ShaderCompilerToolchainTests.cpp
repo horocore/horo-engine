@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Render/NativeReconstructionKernel.h"
 #include "Horo/Runtime/Render/VfxShaderParameters.h"
 #include "support/ShaderCompilerToolchainFixture.h"
 
@@ -316,4 +317,44 @@ TEST_CASE("Locked Linux shader tools produce repeatable validated native artifac
            {Identity(ShaderCompilerTool::Dxc), Identity(ShaderCompilerTool::SpirvTools), Identity(ShaderCompilerTool::SpirvCross)});
     verify(ShaderTargetBackend::D3D12, ShaderPayloadFormat::Dxil60,
            {Identity(ShaderCompilerTool::Dxc), Identity(ShaderCompilerTool::DxilValidator)});
+}
+
+TEST_CASE("Locked Vulkan shader tools cook and admit both native reconstruction entries",
+          "[runtime][renderer][shader-compiler][toolchain][reconstruction][integration]") {
+    auto dxc = Installation(ShaderCompilerTool::Dxc, "HORO_TEST_SHADER_DXC");
+    auto spirvTools = Installation(ShaderCompilerTool::SpirvTools, "HORO_TEST_SHADER_SPIRV_VAL");
+    auto spirvCross = Installation(ShaderCompilerTool::SpirvCross, "HORO_TEST_SHADER_SPIRV_CROSS");
+    if (!dxc || !spirvTools || !spirvCross)
+        SKIP("Set the DXC, SPIRV_VAL and SPIRV_CROSS HORO_TEST_SHADER_* paths to the reviewed Linux tool artifacts.");
+
+    TemporaryDirectory temporary;
+    ShaderCompilerToolchainConfiguration configuration;
+    configuration.hostPlatform = "linux-x86_64-ubuntu-26.04";
+    configuration.scratchRoot = temporary.Path() / "scratch";
+    configuration.tools = {*dxc, *spirvTools, *spirvCross};
+    auto adapter = ExternalShaderCompilerAdapter::Create(std::move(configuration), std::make_shared<NativeExternalProcessRunner>());
+    REQUIRE(adapter.HasValue());
+
+    const auto kind = GENERATE(ReconstructionKind::Spatial, ReconstructionKind::Temporal);
+    const auto other = (kind == ReconstructionKind::Spatial) ? ReconstructionKind::Temporal : ReconstructionKind::Spatial;
+    auto request = Request(ShaderTargetBackend::Vulkan, ShaderPayloadFormat::SpirV16, {dxc->identity, spirvTools->identity});
+    auto &target = request.targets.front().requirement;
+    target.supportsCompute = true;
+    target.supportsStorageResources = true;
+    auto contract = DescribeNativeReconstructionShader(kind, target);
+    REQUIRE(contract.HasValue());
+    request.manifest = std::move(contract.Value().manifest);
+    request.source = Read(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/shaders/runtime/native_reconstruction.hlsl");
+    request.dependencies.clear();
+    request.reflection = ShaderCompilerReflectionRequest{spirvCross->identity, std::move(contract.Value().reflectionNames)};
+    const auto cooked = CompileShaderTargets(request, adapter.Value(), {});
+    REQUIRE(cooked.HasValue());
+    REQUIRE(cooked.Value().artifacts.size() == 1);
+    const auto &artifact = cooked.Value().artifacts.front();
+    REQUIRE(artifact.reflection);
+    const auto bytes = AdmitNativeReconstructionShader(kind, target, artifact);
+    REQUIRE(bytes.HasValue());
+    CHECK_FALSE(bytes.Value().empty());
+    CHECK(AdmitNativeReconstructionShader(other, target, artifact).HasError());
+    RequireRepeatable(request, adapter.Value());
 }
