@@ -38,28 +38,53 @@ namespace Horo::Application::PrefabCookDetail {
             std::map<Assets::AssetId, std::string> providers;
             std::size_t edges{};
             bool nativeScene{};
+            bool schemaBackedOverrides{};
 
+            /** @brief Adds the actual registered type of an admitted direct or layer-added component. */
+            void CollectComponent(const Gameplay::ComponentTypeId &type) {
+                if (Runtime::FindBuiltinSceneComponent(type.Value()))
+                    builtins.insert(type);
+                else
+                    components.insert(type);
+            }
+
+            /** @brief Captures original source requirements, including a member later replaced or removed by a layer. */
             void CollectPrefabTypes(const Prefab::PrefabObjectNode &object) {
-                for (const auto &component : object.components) {
-                    const auto &type = component.component.typeId;
-                    if (Runtime::FindBuiltinSceneComponent(type.Value()))
-                        builtins.insert(type);
-                    else
-                        components.insert(type);
-                }
+                for (const auto &component : object.components)
+                    CollectComponent(component.component.typeId);
                 for (const auto &behavior : object.behaviors)
                     behaviors.insert(behavior.typeId);
             }
 
+            /** @brief Includes typed schema use carried by a mounted or variant layer instead of its raw source members. */
+            void CollectOverrideTypes(const std::optional<Prefab::PrefabValueOverrideSet> &overrides) {
+                if (!overrides)
+                    return;
+                schemaBackedOverrides = schemaBackedOverrides || !overrides->componentRecords.empty() ||
+                                        std::ranges::any_of(overrides->records, [](const Prefab::PrefabValueOverrideRecord &record) {
+                                            return std::holds_alternative<Prefab::PrefabPropertyAddress>(record.target);
+                                        });
+                for (const auto &operation : overrides->componentRecords)
+                    if (const auto *added = std::get_if<Prefab::PrefabAddComponentOverride>(&operation))
+                        CollectComponent(added->payload.component.typeId);
+            }
+
             Result<std::vector<Assets::AssetId>> PrefabDependencies(const Assets::AssetCookPinnedSource &source) {
                 using Return = Result<std::vector<Assets::AssetId>>;
-                const auto found = std::ranges::find_if(resolver.Sources(), [&](const auto &entry) {
-                    return entry.document.Data().assetId == source.record.id;
+                const auto sources = resolver.Sources();
+                const auto found = std::ranges::lower_bound(sources, source.record.id, {}, [](const Prefab::PrefabDependencySource &entry) {
+                    return entry.document.Data().assetId;
                 });
-                if (found == resolver.Sources().end() || !graph.FindNode(source.record.id))
+                if (found == sources.end() || found->document.Data().assetId != source.record.id || !graph.FindNode(source.record.id))
                     return Return::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
-                for (const auto &object : found->document.Data().objects)
+                const auto &document = found->document.Data();
+                for (const auto &object : document.objects)
                     CollectPrefabTypes(object);
+                if (document.composition) {
+                    CollectOverrideTypes(document.composition->variantOverrides);
+                    for (const auto &placement : document.composition->nestedPlacements)
+                        CollectOverrideTypes(placement.valueOverrides);
+                }
                 std::vector<Assets::AssetId> dependencies;
                 for (const auto &edge : graph.DirectDependencies(source.record.id))
                     dependencies.push_back(edge.targetAsset);
@@ -83,8 +108,10 @@ namespace Horo::Application::PrefabCookDetail {
                         behaviors.insert(behavior.typeId);
                 }
                 std::vector<Assets::AssetId> dependencies;
-                for (const auto &placement : parsed.Value().prefabInstances)
+                for (const auto &placement : parsed.Value().prefabInstances) {
                     dependencies.push_back(placement.sourcePrefab.Asset());
+                    CollectOverrideTypes(placement.valueOverrides);
+                }
                 dependencies.insert(dependencies.end(), sceneResources.begin(), sceneResources.end());
                 return Return::Success(std::move(dependencies));
             }
@@ -211,7 +238,10 @@ namespace Horo::Application::PrefabCookDetail {
                 result.sources.push_back(asset);
             std::string identity{"horo.prefab.cook.root-inputs.v1"};
             Append(identity, target.Value());
-            Append(identity, FormatSha256(resolver.ValueSchemaRevision()));
+            const auto overrideRevision = closure.schemaBackedOverrides ? resolver.ValueSchemaRevision() : Sha256Digest{};
+            if (closure.schemaBackedOverrides && overrideRevision == Sha256Digest{})
+                return Result<SemanticCookInputs>::Failure(MakeError(Prefab::PrefabErrors::OverrideOrphan));
+            Append(identity, FormatSha256(overrideRevision));
             for (const auto &[asset, provider] : closure.providers) {
                 Append(identity, asset.ToString());
                 Append(identity, provider);

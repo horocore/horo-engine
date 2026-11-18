@@ -251,8 +251,8 @@ namespace Horo::Application {
             Append(semantic, settings.Value().settings->Configuration().ToJson());
             if (auto released = AppendRelease(semantic, rawPackages.Value(), releasePlan); released.HasError())
                 return Result<HostCapture>::Failure(released.ErrorValue());
-            Append(semantic, FormatSha256(OverrideSchemaIdentity(request)));
             const auto cacheDigest = ComputeSha256(std::as_bytes(std::span{semantic}));
+            Append(semantic, FormatSha256(OverrideSchemaIdentity(request)));
             Append(semantic, request.schemas ? FormatSha256(request.schemas->Digest()) : "no-project-schema-context");
             return Result<HostCapture>::Success({metadata, ComputeSha256(std::as_bytes(std::span{semantic})), cacheDigest,
                                                  ComputeSha256(std::as_bytes(std::span{project.Value().second})),
