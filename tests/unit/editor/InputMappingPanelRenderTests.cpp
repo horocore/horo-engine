@@ -376,8 +376,11 @@ namespace {
             captured = {.kind = Input::BindingControlKind::GamepadButton, .gamepadButton = Input::GamepadButton::South};
         }
         SECTION("Pointer button") {
-            const auto center = fixture.ContentWindow()->InnerRect.GetCenter();
+            const auto center = fixture.ContentWindow()->InnerClipRect.GetCenter();
             ImGui::GetIO().AddMousePosEvent(center.x, center.y);
+            fixture.Draw(900);
+            REQUIRE(ImGui::GetCurrentContext()->HoveredWindow == fixture.ContentWindow());
+            fixture.collector.SetPointerPosition(center.x, center.y);
             ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Right, true);
             fixture.collector.SetPointerButton(Input::PointerButton::Secondary, true);
             captured = {.kind = Input::BindingControlKind::PointerButton, .pointerButton = Input::PointerButton::Secondary};
@@ -385,6 +388,7 @@ namespace {
         fixture.gui.input.BeginFrame(fixture.collector.Commit());
         fixture.Draw(900);
         const auto saved = Input::LoadBindingProfile(paths.Value().projectUser);
+        INFO((saved.HasError() ? saved.ErrorValue().message : ""));
         REQUIRE(saved.HasValue());
         REQUIRE(saved.Value().overrides.size() == 1);
         CHECK(saved.Value().overrides.front().bindings == std::vector{captured});
