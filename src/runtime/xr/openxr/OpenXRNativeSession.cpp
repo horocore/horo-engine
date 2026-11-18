@@ -715,6 +715,12 @@ namespace Horo::XR::OpenXRInternal {
     /** @copydoc OpenXRNativeSession::RegisterFeatureProvider */
     Result<NativeFeatureProviderHandle> OpenXRNativeSession::RegisterFeatureProvider(const XRSessionId &session,
                                                                                      const NativeFeatureProviderRoute route) {
+        return RegisterFeatureProvider(session, route, std::nullopt);
+    }
+
+    /** @copydoc OpenXRNativeSession::RegisterFeatureProvider */
+    Result<NativeFeatureProviderHandle> OpenXRNativeSession::RegisterFeatureProvider(
+        const XRSessionId &session, const NativeFeatureProviderRoute route, const std::optional<PreparedFeatureDispatch> prepared) {
         using Outcome = Result<NativeFeatureProviderHandle>;
         if (controlThread_ != std::this_thread::get_id() || registeringProvider_)
             return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
@@ -753,8 +759,11 @@ namespace Horo::XR::OpenXRInternal {
         if (owner_ != session || current.Value().instance == XR_NULL_HANDLE)
             return Outcome::Failure(MakeError(XRErrors::IdentityStale));
 
-        PFN_xrVoidFunction function{};
-        const auto result = dispatch_.getProc(current.Value().instance, symbol.data(), &function);
+        if (prepared && prepared->incarnation != current.Value().incarnation)
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+
+        PFN_xrVoidFunction function = prepared ? prepared->function : nullptr;
+        const auto result = prepared ? XR_SUCCESS : dispatch_.getProc(current.Value().instance, symbol.data(), &function);
         const auto fenced = Borrow(session);
         if (fenced.HasError())
             return Outcome::Failure(fenced.ErrorValue());

@@ -751,12 +751,17 @@ namespace Horo::Tests::OpenXRApplication {
             Malformed,
             Replacement,
             PartialCreate,
+            LocateUnavailable,
             Unsupported
         };
         auto outcome = Outcome::FocusLoss;
         SECTION("partial tracker creation falls back without retaining either native handle") {
             fixture.script.hands.failRight = true;
             outcome = Outcome::PartialCreate;
+        }
+        SECTION("missing native locate dispatch falls back without leaving trackers or stopping the baseline session") {
+            fixture.script.hands.failLocateLookup = true;
+            outcome = Outcome::LocateUnavailable;
         }
         SECTION("discovered extension on an unsupported system falls back") {
             fixture.script.census.handsSupported = false;
@@ -800,7 +805,8 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(inspection.sessionGeneration == waiting.sessionGeneration);
         CHECK(inspection.spaces[static_cast<std::size_t>(XR::XRSpaceKind::View)] > 0);
         CHECK(inspection.deviceCount > 0);
-        if (outcome != Outcome::Unsupported && outcome != Outcome::PartialCreate) {
+        CHECK(fixture.script.hands.locateLookups == (outcome == Outcome::Unsupported ? 0 : 1));
+        if (outcome != Outcome::Unsupported && outcome != Outcome::PartialCreate && outcome != Outcome::LocateUnavailable) {
             REQUIRE(handGestures.Candidates().size() == 1);
             CHECK(handGestures.Candidates().front().hand == XR::XRHandedness::Left);
             CHECK(handGestures.Candidates().front().kind == XR::XRHandGestureKind::Pinch);
@@ -852,6 +858,7 @@ namespace Horo::Tests::OpenXRApplication {
                 CHECK(nextInspection.trackingRevision == 0);
                 CHECK(fixture.script.hands.live[0]);
                 CHECK(fixture.script.hands.live[1]);
+                CHECK(fixture.script.hands.locateLookups == 2);
                 CHECK(fixture.play->ReadHandGestures().Candidates().empty());
                 replacement->Shutdown();
             }

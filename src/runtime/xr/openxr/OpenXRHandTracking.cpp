@@ -12,6 +12,7 @@ namespace Horo::XR::OpenXRInternal {
         static_assert(static_cast<std::uint32_t>(XRHandJoint::Palm) == XR_HAND_JOINT_PALM_EXT);
         static_assert(static_cast<std::uint32_t>(XRHandJoint::LittleTip) == XR_HAND_JOINT_LITTLE_TIP_EXT);
         constexpr std::array nativeHands{XR_HAND_LEFT_EXT, XR_HAND_RIGHT_EXT};
+        constexpr NativeFeatureProviderRoute HandSamplingRoute{XR_EXT_HAND_TRACKING_EXTENSION_NAME, "xrLocateHandJointsEXT"};
 
         /** @brief Keeps a same-lane foreign operation from recursively mutating the tracker pair. */
         class Operation final {
@@ -103,7 +104,7 @@ namespace Horo::XR::OpenXRInternal {
         if (std::this_thread::get_id() != lane_ || active_ || destroy_)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
         const Operation operation{active_};
-        const auto admission = native_->ReadExtensionAdmission(preparation.activeAttempt, XR_EXT_HAND_TRACKING_EXTENSION_NAME);
+        const auto admission = native_->ReadExtensionAdmission(preparation.activeAttempt, HandSamplingRoute.extension);
         if (admission.HasError())
             return Result<void>::Failure(admission.ErrorValue());
         if (admission.Value().state != NativeExtensionState::Enabled)
@@ -120,7 +121,7 @@ namespace Horo::XR::OpenXRInternal {
         const auto destroy = Resolve<PFN_xrDestroyHandTrackerEXT>(discovery.Value(), "xrDestroyHandTrackerEXT");
         if (destroy.HasError())
             return Result<void>::Failure(destroy.ErrorValue());
-        const auto locate = Resolve<PFN_xrLocateHandJointsEXT>(discovery.Value(), "xrLocateHandJointsEXT");
+        const auto locate = Resolve<PFN_xrLocateHandJointsEXT>(discovery.Value(), HandSamplingRoute.extensionSymbol.data());
         if (locate.HasError())
             return Result<void>::Failure(locate.ErrorValue());
         auto current = native_->BorrowPreparedSession(preparation);
@@ -144,21 +145,21 @@ namespace Horo::XR::OpenXRInternal {
             if (current.HasError() || current.Value().incarnation != incarnation_)
                 return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         }
+        preparedLocate_ = locate.Value();
         return Result<void>::Success();
     }
 
     /** @copydoc OpenXRHandTracking::Bind */
     Result<void> OpenXRHandTracking::Bind(const XRSessionId &session) {
-        if (std::this_thread::get_id() != lane_ || active_ || provider_ || !trackers_.front() || !trackers_.back())
+        if (std::this_thread::get_id() != lane_ || active_ || provider_ || !preparedLocate_ || !trackers_.front() || !trackers_.back())
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
         const Operation operation{active_};
-        const auto current = native_->Borrow(session);
-        if (current.HasError() || current.Value().incarnation != incarnation_)
-            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
-        auto provider = native_->RegisterFeatureProvider(session, {XR_EXT_HAND_TRACKING_EXTENSION_NAME, "xrLocateHandJointsEXT"});
+        const OpenXRNativeSession::PreparedFeatureDispatch prepared{incarnation_, std::bit_cast<PFN_xrVoidFunction>(preparedLocate_)};
+        auto provider = native_->RegisterFeatureProvider(session, HandSamplingRoute, prepared);
         if (provider.HasError())
             return Result<void>::Failure(provider.ErrorValue());
         provider_.emplace(std::move(provider).Value());
+        preparedLocate_ = {};
         return Result<void>::Success();
     }
 
@@ -219,6 +220,7 @@ namespace Horo::XR::OpenXRInternal {
             *it = XR_NULL_HANDLE;
         }
         destroy_ = {};
+        preparedLocate_ = {};
         incarnation_ = {};
         return Result<void>::Success();
     }

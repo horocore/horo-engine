@@ -17,6 +17,8 @@ namespace Horo::Tests::OpenXRApplication {
         static inline thread_local ApplicationHandScript *active{};
         std::array<bool, 2> live{};
         std::size_t locates{};
+        std::size_t locateLookups{};
+        bool failLocateLookup{};
         bool failRight{};
         bool malformed{};
 
@@ -73,6 +75,11 @@ namespace Horo::Tests::OpenXRApplication {
             const auto found = std::ranges::find(routes, std::string_view{name}, &Entry::name);
             if (found == routes.end())
                 return XR_ERROR_FUNCTION_UNSUPPORTED;
+            if (found->name == "xrLocateHandJointsEXT") {
+                ++active->locateLookups;
+                if (active->failLocateLookup)
+                    return XR_ERROR_FUNCTION_UNSUPPORTED;
+            }
             *function = found->function;
             return XR_SUCCESS;
         }

@@ -58,6 +58,7 @@ namespace Horo::XR::OpenXRInternal {
         OpenXRNativeSession *native_;
         std::uint64_t incarnation_{};
         PFN_xrDestroyHandTrackerEXT destroy_{};
+        PFN_xrLocateHandJointsEXT preparedLocate_{};
         std::optional<NativeFeatureProviderHandle> provider_;
         std::array<XrHandTrackerEXT, XRHandTrackingHardLimits::MaximumHands> trackers_{};
         const std::thread::id lane_{std::this_thread::get_id()};

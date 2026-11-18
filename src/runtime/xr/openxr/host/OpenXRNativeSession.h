@@ -331,6 +331,19 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<NativeSessionBorrow> Borrow(const XRSessionId &session) const;
 
     private:
+        friend class OpenXRHandTracking;
+
+        /** @brief Dispatch already resolved by a native child while preparing this exact native session. */
+        struct PreparedFeatureDispatch final {
+            std::uint64_t incarnation;
+            PFN_xrVoidFunction function;
+        };
+
+        /** @brief Publishes an admitted route using existing prepared dispatch or a new lookup on the exact active session. */
+        [[nodiscard]] Result<NativeFeatureProviderHandle> RegisterFeatureProvider(const XRSessionId &session,
+                                                                                  NativeFeatureProviderRoute route,
+                                                                                  std::optional<PreparedFeatureDispatch> prepared);
+
         /** @brief Checks either prepared discovery or an exact active session before native sizing queries. */
         [[nodiscard]] Result<NativeDiscoveryBorrow> BorrowReprojectionOwner(XRLoaderPreflightAttempt attempt,
                                                                             const std::optional<XRSessionId> &session) const;
