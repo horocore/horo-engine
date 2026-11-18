@@ -578,6 +578,36 @@ TEST_CASE("Every registered digital editor command has English and Turkish Setti
     }
 }
 
+TEST_CASE("Settings saves preserve a damaged canonical user profile and the last valid settings", "[unit][editor][keymap]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    KeymapHome home;
+    EditorSettingsDocument document;
+    document.settings.keymap.profile.overrides.push_back(
+        {Input::ActionId{kActionSourceZoomIn},
+         {{.kind = Input::BindingControlKind::Key, .key = Input::Key::F2, .requiredModifiers = {.command = true}}}});
+    REQUIRE(SaveEditorSettingsDocument(&document));
+
+    const auto readText = [](const std::filesystem::path &path) {
+        std::ifstream input(path, std::ios::binary);
+        return std::string{std::istreambuf_iterator<char>{input}, {}};
+    };
+    const auto settingsPath = ResolveEditorSettingsPath();
+    const auto savedSettings = readText(settingsPath);
+    REQUIRE_FALSE(savedSettings.empty());
+    const auto profilePaths = Input::ResolveBindingProfilePaths({}, home.directory.Path());
+    REQUIRE(profilePaths.HasValue());
+    const auto &profilePath = profilePaths.Value().editorUser;
+    std::ofstream(profilePath) << "{interrupted";
+
+    document.settings.gridOverlay = !document.settings.gridOverlay;
+    std::string diagnostic;
+    CHECK_FALSE(SaveEditorSettingsDocument(&document, &diagnostic));
+    CHECK_FALSE(diagnostic.empty());
+    CHECK(readText(profilePath) == "{interrupted");
+    CHECK(readText(settingsPath) == savedSettings);
+}
+
 TEST_CASE("Identical editor profile activation preserves routing generations and live module overrides", "[unit][editor][keymap]") {
     using namespace Horo;
     using namespace Horo::Editor;

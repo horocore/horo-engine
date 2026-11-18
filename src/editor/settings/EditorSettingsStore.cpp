@@ -677,8 +677,12 @@ namespace Horo::Editor {
                     *outError = error.message();
                 return false;
             }
-            if (exists)
-                return true;
+            if (exists) {
+                const auto canonical = Input::LoadBindingProfile(profilePath);
+                if (canonical.HasError() && outError)
+                    *outError = canonical.ErrorValue().message;
+                return canonical.HasValue();
+            }
             const auto previous = LoadEditorSettingsDocument();
             if (previous.parseError) {
                 if (outError)
