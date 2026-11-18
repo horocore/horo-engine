@@ -210,7 +210,7 @@ namespace Horo::Editor {
         const std::span<const std::uint8_t> bytes) {
         using Document = Result<std::unique_ptr<BlackboardSchemaDocument>>;
         const auto *record = registry.Find(asset);
-        if (!record || record->type.Value() != BlackboardSchemaAssetType || record->sourcePath.Value() != document.key.source.Value())
+        if (!record || record->type.Value() != BlackboardSchemaAssetType || record->sourcePath.String() != document.key.source.Value())
             return Document::Failure(MakeError(InvalidEdit));
         auto decoded = BlackboardSchemaSourceCodec::Decode(bytes);
         if (decoded.HasError())
