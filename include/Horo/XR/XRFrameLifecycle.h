@@ -195,6 +195,26 @@ namespace Horo::XR {
          */
         [[nodiscard]] XRFrameStatus Submit(const XRFrameId &frame, std::span<const XRSwapchainImageId> completedImages) noexcept;
 
+        /** @brief Preflights same-frame completed color plus exact motion and depth before accepting optional queue work.
+         * @param frame Exact current frame with only baseline images registered.
+         * @param projection Exact ordinary completed image set in original acquisition order.
+         * @param motion Current imported motion allocation.
+         * @param depth Current imported depth allocation.
+         * @return Typed owner, baseline, format or capacity error without changing frame state.
+         */
+        [[nodiscard]] XRFrameStatus ValidateReprojectionSubmission(const XRFrameId &frame, std::span<const XRSwapchainImageId> projection,
+                                                                   const XRReprojectionImage &motion,
+                                                                   const XRReprojectionImage &depth) const noexcept;
+
+        /** @brief Commits the accepted color, motion and depth submission atomically for one frame.
+         * @param frame Exact current begun frame. @param projection Accepted ordinary images in acquisition order.
+         * @param motion Accepted current motion allocation. @param depth Accepted current depth allocation.
+         * @pre Both auxiliary images and all projection images were accepted by the same real Renderer submission.
+         * @return Typed validation failure leaves the entire frame unchanged for ordinary projection or abort.
+         */
+        [[nodiscard]] XRFrameStatus SubmitReprojection(const XRFrameId &frame, std::span<const XRSwapchainImageId> projection,
+                                                       const XRReprojectionImage &motion, const XRReprojectionImage &depth) noexcept;
+
         /**
          * @brief Choose a backend-confirmed legal zero-layer abort after begin, retaining image-release obligations.
          * @param frame Exact begun frame.
@@ -275,6 +295,10 @@ namespace Horo::XR {
         void ClearFrame() noexcept;
 
         /** @brief Checks the exact current subresource against its acquired and native-released allocation. */
+        [[nodiscard]] XRFrameStatus ValidateSubmission(const XRFrameId &frame,
+                                                       std::span<const XRSwapchainImageId> completedImages) const noexcept;
+        [[nodiscard]] XRFrameStatus ValidateReprojectionImage(const XRReprojectionImage &image) const noexcept;
+        void RecordReprojectionImage(const XRReprojectionImage &image) noexcept;
         [[nodiscard]] bool MatchesReprojectionImage(const XRFrameId &frame, const XRReprojectionSubImage &input,
                                                     XRReprojectionImageKind kind) const noexcept;
         /** @brief Admits the declared format envelope for the exact negotiated current session. */

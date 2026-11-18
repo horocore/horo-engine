@@ -28,6 +28,7 @@ namespace Horo::Tests::OpenXR {
         std::uint32_t releases{};
         std::uint32_t destroys{};
         bool timeout{};
+        XrSwapchain timeoutSwapchain{XR_NULL_HANDLE};
         XrSwapchainCreateInfo created{};
 
         SwapchainScript() {
@@ -87,11 +88,11 @@ namespace Horo::Tests::OpenXR {
             return Record("acquire");
         }
 
-        static XRAPI_ATTR XrResult XRAPI_CALL Wait(XrSwapchain, const XrSwapchainImageWaitInfo *info) {
+        static XRAPI_ATTR XrResult XRAPI_CALL Wait(XrSwapchain swapchain, const XrSwapchainImageWaitInfo *info) {
             CHECK(info->timeout >= 0);
             CHECK(info->timeout <= 100'000'000);
             const auto result = Record("wait");
-            return XR_SUCCEEDED(result) && active->timeout ? XR_TIMEOUT_EXPIRED : result;
+            return XR_SUCCEEDED(result) && (active->timeout || active->timeoutSwapchain == swapchain) ? XR_TIMEOUT_EXPIRED : result;
         }
 
         static XRAPI_ATTR XrResult XRAPI_CALL Release(XrSwapchain, const XrSwapchainImageReleaseInfo *) {

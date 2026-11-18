@@ -71,10 +71,8 @@ namespace Horo::XR {
         return limits.maximumImages >= 3 ? XRFrameStatus::Ok : XRFrameStatus::CapacityExceeded;
     }
 
-    /** @copydoc XRFrameLifecycle::AcquireReprojectionImage */
-    XRFrameStatus XRFrameLifecycle::AcquireReprojectionImage(const XRFrameId &frame, const XRReprojectionImage &image) noexcept {
-        if (const auto status = ValidateCurrent(frame); status != XRFrameStatus::Ok)
-            return status;
+    /** @copydoc XRFrameLifecycle::ValidateReprojectionImage */
+    XRFrameStatus XRFrameLifecycle::ValidateReprojectionImage(const XRReprojectionImage &image) const noexcept {
         if (!reprojection_)
             return XRFrameStatus::Unsupported;
         const auto &allocation = image.allocation;
@@ -87,9 +85,75 @@ namespace Horo::XR {
         if (allocation.format != expected || !Render::HasTextureUsage(allocation.usage, required) ||
             allocation.extent.width < reprojection_->extent.width || allocation.extent.height < reprojection_->extent.height)
             return XRFrameStatus::InvalidInput;
+        return XRFrameStatus::Ok;
+    }
+
+    /** @copydoc XRFrameLifecycle::AcquireReprojectionImage */
+    XRFrameStatus XRFrameLifecycle::AcquireReprojectionImage(const XRFrameId &frame, const XRReprojectionImage &image) noexcept {
+        if (const auto status = ValidateCurrent(frame); status != XRFrameStatus::Ok)
+            return status;
+        if (const auto status = ValidateReprojectionImage(image); status != XRFrameStatus::Ok)
+            return status;
         if (const auto status = Acquire(frame, image.image); status != XRFrameStatus::Ok)
             return status;
         reprojectionImages_[current_.acquiredImages - 1] = image;
+        return XRFrameStatus::Ok;
+    }
+
+    /** @copydoc XRFrameLifecycle::ValidateReprojectionSubmission */
+    XRFrameStatus XRFrameLifecycle::ValidateReprojectionSubmission(const XRFrameId &frame,
+                                                                   const std::span<const XRSwapchainImageId> projection,
+                                                                   const XRReprojectionImage &motion,
+                                                                   const XRReprojectionImage &depth) const noexcept {
+        using enum XRFrameStatus;
+        if (const auto status = ValidateSubmission(frame, projection); status != Ok)
+            return status;
+        if (!reprojection_)
+            return Unsupported;
+        if (limits_.maximumImages - current_.acquiredImages < 2)
+            return CapacityExceeded;
+        if (motion.kind != XRReprojectionImageKind::Motion || depth.kind != XRReprojectionImageKind::Depth ||
+            motion.allocation.extent != depth.allocation.extent || motion.allocation.layerCount != depth.allocation.layerCount ||
+            motion.allocation.layerCount < current_.locatedViews)
+            return InvalidInput;
+        if (motion.image.target.slot.index == depth.image.target.slot.index)
+            return Duplicate;
+        for (const auto *input : {&motion, &depth}) {
+            if (!input->image.IsValid())
+                return InvalidInput;
+            if (input->image.target.session != frame.session)
+                return StaleSession;
+            if (std::ranges::any_of(projection, [&](const auto &image) {
+                return image.target.slot.index == input->image.target.slot.index;
+            }))
+                return Duplicate;
+            if (const auto status = ValidateReprojectionImage(*input); status != Ok)
+                return status;
+        }
+        if (std::ranges::any_of(std::span{reprojectionImages_}.first(current_.acquiredImages), [](const auto &registered) {
+            return registered.has_value();
+        }))
+            return Duplicate;
+        return Ok;
+    }
+
+    /** @copydoc XRFrameLifecycle::RecordReprojectionImage */
+    void XRFrameLifecycle::RecordReprojectionImage(const XRReprojectionImage &image) noexcept {
+        const auto index = current_.acquiredImages++;
+        images_[index] = image.image;
+        reprojectionImages_[index] = image;
+        released_[index] = false;
+    }
+
+    /** @copydoc XRFrameLifecycle::SubmitReprojection */
+    XRFrameStatus XRFrameLifecycle::SubmitReprojection(const XRFrameId &frame, const std::span<const XRSwapchainImageId> projection,
+                                                       const XRReprojectionImage &motion, const XRReprojectionImage &depth) noexcept {
+        if (const auto status = ValidateReprojectionSubmission(frame, projection, motion, depth); status != XRFrameStatus::Ok)
+            return status;
+        RecordReprojectionImage(motion);
+        RecordReprojectionImage(depth);
+        submitted_ = true;
+        current_.phase = XRFramePhase::RendererSubmitted;
         return XRFrameStatus::Ok;
     }
 

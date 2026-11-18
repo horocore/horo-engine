@@ -150,8 +150,9 @@ namespace Horo::XR {
         return XRFrameStatus::Ok;
     }
 
-    /** @copydoc XRFrameLifecycle::Submit */
-    XRFrameStatus XRFrameLifecycle::Submit(const XRFrameId &frame, const std::span<const XRSwapchainImageId> completedImages) noexcept {
+    /** @copydoc XRFrameLifecycle::ValidateSubmission */
+    XRFrameStatus XRFrameLifecycle::ValidateSubmission(const XRFrameId &frame,
+                                                       const std::span<const XRSwapchainImageId> completedImages) const noexcept {
         if (const XRFrameStatus valid = ValidateCurrent(frame); valid != XRFrameStatus::Ok)
             return valid;
         if (!current_.renderAdmitted)
@@ -168,6 +169,13 @@ namespace Horo::XR {
             if (completedImages[index] != images_[index])
                 return XRFrameStatus::IncompleteSubmission;
         }
+        return XRFrameStatus::Ok;
+    }
+
+    /** @copydoc XRFrameLifecycle::Submit */
+    XRFrameStatus XRFrameLifecycle::Submit(const XRFrameId &frame, const std::span<const XRSwapchainImageId> completedImages) noexcept {
+        if (const auto status = ValidateSubmission(frame, completedImages); status != XRFrameStatus::Ok)
+            return status;
         submitted_ = true;
         current_.phase = XRFramePhase::RendererSubmitted;
         return XRFrameStatus::Ok;

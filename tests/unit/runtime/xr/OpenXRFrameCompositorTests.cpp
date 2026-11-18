@@ -56,6 +56,107 @@ namespace Horo::Tests::OpenXR {
             CHECK(f.native.script.liveInstances == 1);
         }
 
+        TEST_CASE("Optional native depth timeout keeps color projection and retains exact cleanup debt",
+                  "[unit][xr][reprojection][compositor]") {
+            CompositorFixture f{false, true, true};
+            f.CreateSynthesisPair();
+            f.Bind();
+            OpenXRReprojectionFrameImages pair{f.frames, f.motionOwner, f.synthesisDepthOwner};
+            const auto frame = f.Begin();
+            const auto color = f.Acquire(frame);
+            const std::array completed{color};
+            const auto plan = f.Plan(frame, color);
+            const std::array targets{NativeProjectionTarget{&f.color, color}};
+            f.swapScript.timeoutSwapchain = NativeHandle<XrSwapchain>(f.swapScript.creates);
+            const auto candidate = pair.Prepare(frame, completed);
+            REQUIRE(candidate.HasValue());
+            CHECK_FALSE(candidate.Value());
+            CHECK(f.frames.Snapshot().acquiredImages == 1);
+            CHECK(f.motionOwner.Phase() == NativeSwapchainPhase::Imported);
+            CHECK(f.synthesisDepthOwner.Phase() == NativeSwapchainPhase::Acquired);
+            REQUIRE(f.frames.Submit(frame, completed) == XRFrameStatus::Ok);
+            f.images.complete = true;
+            REQUIRE(f.color.PollRelease().Value());
+            REQUIRE(f.frames.Release(frame, color) == XRFrameStatus::Ok);
+            REQUIRE(f.compositor.EndProjection(frame, plan, targets).HasValue());
+            CHECK(f.script.layers == 1);
+
+            f.motionImages.complete = true;
+            REQUIRE_FALSE(pair.PollRetirement().Value());
+            CHECK(f.swapScript.releases == 2);
+            CHECK(f.synthesisDepthOwner.Phase() == NativeSwapchainPhase::Acquired);
+            const auto next = f.Begin();
+            const auto newColor = f.Acquire(next);
+            const std::array nextImages{newColor};
+            const auto blocked = pair.Prepare(next, nextImages);
+            REQUIRE(blocked.HasValue());
+            CHECK_FALSE(blocked.Value());
+            const auto nextPlan = f.Plan(next, newColor);
+            const std::array nextTargets{NativeProjectionTarget{&f.color, newColor}};
+            f.swapScript.timeoutSwapchain = XR_NULL_HANDLE;
+            REQUIRE(pair.PollRetirement().Value());
+            CHECK(f.swapScript.releases == 3);
+            CHECK(f.frames.Snapshot().releasedImages == 0);
+            REQUIRE(f.frames.Submit(next, nextImages) == XRFrameStatus::Ok);
+            REQUIRE(f.color.PollRelease().Value());
+            REQUIRE(f.frames.Release(next, newColor) == XRFrameStatus::Ok);
+            REQUIRE(f.compositor.EndProjection(next, nextPlan, nextTargets).HasValue());
+            CHECK(f.script.ends == 2);
+        }
+
+        TEST_CASE("Same-frame auxiliary pair registers atomically and color fallback waits only for registered release",
+                  "[unit][xr][reprojection][compositor]") {
+            const bool omit = GENERATE(false, true);
+            CompositorFixture f{false, true, true};
+            f.CreateSynthesisPair();
+            f.Bind();
+            OpenXRReprojectionFrameImages pair{f.frames, f.motionOwner, f.synthesisDepthOwner};
+            const auto frame = f.Begin();
+            const auto color = f.Acquire(frame);
+            const std::array completed{color};
+            const auto plan = f.Plan(frame, color);
+            const std::array targets{NativeProjectionTarget{&f.color, color}};
+            const auto result = pair.Prepare(frame, completed);
+            REQUIRE(result.HasValue());
+            REQUIRE(result.Value());
+            const auto &candidate = *result.Value();
+            CHECK(candidate.frame == frame);
+            CHECK(candidate.motion.evidence.kind == XRReprojectionImageKind::Motion);
+            CHECK(candidate.depth.evidence.kind == XRReprojectionImageKind::Depth);
+            CHECK(f.frames.Snapshot().acquiredImages == 1);
+            auto wrongFrame = frame;
+            ++wrongFrame.sequence;
+            CHECK(pair.Submit(wrongFrame, completed).HasError());
+            CHECK(pair.Submit(frame, {}).HasError());
+            CHECK(f.frames.Snapshot().acquiredImages == 1);
+            CHECK((f.frames.ValidateReprojectionSubmission(frame, completed, candidate.motion.evidence, candidate.motion.evidence) !=
+                   XRFrameStatus::Ok));
+
+            if (omit) {
+                REQUIRE(pair.Omit(frame).HasValue());
+                REQUIRE(f.frames.Submit(frame, completed) == XRFrameStatus::Ok);
+                CHECK(f.frames.Snapshot().acquiredImages == 1);
+            } else {
+                REQUIRE(pair.Submit(frame, completed).HasValue());
+                CHECK(f.frames.Snapshot().acquiredImages == 3);
+                CHECK(pair.Omit(frame).HasError());
+            }
+            f.images.complete = true;
+            REQUIRE(f.color.PollRelease().Value());
+            REQUIRE(f.frames.Release(frame, color) == XRFrameStatus::Ok);
+            f.motionImages.complete = true;
+            REQUIRE_FALSE(pair.PollRetirement().Value());
+            CHECK(f.swapScript.releases == 2);
+            CHECK(f.frames.Snapshot().releasedImages == (omit ? 1 : 2));
+            CHECK(f.compositor.EndProjection(frame, plan, targets).HasValue() == omit);
+            f.synthesisDepthImages.complete = true;
+            REQUIRE(pair.PollRetirement().Value());
+            CHECK(f.swapScript.releases == 3);
+            if (!omit)
+                REQUIRE(f.compositor.EndProjection(frame, plan, targets).HasValue());
+            CHECK(f.script.layers == 1);
+        }
+
         TEST_CASE("Native XR compositor snapshots admitted pacing before loader callbacks", "[unit][xr][compositor][pacing]") {
             CompositorFixture f;
             NativeFramePacingPolicy pacing;

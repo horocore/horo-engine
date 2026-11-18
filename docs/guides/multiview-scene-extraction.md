@@ -139,10 +139,19 @@ smallest combined allocation. Imported registrations retire through the same
 queue and final attachment layouts as projection images. They expose a typed
 frame-registration input only for the current live native acquisition.
 
+The OpenXR frame coordinator borrows those two owners and attempts both
+acquisitions with zero-time waits against the same canonical frame. It
+registers them atomically after the same Renderer submission accepts both
+auxiliary targets and projection color. A timeout or omitted pair retains
+native cleanup on those swapchains without extending the ordinary projection
+image set. The next optional attempt waits for this native debt. When the
+Renderer accepted a pair but the compositor uses color only, both exact
+auxiliary releases still precede native frame end.
+
 The selected Play frame currently uses a color shader and internal depth.
-Activation still requires same-frame coordination of both auxiliary
-acquisitions and a disocclusion policy for the provider's format. EXT ignores
-the engine validity alpha.
+Activation still requires the packaged motion pass, provider encoding and a
+disocclusion policy for the provider's format. EXT ignores the engine validity
+alpha.
 [OpenXR frame synthesis contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrFrameSynthesisInfoEXT.html)
 
 ## Public contract migration and evidence

@@ -167,4 +167,65 @@ namespace Horo::XR::OpenXRInternal {
         bool closing_{};
         std::optional<Error> fault_;
     };
+
+    /** @brief Renderer inputs issued only when both native imports belong to one exact frame attempt. */
+    struct NativeReprojectionFramePair final {
+        XRFrameId frame;
+        NativeReprojectionAcquisition motion;
+        NativeReprojectionAcquisition depth;
+    };
+
+    /** @brief Control-lane coordinator for the selected provider's two already-created swapchains.
+     * @details Partial acquisitions are retained separately from XRFrameLifecycle so an ordinary
+     * projection can end while the unreferenced optional swapchains still owe wait/release.
+     * The host retains both swapchains through normal retirement or their exact session-loss close.
+     */
+    class OpenXRReprojectionFrameImages final {
+    public:
+        /** @brief Borrows the canonical frame and both live native image owners through retirement. */
+        OpenXRReprojectionFrameImages(XRFrameLifecycle &frames, OpenXRSwapchain &motion, OpenXRSwapchain &depth) noexcept;
+        OpenXRReprojectionFrameImages(const OpenXRReprojectionFrameImages &) = delete;
+        OpenXRReprojectionFrameImages &operator=(const OpenXRReprojectionFrameImages &) = delete;
+
+        /** @brief Makes one zero-wait optional acquire attempt for the current projection.
+         * @param frame Exact current frame.
+         * @param projection Ordinary images already acquired in canonical order.
+         * @return Both usable imports, no pair for ordinary fallback, or original failure with cleanup retained.
+         * @post No auxiliary image is registered with the canonical frame.
+         */
+        [[nodiscard]] Result<std::optional<NativeReprojectionFramePair>> Prepare(const XRFrameId &frame,
+                                                                                 std::span<const XRSwapchainImageId> projection);
+        /** @brief Commits both current auxiliary images only after the same Renderer submission accepted them and color.
+         * @param frame Exact prepared frame.
+         * @param projection Ordinary images accepted by the same Renderer submission.
+         * @return Success or typed validation failure leaving the prepared debt available for abort/retirement.
+         */
+        [[nodiscard]] Result<void> Submit(const XRFrameId &frame, std::span<const XRSwapchainImageId> projection);
+        /** @brief Revokes the exact prepared pair when the host chooses ordinary projection or aborts.
+         * @param frame Same prepared frame. @return Success or stale/order error with no mutation.
+         */
+        [[nodiscard]] Result<void> Omit(const XRFrameId &frame);
+        /** @brief Advances the two wait/retire/release debts without a queue wait.
+         * @return True when both debts are retired, false while pending, or original failure with debt retained.
+         * @post Only actually released, registered images advance XRFrameLifecycle.
+         */
+        [[nodiscard]] Result<bool> PollRetirement();
+
+    private:
+        enum class Phase : std::uint8_t {
+            Idle,
+            Prepared,
+            Omitted,
+            Submitted
+        };
+        [[nodiscard]] Result<void> ValidateOwners(const XRFrameId &frame) const;
+        [[nodiscard]] Result<bool> Release(OpenXRSwapchain &owner, const XRSwapchainImageId *registered);
+
+        XRFrameLifecycle *frames_;
+        std::array<OpenXRSwapchain *, 2> owners_;
+        XRFrameId attempted_;
+        std::optional<NativeReprojectionFramePair> pair_;
+        std::array<bool, 2> released_{};
+        Phase phase_{Phase::Idle};
+    };
 }  // namespace Horo::XR::OpenXRInternal

@@ -4,6 +4,7 @@
 /** @file OpenXRFrameCompositorTestFixture.h
  * @brief Scripted official-dispatch fixture shared by compositor lifecycle cases. */
 #include "OpenXRFrameCompositor.h"
+#include "support/OpenXRCensusTestSupport.h"
 #include "support/OpenXRSwapchainTestSupport.h"
 
 #include <array>
@@ -36,6 +37,7 @@ namespace Horo::Tests::OpenXR {
         class Images final : public IOpenXRSwapchainImages {
         public:
             bool complete{};
+            std::uint32_t textureSlot{1};
 
             Result<void> Validate(const NativeSwapchainRequest &) const override {
                 return Result<void>::Success();
@@ -50,7 +52,7 @@ namespace Horo::Tests::OpenXR {
             }
 
             Result<Render::RenderTextureHandle> Import(const NativeSwapchainRequest &, const XRSwapchainImageId &, std::uint32_t) override {
-                return Result<Render::RenderTextureHandle>::Success({{1}, 1, 1});
+                return Result<Render::RenderTextureHandle>::Success({{1}, textureSlot, 1});
             }
 
             Result<void> Retire(Render::RenderTextureHandle) override {
@@ -68,6 +70,7 @@ namespace Horo::Tests::OpenXR {
 
         struct CompositorFixture final {
             Fixture native;
+            CensusScript census;
             Resources resources;
             XRSessionLifecycle sessions{resources};
             XRFrameLifecycle frames{sessions};
@@ -75,15 +78,33 @@ namespace Horo::Tests::OpenXR {
             FrameScript script;
             SwapchainScript swapScript;
             Images images;
+            Images motionImages;
+            Images synthesisDepthImages;
             OpenXRSwapchain color{native.owner, images};
             OpenXRSwapchain depthOwner{native.owner, images};
+            OpenXRSwapchain motionOwner{native.owner, motionImages};
+            OpenXRSwapchain synthesisDepthOwner{native.owner, synthesisDepthImages};
             OpenXRFrameCompositor compositor{native.owner, frames, spaces};
             XRSessionId session;
             XRViewConfigurationId configuration;
             XRCoordinateSpace local;
             NativeSwapchainRequest allocation;
 
-            explicit CompositorFixture(bool enableDepth = false, bool requestSpaceWarp = false) {
+            static XRAPI_ATTR XrResult XRAPI_CALL ResolveSynthesisProperties(XrInstance, const char *name, PFN_xrVoidFunction *function) {
+                if (std::string_view{name} != "xrGetSystemProperties")
+                    return XR_ERROR_FUNCTION_UNSUPPORTED;
+                *function = std::bit_cast<PFN_xrVoidFunction>(&CensusScript::System);
+                return XR_SUCCESS;
+            }
+
+            explicit CompositorFixture(bool enableDepth = false, bool requestSpaceWarp = false, bool enableSynthesis = false) {
+                if (enableSynthesis) {
+                    native.capabilities = Capabilities(16, true);
+                    native.script.resolveExtra = &ResolveSynthesisProperties;
+                    native.script.spaceWarpExtension = true;
+                    ++native.script.extensionCount;
+                    requestSpaceWarp = true;
+                }
                 if (requestSpaceWarp) {
                     constexpr std::array requested{XRFeatureRequest{XRCapability::SpaceWarp, XRFeatureRequirementKind::Optional,
                                                                     XRFeatureFallback::BaselineProjection}};
@@ -106,13 +127,26 @@ namespace Horo::Tests::OpenXR {
                     native.script.extensionCount = 2;
                     request.extensions = extensions;
                 }
+                const std::array synthesisExtensions{NativeExtensionRequest{XR_FB_SPACE_WARP_EXTENSION_NAME, true}};
+                if (enableSynthesis)
+                    request.extensions = synthesisExtensions;
                 REQUIRE(native.owner.Create(request).HasValue());
                 configuration = {session, {3, 1}};
                 local = {.id = {session, {7, 1}},
                          .kind = XRSpaceKind::Local,
                          .worldOriginRevision = IdentityValue<XRWorldOriginRevision>(1)};
                 spaces.reference = local;
-                REQUIRE(frames.BindConfiguration(configuration, native.capabilities, {2, 2, 1}) == XRFrameStatus::Ok);
+                if (enableSynthesis) {
+                    REQUIRE(
+                        frames.BindConfiguration(configuration, native.capabilities, {2, 3, 1},
+                                                 XRReprojectionPolicy{.extent = {640, 512},
+                                                                      .maximumPredictionIntervalNanoseconds = 20'000'000,
+                                                                      .motion =
+                                                                          XRReprojectionMotionConvention::CurrentNdcMinusPreviousNdcXYZ}) ==
+                        XRFrameStatus::Ok);
+                } else {
+                    REQUIRE(frames.BindConfiguration(configuration, native.capabilities, {2, 2, 1}) == XRFrameStatus::Ok);
+                }
                 allocation = {.target = {session, {4, 1}},
                               .texture = {.extent = {800, 600},
                                           .format = Render::RenderTextureFormat::Rgba8Unorm,
@@ -128,6 +162,27 @@ namespace Horo::Tests::OpenXR {
                 }
             }
 
+            void CreateSynthesisPair() {
+                constexpr Render::FramebufferExtent extent{640, 512};
+                NativeSwapchainRequest request{.target = {session, {5, 1}},
+                                               .texture = {.extent = extent,
+                                                           .format = Render::RenderTextureFormat::Rgba16Float,
+                                                           .layerCount = 2,
+                                                           .usage = Render::RenderTextureUsage::Sampled |
+                                                                    Render::RenderTextureUsage::RenderAttachment},
+                                               .role = NativeSwapchainRole::Motion,
+                                               .reprojection = NativeReprojectionAllocation{native.preflight.Attempt(),
+                                                                                            NativeReprojectionRoute::SpaceWarpFb,
+                                                                                            {extent, extent}}};
+                motionImages.textureSlot = 2;
+                synthesisDepthImages.textureSlot = 3;
+                REQUIRE(motionOwner.Create(request, &SwapchainScript::GetProc).HasValue());
+                request.target.slot.index = 6;
+                request.role = NativeSwapchainRole::ReprojectionDepth;
+                request.texture.format = Render::RenderTextureFormat::Depth32Float;
+                REQUIRE(synthesisDepthOwner.Create(request, &SwapchainScript::GetProc).HasValue());
+            }
+
             ~CompositorFixture() {
                 CHECK(frames.Snapshot().phase == XRFramePhase::Idle);
                 CHECK(compositor.ResetAfterQuiescence().HasValue());
@@ -135,6 +190,11 @@ namespace Horo::Tests::OpenXR {
                 images.complete = true;
                 CHECK(color.Close().HasValue());
                 CHECK(depthOwner.Close().HasValue());
+                swapScript.timeoutSwapchain = XR_NULL_HANDLE;
+                motionImages.complete = true;
+                synthesisDepthImages.complete = true;
+                CHECK(motionOwner.Close().HasValue());
+                CHECK(synthesisDepthOwner.Close().HasValue());
             }
 
             void Bind() {
