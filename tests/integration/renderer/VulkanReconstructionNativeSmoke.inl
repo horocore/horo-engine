@@ -14,7 +14,7 @@ namespace ReconstructionSmoke {
         CompiledShaderArtifact raster;
     };
 
-    /** @brief Cooks the existing portable triangle material and the selected native reconstruction entry. */
+    /** @brief Cooks the mesh-backed triangle material and the selected native reconstruction entry. */
     CookedScene CookScene(NativeReconstructionEntry entry) {
         const auto dxc = Cook::Installation(ShaderCompilerTool::Dxc, "HORO_TEST_SHADER_DXC");
         const auto validator = Cook::Installation(ShaderCompilerTool::SpirvTools, "HORO_TEST_SHADER_SPIRV_VAL");
@@ -41,6 +41,9 @@ namespace ReconstructionSmoke {
         REQUIRE(batch.artifacts.size() == 1);
 
         auto raster = Cook::Request(ShaderTargetBackend::Vulkan, ShaderPayloadFormat::SpirV16, {dxc->identity, validator->identity});
+        raster.source = Cook::Read(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "tests/fixtures/shaders/reconstruction_mesh.hlsl");
+        raster.manifest.sourceIdentity = "tests.shaders.reconstruction_mesh";
+        raster.dependencies.clear();
         raster.reflection = ShaderCompilerReflectionRequest{cross->identity, {}};
         auto rasterBatch = Take(CompileShaderTargets(raster, adapter, {}));
         REQUIRE(rasterBatch.artifacts.size() == 1);
@@ -87,7 +90,7 @@ namespace ReconstructionSmoke {
         std::shared_ptr<const ResidentMaterialBinding> material;
     };
 
-    /** @brief Realizes the existing portable raster fixture through the actual shader, mesh and material owners. */
+    /** @brief Realizes the authored mesh-attribute raster fixture through the actual shader, mesh and material owners. */
     SceneTriangle PrepareTriangle(RenderFrontend &frontend, const CookedScene &shaders) {
         const auto &raster = shaders.raster;
         const auto &target = shaders.rasterManifest.targets.front();
@@ -121,9 +124,9 @@ namespace ReconstructionSmoke {
                                  reflection.cookedArtifactKey, reflection.reflection.interfaceCompatibility, stateKey},
                             }));
 
-        constexpr std::array<MeshVertex, 3> vertices{{{{-0.5F, -0.5F, 0.5F}, {0, 0, 1}, {0, 0}},
-                                                      {{0.0F, 0.5F, 0.5F}, {0, 0, 1}, {0.5F, 1}},
-                                                      {{0.5F, -0.5F, 0.5F}, {0, 0, 1}, {1, 0}}}};
+        constexpr std::array<MeshVertex, 3> vertices{{{{-0.5F, -0.5F, 0.5F}, {0, 0, 1}, {0.25F, 0.5F}},
+                                                      {{0.0F, 0.5F, 0.5F}, {0, 0, 1}, {0.25F, 0.5F}},
+                                                      {{0.5F, -0.5F, 0.5F}, {0, 0, 1}, {0.25F, 0.5F}}}};
         constexpr std::array<std::uint32_t, 3> indices{0, 1, 2};
         SceneTriangle scene;
         scene.vertices = Ready(frontend, frontend.CreateBuffer({.byteSize = sizeof(vertices),
