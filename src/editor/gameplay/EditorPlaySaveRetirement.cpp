@@ -1,6 +1,7 @@
 #include "EditorPlaySaveRetirement.h"
 
 #include "EditorPlaySceneHost.h"
+#include "Horo/Foundation/Logging/LogContext.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "ProjectGameplayRegistry.h"
 
@@ -35,8 +36,10 @@ namespace Horo::Editor {
             if (!save->IsSettled())
                 return pumped.HasError() ? Result<bool>::Failure(pumped.ErrorValue()) : Result<bool>::Success(false);
         }
-        if (committed.HasError())
+        if (committed.HasError()) {
+            const Log::ScopedLogContext privacy{Log::LogContextSnapshot::Isolated({})};
             LOG_WARN("editor.play.save", "Settled Play Scene retired after a cancellation diagnostic.");
+        }
         if (binding)
             binding->runtime = nullptr;
         scene->Shutdown();

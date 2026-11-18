@@ -1,4 +1,5 @@
 #include "EditorPlaySaveHostInternal.h"
+#include "Horo/Foundation/Logging/LogContext.h"
 #include "Horo/Foundation/Logging/Logger.h"
 
 #include <limits>
@@ -237,6 +238,7 @@ namespace Horo::Application::Internal {
             if (submitted.HasValue())
                 return;
             error = submitted.ErrorValue();
+            const Log::ScopedLogContext privacy{Log::LogContextSnapshot::Isolated({})};
             LOG_WARN("editor.play.save", "Sandbox cleanup deferred after request admission closed.");
             storage->CloseAdmission();
         }

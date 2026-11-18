@@ -1,7 +1,9 @@
 #include "EditorPlaySaveHost.h"
 #include "Horo/Platform/SecureRandom.h"
+#include "Horo/Runtime/Save/SaveDiagnostics.h"
 #include "SaveFilesystemTestSupport.h"
 
+#include <algorithm>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
@@ -340,6 +342,13 @@ TEST_CASE("Explicit Play Refresh retries the same real root after asynchronous "
     const auto failed = f.host->Snapshot();
     REQUIRE_FALSE(failed->operationPending);
     REQUIRE(failed->error);
+    const auto descriptors = SaveDiagnosticErrorDescriptors();
+    const auto observed = std::ranges::find_if(descriptors, [&](const auto *descriptor) {
+        return failed->error->code.Value() == descriptor->code.Value();
+    });
+    REQUIRE(observed != descriptors.end());
+    CHECK(failed->error->message == (*observed)->summary);
+    CHECK(failed->error->diagnostics.empty());
     CHECK(failed->availability == Editor::PlaySaveAvailability::Failed);
     CHECK_FALSE(failed->manager);
     CHECK(f.host->Request({.kind = Editor::PlaySaveCommandKind::SaveNew}).HasError());

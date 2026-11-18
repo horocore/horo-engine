@@ -1,6 +1,7 @@
 #include "EditorPlaySaveHostInternal.h"
 #include "EditorPlaySaveIdentityIssuing.h"
 #include "EditorPlaySavePrefabCapture.h"
+#include "Horo/Foundation/Logging/LogContext.h"
 #include "Horo/Runtime/Save/SaveDiagnostics.h"
 
 #include <algorithm>
@@ -208,6 +209,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc EditorPlaySaveHost::State::StartRuntime */
     Result<void> EditorPlaySaveHost::State::StartRuntime(const Editor::PlaySaveCommand &command) {
+        const Log::ScopedLogContext privacy{Log::LogContextSnapshot::Isolated({})};
         const auto identity = IssuePlaySaveIdentity<CapturedStateId>(*environment.storage.entropy);
         if (identity.HasError())
             return Result<void>::Failure(identity.ErrorValue());
@@ -291,6 +293,7 @@ namespace Horo::Application::Internal {
             error = current.terminalError;
             operation->terminalError = RedactSaveDiagnosticError(*current.terminalError);
         }
+        const Log::ScopedLogContext privacy{Log::LogContextSnapshot::Isolated({})};
         (void)environment.operations.Update(current.operation,
                                             {.state = PresentationState(current.state), .error = operation->terminalError});
     }
