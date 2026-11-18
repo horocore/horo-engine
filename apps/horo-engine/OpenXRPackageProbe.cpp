@@ -113,14 +113,14 @@ namespace Horo::Application::Internal {
             });
         }
 
-        /** @brief Picks the exact desktop tool platform before attempting executable/loader operations. */
-        bool MatchesHost(const std::string_view host) {
+        /** @brief Retrieves the exact desktop tool platform, if this build supports the probe. */
+        std::string_view ProbeHost() noexcept {
 #if defined(_WIN32)
-            return host == "windows";
+            return "windows";
 #elif defined(__linux__)
-            return host == "linux";
+            return "linux";
 #else
-            return false;
+            return {};
 #endif
         }
 
@@ -151,6 +151,59 @@ namespace Horo::Application::Internal {
             request.maximumOutputBytes = 128U * 1024U;
             return request;
         }
+
+        /** @brief Requires one current native receipt while the caller retains the installed-product lease. */
+        int ProbeInstalledRuntime(const std::span<char *> arguments, const std::filesystem::path &installation,
+                                  const std::filesystem::path &executable, const Sha256Digest &executableDigest, std::ostream &output,
+                                  std::ostream &errors) {
+            const std::string_view host{arguments[Host]};
+            const std::string_view digest{arguments[InstallDigest]};
+            Cli::CliInvocationStopController stop{std::chrono::milliseconds::zero()};
+            NativeCliInterrupts interrupts;
+            if (interrupts.Start(stop).HasError()) {
+                errors << "XR probe could not acquire native cancellation handling.\n";
+                return 1;
+            }
+            auto request = MakeRequest(arguments, installation);
+            request.forceCancellation = stop.ForceToken();
+            const auto target = FormatSha256(OpenXRProbeWire::TargetDigest(arguments[Runtime], arguments[System]));
+            std::array<char, MaximumReceiptBytes> receipt{};
+            std::size_t received{};
+            bool rejected{};
+            request.onOutput = [&](const ProcessOutputLine &line) noexcept {
+                if (line.stream != ProcessOutputStream::StandardOutput || !line.text.starts_with(OpenXRProbeWire::Record))
+                    return;
+                if (received || line.truncated || line.text.size() > receipt.size() || !IsReceipt(line.text, digest, host, target)) {
+                    rejected = true;
+                    return;
+                }
+                std::ranges::copy(line.text, receipt.begin());
+                received = line.text.size();
+            };
+            NativeExternalProcessRunner runner;
+            const auto terminal = runner.Run(request, stop.Token());
+            if (terminal.HasError()) {
+                errors << "XR probe launch or process cleanup failed.\n";
+                return 1;
+            }
+            if (terminal.Value().stopCause == ProcessStopCause::Timeout) {
+                errors << "XR probe timed out; the supervised process tree was retired.\n";
+                return 1;
+            }
+            if (terminal.Value().reason != ProcessTerminationReason::Exited || terminal.Value().stopCause != ProcessStopCause::None ||
+                stop.Token().IsCancellationRequested()) {
+                errors << "XR probe was interrupted or required process cleanup.\n";
+                return 1;
+            }
+            if (terminal.Value().exitCode != 0 || rejected || received == 0 || !MatchesExecutable(executable, executableDigest)) {
+                errors << "XR probe reported no current installed runtime/device receipt. Check the requested default runtime, HMD and "
+                          "package.\n";
+                return 1;
+            }
+            output << std::string_view{receipt.data(), received} << '\n';
+            return output ? 0 : 1;
+        }
+
     }  // namespace
 
     /** @copydoc RunOpenXRPackageProbe */
@@ -162,7 +215,7 @@ namespace Horo::Application::Internal {
             return 2;
         }
         const std::string_view host{arguments[Host]};
-        if (!MatchesHost(host) || std::string_view{arguments[Route]} != OpenXRProbeWire::Route) {
+        if (host.empty() || host != ProbeHost() || std::string_view{arguments[Route]} != OpenXRProbeWire::Route) {
             errors << "XR probe unavailable for the declared host or connection route.\n";
             return 2;
         }
@@ -197,49 +250,6 @@ namespace Horo::Application::Internal {
             return 1;
         }
 
-        Cli::CliInvocationStopController stop{std::chrono::milliseconds::zero()};
-        NativeCliInterrupts interrupts;
-        if (interrupts.Start(stop).HasError()) {
-            errors << "XR probe could not acquire native cancellation handling.\n";
-            return 1;
-        }
-        auto request = MakeRequest(arguments, installation);
-        request.forceCancellation = stop.ForceToken();
-        const auto target = FormatSha256(OpenXRProbeWire::TargetDigest(arguments[Runtime], arguments[System]));
-        std::array<char, MaximumReceiptBytes> receipt{};
-        std::size_t received{};
-        bool rejected{};
-        request.onOutput = [&](const ProcessOutputLine &line) noexcept {
-            if (line.stream != ProcessOutputStream::StandardOutput || !line.text.starts_with(OpenXRProbeWire::Record))
-                return;
-            if (received || line.truncated || line.text.size() > receipt.size() || !IsReceipt(line.text, digest, host, target)) {
-                rejected = true;
-                return;
-            }
-            std::ranges::copy(line.text, receipt.begin());
-            received = line.text.size();
-        };
-        NativeExternalProcessRunner runner;
-        const auto terminal = runner.Run(request, stop.Token());
-        if (terminal.HasError()) {
-            errors << "XR probe launch or process cleanup failed.\n";
-            return 1;
-        }
-        if (terminal.Value().stopCause == ProcessStopCause::Timeout) {
-            errors << "XR probe timed out; the supervised process tree was retired.\n";
-            return 1;
-        }
-        if (terminal.Value().reason != ProcessTerminationReason::Exited || terminal.Value().stopCause != ProcessStopCause::None ||
-            stop.Token().IsCancellationRequested()) {
-            errors << "XR probe was interrupted or required process cleanup.\n";
-            return 1;
-        }
-        if (terminal.Value().exitCode != 0 || rejected || received == 0 || !MatchesExecutable(executable, executableDigest.Value())) {
-            errors
-                << "XR probe reported no current installed runtime/device receipt. Check the requested default runtime, HMD and package.\n";
-            return 1;
-        }
-        output << std::string_view{receipt.data(), received} << '\n';
-        return output ? 0 : 1;
+        return ProbeInstalledRuntime(arguments, installation, executable, executableDigest.Value(), output, errors);
     }
 }  // namespace Horo::Application::Internal
