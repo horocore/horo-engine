@@ -2333,6 +2333,15 @@ invalidates the retained preview. A compiled stage retains
 only its selected requirement, and preview evaluates each test against its
 own captured location from the pinned Scene.
 
+An application can add named location descriptors to the native choices and
+provide a matching registry and capability set to the workspace. The editor
+uses the registered names for authoring. It invokes a selected provider on the
+Scene owner before handing the captured values to the preview worker. Missing
+grants and mismatched provider versions fail before any provider call.
+Authoring callers now read `option.id` from each generator or distance context
+choice. The optional `option.displayName` is for presentation. Saved query
+properties continue to store only the stable context identity.
+
 The deterministic native point-query admission path uses those same authored
 kernels on the simulation owner. It reserves both lattice passes and the
 bounded test lookup and evaluation. It rejects a retired Scene revision before

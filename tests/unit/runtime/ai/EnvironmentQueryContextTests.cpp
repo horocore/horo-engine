@@ -122,8 +122,8 @@ namespace Horo::AI {
             REQUIRE(settings.HasValue());
             CHECK(settings.Value().lattice.center == world);
             REQUIRE(settings.Value().latticeCenters.size() == 3);
-            CHECK(settings.Value().latticeCenters.front() == querier);
-            CHECK(settings.Value().latticeCenters.back() == BuiltinQueryContextId(BuiltinQueryContext::TargetLocation));
+            CHECK(settings.Value().latticeCenters.front().id == querier);
+            CHECK(settings.Value().latticeCenters.back().id == BuiltinQueryContextId(BuiltinQueryContext::TargetLocation));
             CHECK(settings.Value().distanceTests.front().test.center == querier);
             const auto foreign =
                 AddBuiltinPointDistanceTest(generator.Value(), stage, {300, false, 1, BuiltinQueryContextId(BuiltinQueryContext::Target)});
@@ -414,6 +414,26 @@ namespace Horo::AI {
             source = Source(view);
             source.querier.runtime = Runtime::SceneRuntimeId{88};
             ExpectError(capture.Capture(plan, registry, providers.Value(), view, source), AIErrors::EnvironmentQueryContextStale);
+        }
+
+        TEST_CASE("EQS does not invoke a provider registered against an older context version", "[unit][ai][eqs][context]") {
+            QueryFixture fixture;
+            const auto previous = fixture.Registry();
+            ProviderState state;
+            const std::array registration{
+                QueryContextProviderRegistration{.id = fixture.custom.id, .state = &state, .capture = CaptureCustom}};
+            const auto providers = QueryContextProviderRegistry::Capture(registration, previous);
+            REQUIRE(providers.HasValue());
+            fixture.contexts.back().origin.version = 2;
+            fixture.generator.contexts = {{fixture.custom.id, {2, 2}}};
+            const auto schema = fixture.Registry();
+            const auto plan = fixture.Plan(schema);
+            const auto scene = MakeScene();
+            const auto view = scene->View();
+            QueryContextCapture capture;
+            ExpectError(capture.Capture(plan, schema, providers.Value(), view, Source(view)),
+                        AIErrors::EnvironmentQueryVersionIncompatible);
+            CHECK(state.calls == 0);
         }
 
         TEST_CASE("EQS custom provider registration validates capability and canonical bounds", "[unit][ai][eqs][context]") {

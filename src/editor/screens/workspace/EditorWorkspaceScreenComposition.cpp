@@ -205,6 +205,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                                                                   PCGPreviewInputs &&previewInputs) const {
         const auto *bakeDependencies = services_.TryGetConst<Application::WorldBakeDependencySource>();
         const auto *latticeFactory = services_.TryGetConst<AI::LatticeQueryAuthoringFactory>();
+        const auto *contextAccess = services_.TryGetConst<AI::QueryContextProviderAccess>();
         return EditorWorkspaceDependencies{.assets = {.mutableAssetRegistry = projectServices_.assetRegistry,
                                                       .source = std::move(sources.registry),
                                                       .importerCatalog = projectServices_.importerCatalog},
@@ -239,7 +240,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                            .terrainCook = services_.TryGetConst<Application::TerrainAuthoringCookFactory>(),
                                            .terrainAssets = services_.TryGetConst<Application::TerrainAuthoringAssetFactory>(),
                                            .latticeQueryFactory = latticeFactory ? *latticeFactory : nullptr,
-                                           .querySchema = services_.TryGetConst<AI::QuerySchemaRegistry>()};
+                                           .querySchema = services_.TryGetConst<AI::QuerySchemaRegistry>(),
+                                           .queryContextAccess = contextAccess ? *contextAccess : AI::QueryContextProviderAccess{}};
     }
 
     /** @copydoc EditorWorkspaceScreen::RestoreExtensionWorkspace */

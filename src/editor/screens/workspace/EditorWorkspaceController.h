@@ -1,6 +1,7 @@
 #pragma once
 
 #include "EditorWorkspaceHostServices.h"
+#include "Horo/AI/EnvironmentQueryContexts.h"
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Application/TerrainAuthoringAssets.h"
 #include "Horo/Application/TerrainAuthoringCook.h"
@@ -139,6 +140,7 @@ namespace Horo::Editor {
         const Application::TerrainAuthoringAssetFactory *terrainAssets{};
         AI::LatticeQueryAuthoringFactory latticeQueryFactory{};
         const AI::QuerySchemaRegistry *querySchema{}; /**< Application-owned immutable descriptor registry. */
+        AI::QueryContextProviderAccess queryContextAccess;
     };
 
     class EditorWorkspaceController {  // NOSONAR(cpp:S1820, cpp:S1448) Authoritative workspace controller
@@ -728,6 +730,7 @@ namespace Horo::Editor {
         Assets::AssetRegistry *m_mutableAssetRegistry{};
         AI::LatticeQueryAuthoringFactory m_latticeQueryFactory{};
         const AI::QuerySchemaRegistry *m_querySchema{};
+        AI::QueryContextProviderAccess m_queryContextAccess;
         UiInspectorResources *m_uiInspectorResources{};
         JobSystem *m_sourceRecoveryJobs{};
 

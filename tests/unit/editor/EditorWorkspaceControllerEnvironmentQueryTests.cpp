@@ -9,6 +9,7 @@
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
 
 #include <algorithm>
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <format>
@@ -19,6 +20,20 @@ namespace {
     using namespace Horo;
     using namespace Horo::AI;
     using namespace Horo::Editor;
+
+    /** @brief Records the exact owner Scene seen by a test location provider. */
+    struct PreviewLocationProvider final {
+        Math::WorldCoordinate64 point = Math::WorldCoordinate64::FromMillimeters(8000, 2000, -1000);
+        Runtime::SceneRuntimeId scene;
+        std::size_t calls{};
+
+        static Result<QueryContextValue> Capture(void *state, const Runtime::RuntimeSceneView &view) {
+            auto &provider = *static_cast<PreviewLocationProvider *>(state);
+            provider.scene = view.RuntimeId();
+            ++provider.calls;
+            return Result<QueryContextValue>::Success(provider.point);
+        }
+    };
 
     /** @brief Installed registered query source for the normal content-browser command route. */
     struct Project final {
@@ -188,8 +203,21 @@ TEST_CASE("Environment Query workspace uses the composed native descriptor regis
 
 TEST_CASE("Environment Query workspace previews the saved native lattice from an exact authoring Scene", "[unit][editor][eqs][workspace]") {
     Project project;
-    const auto registry = CaptureBuiltinQuerySchema();
+    const auto location = QueryContextId::Create(31).Value();
+    const auto restricted = QueryContextId::Create(32).Value();
+    const QueryDescriptorOrigin origin{QueryDescriptorSourceKind::Native, QueryProviderId::Create(33).Value(), 2};
+    const std::array choices{QueryContextDescriptor{.id = location, .origin = origin, .displayName = "Encounter origin"},
+                             QueryContextDescriptor{.id = restricted, .origin = origin, .displayName = "Perceived origin"}};
+    const auto registry = CaptureBuiltinQuerySchema(choices);
     REQUIRE(registry.HasValue());
+    PreviewLocationProvider locationSource;
+    const auto granted = AiCapabilitySet::Of(AiCapability::Behavior);
+    const std::array registrations{QueryContextProviderRegistration{location, 2, granted, &locationSource,
+                                                                    PreviewLocationProvider::Capture},
+                                   QueryContextProviderRegistration{restricted, 2, AiCapabilitySet::Of(AiCapability::Perception),
+                                                                    &locationSource, PreviewLocationProvider::Capture}};
+    const auto providers = QueryContextProviderRegistry::Capture(registrations, registry.Value());
+    REQUIRE(providers.HasValue());
     const auto query =
         CreateBuiltinLatticeQuery(QueryId::Create(9).Value(), QueryStageId::Create(10).Value(), QueryResultSchemaId::Create(11).Value(),
                                   "Local points", {.stepMillimeters = 500, .outerSteps = MaximumQueryLatticeOuterSteps}, 100);
@@ -204,7 +232,8 @@ TEST_CASE("Environment Query workspace previews the saved native lattice from an
                                           .mutations = &project.mutations,
                                           .durableFiles = &project.files,
                                           .jobs = &jobs,
-                                          .querySchema = &registry.Value()});
+                                          .querySchema = &registry.Value(),
+                                          .queryContextAccess = {&providers.Value(), granted}});
     REQUIRE_FALSE(controller.InitializationError());
     const auto &model = controller.ViewModel();
     REQUIRE(model.objects.size() == 1);
@@ -253,6 +282,42 @@ TEST_CASE("Environment Query workspace previews the saved native lattice from an
     std::optional<QueryStageId> filterStage;
     bool mixedContexts = false;
     bool usesTarget = false;
+    bool usesProvider = false;
+    SECTION("registered provider choices are named and used only with the host grants") {
+        auto selection = location;
+        SECTION("the owner grants the selected provider capability") {
+            usesProvider = true;
+        }
+        SECTION("the owner withholds the selected provider capability") {
+            selection = restricted;
+            expected = Failed;
+        }
+        const auto lattice =
+            CreateBuiltinLatticeQuery(query.Value().Id(), query.Value().Stages().front().id, query.Value().ResultSchema().id,
+                                      "Provider points", {.stepMillimeters = 1000, .outerSteps = 1, .center = selection}, 9);
+        REQUIRE(lattice.HasValue());
+        const auto test = AddBuiltinPointDistanceTest(lattice.Value(), QueryStageId::Create(12).Value(), {1000, true, 1, selection});
+        REQUIRE(test.HasValue());
+        project.WriteAsset(test.Value());
+        Project::Open(controller, Project::Path);
+        REQUIRE(document.settings.has_value());
+        const auto option = std::ranges::find(document.settings->latticeCenters, selection, &QueryPointContextOption::id);
+        REQUIRE(option != document.settings->latticeCenters.end());
+        CHECK(option->displayName == (usesProvider ? "Encounter origin" : "Perceived origin"));
+        auto edited = pinned;
+        edited.source = document.source;
+        submit(edited);
+        if (usesProvider) {
+            REQUIRE(document.preview.status == Running);
+            CHECK(locationSource.scene == active->RuntimeId());
+            CHECK(locationSource.calls == 1);
+        } else {
+            REQUIRE(document.preview.status == Failed);
+            REQUIRE(document.preview.diagnostic);
+            CHECK(document.preview.diagnostic->code.Value() == AIErrors::EnvironmentQueryContextCapabilityUnavailable.code.Value());
+            CHECK(locationSource.calls == 0);
+        }
+    }
     SECTION("target inputs capture the other selected object and never substitute the querier") {
         usesTarget = true;
         const auto center = BuiltinQueryContextId(BuiltinQueryContext::TargetLocation);
@@ -368,6 +433,14 @@ TEST_CASE("Environment Query workspace previews the saved native lattice from an
     }
     REQUIRE(document.preview.snapshot);
     const auto &preview = *document.preview.snapshot;
+    if (usesProvider) {
+        REQUIRE(preview.candidates.size() == 9);
+        CHECK(preview.candidates[4].point == locationSource.point);
+        CHECK(preview.winnerCount == 5);
+        CHECK(locationSource.calls == 1);
+        CHECK(active->IsCurrent());
+        return;
+    }
     if (usesTarget) {
         REQUIRE(preview.candidates.size() == 9);
         CHECK(preview.candidates[4].point == Math::WorldCoordinate64::FromMillimeters(-1000, 0, 3000));

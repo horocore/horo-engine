@@ -122,7 +122,9 @@ namespace Horo::AI {
         [[nodiscard]] Result<void> ValidateContextDescriptors(const std::vector<QueryContextDescriptor> &contexts) {
             for (const auto &context : contexts)
                 if (!context.id.IsValid() || !ValidOrigin(context.origin) || context.maximumPayloadBytes == 0 ||
-                    context.maximumPayloadBytes > EnvironmentQuerySchemaLimits::CanonicalBytes)
+                    context.maximumPayloadBytes > EnvironmentQuerySchemaLimits::CanonicalBytes ||
+                    context.displayName.size() > EnvironmentQuerySchemaLimits::DisplayNameBytes ||
+                    context.displayName.find('\0') != std::string::npos)
                     return Result<void>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
             return Result<void>::Success();
         }

@@ -44,7 +44,7 @@ namespace Horo::Editor {
 
         /** @brief Projects installed context identities into the shared editor dropdown. */
         void DrawPointContextChoice(const PointContextLabels &labels, const Theme::Fonts &fonts, AI::QueryContextId &selected,
-                                    std::span<const AI::QueryContextId> contexts) {
+                                    std::span<const AI::QueryPointContextOption> contexts) {
             if (contexts.empty())
                 return;
             const auto querier = AI::BuiltinQueryContextId(AI::BuiltinQueryContext::QuerierLocation);
@@ -55,23 +55,26 @@ namespace Horo::Editor {
                 unknown;
             std::array<const char *, AI::EnvironmentQuerySchemaLimits::DescriptorContexts> entries;
             for (std::size_t index = 0; index < contexts.size(); ++index) {
-                if (contexts[index] == querier)
+                const auto &context = contexts[index];
+                if (context.id == querier)
                     entries[index] = labels.querier.c_str();
-                else if (contexts[index] == origin)
+                else if (context.id == origin)
                     entries[index] = labels.origin.c_str();
-                else if (contexts[index] == target)
+                else if (context.id == target)
                     entries[index] = labels.target.c_str();
+                else if (!context.displayName.empty())
+                    entries[index] = context.displayName.c_str();
                 else {
                     auto &buffer = unknown[index];
-                    const auto rendered = std::to_chars(buffer.data(), buffer.data() + buffer.size() - 1, contexts[index].Value());
+                    const auto rendered = std::to_chars(buffer.data(), buffer.data() + buffer.size() - 1, context.id.Value());
                     *rendered.ptr = '\0';
                     entries[index] = buffer.data();
                 }
             }
-            const auto found = std::ranges::find(contexts, selected);
+            const auto found = std::ranges::find(contexts, selected, &AI::QueryPointContextOption::id);
             auto index = found == contexts.end() ? 0 : static_cast<int>(found - contexts.begin());
             if (Ui::DrawComboPropRow(labels.heading.c_str(), "##center_context", index, std::span{entries}.first(contexts.size()), fonts))
-                selected = contexts[static_cast<std::size_t>(index)];
+                selected = contexts[static_cast<std::size_t>(index)].id;
         }
 
         /** @brief Uses the secondary selection only when it is unambiguous and distinct from the querier. */
@@ -123,13 +126,15 @@ namespace Horo::Editor {
         Result<std::shared_ptr<const AI::QueryContextSnapshot>> CaptureLatticePreviewContext(const AI::EnvironmentQueryPlan &plan,
                                                                                              const AI::QuerySchemaRegistry &schema,
                                                                                              const Runtime::RuntimeSceneView &scene,
-                                                                                             const EnvironmentQueryPreviewScene &pin) {
+                                                                                             const EnvironmentQueryPreviewScene &pin,
+                                                                                             const AI::QueryContextProviderAccess &access) {
             using Captured = Result<std::shared_ptr<const AI::QueryContextSnapshot>>;
             const auto querier = CapturePreviewActor(scene, pin.anchor);
             if (querier.HasError())
                 return Captured::Failure(querier.ErrorValue());
             AI::QueryContextCaptureSource source{.querier = querier.Value().entity,
                                                  .querierLocation = querier.Value().point,
+                                                 .availableCapabilities = access.capabilities,
                                                  .executionRevision = pin.document.value};
             if (pin.target) {
                 const auto target = CapturePreviewActor(scene, *pin.target);
@@ -138,11 +143,9 @@ namespace Horo::Editor {
                 source.target = target.Value().entity;
                 source.targetLocation = target.Value().point;
             }
-            const auto providers = AI::QueryContextProviderRegistry::Capture({}, schema);
-            if (providers.HasError())
-                return Captured::Failure(providers.ErrorValue());
+            const AI::QueryContextProviderRegistry empty;
             AI::QueryContextCapture capture;
-            return capture.Capture(plan, schema, providers.Value(), scene, source);
+            return capture.Capture(plan, schema, access.registry ? *access.registry : empty, scene, source);
         }
 
         /** @brief Detached native test programs and their canonical query ranking rules. */
@@ -432,7 +435,7 @@ namespace Horo::Editor {
         if (scoring.HasError())
             return Result<void>::Failure(scoring.ErrorValue());
 
-        auto contexts = CaptureLatticePreviewContext(plan.Value(), *m_querySchema, *current, pin);
+        auto contexts = CaptureLatticePreviewContext(plan.Value(), *m_querySchema, *current, pin, m_queryContextAccess);
         if (contexts.HasError())
             return Result<void>::Failure(contexts.ErrorValue());
         const AI::QueryGeneratorProvenance origin{stages.front().id, generator->id, generator->origin.provider,

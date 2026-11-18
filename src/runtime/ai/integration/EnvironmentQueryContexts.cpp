@@ -87,12 +87,15 @@ namespace Horo::AI {
         }
 
         /** @brief Invokes only a registered custom provider whose capabilities are available. */
-        [[nodiscard]] Result<QueryContextValue> ResolveCustom(const QueryContextId id, const QueryContextProviderRegistry &providers,
+        [[nodiscard]] Result<QueryContextValue> ResolveCustom(const QueryContextDescriptor &descriptor,
+                                                              const QueryContextProviderRegistry &providers,
                                                               const Runtime::RuntimeSceneView &scene,
                                                               const QueryContextCaptureSource &source) {
-            const auto *provider = providers.Find(id);
+            const auto *provider = providers.Find(descriptor.id);
             if (provider == nullptr)
                 return Result<QueryContextValue>::Failure(MakeError(AIErrors::EnvironmentQueryContextMissing));
+            if (provider->schemaVersion != descriptor.origin.version)
+                return Result<QueryContextValue>::Failure(MakeError(AIErrors::EnvironmentQueryVersionIncompatible));
             if ((provider->requiredCapabilities.bits & source.availableCapabilities.bits) != provider->requiredCapabilities.bits)
                 return Result<QueryContextValue>::Failure(MakeError(AIErrors::EnvironmentQueryContextCapabilityUnavailable));
             return provider->capture(provider->state, scene);
@@ -116,7 +119,7 @@ namespace Horo::AI {
                                                                     .version = 1})
                 return Result<QueryCapturedContext>::Failure(MakeError(AIErrors::EnvironmentQueryContextInvalid));
 
-            auto value = kind ? ResolveBuiltin(*kind, scene, source) : ResolveCustom(requirement.id, providers, scene, source);
+            auto value = kind ? ResolveBuiltin(*kind, scene, source) : ResolveCustom(*descriptor, providers, scene, source);
             if (value.HasError())
                 return Result<QueryCapturedContext>::Failure(value.ErrorValue());
             if (const auto valid = ValidateValue(scene, value.Value(), descriptor->maximumPayloadBytes); valid.HasError())

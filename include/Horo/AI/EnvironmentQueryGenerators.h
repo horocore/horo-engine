@@ -72,6 +72,12 @@ namespace Horo::AI {
      */
     [[nodiscard]] Result<QuerySchemaRegistry> CaptureBuiltinQuerySchema();
 
+    /** @brief Adds host-admitted point context descriptors to the built-in generator and distance test choices.
+     * @param locationContexts Additional descriptors whose paired providers return canonical world coordinates.
+     * @return The inert combined registry or a typed identity, version, or capacity error. No provider is invoked.
+     */
+    [[nodiscard]] Result<QuerySchemaRegistry> CaptureBuiltinQuerySchema(std::span<const QueryContextDescriptor> locationContexts);
+
     /**
      * @brief Constructs one initial source through the installed point-lattice provider's typed wire contract.
      * @param query Stable authoring-issued query identity. @param stage Stable stage identity.

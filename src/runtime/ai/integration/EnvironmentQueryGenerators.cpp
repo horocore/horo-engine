@@ -28,27 +28,35 @@ namespace Horo::AI {
         constexpr std::uint64_t DistancePreferNearer = LatticeProvider + 8;
         constexpr std::uint64_t DistanceScoreWeight = LatticeProvider + 9;
         constexpr std::uint64_t PointCenter = LatticeProvider + 10;
+        constexpr std::array NativePointCenters{BuiltinQueryContext::QuerierLocation, BuiltinQueryContext::WorldOrigin,
+                                                BuiltinQueryContext::TargetLocation};
 
         /** @brief Supplies the capturable native location alternatives for a point stage. */
-        QueryContextChoice PointCenterChoice() {
-            return {.property = QueryPropertyId::Create(PointCenter).Value(),
-                    .options = {{BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation), LatticeVersion},
-                                {BuiltinQueryContextId(BuiltinQueryContext::WorldOrigin), LatticeVersion},
-                                {BuiltinQueryContextId(BuiltinQueryContext::TargetLocation), LatticeVersion}}};
+        QueryContextChoice PointCenterChoice(std::span<const QueryContextDescriptor> additional) {
+            QueryContextChoice choice{.property = QueryPropertyId::Create(PointCenter).Value()};
+            choice.options.reserve(NativePointCenters.size() + additional.size());
+            for (const auto kind : NativePointCenters)
+                choice.options.emplace_back(BuiltinQueryContextId(kind), LatticeVersion);
+            for (const auto &descriptor : additional)
+                choice.options.emplace_back(descriptor.id, QueryVersionRange{descriptor.origin.version, descriptor.origin.version});
+            return choice;
         }
 
         /** @brief Retains the original serialized shape for the default native location. */
         void EncodePointCenter(std::vector<QueryPropertyValue> &properties, QueryContextId center) {
-            if (center.IsValid() && center != BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation))
+            if (center.IsValid() && center != BuiltinQueryContextId(NativePointCenters.front()))
                 properties.emplace_back(QueryPropertyId::Create(PointCenter).Value(), center.Value());
         }
 
         /** @brief Projects the installed choice list into editor-owned settings. */
-        std::vector<QueryContextId> PointCenterOptions(const std::optional<QueryContextChoice> &choice) {
-            std::vector<QueryContextId> options;
-            if (choice)
+        std::vector<QueryPointContextOption> PointCenterOptions(const std::optional<QueryContextChoice> &choice,
+                                                                const QuerySchemaRegistry &registry) {
+            std::vector<QueryPointContextOption> options;
+            if (choice.has_value()) {
+                options.reserve(choice->options.size());
                 for (const auto &option : choice->options)
-                    options.push_back(option.id);
+                    options.emplace_back(option.id, registry.Find(option.id)->displayName);
+            }
             return options;
         }
 
@@ -319,30 +327,41 @@ namespace Horo::AI {
 
     /** @copydoc CaptureBuiltinQuerySchema */
     Result<QuerySchemaRegistry> CaptureBuiltinQuerySchema() {
+        return CaptureBuiltinQuerySchema({});
+    }
+
+    /** @copydoc CaptureBuiltinQuerySchema(std::span<const QueryContextDescriptor>) */
+    Result<QuerySchemaRegistry> CaptureBuiltinQuerySchema(std::span<const QueryContextDescriptor> locationContexts) {
+        using enum QueryPropertyKind;
+        if (locationContexts.size() > EnvironmentQuerySchemaLimits::DescriptorContexts - NativePointCenters.size())
+            return Result<QuerySchemaRegistry>::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
         const auto origin = BuiltinOrigin();
         const auto item = QueryItemTypeId::Create(PointItem).Value();
         const std::array items{QueryItemTypeDescriptor{.id = item, .origin = origin, .kind = QueryItemKind::Point}};
-        const auto contexts = BuiltinQueryContextDescriptors();
+        const auto builtin = BuiltinQueryContextDescriptors();
+        std::vector<QueryContextDescriptor> contexts(builtin.begin(), builtin.end());
+        contexts.insert(contexts.end(), locationContexts.begin(), locationContexts.end());
+        const auto centers = PointCenterChoice(locationContexts);
         const std::array generators{
             QueryGeneratorDescriptor{.id = QueryGeneratorId::Create(LatticeGenerator).Value(),
                                      .origin = origin,
                                      .outputItemType = item,
                                      .outputItemVersion = LatticeVersion,
-                                     .properties = {{QueryPropertyId::Create(StepMillimeters).Value(), QueryPropertyKind::Unsigned64, true},
-                                                    {QueryPropertyId::Create(OuterSteps).Value(), QueryPropertyKind::Unsigned64, true},
-                                                    {QueryPropertyId::Create(InnerSteps).Value(), QueryPropertyKind::Unsigned64, false},
-                                                    {QueryPropertyId::Create(PointCenter).Value(), QueryPropertyKind::Unsigned64, false}},
-                                     .contextChoice = PointCenterChoice()}};
+                                     .properties = {{QueryPropertyId::Create(StepMillimeters).Value(), Unsigned64, true},
+                                                    {QueryPropertyId::Create(OuterSteps).Value(), Unsigned64, true},
+                                                    {QueryPropertyId::Create(InnerSteps).Value(), Unsigned64, false},
+                                                    {QueryPropertyId::Create(PointCenter).Value(), Unsigned64, false}},
+                                     .contextChoice = centers}};
         const std::array tests{QueryTestDescriptor{
             .id = QueryTestId::Create(PointDistanceTest).Value(),
             .origin = origin,
             .inputItemType = item,
             .inputItemVersion = LatticeVersion,
-            .properties = {{QueryPropertyId::Create(DistanceRadius).Value(), QueryPropertyKind::Unsigned64, true},
-                           {QueryPropertyId::Create(DistancePreferNearer).Value(), QueryPropertyKind::Boolean, true},
-                           {QueryPropertyId::Create(DistanceScoreWeight).Value(), QueryPropertyKind::Unsigned64, false},
-                           {QueryPropertyId::Create(PointCenter).Value(), QueryPropertyKind::Unsigned64, false}},
-            .contextChoice = PointCenterChoice(),
+            .properties = {{QueryPropertyId::Create(DistanceRadius).Value(), Unsigned64, true},
+                           {QueryPropertyId::Create(DistancePreferNearer).Value(), Boolean, true},
+                           {QueryPropertyId::Create(DistanceScoreWeight).Value(), Unsigned64, false},
+                           {QueryPropertyId::Create(PointCenter).Value(), Unsigned64, false}},
+            .contextChoice = centers,
         }};
         return QuerySchemaRegistry::Capture({items, contexts, generators, tests});
     }
@@ -425,14 +444,14 @@ namespace Horo::AI {
         if (!lattice || !ValidLattice(*lattice))
             return Settings::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
         BuiltinPointQuerySettings settings{*lattice, asset.ResultSchema().maximumResults};
-        settings.latticeCenters = PointCenterOptions(generator->contextChoice);
+        settings.latticeCenters = PointCenterOptions(generator->contextChoice, registry);
         settings.distanceTests.reserve(stages.size() - 1);
         for (const auto &stage : stages.subspan(1)) {
             const auto distance = BuiltinPointDistanceQuery::Capture(stage, registry);
             if (distance.HasError())
                 return Settings::Failure(distance.ErrorValue());
             settings.distanceTests.emplace_back(stage.id, distance.Value().Settings(),
-                                                PointCenterOptions(registry.Find(stage.test)->contextChoice));
+                                                PointCenterOptions(registry.Find(stage.test)->contextChoice, registry));
         }
         return Settings::Success(std::move(settings));
     }

@@ -112,6 +112,12 @@ namespace Horo::AI {
         std::vector<QueryContextProviderRegistration> providers_;
     };
 
+    /** @brief Host-owned registry and explicit capabilities for one context capture consumer. */
+    struct QueryContextProviderAccess final {
+        const QueryContextProviderRegistry *registry{}; /**< Borrowed for the lifetime of the composed consumer. */
+        AiCapabilitySet capabilities;
+    };
+
     /** @brief Borrowed submission values; global locations are host-captured, never rebased float origins. */
     struct QueryContextCaptureSource final {
         Runtime::EntityRef querier;

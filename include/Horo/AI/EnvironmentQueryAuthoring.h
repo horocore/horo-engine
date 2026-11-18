@@ -28,11 +28,17 @@ namespace Horo::AI {
         QueryContextId center;        /**< An invalid identity selects the registered default. */
     };
 
+    /** @brief Stable location choice and its optional provider-owned authoring label. */
+    struct QueryPointContextOption final {
+        QueryContextId id;
+        std::string displayName;
+    };
+
     /** @brief Existing distance stage and its editable controls, keyed by durable identity. */
     struct QueryPointDistanceStageSettings final {
         QueryStageId stage;
         QueryPointDistanceTest test;
-        std::vector<QueryContextId> centers; /**< Available authored choices in registered order. */
+        std::vector<QueryPointContextOption> centers; /**< Available authored choices in registered order. */
     };
 
     /** @brief Editable settings of the admitted native lattice and its existing distance stages. */
@@ -40,7 +46,7 @@ namespace Horo::AI {
         QueryPointLattice lattice;
         std::uint32_t maximumResults{};
         std::vector<QueryPointDistanceStageSettings> distanceTests; /**< Admitted semantic execution order. */
-        std::vector<QueryContextId> latticeCenters;                 /**< Available generator choices in registered order. */
+        std::vector<QueryPointContextOption> latticeCenters;        /**< Available generator choices in registered order. */
     };
 
     /** @brief Pure initial-source factory installed by the application with the matching provider registry. */

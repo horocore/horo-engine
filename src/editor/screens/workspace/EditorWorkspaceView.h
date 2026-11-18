@@ -156,7 +156,7 @@ namespace Horo::Editor {
                 bool preferNearer{};
                 std::uint64_t weight{};
                 AI::QueryContextId center;
-                std::vector<AI::QueryContextId> centers;
+                std::vector<AI::QueryPointContextOption> centers;
             };
 
             EnvironmentQueryDocumentFence fence;

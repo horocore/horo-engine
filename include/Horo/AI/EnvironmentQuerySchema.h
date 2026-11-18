@@ -144,6 +144,7 @@ namespace Horo::AI {
         QueryContextId id;
         QueryDescriptorOrigin origin;
         std::size_t maximumPayloadBytes{64};
+        std::string displayName; /**< Optional editor label. Identity and fingerprinting use the typed descriptor fields. */
     };
 
     /** @brief Exact context dependency and compatible schema versions for one stage descriptor. */
