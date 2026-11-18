@@ -17,3 +17,6 @@ static_assert(std::is_same_v<decltype(std::declval<const Horo::Input::InputActio
 static_assert(std::is_same_v<decltype(std::declval<const Horo::Input::InputRouter &>().ActionCollection(
                                  std::declval<const Horo::Input::InputContextToken &>())),
                              Horo::Result<Horo::Input::InputActionCollection>>);
+static_assert(std::is_same_v<decltype(std::declval<const Horo::Input::InputRouter &>().ActionCollectionForPlayer(
+                                 std::declval<const Horo::Input::InputContextToken &>(), Horo::Input::PlayerId{})),
+                             Horo::Result<Horo::Input::InputActionCollection>>);

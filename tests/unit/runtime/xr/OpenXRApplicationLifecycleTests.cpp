@@ -241,7 +241,7 @@ namespace Horo::Tests::OpenXRApplication {
                                                                   {objects.parent.value}}));
             }
 
-            Input::InputActionCollection InputPort() {
+            Input::InputActionCollection InputPort(const std::optional<Input::PlayerId> player = std::nullopt) {
                 const std::vector<Input::ActionDescriptor> registered{
                     {Input::ActionId{"select"},
                      bindings->schema.actions.front().valueType,
@@ -250,7 +250,8 @@ namespace Horo::Tests::OpenXRApplication {
                      {{.kind = Input::BindingControlKind::Key, .key = Input::Key::Space}}}};
                 REQUIRE(router.SetActionMap(registered).HasValue());
                 inputContext = router.PushContext(Input::InputContextId{"gameplay"}, Input::InputContextKind::Gameplay);
-                return RequireValue(router.ActionCollection(inputContext));
+                return RequireValue(player ? router.ActionCollectionForPlayer(inputContext, *player)
+                                           : router.ActionCollection(inputContext));
             }
         };
     }  // namespace
@@ -745,10 +746,11 @@ namespace Horo::Tests::OpenXRApplication {
             Input::RawInputSnapshot raw_;
         };
 
-        std::unique_ptr<Runtime::SceneActivationCandidate> PublishPlay(ApplicationFixture &fixture) {
+        std::unique_ptr<Runtime::SceneActivationCandidate> PublishPlay(ApplicationFixture &fixture,
+                                                                       const std::optional<Input::PlayerId> player = std::nullopt) {
             fixture.CreatePlay();
             REQUIRE(fixture.play->SetPlayState(Editor::EditorPlayState::Playing).HasValue());
-            const auto input = fixture.InputPort();
+            const auto input = fixture.InputPort(player);
             REQUIRE(fixture.play->AttachInput(input, fixture.source.Port()).HasValue());
             auto participant = fixture.play->MakeSceneParticipant();
             auto candidate = RequireValue(participant->Prepare(fixture.definition, fixture.scene->View()));
@@ -875,7 +877,10 @@ namespace Horo::Tests::OpenXRApplication {
         fixture.script.actions.sample.expectedType = type == Digital  ? XR_ACTION_TYPE_BOOLEAN_INPUT
                                                      : type == Axis1D ? XR_ACTION_TYPE_FLOAT_INPUT
                                                                       : XR_ACTION_TYPE_VECTOR2F_INPUT;
-        auto scene = PublishPlay(fixture);
+        constexpr Input::PlayerId player = 7;
+        constexpr Input::PlayerId other = 2;
+        fixture.router.AssignKeyboardMouse(other);
+        auto scene = PublishPlay(fixture, player);
         const auto generation = fixture.play->ReadInspection().sessionGeneration;
         REQUIRE(generation != 0);
         auto cutoff = std::make_unique<AppInputSample>(*fixture.play);
@@ -887,7 +892,8 @@ namespace Horo::Tests::OpenXRApplication {
             RequireValue(fixture.scheduler->RunFrame());
             REQUIRE(observed->result.has_value());
             RequireValue(*observed->result);
-            return fixture.router.ReadAction(fixture.inputContext, Input::ActionId{"select"});
+            CHECK_FALSE(fixture.router.ReadAction(fixture.inputContext, Input::ActionId{"select"}, other).down);
+            return fixture.router.ReadAction(fixture.inputContext, Input::ActionId{"select"}, player);
         };
         const auto before = runCutoff();
         CHECK(before.down);

@@ -13,7 +13,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     Result<void> EditorWorkspaceScreen::AttachXrInput() {
         if (!xr_.host)
             return Result<void>::Success();  // Ordinary desktop has no explicitly selected XR producer.
-        auto port = input_.router.ActionCollection(input_.context);
+        auto port = xr_.playerSelection ? input_.router.ActionCollectionForPlayer(input_.context, xr_.playerSelection->player)
+                                        : input_.router.ActionCollection(input_.context);
         if (port.HasError())
             return Result<void>::Failure(port.ErrorValue());
         // Set the cleanup obligation before calling a host which may throw after partial preparation.

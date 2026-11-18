@@ -37,11 +37,16 @@ namespace Horo::Input {
             return Stale<void>();
         if (const auto &source = sources[slot];
             source.generation != generation || source.retiring || source.configuration != router->impl_->configurationRevision ||
-            source.assignment != router->impl_->assignmentRevision || !router->TokenActive(source.context) ||
+            !AssignmentCurrent(source.assignment) || !router->TokenActive(source.context) ||
             (source.device &&
              (!router->Snapshot().FindGamepad(*source.device) || router->PlayerForGamepad(*source.device) != source.player)))
             return Stale<void>();
         return Result<void>::Success();
+    }
+
+    /** @brief Explicit external player ports do not borrow another device family's assignment revision. */
+    bool InputCollectionLifetime::AssignmentCurrent(const std::optional<std::uint64_t> revision) const noexcept {
+        return !revision || *revision == router->impl_->assignmentRevision;
     }
 
     Result<void> InputCollectionLifetime::ValidateFrame(const std::uint64_t frame) const {
@@ -95,8 +100,8 @@ namespace Horo::Input {
                 continue;
             auto &source = sources[entry.source];
             const bool current = !source.retiring && source.generation == entry.generation &&
-                                 source.configuration == router->impl_->configurationRevision &&
-                                 source.assignment == router->impl_->assignmentRevision && router->TokenActive(source.context) &&
+                                 source.configuration == router->impl_->configurationRevision && AssignmentCurrent(source.assignment) &&
+                                 router->TokenActive(source.context) &&
                                  (!source.device || ((candidate ? *candidate : router->Snapshot()).FindGamepad(*source.device) &&
                                                      router->PlayerForGamepad(*source.device) == source.player));
             entry.previous = entry.current;
@@ -141,12 +146,14 @@ namespace Horo::Input {
         CommitValues(true);
     }
 
-    void InputCollectionLifetime::Accumulate(const std::size_t action, const std::optional<PlayerId> player, ActionValue &value) noexcept {
+    void InputCollectionLifetime::Accumulate(const std::uint64_t context, const std::size_t action, const std::optional<PlayerId> player,
+                                             ActionValue &value) noexcept {
         for (auto &entry : entries) {
-            if (entry.generation == 0 || entry.action != action || (player.has_value() && sources[entry.source].player != player))
+            if (entry.generation == 0 || entry.action != action)
                 continue;
-            if (const auto &source = sources[entry.source];
-                source.configuration != router->impl_->configurationRevision || source.assignment != router->impl_->assignmentRevision)
+            if (const auto &source = sources[entry.source]; source.context != context || (player.has_value() && source.player != player) ||
+                                                            source.configuration != router->impl_->configurationRevision ||
+                                                            !AssignmentCurrent(source.assignment))
                 continue;
             const bool down = entry.current.active && (entry.current.x != 0.0F || entry.current.y != 0.0F);
             const bool previous = entry.previous.active && (entry.previous.x != 0.0F || entry.previous.y != 0.0F);
@@ -181,6 +188,16 @@ namespace Horo::Input {
         return Result<InputActionCollection>::Success(std::move(port));
     }
 
+    /** @copydoc InputRouter::ActionCollectionForPlayer */
+    Result<InputActionCollection> InputRouter::ActionCollectionForPlayer(const InputContextToken &context, const PlayerId player) const {
+        auto port = ActionCollection(context);
+        if (port.HasValue()) {
+            port.Value().player_ = player;
+            port.Value().assignment_.reset();
+        }
+        return port;
+    }
+
     /** @copydoc InputActionCollection::RegisterSource */
     Result<InputActionSourceToken> InputActionCollection::RegisterSource(const std::span<const ActionDescriptor> actions) const {
         const auto owner = owner_.lock();
@@ -190,7 +207,7 @@ namespace Horo::Input {
         if (router.HasError())
             return Result<InputActionSourceToken>::Failure(router.ErrorValue());
         if (const auto &impl = *router.Value()->impl_; configuration_ != impl.configurationRevision ||
-                                                       assignment_ != impl.assignmentRevision || !router.Value()->TokenActive(context_) ||
+                                                       !owner->AssignmentCurrent(assignment_) || !router.Value()->TokenActive(context_) ||
                                                        owner->collecting || actions.empty())
             return Stale<InputActionSourceToken>();
         auto registered = owner->Register({.context = context_,
@@ -282,7 +299,7 @@ namespace Horo::Input {
             return Stale<InputCollectionFrame>();
         if (auto router = owner->Borrow(); router.HasError())
             return Result<InputCollectionFrame>::Failure(router.ErrorValue());
-        if (configuration_ != owner->router->impl_->configurationRevision || assignment_ != owner->router->impl_->assignmentRevision ||
+        if (configuration_ != owner->router->impl_->configurationRevision || !owner->AssignmentCurrent(assignment_) ||
             !owner->router->TokenActive(context_))
             return Stale<InputCollectionFrame>();
         if (owner->collecting || owner->serial == std::numeric_limits<std::uint64_t>::max())

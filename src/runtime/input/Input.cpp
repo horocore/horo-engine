@@ -1601,7 +1601,7 @@ namespace Horo::Input {
             if (transaction->ConsumesSticky())
                 contextEntry->sticky.Consume();
         }
-        impl_->collection->Accumulate(actionIndex, player, value);
+        impl_->collection->Accumulate(context.token_, actionIndex, player, value);
         FinalizeAction(target);
         impl_->lastActionStatus = evidence.status;
         return evidence;

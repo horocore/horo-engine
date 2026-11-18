@@ -20,7 +20,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         : GuiScreen(kTextScope), packages_(std::move(packages)), host_(services.Get<GuiScreenHost>()), services_(services),
           modalHost_(services.Get<EditorModalHost>()), context_(services.GetConst<EditorGuiContext>()),
           contributions_{services.Get<WorkspacePanelRegistry>(), services.Get<EditorStatusItemRegistry>()},
-          input_(services.Get<Input::InputRouter>()), xr_{services.TryGet<IEditorPlayXrHost>()},
+          input_(services.Get<Input::InputRouter>()),
+          xr_{services.TryGet<IEditorPlayXrHost>(), services.TryGetConst<EditorXrInputPlayerSelection>()},
           view_(context_, contributions_.panels, services.Get<std::uintptr_t>(), input_.router, input_.context,
                 services.TryGet<Extensions::EditorActivityHost>(), services.TryGet<IEditorGuiRenderer>()),
           viewportSceneState_(services.Get<EditorViewportSceneState>()), runtimeScene_(services.Get<Runtime::RuntimeSceneService>()),
@@ -155,7 +156,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             input_.gameplayFrames.Reset();
             return;
         }
-        input_.gameplayFrames.Capture(input_.router, input_.context);
+        const auto player = xr_.attached && xr_.playerSelection ? std::optional{xr_.playerSelection->player} : std::nullopt;
+        input_.gameplayFrames.Capture(input_.router, input_.context, player);
     }
 
     /** @copydoc EditorWorkspaceScreen::OnFixedUpdate */

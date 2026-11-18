@@ -22,7 +22,7 @@ namespace Horo::Input {
             std::uint64_t generation{};
             std::uint64_t context{};
             std::uint64_t configuration{};
-            std::uint64_t assignment{};
+            std::optional<std::uint64_t> assignment;
             std::optional<PlayerId> player;
             std::optional<GamepadDeviceId> device;
             std::size_t count{};
@@ -48,6 +48,7 @@ namespace Horo::Input {
         [[nodiscard]] Result<InputRouter *> Borrow() const;
         [[nodiscard]] Result<void> ValidateSource(std::size_t slot, std::uint64_t generation) const;
         [[nodiscard]] Result<void> ValidateFrame(std::uint64_t frame) const;
+        [[nodiscard]] bool AssignmentCurrent(std::optional<std::uint64_t> revision) const noexcept;
         [[nodiscard]] Result<void> Revoke(std::size_t slot, std::uint64_t generation);
         [[nodiscard]] Result<std::array<std::size_t, MaximumCollectedInputActions>> ResolveActions(
             std::uint64_t context, std::span<const ActionDescriptor> actions) const;
@@ -58,7 +59,7 @@ namespace Horo::Input {
         void ReclaimNeutral() noexcept;
         void CommitEmpty() noexcept;
         void CommitValues(bool focused) noexcept;
-        void Accumulate(std::size_t action, std::optional<PlayerId> player, ActionValue &value) noexcept;
+        void Accumulate(std::uint64_t context, std::size_t action, std::optional<PlayerId> player, ActionValue &value) noexcept;
         InputRouter *router;
         const std::thread::id thread{std::this_thread::get_id()};
         std::array<Source, MaximumCollectedInputSources> sources{};

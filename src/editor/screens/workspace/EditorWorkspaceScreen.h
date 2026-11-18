@@ -72,6 +72,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     /** @brief Borrowed explicit XR host connection; observes the existing Play projection, never owns its state. */
     struct WorkspaceXrPlayConnection final {
         IEditorPlayXrHost *host{};
+        const EditorXrInputPlayerSelection *playerSelection{};
         std::optional<EditorPlayState> observed;
         bool attached{};
     };

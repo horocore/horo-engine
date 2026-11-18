@@ -354,6 +354,8 @@ namespace Horo::Editor {
             bool lightingRootValid{true};
             std::optional<Runtime::SceneObjectId> xrTrackingRoot;
             bool xrTrackingRootValid{true};
+            std::optional<EditorXrInputPlayerSelection> xrInputPlayer;
+            bool xrInputPlayerValid{true};
             bool xrSimulator{};
             std::optional<bool> prefabGranted{false};
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
@@ -680,7 +682,8 @@ namespace Horo::Editor {
         PlayNavigationScene,
         FrameRateLimit,
         ExitAfterFrames,
-        XrTrackingRoot
+        XrTrackingRoot,
+        XrInputPlayer
     };
 
     /** @brief Consumes one value before interpreting flag syntax, preserving existing argument ordering. */
@@ -738,6 +741,16 @@ namespace Horo::Editor {
                     opts.xrTrackingRoot = Runtime::SceneObjectId{identity};
                 return true;
             }
+            case XrInputPlayer: {
+                unsigned player{};
+                const auto parsed = std::from_chars(value.data(), value.data() + value.size(), player);
+                opts.xrInputPlayerValid = opts.xrInputPlayerValid && !opts.xrInputPlayer && parsed.ec == std::errc{} &&
+                                          parsed.ptr == value.data() + value.size() &&
+                                          player <= std::numeric_limits<Input::PlayerId>::max();
+                if (opts.xrInputPlayerValid)
+                    opts.xrInputPlayer = EditorXrInputPlayerSelection{static_cast<Input::PlayerId>(player)};
+                return true;
+            }
             case None:
                 return false;
         }
@@ -764,6 +777,11 @@ namespace Horo::Editor {
         else if (argument.starts_with("--xr-tracking-root=")) {
             pending = XrTrackingRoot;
             static_cast<void>(ConsumeEditorOptionValue(argument.substr(std::string_view{"--xr-tracking-root="}.size()), pending, opts));
+        } else if (argument == "--xr-input-player")
+            pending = XrInputPlayer;
+        else if (argument.starts_with("--xr-input-player=")) {
+            pending = XrInputPlayer;
+            static_cast<void>(ConsumeEditorOptionValue(argument.substr(std::string_view{"--xr-input-player="}.size()), pending, opts));
         } else if (argument.starts_with("--renderer="))
             opts.rendererBackend = std::string{argument.substr(std::string_view{"--renderer="}.size())};
         else if (argument == "--renderer")
@@ -829,6 +847,8 @@ namespace Horo::Editor {
             opts.prefabGranted.reset();
         if (pending == XrTrackingRoot)
             opts.xrTrackingRootValid = false;
+        if (pending == XrInputPlayer)
+            opts.xrInputPlayerValid = false;
         if (pending == PlayNavigationScene)
             opts.playNavigationSceneValid = false;
         if (pending == CookedRoot || pending == CookTarget || opts.cookedRoot.empty() != opts.cookTarget.empty())
@@ -3434,6 +3454,8 @@ namespace Horo::Editor {
             screenHost.Services().Register<CollisionActivationEvidence>(collisionActivation);
             screenHost.Services().RegisterConst<EditorPreviewCollisionReceiptSource>(previewCollisionReceipt);
             screenHost.Services().RegisterConst<WorkspaceReadSourceFactory>(workspaceReadSources);
+            if (p.options.xrInputPlayer)
+                screenHost.Services().RegisterConst<EditorXrInputPlayerSelection>(*p.options.xrInputPlayer);
             screenHost.Services().Register<ProjectMutationCoordinator>(mutationCoordinator);
             screenHost.Services().Register<DurableFileSystem>(durableFiles);
             screenHost.Services().Register<Application::GameplayBuildService>(gameplayBuildService);
@@ -3747,11 +3769,15 @@ namespace Horo::Editor {
             LOG_CRITICAL("editor.xr", "Explicit XR tracking-root selection is malformed or duplicated.");
             return false;
         }
-        if (const bool nativeArguments = std::ranges::any_of(arguments,
-                                                             [](const char *value) {
+        const bool nativeArguments = std::ranges::any_of(arguments, [](const char *value) {
             return std::string_view{value}.starts_with("--xr-host-");
         });
-            options.xrSimulator && (host || nativeArguments)) {
+        const bool nativeSelected = host != nullptr || nativeArguments;
+        if (!options.xrInputPlayerValid || (options.xrInputPlayer && !options.xrSimulator && !nativeSelected)) {
+            LOG_CRITICAL("editor.xr", "XR input player requires one valid local player ID and an explicit XR host.");
+            return false;
+        }
+        if (options.xrSimulator && nativeSelected) {
             LOG_CRITICAL("editor.xr", "Select Simulator without native XR host services or --xr-host-* arguments.");
             return false;
         }

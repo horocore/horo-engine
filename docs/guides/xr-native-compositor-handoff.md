@@ -240,6 +240,14 @@ supply all three normalized absolute paths together:
 --xr-tracking-root <authored-scene-object-id>
 ```
 
+Pass `--xr-input-player <local-player-id>` with an explicit native or simulator
+launch to route the selected headset's scalar actions to a local Play player.
+The editor accepts one decimal player ID from 0 through 255. The workspace
+borrows that player's context-bound Input collection and captures fixed-tick
+gameplay input for the same player. Keyboard and gamepad ownership remains
+independent. Launches that omit the option continue to use the aggregate
+single-player preview input.
+
 The roots document uses the existing package publisher-policy codec. Its source
 is an explicit operator/installer approval; neither project metadata nor a
 catalog signer can select or create those roots. Parsing remains separate from

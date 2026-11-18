@@ -30,6 +30,11 @@ namespace Horo::XR {
 namespace Horo::Editor {
     class EditorXrSceneSourcePort;
 
+    /** @brief Explicit local player selected by application startup for the selected XR Play source. */
+    struct EditorXrInputPlayerSelection final {
+        Input::PlayerId player{};
+    };
+
     /** @brief One owner-issued test request, valid only while that request is queued. */
     struct EditorXrSetupTestId final {
         std::uint64_t value{};

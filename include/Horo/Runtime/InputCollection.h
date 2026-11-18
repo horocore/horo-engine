@@ -78,7 +78,8 @@ namespace Horo::Input {
 
     /** @brief Borrowed, assignment-bound producer port; it cannot create actions, assign players or consume transitions.
      * All methods run on the creating router thread. Router destruction safely invalidates every borrow/token.
-     * InputRouter is nonmovable; map/profile/assignment changes invalidate registrations. */
+     * InputRouter is nonmovable. Map and profile changes invalidate registrations.
+     * Changes in physical device assignment invalidate ports that borrow that assignment evidence. */
     class InputActionCollection final {
     public:
         /** @brief Registers existing canonical descriptors in this exact context. @param actions Exact registered schemas.
@@ -94,7 +95,7 @@ namespace Horo::Input {
         std::weak_ptr<InputCollectionLifetime> owner_;
         std::uint64_t context_{};
         std::uint64_t configuration_{};
-        std::uint64_t assignment_{};
+        std::optional<std::uint64_t> assignment_;
         std::optional<PlayerId> player_;
         std::optional<GamepadDeviceId> device_;
     };

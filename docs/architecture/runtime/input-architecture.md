@@ -841,8 +841,12 @@ Required tests cover:
 ### Bounded External-Source Collection Migration
 
 `HoroInput` owns `InputCollection.h`. The application borrows a port from its existing
-`InputRouter` and exact live context. Optional player filtering derives from an existing
-canonical connected-device assignment; a producer cannot choose or change a player.
+`InputRouter` and exact live context. A host may derive player filtering from an
+existing connected-device assignment or explicitly bind a local player for an
+external source through `ActionCollectionForPlayer`. The producer receives a
+port with sealed player and context scope. The host retires the source and
+commits neutral Input before transferring a live registration to another player.
+Existing keyboard and gamepad ownership stays independent.
 Registration validates existing action ID, value shape and context, without creating
 an action or bypassing the resolved XR binding policy. Input has no XR dependency.
 

@@ -897,6 +897,15 @@ namespace Horo::Input {
          * No XR/native dependency or alternate commit owner is introduced. */
         [[nodiscard]] Result<InputActionCollection> ActionCollection(const InputContextToken &context,
                                                                      std::optional<GamepadDeviceId> assignedDevice = std::nullopt) const;
+        /** @brief Borrows a collection for a host-owned external source's explicitly selected local player.
+         * @param context Exact live context owned by the caller.
+         * @param player Canonical local player selected by host policy for this source.
+         * @return Port bound to this player and context, or typed admission failure.
+         * @pre Called by the InputRouter owner on its owner thread; a producer only receives the resulting port.
+         * @post Existing gamepad and keyboard assignments remain unchanged. Before replacing a live registration's player,
+         * the host revokes that registration and commits neutral Input through the ordinary cutoff.
+         */
+        [[nodiscard]] Result<InputActionCollection> ActionCollectionForPlayer(const InputContextToken &context, PlayerId player) const;
         /** @brief Cancels released pointer capture and reclaims drained semantic mapping identities.
          * @details Pending old-owner releases remain until delivered. The next committed sample also performs this cleanup.
          */
