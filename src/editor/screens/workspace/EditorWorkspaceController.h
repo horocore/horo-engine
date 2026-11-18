@@ -606,6 +606,7 @@ namespace Horo::Editor {
 
         std::optional<PrefabExternalWatchWork> m_prefabExternalWatch;
         float m_prefabExternalWatchSeconds{};
+        std::size_t m_nextPrefabExternalWatch{};
         std::optional<PrefabRecoveryWork> m_prefabRecoveryWork;
         std::vector<DocumentInstanceId> m_prefabRecoveryQueue;
         std::uint64_t m_prefabStageAttemptRevision{};
@@ -1152,7 +1153,7 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> DrainPrefabRecovery(std::optional<DocumentInstanceId> instance = {});
         /** @brief Hands the exact detached checkpoint to the existing shared recovery I/O lane. */
         void SchedulePrefabRecovery(PrefabDocumentSession &document);
-        /** @brief Observes the active dirty Prefab source using a bounded background inspection and owner-lane publication. */
+        /** @brief Observes dirty open Prefabs fairly using one background inspection and owner-lane publication. */
         void UpdatePrefabExternalWatch(float seconds);
         /** @brief Projects one completed inspection without waiting for background work. */
         bool ObservePrefabExternalWatch();

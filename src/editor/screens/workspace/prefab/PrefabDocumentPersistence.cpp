@@ -146,34 +146,38 @@ namespace Horo::Editor {
     }
 
     /** @copydoc WritePrefabRecovery */
-    Result<void> WritePrefabRecovery(const PrefabRecoveryCheckpoint &checkpoint, DocumentRecoveryService &recovery,
-                                     const CancellationToken &cancellation) {
+    Result<std::shared_ptr<const DocumentRecoveryRecord>> WritePrefabRecovery(const PrefabRecoveryCheckpoint &checkpoint,
+                                                                              DocumentRecoveryService &recovery,
+                                                                              const CancellationToken &cancellation) {
+        using Return = Result<std::shared_ptr<const DocumentRecoveryRecord>>;
         if (cancellation.IsCancellationRequested())
-            return JobCancelled();
+            return Return::Failure(JobCancelled().ErrorValue());
         if (auto validated = checkpoint.source->ValidateLimits(checkpoint.limits); validated.HasError())
-            return validated;
+            return Return::Failure(validated.ErrorValue());
         auto encoded = checkpoint.source->SerializeCanonical();
         if (encoded.HasError())
-            return Result<void>::Failure(encoded.ErrorValue());
+            return Return::Failure(encoded.ErrorValue());
         if (cancellation.IsCancellationRequested())
-            return JobCancelled();
-        auto record = checkpoint.record;
+            return Return::Failure(JobCancelled().ErrorValue());
+        auto record = std::make_shared<DocumentRecoveryRecord>(checkpoint.record);
         const auto bytes = std::as_bytes(std::span(encoded.Value()));
-        record.payload.assign(bytes.begin(), bytes.end());
-        return checkpoint.acceptedRecovery ? recovery.ReplaceAccepted(record, *checkpoint.acceptedRecovery, cancellation)
-                                           : recovery.Write(record, cancellation);
+        record->payload.assign(bytes.begin(), bytes.end());
+        const auto published = checkpoint.acceptedRecovery ? recovery.ReplaceAccepted(*record, *checkpoint.acceptedRecovery, cancellation)
+                                                           : recovery.Write(*record, cancellation);
+        return published.HasError() ? Return::Failure(published.ErrorValue()) : Return::Success(std::move(record));
     }
 
     /** @copydoc PrefabDocumentSession::AcknowledgeRecovery */
-    void PrefabDocumentSession::AcknowledgeRecovery(const PrefabRecoveryCheckpoint &checkpoint) noexcept {
+    bool PrefabDocumentSession::AcknowledgeRecovery(const PrefabRecoveryCheckpoint &checkpoint) noexcept {
         const auto &record = checkpoint.record;
         if (closed_ || thread_ != std::this_thread::get_id() || record.sessionOwner != owner_ ||
             record.sessionGeneration != identity_.instance.Value() || record.document != identity_.key ||
             record.acceptedSource != accepted_ || record.revision < recoveryRevision_ || record.revision > revision_ ||
             checkpoint.acceptedRecovery != acceptedRecovery_)
-            return;
+            return false;
         recoveryRevision_ = record.revision;
         acceptedRecovery_.reset();
+        return true;
     }
 
     /** @copydoc PrefabDocumentSession::Autosave */
@@ -187,9 +191,10 @@ namespace Horo::Editor {
         PublicationGuard guard(busy_);
         DocumentRecoveryService recovery(root_, mutations, files);
         auto result = WritePrefabRecovery(checkpoint, recovery);
-        if (result.HasValue())
-            AcknowledgeRecovery(checkpoint);
-        return result;
+        if (result.HasError())
+            return Result<void>::Failure(result.ErrorValue());
+        static_cast<void>(AcknowledgeRecovery(checkpoint));
+        return Result<void>::Success();
     }
 
     /** @copydoc PrefabDocumentSession::DiscardOwnedRecovery */

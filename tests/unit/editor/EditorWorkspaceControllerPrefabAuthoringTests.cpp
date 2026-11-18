@@ -165,12 +165,13 @@ namespace Horo::Editor {
         workspace.OpenPrefab();
         workspace.Rename("To save as a new prefab");
         workspace.project.WriteSource("External source to preserve");
+        workspace.Action(PrefabDocumentAction::Save);
         auto &owner = *workspace.controller;
-        owner.UpdateExternalSceneWatch(1.0F);
-        jobs.Shutdown(ShutdownPolicy::Drain);
-        owner.UpdateExternalSceneWatch(0.0F);
         const auto conflict = owner.ViewModel().prefabDocuments.front();
-        REQUIRE(conflict.externalComparison);
+        REQUIRE(conflict.externalConflict);
+        const auto before = Assets::CaptureAssetSource(workspace.project.directory.path, workspace.project.source,
+                                                        Prefab::PrefabHardLimits::SourceDocumentBytes);
+        REQUIRE(before.HasValue());
         const auto destination = workspace.project.source.parent_path() / "copy.prefab";
         owner.ProcessCommand({.command = EditorWorkspaceViewCommand::PrefabDocument,
                               .prefabFence = conflict.fence,
@@ -186,7 +187,20 @@ namespace Horo::Editor {
         const auto original = Assets::CaptureAssetSource(workspace.project.directory.path, workspace.project.source,
                                                          Prefab::PrefabHardLimits::SourceDocumentBytes);
         REQUIRE(original.HasValue());
-        CHECK(original.Value().identity == conflict.externalComparison->observed);
+        CHECK(original.Value().identity == before.Value().identity);
+
+        // The fork owns the active tab. The still-dirty original must continue receiving disk observations.
+        CHECK(owner.ViewModel().workspacePanelHost.ActiveDocument() == owner.ViewModel().prefabDocuments.back().identity.instance);
+        workspace.project.WriteSource("A second external revision");
+        owner.UpdateExternalSceneWatch(1.0F);
+        jobs.Shutdown(ShutdownPolicy::Drain);
+        owner.UpdateExternalSceneWatch(0.0F);
+        const auto inactive = owner.ViewModel().prefabDocuments.front();
+        REQUIRE(inactive.externalComparison);
+        REQUIRE(inactive.externalComparison->members.size() == 1);
+        CHECK(inactive.externalComparison->members.front().diskName == "A second external revision");
+        CHECK(owner.ViewModel().prefabHierarchyUnavailable);
+        CHECK_FALSE(owner.ViewModel().prefabDocuments.back().externalConflict);
     }
 
     TEST_CASE("Typed prefab asset activation focuses its persistent document and preserves dirty history",
@@ -301,7 +315,8 @@ namespace Horo::Editor {
     }
 
     TEST_CASE("Prefab workspace recovery survives shutdown and exact candidate decisions retain local intent", "[editor][prefab][native]") {
-        Workspace workspace;
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
+        Workspace workspace{"hierarchy", false, &jobs};
         workspace.OpenPrefab();
         workspace.Rename("Durable recovery");
         auto &first = *workspace.controller;
@@ -309,6 +324,8 @@ namespace Horo::Editor {
         first.UpdatePrefabAutosave(1, 1);
         CHECK(first.ViewModel().prefabDocuments.front().recoveryRevision == 0);
         first.UpdatePrefabAutosave(59, 1);
+        jobs.Shutdown(ShutdownPolicy::Drain);
+        first.UpdatePrefabAutosave(0, 1);
         REQUIRE(first.ViewModel().prefabRecovery);
         CHECK(first.ViewModel().prefabDocuments.front().recoveryRevision != 0);
         REQUIRE(first.ShutdownPrefabDocuments().HasValue());
@@ -320,7 +337,7 @@ namespace Horo::Editor {
         REQUIRE_FALSE(workspace.controller->ViewModel().prefabDocumentError);
         CHECK(workspace.controller->ViewModel().prefabDocuments.front().dirty);
         CHECK(workspace.controller->ViewModel().prefabDocuments.front().source->Data().objects.front().name == "Durable recovery");
-        workspace.controller->UpdatePrefabAutosave(0, 0);
+        workspace.controller->FlushPrefabAutosave();
         REQUIRE(workspace.controller->ViewModel().prefabRecovery);
         const auto replacement = workspace.controller->ViewModel().prefabRecovery;
         workspace.Action(PrefabDocumentAction::DiscardRecovery, candidate);
@@ -361,7 +378,7 @@ namespace Horo::Editor {
         workspace.Action(PrefabDocumentAction::Recover);
         CHECK(model.prefabDocumentError.has_value());
         workspace.Rename("Explicit discard");
-        owner.UpdatePrefabAutosave(0, 0);
+        owner.FlushPrefabAutosave();
         REQUIRE(owner.ShutdownPrefabDocuments(true).HasValue());
         CHECK(model.prefabDocuments.empty());
         CHECK(original.source->Data().objects.front().name == "Source root");
@@ -379,7 +396,7 @@ namespace Horo::Editor {
         CHECK(owner.ViewModel().prefabDocumentError->code.Value() == Assets::AssetSourceErrors::Authority.code.Value());
         REQUIRE(owner.SavePrefabDocuments().HasError());
         REQUIRE(owner.ShutdownPrefabDocuments().HasError());
-        owner.UpdatePrefabAutosave(0, 0);
+        owner.FlushPrefabAutosave();
         workspace.Action(PrefabDocumentAction::Recover);
         REQUIRE(owner.ViewModel().prefabDocumentError);
         CHECK(owner.ViewModel().prefabDocumentError->code.Value() == Assets::AssetSourceErrors::Authority.code.Value());

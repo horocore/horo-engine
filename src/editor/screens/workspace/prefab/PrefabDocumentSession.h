@@ -112,9 +112,11 @@ namespace Horo::Editor {
         std::shared_ptr<const DocumentRecoveryRecord> acceptedRecovery;
     };
 
-    /** @brief Encodes and persists only the captured recovery slot, without borrowing a live document session. */
-    [[nodiscard]] Result<void> WritePrefabRecovery(const PrefabRecoveryCheckpoint &checkpoint, DocumentRecoveryService &recovery,
-                                                   const CancellationToken &cancellation = {});
+    /** @brief Encodes and persists only the captured recovery slot, without borrowing a live document session.
+     * @return Exact durable record for owner-lane presentation, or typed failure.
+     */
+    [[nodiscard]] Result<std::shared_ptr<const DocumentRecoveryRecord>> WritePrefabRecovery(
+        const PrefabRecoveryCheckpoint &checkpoint, DocumentRecoveryService &recovery, const CancellationToken &cancellation = {});
 
     /** @brief Owner-thread session. Source edits use exact semantic history; the stage owns no save authority.
      * @details Load/command time only. Caller serializes requests on the creating thread. The shared
@@ -159,6 +161,11 @@ namespace Horo::Editor {
         /** @brief Reports whether a workspace tab currently presents this owner. */
         [[nodiscard]] bool HasPresentation() const noexcept {
             return presented_;
+        }
+
+        /** @brief Checks dirty state without copying the shared document projection. */
+        [[nodiscard]] bool IsDirty() const noexcept {
+            return state_ != saved_;
         }
 
         /** @brief Tests whether a retained group still needs the source owner after closing its tab. */
@@ -222,7 +229,7 @@ namespace Horo::Editor {
          * @return Immutable dirty checkpoint, absence for a clean/already checkpointed revision, or a typed owner error. */
         [[nodiscard]] Result<std::optional<PrefabRecoveryCheckpoint>> CaptureRecovery() const;
         /** @brief Acknowledges completed recovery only for the exact owner, source authority and still-relevant revision. */
-        void AcknowledgeRecovery(const PrefabRecoveryCheckpoint &checkpoint) noexcept;
+        bool AcknowledgeRecovery(const PrefabRecoveryCheckpoint &checkpoint) noexcept;
 
         /** @brief Discards an exact inspected candidate after an explicit user decision, including a foreign/stale session.
          * @param fence Current source admission. @param record Exact displayed candidate, never a guessed record path.

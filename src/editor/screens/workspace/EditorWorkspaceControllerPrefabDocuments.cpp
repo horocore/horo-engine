@@ -420,18 +420,26 @@ namespace Horo::Editor {
     void EditorWorkspaceController::UpdatePrefabExternalWatch(const float seconds) {
         if (!ObservePrefabExternalWatch())
             return;
-        if (!m_sourceRecoveryJobs || !m_activePrefabDocument || !std::isfinite(seconds) || seconds <= 0.0F)
+        if (!m_sourceRecoveryJobs || m_prefabDocuments.empty() || !std::isfinite(seconds) || seconds <= 0.0F)
             return;
         m_prefabExternalWatchSeconds += seconds;
         if (m_prefabExternalWatchSeconds < 1.0F)
             return;
         m_prefabExternalWatchSeconds = 0;
-        const auto owner = std::ranges::find_if(m_prefabDocuments, [this](const auto &entry) {
-            return entry->HasPresentation() && entry->Instance() == m_activePrefabDocument;
-        });
-        if (owner == m_prefabDocuments.end() || !(*owner)->Snapshot().dirty)
+        const auto count = m_prefabDocuments.size();
+        PrefabDocumentSession *owner = nullptr;
+        for (std::size_t offset = 0; offset < count; ++offset) {
+            const auto next = (m_nextPrefabExternalWatch + offset) % count;
+            auto &candidate = *m_prefabDocuments[next];
+            if (candidate.HasPresentation() && candidate.IsDirty()) {
+                owner = &candidate;
+                m_nextPrefabExternalWatch = (next + 1) % count;
+                break;
+            }
+        }
+        if (!owner)
             return;
-        auto request = std::make_shared<const PrefabExternalInspection>((*owner)->CaptureExternalInspection());
+        auto request = std::make_shared<const PrefabExternalInspection>(owner->CaptureExternalInspection());
         auto comparison = std::make_shared<std::shared_ptr<const PrefabExternalComparison>>();
         auto job = m_sourceRecoveryJobs->SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Io},
                                                       [request, comparison](const CancellationToken &cancellation) {
@@ -461,23 +469,23 @@ namespace Horo::Editor {
         const auto snapshot = m_prefabRecoveryWork->job.Snapshot();
         if (!snapshot || !snapshot->terminalResult)
             return false;
-        const auto checkpoint = std::move(m_prefabRecoveryWork->checkpoint);
+        auto finished = std::move(*m_prefabRecoveryWork);
         m_prefabRecoveryWork.reset();
+        const auto &checkpoint = finished.checkpoint;
         const auto instance = checkpoint->record.sessionGeneration;
         if (snapshot->state == JobState::Succeeded) {
             const auto owner = std::ranges::find_if(m_prefabDocuments, [instance](const auto &entry) {
                 return entry->HasPresentation() && entry->Instance().Value() == instance;
             });
-            if (owner != m_prefabDocuments.end()) {
-                (*owner)->AcknowledgeRecovery(*checkpoint);
+            if (owner != m_prefabDocuments.end() && (*owner)->AcknowledgeRecovery(*checkpoint)) {
                 const auto entry = std::ranges::find_if(m_viewModel.prefabDocuments, [instance](const auto &item) {
                     return item.identity.instance.Value() == instance;
                 });
                 if (entry != m_viewModel.prefabDocuments.end())
                     entry->recoveryRevision = (*owner)->Snapshot().recoveryRevision;
-                if (m_activePrefabDocument == (*owner)->Instance() && checkpoint->acceptedRecovery) {
-                    m_viewModel.prefabRecoveryAvailable = false;
-                    m_viewModel.prefabRecovery.reset();
+                if (m_activePrefabDocument == (*owner)->Instance()) {
+                    m_viewModel.prefabRecovery = std::move(*finished.persisted);
+                    m_viewModel.prefabRecoveryAvailable = m_viewModel.prefabRecovery != nullptr;
                 }
             }
         } else if (snapshot->state != JobState::Cancelled && snapshot->terminalResult->error) {
@@ -507,17 +515,23 @@ namespace Horo::Editor {
         if (!captured.Value())
             return;
         auto checkpoint = std::make_shared<const PrefabRecoveryCheckpoint>(std::move(captured).Value().value());
-        auto submitted = m_sourceRecoveryJobs->SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Io},
-                                                            [root = std::filesystem::path(ProjectRoot()), mutations = m_mutations,
-                                                             files = m_durableFiles, checkpoint](const CancellationToken &cancellation) {
-            DocumentRecoveryService recovery(root, *mutations, *files);
-            return WritePrefabRecovery(*checkpoint, recovery, cancellation);
-        });
+        auto persisted = std::make_shared<std::shared_ptr<const DocumentRecoveryRecord>>();
+        auto submitted = m_sourceRecoveryJobs->SubmitResult(
+            {.priority = JobPriority::Background, .resource = JobResource::Io},
+            [root = std::filesystem::path(ProjectRoot()), mutations = m_mutations, files = m_durableFiles,
+             checkpoint, persisted](const CancellationToken &cancellation) {
+                DocumentRecoveryService recovery(root, *mutations, *files);
+                auto written = WritePrefabRecovery(*checkpoint, recovery, cancellation);
+                if (written.HasError())
+                    return Result<void>::Failure(written.ErrorValue());
+                *persisted = std::move(written).Value();
+                return Result<void>::Success();
+            });
         if (submitted.HasError()) {
             m_viewModel.prefabDocumentError = submitted.ErrorValue();
             return;
         }
-        m_prefabRecoveryWork.emplace(PrefabRecoveryWork{std::move(submitted).Value(), std::move(checkpoint)});
+        m_prefabRecoveryWork.emplace(PrefabRecoveryWork{std::move(submitted).Value(), std::move(checkpoint), std::move(persisted)});
     }
 
     /** @copydoc EditorWorkspaceController::UpdatePrefabAutosave */
@@ -529,7 +543,7 @@ namespace Horo::Editor {
         if (m_prefabRecoveryQueue.empty() && m_prefabAutosaveSeconds >= static_cast<float>(minutes) * 60) {
             m_prefabAutosaveSeconds = 0;
             for (const auto &entry : m_prefabDocuments)
-                if (entry->HasPresentation() && entry->Snapshot().dirty)
+                if (entry->HasPresentation() && entry->IsDirty())
                     m_prefabRecoveryQueue.push_back(entry->Instance());
         }
         if (m_prefabRecoveryQueue.empty())
@@ -556,6 +570,12 @@ namespace Horo::Editor {
         for (const auto &entry : m_prefabDocuments) {
             if (auto result = entry->Autosave(*m_mutations, *m_durableFiles); result.HasError())
                 m_viewModel.prefabDocumentError = result.ErrorValue();
+            const auto snapshot = entry->Snapshot();
+            for (auto &published : m_viewModel.prefabDocuments)
+                if (published.identity.instance == snapshot.identity.instance)
+                    published.recoveryRevision = snapshot.recoveryRevision;
+            if (snapshot.identity.instance == m_activePrefabDocument)
+                RefreshPrefabRecovery(snapshot);
         }
     }
 

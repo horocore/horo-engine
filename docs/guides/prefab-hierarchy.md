@@ -124,7 +124,7 @@ qualification from the in-process path and document regressions.
 
 ## External source conflict
 
-The active dirty prefab is inspected on the shared editor I/O lane. Each
+Open dirty prefabs are inspected in turn on the shared editor I/O lane. Each
 comparison pins the draft, document revision and accepted disk identity. Changed
 source evidence invalidates a dependent hierarchy projection before it can
 authorize any further edits. Compare shows differences using the same local

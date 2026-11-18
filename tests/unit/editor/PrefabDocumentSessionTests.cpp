@@ -482,8 +482,10 @@ namespace Horo::Editor {
 
         fixture.Rename("Later intent");
         JobSystem jobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
-        auto submitted = jobs.SubmitResult({.resource = JobResource::Io}, [&checkpoint, &recovery](const CancellationToken &token) {
-            return WritePrefabRecovery(*checkpoint.Value(), recovery, token);
+        auto submitted = jobs.SubmitResult({.resource = JobResource::Io},
+                                          [&checkpoint, &recovery](const CancellationToken &token) {
+            const auto written = WritePrefabRecovery(*checkpoint.Value(), recovery, token);
+            return written.HasError() ? Result<void>::Failure(written.ErrorValue()) : Result<void>::Success();
         });
         REQUIRE(submitted.HasValue());
         REQUIRE(submitted.Value().Wait().HasValue());
