@@ -137,11 +137,13 @@ namespace Horo::Editor {
                 ImGui::TextUnformatted(title.c_str());
                 if (node.missing && !node.label.empty())
                     ImGui::TextColored(Theme::Warn(), "%s", role.c_str());
-                ImGui::PopTextWrapPos();
-                if (node.incomingOrder)
-                    ImGui::TextColored(Theme::Muted(), "%s %zu",
-                                       context.localization.Get("editor", "workspace.decision_graph.edit_tree_order").c_str(),
+                if (node.incomingOrder) {
+                    const auto label = node.role == GraphNodeRole::UtilityOption ? "workspace.decision_canvas.utility_order"
+                                                                                 : "workspace.decision_graph.edit_tree_order";
+                    ImGui::TextColored(Theme::Muted(), "%s %zu", context.localization.Get("editor", label).c_str(),
                                        *node.incomingOrder + 1);
+                }
+                ImGui::PopTextWrapPos();
             }
 
             for (std::size_t offset = 0; offset < node.pinCount; ++offset) {

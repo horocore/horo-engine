@@ -237,6 +237,7 @@ TEST_CASE("Decision graph workspace and initial state machine labels resolve in 
         CHECK_FALSE(service.Get("editor", "workspace.decision_canvas.subtree").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_canvas.locate_selection").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_canvas.fit").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_canvas.utility_order").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.content_browser.action.create_behavior_tree").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.content_browser.action.create_utility").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.content_browser.action.create_state_machine").starts_with("[missing:"));

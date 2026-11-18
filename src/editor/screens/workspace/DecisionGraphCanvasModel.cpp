@@ -99,12 +99,19 @@ namespace Horo::Editor {
                 addLink(GraphLinkRole::Transition, edge.id.Value(), edge.source, edge.target);
         }
 
-        /** @brief Shows scorer-to-option associations using the stable authored option identity. */
+        /** @brief Shows options in the stable ID order used by UtilitySelector. */
         void ProjectUtility(const AI::UtilityDecisionSource &utility, GraphViewSnapshot &out) {
+            std::vector<AI::DecisionNodeId> options;
+            options.reserve(utility.options.size());
+            for (const auto &option : utility.options)
+                options.push_back(option.option.id);
+            std::ranges::sort(options);
+
             const auto root = AppendEndpointNode(out, utility.root, GraphNodeRole::Root, true);
-            for (const auto &option : utility.options) {
-                const auto id = option.option.id;
+            for (std::size_t order = 0; order < options.size(); ++order) {
+                const auto id = options[order];
                 const auto target = AppendEndpointNode(out, id, GraphNodeRole::UtilityOption, false);
+                out.nodes.back().incomingOrder = order;
                 out.links.push_back({GraphLinkRole::UtilityOption, id.Value(), root + 1, target});
             }
         }

@@ -888,6 +888,7 @@
     "workspace.decision_canvas.auto_layout": {"text": "Otomatik Yerleşim"},
     "workspace.decision_canvas.locate_selection": {"text": "Seçili Düğümü Bul"},
     "workspace.decision_canvas.fit": {"text": "Grafiği Sığdır"},
+    "workspace.decision_canvas.utility_order": {"text": "Seçenek değerlendirme sırası"},
     "workspace.decision_graph.subtree_cycle": {"text": "Bu alt ağaç bir bağımlılık döngüsü oluşturur."},
     "workspace.decision_graph.subtree_missing": {"text": "Kayıtlı bir alt ağaç kaynak dosyası eksik."},
     "workspace.decision_graph.subtree_stale": {"text": "İnceleme güncel değil. Kayıtlı alt ağacı yeniden inceleyin."},

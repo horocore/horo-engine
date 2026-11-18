@@ -13,6 +13,7 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
+#include <cstdint>
 #include <imgui.h>
 #include <map>
 #include <memory>
@@ -25,6 +26,10 @@ namespace Horo::Editor {
         public:
             const std::string &Get(std::string_view, std::string_view key) const override {
                 return labels_.try_emplace(std::string{key}, "Localized graph label " + std::string{key}).first->second;
+            }
+
+            bool Used(std::string_view key) const {
+                return labels_.contains(std::string{key});
             }
 
         private:
@@ -224,6 +229,51 @@ namespace Horo::Editor {
         reveal(first, 640.0F);
         CHECK(document.revision == fence.revision);
         CHECK(document.graph == graph);
+    }
+
+    TEST_CASE("Utility canvas labels options in the real selector evaluation order", "[unit][editor][decision][canvas]") {
+        CanvasFixture fixture;
+        const auto node = [](std::uint64_t id) {
+            return AI::DecisionNodeId::Create(id).Value();
+        };
+        const auto key = AI::BlackboardKeyId::Create(1).Value();
+        const std::array keys{AI::BlackboardKeyDescriptor{.key = key, .kind = AI::BlackboardValueKind::Scalar}};
+        auto schema = AI::BlackboardSchema::Capture({.identity = AI::BlackboardSchemaId::Create(1).Value(), .keys = keys});
+        REQUIRE(schema.HasValue());
+        const auto option = [&](std::uint64_t id, double priority) {
+            return AI::UtilityOption{node(id), AI::TaskId::Create(id).Value(), priority, 0, {{.key = key}}};
+        };
+        const std::array authored{option(90, 1.0), option(7, 0.2), option(42, 0.7)};
+        const auto selector =
+            AI::UtilitySelector::Capture(std::make_shared<const AI::BlackboardSchema>(std::move(schema).Value()), authored);
+        REQUIRE(selector.HasValue());
+        AI::UtilityDecisionSource utility{.root = node(12)};
+        for (const auto &entry : authored)
+            utility.options.push_back({.option = entry});
+
+        auto source = std::make_shared<const AI::DecisionGraphSource>(AI::DecisionGraphSource{.body = std::move(utility)});
+        const DecisionGraphDocumentFence fence{DocumentInstanceId::Create(8).Value(), 1};
+        const auto graph = ProjectDecisionCanvas(*source, fence, true);
+        REQUIRE(graph.nodes.size() == authored.size() + 1);
+        REQUIRE(graph.links.size() == authored.size());
+        CHECK_FALSE(graph.nodes.front().incomingOrder.has_value());
+        for (std::size_t index = 0; index < authored.size(); ++index) {
+            const auto &expected = selector.Value().Options()[index];
+            CHECK(graph.nodes[index + 1].id == expected.id);
+            CHECK(graph.nodes[index + 1].incomingOrder == index);
+            CHECK(graph.links[index].authoredId == expected.id.Value());
+            CHECK(graph.pins[graph.links[index].to].node == expected.id);
+        }
+        CHECK(std::get<AI::UtilityDecisionSource>(source->body).options.front().option.id == authored.front().id);
+
+        DecisionGraphWorkspaceDocument document;
+        document.identity.instance = fence.instance;
+        document.graph = std::move(source);
+        document.family = AI::DecisionPlanKind::Utility;
+        document.revision = fence.revision;
+        fixture.Draw(document, 280.0F);
+        CHECK(fixture.labels.Used("workspace.decision_canvas.utility_order"));
+        CHECK_FALSE(fixture.labels.Used("workspace.decision_graph.edit_tree_order"));
     }
 
     TEST_CASE("Decision projection retains maximum machine transitions and utility option links", "[unit][editor][decision][canvas]") {

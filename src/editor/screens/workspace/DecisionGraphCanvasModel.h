@@ -57,7 +57,7 @@ namespace Horo::Editor {
         std::string label;
         std::size_t firstPin{};
         std::size_t pinCount{};
-        std::optional<std::size_t> incomingOrder;
+        std::optional<std::size_t> incomingOrder; /**< Zero-based tree child or Utility option evaluation order. */
         bool initial{};
         bool missing{};
     };
