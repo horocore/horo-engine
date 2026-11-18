@@ -11,6 +11,7 @@ namespace Horo::Tests::OpenXR {
         std::uint32_t views{2};
         std::uint32_t spaces{2};
         std::uint32_t formats{2};
+        std::span<const std::int64_t> formatPublication;
         bool duplicateSpaces{};
         bool invalidView{};
         bool handsSupported{};
@@ -125,7 +126,7 @@ namespace Horo::Tests::OpenXR {
                 return XR_ERROR_SIZE_INSUFFICIENT;
             if (capacity)
                 for (std::uint32_t index = 0; index < *count; ++index)
-                    values[index] = 37 + index;
+                    values[index] = index < active->formatPublication.size() ? active->formatPublication[index] : 37 + index;
             return Record("formats");
         }
 

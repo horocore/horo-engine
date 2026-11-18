@@ -1325,7 +1325,12 @@ namespace Horo::Editor {
                                                std::move(viewport), *options.directionalShadows, *options.lighting);
                     installed.HasError())
                     return installed;
-                return composition.xrViewport->PrepareXrProgram(std::move(multiview).Value());
+                if (const auto projection = composition.xrViewport->PrepareXrProgram(std::move(multiview).Value()); projection.HasError())
+                    return projection;
+                auto motion = LoadPackagedVulkanMultiviewMotionShader(EditorAssetRoot());
+                if (motion.HasValue())
+                    composition.xrViewport->StageXrMotionProgram(std::move(motion).Value());
+                return Result<void>::Success();
             }
 #endif
             return InstallSelectedEditorRenderers(window, options, composition);

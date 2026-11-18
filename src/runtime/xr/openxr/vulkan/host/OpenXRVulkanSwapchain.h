@@ -9,7 +9,26 @@
 
 #include <openxr/openxr_platform.h>
 
+namespace Horo::Render {
+    struct RenderCapabilitySnapshot;
+}
+
 namespace Horo::XR::OpenXRInternal {
+    /** @brief Exact sampled attachment formats compatible with the selected Vulkan and native runtime. */
+    struct OpenXRVulkanReprojectionFormats final {
+        Render::RenderTextureFormat motion;
+        Render::RenderTextureFormat depth;
+    };
+
+    /** @brief Finds a complete native-advertised motion/depth tuple with single-sample Vulkan attachment support.
+     * @param renderer
+     * Selected device capabilities. @param offered Exact native swapchain format publication.
+     * @param extent Observed extent used for
+     * the cold support check. @return Compatible tuple or no optional path.
+     */
+    [[nodiscard]] std::optional<OpenXRVulkanReprojectionFormats> SelectOpenXRVulkanReprojectionFormats(
+        const Render::RenderCapabilitySnapshot &renderer, std::span<const std::int64_t> offered, Render::FramebufferExtent extent);
+
     /**
      * @brief Concrete official Vulkan image enumeration and canonical frontend import/retirement adapter.
      * @details The graphics binding is the exact stable storage used to create the native session,

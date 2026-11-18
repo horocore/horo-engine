@@ -57,6 +57,21 @@ namespace Horo::Tests::ShaderCook {
           "outputs":[{"name":"color","type":"vec4","location":0}]})"}}};
     }
 
+    inline std::array<SpirvReflectionStage, 2> MultiviewMotionEvidence() {
+        auto evidence = MultiviewEvidence();
+        evidence[0].json = R"({"entryPoints":[{"name":"VSMain","mode":"vert"}],
+          "inputs":[{"name":"position","type":"vec3","location":0}],
+          "outputs":[{"name":"currentClip","type":"vec4","location":0},{"name":"previousClip","type":"vec4","location":1}],
+          "types":{"_1":{"members":[
+            {"name":"CurrentLocalToClip","type":"mat4","offset":0,"matrix_stride":16,"array":[32],"array_size_is_literal":[true],"array_stride":64},
+            {"name":"PreviousLocalToClip","type":"mat4","offset":2048,"matrix_stride":16,"array":[32],"array_size_is_literal":[true],"array_stride":64}]}},
+          "ubos":[{"type":"_1","name":"type.MultiviewMotionParameters","block_size":4096,"set":0,"binding":0}]})";
+        evidence[1].json = R"({"entryPoints":[{"name":"PSMain","mode":"frag"}],
+          "inputs":[{"name":"currentClip","type":"vec4","location":0},{"name":"previousClip","type":"vec4","location":1}],
+          "outputs":[{"name":"motion","type":"vec4","location":0}]})";
+        return evidence;
+    }
+
     inline void ReplaceEvidence(std::string &json, const std::string_view before, const std::string_view after) {
         const auto position = json.find(before);
         REQUIRE(position != std::string::npos);
@@ -75,6 +90,7 @@ namespace Horo::Tests::ShaderCook {
     enum class CookFixtureRole {
         Viewport,
         Multiview,
+        MultiviewMotion,
         Shadow
     };
 
@@ -84,6 +100,8 @@ namespace Horo::Tests::ShaderCook {
                 return EditorVulkanViewportShaderManifest();
             case CookFixtureRole::Multiview:
                 return EditorVulkanMultiviewShaderManifest();
+            case CookFixtureRole::MultiviewMotion:
+                return EditorVulkanMultiviewMotionShaderManifest();
             case CookFixtureRole::Shadow:
                 return EditorVulkanShadowShaderManifest();
         }
@@ -96,6 +114,8 @@ namespace Horo::Tests::ShaderCook {
                 return EditorVulkanViewportReflectionNames();
             case CookFixtureRole::Multiview:
                 return EditorVulkanMultiviewReflectionNames();
+            case CookFixtureRole::MultiviewMotion:
+                return EditorVulkanMultiviewMotionReflectionNames();
             case CookFixtureRole::Shadow:
                 return EditorVulkanShadowReflectionNames();
         }

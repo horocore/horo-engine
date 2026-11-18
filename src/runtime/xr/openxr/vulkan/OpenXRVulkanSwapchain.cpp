@@ -50,6 +50,29 @@ namespace Horo::XR::OpenXRInternal {
         }
     }  // namespace
 
+    /** @copydoc SelectOpenXRVulkanReprojectionFormats */
+    std::optional<OpenXRVulkanReprojectionFormats> SelectOpenXRVulkanReprojectionFormats(const Render::RenderCapabilitySnapshot &renderer,
+                                                                                         const std::span<const std::int64_t> offered,
+                                                                                         const Render::FramebufferExtent extent) {
+        using namespace Render;
+        using enum RenderTextureFormat;
+        constexpr auto usage = RenderTextureUsage::RenderAttachment | RenderTextureUsage::Sampled;
+        const auto select = [&](const auto &formats) {
+            return std::ranges::find_if(formats, [&](const RenderTextureFormat format) {
+                const auto native = NativeFormat(format);
+                return native && std::ranges::find(offered, *native) != offered.end() &&
+                       renderer.Supports({.extent = extent, .format = format, .layerCount = 2, .usage = usage});
+            });
+        };
+        constexpr std::array motionFormats{Rgba16Float, Rgba32Float};
+        constexpr std::array depthFormats{Depth32Float, Depth16Unorm};
+        const auto motion = select(motionFormats);
+        const auto depth = select(depthFormats);
+        if (motion == motionFormats.end() || depth == depthFormats.end())
+            return std::nullopt;
+        return OpenXRVulkanReprojectionFormats{*motion, *depth};
+    }
+
     /** @brief Prepared immutable native image with generation-fenced acquisition identity, never allocation ownership. */
     struct OpenXRVulkanSwapchainImages::Source final : Render::Detail::IVulkanExternalTextureSource {
         Source() = default;

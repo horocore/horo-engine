@@ -2,6 +2,7 @@
 #include "Horo/Runtime/Render/MultiviewSceneExtraction.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "OpenXRApplicationSession.h"
+#include "OpenXRVulkanSwapchain.h"
 
 #include <algorithm>
 #include <format>
@@ -181,7 +182,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRApplicationSession::PrepareProjection */
     Result<OpenXRApplicationProjection> OpenXRApplicationSession::PrepareProjection(const Render::RenderFrontend &frontend,
-                                                                                    const Editor::EditorViewportRendererVulkan &viewport,
+                                                                                    Editor::EditorViewportRendererVulkan &viewport,
                                                                                     const OpenXRApplicationBindings &bindings) {
         using Outcome = Result<OpenXRApplicationProjection>;
         const auto observedSystem = ValidateProjectionPreparation(viewport);
@@ -206,6 +207,20 @@ namespace Horo::Application::Internal {
             if (offer.HasError())
                 return Outcome::Failure(offer.ErrorValue());
             optional.reprojection = offer.Value().availabilityWithoutProducer;
+            if (offer.Value().route != NativeReprojectionRoute::None && optional.reprojection == XRCapabilityState::DependencyMissing) {
+                auto extent = targets.Value().color.extent;
+                if (std::ranges::all_of(offer.Value().extents, [](const auto &eye) {
+                    return eye.IsValid();
+                })) {
+                    const auto &left = offer.Value().extents.front();
+                    const auto &right = offer.Value().extents.back();
+                    extent = {std::max(left.width, right.width), std::max(left.height, right.height)};
+                }
+                const auto formats = SelectOpenXRVulkanReprojectionFormats(frontend.Capabilities().support,
+                                                                           std::span{session.formats}.first(session.formatCount), extent);
+                if (formats)
+                    (void)Editor::EditorVulkanXrViewportAccess::PrepareMotionPipeline(viewport, formats->motion, formats->depth);
+            }
         }
         auto capabilities =
             ProjectionCapabilities(observed, session, targets.Value(), observedSystem.Value(), revision.Value(), budget, optional);

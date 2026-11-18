@@ -32,24 +32,42 @@ namespace {
             std::filesystem::remove_all(root, error);
         }
 
-        std::filesystem::path Path(std::string_view file) const {
-            return root / "shaders/editor" / file;
+        std::filesystem::path Path(std::string_view file, std::string_view directory = "editor") const {
+            return root / "shaders" / directory / file;
         }
 
-        void Write(std::string_view file, std::span<const std::uint8_t> bytes) const {
-            std::ofstream output(Path(file), std::ios::binary | std::ios::trunc);
+        void Write(std::string_view file, std::span<const std::uint8_t> bytes, std::string_view directory = "editor") const {
+            std::ofstream output(Path(file, directory), std::ios::binary | std::ios::trunc);
             output.write(std::bit_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
             REQUIRE(output.good());
         }
 
-        void WriteCook(std::string_view prefix, const CookFixture &fixture) const {
+        void WriteCook(std::string_view prefix, const CookFixture &fixture, std::string_view directory = "editor") const {
             const auto metadata = EncodeReflectedShaderArtifact(fixture.reflected);
             REQUIRE(metadata.HasValue());
-            Write(std::string(prefix) + ".horoshdr", fixture.compiled.payload);
-            Write(std::string(prefix) + ".reflection.json", metadata.Value());
+            Write(std::string(prefix) + ".horoshdr", fixture.compiled.payload, directory);
+            Write(std::string(prefix) + ".reflection.json", metadata.Value(), directory);
         }
     };
 }  // namespace
+
+TEST_CASE("Optional packaged Vulkan XR motion requires its own complete authentic bundle", "[editor][shader-cook][assets][xr]") {
+    Bundle bundle;
+    CHECK(LoadPackagedVulkanMultiviewMotionShader(bundle.root).HasError());
+    std::filesystem::create_directories(bundle.root / "shaders/runtime");
+    const CookFixture motion{CookFixtureRole::MultiviewMotion, MultiviewMotionEvidence()};
+    bundle.WriteCook("multiview-motion-vulkan", motion, "runtime");
+    const auto loaded = LoadPackagedVulkanMultiviewMotionShader(bundle.root);
+    REQUIRE(loaded.HasValue());
+    CHECK(loaded.Value().metadata.cookedArtifactKey == motion.reflected.cookedArtifactKey);
+    CHECK(LoadPackagedVulkanMultiviewShader(bundle.root).HasError());
+
+    const CookFixture projection{CookFixtureRole::Multiview, MultiviewEvidence()};
+    bundle.WriteCook("multiview-motion-vulkan", projection, "runtime");
+    CHECK(LoadPackagedVulkanMultiviewMotionShader(bundle.root).HasError());
+    bundle.WriteCook("multiview-vulkan", projection, "runtime");
+    CHECK(LoadPackagedVulkanMultiviewShader(bundle.root).HasValue());
+}
 
 TEST_CASE("Packaged Vulkan viewport loading requires and owns both canonical lit and shadow artifacts", "[editor][shader-cook][assets]") {
     Bundle bundle;

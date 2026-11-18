@@ -14,4 +14,10 @@ namespace Horo::Editor {
      * fallback.
      */
     [[nodiscard]] Result<EditorVulkanMultiviewCook> LoadPackagedVulkanMultiviewShader(const std::filesystem::path &assetRoot);
+    /** @brief Loads the separately cooked optional XR motion/depth program.
+     * @param assetRoot Same selected packaged root as the
+     * projection shader.
+     * @return The exact motion program or a typed missing, altered or foreign-program error.
+     */
+    [[nodiscard]] Result<EditorVulkanMultiviewCook> LoadPackagedVulkanMultiviewMotionShader(const std::filesystem::path &assetRoot);
 }  // namespace Horo::Editor

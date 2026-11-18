@@ -155,9 +155,18 @@ projection and exact per-eye evidence, and attaches the corresponding OpenXR
 extension structure to every view. Missing optional evidence uses the same
 single color projection. A native end failure retains the original frame fault.
 
-The selected Play frame currently uses a color shader and internal depth.
-Activation still requires wiring the packaged motion pass and a disocclusion
-policy for the provider's format. EXT ignores the engine validity alpha.
+The selected host loads the optional offline pair from
+`shaders/runtime/multiview-motion-vulkan.horoshdr` and
+`shaders/runtime/multiview-motion-vulkan.reflection.json` under its packaged
+asset root. Cook this prefix with `HoroEditorVulkanShaderCook` and
+`--multiview-motion`. During opted-in Play preparation, the renderer builds
+the resident pipeline using the intersection of advertised OpenXR formats and
+the selected Vulkan device's sampled attachment support. Missing or failed
+motion packages leave the ordinary projection available.
+
+Play still renders color and internal depth. Provider activation requires
+the same-frame external motion/depth graph and a disocclusion policy for the
+provider's format. EXT ignores the engine validity alpha.
 [OpenXR frame synthesis contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrFrameSynthesisInfoEXT.html)
 
 ## Public contract migration and evidence

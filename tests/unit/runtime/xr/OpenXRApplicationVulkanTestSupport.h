@@ -19,7 +19,7 @@ namespace Horo::Tests::OpenXRApplication {
             driver = &state;
             state.specializationCount = 0;
             state.admittedAttributeCounts = {1, 3};
-            state.admittedUniformRanges = {1744, 64, 2624};
+            state.admittedUniformRanges = {1744, 64, 2624, 4096};
         }
 
         ShaderDriverScope(const ShaderDriverScope &) = delete;
@@ -162,6 +162,13 @@ namespace Horo::Tests::OpenXRApplication {
                                     Render::ShaderArtifactStage{Render::ShaderStage::Fragment, "PSMain",
                                                                 Code(Render::ShaderStage::Fragment)}};
             return ShaderCook::CookFixture{multiview ? ShaderCook::MultiviewEvidence() : ShaderCook::Evidence(), stages, multiview};
+        }
+
+        static ShaderCook::CookFixture CookMotion() {
+            const std::array stages{Render::ShaderArtifactStage{Render::ShaderStage::Vertex, "VSMain", Code(Render::ShaderStage::Vertex)},
+                                    Render::ShaderArtifactStage{Render::ShaderStage::Fragment, "PSMain",
+                                                                Code(Render::ShaderStage::Fragment)}};
+            return ShaderCook::CookFixture{ShaderCook::CookFixtureRole::MultiviewMotion, ShaderCook::MultiviewMotionEvidence(), stages};
         }
 
         /** @brief Uses the shared canonical shadow role and unchanged scripted evidence; this is never native shader execution proof. */

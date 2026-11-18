@@ -208,7 +208,7 @@ namespace Horo::Application::Internal {
          * receives a monotonic private capability revision; no per-frame discovery or allocation is introduced.
          */
         [[nodiscard]] Result<OpenXRApplicationProjection> PrepareProjection(const Render::RenderFrontend &frontend,
-                                                                            const Editor::EditorViewportRendererVulkan &viewport,
+                                                                            Editor::EditorViewportRendererVulkan &viewport,
                                                                             const OpenXRApplicationBindings &bindings);
         /** @brief Activates the SAME prepared session during canonical lifecycle resource preparation.
          * @param candidate Exact identity issued by that lifecycle, never an App-predicted ordinal.

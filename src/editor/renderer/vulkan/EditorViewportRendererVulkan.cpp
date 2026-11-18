@@ -264,6 +264,9 @@ namespace Horo::Editor {
         if (xrShader_.materials)
             static_cast<void>(xrShader_.materials->Shutdown());
         xrShader_.materials.reset();
+        if (xrMotionShader_.materials)
+            static_cast<void>(xrMotionShader_.materials->Shutdown());
+        xrMotionShader_.materials.reset();
         initialized_ = false;
         childAttached_ = false;
         recordedEver_ = false;
@@ -287,6 +290,9 @@ namespace Horo::Editor {
         shader_.payload = std::move(source);
         shader_.metadata = std::move(metadata);
         RetireXrProgram();
+        RetireProgram(xrMotionShader_, {});
+        xrMotionFormats_.reset();
+        xrMotionCook_.reset();
     }
 
     void EditorViewportRendererVulkan::RetireXrProgram() noexcept {

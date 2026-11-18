@@ -20,6 +20,12 @@ namespace Horo::Editor {
         return viewport.BorrowXrDevice();
     }
 
+    /** @copydoc EditorVulkanXrViewportAccess::PrepareMotionPipeline */
+    Result<bool> EditorVulkanXrViewportAccess::PrepareMotionPipeline(EditorViewportRendererVulkan &viewport,
+                                                                     const RenderTextureFormat motion, const RenderTextureFormat depth) {
+        return viewport.PrepareXrMotionPipeline(motion, depth);
+    }
+
     /** @copydoc EditorVulkanXrViewportAccess::Prepare */
     Result<void> EditorVulkanXrViewportAccess::Prepare(EditorViewportRendererVulkan &viewport,
                                                        std::span<const RenderMeshResourceView> meshes, const RenderTextureDescriptor &color,

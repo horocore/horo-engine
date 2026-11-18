@@ -30,6 +30,14 @@ namespace Horo::Editor {
 
         /** @brief Borrow the actual selected native device; no creation or selection occurs. */
         [[nodiscard]] static Result<Render::Detail::VulkanEditorDevice> Device(const EditorViewportRendererVulkan &viewport);
+        /** @brief Cold-prepares the staged optional motion pipeline for the selected format pair.
+         * @param viewport Existing
+         * selected owner. @param motion Exact signed color format. @param depth Exact forward depth format.
+         * @return Resident
+         * success, absent optional bundle, or original admission failure.
+         */
+        [[nodiscard]] static Result<bool> PrepareMotionPipeline(EditorViewportRendererVulkan &viewport, Render::RenderTextureFormat motion,
+                                                                Render::RenderTextureFormat depth);
         /** @brief Cold-prepare topology over exact canonical meshes and native allocation/release policy.
          * @param viewport Existing selected owner. @param meshes Complete immutable canonical mesh resource projection.
          * @param color Native allocation. @param acquired Actual acquisition state. @param final Required native release state.

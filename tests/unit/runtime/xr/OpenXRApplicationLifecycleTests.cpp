@@ -88,7 +88,8 @@ namespace Horo::Tests::OpenXRApplication {
             explicit ApplicationFixture(const bool render = false, const std::int64_t maximumSpaces = 5,
                                         const XR::XRProjectFeaturePolicy depth = XR::XRProjectFeaturePolicy::Unrequested,
                                         const XR::XRProjectFeaturePolicy hands = XR::XRProjectFeaturePolicy::Unrequested,
-                                        const XR::XRProjectFeaturePolicy stage = XR::XRProjectFeaturePolicy::Unrequested) {
+                                        const XR::XRProjectFeaturePolicy stage = XR::XRProjectFeaturePolicy::Unrequested,
+                                        const bool synthesis = false) {
                 ConfigurationResolutionRequest request;
                 request.invocation.emplace(SettingKey{"xr.enabled"}, ConfigurationInputValue{true, std::nullopt});
                 if (depth != XR::XRProjectFeaturePolicy::Unrequested) {
@@ -108,6 +109,14 @@ namespace Horo::Tests::OpenXRApplication {
                 if (stage != XR::XRProjectFeaturePolicy::Unrequested)
                     request.invocation.emplace(SettingKey{"xr.features.stage_space"},
                                                ConfigurationInputValue{static_cast<std::int64_t>(stage), std::nullopt});
+                if (synthesis) {
+                    request.invocation.emplace(SettingKey{"xr.features.space_warp"},
+                                               ConfigurationInputValue{static_cast<std::int64_t>(
+                                                                           XR::XRProjectFeaturePolicy::OptionalProjection),
+                                                                       std::nullopt});
+                    script.native.synthesisExtension = true;
+                    ++script.native.extensionCount;
+                }
                 REQUIRE(bindings->poses.empty());
                 // This zero-pose Play composition reserves five canonical spaces before native activation.
                 request.invocation.emplace(SettingKey{"xr.limits.spaces"}, ConfigurationInputValue{maximumSpaces, std::nullopt});
@@ -996,6 +1005,50 @@ namespace Horo::Tests::OpenXRApplication {
             CHECK(fixture.play->UsesXrScene());
             scene->Shutdown();
         }
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+    }
+
+    TEST_CASE("Selected Play cold prepares the staged Vulkan motion pipeline without activating synthesis",
+              "[xr][application][play][reprojection]") {
+        using enum XR::XRProjectFeaturePolicy;
+        ApplicationFixture fixture{true, 5, Unrequested, Unrequested, Unrequested, true};
+        constexpr std::array<std::int64_t, 3> formats{VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_D16_UNORM};
+        fixture.script.census.formats = formats.size();
+        fixture.script.census.formatPublication = formats;
+        bool stageBundle = true;
+        bool rejectPipeline = false;
+        SECTION("matching advertised tuple") {}
+        SECTION("packaged motion pair absent") {
+            stageBundle = false;
+        }
+        SECTION("selected native pipeline creation failure") {
+            rejectPipeline = true;
+        }
+        if (stageBundle) {
+            const auto motion = ApplicationVulkanFixture::CookMotion();
+            fixture.viewport->StageXrMotionProgram(RequireValue(
+                Editor::LoadEditorVulkanMultiviewMotionCook(motion.compiled.payload,
+                                                            RequireValue(Render::EncodeReflectedShaderArtifact(motion.reflected)))));
+        }
+        auto &driver = fixture.vulkan->shader.state;
+        const auto pipelines = driver.pipelines;
+        const auto destroyedShaders = driver.destroyedShaders;
+        if (rejectPipeline)
+            driver.pipelineResult = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        auto scene = PublishPlay(fixture);
+        CHECK(driver.pipelines == pipelines + (stageBundle ? 1U : 0U));
+        CHECK(std::ranges::find(fixture.script.native.enabledExtensions, XR_EXT_FRAME_SYNTHESIS_EXTENSION_NAME) ==
+              fixture.script.native.enabledExtensions.end());
+        if (stageBundle) {
+            CHECK(driver.colorFormat == VK_FORMAT_R32G32B32A32_SFLOAT);
+            CHECK(driver.depthFormat == VK_FORMAT_D16_UNORM);
+            CHECK(driver.depthTestEnabled);
+            CHECK(driver.depthWriteEnabled);
+        }
+        if (rejectPipeline)
+            CHECK(driver.destroyedShaders >= destroyedShaders + 2);
+        driver.pipelineResult = VK_SUCCESS;
+        scene->Shutdown();
         REQUIRE(RequireValue(fixture.ClosePlay()));
     }
 

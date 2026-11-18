@@ -29,6 +29,21 @@ namespace Horo::Editor {
          * @pre Initialized selected Vulkan owner, before any interactive frame or graph recording.
          */
         [[nodiscard]] Result<void> PrepareXrProgram(EditorVulkanMultiviewCook cooked);
+        /** @brief Retains the optional packaged motion program before any rendering begins.
+         * @param cooked Optional decoded
+         * bundle from the selected packaged root.
+         */
+        void StageXrMotionProgram(EditorVulkanMultiviewCook cooked) noexcept;
+        /** @brief Prepares the selected same-device pipeline for the exact native/renderer format pair.
+         * @param motion Admitted
+         * signed floating-point color attachment.
+         * @param depth Admitted sampled forward depth attachment.
+         * @return
+         * True for a resident program, false without an installed bundle, or an original admission error.
+         * @pre Cold selected XR
+         * scene preparation before graph or external image acquisition.
+         */
+        [[nodiscard]] Result<bool> PrepareXrMotionPipeline(Render::RenderTextureFormat motion, Render::RenderTextureFormat depth);
         /** @brief Borrows the actual selected device for cold same-session XR image translation.
          * @return Current same-bridge facts or original typed failure. No device/queue/loader is created.
          */
@@ -273,6 +288,9 @@ namespace Horo::Editor {
         ShaderResources shader_;
         ShaderResources shadowShader_;
         ShaderResources xrShader_;
+        std::optional<EditorVulkanMultiviewCook> xrMotionCook_;
+        ShaderResources xrMotionShader_;
+        std::optional<std::pair<Render::RenderTextureFormat, Render::RenderTextureFormat>> xrMotionFormats_;
         std::shared_ptr<XrGraph> xrGraph_;
         std::array<std::array<DrawSlot, Render::RenderMaterialPass::MaximumDraws>, 8> xrDrawSlots_;
         EditorViewportResources resources_;

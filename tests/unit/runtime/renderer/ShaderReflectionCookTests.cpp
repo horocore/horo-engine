@@ -182,20 +182,7 @@ TEST_CASE("Canonical multiview consumer requires actual bound reflection and clo
 }
 
 TEST_CASE("Motion shader cooking requires signed XYZ transport and both exact predecessor fields", "[renderer][shader-cook][xr]") {
-    const auto stages = [] {
-        auto evidence = MultiviewEvidence();
-        evidence[0].json = R"({"entryPoints":[{"name":"VSMain","mode":"vert"}],
-          "inputs":[{"name":"position","type":"vec3","location":0}],
-          "outputs":[{"name":"currentClip","type":"vec4","location":0},{"name":"previousClip","type":"vec4","location":1}],
-          "types":{"_1":{"members":[
-            {"name":"CurrentLocalToClip","type":"mat4","offset":0,"matrix_stride":16,"array":[32],"array_size_is_literal":[true],"array_stride":64},
-            {"name":"PreviousLocalToClip","type":"mat4","offset":2048,"matrix_stride":16,"array":[32],"array_size_is_literal":[true],"array_stride":64}]}},
-          "ubos":[{"type":"_1","name":"type.MultiviewMotionParameters","block_size":4096,"set":0,"binding":0}]})";
-        evidence[1].json = R"({"entryPoints":[{"name":"PSMain","mode":"frag"}],
-          "inputs":[{"name":"currentClip","type":"vec4","location":0},{"name":"previousClip","type":"vec4","location":1}],
-          "outputs":[{"name":"motion","type":"vec4","location":0}]})";
-        return evidence;
-    }();
+    const auto stages = MultiviewMotionEvidence();
     const auto manifest = EditorVulkanMultiviewMotionShaderManifest();
     const auto target = EditorVulkanViewportShaderTarget();
     const auto names = EditorVulkanMultiviewMotionReflectionNames();

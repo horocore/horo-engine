@@ -220,4 +220,54 @@ namespace Horo::Editor {
                     return prepared;
         return Result<void>::Success();
     }
+
+    /** @copydoc EditorViewportRendererVulkan::StageXrMotionProgram */
+    void EditorViewportRendererVulkan::StageXrMotionProgram(EditorVulkanMultiviewCook cooked) noexcept {
+        if (owner_ == std::this_thread::get_id() && initialized_ && !recordedEver_ && !xrMotionCook_)
+            xrMotionCook_.emplace(std::move(cooked));
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareXrMotionPipeline */
+    Result<bool> EditorViewportRendererVulkan::PrepareXrMotionPipeline(const Render::RenderTextureFormat motion,
+                                                                       const Render::RenderTextureFormat depth) {
+        using namespace Render;
+        using Outcome = Result<bool>;
+        if (!xrMotionCook_)
+            return Outcome::Success(false);
+        if (const auto device = BorrowXrDevice(); device.HasError())
+            return Outcome::Failure(device.ErrorValue());
+        using enum RenderTextureFormat;
+        if (xrGraph_ || (motion != Rgba16Float && motion != Rgba32Float) || (depth != Depth16Unorm && depth != Depth32Float))
+            return Outcome::Failure(MakeError(RendererErrors::ViewportShaderContractInvalid));
+        const auto formats = std::pair{motion, depth};
+        if (xrMotionFormats_ == formats && xrMotionShader_.pipeline.IsValid() && xrMotionShader_.materials)
+            return Outcome::Success(true);
+
+        const auto metadata = EncodeReflectedShaderArtifact(xrMotionCook_->metadata);
+        if (metadata.HasError())
+            return Outcome::Failure(metadata.ErrorValue());
+        const auto admitted = LoadEditorVulkanMultiviewMotionCook(xrMotionCook_->payload, metadata.Value());
+        if (admitted.HasError())
+            return Outcome::Failure(admitted.ErrorValue());
+        ShaderResources candidate{.payload = std::move(admitted).Value().payload, .metadata = xrMotionCook_->metadata};
+        const auto retireFailure = [&](const Error &error) {
+            RetireProgram(candidate, {});
+            return Outcome::Failure(error);
+        };
+        if (auto stages = ProgramResources::CreateProgramStages(frontend_, candidate); stages.HasError())
+            return retireFailure(stages.ErrorValue());
+        const RenderGraphicsPipelineState state{.cull = RenderCullMode::None, .colorFormat = motion, .depthFormat = depth};
+        const auto pipeline =
+            ProgramResources::CreatePipelineState(frontend_, candidate, EditorVulkanMultiviewMotionShaderManifest(), state);
+        if (pipeline.HasError())
+            return retireFailure(pipeline.ErrorValue());
+        candidate.pipeline = pipeline.Value();
+        if (const auto layout = ProgramResources::CreateMaterialLayout(frontend_, candidate, candidate.metadata.reflection, device_.frames);
+            layout.HasError())
+            return retireFailure(layout.ErrorValue());
+        std::swap(xrMotionShader_, candidate);
+        xrMotionFormats_ = formats;
+        RetireProgram(candidate, {});
+        return Outcome::Success(true);
+    }
 }  // namespace Horo::Editor
