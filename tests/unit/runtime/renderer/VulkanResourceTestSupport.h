@@ -197,7 +197,7 @@ namespace Horo::Render::VulkanResourceTest {
             return VK_ERROR_OUT_OF_HOST_MEMORY;
         if (nativeResources->createViewResult != VK_SUCCESS)
             return nativeResources->createViewResult;
-        *view = NativeHandle<VkImageView>(14);
+        *view = NativeHandle<VkImageView>(13 + static_cast<std::uintptr_t>(nativeResources->createViewCount));
         return VK_SUCCESS;
     }
 
