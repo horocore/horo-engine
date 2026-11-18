@@ -266,6 +266,10 @@ namespace Horo::Navigation {
         [[nodiscard]] Result<NavigationAgentSnapshot> Snapshot() const;
         /** @brief Resolves one exact handle against the published population. */
         [[nodiscard]] Result<NavigationAgentRecord> Find(CrowdAgentHandle handle) const;
+        /** @brief Looks up the current coordinator handle for one exact Scene entity generation.
+         * @param owner Scene-issued entity identity. @return Current handle, or empty when unregistered or retired.
+         */
+        [[nodiscard]] std::optional<CrowdAgentHandle> FindOwner(NavigationAgentOwner owner) const noexcept;
         /** @brief Returns the exact active Scene/world binding. */
         [[nodiscard]] Result<NavigationAgentSceneBinding> ActiveBinding() const;
 

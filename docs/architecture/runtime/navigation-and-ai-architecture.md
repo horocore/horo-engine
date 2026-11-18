@@ -404,6 +404,14 @@ unavailable with deterministic cooked AI dispatch. HoroNetworkProductHost compos
 the grant through HoroGameplayNavigationIntegration and retains its exact
 Navigation owner during shutdown until worker and request fences drain.
 
+A behavior attached to an enabled Navigation agent receives a path-only
+attachment scope. It resolves the actual Scene entity generation through the
+installed agent registry and tags each canonical submission with that handle.
+The module-wide caller quota still covers attachment and module requests.
+Committed despawn abandons the exact agent reservations and retained handles
+return scope revocation. Cancelled despawn keeps the attachment and its results
+available. Completed value copies remain historical snapshots.
+
 `HoroNavigationCharacterIntegration` is the downstream NAV-004.9 composition
 boundary. It depends on `HoroNavigationRuntime` and `HoroCharacterInput`; neither
 Character nor Physics imports Navigation. The host creates a

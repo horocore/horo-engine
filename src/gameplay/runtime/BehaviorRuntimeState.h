@@ -75,6 +75,7 @@ namespace Horo::Gameplay {
             bool enabledCallbackActive{};
             bool started{};
             bool destroyed{};
+            std::shared_ptr<const GameplayNavigationContext> navigation;
             std::shared_ptr<const GameplayPrefabContext> prefabs;
             std::shared_ptr<const GameplayVfxContext> vfx;
         };
@@ -146,7 +147,7 @@ namespace Horo::Gameplay {
             [[nodiscard]] std::shared_ptr<const GameplayNavigationContext> NavigationContext() const noexcept override {
                 if (runtime.navigation && !instance.component.typeId.Value().starts_with(runtime.navigation->Binding().moduleId + "."))
                     return {};
-                return runtime.navigation;
+                return instance.navigation ? instance.navigation : runtime.navigation;
             }
 
             [[nodiscard]] std::shared_ptr<const GameplayPhysicsContext> PhysicsContext() const noexcept override {
@@ -253,7 +254,32 @@ namespace Horo::Gameplay {
             return Result<void>::Success();
         }
 
+        /** @brief Binds path-only ownership after the exact entity and Navigation registry have been published. */
+        [[nodiscard]] Result<void> InitializeAgentNavigation(Instance &instance) const {
+            if (instance.navigation) {
+                instance.navigation->Revoke();
+                instance.navigation.reset();
+            }
+            if (!navigation || !navigation->HasBehaviorAgentPaths() ||
+                !instance.component.typeId.Value().starts_with(navigation->Binding().moduleId + "."))
+                return Result<void>::Success();
+            const auto entity = SceneView().Get(instance.entity);
+            if (entity.HasError())
+                return Result<void>::Failure(entity.ErrorValue());
+            const auto &agent = entity.Value().components->navigationAgent;
+            if (!agent || !agent->enabled)
+                return Result<void>::Success();
+            const auto grant = navigation->ForBehaviorEntity(
+                {navigation->Binding().scene.scene, instance.entity.entity.index, instance.entity.entity.generation});
+            if (grant.HasError())
+                return Result<void>::Failure(grant.ErrorValue());
+            instance.navigation = grant.Value();
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> InitializePrefabContext(Instance &instance) const {
+            if (auto bound = InitializeAgentNavigation(instance); bound.HasError())
+                return bound;
             if (auto bound = InitializeVfxContext(instance); bound.HasError())
                 return bound;
             if (!prefabs || !prefabs->Binding().AdmitsBehavior(instance.component.typeId))
@@ -514,6 +540,8 @@ namespace Horo::Gameplay {
         };
 
         [[nodiscard]] bool RollbackInstance(Instance &instance, const bool committedRetirement = false) noexcept {
+            if (instance.navigation)
+                instance.navigation->Revoke();
             if (committedRetirement)
                 Detail::GameplayVfxHostAccess::RetireEntityClient(instance.vfx);
             bool complete = true;

@@ -456,6 +456,16 @@ namespace Horo::Navigation {
         return Result<NavigationAgentRecord>::Success(*slot.record);
     }
 
+    /** @copydoc NavigationAgentRegistry::FindOwner */
+    std::optional<CrowdAgentHandle> NavigationAgentRegistry::FindOwner(const NavigationAgentOwner owner) const noexcept {
+        if (shutdown_ || !active_ || owner.scene != active_->binding.scene)
+            return {};
+        const auto found = active_->ownerSlots.find(owner);
+        if (found == active_->ownerSlots.end())
+            return {};
+        return active_->slots[found->second].record->handle;
+    }
+
     /** @copydoc NavigationAgentRegistry::ActiveBinding */
     Result<NavigationAgentSceneBinding> NavigationAgentRegistry::ActiveBinding() const {
         if (shutdown_)

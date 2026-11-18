@@ -2,7 +2,9 @@
 
 #include "Horo/Application/NavigationProjectSettings.h"
 #include "Horo/Navigation/NavigationDefinitionSerialization.h"
+#include "Horo/Prefab/CookedPrefab.h"
 #include "Horo/Scene/CookedSceneDefinition.h"
+#include "Horo/Scene/PrefabComponentProjection.h"
 #include "Horo/Scene/SceneRuntimeConversion.h"
 #include "PrefabSceneCookHostFixture.h"
 #include "navigation/NavigationContentPolicyFixture.h"
@@ -20,12 +22,19 @@ namespace Horo::Application::CharacterSceneProductTest {
             StalePolicy,
             UnsupportedLink
         };
+        enum class Client {
+            None,
+            Scene,
+            Prefab
+        };
         HostFixture project;
         SceneSource::SceneSourceDocument source;
         const Navigation::NavigationFilterId pathFilter{Navigation::NavigationFilterId::Create(13).Value()};
         const Assets::AssetId definitionId{Id("11223344-5566-7788-99aa-bbccddeeff88")};
 
-        void Publish(const Input input, const bool nativeClient = false) {
+        Sha256Digest prefabDigest;
+
+        void Publish(const Input input, const Client client = Client::None) {
             using namespace Navigation;
             const auto profile = NavigationAgentProfileId::Create(7).Value();
             const auto surface = SurfaceId::Create(53).Value();
@@ -100,13 +109,11 @@ namespace Horo::Application::CharacterSceneProductTest {
                                               NavigationCookedContentProvenance{{digest, digest, digest},
                                                                                 NavigationProjectProfile::Create(policy).Value()}};
             source.objects.push_back({.id = {1}, .name = "Play camera", .components = {.camera = Runtime::CameraComponent{}}});
-            if (nativeClient)
+            if (client == Client::Scene)
+                source.objects.front().components.behaviors.push_back(NavigationClient(false));
+            else if (client == Client::Prefab)
                 source.objects.front().components.behaviors.push_back(
-                    {{1},
-                     Gameplay::BehaviorTypeId::Parse("game.tests.navigation_client").Value(),
-                     1,
-                     true,
-                     {{"destinationX", 2.0}, {"destinationZ", 2.0}}});
+                    {{1}, Gameplay::BehaviorTypeId::Parse("game.tests.prefab_capability_probe").Value()});
             if (input != Input::MissingSurface) {
                 source.objects.push_back(
                     {.id = {2},
@@ -133,10 +140,50 @@ namespace Horo::Application::CharacterSceneProductTest {
             project.WriteText("assets/level.horo", SceneSource::EncodeSceneSource(view));
             const auto scene = SceneSource::ConvertSceneSourceToRuntime(view, SceneCook::SceneDefinitionIdForAsset(project.sceneId), {1});
             REQUIRE(scene.HasValue());
-            PublishCook(Navigation::TestSupport::ContentEnvelope(set, definitionId, project.request.assets.target), scene.Value());
+            auto prefab = client == Client::Prefab ? EncodeNavigationPrefab(profile) : std::vector<std::uint8_t>{};
+            PublishCook(Navigation::TestSupport::ContentEnvelope(set, definitionId, project.request.assets.target), scene.Value(),
+                        std::move(prefab));
         }
 
     private:
+        /** @brief One real native callback, used by either ordinary or cooked prefab Scene composition. */
+        static Gameplay::BehaviorComponent NavigationClient(const bool capture) {
+            return {{1},
+                    Gameplay::BehaviorTypeId::Parse("game.tests.navigation_client").Value(),
+                    1,
+                    true,
+                    {{"destinationX", 2.0}, {"destinationZ", 2.0}, {"captureSubmission", capture}}};
+        }
+
+        /** @brief Uses the canonical builtin producer and prefab envelope rather than manufacturing a registry handle. */
+        std::vector<std::uint8_t> EncodeNavigationPrefab(const Navigation::NavigationAgentProfileId profile) const {
+            const SceneSource::SceneObjectComponentSet components{
+                .navigationAgent = Runtime::NavigationAgentComponent{.profile = profile, .filter = pathFilter}};
+            auto agent = SceneSource::EncodePrefabNavigationComponent(Runtime::BuiltinSceneComponentKind::NavigationAgent,
+                                                                      Prefab::PrefabComponentInstanceId::Create(1).Value(), components);
+            REQUIRE(agent.HasValue());
+            const auto content = ComputeSha256(std::as_bytes(std::span{"nav prefab", std::size_t{10}}));
+            Prefab::CookedPrefabEntity root;
+            root.provenance = {project.prefabId, {}, content};
+            root.members.emplace_back(std::move(agent).Value());
+            root.members.emplace_back(NavigationClient(true));
+            const auto prefab = Prefab::CookedPrefab::Create({.assetId = project.prefabId, .entities = {std::move(root)}},
+                                                             Prefab::PrefabLimitProfile::Create({}).Value());
+            REQUIRE(prefab.HasValue());
+            std::vector<std::uint8_t> payload;
+            payload.reserve(prefab.Value().Bytes().size());
+            for (const auto byte : prefab.Value().Bytes())
+                payload.push_back(std::to_integer<std::uint8_t>(byte));
+            auto envelope = Assets::EncodeCookedArtifact({.id = project.prefabId,
+                                                          .type = Type("core.prefab"),
+                                                          .target = project.request.assets.target,
+                                                          .sourceDigest = content,
+                                                          .payloadDigest = ComputeSha256(prefab.Value().Bytes()),
+                                                          .payload = std::move(payload)});
+            REQUIRE(envelope.HasValue());
+            return std::move(envelope).Value();
+        }
+
         static Assets::AssetRecord AssetRecordFor(const Assets::AssetId id, const std::string_view type, const std::string_view path) {
             return {.id = id,
                     .type = Type(type),
@@ -144,7 +191,8 @@ namespace Horo::Application::CharacterSceneProductTest {
                     .metadataPath = ProjectPath::Parse(std::string(path) + ".horo").Value()};
         }
 
-        void PublishCook(std::vector<std::uint8_t> navigationEnvelope, const Runtime::RuntimeSceneDefinition &scene) {
+        void PublishCook(std::vector<std::uint8_t> navigationEnvelope, const Runtime::RuntimeSceneDefinition &scene,
+                         std::vector<std::uint8_t> prefab) {
             const auto cooked = SceneCook::EncodeCookedSceneDefinition(scene);
             REQUIRE(cooked.HasValue());
             const auto target = project.request.assets.target;
@@ -152,18 +200,26 @@ namespace Horo::Application::CharacterSceneProductTest {
             auto sceneEnvelope =
                 Assets::EncodeCookedArtifact({project.sceneId, Type("core.scene"), target, digest, digest, digest, cooked.Value()});
             REQUIRE(sceneEnvelope.HasValue());
-            const std::array envelopes{std::move(sceneEnvelope).Value(), std::move(navigationEnvelope)};
+            std::vector envelopes{std::move(sceneEnvelope).Value(), std::move(navigationEnvelope)};
             const auto entry = [](const Assets::AssetId id, const Assets::AssetTypeId &type, const std::vector<std::uint8_t> &bytes) {
                 return Assets::AssetCookManifestEntry{id, type, id.ToString() + ".cooked", ComputeSha256(std::as_bytes(std::span{bytes}))};
             };
-            const std::array entries{entry(project.sceneId, Type("core.scene"), envelopes[0]),
-                                     entry(definitionId, Type("core.navmesh"), envelopes[1])};
+            std::vector entries{entry(project.sceneId, Type("core.scene"), envelopes[0]),
+                                entry(definitionId, Type("core.navmesh"), envelopes[1])};
+            if (!prefab.empty()) {
+                entries.insert(entries.begin(), entry(project.prefabId, Type("core.prefab"), prefab));
+                prefabDigest = entries.front().artifactHash;
+                envelopes.insert(envelopes.begin(), std::move(prefab));
+            }
             auto lease = project.files.TryAcquireExclusive(project.cooked.path / ".cook-writer.lock", "Navigation product fixture");
             REQUIRE(lease.HasValue());
             const Assets::AssetCookPublicationPolicy publication{.files = &project.files,
                                                                  .operationId = project.sceneId.ToString(),
                                                                  .writerLease = &lease.Value()};
-            REQUIRE(Assets::PublishCookGeneration(project.cooked.path, target, entries, envelopes, {}, publication).HasValue());
+            const auto generation = Assets::PublishCookGeneration(project.cooked.path, target, entries, envelopes, {}, publication);
+            if (generation.HasError())
+                UNSCOPED_INFO(generation.ErrorValue().message);
+            REQUIRE(generation.HasValue());
         }
     };
 }  // namespace Horo::Application::CharacterSceneProductTest

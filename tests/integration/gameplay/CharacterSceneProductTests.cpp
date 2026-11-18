@@ -101,6 +101,70 @@ namespace Horo::Application::CharacterSceneProductTest {
             std::unique_ptr<Network::INetworkModeService> scene;
             std::unique_ptr<Network::INetworkModeService> physics;
             bool stopped{};
+            std::uint64_t tick{};
+
+            void Start(const NavigationProductFixture &fixture, const Internal::GameplayWorldSelection &gameplay) {
+                const Internal::HeadlessProjectSceneOptions options{.projectRoot = fixture.project.project.dir.path,
+                                                                    .scene = "cooked:" + fixture.project.sceneId.ToString(),
+                                                                    .cookedRoot = fixture.project.cooked.path,
+                                                                    .cookTarget = fixture.project.request.assets.target.Value(),
+                                                                    .navigationMode = Internal::HeadlessNavigationMode::RecastDetour};
+                auto prepared = Internal::PrepareHeadlessProjectSceneResources(options);
+                REQUIRE(prepared.HasValue());
+                resources = std::move(prepared).Value();
+                auto &project = *resources;
+                const auto nativePrefabs = gameplay.prefabPermission == Internal::GameplayPrefabPermission::Granted;
+                auto configured =
+                    Internal::ComposeHeadlessSceneNetworkServices(project.definition,
+                                                                  {.mode = options.physicsMode,
+                                                                   .settings = *project.settings,
+                                                                   .registry = project.registry,
+                                                                   .loads = *project.loads,
+                                                                   .load = project.load,
+                                                                   .prefabLoads = nativePrefabs ? project.prefabLoads.get() : nullptr,
+                                                                   .navigation = project.navigation,
+                                                                   .navigationPath =
+                                                                       Internal::HeadlessNavigationPathPolicy{fixture.pathFilter, 512}},
+                                                                  {}, gameplay);
+                REQUIRE(configured.HasValue());
+                composition.emplace(std::move(configured).Value());
+                const auto makeService = [&](const Network::NetworkModeServiceKind kind) {
+                    auto service = composition->factories.services[static_cast<std::size_t>(kind)](
+                        {kind, Network::NetworkProjectRole::Standalone, {}, Network::NetworkModeWorldKind::Standalone, {31}});
+                    REQUIRE(service.HasValue());
+                    return std::move(service).Value();
+                };
+                scene = makeService(Network::NetworkModeServiceKind::Scene);
+                REQUIRE(scene->Prepare().HasValue());
+                physics = makeService(Network::NetworkModeServiceKind::Physics);
+                REQUIRE(physics->Prepare().HasValue());
+                REQUIRE(scene->Activate().HasValue());
+                REQUIRE(physics->Activate().HasValue());
+            }
+
+            void RunFrame() {
+                const auto cancellation = resources->cancellation.Token();
+                const auto result = physics->RunFixedTick({++tick, Duration::FromNanoseconds(16'666'667), cancellation});
+                if (result.HasError())
+                    UNSCOPED_INFO(result.ErrorValue().message);
+                REQUIRE(result.HasValue());
+                const auto commit = physics->RunPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges);
+                if (commit.HasError())
+                    UNSCOPED_INFO(commit.ErrorValue().message);
+                REQUIRE(commit.HasValue());
+            }
+
+            void Await(const Prefab::PrefabOperation &operation, const Prefab::PrefabSpawnState expected) {
+                const auto deadline = tick + 64;
+                while (operation.State() == Prefab::PrefabSpawnState::Pending && tick < deadline) {
+                    RunFrame();
+                    if (operation.State() == Prefab::PrefabSpawnState::Pending)
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+                if (const auto failure = operation.Failure())
+                    UNSCOPED_INFO(failure->message);
+                REQUIRE(operation.State() == expected);
+            }
 
             ~NativeNavigationProductWorld() {
                 Stop();
@@ -171,7 +235,7 @@ namespace Horo::Application::CharacterSceneProductTest {
 
     TEST_CASE("Terminal native Navigation path requires its explicit filter and deadline", "[navigation][scene][cli][product]") {
         NavigationProductFixture fixture;
-        fixture.Publish(NavigationProductFixture::Input::Valid, true);
+        fixture.Publish(NavigationProductFixture::Input::Valid, NavigationProductFixture::Client::Scene);
         const auto gameplay = NavigationGameplay();
         auto arguments = NavigationArguments(fixture);
         arguments.insert(arguments.end(), {"--game-module", Utf8Path(gameplay.nativeArtifact), gameplay.moduleId,
@@ -194,43 +258,10 @@ namespace Horo::Application::CharacterSceneProductTest {
     TEST_CASE("Native gameplay executes a cooked standalone path and rejects retained requests after world retirement",
               "[navigation][scene][gameplay][product]") {
         NavigationProductFixture fixture;
-        fixture.Publish(NavigationProductFixture::Input::Valid, true);
+        fixture.Publish(NavigationProductFixture::Input::Valid, NavigationProductFixture::Client::Scene);
         const auto gameplay = NavigationGameplay();
         NativeNavigationProductWorld product;
-        const Internal::HeadlessProjectSceneOptions options{.projectRoot = fixture.project.project.dir.path,
-                                                            .scene = "cooked:" + fixture.project.sceneId.ToString(),
-                                                            .cookedRoot = fixture.project.cooked.path,
-                                                            .cookTarget = fixture.project.request.assets.target.Value(),
-                                                            .navigationMode = Internal::HeadlessNavigationMode::RecastDetour};
-        auto resources = Internal::PrepareHeadlessProjectSceneResources(options);
-        REQUIRE(resources.HasValue());
-        product.resources = std::move(resources).Value();
-        auto &project = *product.resources;
-        const auto filter = fixture.pathFilter;
-        auto composition =
-            Internal::ComposeHeadlessSceneNetworkServices(project.definition,
-                                                          {.mode = options.physicsMode,
-                                                           .settings = *project.settings,
-                                                           .registry = project.registry,
-                                                           .loads = *project.loads,
-                                                           .load = project.load,
-                                                           .navigation = project.navigation,
-                                                           .navigationPath = Internal::HeadlessNavigationPathPolicy{filter, 512}},
-                                                          {}, gameplay);
-        REQUIRE(composition.HasValue());
-        product.composition.emplace(std::move(composition).Value());
-        const auto makeService = [&](const Network::NetworkModeServiceKind kind) {
-            auto service = product.composition->factories.services[static_cast<std::size_t>(kind)](
-                {kind, Network::NetworkProjectRole::Standalone, {}, Network::NetworkModeWorldKind::Standalone, {31}});
-            REQUIRE(service.HasValue());
-            return std::move(service).Value();
-        };
-        product.scene = makeService(Network::NetworkModeServiceKind::Scene);
-        REQUIRE(product.scene->Prepare().HasValue());
-        product.physics = makeService(Network::NetworkModeServiceKind::Physics);
-        REQUIRE(product.physics->Prepare().HasValue());
-        REQUIRE(product.scene->Activate().HasValue());
-        REQUIRE(product.physics->Activate().HasValue());
+        product.Start(fixture, gameplay);
 
         const auto scope = Internal::InspectHeadlessNavigationContext(*product.physics);
         REQUIRE(scope);
@@ -248,20 +279,8 @@ namespace Horo::Application::CharacterSceneProductTest {
         REQUIRE(symbol);
         const auto take = std::bit_cast<void (*)(void *)>(symbol);
         std::shared_ptr<const Gameplay::GameplayNavigationResult> output;
-        std::uint64_t tick{};
-        const auto runFrame = [&] {
-            const auto completed =
-                product.physics->RunFixedTick({++tick, Duration::FromNanoseconds(16'666'667), project.cancellation.Token()});
-            if (completed.HasError())
-                UNSCOPED_INFO(completed.ErrorValue().message);
-            REQUIRE(completed.HasValue());
-            const auto committed = product.physics->RunPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges);
-            if (committed.HasError())
-                UNSCOPED_INFO(committed.ErrorValue().message);
-            REQUIRE(committed.HasValue());
-        };
-        for (; tick < 512 && !output;) {
-            runFrame();
+        while (product.tick < 512 && !output) {
+            product.RunFrame();
             take(&output);
             if (!output)
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -274,7 +293,7 @@ namespace Horo::Application::CharacterSceneProductTest {
 
         auto pending = scope->Submit({.start = {1, 0, 1}, .destination = {2, 0, 2}});
         REQUIRE(pending.HasValue());
-        runFrame();
+        product.RunFrame();
         product.Stop();
         auto closed = product.composition->pollRetirement(64);
         REQUIRE(closed.HasValue());
@@ -282,6 +301,112 @@ namespace Horo::Application::CharacterSceneProductTest {
         const auto rejected = pending.Value().Poll();
         REQUIRE(rejected.HasError());
         CHECK(rejected.ErrorValue().code.Value() == Gameplay::NavigationCapabilityErrors::ScopeRevoked.code.Value());
+        CHECK(gameplay.moduleRetirements->Close().HasValue());
+    }
+
+    TEST_CASE("Cooked prefab native path handles retire with the exact behavior agent while the module stays active",
+              "[navigation][scene][gameplay][prefab][product]") {
+        NavigationProductFixture fixture;
+        fixture.Publish(NavigationProductFixture::Input::Valid, NavigationProductFixture::Client::Prefab);
+        auto gameplay = NavigationGameplay();
+        gameplay.prefabPermission = Internal::GameplayPrefabPermission::Granted;
+        NativeNavigationProductWorld product;
+        product.Start(fixture, gameplay);
+        const auto moduleScope = Internal::InspectHeadlessNavigationContext(*product.physics);
+        REQUIRE(moduleScope);
+
+        auto image = Platform::LoadDynamicLibraryAtPath(gameplay.nativeArtifact);
+        REQUIRE(image.HasValue());
+        const auto prefabSymbol = image.Value()->GetSymbol("HoroTestCopyPrefabCapability");
+        const auto pathSymbol = image.Value()->GetSymbol("HoroTestTakeNavigationSubmission");
+        const auto resultSymbol = image.Value()->GetSymbol("HoroTestTakeNavigationResult");
+        REQUIRE(prefabSymbol);
+        REQUIRE(pathSymbol);
+        REQUIRE(resultSymbol);
+        using PrefabProbe = void (*)(std::shared_ptr<const Gameplay::GameplayPrefabContext> *);
+        using PathProbe =
+            void (*)(std::shared_ptr<const Gameplay::GameplayNavigationContext> *, std::optional<Gameplay::GameplayNavigationHandle> *);
+        const auto copyPrefab = std::bit_cast<PrefabProbe>(prefabSymbol);
+        const auto takePath = std::bit_cast<PathProbe>(pathSymbol);
+        const auto takeResult = std::bit_cast<void (*)(void *)>(resultSymbol);
+        std::shared_ptr<const Gameplay::GameplayPrefabContext> prefabs;
+        product.RunFrame();
+        copyPrefab(&prefabs);
+        REQUIRE(prefabs);
+        const auto spawned =
+            prefabs->Spawn({.source = {fixture.project.prefabId, fixture.prefabDigest, fixture.project.request.assets.target},
+                            .notBeforeTick = product.tick + 1});
+        REQUIRE(spawned.HasValue());
+        product.Await(spawned.Value(), Prefab::PrefabSpawnState::Committed);
+        const auto instance = spawned.Value().Spawned();
+        REQUIRE(instance.HasValue());
+        const auto agent = instance.Value().Root();
+        REQUIRE(agent.IsValid());
+        product.RunFrame();
+
+        std::shared_ptr<const Gameplay::GameplayNavigationContext> agentScope;
+        std::optional<Gameplay::GameplayNavigationHandle> completed;
+        takePath(&agentScope, &completed);
+        REQUIRE(agentScope);
+        REQUIRE(completed);
+        CHECK(agentScope != moduleScope);
+        const Gameplay::GameplayNavigationRequest path{.start = {1, 0, 1}, .destination = {2, 0, 2}};
+        const auto quota = moduleScope->Submit(path);
+        REQUIRE(quota.HasError());
+        CHECK(quota.ErrorValue().code.Value() == Navigation::NavigationErrors::AdmissionRejected.code.Value());
+
+        std::shared_ptr<const Gameplay::GameplayNavigationResult> result;
+        while (product.tick < 512 && !result) {
+            product.RunFrame();
+            takeResult(&result);
+            if (!result)
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        REQUIRE(result);
+        REQUIRE(result->path);
+        REQUIRE(result->path->status == Navigation::NavigationPathStatus::Reachable);
+
+        CancellationSource cancelled;
+        const auto preserved = prefabs->Despawn(instance.Value(), product.tick + 1, cancelled.Token());
+        REQUIRE(preserved.HasValue());
+        cancelled.RequestCancellation();
+        product.Await(preserved.Value(), Prefab::PrefabSpawnState::Cancelled);
+        CHECK(agentScope->IsUsable());
+        REQUIRE(completed->Poll().HasValue());
+
+        const auto pending = agentScope->Submit(path);
+        REQUIRE(pending.HasValue());
+        const auto retired = prefabs->Despawn(instance.Value(), product.tick + 1);
+        REQUIRE(retired.HasValue());
+        product.Await(retired.Value(), Prefab::PrefabSpawnState::Committed);
+        const auto current = Internal::InspectHeadlessScene(*product.physics);
+        REQUIRE(current);
+        CHECK(current->Get(agent).HasError());
+        const auto &completedRequest = *completed;
+        for (const auto *request : {&completedRequest, &pending.Value()}) {
+            const auto response = request->Poll();
+            REQUIRE(response.HasError());
+            CHECK(response.ErrorValue().code.Value() == Gameplay::NavigationCapabilityErrors::ScopeRevoked.code.Value());
+        }
+        CHECK_FALSE(agentScope->IsUsable());
+        CHECK(agentScope->Submit(path).HasError());
+        REQUIRE(moduleScope->IsUsable());
+
+        // The canonical request keeps its slot charged until accepted worker work drains. The module resumes when that fence exits.
+        bool moduleAvailable = false;
+        const auto deadline = product.tick + 64;
+        while (product.tick < deadline && !moduleAvailable) {
+            product.RunFrame();
+            const auto unrelated = moduleScope->Submit(path);
+            moduleAvailable = unrelated.HasValue();
+            if (!moduleAvailable)
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        CHECK(moduleAvailable);
+        product.Stop();
+        const auto drained = product.composition->pollRetirement(64);
+        REQUIRE(drained.HasValue());
+        CHECK(drained.Value());
         CHECK(gameplay.moduleRetirements->Close().HasValue());
     }
 #endif

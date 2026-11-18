@@ -28,6 +28,7 @@
 #include <format>
 #include <memory>
 #include <stdexcept>
+#include <utility>
 
 using namespace Horo;
 using namespace Horo::Gameplay;
@@ -199,20 +200,38 @@ HORO_BEHAVIOR(MoveBehavior, "game.tests.dynamic_mover")
 #if defined(HORO_TEST_GAMEPLAY_NAVIGATION) && HORO_TEST_GAMEPLAY_NAVIGATION
 namespace {
     std::shared_ptr<const GameplayNavigationResult> navigationClientCompleted;
-}
+    std::weak_ptr<const GameplayNavigationContext> navigationClientScope;
+    const std::optional<GameplayNavigationHandle> *navigationClientHandle{};
+}  // namespace
 
 /** @brief Transfer the actual native consumer's completed result to host regression ownership. */
 extern "C" HORO_GAME_EXPORT void HoroTestTakeNavigationResult(void *output) {
     *static_cast<std::shared_ptr<const GameplayNavigationResult> *>(output) = std::move(navigationClientCompleted);
 }
 
+/** @brief Transfers retained native callback access to the owning test process. */
+extern "C" HORO_GAME_EXPORT void HoroTestTakeNavigationSubmission(std::shared_ptr<const GameplayNavigationContext> *scope,
+                                                                  std::optional<GameplayNavigationHandle> *handle) {
+    *scope = navigationClientScope.lock();
+    *handle = navigationClientHandle ? *navigationClientHandle : std::nullopt;
+    navigationClientScope.reset();
+    navigationClientHandle = nullptr;
+}
+
 /** @brief Actual native module consumer of the same request/poll path used by Lua. */
 class NavigationClientBehavior final : public IBehaviorInstance {
 public:
+    ~NavigationClientBehavior() override {
+        if (navigationClientHandle == &request_) {
+            navigationClientHandle = nullptr;
+            navigationClientScope.reset();
+        }
+    }
+
     static BehaviorDescriptor DescribeBehavior() {
         BehaviorDescriptor descriptor;
         descriptor.displayName = "Native Navigation Client";
-        descriptor.fields = {{"destinationX", 9.0}, {"destinationZ", 9.0}};
+        descriptor.fields = {{"destinationX", 9.0}, {"destinationZ", 9.0}, {"captureSubmission", false}};
         return descriptor;
     }
 
@@ -227,17 +246,26 @@ public:
                     destination.x = static_cast<float>(std::get<double>(field.value));
                 if (field.name == "destinationZ")
                     destination.z = static_cast<float>(std::get<double>(field.value));
+                if (field.name == "captureSubmission")
+                    captureSubmission_ = std::get<bool>(field.value);
             }
             auto submitted =
                 navigation->Submit({.start = {1, 0, 1}, .destination = destination, .context = Telemetry::CaptureOperationContext()});
-            if (submitted.HasValue())
+            if (submitted.HasValue()) {
                 request_ = std::move(submitted).Value();
+                if (captureSubmission_) {
+                    navigationClientScope = navigation;
+                    navigationClientHandle = &request_;
+                }
+            }
             return;
         }
         auto result = request_->Poll();
         if (result.HasError() || !result.Value())
             return;
         navigationClientCompleted = result.Value();
+        if (captureSubmission_)
+            return;
         auto transform = context.LocalTransform();
         if (transform.HasValue()) {
             auto changed = transform.Value();
@@ -248,6 +276,7 @@ public:
 
 private:
     std::optional<GameplayNavigationHandle> request_;
+    bool captureSubmission_{};
 };
 HORO_BEHAVIOR(NavigationClientBehavior, "game.tests.navigation_client")
 #endif

@@ -48,7 +48,9 @@ namespace Horo::Gameplay {
         bool queryGranted{};
         bool movementGranted{};
     };
+    class BehaviorRuntime;
     class GameModuleHost;
+    struct GameplayNavigationAgentScope;
     struct GameplayNavigationState;
     struct GameplayNavigationRecord;
 
@@ -104,6 +106,16 @@ namespace Horo::Gameplay {
                                                                                        Navigation::NavigationMovementController *movement,
                                                                                        Navigation::NavigationPathSubmission policy,
                                                                                        std::size_t maximumPending = 16);
+        /** @brief Creates a path-only root with behavior grants fenced by the canonical registered entity generation.
+         * @param binding Module/Scene path grant. @param world Exact active Navigation world.
+         * @param coordinator Existing canonical path queue. @param agents Published agent registry for the same Scene.
+         * @param policy Existing module quota and query policy. @param maximumPending Finite module-wide retained records.
+         * @return Root grant or original world/registry admission error. The registry outlives root retirement.
+         */
+        [[nodiscard]] static Result<std::shared_ptr<GameplayNavigationContext>> CreateWithBehaviorAgentPaths(
+            GameplayNavigationBinding binding, Navigation::NavigationWorldLifecycle &world, Navigation::NavigationCoordinator &coordinator,
+            const Navigation::NavigationAgentRegistry &agents, Navigation::NavigationPathSubmission policy, std::size_t maximumPending);
+
         ~GameplayNavigationContext();
         GameplayNavigationContext(const GameplayNavigationContext &) = delete;
         GameplayNavigationContext &operator=(const GameplayNavigationContext &) = delete;
@@ -131,12 +143,20 @@ namespace Horo::Gameplay {
         [[nodiscard]] const GameplayNavigationBinding &Binding() const noexcept;
 
     private:
+        friend class BehaviorRuntime;
         friend class GameModuleHost;
+
+        /** @brief Derives one exact attachment grant while retaining the module-wide request queue and quota. */
+        [[nodiscard]] Result<std::shared_ptr<const GameplayNavigationContext>> ForBehaviorEntity(
+            Navigation::NavigationAgentOwner owner) const;
+        /** @brief Whether the host explicitly opted into using registered agent generations for behavior paths. */
+        [[nodiscard]] bool HasBehaviorAgentPaths() const noexcept;
         /** @brief Retain host-owned native SDK code through late record and cancellation-state destruction.
          * @param image Independent code image owner with no context/module-instance cycle; host thread before native startup.
          * @return Success or typed rejection of a replacement generation; existing grants are unchanged.
          */
         [[nodiscard]] Result<void> RetainCodeImage(std::shared_ptr<void> image) const;
         std::shared_ptr<GameplayNavigationState> state_;
+        std::shared_ptr<GameplayNavigationAgentScope> agent_;
     };
 }  // namespace Horo::Gameplay

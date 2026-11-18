@@ -52,13 +52,14 @@ namespace Horo::Application::Internal {
                                                    .Value()};
         const Nav::NavigationAgentSceneBinding binding{active.Value().world, active.Value().scene, active.Value().sceneGeneration};
         try {
-            auto context = Gameplay::GameplayNavigationContext::Create({std::string{module}, binding, true, false}, world.get(),
-                                                                       &owner.coordinator, nullptr,
-                                                                       {.caller = caller,
-                                                                        .request = {.filter = policy.filter, .requirement = requirement},
-                                                                        .capabilityRevision = profileRevision,
-                                                                        .deadlineTick = policy.deadlineTicks},
-                                                                       owner.maximumPendingPathRequests);
+            auto context = Gameplay::GameplayNavigationContext::CreateWithBehaviorAgentPaths({std::string{module}, binding, true, false},
+                                                                                             *world, owner.coordinator, owner.agents,
+                                                                                             {.caller = caller,
+                                                                                              .request = {.filter = policy.filter,
+                                                                                                          .requirement = requirement},
+                                                                                              .capabilityRevision = profileRevision,
+                                                                                              .deadlineTick = policy.deadlineTicks},
+                                                                                             owner.maximumPendingPathRequests);
             if (context.HasError())
                 return Scope::Failure(context.ErrorValue());
             if (auto refreshed = context.Value()->Refresh({.binding = binding, .path = {.provenance = source}}); refreshed.HasError())
