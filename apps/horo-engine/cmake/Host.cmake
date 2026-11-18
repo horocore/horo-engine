@@ -9,6 +9,7 @@ add_library(HoroNetworkProductHost STATIC
     horo-engine/composition/network/HeadlessNetworkServices.cpp
     horo-engine/composition/network/HeadlessCookedDecisionAdmission.cpp
     horo-engine/composition/network/HeadlessNavigationPathScope.cpp
+    horo-engine/composition/network/HeadlessPerceptionPolicy.cpp
     horo-engine/composition/network/HeadlessAnimationFixed.h
     horo-engine/composition/network/NetworkProductComposition.h
     horo-engine/composition/network/HeadlessSceneLoadBoundary.cpp
@@ -16,7 +17,7 @@ add_library(HoroNetworkProductHost STATIC
     horo-engine/composition/network/GameplayWorldComposition.cpp
 )
 target_compile_features(HoroNetworkProductHost PUBLIC cxx_std_20)
-target_link_libraries(HoroNetworkProductHost PRIVATE HoroNetworkModeHostInternal)
+target_link_libraries(HoroNetworkProductHost PRIVATE HoroNetworkModeHostInternal nlohmann_json::nlohmann_json)
 target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::GameplayVfxSceneIntegration)
 target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::PlatformProjectIo)
 target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::PrefabProjectSettings HoroEngine::ProjectSurfaceSettings)

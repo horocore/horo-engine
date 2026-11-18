@@ -1,4 +1,5 @@
 #include "HeadlessNetworkWorldService.h"
+#include "HeadlessPerceptionPolicy.h"
 #include "Horo/Gameplay/GameplayVfxScene.h"
 #include "Horo/Network/NetworkErrors.h"
 #include "Horo/Network/ReplicationWorldLifecycle.h"
@@ -176,11 +177,32 @@ namespace Horo::Application::Internal {
         }
     }  // namespace
 
+    namespace {
+        /** @brief Binds a declared origin to this exact committed definition before installing either callback. */
+        Result<void> AdmitPerceptionProject(const std::shared_ptr<const Runtime::RuntimeSceneDefinition> &definition,
+                                            HeadlessSceneActivationInput &input) {
+            if (!input.perceptionProject)
+                return Result<void>::Success();
+            const auto &[policy, registry] = *input.perceptionProject;
+            if (!definition || !policy || !registry || input.perceptionPositions || input.perceptionGroupPositions)
+                return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionDependencyMissing,
+                                                       "Project Perception needs one complete position and descriptor authority."));
+            if (definition->Id() != policy->definition || definition->Revision() != policy->revision)
+                return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionSpatialStale));
+            auto sources = MakeHeadlessPerceptionPositionSources(policy);
+            input.perceptionPositions = std::move(sources.scene);
+            input.perceptionGroupPositions = std::move(sources.group);
+            return Result<void>::Success();
+        }
+    }  // namespace
+
     /** @copydoc ComposeHeadlessSceneNetworkServices */
     Result<NetworkProductComposition> ComposeHeadlessSceneNetworkServices(
         std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition, HeadlessSceneActivationInput input,
         Network::NetworkModeFactories selectedFactories, const std::optional<GameplayWorldSelection> &gameplay,
         const std::optional<Gameplay::GameplayReplicationAdmissionPolicy> &replicationAdmission) {
+        if (auto admitted = AdmitPerceptionProject(definition, input); admitted.HasError())
+            return Result<NetworkProductComposition>::Failure(admitted.ErrorValue());
         if (auto valid = ValidateConfiguredInput(definition, input, gameplay); valid.HasError())
             return Result<NetworkProductComposition>::Failure(std::move(valid).ErrorValue());
         if (auto valid = ValidateAnimationSelection(input); valid.HasError())

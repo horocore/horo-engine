@@ -1299,6 +1299,17 @@ keeps Gameplay-event admission and blackboard projection in their existing
 owners. Canonical AI restore is unavailable for this opt-in until the restore
 transaction can stage fresh sensing instances and the paired endpoint publication.
 
+A headless project capture may explicitly read a bounded Perception policy from
+the project source boundary. Its schema 1 record selects the full cooked Scene
+asset ID and revision, an absolute signed-millimeter world origin, and controller
+IDs with stable listener/sense selectors and endpoint layers/masks. Provider and
+stimulus declarations still come from the admitted frozen registry. Scene position
+evidence composes the available current or prospective entity hierarchy in
+canonical local meters and adds the explicit origin after millimeter quantization.
+Missing detached ancestry or a mismatched Scene revision denies capture. This is
+a typed host input; a terminal launch still needs to select the policy and grant
+the same selected native controller catalog and callable provider generation.
+
 The native public capture path rejects Script origins. The private VM admission
 path is available only to `Gameplay::LuaPerceptionSenseProgram`, which uses the
 existing Lua sandbox and allocator with a bounded instruction hook. Its callback

@@ -6,6 +6,7 @@
  */
 #include "CommittedSceneAssets.h"
 #include "HeadlessNetworkServices.h"
+#include "HeadlessPerceptionPolicy.h"
 #include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Platform/ProjectReadFiles.h"
@@ -27,6 +28,7 @@ namespace Horo::Application::Internal {
         std::chrono::milliseconds loadTimeout{30'000};
         std::string publicationNamespace; /**< Empty preserves read-only hosts; explicit derived output selected by the application. */
         HeadlessNavigationMode navigationMode{HeadlessNavigationMode::Disabled};
+        std::string perceptionPolicyPath; /**< Explicit project-relative source for one selected committed Scene. */
     };
 
     /** @brief Owns all borrowed assets/jobs/project captures until every world service has retired.
@@ -50,6 +52,7 @@ namespace Horo::Application::Internal {
         std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition;
         Assets::AssetId sceneAsset; /**< Exact selected cooked Scene identity, including the full UUID. */
         std::shared_ptr<const ProjectSceneNavigationSelection> navigation;
+        std::shared_ptr<const HeadlessPerceptionPolicy> perceptionPolicy; /**< Matched source and definition, without provider activation. */
         std::optional<Physics::PhysicsSceneActivationSettings> settings;
         Prefab::PrefabMetricHandles prefabMetrics; /**< Process-prebound numeric observations retained by host resources. */
         Prefab::PrefabProjectPolicy prefabPolicy;  /**< Project-launch capture, passed by value to source-free world composition. */

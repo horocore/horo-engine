@@ -1,6 +1,8 @@
 #include "DecisionGraphCompilerTestSupport.h"
 #include "HeadlessCookedDecisionAdmission.h"
 #include "HeadlessNetworkServices.h"
+#include "HeadlessPerceptionPolicy.h"
+#include "OwnedTestDirectory.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/AIScenePerceptionSource.h"
 #include "Horo/AI/PerceptionSenseProvider.h"
@@ -9,6 +11,7 @@
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Platform/DynamicLibrary.h"
 #include "Horo/Platform/ExternalProcess.h"
+#include "Horo/Platform/NativeProjectReadFiles.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Scene/CookedSceneDefinition.h"
 #include "PrefabAtomicOwnerTestSupport.h"
@@ -535,6 +538,34 @@ namespace Horo::Application::PrefabAtomicTest {
             std::shared_ptr<const AI::AiControllerPerceptionEndpoints> endpoints;
         };
 
+        /** @brief Captures test-authored bytes through the same native project read owner as product composition. */
+        Result<std::shared_ptr<const Internal::HeadlessPerceptionPolicy>> CaptureProjectPerception(
+            const Runtime::RuntimeSceneDefinition &definition, const Assets::AssetId asset, const std::string &source) {
+            Horo::Tests::OwnedTestDirectory directory{"native-perception-placement"};
+            constexpr std::string_view path = "perception.json";
+            {
+                std::ofstream stream{directory.Path() / path};
+                REQUIRE(stream << source);
+            }
+            auto files = Platform::CreateNativeProjectReadFiles(directory.Path(), "perception-test", 1);
+            REQUIRE(files.HasValue());
+            const Platform::ProjectReadContext context{.projectIdentity = "perception-test",
+                                                        .projectGeneration = 1,
+                                                        .deadline = std::chrono::steady_clock::now() + std::chrono::seconds{3}};
+            return Internal::CaptureHeadlessPerceptionPolicy(*files.Value(), context, path, asset, definition);
+        }
+
+        /** @brief Populates explicit stable selectors and a nonzero origin without native provider defaults. */
+        std::string ProjectPerceptionSource(const Assets::AssetId asset, const std::uint64_t revision,
+                                             const AI::AiControllerDescriptor &controller) {
+            const auto &endpoints = *controller.perceptionEndpoints;
+            return "{\"schema\":1,\"sceneAsset\":\"" + asset.ToString() + "\",\"sceneRevision\":" + std::to_string(revision) +
+                   ",\"worldOriginMillimeters\":[100,200,-300],\"controllers\":[{\"controller\":" +
+                   std::to_string(controller.controller.Value()) + ",\"listeners\":[" +
+                   std::to_string(endpoints.listeners.front().Value()) + "],\"sources\":[" +
+                   std::to_string(endpoints.sources.front().Value()) + "],\"layers\":1,\"mask\":1}]}";
+        }
+
         TEST_CASE("Configured authoritative headless ticks poll the admitted native producer over its actual Scene",
                   "[prefab][integration][ai][perception][host]") {
             using namespace Network;
@@ -543,9 +574,14 @@ namespace Horo::Application::PrefabAtomicTest {
             controller.agent.controller->requiredCapabilities = AI::AiCapabilitySet::Of(AI::AiCapability::Perception);
             controller.descriptor.perceptionEndpoints = native.endpoints;
             Runtime::SceneDefinitionBuilder builder{{7}, {1}};
-            builder.Add({.object = {1}, .components = {.aiAgent = controller.agent.agent, .aiController = controller.agent.controller}});
+            builder.Add({.object = {1},
+                         .localTransform = {.translation = {0.25F, 0.0F, 0.0F}},
+                         .components = {.aiAgent = controller.agent.agent, .aiController = controller.agent.controller}});
             controller.agent.agent.agent = AI::TestSupport::MakeIdentity<AI::AgentId>(2);
-            builder.Add({.object = {2}, .components = {.aiAgent = controller.agent.agent, .aiController = controller.agent.controller}});
+            builder.Add({.object = {2},
+                         .parent = Runtime::SceneObjectId{1},
+                         .localTransform = {.translation = {0.75F, 0.0F, 0.0F}},
+                         .components = {.aiAgent = controller.agent.agent, .aiController = controller.agent.controller}});
             auto definition = std::move(builder).Build();
             REQUIRE(definition.HasValue());
             JobSystem jobs{{1, 8}};
@@ -555,7 +591,7 @@ namespace Horo::Application::PrefabAtomicTest {
             CancellationSource cancellation;
             const Internal::HeadlessSceneLoadBoundary load{cancellation.Token(),
                                                            std::chrono::steady_clock::now() + std::chrono::seconds{3}};
-            const std::array catalog{controller.descriptor};
+            std::array catalog{controller.descriptor};
             Internal::HeadlessSceneActivationInput input{Physics::PhysicsRuntimeMode::Canonical,
                                                          Physics::Settings(),
                                                          registry,
@@ -567,7 +603,18 @@ namespace Horo::Application::PrefabAtomicTest {
             auto role = NetworkProjectRole::Standalone;
             auto world = NetworkModeWorldKind::Standalone;
             bool seatsAdmitted = true;
+            bool usesAuthoredCoordinates = false;
             SECTION("bounded fixed dispatch and paired shutdown") {}
+            SECTION("durable endpoint selectors and parented coordinates reach actual fixed dispatch") {
+                const auto asset = Assets::AssetId::Parse("5c881920-450f-4ca7-b938-d151696ea419").Value();
+                const auto source = ProjectPerceptionSource(asset, definition.Value().Revision().value, controller.descriptor);
+                auto policy = CaptureProjectPerception(definition.Value(), asset, source);
+                REQUIRE(policy.HasValue());
+                input.perceptionProject = Internal::HeadlessPerceptionProjectAdmission{std::move(policy).Value(), native.endpoints->registry};
+                input.perceptionPositions = {};
+                catalog.front().perceptionEndpoints.reset();
+                usesAuthoredCoordinates = true;
+            }
             SECTION("the declared work budget refuses startup before invoking a sense") {
                 input.perceptionExecution->workUnitsPerTick = native.RequiredUnits() - 1;
                 seatsAdmitted = false;
@@ -620,10 +667,44 @@ namespace Horo::Application::PrefabAtomicTest {
             REQUIRE(memory.Value().count == 1);
             CHECK(memory.Value().entries.front().key.source == AI::ProjectPerceptionSource(*source));
             CHECK(memory.Value().entries.front().lastSensedTick == 1);
+            if (usesAuthoredCoordinates)
+                CHECK(memory.Value().entries.front().lastKnownPosition == Math::WorldCoordinate64::FromMillimeters(1100, 200, -300));
             sceneService.Value()->Shutdown();
             CHECK(Internal::InspectHeadlessPerceptionMemory(*physics.Value(), *observer).HasError());
             CHECK(native.probe.module[2] == 2);
             physics.Value()->Shutdown();
+        }
+
+        TEST_CASE("Durable Perception placement denies stale Scene revisions and ambiguous declarations",
+                  "[prefab][integration][ai][perception][host]") {
+            NativePerceptionFixture native;
+            auto controller = AI::TestSupport::MakeFixture(1, 11, 1, 0);
+            controller.descriptor.perceptionEndpoints = native.endpoints;
+            const auto asset = Assets::AssetId::Parse("5c881920-450f-4ca7-b938-d151696ea419").Value();
+            Runtime::SceneDefinitionBuilder builder{{7}, {42}};
+            auto definition = std::move(builder).Build();
+            REQUIRE(definition.HasValue());
+            auto source = ProjectPerceptionSource(asset, 42, controller.descriptor);
+            const ErrorCodeDescriptor *expected = nullptr;
+            SECTION("stale revision") {
+                source = ProjectPerceptionSource(asset, 41, controller.descriptor);
+                expected = &AI::AIErrors::PerceptionSpatialStale;
+            }
+            SECTION("duplicate root key") {
+                source.insert(1, "\"schema\":1,");
+                expected = &AI::AIErrors::PerceptionDescriptorInvalid;
+            }
+            SECTION("missing origin") {
+                const auto begin = source.find("\"worldOriginMillimeters\":");
+                const auto end = source.find("],", begin);
+                REQUIRE(end != std::string::npos);
+                source.erase(begin, end + 2 - begin);
+                expected = &AI::AIErrors::PerceptionDescriptorInvalid;
+            }
+            REQUIRE(expected != nullptr);
+            const auto captured = CaptureProjectPerception(definition.Value(), asset, source);
+            REQUIRE(captured.HasError());
+            CHECK(captured.ErrorValue().code.Value() == expected->code.Value());
         }
 
         /** @brief Returns a well-formed authored controller for which the captured catalog has no descriptor. */

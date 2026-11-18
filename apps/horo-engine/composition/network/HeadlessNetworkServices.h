@@ -21,6 +21,13 @@ namespace Horo::Vfx {
 
 namespace Horo::Application::Internal {
     struct ProjectSceneNavigationSelection;
+    struct HeadlessPerceptionPolicy;
+
+    /** @brief Exact authored selection and frozen descriptor authorities granted by the configured host. */
+    struct HeadlessPerceptionProjectAdmission final {
+        std::shared_ptr<const HeadlessPerceptionPolicy> policy;
+        std::shared_ptr<const AI::PerceptionDescriptorRegistry> registry;
+    };
     struct HeadlessCookedDecisionInput;
 
     /** @brief Exact registered traversal filter and bounded deadline for the standalone best-effort path grant. */
@@ -75,6 +82,8 @@ namespace Horo::Application::Internal {
             navigationPath; /**< Explicit native scope for the installed immutable Navigation world. */
         std::optional<AI::AiScenePerceptionExecution>
             perceptionExecution; /**< Frozen native producer and explicit authoritative spatial execution policy. */
+        std::optional<HeadlessPerceptionProjectAdmission>
+            perceptionProject; /**< Explicit project-backed endpoint and coordinate policy for the selected cooked definition. */
     };
 
     /** @brief Composes actual project Scene services and their sole aggregate-owned Physics/Character pair.

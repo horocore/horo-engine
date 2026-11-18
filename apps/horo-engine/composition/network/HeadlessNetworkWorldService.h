@@ -5,6 +5,7 @@
 #include "HeadlessAnimationFixed.h"
 #include "HeadlessCookedDecisionAdmission.h"
 #include "HeadlessNetworkWorldOwners.h"
+#include "HeadlessPerceptionPolicy.h"
 #include "Horo/AI/AIErrors.h"
 
 namespace Horo::Application::Internal::HeadlessNetworkDetail {
@@ -309,8 +310,15 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 auto prepared = PrepareCookedControllers(catalog, *input.cookedDecisions);
                 if (prepared.HasError())
                     return Result<void>::Failure(prepared.ErrorValue());
-                record_->cookedControllers = std::move(prepared).Value();
-                catalog = record_->cookedControllers;
+                record_->admittedControllers = std::move(prepared).Value();
+                catalog = record_->admittedControllers;
+            }
+            if (OwnsPerception() && input.perceptionProject) {
+                auto prepared = BindHeadlessPerceptionEndpoints(*input.perceptionProject->policy, input.perceptionProject->registry, catalog);
+                if (prepared.HasError())
+                    return Result<void>::Failure(prepared.ErrorValue());
+                record_->admittedControllers = std::move(prepared).Value();
+                catalog = record_->admittedControllers;
             }
             auto ai = OwnsCookedDecisionExecution() && !record_->preparedGameplay
                           ? AI::AiSceneRuntime::Create(settings, *input.cookedDecisions->execution)
