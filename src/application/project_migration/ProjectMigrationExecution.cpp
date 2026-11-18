@@ -663,12 +663,24 @@ namespace Horo::Application {
         return Result<void>::Success();
     }
 
-    /** @copydoc ProjectMigrationExecutor::VerifiedDryRun */
+    /** @copydoc ProjectMigrationExecutor::VerifiedDryRun(const std::filesystem::path &, const ProjectMigrationPlan &, JobSystem &, const
+     * ProjectMigrationLimits &, CancellationToken, const ProjectMigrationExecutionServices &) */
     Result<ProjectMigrationDryRunResult> ProjectMigrationExecutor::VerifiedDryRun(const std::filesystem::path &projectRoot,
                                                                                   const ProjectMigrationPlan &plan, JobSystem &jobs,
                                                                                   const ProjectMigrationLimits &limits,
                                                                                   const CancellationToken cancellation,
                                                                                   const ProjectMigrationExecutionServices &services) {
+        return VerifiedDryRun(projectRoot, plan, jobs, limits, cancellation, services, {});
+    }
+
+    /** @copydoc ProjectMigrationExecutor::VerifiedDryRun(const std::filesystem::path &, const ProjectMigrationPlan &, JobSystem &, const
+     * ProjectMigrationLimits &, CancellationToken, const ProjectMigrationExecutionServices &, const DryRunFinalDocuments &) */
+    Result<ProjectMigrationDryRunResult> ProjectMigrationExecutor::VerifiedDryRun(const std::filesystem::path &projectRoot,
+                                                                                  const ProjectMigrationPlan &plan, JobSystem &jobs,
+                                                                                  const ProjectMigrationLimits &limits,
+                                                                                  const CancellationToken cancellation,
+                                                                                  const ProjectMigrationExecutionServices &services,
+                                                                                  const DryRunFinalDocuments &buildDocuments) {
         static std::atomic<std::uint64_t> sequence{0};
         const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
         const auto candidateRoot = projectRoot / std::format("{}{}-{}", kMigrationDryRunRootPrefix, stamp, sequence.fetch_add(1));
@@ -676,7 +688,16 @@ namespace Horo::Application {
         if (prepared.HasError())
             return Result<ProjectMigrationDryRunResult>::Failure(prepared.ErrorValue());
         PreparedProjectMigration candidate = std::move(prepared).Value();
-        if (const Result<void> finalized = Finalize(candidate, {}, plan.targetValidator, cancellation); finalized.HasError())
+        if (cancellation.IsCancellationRequested())
+            return Result<ProjectMigrationDryRunResult>::Failure(MakeError(ProjectErrors::MigrationCancelled));
+        std::vector<PreparedMigrationDocument> documents;
+        if (buildDocuments) {
+            auto built = buildDocuments(candidate);
+            if (built.HasError())
+                return Result<ProjectMigrationDryRunResult>::Failure(std::move(built).ErrorValue());
+            documents = std::move(built).Value();
+        }
+        if (const Result<void> finalized = Finalize(candidate, documents, plan.targetValidator, cancellation); finalized.HasError())
             return Result<ProjectMigrationDryRunResult>::Failure(finalized.ErrorValue());
         ProjectMigrationDryRunResult result{.inputBytes = candidate.InputBytes(), .outputBytes = candidate.OutputBytes()};
         for (const auto &change : candidate.Changes())

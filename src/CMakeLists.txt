@@ -518,6 +518,7 @@ target_compile_features(HoroUserStateMigration PUBLIC cxx_std_20)
 target_link_libraries(HoroUserStateMigration PUBLIC HoroEngine::Platform)
 
 add_library(HoroProjectMigrations STATIC
+        application/project_migrations/PrefabSourceMigrationPlan.cpp
         ${HORO_PROJECT_MIGRATION_CATALOG_CPP}
         ${HORO_PROJECT_MIGRATION_SOURCES}
 )

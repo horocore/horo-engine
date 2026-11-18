@@ -624,6 +624,9 @@ namespace {
         constexpr std::string_view Authored = R"({"projectVersion":"0.0.1","objects":[]})";
         write(".horo/project.json", Legacy);
         write("assets/player.prefab", Authored);
+        constexpr std::string_view Sidecar =
+            R"({"schemaVersion":1,"assetId":"00112233-4455-6677-8899-aabbccddeeff","assetType":"core.prefab"})";
+        write("assets/player.prefab.horo", Sidecar);
         const auto wire = Json::parse(process.Run(command, 0));
         Envelope(wire);
         Require(wire.at("outputSchema").at("id") == "horo.prefab.migration-plan", "prefab plan schema changed");
@@ -635,8 +638,43 @@ namespace {
                         "core.authoring.semantic_surfaces\ncore.authoring.platform_services_identity",
                 "prefab CLI did not project the full ordered production adoption chain");
         Require(Json::parse(process.Run(command, 0)).at("result") == plan, "repeat planning changed the selected chain");
+        Require(plan.at("verified") == false && plan.at("changedFileCount") == 0, "plan-only mode verified the source");
         Require(read(".horo/project.json") == Legacy && read("assets/player.prefab") == Authored,
                 "prefab migration planning rewrote authored source");
+
+        auto verifyCommand = command;
+        verifyCommand.push_back("--verify");
+        const auto checkDisposable = [&] {
+            Require(!std::filesystem::exists(root / ".horo/migration_history.json") &&
+                        !std::filesystem::exists(root / ".horo/local/migration"),
+                    "verified prefab migration published transaction state");
+            for (const auto &entry : std::filesystem::directory_iterator(root))
+                Require(!entry.path().filename().string().starts_with(".horo-migration-dry-run-"),
+                        "verified prefab migration left temporary state");
+        };
+        const auto verified = Json::parse(process.Run(verifyCommand, 0)).at("result");
+        const auto paths = verified.at("changedProjectPaths").get<std::string>();
+        Require(verified.at("verified") == true && verified.at("changedFileCount").get<std::size_t>() >= 3 &&
+                    verified.at("changedPathsOmitted") == false && paths.find(".horo/project.json") != std::string::npos &&
+                    paths.find(".horo/migration_history.json") != std::string::npos &&
+                    paths.find("assets/player.prefab") != std::string::npos,
+                "prefab verification did not validate the complete target candidate");
+        Require(Json::parse(process.Run(verifyCommand, 0)).at("result") == verified, "repeat verification changed its portable result");
+        Require(read(".horo/project.json") == Legacy && read("assets/player.prefab") == Authored &&
+                    read("assets/player.prefab.horo") == Sidecar,
+                "verified prefab migration changed a canonical source");
+        checkDisposable();
+
+        constexpr std::string_view Malformed = "private malformed prefab fixture";
+        write("assets/player.prefab", Malformed);
+        const auto rejected = process.Run(verifyCommand, 5);
+        Require(Json::parse(rejected).at("error").at("code") == "project.migration.stage_failed" &&
+                    rejected.find(Malformed) == std::string::npos && rejected.find(Utf8Path(root)) == std::string::npos,
+                "verified prefab migration lost its typed error or exposed untrusted details");
+        Require(read(".horo/project.json") == Legacy && read("assets/player.prefab") == Malformed &&
+                    read("assets/player.prefab.horo") == Sidecar,
+                "failed verification changed a canonical source");
+        checkDisposable();
 
         write(".horo/local/migration/outstanding/journal.json", "{");
         const auto blocked = process.Run(command, 5);
@@ -650,10 +688,12 @@ namespace {
         const auto currentRoot = std::filesystem::canonical(current.Path());
         PlatformProtocol::Fixture::WriteAt(currentRoot, ".horo/project.json", PlatformProtocol::Fixture::Initial().projectSource);
         const auto currentPlan =
-            Json::parse(process.Run({"prefab", "migration-plan", "--project", Utf8Path(currentRoot), "--output", "json"}, 0)).at("result");
+            Json::parse(process.Run({"prefab", "migration-plan", "--project", Utf8Path(currentRoot), "--output", "json", "--verify"}, 0))
+                .at("result");
         Require(currentPlan.at("prefabAdoptionRequired") == false && currentPlan.at("sourceBaseline") == targetBaseline &&
                     currentPlan.at("targetBaseline") == targetBaseline && currentPlan.at("definitionCount") == 0 &&
-                    currentPlan.at("definitionChain") == "",
+                    currentPlan.at("definitionChain") == "" && currentPlan.at("verified") == false &&
+                    currentPlan.at("changedFileCount") == 0 && currentPlan.at("changedProjectPaths") == "",
                 "compatible project reported required prefab migration");
     }
 

@@ -1,11 +1,15 @@
 #include "PrefabCliHost.h"
 
 #include "Horo/Application/PrefabSceneCookHost.h"
+#include "Horo/Application/PrefabSourceMigrationPlan.h"
+#include "Horo/Application/ProjectMigrationErrors.h"
 #include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Cli/CliErrors.h"
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Editor/ProjectOpenService.h"
 #include "Horo/Foundation/ImmutableFileStorage.h"
+#include "Horo/Platform/ProjectReadFiles.h"
+#include "Horo/Platform/SecureRandom.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "NativePrefabCookComposition.h"
 
@@ -161,29 +165,49 @@ namespace Horo::Application::Internal {
             Cli::CliCommandDescriptor descriptor_{DescribePrefabCookCommand()};
         };
 
-        /** @brief Recognize source adoption in the selected pipeline by its stable stage ID. */
-        bool AdoptsPrefabSource(const ProjectMigrationDefinition &definition) {
-            return std::ranges::any_of(definition.pipeline->Nodes(), [](const ProjectMigrationNode &node) {
-                return node.kind == ProjectMigrationNodeKind::Then && node.stage->Describe().id.value == "adopt_prefab_source_identity";
-            });
+        /** @brief Preserves registered migration error identities while dropping untrusted source details. */
+        Error RedactMigrationFailure(const Error &error) {
+            if (IsJobCancelled(error) ||
+                ErrorChainContains(error, ProjectErrors::MigrationCancelled.domain, ProjectErrors::MigrationCancelled.code))
+                return MakeError(Cli::CliErrors::ExecutionCancelled);
+            return {.code = error.code, .domain = error.domain, .severity = error.severity, .message = "Project migration failed."};
+        }
+
+        /** @brief Retains a bounded ordered list of safe project-relative dry-run changes. */
+        void AddVerificationFields(Cli::CliCommandResult &result, const ProjectMigrationDryRunResult *verified) {
+            constexpr std::size_t MaximumPathListBytes = 16 * 1024;
+            std::size_t changedFiles{};
+            bool omitted{};
+            std::string paths;
+            if (verified) {
+                changedFiles = verified->changedFiles.size();
+                for (const auto &path : verified->changedFiles) {
+                    if (path.size() + 1 > MaximumPathListBytes - paths.size() || !Platform::IsSafeProjectReadPath(path)) {
+                        omitted = true;
+                        continue;
+                    }
+                    if (!paths.empty())
+                        paths.push_back('\n');
+                    paths.append(path);
+                }
+            }
+            result.fields.push_back({"verified", verified != nullptr});
+            result.fields.push_back({"changedFileCount", static_cast<std::int64_t>(changedFiles)});
+            result.fields.push_back({"changedProjectPaths", std::move(paths)});
+            result.fields.push_back({"changedPathsOmitted", omitted});
         }
 
         /** @brief Project the authoritative chain or fail with the preflight's typed diagnostic. */
-        Return ProjectAdoptionPlan(const Editor::ProjectOpenPreflightSnapshot &snapshot) {
+        Return ProjectAdoptionPlan(const Editor::ProjectOpenPreflightSnapshot &snapshot, const bool adoptionRequired) {
             const auto &admission = snapshot.compatibility;
             using enum ProjectCompatibilityStatus;
             const auto &plan = snapshot.migrationPlan;
             if (!plan && (!admission.sourceBaseline || (admission.status != Current && admission.status != CompatibleReleaseLine))) {
                 const auto error = admission.diagnostic.value_or(MakeError(Prefab::PrefabErrors::MigrationRequired));
-                return Return::Failure({.code = error.code,
-                                        .domain = error.domain,
-                                        .severity = error.severity,
-                                        .message = "Project migration planning failed."});
+                return Return::Failure(RedactMigrationFailure(error));
             }
-            bool adoptionRequired{};
             std::string definitions;
             if (plan) {
-                adoptionRequired = std::ranges::any_of(plan->definitions, AdoptsPrefabSource);
                 for (const auto &definition : plan->definitions) {
                     if (!definitions.empty())
                         definitions.push_back('\n');
@@ -197,6 +221,23 @@ namespace Horo::Application::Internal {
                                                {"targetBaseline", FormatHoroVersion(target.value)},
                                                {"definitionCount", static_cast<std::int64_t>(plan ? plan->definitions.size() : 0)},
                                                {"definitionChain", std::move(definitions)}}});
+        }
+
+        /** @brief Verifies the full selected chain with the ordinary transaction-owned terminal documents. */
+        Result<ProjectMigrationDryRunResult> VerifyAdoption(const std::filesystem::path &root, const ProjectMigrationPlan &plan,
+                                                            const ProjectCompatibilitySnapshot &admission,
+                                                            const Editor::ProjectMigrationTransactionService &transactions,
+                                                            const CancellationToken cancellation) {
+            const auto *target = BuiltInReleaseCompatibilityRegistry().Find(admission.targetVersion);
+            if (!target || !admission.metadata || !admission.sourceBaseline)
+                return Result<ProjectMigrationDryRunResult>::Failure(MakeError(Prefab::PrefabErrors::MigrationRequired));
+            return transactions.Verify({.projectRoot = root,
+                                        .sourceMetadata = *admission.metadata,
+                                        .sourceBaseline = *admission.sourceBaseline,
+                                        .targetDecision = *target,
+                                        .plan = plan,
+                                        .engineBuildIdentity = "horo-engine-prefab-verification",
+                                        .cancellation = cancellation});
         }
 
         /** @brief Inspect migration compatibility and recovery through the existing project-open authority. */
@@ -217,16 +258,39 @@ namespace Horo::Application::Internal {
                 if (error)
                     return Return::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed));
 
+                const auto flags = Option(request, "verify");
+                const auto *flag = flags.size() == 1 && flags.front().source == Cli::CliValueSource::Invocation
+                                       ? std::get_if<bool>(&flags.front().value)
+                                       : nullptr;
+                const bool verify = flag && *flag;
                 NativeDurableFileSystem files;
                 SystemWallClock clock;
                 Editor::ProjectMutationCoordinator mutations{files};
-                JobSystem jobs{{.workerCount = 0, .maxQueuedJobs = 1}};
-                Editor::ProjectMigrationTransactionService transactions{files, clock, mutations, jobs};
+                JobSystem jobs{{.workerCount = verify ? 2U : 0U, .maxQueuedJobs = 32}};
+                const ProjectMigrationExecutionServices executionServices{.random = verify ? Platform::CreateNativeSecureRandomSource()
+                                                                                           : nullptr};
+                Editor::ProjectMigrationTransactionService transactions{files, clock, mutations, jobs, {}, executionServices};
                 const Editor::ProjectOpenPreflightService preflight{transactions};
                 const auto snapshot = preflight.Inspect(root);
                 if (context.IsStopRequested())
                     return Return::Failure(MakeError(Cli::CliErrors::ExecutionCancelled));
-                return ProjectAdoptionPlan(snapshot);
+                const bool adoption =
+                    snapshot.migrationPlan && ProjectMigrations::PlanIncludesPrefabSourceAdoption(*snapshot.migrationPlan);
+                auto result = ProjectAdoptionPlan(snapshot, adoption);
+                if (result.HasError())
+                    return result;
+                if (!verify || !adoption) {
+                    AddVerificationFields(result.Value(), nullptr);
+                    return result;
+                }
+                const auto verified =
+                    VerifyAdoption(root, *snapshot.migrationPlan, snapshot.compatibility, transactions, context.Cancellation());
+                if (context.IsStopRequested())
+                    return Return::Failure(MakeError(Cli::CliErrors::ExecutionCancelled));
+                if (verified.HasError())
+                    return Return::Failure(RedactMigrationFailure(verified.ErrorValue()));
+                AddVerificationFields(result.Value(), &verified.Value());
+                return result;
             }
 
         private:
@@ -271,6 +335,9 @@ namespace Horo::Application::Internal {
         using namespace Cli;
         return {.path = {{"prefab", "migration-plan"}},
                 .summary = "Inspect the project migration chain for prefab source adoption.",
+                .options = {{.name = "verify",
+                             .summary = "Execute and validate the selected adoption chain in disposable staging.",
+                             .valueKind = CliOptionValueKind::Flag}},
                 .requiredCapabilities = {{std::string{MigrationPlanCapability}}},
                 .output = {.id = "horo.prefab.migration-plan",
                            .version = 1,
@@ -278,8 +345,9 @@ namespace Horo::Application::Internal {
                 .interactive = CliInteractivePolicy::Forbidden,
                 .hosts = CliHostAvailability::HoroEngine,
                 .contractVersion = {1, 0, 0},
-                .sideEffects = CliSideEffectPolicy::ReadsState,
+                .sideEffects = CliSideEffectPolicy::WritesFiles,
                 .cancellation = CliCancellationPolicy::Cooperative,
+                .timeout = {.maximumMilliseconds = 86'400'000},
                 .ownerId = "horo.prefab.cli"};
     }
 

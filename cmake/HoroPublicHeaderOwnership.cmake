@@ -354,7 +354,9 @@ horo_configure_target_header_boundary(HoroPackageLifecycle PUBLIC_HEADERS
     Horo/Packages/NativePackageModuleHost.h
     Horo/Packages/ScriptPackageModuleHost.h
 )
-horo_configure_target_header_boundary(HoroProjectMigrations)
+horo_configure_target_header_boundary(HoroProjectMigrations PUBLIC_HEADERS
+    Horo/Application/PrefabSourceMigrationPlan.h
+)
 horo_configure_target_header_boundary(HoroSaveApi PUBLIC_HEADERS
     Horo/Runtime/Save/SaveErrors.h
     Horo/Runtime/Save/SaveIdentity.h

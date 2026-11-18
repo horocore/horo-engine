@@ -161,3 +161,13 @@ inspection and migration registry as editor project-open. A compatible project
 returns an empty chain. Pending recovery or an unavailable chain returns a typed
 failure. Planning reads project metadata and recovery evidence without running
 transforms or modifying project files.
+
+Add `--verify` to run the complete selected chain when it includes prefab source
+adoption. The verified dry run builds a disposable candidate, stages the same
+root version and migration history as the publishing transaction, and runs the
+final target-contract validator. The project directory must allow creation of
+temporary staging. Canonical files and recovery journals remain untouched.
+Successful verification reports `verified: true`, a full changed-file count,
+and a bounded newline-delimited list of portable project-relative paths.
+`changedPathsOmitted` marks paths excluded by the output size or portability
+checks. A plan without prefab source adoption returns `verified: false`.

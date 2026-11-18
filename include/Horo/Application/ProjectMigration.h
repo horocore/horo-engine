@@ -13,6 +13,7 @@
 #include <array>
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -453,6 +454,27 @@ namespace Horo::Application {
                                                                                  const ProjectMigrationLimits &limits = {},
                                                                                  CancellationToken cancellation = {},
                                                                                  const ProjectMigrationExecutionServices &services = {});
+
+        /** @brief Supplies transaction-owned documents from the transformed, unpublished candidate. */
+        using DryRunFinalDocuments = std::function<Result<std::vector<PreparedMigrationDocument>>(const PreparedProjectMigration &)>;
+
+        /**
+         * @brief Verifies a complete disposable candidate, including transaction-owned metadata and history.
+         * @param projectRoot Authoritative project root, read-only for this operation.
+         * @param plan Deterministic plan including its final target-contract validator.
+         * @param jobs Injected operation scheduler.
+         * @param limits Bounded inventory and execution limits.
+         * @param cancellation Parent operation cancellation.
+         * @param services Same explicit capabilities used by real preparation.
+         * @param buildDocuments Synchronous projection of transaction-owned candidate documents after the pipeline has executed.
+         * @return Verified change summary or a typed inventory, stage, or validation failure.
+         */
+        [[nodiscard]] static Result<ProjectMigrationDryRunResult> VerifiedDryRun(const std::filesystem::path &projectRoot,
+                                                                                 const ProjectMigrationPlan &plan, JobSystem &jobs,
+                                                                                 const ProjectMigrationLimits &limits,
+                                                                                 CancellationToken cancellation,
+                                                                                 const ProjectMigrationExecutionServices &services,
+                                                                                 const DryRunFinalDocuments &buildDocuments);
     };
 
     /** @brief Constructs the build-generated core migration catalog. */
