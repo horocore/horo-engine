@@ -113,7 +113,7 @@ namespace Horo::Render {
     Result<NativeReconstructionDispatch> PrepareNativeReconstructionDispatch(const ReconstructionFrameRequest &request,
                                                                              const RenderCapabilitySnapshot &capabilities,
                                                                              const NativeReconstructionTemporalSettings &tuning,
-                                                                             const TemporalHistoryFrame *history) {
+                                                                             const std::optional<NativeReconstructionHistory> history) {
         using Outcome = Result<NativeReconstructionDispatch>;
         if (const auto valid = ValidateReconstructionFrame(request, capabilities); valid.HasError())
             return Outcome::Failure(valid.ErrorValue());
