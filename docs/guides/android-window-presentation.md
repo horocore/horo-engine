@@ -84,6 +84,10 @@ After destroying an old surface tuple, the readiness poll returns unavailable
 with that native output genuinely absent. A later poll imports the replacement;
 the application can observe the real loss boundary even when window facts did
 not change. This uses no synthetic busy timer or fabricated completion.
+During the next import, native surface loss or temporarily inconsistent
+Android and Vulkan extents leave presentation unavailable. The backend rolls
+back that candidate and retries on a later poll. Unsupported formats and
+other native failures keep their explicit errors.
 
 The maintenance extension's present fences cover presentation resource lifetime,
 which differs from command completion. The Vulkan specification describes both

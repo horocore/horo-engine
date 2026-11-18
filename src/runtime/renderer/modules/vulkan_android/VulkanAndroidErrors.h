@@ -13,4 +13,7 @@ namespace Horo::Render::AndroidVulkan {
     /** @brief Preserves native failure status without translating it to successful presentation. @param operation Native call. @param
      * result Native status. @return Typed error. */
     [[nodiscard]] Error NativeError(std::string_view operation, VkResult result);
+
+    /** @brief Identifies the backend's exact retryable readiness outcome. */
+    [[nodiscard]] bool IsPending(const Error &error) noexcept;
 }  // namespace Horo::Render::AndroidVulkan

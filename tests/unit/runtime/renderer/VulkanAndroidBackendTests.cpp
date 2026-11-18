@@ -459,13 +459,90 @@ namespace Horo::Render::AndroidVulkan::Testing {
         Fixture f;
         f.Initialize();
         f.Available();
-        f.driver.failSwapchain = true;
-        REQUIRE(f.runtime->Availability({640, 480}).HasError());
+        f.driver.swapchainResult = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        const auto failed = f.runtime->Availability({640, 480});
+        REQUIRE(failed.HasError());
+        CHECK(failed.ErrorValue().code.Value() == Errors::NativeFailure.code.Value());
         CHECK(f.driver.surfaceDestroys == 1);
         CHECK(f.driver.submits == 0);
-        f.driver.failSwapchain = false;
+        f.driver.swapchainResult = VK_SUCCESS;
         CHECK(Value(f.runtime->Availability({640, 480})));
         CHECK(f.driver.surfaceCreates == 2);
+    }
+
+    TEST_CASE("Android Vulkan retries surface loss during replacement discovery or creation", "[renderer][vulkan-android][protocol-fake]") {
+        Fixture f;
+        f.Initialize();
+        const auto original = f.Available();
+        REQUIRE(Value(f.runtime->Availability({640, 480})));
+        f.Draw();
+        Accepted(f.windows->ObserveLost(original));
+        const auto replacement = f.Available(1);
+        REQUIRE(replacement != original);
+        REQUIRE_FALSE(Value(f.runtime->Availability({640, 480})));
+        REQUIRE(f.driver.chainDestroys == 1);
+        REQUIRE(f.driver.surfaceDestroys == 1);
+
+        SECTION("discovery loses the surface before freezing the candidate") {
+            f.driver.capabilitiesResult = VK_ERROR_SURFACE_LOST_KHR;
+        }
+        SECTION("creation loses the surface after freezing the candidate") {
+            f.driver.swapchainResult = VK_ERROR_SURFACE_LOST_KHR;
+        }
+        REQUIRE_FALSE(Value(f.runtime->Availability({640, 480})));
+        CHECK(f.native[0].references == 0);
+        CHECK(f.native[1].references == 1);
+        CHECK(f.driver.surfaceCreates == 2);
+        CHECK(f.driver.surfaceDestroys == 2);
+        CHECK(f.driver.chainDestroys == 1);
+        CHECK(f.driver.acquisitions == 1);
+        CHECK(f.driver.submits == 1);
+
+        f.driver.capabilitiesResult = VK_SUCCESS;
+        f.driver.swapchainResult = VK_SUCCESS;
+        REQUIRE(Value(f.runtime->Availability({640, 480})));
+        f.Draw();
+        CHECK(f.driver.presents == 2);
+        CHECK(f.driver.deviceCreates == 1);
+        CHECK(f.driver.surfaceCreates == 3);
+    }
+
+    TEST_CASE("Android Vulkan retries inconsistent resize extents before allocating a new swapchain",
+              "[renderer][vulkan-android][protocol-fake]") {
+        Fixture f;
+        f.Initialize();
+        const auto original = f.Available();
+        REQUIRE(Value(f.runtime->Availability({640, 480})));
+        f.native[0].extent = {320, 240};
+        f.Commit();
+        REQUIRE_FALSE(Value(f.runtime->Availability({320, 240})));
+
+        SECTION("Vulkan still reports the old size") {
+            f.driver.currentExtent = {640, 480};
+        }
+        SECTION("Vulkan temporarily reports a non-drawable surface") {
+            f.driver.currentExtent = {0, 0};
+            f.driver.maximumExtent = {0, 0};
+        }
+        REQUIRE_FALSE(Value(f.runtime->Availability({320, 240})));
+        CHECK(f.driver.chainCreates == 1);
+        CHECK(f.driver.chainDestroys == 1);
+        CHECK(f.driver.surfaceDestroys == 2);
+        CHECK(f.driver.acquisitions == 0);
+        CHECK(Value(f.windows->Snapshot()).window == original);
+
+        f.driver.currentExtent = {320, 240};
+        f.driver.maximumExtent = {2048, 2048};
+        REQUIRE(Value(f.runtime->Availability({320, 240})));
+        CHECK(f.driver.chainCreates == 2);
+        CHECK(f.driver.deviceCreates == 1);
+        CHECK(f.driver.surfaceCreates == 3);
+        const auto frame = Value(f.runtime->Begin({1, {320, 240}}));
+        const std::array passes{
+            RenderPassDescriptor{.id = {1}, .kind = RenderPassKind::Graphics, .primaryOutput = PrimaryOutputAttachment{}}};
+        Accepted(f.runtime->Execute({frame, passes}));
+        Accepted(f.runtime->Present(frame));
+        CHECK(f.driver.presents == 1);
     }
 
     TEST_CASE("Android Vulkan rejected native presentation preserves pending debt and its native cause",
