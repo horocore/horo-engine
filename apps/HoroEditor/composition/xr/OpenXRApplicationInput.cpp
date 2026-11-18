@@ -166,7 +166,7 @@ namespace Horo::Application::Internal {
     Result<void> OpenXRApplicationSession::RefreshInputProfiles(const XRSessionId &session, const XRInteractionProfileId fallback) {
         if (auto current = Current(); current.HasError())
             return current;
-        if (!input_.native || !input_.bindings || !input_.projection)
+        if (!input_.native || !input_.bindings)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         const auto observed = input_.native->Profiles(session);
         if (observed.HasError())
@@ -413,12 +413,37 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRApplicationSession::RevokeInput */
     void OpenXRApplicationSession::RevokeInput() noexcept {
+        RetireInputProjection();
+        input_.bindings.reset();
+        input_.profiles = {};
+    }
+
+    /** @copydoc OpenXRApplicationSession::RetireInputProjection */
+    void OpenXRApplicationSession::RetireInputProjection() noexcept {
         HORO_INVARIANT_MSG(std::this_thread::get_id() == lane_, "XR Input retirement requires its owner lane");
         RequestHapticCancellation();
         input_.projection.reset();
         input_.gestures = {};
         input_.gestureRevision = {};
-        input_.bindings.reset();
-        input_.profiles = {};
+    }
+
+    /** @copydoc OpenXRApplicationSession::RebuildInputProjection */
+    Result<void> OpenXRApplicationSession::RebuildInputProjection(const Input::InputActionCollection &port,
+                                                                  const XRActionBindingCoordinator &coordinator) {
+        if (auto current = Current(); current.HasError())
+            return current;
+        if (!native_ || native_->Session() != coordinator.Session() || !input_.native || input_.projection || !input_.bindings ||
+            !coordinator.Current() || *coordinator.Current() != *input_.bindings)
+            return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
+        auto source = XRInputProjection::Create(port, coordinator.Session(), *coordinator.Current(), coordinator.Revision());
+        if (source.HasError())
+            return Result<void>::Failure(source.ErrorValue());
+        input_.projection.emplace(std::move(source).Value());
+        return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRApplicationSession::HasInputProjection */
+    bool OpenXRApplicationSession::HasInputProjection() const noexcept {
+        return input_.projection.has_value();
     }
 }  // namespace Horo::Application::Internal

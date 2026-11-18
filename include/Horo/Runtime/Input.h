@@ -906,6 +906,12 @@ namespace Horo::Input {
          * the host revokes that registration and commits neutral Input through the ordinary cutoff.
          */
         [[nodiscard]] Result<InputActionCollection> ActionCollectionForPlayer(const InputContextToken &context, PlayerId player) const;
+        /** @brief Refreshes the map revision of a port issued for an explicitly selected external player.
+         * @param port Existing host port from this router. Its context and player stay sealed.
+         * @return True for a renewed port, false if already current or device-bound, or a typed stale/owner-thread error.
+         * @post Old registrations stay stale. The host must commit a neutral cutoff before registering the replacement.
+         */
+        [[nodiscard]] Result<bool> RefreshPlayerActionCollection(InputActionCollection &port) const;
         /** @brief Cancels released pointer capture and reclaims drained semantic mapping identities.
          * @details Pending old-owner releases remain until delivered. The next committed sample also performs this cleanup.
          */

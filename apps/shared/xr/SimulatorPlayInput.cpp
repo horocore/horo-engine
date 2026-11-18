@@ -1,3 +1,4 @@
+#include "Horo/Foundation/Logging/Logger.h"
 #include "SimulatorPlayState.h"
 
 #include <algorithm>
@@ -102,8 +103,32 @@ namespace Horo::Application::Internal {
         if (auto lane = impl_->Lane(); lane.HasError())
             return lane;
         Impl::Operation operation{*impl_};
+        if (impl_->input) {
+            const auto refreshed = impl_->composition.router.RefreshPlayerActionCollection(*impl_->input);
+            if (refreshed.HasError()) {
+                impl_->Revoke();
+                impl_->composition.router.BeginFrame(raw);
+                return Result<void>::Failure(refreshed.ErrorValue());
+            }
+            if (refreshed.Value()) {
+                impl_->preview.reset();
+                if (impl_->activeInput)
+                    impl_->activeInput->projection.reset();
+                impl_->composition.router.BeginFrame(raw);
+                if (auto *active = impl_->activeInput.get(); impl_->admitted && active && active->coordinator->Current()) {
+                    auto rebound = XRInputProjection::Create(*impl_->input, active->session, *active->coordinator->Current(),
+                                                             active->coordinator->Revision());
+                    if (rebound.HasValue())
+                        active->projection.emplace(std::move(rebound).Value());
+                    else
+                        LOG_WARN("editor.xr", "Current action map cannot admit the simulator input plan: %s",
+                                 rebound.ErrorValue().code.Value().c_str());
+                }
+                return Result<void>::Success();
+            }
+        }
         if (const bool sampling = impl_->play == Editor::EditorPlayState::Playing || impl_->pendingStep;
-            !impl_->admitted || !impl_->runtime || !impl_->input || !sampling) {
+            !impl_->admitted || !impl_->runtime || !impl_->input || !sampling || (impl_->activeInput && !impl_->activeInput->projection)) {
             impl_->composition.router.BeginFrame(raw);
             return Result<void>::Success();
         }

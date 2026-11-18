@@ -70,7 +70,7 @@ namespace {
         std::unique_ptr<XRSimulatorModel> model;
         std::unique_ptr<Runtime::RuntimeHost> host;
 
-        explicit Fixture(const float rootX = 0) {
+        explicit Fixture(const float rootX = 0, const std::optional<Input::PlayerId> player = std::nullopt) {
             SceneSource::SceneSourceDocument authored;
             authored.objects.push_back({.id = {1}, .name = "Tracking origin", .localTransform = {.translation = {rootX, 0, 0}}});
             auto document = EditorSimulatorSceneSource::Create(std::move(authored), {1});
@@ -86,7 +86,7 @@ namespace {
             Require(play);
             simulator = std::move(play).Value();
             model = std::make_unique<XRSimulatorModel>(simulator);
-            auto port = router.ActionCollection(context);
+            auto port = player ? router.ActionCollectionForPlayer(context, *player) : router.ActionCollection(context);
             Require(port);
             Require(simulator->AttachInput(port.Value(), source->Port()));
             auto participant = std::make_unique<InputAndScene>(*simulator);
@@ -119,6 +119,31 @@ namespace {
         REQUIRE_FALSE(fixture.simulator->Preview().has_value());
         REQUIRE_FALSE(fixture.model->Snapshot().available);
         REQUIRE(fixture.model->Apply({before.state.session.session, XRSimulatorCommandKind::Reset, {}}).HasError());
+    }
+
+    TEST_CASE("Shared simulator rebinds assigned input after a live map change without replacing the session",
+              "[xr][simulator][lifecycle]") {
+        constexpr Input::PlayerId player = 7;
+        Fixture fixture{0, player};
+        const auto published = fixture.model->Snapshot();
+        const auto session = published.state.session.session;
+        auto controls = published.controls;
+        controls.actionCount = 1;
+        controls.actions[0] = {0, XRTrackedDeviceRole::LeftController, XRTrackedActionKind::Vector2, true, 0.5F, -0.25F};
+        Require(fixture.model->Apply({session, XRSimulatorCommandKind::Controls, controls}));
+        const Input::ActionId move{"gameplay.move"};
+        fixture.Frame();
+        CHECK(fixture.router.ReadAction(fixture.context, move, player).x == 0.5F);
+        CHECK_FALSE(fixture.router.ReadAction(fixture.context, move, Input::PlayerId{2}).down);
+
+        const auto current = fixture.router.Actions();
+        const std::vector<Input::ActionDescriptor> actions(current.begin(), current.end());
+        Require(fixture.router.SetActionMap(actions));
+        fixture.Frame();
+        CHECK_FALSE(fixture.router.ReadAction(fixture.context, move, player).down);
+        fixture.Frame();
+        CHECK(fixture.router.ReadAction(fixture.context, move, player).x == 0.5F);
+        CHECK(fixture.model->Snapshot().state.session.session == session);
     }
 
     struct QueryObservation final {

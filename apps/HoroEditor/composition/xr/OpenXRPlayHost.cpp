@@ -1,6 +1,7 @@
 #include "OpenXRPlayHost.h"
 
 #include "Horo/Foundation/Assertions.h"
+#include "Horo/Foundation/Logging/Logger.h"
 #include "OpenXRPlayFrameState.h"
 
 namespace Horo::Application::Internal {
@@ -300,7 +301,29 @@ namespace Horo::Application::Internal {
         if (!input_.router)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         const Operation operation{*this};
-        if (!input_.port || !input_.admitted || eventsPending_ || input_.play != Editor::EditorPlayState::Playing) {
+        if (input_.port && !eventsPending_) {
+            const auto refreshed = input_.router->RefreshPlayerActionCollection(*input_.port);
+            if (refreshed.HasError()) {
+                RevokeSource();
+                input_.router->BeginFrame(raw);
+                return Result<void>::Failure(refreshed.ErrorValue());
+            }
+            if (refreshed.Value()) {
+                tracking_.Revoke();
+                if (input_.admitted)
+                    composition_.session.RetireInputProjection();
+                input_.router->BeginFrame(raw);
+                if (input_.admitted && input_.coordinator) {
+                    const auto rebound = composition_.session.RebuildInputProjection(*input_.port, *input_.coordinator);
+                    if (rebound.HasError())
+                        LOG_WARN("editor.xr", "Current action map cannot admit the signed XR input plan: %s",
+                                 rebound.ErrorValue().code.Value().c_str());
+                }
+                return Result<void>::Success();
+            }
+        }
+        if (!input_.port || !input_.admitted || eventsPending_ || input_.play != Editor::EditorPlayState::Playing ||
+            !composition_.session.HasInputProjection()) {
             tracking_.Revoke();
             input_.router->BeginFrame(raw);
             return Result<void>::Success();

@@ -168,6 +168,29 @@ namespace Horo::XR {
         CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id).pressed);
     }
 
+    TEST_CASE("Input can refresh only the exact issued player port and still requires a neutral cutoff", "[unit][xr][input]") {
+        ProjectionFixture fixture;
+        auto assigned = fixture.router.ActionCollectionForPlayer(fixture.context, Input::PlayerId{7});
+        REQUIRE(assigned.HasValue());
+        auto port = std::move(assigned).Value();
+        const auto stale = port;
+        const auto old = XRInputProjection::Create(port, fixture.session, fixture.bindings, 4);
+        REQUIRE(old.HasValue());
+        REQUIRE_FALSE(fixture.router.RefreshPlayerActionCollection(port).Value());
+
+        Input::InputRouter foreign;
+        CHECK(foreign.RefreshPlayerActionCollection(port).HasError());
+        REQUIRE(fixture.router.SetActionMap({fixture.action}).HasValue());
+        REQUIRE(fixture.router.RefreshPlayerActionCollection(port).Value());
+        CHECK(stale.Begin(fixture.collector.Commit()).HasError());
+        CHECK(XRInputProjection::Create(port, fixture.session, fixture.bindings, 4).HasError());
+        fixture.router.BeginFrame(fixture.collector.Commit());
+        CHECK(XRInputProjection::Create(port, fixture.session, fixture.bindings, 4).HasValue());
+
+        fixture.context = {};
+        CHECK(fixture.router.RefreshPlayerActionCollection(port).HasError());
+    }
+
     TEST_CASE("XR input bind cannot revive a reservation revoked during native preparation", "[unit][xr][input]") {
         ProjectionFixture fixture;
         auto prepared = XRInputProjection::Prepare(fixture.Port(), fixture.bindings);

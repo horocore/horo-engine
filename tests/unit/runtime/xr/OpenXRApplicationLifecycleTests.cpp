@@ -903,6 +903,22 @@ namespace Horo::Tests::OpenXRApplication {
         REQUIRE(initial.status == EditorXrInspectionStatus::Current);
         REQUIRE(initial.trackingRevision != 0);
 
+        const auto currentActions = fixture.router.Actions();
+        const std::vector<Input::ActionDescriptor> original(currentActions.begin(), currentActions.end());
+        auto mismatched = original;
+        mismatched.front().id = Input::ActionId{"other"};
+        REQUIRE(fixture.router.SetActionMap(mismatched).HasValue());
+        CHECK_FALSE(runCutoff().down);
+        CHECK_FALSE(runCutoff().down);
+        REQUIRE(fixture.router.SetActionMap(original).HasValue());
+        CHECK_FALSE(runCutoff().down);
+        const auto rebound = runCutoff();
+        CHECK(rebound.down);
+        CHECK(rebound.x == before.x);
+        CHECK(rebound.y == before.y);
+        CHECK(fixture.play->ReadInspection().sessionGeneration == generation);
+        CHECK(fixture.play->ReadInspection().bindingRevision == initial.bindingRevision);
+
         fixture.script.actions.currentProfiles[0] = fixture.script.actions.Find(profilePath);
         REQUIRE(fixture.script.actions.currentProfiles[0] != XR_NULL_PATH);
         fixture.script.events.interactionProfileChanged = true;

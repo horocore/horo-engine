@@ -248,6 +248,12 @@ gameplay input for the same player. Keyboard and gamepad ownership remains
 independent. Launches that omit the option continue to use the aggregate
 single-player preview input.
 
+An action-map reload commits one neutral Input cutoff before the existing
+signed plan can regain scalar routing. The same player, XR session and native
+binding publication remain selected. An incompatible map leaves the semantic
+source neutral until a compatible map is installed. Ordinary physical Input
+continues during both transitions.
+
 The roots document uses the existing package publisher-policy codec. Its source
 is an explicit operator/installer approval; neither project metadata nor a
 catalog signer can select or create those roots. Parsing remains separate from

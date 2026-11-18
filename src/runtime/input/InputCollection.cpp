@@ -198,6 +198,23 @@ namespace Horo::Input {
         return port;
     }
 
+    /** @copydoc InputRouter::RefreshPlayerActionCollection */
+    Result<bool> InputRouter::RefreshPlayerActionCollection(InputActionCollection &port) const {
+        if (port.assignment_ || !port.player_)
+            return Result<bool>::Success(false);
+        const auto owner = port.owner_.lock();
+        if (owner != impl_->collection)
+            return Stale<bool>();
+        if (const auto borrowed = owner->Borrow(); borrowed.HasError())
+            return Result<bool>::Failure(borrowed.ErrorValue());
+        if (!TokenActive(port.context_) || impl_->configurationRevision == 0)
+            return Stale<bool>();
+        if (port.configuration_ == impl_->configurationRevision)
+            return Result<bool>::Success(false);
+        port.configuration_ = impl_->configurationRevision;
+        return Result<bool>::Success(true);
+    }
+
     /** @copydoc InputActionCollection::RegisterSource */
     Result<InputActionSourceToken> InputActionCollection::RegisterSource(const std::span<const ActionDescriptor> actions) const {
         const auto owner = owner_.lock();

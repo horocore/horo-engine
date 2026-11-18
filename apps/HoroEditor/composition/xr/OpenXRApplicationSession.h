@@ -310,6 +310,17 @@ namespace Horo::Application::Internal {
          * @pre Owner lane; the next canonical App cutoff commits neutralization before replacement.
          */
         void RevokeInput() noexcept;
+        /** @brief Retires the semantic source and effects while retaining the signed native binding plan. */
+        void RetireInputProjection() noexcept;
+        /** @brief Rebinds the still-current signed plan to the refreshed Input port after a neutral commit.
+         * @param port Refreshed context and player authority.
+         * @param coordinator Exact active session binding publication.
+         * @return Success or a typed mismatch with the new action map.
+         */
+        [[nodiscard]] Result<void> RebuildInputProjection(const Input::InputActionCollection &port,
+                                                          const XR::XRActionBindingCoordinator &coordinator);
+        /** @brief Checks whether the current map admitted a semantic projection. */
+        [[nodiscard]] bool HasInputProjection() const noexcept;
         /** @brief Abandons only the SAME unbound native attempt after failed pre-candidate Scene preparation.
          * @return Original cleanup failure, retaining native actions/session and loader for retry.
          * @pre Owner lane; no issued session owner, frame, image or renderer child can exist.
