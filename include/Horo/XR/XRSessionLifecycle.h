@@ -16,7 +16,8 @@
 namespace Horo::XR {
     namespace RuntimeInternal {
         class XRSessionHostControl;
-    }
+        class XRTrackingPublication;
+    }  // namespace RuntimeInternal
     /** @brief Ordered host-composition resource boundaries; native values remain in the selected adapter. */
     enum class XRSessionPreparation : std::uint8_t {
         PlatformLoader,
@@ -159,6 +160,7 @@ namespace Horo::XR {
     private:
         friend class XRFrameLifecycle;
         friend class RuntimeInternal::XRSessionHostControl;
+        friend class RuntimeInternal::XRTrackingPublication;
         /** @brief Tests immutable control-thread identity before accessing owner state. */
         [[nodiscard]] bool IsOwnerThread() const noexcept;
 
@@ -170,6 +172,7 @@ namespace Horo::XR {
         XRSessionId ownedSession_{};
         XRSessionSnapshot snapshot_{};
         std::optional<XRFeaturePlan> acceptedPlan_;
+        std::uint64_t trackingContinuity_{};  // Owner lane; zero means no further cutoffs for this session.
         std::uint32_t lastSessionGeneration_{};
         bool destroyed_{};
     };

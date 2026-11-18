@@ -688,7 +688,9 @@ Input owns semantic action IDs, contexts, player assignment, user overrides and
 consumption. XROpenXR compiles the admitted plan into native action sets/actions/spaces,
 synchronizes and locates them, and keeps native paths private. XRRuntime publishes one
 bounded generation-scoped snapshot, and the host-composed XR/Input adapter joins it to
-the normal Input snapshot transaction before the cutoff.
+the normal Input snapshot transaction before the cutoff. Each session-state transition
+invalidates the previous cutoff. Regaining focus or restarting a retained session
+requires a fresh publication before the host can borrow tracking again.
 
 Rendering-time view/head poses are a distinct predicted-frame snapshot. They may reduce
 visual latency but cannot overwrite the Input snapshot, a tick-assigned gameplay frame,

@@ -173,6 +173,7 @@ namespace Horo::XR {
         snapshot_.capabilityRevision = capabilities.Revision();
         acceptedPlan_ = plan;
         PublishState(XRSessionState::Ready);
+        trackingContinuity_ = 1;
         rollback.Commit();
         return Result<XRSessionId>::Success(candidate);
     }
@@ -234,6 +235,10 @@ namespace Horo::XR {
 
     void XRSessionLifecycle::PublishState(const XRSessionState state) noexcept {
         using enum XRSessionState;
+        if (state != snapshot_.state && trackingContinuity_ != 0) {
+            // Unsigned exhaustion leaves zero, which rejects new cutoffs until a new session is issued.
+            ++trackingContinuity_;
+        }
         snapshot_.state = state;
         snapshot_.admitsFrames = state == Running || state == Visible || state == Focused;
         snapshot_.admitsActions = state == Focused;

@@ -90,8 +90,9 @@ namespace Horo::XR::RuntimeInternal {
          * @post Only success advances the owner-issued snapshot revision/sequence; no partial candidate escapes.
          */
         [[nodiscard]] Result<void> Publish(const TrackingPublicationRequest &request);
-        /** @brief Borrows the sole current immutable snapshot. @return Null on failure/loss/shutdown/stale lifecycle.
-         * @pre Owner-lane use; the borrow ends at Publish/ObserveDevice/Bind/Close.
+        /** @brief Borrows the sole current immutable snapshot.
+         * @return Null after failure or a lifecycle transition until a new publication.
+         * @pre Owner-lane use; the borrow ends at a lifecycle transition or at Publish/ObserveDevice/Bind/Close.
          */
         [[nodiscard]] const XRTrackingSnapshot *Current() const noexcept;
         /** @brief Revokes a failed native sampling opportunity without reusing its earlier snapshot.
@@ -119,6 +120,7 @@ namespace Horo::XR::RuntimeInternal {
         std::size_t deviceCount_{};
         std::vector<XRTrackedPoseRecord> poses_;  // Bounded allocation at Bind, retained through all frame work.
         std::optional<XRTrackingSnapshot> current_;
+        std::uint64_t publishedContinuity_{};
         std::uint64_t revision_{};
     };
 }  // namespace Horo::XR::RuntimeInternal

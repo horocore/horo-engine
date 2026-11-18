@@ -329,6 +329,9 @@ namespace Horo::XR::RuntimeInternal {
         current_.reset();
         if (auto admitted = lifecycle_->Admit(session_, request.focus == XRTrackingFocusState::Focused); admitted.HasError())
             return admitted;
+        const auto continuity = lifecycle_->trackingContinuity_;
+        if (continuity == 0)
+            return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
         if (!ValidPublicationTime(request, lifecycle_->Snapshot(), origin_, revision_))
             return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotInvalid));
         if (auto hands = AdmitJointRecords(request.handJoints); hands.HasError())
@@ -358,6 +361,7 @@ namespace Horo::XR::RuntimeInternal {
         if (candidate.HasError())
             return Result<void>::Failure(candidate.ErrorValue());
         current_.emplace(std::move(candidate).Value());
+        publishedContinuity_ = continuity;
         ++revision_;
         return Result<void>::Success();
     }
@@ -366,8 +370,7 @@ namespace Horo::XR::RuntimeInternal {
     const XRTrackingSnapshot *XRTrackingPublication::Current() const noexcept {
         if (std::this_thread::get_id() != lane_ || !current_)
             return nullptr;
-        if (const auto snapshot = lifecycle_->Snapshot(); snapshot.session != session_ || !snapshot.admitsFrames ||
-                                                          (current_->Focus() == XRTrackingFocusState::Focused && !snapshot.admitsActions))
+        if (lifecycle_->Snapshot().session != session_ || lifecycle_->trackingContinuity_ != publishedContinuity_)
             return nullptr;
         return &*current_;
     }
