@@ -1,6 +1,7 @@
 #include "DecisionGraphCanvasModel.h"
 #include "DecisionProblemsView.h"
 #include "DecisionTaskPalette.h"
+#include "DecisionTaskPropertiesView.h"
 #include "EditorWorkspaceView.h"
 #include "Horo/AI/BlackboardUsageInspection.h"
 #include "Horo/AI/DecisionAssetValidation.h"
@@ -19,6 +20,114 @@
 
 namespace Horo::Editor {
     namespace {
+        /** @brief Renders supported source values through shared editor text controls. */
+        class DecisionPropertyValues final {
+        public:
+            explicit DecisionPropertyValues(const EditorGuiContext &context) : context_(context) {}
+
+            void Draw(const AI::BehaviorTreePropertyValue &value) const {
+                std::visit([this](const auto &entry) {
+                    Show(entry);
+                }, value);
+            }
+
+            void Label(std::string_view label) const {
+                Text(label, Theme::Muted());
+            }
+
+        private:
+            const std::string &Localized(const char *key) const {
+                return context_.localization.Get("editor", key);
+            }
+
+            void Text(std::string_view value, ImVec4 color) const {
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, value, color, context_.theme.fonts);
+            }
+
+            template <typename Number> void NumberValue(Number value) const {
+                std::array<char, 64> buffer;
+                const auto result = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
+                if (result.ec == std::errc{})
+                    Text(std::string_view(buffer.data(), result.ptr), Theme::Text());
+            }
+
+            template <typename Number> void LabeledNumber(const char *key, Number value) const {
+                Label(Localized(key));
+                NumberValue(value);
+            }
+
+            void Show(std::monostate) const {
+                Label(Localized("workspace.decision_graph.task_property_unavailable"));
+            }
+
+            void Show(bool value) const {
+                Text(Localized(value ? "workspace.blackboard.value_true" : "workspace.blackboard.value_false"), Theme::Text());
+            }
+
+            void Show(std::int64_t value) const {
+                NumberValue(value);
+            }
+
+            void Show(double value) const {
+                NumberValue(value);
+            }
+
+            void Show(std::string_view value) const {
+                Text(value, Theme::Text());
+            }
+
+            void Show(AI::BehaviorTreeNodeId value) const {
+                NumberValue(value.Value());
+            }
+
+            void Show(const AI::BehaviorTreeOpaqueProperty &value) const {
+                Label(Localized("workspace.decision_graph.task_property_opaque"));
+                LabeledNumber("workspace.decision_graph.task_property_version", value.contractVersion);
+            }
+
+            void Show(const AI::BehaviorTreeQueryOutput &value) const {
+                LabeledNumber("workspace.decision_graph.bound_query", value.query.Value());
+                LabeledNumber("workspace.decision_graph.task_property_result", value.result.Value());
+                LabeledNumber("workspace.decision_graph.task_property_version", value.resultVersion);
+                LabeledNumber("workspace.decision_graph.task_property_item", value.item.Value());
+                LabeledNumber("workspace.decision_graph.query_output_key", value.key.Value());
+                LabeledNumber("workspace.decision_graph.query_timeout", value.timeoutTicks);
+            }
+
+            const EditorGuiContext &context_;
+        };
+
+        /** @brief Shows exact authored property sets for the selected state's registered action phases. */
+        void DrawStateActionProperties(const AI::StateMachineState &state, const EditorGuiContext &context) {
+            if (state.entryProvider)
+                DrawDecisionTaskProperties(state.entryProvider->properties, context, "workspace.decision_graph.task_properties_entry");
+            if (state.updateProvider)
+                DrawDecisionTaskProperties(state.updateProvider->properties, context, "workspace.decision_graph.task_properties_update");
+            if (state.exitProvider)
+                DrawDecisionTaskProperties(state.exitProvider->properties, context, "workspace.decision_graph.task_properties_exit");
+        }
+
+        /** @brief Resolves one read-only canvas selection to the current immutable source properties. */
+        void DrawReadOnlyDecisionProperties(const AI::DecisionGraphSource &source, AI::DecisionNodeId selected,
+                                            const EditorGuiContext &context) {
+            if (!selected.IsValid())
+                return;
+            if (const auto *machine = std::get_if<AI::StateMachineAssetDescriptor>(&source.body)) {
+                const auto state = std::ranges::find(machine->states, selected, &AI::StateMachineState::id);
+                if (state != machine->states.end())
+                    DrawStateActionProperties(*state, context);
+            } else if (const auto *tree = std::get_if<std::shared_ptr<const AI::BehaviorTreeAsset>>(&source.body); tree && *tree) {
+                if (const auto *node = (*tree)->FindNode(AI::BehaviorTreeNodeId::Create(selected.Value()).Value()))
+                    DrawDecisionTaskProperties(node->properties, context);
+            } else if (const auto *utility = std::get_if<AI::UtilityDecisionSource>(&source.body)) {
+                const auto option = std::ranges::find(utility->options, selected, [](const auto &entry) {
+                    return entry.option.id;
+                });
+                if (option != utility->options.end())
+                    DrawDecisionTaskProperties(option->properties, context);
+            }
+        }
+
         /** @brief Matches literal metadata text, folding ASCII without changing UTF-8 bytes. */
         bool MatchesTaskLabel(std::string_view label, std::string_view search) {
             const auto fold = [](char value) {
@@ -321,6 +430,7 @@ namespace Horo::Editor {
         static_cast<void>(Ui::ComboControl("##BehaviorTreeNode", &index, static_cast<int>(nodes.size()), nodeItems, m_context.theme.fonts));
         const auto &node = nodes[static_cast<std::size_t>(index)];
         selection.node = AI::DecisionNodeId::Create(node.id.Value()).Value();
+        DrawDecisionTaskProperties(node.properties, m_context);
         const auto edges = tree.Edges();
         const auto incoming = std::ranges::find(edges, node.id, &AI::BehaviorTreeEdge::targetNode);
         if (incoming == edges.end())
@@ -410,6 +520,23 @@ namespace Horo::Editor {
         }
         if (button("workspace.decision_graph.edit_tree_append_task", room && children < node.maximumChildren))
             emit(BehaviorTreeEditOperation::AppendTask, selected);
+    }
+
+    /** @copydoc DrawDecisionTaskProperties */
+    void DrawDecisionTaskProperties(std::span<const AI::BehaviorTreeProperty> properties, const EditorGuiContext &context,
+                                    const char *heading) {
+        if (properties.empty())
+            return;
+        Ui::Card card({.id = heading});
+        const auto &title = context.localization.Get("editor", heading);
+        card.DrawTitleBar({.id = "##PropertyHeading", .title = title.c_str(), .fonts = context.theme.fonts});
+        if (!card.BeginBody())
+            return;
+        const DecisionPropertyValues view{context};
+        for (const auto &property : properties) {
+            view.Label(property.displayName);
+            view.Draw(property.value);
+        }
     }
 
     /** @copydoc FindSavedDecisionSchema */
@@ -637,29 +764,31 @@ namespace Horo::Editor {
             label(std::format("{} {}", text("workspace.decision_graph.transition_order"), order.rank), Theme::Text());
             label(text("workspace.decision_graph.transition_precedence"), Theme::Muted());
         };
+        const auto instance = opened->identity.instance;
+        const auto selectedNode = [&]() -> AI::DecisionNodeId {
+            using enum AI::DecisionPlanKind;
+            if (opened->family == StateMachine && m_stateMachineSelection.instance == instance)
+                return m_stateMachineSelection.state;
+            if (opened->family == BehaviorTree && m_behaviorTreeSelection.instance == instance)
+                return m_behaviorTreeSelection.node;
+            if (opened->family == Utility && m_utilityGraphSelection.instance == instance)
+                return m_utilityGraphSelection.option;
+            return {};
+        };
         if (!opened->editable) {
             label(text("workspace.decision_graph.read_only"), Theme::Muted());
             const auto canvas = m_decisionGraphCanvas.Draw(*opened, m_context, viewModel.decisionProviderMetadata);
+            ApplyDecisionCanvasInteraction(*opened, {.node = canvas.node, .transition = canvas.transition}, outCommand);
+            DrawReadOnlyDecisionProperties(*opened->graph, selectedNode(), m_context);
             if (const auto *machine = std::get_if<AI::StateMachineAssetDescriptor>(&opened->graph->body)) {
-                auto &selection = m_stateMachineSelection;
-                if (selection.instance != opened->identity.instance)
-                    selection = {.instance = opened->identity.instance};
-                if (canvas.transition)
-                    selection.transition = *canvas.transition;
+                const auto &selection = m_stateMachineSelection;
                 const auto transition = std::ranges::find(machine->transitions, selection.transition, &AI::StateMachineTransition::id);
                 if (transition != machine->transitions.end())
                     drawTransitionOrder(*machine, *transition);
             }
             return true;
         }
-        AI::DecisionNodeId selected;
-        const auto instance = opened->identity.instance;
-        if (opened->family == AI::DecisionPlanKind::StateMachine && m_stateMachineSelection.instance == instance)
-            selected = m_stateMachineSelection.state;
-        else if (opened->family == AI::DecisionPlanKind::BehaviorTree && m_behaviorTreeSelection.instance == instance)
-            selected = m_behaviorTreeSelection.node;
-        else if (opened->family == AI::DecisionPlanKind::Utility && m_utilityGraphSelection.instance == instance)
-            selected = m_utilityGraphSelection.option;
+        const auto selected = selectedNode();
         if (Ui::Button({.label = text("workspace.decision_canvas.locate_selection").c_str(),
                         .enabled = selected.IsValid(),
                         .font = m_context.theme.fonts.sans}))
@@ -726,6 +855,7 @@ namespace Horo::Editor {
         const bool canConnect = state != machine.states.end() && state->terminal == AI::DecisionStateTerminal::None &&
                                 machine.transitions.size() < AI::StateMachineLimits::Transitions;
         if (state != machine.states.end()) {
+            DrawStateActionProperties(*state, m_context);
             constexpr std::array Keys{"workspace.decision_graph.edit_running", "workspace.decision_graph.succeeded",
                                       "workspace.decision_graph.failed"};
             const std::array labels{text(Keys[0]).c_str(), text(Keys[1]).c_str(), text(Keys[2]).c_str()};

@@ -10,6 +10,7 @@
 #include "editor/screens/workspace/DecisionGraphCanvasModel.h"
 #include "editor/screens/workspace/DecisionProblemsView.h"
 #include "editor/screens/workspace/DecisionTaskPalette.h"
+#include "editor/screens/workspace/DecisionTaskPropertiesView.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "support/DecisionGraphCompilerTestSupport.h"
 
@@ -234,6 +235,46 @@ namespace Horo::Editor {
         CHECK(fixture.DrawPalette(catalog, draft) == nullptr);
         CHECK(fixture.labels.Used("workspace.decision_canvas.provider_version_mismatch"));
         CHECK(provider.probe.factories == 0);
+    }
+
+    TEST_CASE("Decision provider property inspector renders authored typed values and preserves opaque data",
+              "[unit][editor][decision][palette]") {
+        using namespace AI;
+        using AI::DecisionGraphTestSupport::MakeIdentity;
+        CanvasFixture fixture;
+        const std::array properties{
+            BehaviorTreeProperty{MakeIdentity<BehaviorTreePropertyId>(1), "Enabled", BehaviorTreePropertyKind::Boolean, true},
+            BehaviorTreeProperty{MakeIdentity<BehaviorTreePropertyId>(2), "Integer", BehaviorTreePropertyKind::SignedInteger,
+                                 std::int64_t{-4'000'000'000}},
+            BehaviorTreeProperty{MakeIdentity<BehaviorTreePropertyId>(3), "Scalar", BehaviorTreePropertyKind::Scalar, 0.125},
+            BehaviorTreeProperty{MakeIdentity<BehaviorTreePropertyId>(4), "Long source label without a format",
+                                 BehaviorTreePropertyKind::String, std::string{"Literal %d and ## characters"}},
+            BehaviorTreeProperty{MakeIdentity<BehaviorTreePropertyId>(5), "Node", BehaviorTreePropertyKind::NodeReference,
+                                 MakeIdentity<BehaviorTreeNodeId>(55)},
+            BehaviorTreeProperty{MakeIdentity<BehaviorTreePropertyId>(6), "Preserved", BehaviorTreePropertyKind::Opaque,
+                                 BehaviorTreeOpaqueProperty{7, {0, 0xFF, 0xA0}}},
+            BehaviorTreeProperty{MakeIdentity<BehaviorTreePropertyId>(7), "Query", BehaviorTreePropertyKind::QueryOutput,
+                                 BehaviorTreeQueryOutput{MakeIdentity<QueryId>(71), MakeIdentity<QueryResultSchemaId>(72), 2,
+                                                         MakeIdentity<QueryItemTypeId>(73), MakeIdentity<BlackboardKeyId>(74), 24}},
+        };
+        const auto original = properties;
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({0, 0});
+        ImGui::SetNextWindowSize({195, 580});
+        ImGui::Begin("Decision task inspector test", nullptr, ImGuiWindowFlags_NoSavedSettings);
+        DrawDecisionTaskProperties(properties, fixture.context);
+        ImGui::End();
+        ImGui::Render();
+
+        REQUIRE(ImGui::GetDrawData()->TotalVtxCount > 0);
+        CHECK(fixture.labels.Used("workspace.decision_graph.task_properties"));
+        CHECK(fixture.labels.Used("workspace.blackboard.value_true"));
+        CHECK(fixture.labels.Used("workspace.decision_graph.task_property_opaque"));
+        CHECK(fixture.labels.Used("workspace.decision_graph.task_property_version"));
+        CHECK(fixture.labels.Used("workspace.decision_graph.task_property_result"));
+        CHECK(fixture.labels.Used("workspace.decision_graph.task_property_item"));
+        CHECK(fixture.labels.Used("workspace.decision_graph.query_output_key"));
+        CHECK(properties == original);
     }
 
     TEST_CASE("Decision canvas validation resolves only exact visible nodes and clears replaced findings",

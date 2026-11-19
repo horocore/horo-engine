@@ -1,5 +1,6 @@
 #include "BlackboardScalarInput.h"
 #include "DecisionTaskPalette.h"
+#include "DecisionTaskPropertiesView.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
@@ -238,7 +239,9 @@ namespace Horo::Editor {
         Ui::FieldLabel(text("workspace.decision_graph.edit_utility_option").c_str(), fonts);
         static_cast<void>(
             Ui::ComboControl("##UtilityAuthoringOption", &optionIndex, static_cast<int>(source.options.size()), options, fonts));
-        const auto &option = source.options[static_cast<std::size_t>(optionIndex)].option;
+        const auto &selected = source.options[static_cast<std::size_t>(optionIndex)];
+        DrawDecisionTaskProperties(selected.properties, m_context);
+        const auto &option = selected.option;
         const auto resetScore = [&] {
             draft.score = draft.row ? option.considerations[*draft.row] : AI::UtilityConsideration{};
             draft.fields[Minimum] = std::format("{}", draft.score.minimum);

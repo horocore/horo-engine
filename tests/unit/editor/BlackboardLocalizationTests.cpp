@@ -294,6 +294,15 @@ TEST_CASE("Decision graph workspace and initial state machine labels resolve in 
         CHECK_FALSE(service.Get("editor", "workspace.decision_graph.task_key_access").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_graph.task_key_presence").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_graph.task_key_default").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_graph.task_properties").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_graph.task_properties_entry").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_graph.task_properties_update").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_graph.task_properties_exit").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_graph.task_property_unavailable").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_graph.task_property_opaque").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_graph.task_property_version").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_graph.task_property_result").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_graph.task_property_item").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_canvas.layout_unavailable").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_canvas.auto_layout").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_canvas.subtree").starts_with("[missing:"));
