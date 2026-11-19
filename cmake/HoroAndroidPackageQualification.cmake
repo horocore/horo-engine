@@ -84,7 +84,8 @@ if(HORO_ANDROID_QUALIFICATION_OPENXR_DISCOVERY)
         "${CMAKE_CURRENT_BINARY_DIR}/openxr-qualification")
     target_compile_definitions(HoroAndroidPackageQualification PRIVATE HORO_ANDROID_QUALIFICATION_OPENXR_DISCOVERY=1)
     target_link_libraries(HoroAndroidPackageQualification PRIVATE HoroPlatform HoroOpenXRHeaders miniz dl)
-    list(APPEND _horo_qualification_targets HoroPlatform)
+    # miniz records source paths in diagnostics as well as debug information.
+    list(APPEND _horo_qualification_targets HoroPlatform miniz)
 endif()
 if(HORO_ANDROID_QUALIFICATION_RENDERER STREQUAL "vulkan-android")
     target_sources(HoroAndroidPackageQualification PRIVATE
