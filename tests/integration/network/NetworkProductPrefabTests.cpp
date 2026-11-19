@@ -2,6 +2,7 @@
 #include "../../unit/runtime/physics/PhysicsSceneActivationTestSupport.h"
 #include "Horo/Assets/AssetCook.h"
 #include "Horo/Assets/AssetProvider.h"
+#include "Horo/Network/NetworkPrefabLifecycle.h"
 #include "Horo/Scene/CookedSceneDefinition.h"
 #include "NetworkModeHostTestSupport.h"
 
@@ -171,9 +172,19 @@ namespace Horo::Network {
             slots.push_back(origin.source.entitySlot);
         }
         CHECK(slots == std::vector<std::uint32_t>{0, 2});
+        const auto encodedSpawn = CaptureNetworkPrefabSpawn(spawned, mappings.front().object).Value();
+        const auto wire = EncodeNetworkPrefabLifecycle(encodedSpawn).Value();
+        const auto decoded = DecodeNetworkPrefabLifecycle(wire).Value();
+        REQUIRE(decoded.spawn);
+        CHECK(decoded.session == *role.worldSession);
+        CHECK(decoded.spawn->recipe == NetworkPrefabTemplateIdentity{prefab, artifact, 3});
+        CHECK(decoded.spawn->members[1].entitySlot == 2);
+        CHECK(decoded.spawn->members[1].object == mappings[1].object);
         CHECK(awaitMappings(0).Mapping().Entries().empty());
+        CHECK(CaptureNetworkPrefabSpawn(snapshot(), decoded.occurrence).HasError());
         host->Shutdown();
         CHECK(spawned.IsRevoked());
+        CHECK(CaptureNetworkPrefabSpawn(spawned, decoded.occurrence).HasError());
     }
 
 }  // namespace Horo::Network

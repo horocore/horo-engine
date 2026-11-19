@@ -124,6 +124,14 @@ provenance initializer. Rebuild native consumers against the updated mapping
 value layout. The existing NetworkRuntime target supplies the Assets identity
 header through its public usage requirements.
 
+The versioned Prefab lifecycle payload carries the world session, authority
+epoch and occurrence. Spawn also carries the cooked envelope identity, bounded
+entity count, and exact network object and schema versions in prepared member
+order. Despawn names only the exact occurrence. The codec rejects invalid
+lengths, repeated object slots and ambiguous member order before data reaches
+Scene admission. Dispatch must still check the authenticated server direction,
+the current world and the selected cooked catalog.
+
 ```cpp
 enum class ReplicationExecutionRole : std::uint8_t {
     Standalone,

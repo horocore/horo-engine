@@ -3,6 +3,7 @@
 #include "Horo/Network/NetworkAdmissionController.h"
 #include "Horo/Network/NetworkModeComposition.h"
 #include "Horo/Network/NetworkObjectMapping.h"
+#include "Horo/Network/NetworkPrefabLifecycle.h"
 #include "Horo/Network/NetworkWorldBinding.h"
 #include "Horo/Network/ReplicationInboundApply.h"
 #include "Horo/Network/ReplicationSnapshotHistory.h"
@@ -71,5 +72,6 @@ int main() {
     constexpr Horo::Network::NetworkPrefabTemplateIdentity prefabRecipe{prefabAsset, Horo::Sha256Digest{{2}}, 3};
     static_assert(Horo::Network::NetworkPrefabMemberSource{prefabRecipe, 2}.IsValid());
     static_assert(!Horo::Network::NetworkPrefabMemberSource{prefabRecipe, 3}.IsValid());
+    static_assert(Horo::Network::MaximumNetworkPrefabLifecycleBytes == 7254);
     return Horo::Network::NetworkProjectRole::Standalone == Horo::Network::NetworkProjectRole::Count ? 1 : 0;
 }
