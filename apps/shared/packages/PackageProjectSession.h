@@ -2,7 +2,18 @@
 /** @file PackageProjectSession.h @brief Non-installed application-root package authority composition. */
 #include "Horo/Application/PackageApplication.h"
 
+namespace Horo::AI {
+    class DecisionNodeGeneration;
+}
+
+namespace Horo::Packages {
+    class GameplayPackageModuleHost;
+}
+
 namespace Horo::Application::Internal {
+    /** @brief Short-lived exact Decision declaration leases acquired on the package owner lane. */
+    using PackageDecisionNodeLeaves = std::vector<std::shared_ptr<const AI::DecisionNodeGeneration>>;
+
     /** @brief Explicit borrowed application services; all remain alive until host Close completes. */
     struct PackageProjectHostServices final {
         JobSystem &jobs;
@@ -21,6 +32,7 @@ namespace Horo::Application::Internal {
         Packages::PackageRestoreLimits limits;
         Packages::PackageRestoreMode mode{Packages::PackageRestoreMode::Offline};
         bool requirePublisherVerification{};
+        Packages::GameplayPackageModuleHost *gameplayModules{}; /**< Optional exact owner already retained by lifecycle.moduleHosts. */
     };
 
     /** @brief Bounded inert project snapshot prepared on a host-owned I/O job, never during modal drawing. */
@@ -72,6 +84,12 @@ namespace Horo::Application::Internal {
          * publisher/deployment trust and native lifetime. No store, restore, activation or XR dependency is introduced.
          */
         [[nodiscard]] Result<std::shared_ptr<const Packages::VerifiedPackageInstallRecord>> InstalledRecord() const;
+        /** @brief Observes the already published gameplay role activation on the owner lane.
+         * @return Exact generation or zero when no configured gameplay role is active. */
+        [[nodiscard]] std::uint64_t DecisionCatalogGeneration() const noexcept;
+        /** @brief Acquires Decision leaves from only the expected live activation.
+         * @param activation Exact previously observed generation. @return Admitted declarations or a typed stale/owner failure. */
+        [[nodiscard]] Result<PackageDecisionNodeLeaves> AcquireDecisionNodes(std::uint64_t activation) const;
         /** @brief Advances the shared operation at an actual host boundary. @param boundary Actual host phase. @return Typed outcome. */
         [[nodiscard]] Result<void> Pump(Packages::PackageActivationBoundary boundary);
         /** @brief Requests cancellation and owner-lane retirement without waiting.

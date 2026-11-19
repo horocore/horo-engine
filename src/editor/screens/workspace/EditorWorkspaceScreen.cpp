@@ -124,7 +124,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                              .stringPayload = std::string{}});
             controller_->ReconcileAudioPreview();
             controller_->UpdatePlayPresentation(dt);
-            if (packages_.pump || packages_.activationTrustRequired) {
+            if (packages_.pump || packages_.activationTrustRequired || packages_.decisionCatalog) {
                 const auto &model = controller_->ViewModel();
                 const auto &root = controller_->ProjectRoot();
                 const auto boundary = model.playState == EditorPlayState::Idle || model.playState == EditorPlayState::Failed
@@ -132,6 +132,20 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                           : Packages::PackageActivationBoundary::Running;
                 if (packages_.pump)
                     static_cast<void>(packages_.pump(root, boundary));
+                if (packages_.decisionCatalog && packages_.acquireDecisionNodes) {
+                    const auto catalog = packages_.decisionCatalog(root);
+                    if (catalog != packageDecisionCatalog_) {
+                        std::shared_ptr<const ProjectPackageDecisionNodeSource> nodes;
+                        if (catalog) {
+                            nodes = std::make_shared<const ProjectPackageDecisionNodeSource>(
+                                [acquire = packages_.acquireDecisionNodes, root, stamp = *catalog] {
+                                return acquire(root, stamp);
+                            });
+                        }
+                        controller_->SetPackageDecisionNodeSource(std::move(nodes));
+                        packageDecisionCatalog_ = catalog;
+                    }
+                }
                 const auto active = model.workspacePanelHost.ActiveDocument();
                 const bool decisionActive = std::ranges::any_of(model.decisionGraphDocuments, [active](const auto &document) {
                     return document.identity.instance == active;

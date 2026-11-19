@@ -157,7 +157,7 @@ namespace Horo::Editor {
          * @details The application calls this on package publication, retirement and Project rebind. The catalog retains no executable
          * lease.
          */
-        [[nodiscard]] Result<void> ReplacePackageDecisionNodeSource(ProjectPackageDecisionNodeSource source);
+        [[nodiscard]] Result<void> ReplacePackageDecisionNodeSource(std::shared_ptr<const ProjectPackageDecisionNodeSource> source);
 
         /** @brief Returns source-addressed compile and registration failures. */
         [[nodiscard]] const std::vector<ProjectGameplayDiagnostic> &Diagnostics() const noexcept;
@@ -219,10 +219,10 @@ namespace Horo::Editor {
         void DiscoverLuaPrograms(const std::filesystem::path &projectRoot);
         void InstallLuaGeneration(const ProjectLuaGenerationSnapshot &snapshot);
         /** @brief Rebuilds detached metadata after initial discovery or coherent source replacement. */
-        [[nodiscard]] Result<void> RefreshDecisionAuthoringCatalog(const ProjectPackageDecisionNodeSource &packages);
+        [[nodiscard]] Result<void> RefreshDecisionAuthoringCatalog(const std::shared_ptr<const ProjectPackageDecisionNodeSource> &packages);
         /** @brief Acquires and composes real leaf owners without altering the admitted catalog. */
         [[nodiscard]] Result<std::shared_ptr<const AI::DecisionNodeGeneration>> BuildDecisionAuthoringGeneration(
-            const ProjectPackageDecisionNodeSource &packages) const;
+            const std::shared_ptr<const ProjectPackageDecisionNodeSource> &packages) const;
         /** @brief Replaces changed Decision scripts only after catalog validation succeeds. */
         void ReloadChangedDecisionSources(std::vector<ProjectGameplayDiagnostic> &diagnostics);
         void CaptureReplicationMetadata(const std::filesystem::path &projectRoot);
@@ -237,7 +237,7 @@ namespace Horo::Editor {
         std::unique_ptr<Gameplay::LoadedGameModule> nativeModule_;
         std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> decisionUsageMetadata_;
         mutable std::weak_ptr<const AI::DecisionNodeGeneration> decisionAuthoringGeneration_;
-        ProjectPackageDecisionNodeSource packageDecisionNodes_;
+        std::shared_ptr<const ProjectPackageDecisionNodeSource> packageDecisionNodes_;
         bool nativeDecisionAvailable_{};
         Gameplay::GameAssetTypeRegistry missingAssetTypes_{"game.missing"};
         Gameplay::ComponentRegistry missingComponents_;

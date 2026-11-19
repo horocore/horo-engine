@@ -153,6 +153,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (controller_) {
             static_cast<void>(controller_->ShutdownPrefabSettings(true));
             static_cast<void>(controller_->ShutdownCollisionSettings(true));
+            controller_->SetPackageDecisionNodeSource({});
+            packageDecisionCatalog_.reset();
             if (packages_.retire)
                 static_cast<void>(packages_.retire(std::filesystem::path{controller_->ViewModel().projectRoot}));
             SaveExtensionWorkspace();

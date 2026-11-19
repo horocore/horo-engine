@@ -77,6 +77,14 @@ namespace Horo::Editor {
         return application_->Activate(enabled);
     }
 
+    /** @copydoc PackageModalSession::ActivateModules */
+    Result<Application::PackageOperationId> PackageModalSession::ActivateModules(PackageModalGeneration generation,
+                                                                                 std::span<const Packages::EnabledPackageModule> enabled) {
+        if (const auto valid = Validate(generation); valid.HasError())
+            return Result<Application::PackageOperationId>::Failure(valid.ErrorValue());
+        return application_->ActivateModules(enabled);
+    }
+
     /** @copydoc PackageModalSession::Cancel */
     Result<void> PackageModalSession::Cancel(const PackageModalGeneration generation) {
         if (const auto valid = Validate(generation); valid.HasError())

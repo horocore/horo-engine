@@ -266,6 +266,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         void DetachXrInput();
 
         PackageWorkspaceAccess packages_;
+        std::optional<PackageWorkspaceDecisionCatalog> packageDecisionCatalog_;
         GuiScreenHost &host_;
         const EditorServiceRegistry &services_;
         EditorModalHost &modalHost_;

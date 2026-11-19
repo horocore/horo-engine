@@ -504,6 +504,10 @@ namespace Horo::Editor {
             m_viewModel.decisionPackageActivationTrustRequired = required;
         }
 
+        /** @brief Projects an exact package catalog while the application owns its live activation.
+         * @param source Owner-lane reacquisition callback, or empty to detach package declarations. */
+        void SetPackageDecisionNodeSource(std::shared_ptr<const ProjectPackageDecisionNodeSource> source);
+
         /** @brief Replaces the Content Browser projection when a newer registry revision is published.
          */
         void RefreshAssets(const Assets::AssetRegistrySnapshot &assetRegistry);
@@ -907,6 +911,7 @@ namespace Horo::Editor {
         std::optional<SceneDocumentSnapshot> m_deferredRuntimeSnapshot;
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> m_gameplayRetirements{std::make_shared<Gameplay::GameModuleRetirementQueue>()};
         std::unique_ptr<ProjectGameplayRegistry> m_gameplayRegistry;
+        std::shared_ptr<const ProjectPackageDecisionNodeSource> m_packageDecisionNodes;
         std::unique_ptr<ProjectGameplayRegistry> m_pendingGameplayRegistry;
         std::shared_ptr<EditorPlaySaveRetirement> m_playSaveRetirement;
         EditorPlaySessionController m_playSession;

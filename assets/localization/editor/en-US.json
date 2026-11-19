@@ -4001,6 +4001,12 @@
     "workspace.packages.activate": {
       "text": "Activate explicit selection"
     },
+    "workspace.packages.gameplay_module": {
+      "text": "Declared gameplay module ID"
+    },
+    "workspace.packages.activate_gameplay_module": {
+      "text": "Activate gameplay module"
+    },
     "workspace.packages.disable": {
       "text": "Disable package extensions"
     },

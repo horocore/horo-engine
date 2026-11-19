@@ -4001,6 +4001,12 @@
     "workspace.packages.activate": {
       "text": "Açık seçimi etkinleştir"
     },
+    "workspace.packages.gameplay_module": {
+      "text": "Bildirilen oynanış modülünün kimliği"
+    },
+    "workspace.packages.activate_gameplay_module": {
+      "text": "Oynanış modülünü etkinleştir"
+    },
     "workspace.packages.disable": {
       "text": "Paket uzantılarını devre dışı bırak"
     },

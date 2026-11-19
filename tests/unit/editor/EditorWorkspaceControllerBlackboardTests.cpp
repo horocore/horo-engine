@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <chrono>
@@ -2782,6 +2783,45 @@ TEST_CASE("Blackboard workspace applies and saves an exact reviewed Decision mig
         CHECK(view.snapshot.dirty);
         CHECK(controller.ViewModel().decisionGraphDocuments.front().dirty);
     }
+}
+
+TEST_CASE("workspace Decision palette reprojects attached and withdrawn package declarations", "[unit][editor][decision][packages]") {
+    BlackboardWorkspaceFixture project;
+    project.Write("Unused key", AI::BlackboardKeyPresence::Optional);
+    project.RebuildRegistry();
+    Horo::Tests::WriteReplicationProject(project.root);
+    EditorWorkspaceController controller(project.root, project.runtime, project.registry.Snapshot(),
+                                         {.assets = {.mutableAssetRegistry = &project.registry},
+                                          .mutations = &project.mutations,
+                                          .durableFiles = &project.files});
+    const auto &model = controller.ViewModel();
+    CHECK(model.decisionTaskPaletteChoices.empty());
+    AI::DecisionNodeContract contract;
+    const auto type = AI::DecisionNodeTypeId::Create(903).Value();
+    contract.descriptor = {type,
+                           {AI::DecisionDescriptorSourceKind::Package, AI::DecisionProviderId::Create(904).Value(), 1},
+                           {},
+                           {"extensions/native/fixture", 0, 0}};
+    contract.role = AI::DecisionNodeRole::Condition;
+    const auto source = std::make_shared<const ProjectPackageDecisionNodeSource>(
+        [node = AI::DecisionNodeRegistration{contract, {}}, active = std::make_shared<std::atomic_bool>(true)] {
+        using Leaves = std::vector<std::shared_ptr<const AI::DecisionNodeGeneration>>;
+        auto captured = AI::DecisionNodeGeneration::Capture(std::array{node}, active);
+        if (captured.HasError())
+            return Result<Leaves>::Failure(captured.ErrorValue());
+        return Result<Leaves>::Success({std::move(captured).Value()});
+    });
+    controller.SetPackageDecisionNodeSource(source);
+    REQUIRE(model.decisionTaskPaletteChoices.size() == 1);
+    CHECK(model.decisionTaskPaletteChoices.front().type == type);
+    CHECK(model.decisionTaskPaletteChoices.front().source == AI::DecisionDescriptorSourceKind::Package);
+    CHECK(model.decisionTaskChoices.empty());
+    const auto revision = model.availableBehaviorsRevision;
+    controller.SetPackageDecisionNodeSource(source);
+    CHECK(model.availableBehaviorsRevision == revision);
+    controller.SetPackageDecisionNodeSource({});
+    CHECK(model.availableBehaviorsRevision > revision);
+    CHECK(model.decisionTaskPaletteChoices.empty());
 }
 
 TEST_CASE("registered project Lua tasks can author and reopen a Behavior Tree", "[unit][editor][decision][lua]") {

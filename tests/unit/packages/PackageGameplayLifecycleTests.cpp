@@ -2,13 +2,18 @@
 #include "GameplayModuleTestSupport.h"
 #include "Horo/AI/AIScenePerceptionSource.h"
 #include "Horo/AI/PerceptionSenseScene.h"
+#include "Horo/Editor/PackageModalSession.h"
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Gameplay/GameEventRegistry.h"
 #include "Horo/Packages/GameplayPackageModuleHost.h"
+#include "Horo/Packages/PackageRequest.h"
+#include "PackageApplicationServiceTestSupport.h"
 #include "PackageLifecycleTestSupport.h"
+#include "PackageProjectHost.h"
 #include "PerceptionSenseTestSupport.h"
 
 #include <cstdint>
+#include <fstream>
 #include <thread>
 using namespace Horo::Packages::Tests::Support;
 
@@ -243,6 +248,113 @@ TEST_CASE("Verified package decision nodes retain exact locked version and real 
     CHECK(fixture.retirement->Close().HasError());
     contribution.nodes.reset();
     CHECK(fixture.retirement->Close().HasValue());
+}
+
+TEST_CASE("Editor package selection publishes exact Decision nodes through the configured project host",
+          "[packages][decision-node][editor]") {
+    using Horo::Application::Internal::PackageProjectHost;
+    GameplayFixture fixture;
+    Horo::Tests::Packages::TemporaryDirectory project{"editor package decisions"};
+    const auto root = std::filesystem::canonical(project.Path());
+    const auto content = std::filesystem::canonical(fixture.base.temporary.Path());
+    const auto relativeMetadata = root / ".horo";
+    REQUIRE(std::filesystem::create_directories(relativeMetadata));
+    const auto locked = fixture.base.install.ActiveGraph();
+    REQUIRE(locked);
+    const auto &entry = locked->packages.front();
+    const auto intent = nlohmann::json{{"sources", {{"fixture.source", {{"kind", "public-registry"}, {"registry", "official"}}}}},
+                                       {"dependencies", {{"fixture.gameplay", {{"source", "fixture.source"}, {"version", "1.0.0"}}}}}}
+                            .dump();
+    const auto request = ValidatedPackageRequest::Parse(intent);
+    REQUIRE(request.HasValue());
+    const PackageResolutionPlan resolution{
+        .packages = {{entry.lock.package, entry.lock.version, entry.lock.source, entry.lock.artifactDigest, {}}}};
+    const PackageLockArtifact artifact{.package = entry.lock.package,
+                                       .version = entry.lock.version,
+                                       .source = entry.lock.source,
+                                       .artifactDigest = entry.lock.artifactDigest,
+                                       .manifestDigest = entry.lock.manifestDigest,
+                                       .fileManifestDigest = entry.lock.fileManifestDigest,
+                                       .packageFormatVersion = 1,
+                                       .contributions = {"native"}};
+    const auto lock = ValidatedPackageLockfileV1::Generate(resolution, std::span{&entry.lock.package, 1}, request.Value().Digest(),
+                                                           std::span{&artifact, 1});
+    REQUIRE(lock.HasValue());
+    std::ofstream{relativeMetadata / "packages.json", std::ios::binary} << intent;
+    std::ofstream{relativeMetadata / "packages.lock", std::ios::binary} << lock.Value().SerializeCanonical();
+    const auto bytes = entry.archive->Bytes();
+    Horo::Tests::PackageApplicationService::ControlledSource source{std::vector<std::byte>{bytes.begin(), bytes.end()}};
+    JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 8, .ioWorkerCount = 1}};
+    const SteadyClock clock;
+    const SystemWallClock wall;
+    auto created = PackageProjectHost::Create({jobs, fixture.base.files, clock, wall, fixture.base.trust},
+                                              {.cacheRoot = content / "decision-host-cache",
+                                               .platform = {"linux", "x64", "horo-sdk-2"},
+                                               .lifecycle = {.temporaryRoot = content,
+                                                             .capabilities = {"runtime.participate"},
+                                                             .artifactGate = Horo::Tests::CreateAcceptingArtifactGate(),
+                                                             .moduleHosts = {fixture.gameplay},
+                                                             .moduleRetirements = fixture.retirement},
+                                               .mode = PackageRestoreMode::Online,
+                                               .gameplayModules = fixture.gameplay.get()},
+                                              Duration::FromMilliseconds(60'000), &source);
+    REQUIRE(created.HasValue());
+    const auto host = std::move(created).Value();
+    CHECK(host->HasGameplayModuleOwner());
+    std::shared_ptr<Horo::Application::PackageApplication> application;
+    for (const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+         !application && std::chrono::steady_clock::now() < deadline;) {
+        auto acquired = host->Acquire(root);
+        if (acquired.HasValue())
+            application = std::move(acquired).Value();
+        else
+            REQUIRE(acquired.ErrorValue().code.Value() == "packages.host.preparing");
+        std::this_thread::yield();
+    }
+    REQUIRE(application);
+    CHECK_FALSE(host->DecisionCatalog(root));
+    Horo::Editor::PackageModalSession modal{application};
+    const auto generation = modal.Open();
+    REQUIRE(generation.HasValue());
+    CHECK(modal.ActivateModules({generation.Value().value + 1}, std::span{&fixture.enabled, 1}).HasError());
+    const auto activated = modal.ActivateModules(generation.Value(), std::span{&fixture.enabled, 1});
+    REQUIRE(activated.HasValue());
+    const auto pump = [&](Horo::Application::PackageOperationId operation) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while (std::chrono::steady_clock::now() < deadline) {
+            REQUIRE(host->PumpProject(root, PackageActivationBoundary::Quiescent).HasValue());
+            auto progress = application->Query(operation);
+            REQUIRE(progress.HasValue());
+            if (progress.Value().outcome != Horo::Application::PackageOperationOutcome::Running)
+                return std::move(progress).Value();
+            std::this_thread::yield();
+        }
+        FAIL("Configured project package request did not finish.");
+        return Horo::Application::PackageOperationSnapshot{};
+    };
+    const auto publication = pump(activated.Value());
+    INFO((publication.diagnostic ? publication.diagnostic->message : ""));
+    REQUIRE(publication.outcome == Horo::Application::PackageOperationOutcome::Succeeded);
+    const auto stamp = host->DecisionCatalog(root);
+    REQUIRE(stamp);
+    REQUIRE(publication.activeGeneration);
+    CHECK(stamp->activation == *publication.activeGeneration);
+    CHECK_FALSE(host->DecisionCatalog(content));
+    CHECK(host->AcquireDecisionNodes(root, {stamp->project + 1, stamp->activation}).HasError());
+    {
+        const auto leaves = host->AcquireDecisionNodes(root, *stamp);
+        REQUIRE(leaves.HasValue());
+        REQUIRE(leaves.Value().size() == 1);
+        REQUIRE(leaves.Value().front()->Contracts().size() == 1);
+        CHECK(leaves.Value().front()->Contracts().front().descriptor.type.Value() == 201);
+    }
+    const auto disable = modal.Submit(generation.Value(), Horo::Application::PackageOperationKind::Disable);
+    REQUIRE(disable.HasValue());
+    REQUIRE(pump(disable.Value()).outcome == Horo::Application::PackageOperationOutcome::Succeeded);
+    CHECK_FALSE(host->DecisionCatalog(root));
+    CHECK(host->AcquireDecisionNodes(root, *stamp).HasError());
+    REQUIRE(modal.Close(generation.Value()).HasValue());
+    REQUIRE(host->Close().HasValue());
 }
 
 TEST_CASE("Verified package custom senses preserve locked identity and revoke before native cleanup", "[packages][sense-provider]") {

@@ -468,12 +468,14 @@ namespace Horo::Editor {
 
     /** @copydoc ProjectGameplayRegistry::BuildDecisionAuthoringGeneration */
     Result<std::shared_ptr<const AI::DecisionNodeGeneration>> ProjectGameplayRegistry::BuildDecisionAuthoringGeneration(
-        const ProjectPackageDecisionNodeSource &packages) const {
+        const std::shared_ptr<const ProjectPackageDecisionNodeSource> &packages) const {
         using Generation = Result<std::shared_ptr<const AI::DecisionNodeGeneration>>;
         try {
             std::vector<std::shared_ptr<const AI::DecisionNodeGeneration>> parents;
             if (packages) {
-                auto acquired = packages();
+                if (!*packages)
+                    return Generation::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+                auto acquired = (*packages)();
                 if (acquired.HasError())
                     return Generation::Failure(acquired.ErrorValue());
                 parents = std::move(acquired).Value();
@@ -508,7 +510,8 @@ namespace Horo::Editor {
     }
 
     /** @copydoc ProjectGameplayRegistry::RefreshDecisionAuthoringCatalog */
-    Result<void> ProjectGameplayRegistry::RefreshDecisionAuthoringCatalog(const ProjectPackageDecisionNodeSource &packages) {
+    Result<void> ProjectGameplayRegistry::RefreshDecisionAuthoringCatalog(
+        const std::shared_ptr<const ProjectPackageDecisionNodeSource> &packages) {
         const auto generation = BuildDecisionAuthoringGeneration(packages);
         if (generation.HasError())
             return Result<void>::Failure(generation.ErrorValue());
@@ -526,7 +529,9 @@ namespace Horo::Editor {
     }
 
     /** @copydoc ProjectGameplayRegistry::ReplacePackageDecisionNodeSource */
-    Result<void> ProjectGameplayRegistry::ReplacePackageDecisionNodeSource(ProjectPackageDecisionNodeSource source) {
+    Result<void> ProjectGameplayRegistry::ReplacePackageDecisionNodeSource(std::shared_ptr<const ProjectPackageDecisionNodeSource> source) {
+        if (source == packageDecisionNodes_)
+            return Result<void>::Success();
         if (auto refreshed = RefreshDecisionAuthoringCatalog(source); refreshed.HasError())
             return refreshed;
         packageDecisionNodes_ = std::move(source);

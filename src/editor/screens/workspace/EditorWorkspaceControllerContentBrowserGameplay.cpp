@@ -128,7 +128,21 @@ namespace Horo::Editor {
         RefreshAvailableBehaviorProjection();
     }
 
+    /** @copydoc EditorWorkspaceController::SetPackageDecisionNodeSource */
+    void EditorWorkspaceController::SetPackageDecisionNodeSource(std::shared_ptr<const ProjectPackageDecisionNodeSource> source) {
+        if (source == m_packageDecisionNodes)
+            return;
+        m_packageDecisionNodes = std::move(source);
+        if (m_gameplayRegistry)
+            RefreshAvailableBehaviorProjection();
+    }
+
     void EditorWorkspaceController::RefreshAvailableBehaviorProjection() {
+        if (const auto catalog = m_gameplayRegistry->ReplacePackageDecisionNodeSource(m_packageDecisionNodes); catalog.HasError()) {
+            // A new package publication cannot retain a catalog for a withdrawn prior activation.
+            static_cast<void>(m_gameplayRegistry->ReplacePackageDecisionNodeSource({}));
+            LOG_WARN("editor.gameplay", "Package Decision catalog rejected: %s", catalog.ErrorValue().code.Value().c_str());
+        }
         ++m_viewModel.availableBehaviorsRevision;
         InvalidateInspectorBehaviorBindings();
         RefreshDecisionTaskChoices();

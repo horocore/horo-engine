@@ -8,8 +8,9 @@
 namespace Horo::Editor {
     /** @copydoc PackageModal::PackageModal */
     PackageModal::PackageModal(const EditorGuiContext &context,
-                               std::function<Result<std::shared_ptr<Application::PackageApplication>>()> acquire)
-        : EditorModal(kTextScope), context_(context), acquire_(std::move(acquire)) {}
+                               std::function<Result<std::shared_ptr<Application::PackageApplication>>()> acquire,
+                               const bool gameplayModuleOwner)
+        : EditorModal(kTextScope), context_(context), acquire_(std::move(acquire)), gameplayModuleOwner_(gameplayModuleOwner) {}
 
     ModalId PackageModal::Id() const {
         return ModalId{0x5041434B41474553ULL};
@@ -108,7 +109,7 @@ namespace Horo::Editor {
     }
 
     /** @brief Parses bounded explicit identity fields; the application authority rechecks selection and trust. */
-    void PackageModal::Activate() {
+    void PackageModal::Activate(const bool gameplayModule) {
         auto package = Packages::HoroPackageId::Parse(package_);
         if (package.HasError()) {
             error_ = package.ErrorValue();
@@ -117,6 +118,12 @@ namespace Horo::Editor {
         auto descriptor = Packages::PackagePath::Parse(descriptor_);
         if (descriptor.HasError()) {
             error_ = descriptor.ErrorValue();
+            return;
+        }
+        if (gameplayModule) {
+            const Packages::EnabledPackageModule selected{std::move(package).Value(), std::move(descriptor).Value(), module_,
+                                                          Extensions::ExtensionModuleRole::RuntimeParticipant};
+            Record(session_->ActivateModules(generation_, std::span{&selected, 1}));
             return;
         }
         const Packages::EnabledPackageExtension selection{std::move(package).Value(), std::move(descriptor).Value()};
@@ -141,8 +148,15 @@ namespace Horo::Editor {
         static_cast<void>(Ui::InputTextControl("##PackageIdentity", package_, 256, context_.theme.fonts));
         Ui::FieldLabel(Text("descriptor").c_str(), context_.theme.fonts);
         static_cast<void>(Ui::InputTextControl("##PackageDescriptor", descriptor_, 1024, context_.theme.fonts));
-        if (button("activate", session_ && !running && !package_.empty() && !descriptor_.empty()))
-            Activate();
+        const bool canActivate = session_ && !running && !package_.empty() && !descriptor_.empty();
+        if (button("activate", canActivate))
+            Activate(false);
+        if (gameplayModuleOwner_) {
+            Ui::FieldLabel(Text("gameplay_module").c_str(), context_.theme.fonts);
+            static_cast<void>(Ui::InputTextControl("##PackageGameplayModule", module_, 256, context_.theme.fonts));
+            if (button("activate_gameplay_module", canActivate && !module_.empty()))
+                Activate(true);
+        }
         if (button("disable", session_ && !running))
             Record(session_->Submit(generation_, Application::PackageOperationKind::Disable));
         if (button("cancel", running)) {

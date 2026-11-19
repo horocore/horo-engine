@@ -14,7 +14,8 @@ namespace Horo::Editor {
         static constexpr GuiLocalizationScope kTextScope{"workspace.packages"};
 
         /** @brief Binds presentation and an explicit project application capability. */
-        PackageModal(const EditorGuiContext &context, std::function<Result<std::shared_ptr<Application::PackageApplication>>()> acquire);
+        PackageModal(const EditorGuiContext &context, std::function<Result<std::shared_ptr<Application::PackageApplication>>()> acquire,
+                     bool gameplayModuleOwner);
         [[nodiscard]] ModalId Id() const override;
         [[nodiscard]] ModalPresentation Presentation() const override;
         [[nodiscard]] ModalClosePolicy ClosePolicy() const override;
@@ -30,12 +31,13 @@ namespace Horo::Editor {
         void DrawPlan();
         void DrawDiagnostic(const Error &error) const;
         void DrawActions();
-        void Activate();
+        void Activate(bool gameplayModule);
         void Record(const Result<Application::PackageOperationId> &result);
         const EditorGuiContext &context_;
         std::function<Result<std::shared_ptr<Application::PackageApplication>>()> acquire_;
         std::unique_ptr<PackageModalSession> session_;
         PackageModalGeneration generation_;
+        bool gameplayModuleOwner_{};
 
         struct PlanRow final {
             std::string package;
@@ -47,6 +49,7 @@ namespace Horo::Editor {
         std::vector<PlanRow> planRows_;
         std::string package_;
         std::string descriptor_;
+        std::string module_;
         std::optional<Error> error_;
     };
 }  // namespace Horo::Editor

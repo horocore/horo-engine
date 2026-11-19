@@ -228,16 +228,20 @@ TEST_CASE("project Decision catalog admits and withdraws the exact package leave
             return Result<Leaves>::Failure(captured.ErrorValue());
         return Result<Leaves>::Success({std::move(captured).Value()});
     };
-    REQUIRE(registry->ReplacePackageDecisionNodeSource(source).HasValue());
+    const auto boundSource = std::make_shared<const Editor::ProjectPackageDecisionNodeSource>(source);
+    REQUIRE(registry->ReplacePackageDecisionNodeSource(boundSource).HasValue());
     const auto merged = registry->DecisionUsageMetadata();
     REQUIRE(merged);
+    REQUIRE(registry->ReplacePackageDecisionNodeSource(boundSource).HasValue());
+    CHECK(registry->DecisionUsageMetadata() == merged);
     CHECK(merged->Descriptors().size() == original->Descriptors().size() + 1);
     CHECK(std::ranges::find(merged->Descriptors(), type, &AI::DecisionNodeDescriptor::type) != merged->Descriptors().end());
     const auto generation = registry->AcquireDecisionAuthoringGeneration();
     REQUIRE(generation.HasValue());
     CHECK(generation.Value()->CanAdmit());
 
-    const auto conflicting = registry->ReplacePackageDecisionNodeSource([&source] {
+    const auto conflicting =
+        registry->ReplacePackageDecisionNodeSource(std::make_shared<const Editor::ProjectPackageDecisionNodeSource>([&source] {
         auto acquired = source();
         if (acquired.HasError())
             return acquired;
@@ -245,7 +249,7 @@ TEST_CASE("project Decision catalog admits and withdraws the exact package leave
         const auto duplicate = leaves.front();
         leaves.push_back(duplicate);
         return Result<Leaves>::Success(std::move(leaves));
-    });
+    }));
     REQUIRE(conflicting.HasError());
     CHECK(conflicting.ErrorValue().code.Value() == AI::AIErrors::DecisionAssetDescriptorAmbiguous.code.Value());
     CHECK(registry->DecisionUsageMetadata() == merged);

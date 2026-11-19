@@ -239,6 +239,8 @@ namespace {
                                          "workspace.packages.package",
                                          "workspace.packages.descriptor",
                                          "workspace.packages.activate",
+                                         "workspace.packages.gameplay_module",
+                                         "workspace.packages.activate_gameplay_module",
                                          "workspace.packages.disable",
                                          "workspace.packages.cancel",
                                          "workspace.packages.running",

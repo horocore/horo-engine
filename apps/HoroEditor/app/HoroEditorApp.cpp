@@ -3715,7 +3715,13 @@ namespace Horo::Editor {
                 return packages->Retire(root);
             }, .activationTrustRequired = [&packages](const std::filesystem::path &root) {
                 return packages->ActivationTrustRequired(root);
-            }});
+            }, .decisionCatalog = [&packages](const std::filesystem::path &root) -> std::optional<PackageWorkspaceDecisionCatalog> {
+                if (const auto stamp = packages->DecisionCatalog(root))
+                    return PackageWorkspaceDecisionCatalog{stamp->project, stamp->activation};
+                return std::nullopt;
+            }, .acquireDecisionNodes = [&packages](const std::filesystem::path &root, const PackageWorkspaceDecisionCatalog &stamp) {
+                return packages->AcquireDecisionNodes(root, {stamp.project, stamp.activation});
+            }, .gameplayModuleOwner = packages->HasGameplayModuleOwner()});
             EditorNavigationBakeHost navigationBakes{p.operationServices.operationStore};
             const auto navigationBakeAccess = navigationBakes.Access();
             const NavigationViewportAccess navigationOverlayAccess{.prepare = navigationBakeAccess.prepare,
