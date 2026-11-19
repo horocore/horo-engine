@@ -187,7 +187,7 @@ namespace Horo::Render::Detail {
     void VulkanGraphRuntime::Impl::Encode(const VkCommandBuffer command, const RenderGraphWorkload &workload) const noexcept {
         std::visit([this, command]<typename Operation>(const Operation &operation) noexcept {
             if constexpr (std::is_same_v<Operation, RenderGraphMultiview>) {
-                multiview.Encode(command);
+                multiview[static_cast<std::size_t>(operation.output)].Encode(command);
             } else if constexpr (std::is_same_v<Operation, RenderGraphDepthAttachment>) {
                 native.EncodeDepthAttachment(command, operation, bindings);
             } else if constexpr (std::is_same_v<Operation, RenderGraphBufferCopy>) {

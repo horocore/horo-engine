@@ -4,6 +4,7 @@
 #include "RenderResourceRegistry.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace Horo::Render::Detail {
     namespace {
@@ -106,7 +107,7 @@ namespace Horo::Render::Detail {
     Result<ResolvedMultiviewResources> ResolveMultiviewResources(const std::span<const RenderGraphPassWorkload> workloads,
                                                                  const RenderResourceRegistry &registry) {
         ResolvedMultiviewResources output;
-        std::size_t scenes = 0;
+        std::array<bool, RenderGraphMultiview::MaximumPassesPerFrame> admitted{};
         for (const auto &entry : workloads) {
             if (const auto *reconstruction = std::get_if<RenderGraphNativeReconstruction>(&entry.workload))
                 if (const auto resolved = ResolveReconstructionImages(*reconstruction, output, registry); resolved.HasError())
@@ -115,7 +116,10 @@ namespace Horo::Render::Detail {
                 if (auto resolved = ResolveMaterialRaster(*raster, output, registry); resolved.HasError())
                     return Result<ResolvedMultiviewResources>::Failure(resolved.ErrorValue());
             if (const auto *scene = std::get_if<RenderGraphMultiview>(&entry.workload)) {
-                if (++scenes > 1)
+                const auto outputIndex = static_cast<std::size_t>(scene->output);
+                if (outputIndex >= admitted.size())
+                    return Result<ResolvedMultiviewResources>::Failure(MakeError(MultiviewExtractionErrors::InvalidInput));
+                if (std::exchange(admitted[outputIndex], true))
                     return Result<ResolvedMultiviewResources>::Failure(MakeError(MultiviewExtractionErrors::CapacityExceeded));
                 if (const auto resolved = ResolveScene(*scene, output, registry); resolved.HasError())
                     return Result<ResolvedMultiviewResources>::Failure(resolved.ErrorValue());

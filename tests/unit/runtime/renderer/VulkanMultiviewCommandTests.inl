@@ -14,14 +14,17 @@ struct MultiviewPacket {
     std::array<RenderGraphPassWorkload, 1> workloads{};
     std::array<RenderGraphQueueSubmission, 1> submissions{{{{{1}, {1}, {}, {{1}, 1}}, {0, 1}}}};
     std::uint64_t parameters{}, secondView{};
-    MultiviewPublication publication{1, 1, 1, 1, 11, 1};
+    MultiviewPublication publication{1, 2, 1, 1, 11, 1};
 
     MultiviewPacket(NativeGraphFixture &fixture, const bool instanced, const bool motion = false,
-                    const RenderTextureFormat motionFormat = RenderTextureFormat::Rgba16Float)
+                    const RenderTextureFormat motionFormat = RenderTextureFormat::Rgba16Float, const std::uint32_t slotBase = 0)
         : native(fixture, true, motion ? motionFormat : RenderTextureFormat::Rgba8Unorm,
-                 motion ? RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment : RenderTextureUsage::RenderAttachment) {
-        if (motion)
-            ++publication.frame;
+                 motion ? RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment : RenderTextureUsage::RenderAttachment,
+                 slotBase) {
+        const RenderBufferHandle uniformHandle{{1}, slotBase + 5, 1};
+        const RenderTextureHandle colorHandle{{1}, slotBase + 3, 1};
+        const RenderTextureViewHandle firstViewHandle{{1}, slotBase + 4, 1}, secondViewHandle{{1}, slotBase + 6, 1};
+        const RenderMeshHandle meshHandle{{1}, slotBase + 2, 1};
         const std::size_t parameterBytes = motion ? 256 : 224;
         auto layout = MultiviewTest::Layout();
         if (motion) {
@@ -43,13 +46,13 @@ struct MultiviewPacket {
                                              .revision = 1,
                                              .pipeline = {{1}, 10, 1},
                                              .layout = std::move(layout),
-                                             .resources = {{{1}, 0, MaterialBufferBinding{{{1}, 5, 1}, 0, parameterBytes}}}};
+                                             .resources = {{{1}, 0, MaterialBufferBinding{uniformHandle, 0, parameterBytes}}}};
         const auto published = table->Publish(descriptor);
         REQUIRE(published.HasValue());
         material = SubmissionTest::Take(table->Acquire(published.Value().binding));
         const std::array sourceViews{MultiviewSceneView{0, Horo::Math::Mat4::Identity()},
                                      MultiviewSceneView{1, Horo::Math::Mat4::Identity()}};
-        const std::array instances{MultiviewSceneInstance{{{1}, 2, 1},
+        const std::array instances{MultiviewSceneInstance{meshHandle,
                                                           material->Id(),
                                                           Horo::Math::Mat4::Identity(),
                                                           {{-0.25F, -0.25F, 0.25F}, {0.25F, 0.25F, 0.75F}}}};
@@ -80,18 +83,18 @@ struct MultiviewPacket {
         REQUIRE(cost.HasValue());
         parameters = SubmissionTest::Take(fixture.resources.CreateBuffer(buffer, data, TestSupport::PlacementFor(cost.Value(), 8)));
         secondView = SubmissionTest::Take(
-            fixture.resources.CreateTextureView({.texture = {{1}, 3, 1}, .format = native.material.state.colorFormat, .baseLayer = 1},
+            fixture.resources.CreateTextureView({.texture = colorHandle, .format = native.material.state.colorFormat, .baseLayer = 1},
                                                 native.texture));
-        const RenderTextureHandle depthHandle = motion ? RenderTextureHandle{{1}, 7, 1} : RenderTextureHandle{};
-        auto prepared = MultiviewTest::Graph({{1}, 3, 1}, {{1}, 1, 1}, {{1}, 2, 1}, {{1}, 5, 1}, depthHandle);
+        const RenderTextureHandle depthHandle = motion ? RenderTextureHandle{{1}, slotBase + 7, 1} : RenderTextureHandle{};
+        auto prepared = MultiviewTest::Graph(colorHandle, {{1}, slotBase + 1, 1}, {{1}, slotBase + 2, 1}, uniformHandle, depthHandle);
         const auto depth = prepared.depth;
         const auto color = prepared.color, vertex = prepared.vertex, index = prepared.index, uniform = prepared.uniform;
         graph.emplace(std::move(prepared.graph));
         const auto pass = graph->Passes().front().pass;
         resources = {{color, native.texture}, {vertex, native.vertex}, {index, native.index}, {uniform, parameters}};
-        meshes = {{{{{1}, 2, 1}, native.mesh}}};
-        views = {{{{1}, 4, 1}, native.view}, {{{1}, 6, 1}, secondView}};
-        targets = {{{color, {}, {{1}, 4, 1}, {}, {0, 0, 8, 8}, 0}, {color, {}, {{1}, 6, 1}, {}, {0, 0, 8, 8}, 1}}};
+        meshes = {{{meshHandle, native.mesh}}};
+        views = {{firstViewHandle, native.view}, {secondViewHandle, secondView}};
+        targets = {{{color, {}, firstViewHandle, {}, {0, 0, 8, 8}, 0}, {color, {}, secondViewHandle, {}, {0, 0, 8, 8}, 1}}};
         if (motion) {
             const RenderTextureDescriptor descriptor{.extent = {8, 8},
                                                      .format = RenderTextureFormat::Depth32Float,
@@ -101,7 +104,7 @@ struct MultiviewPacket {
             const auto texture = SubmissionTest::Take(fixture.resources.CreateTexture(descriptor, {}, TestSupport::PlacementFor(cost, 9)));
             resources.push_back({depth, texture});
             for (std::uint32_t eye = 0; eye < targets.size(); ++eye) {
-                const RenderTextureViewHandle handle{{1}, 8 + eye, 1};
+                const RenderTextureViewHandle handle{{1}, slotBase + 8 + eye, 1};
                 const auto nativeView = SubmissionTest::Take(fixture.resources.CreateTextureView({.texture = depthHandle,
                                                                                                   .format = descriptor.format,
                                                                                                   .aspect = RenderTextureAspect::Depth,
@@ -232,6 +235,133 @@ TEST_CASE("Vulkan motion graph records paired floating and depth attachments onl
         fixture.graph.AbortFrame({1});
 }
 
+/** @brief Rebinds an admitted packet's logical graph identities for the combined graph without changing native targets. */
+void AppendMultiviewPacket(RenderGraphBuilder &builder, MultiviewPacket &packet, const RenderGraphPassRef pass,
+                           std::vector<RenderGraphResourceInstance> &resources, std::vector<RenderGraphImportedState> &initial) {
+    std::vector<RenderGraphResourceId> imported;
+    for (const auto &source : packet.graph->Resources()) {
+        const auto id =
+            source.kind == RenderGraphResourceKind::Texture
+                ? SubmissionTest::Take(builder.ImportTexture(std::get<RenderTextureHandle>(source.binding), source.resourceClass))
+                : SubmissionTest::Take(builder.ImportBuffer(std::get<RenderBufferHandle>(source.binding), source.resourceClass));
+        imported.push_back(id);
+        const auto state = packet.graph->ImportedStates()[source.id.value - 1];
+        initial.push_back({id, state.state, state.contents});
+        const auto instance = std::ranges::find(packet.resources, source.id, &RenderGraphResourceInstance::resource);
+        REQUIRE(instance != packet.resources.end());
+        resources.push_back({id, instance->instance});
+        if (source.kind == RenderGraphResourceKind::Texture)
+            REQUIRE(builder.ExportResource(id).HasValue());
+    }
+    const auto remap = [&imported](const RenderGraphResourceId id) {
+        return id.IsValid() ? imported[id.value - 1] : id;
+    };
+    for (const auto &use : packet.graph->Usages())
+        REQUIRE(builder.AddUsage({pass, remap(use.resource), use.access, use.kind}).HasValue());
+    for (auto &target : packet.targets) {
+        target.color = remap(target.color);
+        target.depth = remap(target.depth);
+    }
+    for (auto &draw : packet.geometry) {
+        draw.vertices = remap(draw.vertices);
+        draw.indices = remap(draw.indices);
+        draw.parameters = remap(draw.parameters);
+    }
+}
+
+TEST_CASE("Vulkan projection and asymmetric motion depth use their own prepared attachments in one graphics submission",
+          "[vulkan][multiview][motion][command]") {
+    bool duplicate = false;
+    bool invalidDepth = false;
+    bool differentView = false;
+    SECTION("projection plus motion and depth") {}
+    SECTION("duplicate projection cannot reuse the prepared recorder") {
+        duplicate = true;
+    }
+    SECTION("wrong second eye attachment view rejects both passes before recording") {
+        invalidDepth = true;
+    }
+    SECTION("different current eye projection rejects the pair") {
+        differentView = true;
+    }
+
+    NativeGraphFixture fixture;
+    MultiviewPacket color(fixture, false);
+    MultiviewPacket aux(fixture, false, !duplicate, RenderTextureFormat::Rgba16Float, 16);
+    aux.targets.front().rectangle = {0, 0, 6, 8};
+    aux.targets.back().rectangle = {0, 0, 8, 5};
+    if (invalidDepth)
+        aux.targets.back().depthView = aux.targets.front().depthView;
+    if (differentView) {
+        std::array eyes{aux.scene->Views().front(), aux.scene->Views().back()};
+        eyes.back().worldToClip.values[12] = 0.125F;
+        auto other = MultiviewSceneSnapshot::Extract(aux.publication, aux.publication, eyes, aux.scene->Instances(),
+                                                     {32, true, true, false}, MultiviewExecutionPolicy::Multipass);
+        REQUIRE(other.HasValue());
+        aux.Workload().scene = std::make_shared<const MultiviewSceneSnapshot>(std::move(other).Value());
+    }
+    auto builder = SubmissionTest::Take(RenderGraphBuilder::Create());
+    const auto projection = SubmissionTest::Take(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
+    const auto auxiliary = SubmissionTest::Take(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
+    REQUIRE(builder.AddDependency({projection, auxiliary}).HasValue());
+    std::vector<RenderGraphResourceInstance> resources;
+    std::vector<RenderGraphImportedState> initial;
+    AppendMultiviewPacket(builder, color, projection, resources, initial);
+    AppendMultiviewPacket(builder, aux, auxiliary, resources, initial);
+    const auto authored = SubmissionTest::Take(builder.Finalize());
+    const auto schedule = SubmissionTest::Take(CompileRenderGraph(authored));
+    const std::array queues{RenderQueueAssignment{RenderQueueRole::Graphics, {1}}};
+    const auto sync = SubmissionTest::Take(SynthesizeRenderGraphSynchronization(authored, schedule, queues, initial));
+    const auto graph = SubmissionTest::Take(CompileRenderGraphExecution(authored, schedule, sync, queues));
+    const std::array workloads{RenderGraphPassWorkload{projection, color.Workload()}, RenderGraphPassWorkload{auxiliary, aux.Workload()}};
+    const std::array meshes{color.meshes.front(), aux.meshes.front()};
+    auto views = color.views;
+    views.insert(views.end(), aux.views.begin(), aux.views.end());
+    const std::array<RenderGraphQueueSubmission, 1> submissions{{{{{1}, {1}, {}, {{1}, 1}}, {0, 2}}}};
+    RenderGraphLeaseTransfer transfer;
+    REQUIRE(fixture.graph.BeginFrame({1}).HasValue());
+    const RenderGraphExecutionRequest request{{1},   graph,     workloads,   resources, &fixture.lease,
+                                              false, &transfer, submissions, meshes,    views};
+    const auto recorded = fixture.graph.ExecuteGraph(request);
+    if (duplicate || invalidDepth || differentView) {
+        CHECK(recorded.HasError());
+        CHECK(fixture.encoded.renderingCalls.empty());
+        CHECK(fixture.commandState.state.beginCalls == 0);
+        fixture.graph.AbortFrame({1});
+        return;
+    }
+    INFO((recorded.HasError() ? recorded.ErrorValue().message : "paired graph recorded"));
+    REQUIRE(recorded.HasValue());
+    const auto &calls = fixture.encoded.renderingCalls;
+    REQUIRE(calls.size() == 4);
+    CHECK_FALSE(calls[0].depth);
+    CHECK_FALSE(calls[1].depth);
+    CHECK(calls[0].colorView != calls[1].colorView);
+    CHECK(calls[0].colorClear.color.float32[3] == 1.0F);
+    CHECK(calls[2].colorView != calls[3].colorView);
+    CHECK(calls[0].colorView != calls[2].colorView);
+    CHECK(calls[1].colorView != calls[3].colorView);
+    CHECK(calls[2].depth);
+    CHECK(calls[3].depth);
+    CHECK(calls[2].extent.width == 6);
+    CHECK(calls[2].extent.height == 8);
+    CHECK(calls[3].extent.width == 8);
+    CHECK(calls[3].extent.height == 5);
+    CHECK(calls[2].colorClear.color.float32[3] == 0.0F);
+    CHECK(calls[3].colorClear.color.float32[3] == 0.0F);
+    REQUIRE(fixture.encoded.drawCalls.size() == 4);
+    CHECK(fixture.encoded.drawCalls[0].firstView == 0);
+    CHECK(fixture.encoded.drawCalls[1].firstView == 1);
+    CHECK(fixture.encoded.drawCalls[2].firstView == 0);
+    CHECK(fixture.encoded.drawCalls[3].firstView == 1);
+    REQUIRE(fixture.graph.SubmitFrame({1}).HasValue());
+    CHECK(fixture.commandState.state.accepted.size() == 1);
+    CHECK(fixture.commandState.state.waitCalls == 0);
+    fixture.commandState.state.Complete();
+    REQUIRE(fixture.graph.BeginShutdown().HasValue());
+    CHECK(fixture.graph.PollDrain().Value() == RenderBackendDrainProgress::Drained);
+}
+
 TEST_CASE("Vulkan multiview rejects late invalid views materials work bounds and stale owners before any native recording",
           "[vulkan][multiview][command]") {
     NativeGraphFixture fixture;
@@ -252,7 +382,7 @@ TEST_CASE("Vulkan multiview rejects late invalid views materials work bounds and
         packet.Workload().limits.maximumExpandedIndices = 5;
     }
     SECTION("publication replacement") {
-        packet.Workload().active.frame = 2;
+        ++packet.Workload().active.frame;
     }
     SECTION("graph input mapping") {
         packet.resources[1].instance = packet.native.index;

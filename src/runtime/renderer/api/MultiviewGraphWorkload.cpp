@@ -138,10 +138,10 @@ namespace Horo::Render {
             !std::isfinite(workload.depthClear) || workload.depthClear < 0.0F || workload.depthClear > 1.0F ||
             workload.targets.size() != workload.scene->Views().size() || workload.geometry.size() != workload.scene->Draws().size() ||
             request.graph.Resources().size() > RenderGraphLimits::HardMaxResources ||
-            request.meshes.size() > MultiviewExtractionLimits::HardMaximumInstances ||
-            request.views.size() > MultiviewExtractionLimits::HardMaximumViews * 2 || !workload.limits.IsValid())
+            request.meshes.size() > RenderGraphMultiview::MaximumMeshInstances ||
+            request.views.size() > RenderGraphMultiview::MaximumAttachmentViews || !workload.limits.IsValid())
             return Invalid();
-        if (workload.output > MultiviewOutput::MotionDepth ||
+        if (workload.output >= MultiviewOutput::Count ||
             (workload.output == MultiviewOutput::MotionDepth &&
              (workload.scene->Mode() != MultiviewExecutionMode::Multipass || workload.depthClear != 1.0F ||
               workload.clearColor.red != 0.0F || workload.clearColor.green != 0.0F || workload.clearColor.blue != 0.0F ||

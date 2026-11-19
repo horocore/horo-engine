@@ -677,6 +677,10 @@ submission and native release for those exact images. Only a successful native
 projection establishes history. Skipped frames, session or origin replacement,
 and incompatible views, allocations, or prediction times break that history.
 Failed optional inputs leave a separately valid ordinary projection available.
+The Vulkan graph can record one projection pass and one auxiliary motion/depth
+pass in the same graphics submission. It validates the shared publication and
+ordered view transforms before either pass records commands. Each pass owns
+distinct attachments, and the auxiliary pass uses each eye's rectangle.
 
 See the [Khronos space-warp layer contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrCompositionLayerSpaceWarpInfoFB.html)
 for the distinction between runtime motion inputs and internal Renderer UV history.

@@ -58,7 +58,7 @@ namespace Horo::Render::Detail {
             for (auto &pins : retention)
                 pins.resources.reserve(
                     RenderGraphLimits::HardMaxResources + RenderGraphNativeReconstruction::MaximumPassesPerFrame +
-                    (MultiviewExtractionLimits::HardMaximumInstances + MaximumVfxGraphDraws + RenderMaterialPass::MaximumBatchDraws) * 3);
+                    (RenderGraphMultiview::MaximumMeshInstances + MaximumVfxGraphDraws + RenderMaterialPass::MaximumBatchDraws) * 3);
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(
                 MakeError(VulkanBackendErrors::ResourceCreationFailed, "Bounded graph storage allocation failed."));
@@ -94,7 +94,8 @@ namespace Horo::Render::Detail {
                                                          request.timelineDifference, request.deviceIncarnation, request.resolver);
             initialized.HasError())
             return initialized;
-        multiview.Initialize(request.device, request.deviceIncarnation, request.vertexLayerEnabled, request.resolver);
+        for (auto &recorder : multiview)
+            recorder.Initialize(request.device, request.deviceIncarnation, request.vertexLayerEnabled, request.resolver);
         if (request.properties) {
             if (std::ranges::any_of(request.queues, &VulkanCommandQueue::supportsCompute))
                 reconstruction.Initialize(request.device, request.properties->limits, request.frames, request.resolver);
@@ -142,7 +143,6 @@ namespace Horo::Render::Detail {
         slot->resources.clear();
         impl_->lifecycle.pins = std::addressof(*slot);
         impl_->lifecycle.frame = frame;
-        impl_->multiview.Reset();
         impl_->guiPrepared = false;
         impl_->guiRecorded = false;
         return Result<void>::Success();
@@ -308,7 +308,8 @@ namespace Horo::Render::Detail {
 
     void VulkanGraphRuntime::Impl::Abort() noexcept {
         vfxGpu.Abort();
-        multiview.Reset();
+        for (auto &recorder : multiview)
+            recorder.Reset();
         for (const auto &submission : submissions)
             commands.Abort(submission.ticket);
         submissions.clear();
@@ -382,7 +383,7 @@ namespace Horo::Render::Detail {
 
     /** @copydoc VulkanGraphRuntime::MultiviewSupport */
     MultiviewCapabilities VulkanGraphRuntime::MultiviewSupport() const noexcept {
-        return impl_->owner == std::thread::id{} ? MultiviewCapabilities{} : impl_->multiview.Capabilities();
+        return impl_->owner == std::thread::id{} ? MultiviewCapabilities{} : impl_->multiview.front().Capabilities();
     }
 
     /** @copydoc VulkanGraphRuntime::BeginShutdown */

@@ -8,9 +8,9 @@ namespace Horo::Render::Detail {
 
     /** @brief Stack-bounded exact generation mappings; spans are borrowed only during synchronous backend admission. */
     struct ResolvedMultiviewResources final {
-        std::array<RenderGraphMeshInstance, MultiviewExtractionLimits::HardMaximumInstances> meshes;
+        std::array<RenderGraphMeshInstance, RenderGraphMultiview::MaximumMeshInstances> meshes;
         std::array<RenderGraphTextureViewInstance,
-                   MultiviewExtractionLimits::HardMaximumViews * 2 +
+                   RenderGraphMultiview::MaximumAttachmentViews +
                        RenderGraphNativeReconstruction::ImageCount * RenderGraphNativeReconstruction::MaximumPassesPerFrame>
             views;
         std::size_t meshCount{};

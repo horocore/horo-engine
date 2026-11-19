@@ -59,7 +59,8 @@ namespace Horo::Render {
     /** @brief Explicit color/depth layout and reflected shader contract for a multiview pass. */
     enum class MultiviewOutput : std::uint8_t {
         ProjectionColor,
-        MotionDepth /**< Separate multipass signed XYZ motion and matching hardware forward depth. */
+        MotionDepth, /**< Separate multipass signed XYZ motion and matching hardware forward depth. */
+        Count
     };
 
     /** @brief One atomic bounded whole-frame scene workload; all admission precedes encoding any view.
@@ -68,6 +69,10 @@ namespace Horo::Render {
      * Color/depth are cleared exactly once per view and stored; this operation does not publish XR completion itself.
      */
     struct RenderGraphMultiview final {
+        static constexpr std::size_t MaximumPassesPerFrame = static_cast<std::size_t>(MultiviewOutput::Count); /**< One per output. */
+        static constexpr std::size_t MaximumMeshInstances = MultiviewExtractionLimits::HardMaximumInstances * MaximumPassesPerFrame;
+        static constexpr std::size_t MaximumAttachmentViews = MultiviewExtractionLimits::HardMaximumViews * 2 * MaximumPassesPerFrame;
+
         std::shared_ptr<const MultiviewSceneSnapshot> scene;
         MultiviewPublication active;
         std::span<const MultiviewGraphTarget> targets;

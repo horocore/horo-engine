@@ -61,6 +61,8 @@ namespace Horo::Render::Detail {
         materialDrawCount = 0;
         submissions.clear();
         vfxDraws.clear();
+        for (auto &recorder : multiview)
+            recorder.Reset();
         identities.clear();
         for (std::size_t index = 0; index < request.resources.size(); ++index)
             identities.push_back(bindings[index].state);
@@ -183,8 +185,7 @@ namespace Horo::Render::Detail {
         if (const auto *scene = std::get_if<RenderGraphMultiview>(&work)) {
             if (!queue || !queue->supportsGraphics)
                 return Result<void>::Failure(Unsupported("Multiview requires actual graphics queue."));
-            if (const auto prepared = multiview.Prepare(request, *scene, bindings, *resources, pins); prepared.HasError())
-                return prepared;
+            return multiview[static_cast<std::size_t>(scene->output)].Prepare(request, *scene, bindings, *resources, pins);
         }
         if (std::holds_alternative<RenderGraphVfx>(work)) {
             if (!queue || !queue->supportsGraphics)

@@ -333,8 +333,28 @@ namespace Horo::Render {
             return Result<void>::Success();
         }
 
+        /** @brief Compares the producer's exact ordered views while allowing distinct output material generations. */
+        bool SameMultiviewProjection(const RenderGraphMultiview &color, const RenderGraphMultiview &motion) {
+            return color.active == motion.active &&
+                   std::ranges::equal(color.scene->Views(), motion.scene->Views(), [](const auto &a, const auto &b) {
+                return a.index == b.index && a.depthRange == b.depthRange && a.worldToClip == b.worldToClip;
+            });
+        }
+
+        /** @brief Keeps image ownership disjoint across compositor projection and auxiliary outputs. */
+        bool DisjointMultiviewTargets(const RenderGraphMultiview &color, const RenderGraphMultiview &motion) {
+            for (const auto &target : color.targets) {
+                if (std::ranges::any_of(motion.targets, [&](const auto &auxiliary) {
+                    return target.color == auxiliary.color || target.color == auxiliary.depth ||
+                           (target.depth.IsValid() && (target.depth == auxiliary.color || target.depth == auxiliary.depth));
+                }))
+                    return false;
+            }
+            return true;
+        }
+
         Result<void> ValidateTypedWorkloads(const RenderGraphExecutionRequest &request) {
-            std::size_t multiviewCount = 0;
+            std::array<const RenderGraphMultiview *, RenderGraphMultiview::MaximumPassesPerFrame> multiview{};
             std::size_t reconstructionCount = 0;
             for (std::size_t index = 0; index < request.workloads.size(); ++index) {
                 const auto &binding = request.workloads[index];
@@ -344,14 +364,20 @@ namespace Horo::Render {
                 if (auto valid = ValidateTypedPass(request, request.graph.Passes()[index], binding.workload); valid.HasError())
                     return valid;
                 if (const auto *scene = std::get_if<RenderGraphMultiview>(&binding.workload)) {
-                    if (++multiviewCount > 1)
-                        return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload,
-                                                               "One graph admits one complete multiview scene contribution within its "
-                                                               "fixed native scratch envelope."));
                     if (const auto valid = ValidateMultiviewGraphWorkload(request, request.graph.Passes()[index], *scene); valid.HasError())
                         return valid;
+                    auto &output = multiview[static_cast<std::size_t>(scene->output)];
+                    if (output)
+                        return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload,
+                                                               "One graph admits at most one multiview pass for each output."));
+                    output = scene;
                 }
             }
+            const auto *color = multiview[static_cast<std::size_t>(MultiviewOutput::ProjectionColor)];
+            const auto *motion = multiview[static_cast<std::size_t>(MultiviewOutput::MotionDepth)];
+            if (color && motion && (!SameMultiviewProjection(*color, *motion) || !DisjointMultiviewTargets(*color, *motion)))
+                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph,
+                                                       "Paired multiview outputs require the same exact views and disjoint attachments."));
             return Result<void>::Success();
         }
 

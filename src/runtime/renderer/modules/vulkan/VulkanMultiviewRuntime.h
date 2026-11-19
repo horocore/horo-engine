@@ -22,7 +22,7 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> Prepare(const RenderGraphExecutionRequest &request, const RenderGraphMultiview &workload,
                                            std::span<const VulkanGraphResource> resources, VulkanResourceRuntime &registry,
                                            VulkanCommandRetention &retention);
-        /** @brief Records one fully admitted frame into the existing canonical command buffer, without submission or waiting. */
+        /** @brief Records one fully admitted pass into the existing canonical command buffer, without submission or waiting. */
         void Encode(VkCommandBuffer command) const noexcept;
         /** @brief Revokes scratch admission without destroying caller-owned native data or synchronization state. */
         void Reset() noexcept;

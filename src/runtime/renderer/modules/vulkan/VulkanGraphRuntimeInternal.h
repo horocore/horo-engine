@@ -126,7 +126,7 @@ namespace Horo::Render::Detail {
         std::uint64_t deviceIncarnation{};
         VulkanCommandRuntime commands;
         VulkanVfxGpuRuntime vfxGpu;
-        VulkanMultiviewRecorder multiview;
+        std::array<VulkanMultiviewRecorder, RenderGraphMultiview::MaximumPassesPerFrame> multiview;
         VulkanReconstructionRuntime reconstruction;
         std::size_t reconstructionPassCount{};
         VulkanResourceRuntime *resources{};
