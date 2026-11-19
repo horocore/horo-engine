@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Horo/Runtime/Render/UiPaintFrameUpload.h"
 #include "Horo/Runtime/Render/VfxFrameUpload.h"
 #include "Horo/Runtime/Render/VfxGpuKernel.h"
 #include "VulkanCommandRuntime.h"
@@ -33,6 +34,7 @@ namespace Horo::Render::Detail {
         RenderBufferDescriptor bufferDescriptor;
         RenderTextureDescriptor textureDescriptor;
         VulkanGraphResourceState *state{nullptr};
+        VkImageView stencilView{VK_NULL_HANDLE}; /**< Whole depth/stencil attachment view for stencil writes. */
     };
 
     /** @brief Captured whole-image offscreen attachments; command retention owns their native backing. */
@@ -79,6 +81,21 @@ namespace Horo::Render::Detail {
         std::uint64_t revision{};
         std::uint32_t instances{};
         bool published{};
+    };
+
+    /** @brief Exact common publication for the three buffers written together by one Vulkan UI upload. */
+    struct VulkanUiPaintPublication final {
+        std::array<std::uint64_t, 3> members{};
+        std::uint64_t revision{};
+        std::uint32_t vertices{}, indices{}, parameters{};
+
+        [[nodiscard]] bool operator==(const VulkanUiPaintPublication &) const noexcept = default;
+    };
+
+    /** @brief Short read borrow of a live mapped native UI generation during serialized encoding admission. */
+    struct VulkanUiPaintBufferView final {
+        VulkanUiPaintPublication publication;
+        std::span<const std::byte> bytes;
     };
 
     /** @brief Exact existing registry generation retained by a cold native particle inventory; never a second registry. */
@@ -204,6 +221,17 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> UpdateVfxFrame(const NativeVfxFrameUpdate &update, const bool &closing);
         /** @brief Reads accepted publication from the exact live native buffer generation without allocation. */
         [[nodiscard]] Result<VulkanVfxPublication> VfxPublication(std::uint64_t instance) const;
+        /** @brief Validates/maps one exact native buffer family and publishes the whole UI upload atomically.
+         * @param update Frontend-issued exact native identities and portable payload.
+         * @param closing Live device-owner closure fence, checked after native mapping.
+         * @return Success or original validation/cancellation/mapping error without modifying candidate bytes.
+         * @pre Actual Vulkan command owner proved all three earlier submissions retired; facility runs outside a frame. */
+        [[nodiscard]] Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &update, const bool &closing);
+        /** @brief Borrows one native member and its full family publication for exact frame validation.
+         * @param instance Exact live native buffer identifier.
+         * @return Current published family and mapped bytes, or typed invalid/stale failure.
+         * @pre Selected Vulkan owner lane during synchronous encoding admission. */
+        [[nodiscard]] Result<VulkanUiPaintBufferView> ReadUiPaintBuffer(std::uint64_t instance) const;
         /** @brief Checks a borrowed VFX material against the existing shader owner's live pipeline and reflected schema. */
         [[nodiscard]] Result<void> ValidateVfxMaterial(const VulkanPreparedMaterialBinding &material,
                                                        const MaterialBindingLayout &layout) const;

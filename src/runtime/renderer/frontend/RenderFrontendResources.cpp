@@ -128,6 +128,13 @@ namespace Horo::Render {
             return IsDepthCopySourceDescriptor(descriptor) && support.IsValid() && support.Supports(descriptor);
         }
 
+        /** @brief Accepts exact device-proven stencil attachments independently of a primary UI composition capability. */
+        [[nodiscard]] constexpr bool AdmitStencilAttachment(const RenderTextureDescriptor &descriptor,
+                                                              const RenderCapabilitySnapshot &support) noexcept {
+            return descriptor.format == RenderTextureFormat::Depth32FloatStencil8 && IsSingleColorTexture(descriptor) &&
+                   descriptor.usage == RenderTextureUsage::RenderAttachment && support.IsValid() && support.Supports(descriptor);
+        }
+
         /** @brief Checks which closed reconstruction role can use the selected texture format. */
         bool ReconstructionTextureFormat(RenderTextureFormat format, bool storage) noexcept {
             using Image = NativeReconstructionImage;
@@ -159,7 +166,8 @@ namespace Horo::Render {
             return AdmitCurrentTextureDescriptor(descriptor, support.features.Supports(RenderCapability::UiPaint)) ==
                        ResourceDescriptorAdmission::Supported ||
                    AdmitColorTextureDescriptor(descriptor, support) || AdmitDepthCopySourceDescriptor(descriptor, support) ||
-                   AdmitReconstructionTextureDescriptor(descriptor, support) || AdmitStereoCoverageTexture(descriptor, support);
+                   AdmitStencilAttachment(descriptor, support) || AdmitReconstructionTextureDescriptor(descriptor, support) ||
+                   AdmitStereoCoverageTexture(descriptor, support);
         }
 
         [[nodiscard]] ResourceDescriptorAdmission AdmitCurrentTextureViewDescriptor(const RenderTextureViewDescriptor &descriptor,

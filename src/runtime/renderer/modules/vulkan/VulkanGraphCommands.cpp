@@ -297,6 +297,8 @@ namespace Horo::Render::Detail {
             reconstruction.Encode(command, work->dispatch.constants, passes[pass].reconstruction);
         } else if (std::holds_alternative<RenderGraphStereoCoverageReduction>(workload)) {
             coverageReduction.Encode(command, passes[pass].coverageReduction);
+        } else if (const auto *paint = std::get_if<RenderGraphUiPaint>(&workload)) {
+            static_cast<const VulkanUiPaintCommands &>(*paint->kernel).Encode(command, *paint, passes[pass].uiPaint);
         } else if (const auto material = passes[pass].materialRaster) {
             EncodeMaterialPass(command, materialPasses[*material]);
         } else {

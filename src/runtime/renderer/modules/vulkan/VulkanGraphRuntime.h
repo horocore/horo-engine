@@ -4,6 +4,7 @@
  * @brief Device-private translation of canonical graph submissions and resource states.
  */
 #include "VulkanResourceRuntime.h"
+#include "VulkanUiPaintCommands.h"
 
 #include <VulkanEditorGraphicsBridge.h>
 
@@ -77,6 +78,12 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> ExecuteMaterialPass(const RenderMaterialExecutionRequest &request);
         /** @brief Publishes an issued VFX block outside active recording, polling the sole native completion owner. */
         [[nodiscard]] Result<void> UpdateVfxFrame(const NativeVfxFrameUpdate &update);
+        /** @brief Publishes a complete UI slot after polling all three native residents outside active frames. */
+        [[nodiscard]] Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &update);
+        /** @brief Cold-realizes a UI kernel with exact selected physical resource evidence and native renderer dispatch. */
+        [[nodiscard]] Result<std::shared_ptr<IResidentUiPaintKernel>> RealizeUiPaintKernel(
+            const CookedUiPaintKernel &cooked, const VulkanUiPaintDevice &device,
+            const VulkanUiPaintCommands::FormatFeatures &formats, const VulkanShaderRuntime::Resolver &resolve);
         /** @brief Admits the existing GUI completion lease before any executor records native commands. */
         [[nodiscard]] Result<void> PrepareGuiComposition(const GuiCompositionRequest &request);
         /** @brief Records one GUI tail through this frame's sole submission/retention owner. */

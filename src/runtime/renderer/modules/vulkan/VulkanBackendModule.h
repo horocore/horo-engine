@@ -8,6 +8,7 @@
 #include "Horo/Runtime/Render/MaterialBindingErrors.h"
 #include "Horo/Runtime/Render/NativeReconstructionKernel.h"
 #include "Horo/Runtime/Render/RenderBackendRegistry.h"
+#include "Horo/Runtime/Render/UiPaintFrameUpload.h"
 #include "Horo/Runtime/Render/VfxFrameUpload.h"
 #include "VulkanHostGraphicsRequirements.h"
 
@@ -231,6 +232,16 @@ namespace Horo::Render {
         /** @brief Publishes a prepared VFX block only through the canonical command owner's retirement proof. */
         [[nodiscard]] virtual Result<void> UpdateVfxFrame(const NativeVfxFrameUpdate &) {
             return Result<void>::Failure(MakeError(VfxFrameErrors::Unavailable));
+        }
+
+        /** @brief Publishes a complete UI slot through the exact native completion owner. */
+        [[nodiscard]] virtual Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &) {
+            return Result<void>::Failure(MakeError(UiPaintFrameErrors::Unavailable));
+        }
+
+        /** @brief Realizes exact offline UI paint through this device's shared command owner. */
+        [[nodiscard]] virtual Result<std::shared_ptr<IResidentUiPaintKernel>> RealizeUiPaintKernel(const CookedUiPaintKernel &) {
+            return Result<std::shared_ptr<IResidentUiPaintKernel>>::Failure(MakeError(UiPaintFrameErrors::Unavailable));
         }
 
         /** @brief Cold realization through the device's canonical reconstruction command owner. */

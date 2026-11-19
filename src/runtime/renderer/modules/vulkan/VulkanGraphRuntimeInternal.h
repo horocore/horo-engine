@@ -49,6 +49,7 @@ namespace Horo::Render::Detail {
             VulkanPreparedReconstruction reconstruction;
             VulkanPreparedStereoCoverage coverageReduction;
             std::optional<std::size_t> materialRaster;
+            VulkanPreparedUiPaint uiPaint;
         };
 
         struct Update {
@@ -136,6 +137,11 @@ namespace Horo::Render::Detail {
         VulkanReconstructionRuntime reconstruction;
         VulkanStereoCoverageRuntime coverageReduction;
         std::size_t reconstructionPassCount{};
+        static constexpr std::size_t MaximumUiPaintKernels = 8;
+        std::array<std::weak_ptr<VulkanUiPaintCommands>, MaximumUiPaintKernels> uiPaintKernels;
+        std::array<const VulkanUiPaintCommands *, MaximumUiPaintKernels> retainedUiPaintKernels{};
+        std::size_t uiPaintDrawCount{};
+        RenderGraphResourceId uiPaintNeutral;
         VulkanResourceRuntime *resources{};
         std::thread::id owner;
         std::vector<VulkanCommandQueue> queues;
@@ -157,7 +163,7 @@ namespace Horo::Render::Detail {
             bool recorded{false};
             bool closing{false};
             bool failedSubmission{false};
-            bool uploadingVfx{false}; /**< Owner-thread native map borrow; closing revokes admission before retirement. */
+            bool uploading{false}; /**< Owner-thread native map borrow; closing revokes admission before retirement. */
         };
 
         Lifecycle lifecycle;
@@ -303,6 +309,9 @@ namespace Horo::Render::Detail {
         /** @brief Prepares a material raster pass using compiled graph barriers and resident resource provenance. */
         [[nodiscard]] Result<void> PrepareGraphMaterial(const RenderGraphExecutionRequest &, std::size_t pass,
                                                         const RenderGraphMaterialRaster &, VulkanCommandRetention &);
+        /** @brief Prepares one exact native UI pass using its real graph-owned white sample and captured release lease. */
+        [[nodiscard]] Result<void> PrepareUiPaint(const RenderGraphExecutionRequest &, std::size_t pass, const RenderGraphUiPaint &,
+                                                 VulkanCommandRetention &);
         [[nodiscard]] Result<void> PrepareMaterialDraw(const RenderMaterialDrawInstance &source, MaterialDraw &draw,
                                                        const RenderQueueSubmission &submission, bool depthOnly,
                                                        VulkanCommandRetention &pins);

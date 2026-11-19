@@ -116,6 +116,7 @@ namespace Horo::Render {
         struct UiPaintSlotProgram final {
             std::vector<ResourceCreation<RenderTextureHandle>> surfaces;
             ResourceCreation<RenderTextureHandle> stencil;
+            ResourceCreation<RenderTextureHandle> neutralSample;
             std::vector<RenderGraphResourceId> textures;
             std::vector<std::vector<RenderGraphResourceId>> sampled;
             std::optional<CompiledRenderGraphExecution> graph;
@@ -125,6 +126,16 @@ namespace Horo::Render {
             std::array<UiPaintCpuFrame, 2> frames;
             std::uint32_t accepted{};
             std::uint64_t revision{};
+
+            /** @brief Borrows only variable paint draws, excluding a cold-authored neutral initialization pass. */
+            [[nodiscard]] std::span<RenderGraphPassWorkload> PaintWorkloads() noexcept {
+                return std::span{workloads}.subspan(neutralSample.handle.IsValid() ? 1 : 0);
+            }
+
+            /** @copydoc PaintWorkloads */
+            [[nodiscard]] std::span<const RenderGraphPassWorkload> PaintWorkloads() const noexcept {
+                return std::span{workloads}.subspan(neutralSample.handle.IsValid() ? 1 : 0);
+            }
         };
     }  // namespace Detail
 

@@ -47,6 +47,8 @@ namespace Horo::Render {
                     static_cast<void>(Detail::ObserveUiPaintCreation(frontend, surface.operation, surface.handle));
             if (slot.stencil.handle.IsValid())
                 static_cast<void>(Detail::ObserveUiPaintCreation(frontend, slot.stencil.operation, slot.stencil.handle));
+            if (slot.neutralSample.handle.IsValid())
+                static_cast<void>(Detail::ObserveUiPaintCreation(frontend, slot.neutralSample.operation, slot.neutralSample.handle));
         }
 
         /** @brief Clears one local handle only after explicit release succeeds or frontend revocation has removed native authority. */
@@ -66,7 +68,9 @@ namespace Horo::Render {
             for (auto &surface : slot.surfaces)
                 if (const auto released = ReleaseSlotTexture(surface, frontend); released.HasError())
                     return released;
-            return ReleaseSlotTexture(slot.stencil, frontend);
+            if (const auto released = ReleaseSlotTexture(slot.stencil, frontend); released.HasError())
+                return released;
+            return ReleaseSlotTexture(slot.neutralSample, frontend);
         }
     }  // namespace
 
@@ -144,11 +148,17 @@ namespace Horo::Render {
         auto &prepared = *storage_;
         auto &native = prepared.native;
         const auto &descriptor = prepared.descriptor;
-        auto buffers = UiPaintFrameBufferPool::Create(renderer, descriptor.capacity, descriptor.frameSlots);
-        if (buffers.HasError())
-            return Result<void>::Failure(buffers.ErrorValue());
-        native.buffers = std::move(buffers).Value();
-        prepared.frontend = renderer.uiPaintFrontendState_;
+        const auto prepareBuffers = [&](const bool exactSceneKernel) {
+            auto buffers = UiPaintFrameBufferPool::CreateInternal(renderer, descriptor.capacity, descriptor.frameSlots, exactSceneKernel);
+            if (buffers.HasError())
+                return Result<void>::Failure(buffers.ErrorValue());
+            native.buffers = std::move(buffers).Value();
+            prepared.frontend = renderer.uiPaintFrontendState_;
+            return Result<void>::Success();
+        };
+        if (!scene)
+            if (const auto buffers = prepareBuffers(false); buffers.HasError())
+                return buffers;
         if (prepared.target == Detail::UiPaintRootTarget::PrimaryOutput) {
             auto primary = renderer.RealizeUiPaintKernel(kernel);
             if (primary.HasError())
@@ -161,6 +171,11 @@ namespace Horo::Render {
         if (isolated.HasError())
             return Result<void>::Failure(isolated.ErrorValue());
         native.offscreen = std::move(isolated).Value();
+        if (!scene && native.offscreen->RequiresGraphNeutralSample())
+            return Result<void>::Failure(MakeError(UiPaintFrameErrors::Unavailable));
+        if (scene)
+            if (const auto buffers = prepareBuffers(true); buffers.HasError())
+                return buffers;
         native.slots.resize(descriptor.frameSlots);
         for (std::uint32_t slot = 0; slot < descriptor.frameSlots; ++slot) {
             if (cancellation.IsCancellationRequested())
@@ -227,6 +242,8 @@ namespace Horo::Render {
             for (auto &surface : resources.surfaces)
                 observe(surface.operation, surface.handle);
             observe(resources.stencil.operation, resources.stencil.handle);
+            if (resources.neutralSample.handle.IsValid())
+                observe(resources.neutralSample.operation, resources.neutralSample.handle);
         }
         if (failure)
             return Result<void>::Failure(std::move(*failure));
@@ -267,6 +284,9 @@ namespace Horo::Render {
                 return Preparation::Failure(ready.ErrorValue());
         if (const auto ready = owner->frontend->ResourceOperationResult(slot.stencil.operation); ready.HasError())
             return Preparation::Failure(ready.ErrorValue());
+        if (slot.neutralSample.handle.IsValid())
+            if (const auto ready = owner->frontend->ResourceOperationResult(slot.neutralSample.operation); ready.HasError())
+                return Preparation::Failure(ready.ErrorValue());
         for (const auto &image : source.images)
             if (const auto ready = owner->frontend->ResourceOperationResult(image.realization->Creation().operation); ready.HasError())
                 return Preparation::Failure(ready.ErrorValue());
@@ -412,6 +432,8 @@ namespace Horo::Render {
                     state->frontend->RetireOwnedUiPaintTexture(surface.handle, surface.operation);
             if (slot.stencil.handle.IsValid())
                 state->frontend->RetireOwnedUiPaintTexture(slot.stencil.handle, slot.stencil.operation);
+            if (slot.neutralSample.handle.IsValid())
+                state->frontend->RetireOwnedUiPaintTexture(slot.neutralSample.handle, slot.neutralSample.operation);
         }
     }
 

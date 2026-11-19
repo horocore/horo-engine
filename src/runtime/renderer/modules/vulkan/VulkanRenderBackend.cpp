@@ -259,6 +259,23 @@ namespace Horo::Render {
                 return commandPort_->UpdateVfxFrame(update);
             }
 
+            Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &update) override {
+                if (const auto access = CommandAccess(); access.HasError())
+                    return access;
+                if (activeFrame_.IsValid())
+                    return Result<void>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
+                return commandPort_->UpdateUiPaintFrame(update);
+            }
+
+            Result<std::shared_ptr<IResidentUiPaintKernel>> RealizeUiPaintKernel(const CookedUiPaintKernel &cooked) override {
+                using Outcome = Result<std::shared_ptr<IResidentUiPaintKernel>>;
+                if (const auto access = CommandAccess(); access.HasError())
+                    return Outcome::Failure(access.ErrorValue());
+                if (activeFrame_.IsValid())
+                    return Outcome::Failure(MakeError(UiPaintFrameErrors::Unavailable));
+                return commandPort_->RealizeUiPaintKernel(cooked);
+            }
+
             Result<void> Present(const FrameToken frame) override {
                 if (const auto access = CommandAccess(); access.HasError())
                     return access;

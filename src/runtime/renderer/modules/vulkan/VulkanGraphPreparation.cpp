@@ -5,6 +5,25 @@
 namespace Horo::Render::Detail {
 #include "VulkanGraphExternalReleases.inl"
 
+    namespace {
+        /** @brief Verifies that one canonical graph defines the exact neutral pixel before any paint sampling. */
+        Result<RenderGraphResourceId> UiPaintNeutral(const std::span<const RenderGraphPassWorkload> workloads) {
+            using Outcome = Result<RenderGraphResourceId>;
+            if (std::ranges::none_of(workloads, [](const auto &entry) {
+                return std::holds_alternative<RenderGraphUiPaint>(entry.workload);
+            }))
+                return Outcome::Success({});
+            const auto *initial = std::get_if<RenderGraphColorAttachment>(&workloads.front().workload);
+            if (!initial || initial->operations.loadOperation != AttachmentLoadOperation::Clear ||
+                initial->operations.storeOperation != AttachmentStoreOperation::Store || initial->operations.outputColor)
+                return Outcome::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
+            const auto &white = initial->operations.clearColor;
+            if (white.red != 1.0F || white.green != 1.0F || white.blue != 1.0F || white.alpha != 1.0F)
+                return Outcome::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
+            return Outcome::Success(initial->texture);
+        }
+    }  // namespace
+
     /** @brief Validates exact imported generation evidence against native committed state. */
     Result<void> VulkanGraphRuntime::Impl::InitialStates(const RenderGraphExecutionRequest &request) {
         if (request.graph.ImportedStates().size() != request.graph.Resources().size())
@@ -57,6 +76,8 @@ namespace Horo::Render::Detail {
         updates.clear();
         materialPassStateCount = 0;
         reconstructionPassCount = 0;
+        uiPaintDrawCount = 0;
+        retainedUiPaintKernels.fill(nullptr);
         materialPassCount = 0;
         materialDrawCount = 0;
         submissions.clear();
@@ -64,6 +85,10 @@ namespace Horo::Render::Detail {
         for (auto &recorder : multiview)
             recorder.Reset();
         identities.clear();
+        const auto neutral = UiPaintNeutral(request.workloads);
+        if (neutral.HasError())
+            return Result<void>::Failure(neutral.ErrorValue());
+        uiPaintNeutral = neutral.Value();
         for (std::size_t index = 0; index < request.resources.size(); ++index)
             identities.push_back(bindings[index].state);
         std::ranges::sort(identities, std::less<>{});
@@ -264,6 +289,39 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
+    /** @copydoc VulkanGraphRuntime::Impl::PrepareUiPaint */
+    Result<void> VulkanGraphRuntime::Impl::PrepareUiPaint(const RenderGraphExecutionRequest &request, const std::size_t index,
+                                                        const RenderGraphUiPaint &paint, VulkanCommandRetention &pins) {
+        const auto *queue = Queue(request.graph.Passes()[index].queue);
+        if (!queue || !queue->supportsGraphics || paint.neutralSample != uiPaintNeutral)
+            return Result<void>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
+        const auto kernel = std::dynamic_pointer_cast<VulkanUiPaintCommands>(paint.kernel);
+        if (!kernel)
+            return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
+        const auto approved = std::ranges::find_if(uiPaintKernels, [&](const auto &entry) {
+            return entry.lock() == kernel;
+        });
+        if (approved == uiPaintKernels.end())
+            return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
+        const auto ownerIndex = static_cast<std::size_t>(approved - uiPaintKernels.begin());
+        if (!retainedUiPaintKernels[ownerIndex]) {
+            if (pins.resources.size() == pins.resources.capacity())
+                return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceCapacityExceeded));
+            pins.resources.push_back(kernel);
+            retainedUiPaintKernels[ownerIndex] = kernel.get();
+        }
+        const auto frame = static_cast<std::size_t>(&pins - retention.data());
+        const auto prepared = kernel->Prepare(paint, {*resources, request.resources, bindings, states}, frame, uiPaintDrawCount);
+        if (prepared.HasError())
+            return Result<void>::Failure(prepared.ErrorValue());
+        uiPaintDrawCount += paint.draws.size();
+        passes[index].uiPaint = prepared.Value();
+        states[paint.color.value - 1].contentsDefined = true;
+        if (paint.stencil.IsValid())
+            states[paint.stencil.value - 1].contentsDefined = true;
+        return Result<void>::Success();
+    }
+
     Result<void> VulkanGraphRuntime::Impl::PreparePass(const RenderGraphExecutionRequest &request, std::size_t index,
                                                        VulkanCommandRetention &pins) {
         // MaterialState's alias cache belongs to this pass, while updates retains the whole attempt.
@@ -274,11 +332,14 @@ namespace Horo::Render::Detail {
         prepared.reconstruction = {};
         prepared.coverageReduction = {};
         prepared.materialRaster.reset();
+        prepared.uiPaint = {};
         if (const auto valid = ValidatePassUses(request, index); valid.HasError())
             return valid;
         for (const auto &use : request.graph.Usages().subspan(pass.usages.offset, pass.usages.count)) {
             if (use.access == RenderGraphAccess::Read)
                 continue;
+            if (index != 0 && use.resource == uiPaintNeutral)
+                return Result<void>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
             auto &state = states[use.resource.value - 1];
             state.coverageReadbackBytes = 0;
             state.coverageReduction = false;
@@ -302,6 +363,9 @@ namespace Horo::Render::Detail {
             states[work->result.value - 1].coverageReduction = true;
         } else if (const auto *material = std::get_if<RenderGraphMaterialRaster>(&operation)) {
             if (const auto result = PrepareGraphMaterial(request, index, *material, pins); result.HasError())
+                return result;
+        } else if (const auto *paint = std::get_if<RenderGraphUiPaint>(&operation)) {
+            if (const auto result = PrepareUiPaint(request, index, *paint, pins); result.HasError())
                 return result;
         } else if (const auto result = ValidateWorkload(operation, pass.queue); result.HasError()) {
             return result;

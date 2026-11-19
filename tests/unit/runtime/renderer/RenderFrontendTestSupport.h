@@ -48,11 +48,14 @@ namespace Horo::Tests::RenderFrontendTesting {
     /** @brief CPU admission ledger only; never native completion or pixel evidence. */
     struct UiPaintUploadAudit final {
         bool enabled{}, pending{};
+        bool requireGraphNeutralSample{};
+        bool supportsPrimaryUiPaint{true};
         std::size_t updates{}, kernels{};
         std::vector<UiPaintPassAudit> passes;
         std::size_t graphCalls{}, failGraphCall{};
         bool retainAfterAbort{};
         std::function<void()> onGraph; /**< Test-only reentry probe; cleared before its borrowed frame leaves scope. */
+        std::function<void(const RenderGraphExecutionRequest &)> inspectGraph; /**< Synchronous observation of exact admitted graph. */
         std::uint64_t revision{};
         std::array<std::uint64_t, 3> instances{};
     };

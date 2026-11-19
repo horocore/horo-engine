@@ -1,6 +1,8 @@
 #include "Horo/Runtime/Render/NativeReconstructionKernel.h"
 #include "Horo/Runtime/Render/ShaderArtifact.h"
 #include "Horo/Runtime/Render/ShaderReflectionErrors.h"
+#include "Horo/Runtime/Render/UiPaintKernel.h"
+#include "Horo/Runtime/Render/UiPaintWorkload.h"
 #include "ShaderReflectionCookJson.h"
 
 #include <algorithm>
@@ -34,7 +36,7 @@ namespace Horo::Render {
             std::uint8_t columns;
         };
 
-        /** @brief Admits the explicit float viewport shapes and unsigned multiview layer scalar; other types fail closed. */
+        /** @brief Admits the exact supported scalar, vector and matrix shapes from Vulkan raster reflection. */
         Shape ValueShape(const std::string &type) {
             if (type == "float")
                 return {ShaderValueType::Float32, 1, 1};
@@ -42,6 +44,8 @@ namespace Horo::Render {
                 return {ShaderValueType::Uint32, 1, 1};
             if (type.size() == 4 && type.starts_with("vec") && type[3] >= '2' && type[3] <= '4')
                 return {ShaderValueType::Float32, 1, static_cast<std::uint8_t>(type[3] - '0')};
+            if (type.size() == 5 && type.starts_with("uvec") && type[4] >= '2' && type[4] <= '4')
+                return {ShaderValueType::Uint32, 1, static_cast<std::uint8_t>(type[4] - '0')};
             if (type.size() == 4 && type.starts_with("mat") && type[3] >= '2' && type[3] <= '4')
                 return {ShaderValueType::Float32, static_cast<std::uint8_t>(type[3] - '0'), static_cast<std::uint8_t>(type[3] - '0')};
             throw InvalidEvidence{};
@@ -379,6 +383,8 @@ namespace Horo::Render {
                     throw InvalidEvidence{};
                 const auto blockBytes = Unsigned(ubo.at("block_size"));
                 if (blockBytes == 0 || blockBytes > 16U * 1024U * 1024U)
+                    throw InvalidEvidence{};
+                if (manifest_.sourceIdentity == UiPaintShaderSourceIdentity && blockBytes != sizeof(UiPaintParameters))
                     throw InvalidEvidence{};
                 std::array<bool, 512> memberSeen{};
                 for (const auto &member : members) {

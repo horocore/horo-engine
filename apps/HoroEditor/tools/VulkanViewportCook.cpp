@@ -4,6 +4,7 @@
 #include "EditorVulkanViewportShader.h"
 #include "Horo/Platform/ExternalProcess.h"
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
+#include "Horo/Runtime/Render/UiPaintKernel.h"
 #include "ShaderCompilerToolchain.h"
 #include "ShaderReflectionCook.h"
 #include "VulkanReconstructionReleaseCook.h"
@@ -24,6 +25,7 @@ namespace {
     enum class CookMode {
         Viewport,
         CameraCrossFade,
+        RuntimeUiPaint,
         SceneLinear,
         Multiview,
         Shadow,
@@ -50,6 +52,8 @@ namespace {
                 return Editor::EditorVulkanViewportShaderManifest();
             case CameraCrossFade:
                 return Editor::EditorVulkanCameraCrossFadeShaderManifest();
+            case RuntimeUiPaint:
+                return MakeUiPaintShaderManifest(UiPaintVulkanTarget());
             case SceneLinear:
                 return {};  // The signed release and standalone route use their shared complete request.
             case Multiview:
@@ -76,6 +80,8 @@ namespace {
                 return Editor::EditorVulkanViewportReflectionNames();
             case CameraCrossFade:
                 return Editor::EditorVulkanCameraCrossFadeReflectionNames();
+            case RuntimeUiPaint:
+                return UiPaintVulkanReflectionNames();
             case SceneLinear:
                 return {};
             case Multiview:
@@ -95,31 +101,28 @@ namespace {
         return {};
     }
 
-    std::string_view ModeName(CookMode mode) {
-        switch (mode) {
-            using enum CookMode;
-            case Viewport:
-                return "viewport";
-            case CameraCrossFade:
-                return "camera-cross-fade";
-            case SceneLinear:
-                return "scene-linear";
-            case Multiview:
-                return "multiview";
-            case Shadow:
-                return "shadow";
-            case MultiviewMotion:
-                return "multiview-motion";
-            case MultiviewCoverage:
-                return "multiview-coverage";
-            case MultiviewCoverageReduction:
-                return "multiview-coverage-reduction";
-            case TemporalLinearDepth:
-                return "temporal-linear-depth";
-            case TemporalMotion:
-                return "temporal-motion";
-        }
-        return "invalid";
+    struct NamedCookMode final {
+        CookMode mode;
+        std::string_view name;
+    };
+
+    /** @brief Closed names for standalone optional cook roles, shared by parsing and diagnosis. */
+    constexpr std::array NamedCookModes{NamedCookMode{CookMode::CameraCrossFade, "camera-cross-fade"},
+                                        NamedCookMode{CookMode::RuntimeUiPaint, "runtime-ui-paint"},
+                                        NamedCookMode{CookMode::SceneLinear, "scene-linear"},
+                                        NamedCookMode{CookMode::Multiview, "multiview"},
+                                        NamedCookMode{CookMode::Shadow, "shadow"},
+                                        NamedCookMode{CookMode::MultiviewMotion, "multiview-motion"},
+                                        NamedCookMode{CookMode::MultiviewCoverage, "multiview-coverage"},
+                                        NamedCookMode{CookMode::MultiviewCoverageReduction, "multiview-coverage-reduction"},
+                                        NamedCookMode{CookMode::TemporalLinearDepth, "temporal-linear-depth"},
+                                        NamedCookMode{CookMode::TemporalMotion, "temporal-motion"}};
+
+    std::string_view ModeName(const CookMode mode) {
+        if (mode == CookMode::Viewport)
+            return "viewport";
+        const auto named = std::ranges::find(NamedCookModes, mode, &NamedCookMode::mode);
+        return named == NamedCookModes.end() ? "invalid" : named->name;
     }
 
     template <typename T> Result<void> Admit(Result<T> result) {
@@ -202,6 +205,16 @@ namespace {
                 return Admit(Editor::LoadEditorVulkanViewportCook(artifact.payload, metadata));
             case CameraCrossFade:
                 return Admit(Editor::LoadEditorVulkanCameraCrossFadeCook(artifact.payload, metadata));
+            case RuntimeUiPaint: {
+                const auto target = UiPaintVulkanTarget();
+                auto manifest = MakeUiPaintShaderManifest(target);
+                auto decoded = DecodeReflectedShaderArtifact(manifest, target, artifact.payload, metadata);
+                if (decoded.HasError())
+                    return Result<void>::Failure(decoded.ErrorValue());
+                auto bound = artifact;
+                bound.reflection = std::make_shared<const ReflectedShaderArtifact>(std::move(decoded).Value());
+                return Admit(ValidateCookedUiPaintKernel({std::move(manifest), target, std::move(bound)}, target.backend));
+            }
             case SceneLinear:
                 return Admit(Editor::LoadEditorVulkanSceneLinearCook(artifact.payload, metadata));
             case Multiview:
@@ -358,25 +371,12 @@ namespace {
             return Viewport;
         if (argc != 8)
             return std::nullopt;
-        if (std::string_view{argv[7]} == "--scene-linear")
-            return SceneLinear;
-        if (std::string_view{argv[7]} == "--multiview")
-            return Multiview;
-        if (std::string_view{argv[7]} == "--shadow")
-            return Shadow;
-        if (std::string_view{argv[7]} == "--camera-cross-fade")
-            return CameraCrossFade;
-        if (std::string_view{argv[7]} == "--multiview-motion")
-            return MultiviewMotion;
-        if (std::string_view{argv[7]} == "--multiview-coverage")
-            return MultiviewCoverage;
-        if (std::string_view{argv[7]} == "--multiview-coverage-reduction")
-            return MultiviewCoverageReduction;
-        if (std::string_view{argv[7]} == "--temporal-linear-depth")
-            return TemporalLinearDepth;
-        if (std::string_view{argv[7]} == "--temporal-motion")
-            return TemporalMotion;
-        return std::nullopt;
+        auto token = std::string_view{argv[7]};
+        if (!token.starts_with("--"))
+            return std::nullopt;
+        token.remove_prefix(2);
+        const auto named = std::ranges::find(NamedCookModes, token, &NamedCookMode::name);
+        return named == NamedCookModes.end() ? std::nullopt : std::optional{named->mode};
     }
 }  // namespace
 
@@ -392,7 +392,7 @@ int main(int argc, char **argv) {
         std::cerr << "Usage: HoroEditorVulkanShaderCook source.hlsl output-prefix scratch-root dxc spirv-val spirv-cross "
                      "[--scene-linear|--multiview|--multiview-motion|--multiview-coverage|--multiview-coverage-reduction|--shadow|--"
                      "temporal-linear-depth|"
-                     "--temporal-motion|--camera-cross-fade]\n"
+                     "--temporal-motion|--camera-cross-fade|--runtime-ui-paint]\n"
                      "       HoroEditorVulkanShaderCook source.hlsl absolute-new-stage scratch-root dxc spirv-val spirv-cross "
                      "--native-reconstruction candidate-id [--scene-linear-source viewport.hlsl]\n"
                      "       HoroEditorVulkanShaderCook repository absolute-new-stage scratch-root dxc spirv-val spirv-cross "

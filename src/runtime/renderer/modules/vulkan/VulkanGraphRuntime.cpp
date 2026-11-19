@@ -6,13 +6,31 @@
 #include <limits>
 
 namespace Horo::Render::Detail {
+    namespace {
+        /** @brief Prevents another admission from reentering while the native upload owner borrows mapped resources. */
+        struct UploadScope final {
+            bool &active;
+
+            explicit UploadScope(bool &value) noexcept : active(value) {
+                active = true;
+            }
+
+            UploadScope(const UploadScope &) = delete;
+            UploadScope &operator=(const UploadScope &) = delete;
+
+            ~UploadScope() {
+                active = false;
+            }
+        };
+    }  // namespace
+
     /** @copydoc VulkanGraphRuntime::Impl::Access */
     Result<void> VulkanGraphRuntime::Impl::Access(const bool admission) const {
         if (owner == std::thread::id{})
             return Result<void>::Failure(MakeError(VulkanBackendErrors::NotInitialized));
         if (owner != std::this_thread::get_id())
             return Result<void>::Failure(MakeError(VulkanBackendErrors::WrongThread));
-        if (admission && (lifecycle.closing || lifecycle.failedSubmission || lifecycle.uploadingVfx))
+        if (admission && (lifecycle.closing || lifecycle.failedSubmission || lifecycle.uploading))
             return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
         return Result<void>::Success();
     }
@@ -58,7 +76,8 @@ namespace Horo::Render::Detail {
             for (auto &pins : retention)
                 pins.resources.reserve(
                     RenderGraphLimits::HardMaxResources + RenderGraphNativeReconstruction::MaximumPassesPerFrame +
-                    (RenderGraphMultiview::MaximumMeshInstances + MaximumVfxGraphDraws + RenderMaterialPass::MaximumBatchDraws) * 3);
+                    (RenderGraphMultiview::MaximumMeshInstances + MaximumVfxGraphDraws + RenderMaterialPass::MaximumBatchDraws) * 3 +
+                    MaximumUiPaintKernels);
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(
                 MakeError(VulkanBackendErrors::ResourceCreationFailed, "Bounded graph storage allocation failed."));
@@ -170,6 +189,32 @@ namespace Horo::Render::Detail {
         const auto &native = impl_->native;
         return impl_->resources && native.bindPipeline && native.bindSets && native.bindVertices && native.bindIndex && native.viewport &&
                native.scissor && native.drawIndexed;
+    }
+
+    /** @copydoc VulkanGraphRuntime::RealizeUiPaintKernel */
+    Result<std::shared_ptr<IResidentUiPaintKernel>> VulkanGraphRuntime::RealizeUiPaintKernel(
+        const CookedUiPaintKernel &cooked, const VulkanUiPaintDevice &device,
+        const VulkanUiPaintCommands::FormatFeatures &formats, const VulkanShaderRuntime::Resolver &resolve) {
+        using Outcome = Result<std::shared_ptr<IResidentUiPaintKernel>>;
+        if (const auto access = impl_->Access(); access.HasError())
+            return Outcome::Failure(access.ErrorValue());
+        if (impl_->lifecycle.frame.IsValid())
+            return Outcome::Failure(MakeError(UiPaintFrameErrors::Unavailable, "Vulkan UI pipelines require a cold owner safe point."));
+        if (device.incarnation != impl_->deviceIncarnation || !SupportsGraphMaterialRaster())
+            return Outcome::Failure(
+                MakeError(UiPaintFrameErrors::Unavailable, "Selected Vulkan graphics graph owner or device incarnation is unavailable."));
+        const auto free = std::ranges::find_if(impl_->uiPaintKernels, &std::weak_ptr<VulkanUiPaintCommands>::expired);
+        if (free == impl_->uiPaintKernels.end())
+            return Outcome::Failure(MakeError(VulkanBackendErrors::ResourceCapacityExceeded));
+        const UploadScope scope{impl_->lifecycle.uploading};
+        auto created = VulkanUiPaintCommands::Create(device, resolve, cooked, formats, impl_->retention.size());
+        if (created.HasError())
+            return Outcome::Failure(created.ErrorValue());
+        if (impl_->lifecycle.closing)
+            return Outcome::Failure(MakeError(UiPaintFrameErrors::Unavailable));
+        auto kernel = std::move(created).Value();
+        *free = kernel;
+        return Outcome::Success(std::move(kernel));
     }
 
     /** @copydoc VulkanGraphRuntime::SupportsNativeReconstruction */
@@ -408,21 +453,7 @@ namespace Horo::Render::Detail {
         if (impl_->lifecycle.frame.IsValid() || update.deviceIncarnation != impl_->deviceIncarnation)
             return Result<void>::Failure(MakeError(VfxFrameErrors::InvalidInput));
 
-        struct UploadScope final {
-            bool &active;
-
-            explicit UploadScope(bool &value) noexcept : active(value) {}
-
-            UploadScope(const UploadScope &) = delete;
-            UploadScope &operator=(const UploadScope &) = delete;
-
-            ~UploadScope() {
-                active = false;
-            }
-        };
-
-        impl_->lifecycle.uploadingVfx = true;
-        const UploadScope scope{impl_->lifecycle.uploadingVfx};
+        const UploadScope scope{impl_->lifecycle.uploading};
         const auto retired = impl_->ObserveBufferRetirement(update.instance);
         if (retired.HasError())
             return Result<void>::Failure(retired.ErrorValue());
@@ -431,6 +462,23 @@ namespace Horo::Render::Detail {
         if (impl_->lifecycle.closing)
             return Result<void>::Failure(MakeError(VfxFrameErrors::InvalidInput));
         return impl_->resources->UpdateVfxFrame(update, impl_->lifecycle.closing);
+    }
+
+    /** @copydoc VulkanGraphRuntime::UpdateUiPaintFrame */
+    Result<void> VulkanGraphRuntime::UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &update) {
+        if (const auto access = impl_->Access(); access.HasError())
+            return access;
+        if (impl_->lifecycle.frame.IsValid())
+            return Result<void>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
+        const UploadScope scope{impl_->lifecycle.uploading};
+        for (const auto instance : update.instances) {
+            const auto retired = impl_->ObserveBufferRetirement(instance);
+            if (retired.HasError())
+                return Result<void>::Failure(retired.ErrorValue());
+            if (!retired.Value())
+                return Result<void>::Failure(MakeError(UiPaintFrameErrors::Pending));
+        }
+        return impl_->resources->UpdateUiPaintFrame(update, impl_->lifecycle.closing);
     }
 
     /** @copydoc VulkanGraphRuntime::WasSubmissionAccepted */
@@ -481,6 +529,11 @@ namespace Horo::Render::Detail {
                 std::terminate();
         reconstruction.Reset();
         coverageReduction.Reset();
+        for (auto &entry : uiPaintKernels) {
+            if (const auto kernel = entry.lock())
+                kernel->Revoke();
+            entry.reset();
+        }
         resources = nullptr;
         owner = {};
     }
@@ -493,7 +546,7 @@ namespace Horo::Render::Detail {
             return Result<RenderBackendDrainProgress>::Failure(access.ErrorValue());
         if (!impl_->lifecycle.closing)
             return Result<RenderBackendDrainProgress>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
-        if (impl_->lifecycle.uploadingVfx)
+        if (impl_->lifecycle.uploading)
             return Result<RenderBackendDrainProgress>::Success(Pending);
         auto drained = impl_->DrainOwners();
         if (drained.HasValue() && drained.Value() == Drained)

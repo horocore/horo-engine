@@ -4,6 +4,7 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Render/RenderOriginScene.h"
 #include "Horo/Runtime/Render/TemporalHistoryErrors.h"
+#include "Horo/Runtime/Render/UiPaintFrameBufferPool.h"
 #include "Horo/Vfx/CpuParticleSimulator.h"
 #include "Horo/Vfx/GpuParticleSimulator.h"
 #include "Horo/Vfx/VfxWorld.h"
@@ -365,4 +366,5 @@ namespace {
 #include "VulkanReconstructionSceneHistorySmoke.inl"
 #include "VulkanVfxGpuNativeSmoke.inl"
 #include "VulkanVfxInstancedNativeSmoke.inl"
+#include "VulkanUiPaintNativeSmoke.inl"
 }  // namespace

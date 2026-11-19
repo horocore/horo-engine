@@ -19,7 +19,17 @@ namespace Horo::Tests::RenderFrontendTesting {
     };
 
     /** @brief Metadata test resident only; this deliberately does not execute shader code. */
-    class TrackingUiPaintKernel final : public IResidentUiPaintKernel {};
+    class TrackingUiPaintKernel final : public IResidentUiPaintKernel {
+    public:
+        explicit TrackingUiPaintKernel(const bool requiresNeutralSample) : requiresNeutralSample_{requiresNeutralSample} {}
+
+        [[nodiscard]] bool RequiresGraphNeutralSample() const noexcept override {
+            return requiresNeutralSample_;
+        }
+
+    private:
+        bool requiresNeutralSample_;
+    };
 
     class TrackingBackend final : public IRenderBackend, public Detail::IRenderExternalTextureBackend {
     public:
@@ -52,7 +62,8 @@ namespace Horo::Tests::RenderFrontendTesting {
                     RenderTextureUsage::RenderAttachment;
             }
             if (lifecycleState.uiPaint.enabled) {
-                capabilities_.support.features.Enable(RenderCapability::UiPaint);
+                if (lifecycleState.uiPaint.supportsPrimaryUiPaint)
+                    capabilities_.support.features.Enable(RenderCapability::UiPaint);
                 capabilities_.support.features.Enable(RenderCapability::TextureResources);
                 capabilities_.support.limits.maxTextureDimension2D = 16'384;
                 capabilities_.support.formats.sampleCountMask = std::uint64_t{1} << 1;
@@ -163,7 +174,8 @@ namespace Horo::Tests::RenderFrontendTesting {
             if (!lifecycleState.uiPaint.enabled)
                 return IRenderBackend::RealizeUiPaintKernel(kernel);
             ++lifecycleState.uiPaint.kernels;
-            return Result<std::shared_ptr<IResidentUiPaintKernel>>::Success(std::make_shared<TrackingUiPaintKernel>());
+            return Result<std::shared_ptr<IResidentUiPaintKernel>>::Success(
+                std::make_shared<TrackingUiPaintKernel>(lifecycleState.uiPaint.requireGraphNeutralSample));
         }
 
         Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &native) override {
@@ -232,6 +244,8 @@ namespace Horo::Tests::RenderFrontendTesting {
         }
 
         Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request) override {
+            if (const auto &inspect = lifecycleState.uiPaint.inspectGraph)
+                inspect(request);
             if (!request.submissions.empty())
                 return ExecuteExplicitTestGraph(request);
             if (request.role == RenderGraphExecutionRole::UiComposition) {

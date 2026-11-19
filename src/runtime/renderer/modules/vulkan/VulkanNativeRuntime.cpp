@@ -539,6 +539,22 @@ namespace Horo::Render {
                 return graph_.UpdateVfxFrame(update);
             }
 
+            Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &update) override {
+                return graph_.UpdateUiPaintFrame(update);
+            }
+
+            Result<std::shared_ptr<IResidentUiPaintKernel>> RealizeUiPaintKernel(const CookedUiPaintKernel &cooked) override {
+                using Outcome = Result<std::shared_ptr<IResidentUiPaintKernel>>;
+                const auto color = static_cast<std::size_t>(cooked.colorFormat);
+                const auto stencil = static_cast<std::size_t>(cooked.stencilFormat);
+                if (color >= uiPaintFormats_.size() || stencil >= uiPaintFormats_.size())
+                    return Outcome::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
+                auto device = uiPaintDevice_;
+                device.colorFeatures = uiPaintFormats_[color];
+                device.stencilFeatures = uiPaintFormats_[stencil];
+                return graph_.RealizeUiPaintKernel(cooked, device, uiPaintFormats_, dispatch_.getDeviceProcAddr);
+            }
+
 #include "VulkanNativeEditorDelegation.inl"
 
             Result<void> SubmitFrame(const FrameToken frame) override {
@@ -732,12 +748,16 @@ namespace Horo::Render {
                                   "vkGetPhysicalDeviceFormatProperties is required to publish native resource capabilities."));
                 }
                 snapshot.formats.sampleCountMask = std::uint64_t{1} << 1U;
+                uiPaintDevice_ = {.device = device_, .incarnation = incarnation, .limits = properties.limits};
+                uiPaintFormats_.fill(0);
                 const bool reconstruction = computeRole && graph_.SupportsNativeReconstruction();
                 for (const auto format :
-                     {Rgba8Unorm, Rgba16Float, Depth24Stencil8, Depth32Float, R16Float, R32Float, Rg16Float, Rg32Float, Rgba32Float}) {
+                     {Rgba8Unorm, Rgba16Float, Depth24Stencil8, Depth32Float, Depth32FloatStencil8, R16Float, R32Float, Rg16Float,
+                      Rg32Float, Rgba32Float}) {
                     using enum RenderTextureUsage;
                     VkFormatProperties native{};
                     query(device, Detail::VulkanResourceConversion::TextureFormat(format), &native);
+                    uiPaintFormats_[static_cast<std::size_t>(format)] = native.optimalTilingFeatures;
                     auto usage = None;
                     if (reconstruction && (format == Rgba32Float || format == R32Float) &&
                         (native.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0)
@@ -999,6 +1019,8 @@ namespace Horo::Render {
             const std::thread::id editorOwner_{std::this_thread::get_id()};
             Detail::VulkanEditorGraphicsBridge *editorBridge_{};
             std::array<Detail::IVulkanEditorDeviceChild *, 2> editorChildren_{};
+            Detail::VulkanUiPaintDevice uiPaintDevice_;
+            Detail::VulkanUiPaintCommands::FormatFeatures uiPaintFormats_{};
             VkPhysicalDevice editorPhysical_{};
             std::uint32_t editorGraphicsFamily_{};
             std::uint32_t editorFrames_{};

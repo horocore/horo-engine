@@ -39,12 +39,18 @@ namespace Horo::Render {
     /** @copydoc UiPaintFrameBufferPool::Create */
     Result<std::unique_ptr<UiPaintFrameBufferPool>> UiPaintFrameBufferPool::Create(RenderFrontend &frontend, UiPaintFrameBudget budget,
                                                                                    std::uint32_t slots) {
+        return CreateInternal(frontend, budget, slots, false);
+    }
+
+    /** @copydoc UiPaintFrameBufferPool::CreateInternal */
+    Result<std::unique_ptr<UiPaintFrameBufferPool>> UiPaintFrameBufferPool::CreateInternal(
+        RenderFrontend &frontend, UiPaintFrameBudget budget, std::uint32_t slots, const bool exactSceneKernel) {
         using Creation = Result<std::unique_ptr<UiPaintFrameBufferPool>>;
         if (const auto admission = frontend.RequireOpenOwner(); admission.HasError())
             return Creation::Failure(admission.ErrorValue());
         if (!budget.IsValid() || slots == 0 || slots > 8)
             return Creation::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
-        if (!frontend.Capabilities().support.features.Supports(RenderCapability::UiPaint))
+        if (!exactSceneKernel && !frontend.Capabilities().support.features.Supports(RenderCapability::UiPaint))
             return Creation::Failure(MakeError(UiPaintFrameErrors::Unavailable));
         if (slots > frontend.Capabilities().support.limits.maxFramesInFlight)
             return Creation::Failure(MakeError(UiPaintFrameErrors::InvalidInput));

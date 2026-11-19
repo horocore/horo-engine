@@ -49,9 +49,10 @@ namespace Horo::Tests::UiPaintProgramTesting {
     using Runtime::Ui::UiSolidDraw;
 
     /** @brief Establishes the injected backend before constructing its owning fixture member. */
-    inline std::unique_ptr<RenderFrontend> PaintFrontend(bool explicitSubmissions = false) {
+    inline std::unique_ptr<RenderFrontend> PaintFrontend(bool explicitSubmissions = false, bool supportsPrimary = true) {
         lifecycleState = {};
         lifecycleState.uiPaint.enabled = true;
+        lifecycleState.uiPaint.supportsPrimaryUiPaint = supportsPrimary;
         lifecycleState.reconstruction.enabled = explicitSubmissions;
         return CreateTrackingFrontend();
     }
@@ -84,7 +85,8 @@ namespace Horo::Tests::UiPaintProgramTesting {
         std::uint64_t revision{1};
         std::uint64_t frameNumber{1};
 
-        explicit ProgramFixture(bool explicitSubmissions = false) : frontend(PaintFrontend(explicitSubmissions)) {
+        explicit ProgramFixture(bool explicitSubmissions = false, bool supportsPrimary = true)
+            : frontend(PaintFrontend(explicitSubmissions, supportsPrimary)) {
             std::array<std::byte, 64> alpha;
             alpha.fill(std::byte{128});
             texture = UiRequire(frontend->CreateUiMaskTexture(images, image, 0, alpha));

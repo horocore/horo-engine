@@ -119,6 +119,7 @@ namespace Horo::Render {
         std::uint64_t frameRevision{};  /**< Exact accepted reusable vertex/index/uniform slot publication. */
         std::uint32_t firstParameter{}; /**< First 256-byte uniform record used by this pass's ordered draws. */
         UiPaintPassActivity activity{UiPaintPassActivity::Active};
+        RenderGraphResourceId neutralSample; /**< Graph-owned neutral pixel in sampledResources when the exact kernel requires it. */
     };
 
     /** @brief Finite realization and per-pass encoding envelope, independent of backend implementation. */

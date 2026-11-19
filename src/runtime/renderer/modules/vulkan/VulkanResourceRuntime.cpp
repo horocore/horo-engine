@@ -104,6 +104,8 @@ namespace Horo::Render::Detail {
             std::uint64_t vfxRevision{};
             std::uint32_t vfxInstances{};
             bool vfxPublished{};
+            VulkanUiPaintPublication uiPaint;
+            std::uint64_t lastUiPaintRevision{};
             bool coverageInputSealed{};
         };
 
@@ -112,6 +114,7 @@ namespace Horo::Render::Detail {
             RenderTextureDescriptor descriptor;
             VulkanGraphResourceState graphState;
             VkImageView colorView{VK_NULL_HANDLE};
+            VkImageView stencilView{VK_NULL_HANDLE};
             PFN_vkDestroyImageView destroyView{};
             bool borrowedView{};
 
@@ -120,6 +123,8 @@ namespace Horo::Render::Detail {
                     externalSource->RecordNativeRetirement(graphState.logical, graphState.hasNativeState);
                 if (colorView != VK_NULL_HANDLE && !borrowedView)
                     destroyView(this->device, colorView, nullptr);
+                if (stencilView != VK_NULL_HANDLE)
+                    destroyView(this->device, stencilView, nullptr);
             }
         };
 
@@ -322,6 +327,10 @@ namespace Horo::Render::Detail {
                 return true;
             if (initialData.size() > buffer.descriptor.byteSize)
                 return false;
+            if (buffer.mapped) {
+                std::ranges::copy(initialData, static_cast<std::byte *>(buffer.mapped));
+                return true;
+            }
             void *mapped{nullptr};
             if (dispatch.mapMemory(device, buffer.memory, 0, initialData.size(), 0, &mapped) != VK_SUCCESS)
                 return false;
@@ -717,20 +726,27 @@ namespace Horo::Render::Detail {
             allocation != Impl::AllocationFailure::None) {
             return Result<std::uint64_t>::Failure(Impl::AllocationError(allocation, "Texture"));
         }
+        const bool depth = VulkanResourceConversion::IsDepthFormat(descriptor.format);
+        const bool attachment = HasTextureUsage(descriptor.usage, RenderTextureUsage::RenderAttachment);
         if (descriptor.dimension == RenderTextureDimension::TwoD && descriptor.depth == 1 && descriptor.mipCount == 1 &&
-            descriptor.sampleCount == 1 && HasTextureUsage(descriptor.usage, RenderTextureUsage::RenderAttachment)) {
-            const VkImageViewCreateInfo view{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            descriptor.sampleCount == 1 && attachment) {
+            VkImageViewCreateInfo view{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
                                              .image = texture->handle,
                                              .viewType = descriptor.layerCount == 1 ? VK_IMAGE_VIEW_TYPE_2D : VK_IMAGE_VIEW_TYPE_2D_ARRAY,
                                              .format = VulkanResourceConversion::TextureFormat(descriptor.format),
-                                             .subresourceRange = {VulkanResourceConversion::Aspect(
-                                                                      VulkanResourceConversion::IsDepthFormat(descriptor.format)
-                                                                          ? RenderTextureAspect::Depth
-                                                                          : RenderTextureAspect::Color),
+                                             .subresourceRange = {VulkanResourceConversion::Aspect(depth ? RenderTextureAspect::Depth
+                                                                                                          : RenderTextureAspect::Color),
                                                                   0, 1, 0, descriptor.layerCount}};
             if (impl_->dispatch.createImageView(impl_->device, &view, nullptr, &texture->colorView) != VK_SUCCESS)
                 return Result<std::uint64_t>::Failure(
-                    ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Preparing a native graph color attachment view failed."));
+                    ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Preparing the native whole graph texture view failed."));
+            if (attachment && (descriptor.format == RenderTextureFormat::Depth24Stencil8 ||
+                               descriptor.format == RenderTextureFormat::Depth32FloatStencil8)) {
+                view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+                if (impl_->dispatch.createImageView(impl_->device, &view, nullptr, &texture->stencilView) != VK_SUCCESS)
+                    return Result<std::uint64_t>::Failure(
+                        ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Preparing a native stencil attachment view failed."));
+            }
         }
         return impl_->Register(impl_->textures, std::move(texture));
     }
@@ -848,6 +864,7 @@ namespace Horo::Render::Detail {
     }
 
 #include "VulkanMaterialCapture.inl"
+#include "VulkanUiPaintUpload.inl"
 
     /** @copydoc VulkanResourceRuntime::CaptureGraphResources */
     Result<void> VulkanResourceRuntime::CaptureGraphResources(const RenderGraphExecutionRequest &request,
@@ -882,6 +899,7 @@ namespace Horo::Render::Detail {
                         ResourceError(VulkanBackendErrors::ResourceIdentityInvalid, "A graph texture identity is foreign or retired."));
                 captured.image = found->second->handle;
                 captured.colorView = found->second->colorView;
+                captured.stencilView = found->second->stencilView;
                 captured.textureDescriptor = found->second->descriptor;
                 captured.state = &found->second->graphState;
                 retention.resources.push_back(found->second);

@@ -142,6 +142,16 @@ namespace Horo::Render::Test::VfxInstanced {
             return image;
         }
 
+        /** @brief Resolves the only live RGBA8 copy-source image in a fixture that creates exactly one such output. */
+        Image OnlyRgba8CopySource() const {
+            REQUIRE_FALSE(invalid_);
+            const auto candidate = [](const Image &image) {
+                return image.image && image.format == VK_FORMAT_R8G8B8A8_UNORM && (image.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
+            };
+            REQUIRE(std::ranges::count_if(images_, candidate) == 1);
+            return *std::ranges::find_if(images_, candidate);
+        }
+
         /** @brief Returns the only captured reconstruction storage output of the exact format marked for transfer. */
         Image ReconstructedImage(VkFormat format) const {
             REQUIRE_FALSE(invalid_);
@@ -484,14 +494,29 @@ namespace Horo::Render::Test::VfxInstanced {
 
         /** @brief Observes the real RGBA8 image after its GUI sampled queue use and restores that layout. */
         std::vector<std::uint8_t> ReadViewportColor(VkImageView sampledView) {
+            return ReadRgba8Color(loader_.ViewportColor(sampledView), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+        }
+
+        /** @brief Observes the last completed native attachment without introducing a fake sampled graph workload. */
+        std::vector<std::uint8_t> ReadRgba8Attachment(const ObservedLoader::Image &image) {
+            return ReadRgba8Color(image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                  VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+        }
+
+    private:
+        /** @brief Copies exact RGBA8 bytes from their observed native layout and restores that layout. */
+        std::vector<std::uint8_t> ReadRgba8Color(const ObservedLoader::Image &image, VkImageLayout layout, VkPipelineStageFlags stage,
+                                                VkAccessFlags access) {
             REQUIRE(capture_ == Capture::ViewportColor);
-            const auto image = loader_.ViewportColor(sampledView);
+            REQUIRE(image.image);
+            REQUIRE(image.format == VK_FORMAT_R8G8B8A8_UNORM);
+            REQUIRE((image.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0);
             REQUIRE(image.extent.width == Extent.width);
             REQUIRE(image.extent.height == Extent.height);
             REQUIRE(image.extent.depth == Extent.depth);
             Begin();
-            Copy(image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 0, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                 VK_ACCESS_SHADER_READ_BIT);
+            Copy(image.image, VK_IMAGE_ASPECT_COLOR_BIT, layout, 0, stage, access);
             Submit();
             std::vector<std::uint8_t> result(byteCount_);
             void *mapped{};
@@ -502,7 +527,6 @@ namespace Horo::Render::Test::VfxInstanced {
             return result;
         }
 
-    private:
         /** @brief Opens the test-only diagnostic recorder after preparation. */
         void Begin() {
             const VkCommandBufferBeginInfo begin{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,

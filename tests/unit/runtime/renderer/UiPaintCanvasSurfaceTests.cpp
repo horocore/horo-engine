@@ -63,7 +63,9 @@ TEST_CASE("Canvas surface paints an exact sampleable offscreen root through the 
 
 TEST_CASE("Scene graph consumes the exact prepared sampleable canvas in one frame lease", "[renderer][ui-paint][program][canvas-surface]") {
     const bool explicitSubmissions = GENERATE(false, true);
-    ProgramFixture fixture{explicitSubmissions};
+    const bool neutralRequired = GENERATE(false, true);
+    ProgramFixture fixture{explicitSubmissions, !neutralRequired};
+    lifecycleState.uiPaint.requireGraphNeutralSample = neutralRequired;
     const auto geometry = fixture.Extract();
     const std::array textures{fixture.texture->Creation().handle};
     constexpr FramebufferExtent extent{640, 480};
@@ -119,10 +121,14 @@ TEST_CASE("Scene graph consumes the exact prepared sampleable canvas in one fram
 
     auto program = UiRequire(UiPaintProgram::CreateSceneCanvas(*fixture.frontend, descriptor, geometry.SourceSnapshot(), textures,
                                                                CookedUiPaintKernel{}, recipe));
+    CHECK(fixture.frontend->Capabilities().support.features.Supports(RenderCapability::UiPaint) == !neutralRequired);
+    if (neutralRequired)
+        CHECK(UiPaintFrameBufferPool::Create(*fixture.frontend, descriptor.capacity, descriptor.frameSlots).HasError());
+    lifecycleState.uiPaint.requireGraphNeutralSample = false;
     auto kernel = UiRequire(fixture.frontend->RealizeUiPaintKernel({}));
     REQUIRE(fixture.frontend->ProcessResourceRequests().HasValue());
     REQUIRE(program->ValidatePreparation().HasValue());
-    REQUIRE(program->Inventory().passes == 6);
+    REQUIRE(program->Inventory().passes == (neutralRequired ? 7 : 6));
     REQUIRE(consumers[0].canvas != consumers[1].canvas);
     std::array<UiRenderImageBinding, 1> bindings;
     const auto stale = UiRequire(program->Prepare(0, fixture.Submission(*program, geometry, bindings)));
@@ -151,7 +157,29 @@ TEST_CASE("Scene graph consumes the exact prepared sampleable canvas in one fram
     CHECK(program->ExecuteSceneCanvas(frame, prepared, fixture.Submission(*program, geometry, bindings), foreign).HasError());
     CHECK(lifecycleState.graphResources.empty());
     CHECK(lifecycleState.reconstruction.recorded.empty());
+    if (neutralRequired) {
+        lifecycleState.uiPaint.inspectGraph = [&](const RenderGraphExecutionRequest &request) {
+            const auto *clear = std::get_if<RenderGraphColorAttachment>(&request.workloads.front().workload);
+            REQUIRE(clear);
+            CHECK(clear->operations.loadOperation == AttachmentLoadOperation::Clear);
+            CHECK(clear->operations.storeOperation == AttachmentStoreOperation::Store);
+            CHECK(clear->operations.clearColor.red == 1.0F);
+            CHECK(clear->operations.clearColor.green == 1.0F);
+            CHECK(clear->operations.clearColor.blue == 1.0F);
+            CHECK(clear->operations.clearColor.alpha == 1.0F);
+            const auto paintPasses = request.workloads.subspan(1, request.workloads.size() - 2);
+            for (const auto &pass : paintPasses) {
+                const auto &paint = std::get<RenderGraphUiPaint>(pass.workload);
+                CHECK(paint.neutralSample == clear->texture);
+                CHECK(paint.sampledResources.back() == clear->texture);
+                CHECK(paint.frameRevision == 2);
+            }
+            const auto &firstPaint = std::get<RenderGraphUiPaint>(paintPasses.front().workload);
+            CHECK(firstPaint.firstParameter == 0);
+        };
+    }
     REQUIRE(program->ExecuteSceneCanvas(frame, prepared, fixture.Submission(*program, geometry, bindings), workloads).HasValue());
+    lifecycleState.uiPaint.inspectGraph = {};
     CHECK(program->ExecuteSceneCanvas(frame, prepared, fixture.Submission(*program, geometry, bindings), workloads).HasError());
     CHECK(lifecycleState.executeCount == 1);
     if (explicitSubmissions) {
