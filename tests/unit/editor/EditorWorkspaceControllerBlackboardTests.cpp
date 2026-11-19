@@ -1875,6 +1875,34 @@ TEST_CASE("Behavior Tree and Utility New use the current registered native task 
         invalid.score.key = wrongKind;
         edit({.operation = AddConsideration, .option = firstId, .score = invalid});
         CHECK(view.diagnostic.has_value());
+        REQUIRE(view.validation);
+        const auto navigate = [&](std::uint64_t revision, AI::BlackboardKeyId key) {
+            controller.ProcessCommand({.command = EditorWorkspaceViewCommand::OpenDecisionDiagnosticKey,
+                                       .decisionDiagnosticKey = DecisionDiagnosticKeyRequest{{instance, revision}, project.schema, key}});
+        };
+        navigate(view.revision, project.key);
+        CHECK(controller.ViewModel().workspacePanelHost.ActiveDocument() == instance);
+        CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.decision_graph.diagnostic_key_unavailable");
+        navigate(view.revision + 1, wrongKind);
+        CHECK(controller.ViewModel().workspacePanelHost.ActiveDocument() == instance);
+        navigate(view.revision, wrongKind);
+        const auto &blackboard = controller.ViewModel().blackboardDocuments.front();
+        CHECK(controller.ViewModel().contentBrowserOperationError.empty());
+        CHECK(controller.ViewModel().workspacePanelHost.ActiveDocument() == blackboard.snapshot.document.instance);
+        CHECK(blackboard.diagnosticKey == wrongKind);
+        CHECK(blackboard.diagnosticKeyRequest == 1);
+        CHECK(view.graph == original);
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::OpenSourceFile,
+                                   .sourceOpenRequest = SourceOpenRequest{.path = "assets/Working utility.horo_utility",
+                                                                          .origin = SourceOpenOrigin::AssetActivation}});
+        REQUIRE(controller.ViewModel().workspacePanelHost.ActiveDocument() == instance);
+        const auto missingKey = AI::BlackboardKeyId::Create(99).Value();
+        invalid.score.key = missingKey;
+        edit({.operation = AddConsideration, .option = firstId, .score = invalid});
+        REQUIRE(view.validation);
+        navigate(view.revision, missingKey);
+        CHECK(controller.ViewModel().workspacePanelHost.ActiveDocument() == instance);
+        CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.decision_graph.diagnostic_key_missing");
         invalid = risk;
         invalid.schemaSource = {};
         edit({.operation = AddConsideration, .option = firstId, .score = invalid});

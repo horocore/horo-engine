@@ -187,6 +187,7 @@ namespace Horo::Editor {
 
         struct BlackboardViewDraft final {
             BlackboardDocumentFence fence;
+            std::uint64_t diagnosticKeyRequest{};
             AI::BlackboardKeyId selected;
             std::string name;
             std::string numericDefault;

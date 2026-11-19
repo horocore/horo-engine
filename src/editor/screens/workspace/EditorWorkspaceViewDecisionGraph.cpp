@@ -1,5 +1,6 @@
 #include "DecisionGraphCanvasModel.h"
 #include "EditorWorkspaceView.h"
+#include "Horo/AI/DecisionAssetValidation.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
@@ -353,7 +354,25 @@ namespace Horo::Editor {
                 const auto &finding = opened->diagnostic->diagnostics.front();
                 label(std::format("{} · {}", finding.code.Value(), finding.message), Theme::Text());
             }
+            if (opened->validation) {
+                const auto findings = opened->validation->Diagnostics();
+                const auto keyFinding = std::ranges::find_if(findings, [&](const auto &finding) {
+                    const auto &target = finding.target;
+                    return target.asset == opened->graph->asset && target.blackboard == opened->graph->blackboard && target.key.IsValid();
+                });
+                if (keyFinding != findings.end() && Ui::Button({.label = text("workspace.decision_graph.open_diagnostic_key").c_str(),
+                                                                .font = m_context.theme.fonts.sans})) {
+                    outCommand.command = EditorWorkspaceViewCommand::OpenDecisionDiagnosticKey;
+                    outCommand.decisionDiagnosticKey = DecisionDiagnosticKeyRequest{{opened->identity.instance, opened->revision},
+                                                                                    keyFinding->target.blackboard,
+                                                                                    keyFinding->target.key};
+                }
+            }
         }
+        const auto &feedback = viewModel.contentBrowserOperationError;
+        if (feedback == "workspace.decision_graph.diagnostic_key_missing" ||
+            feedback == "workspace.decision_graph.diagnostic_key_unavailable")
+            label(text(feedback), Theme::Warn());
 
         const auto drawTransitionOrder = [&](const AI::StateMachineAssetDescriptor &machine, const AI::StateMachineTransition &transition) {
             const auto order = ProjectStateMachineTransitionOrder(machine, transition);

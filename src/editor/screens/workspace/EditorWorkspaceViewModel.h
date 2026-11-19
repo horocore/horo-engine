@@ -271,6 +271,7 @@ namespace Horo::Editor {
         EditDecisionBehaviorTree,
         EditDecisionUtilityGraph,
         EditDecisionLayout,
+        OpenDecisionDiagnosticKey,
         OpenDiagnosticSource,
         ChangeActivePanel,
         CloseWorkspacePanel,
@@ -642,6 +643,15 @@ namespace Horo::Editor {
         bool usageReviewAvailable{};
         bool reviewingUsages{};
         std::shared_ptr<const Application::BlackboardUsageReview> usageReview;
+        AI::BlackboardKeyId diagnosticKey;
+        std::uint64_t diagnosticKeyRequest{};
+    };
+
+    /** @brief Requests the exact Blackboard target from a published Decision validation finding. */
+    struct DecisionDiagnosticKeyRequest final {
+        DecisionGraphDocumentFence fence;
+        AI::BlackboardSchemaId schema;
+        AI::BlackboardKeyId key;
     };
 
     struct EditorWorkspaceViewCommandData {  // NOSONAR(cpp:S1820) Command payload variant container
@@ -736,6 +746,7 @@ namespace Horo::Editor {
         std::optional<BehaviorTreeEditRequest> behaviorTreeEdit = std::nullopt;
         std::optional<UtilityGraphEditRequest> utilityGraphEdit = std::nullopt;
         std::optional<DecisionGraphLayoutRequest> decisionLayoutEdit = std::nullopt;
+        std::optional<DecisionDiagnosticKeyRequest> decisionDiagnosticKey;
         std::optional<DiagnosticSourceRequest> diagnosticSource = std::nullopt;
         std::optional<CreateGameplayBehaviorRequest> gameplayBehaviorRequest = std::nullopt;
         std::optional<AssetSceneDropRequest> assetSceneDrop = std::nullopt;

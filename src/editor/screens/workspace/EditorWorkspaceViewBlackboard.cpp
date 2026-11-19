@@ -340,8 +340,10 @@ namespace Horo::Editor {
                                     {snapshot.document.instance, snapshot.revision},
                                     outCommand};
         auto &draft = m_blackboardDraft;
-        if (draft.fence.instance != frame.fence.instance)
+        if (draft.fence.instance != frame.fence.instance) {
             draft.selected = {};
+            draft.diagnosticKeyRequest = 0;
+        }
         const auto selected = std::ranges::find_if(rows, [&](const BlackboardSchemaRow &entry) {
             return entry.descriptor.key == draft.selected;
         });
@@ -360,6 +362,16 @@ namespace Horo::Editor {
                 draft.rowIds.push_back(std::to_string(row.descriptor.key.Value()));
             if (!rows.empty())
                 selectRow(rowIndex);
+        }
+        if (draft.diagnosticKeyRequest != document->diagnosticKeyRequest) {
+            draft.diagnosticKeyRequest = document->diagnosticKeyRequest;
+            const auto target = std::ranges::find_if(rows, [&](const auto &row) {
+                return row.descriptor.key == document->diagnosticKey;
+            });
+            if (target != rows.end()) {
+                rowIndex = static_cast<int>(target - rows.begin());
+                selectRow(rowIndex);
+            }
         }
 
         DrawSourceTools(frame, *document);

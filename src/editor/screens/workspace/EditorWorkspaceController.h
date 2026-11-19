@@ -1383,6 +1383,8 @@ namespace Horo::Editor {
         void OpenSourceFile(const SourceOpenRequest &request);
         /** @brief Executes typed state-machine authoring against the active document revision. */
         bool ProcessDecisionGraphEdit(const EditorWorkspaceViewCommandData &cmd);
+        /** @brief Resolves a current finding to a registered Blackboard document and selects its exact key. */
+        void OpenDecisionDiagnosticKey(const DecisionDiagnosticKeyRequest &request);
         /** @brief Saves all dirty intrinsic decision documents through the registered source owner. */
         Result<void> SaveDecisionGraphDocuments();
         /** @brief Records an admitted AI source by its registered identity. */

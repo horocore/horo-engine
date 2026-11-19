@@ -215,6 +215,7 @@ namespace Horo::Editor {
         /** @brief Pins the unique compatible registered Blackboard source before any semantic candidate is admitted. */
         struct CapturedDecisionSchema final {
             std::shared_ptr<const AI::BlackboardSchema> schema;
+            Assets::AssetId asset;
             Sha256Digest digest;
             Assets::AssetCookInputSnapshot inputs;
             std::vector<AI::BlackboardSchemaAuthoringRow> rows;
@@ -229,6 +230,7 @@ namespace Horo::Editor {
             if (inputs.HasError())
                 return Captured::Failure(inputs.ErrorValue());
             std::shared_ptr<const AI::BlackboardSchema> schema;
+            Assets::AssetId asset;
             Sha256Digest digest;
             std::vector<AI::BlackboardSchemaAuthoringRow> rows;
             for (const auto &file : inputs.Value().Sources()) {
@@ -240,13 +242,25 @@ namespace Horo::Editor {
                     continue;
                 if (schema)
                     return Captured::Failure(MakeError(AI::AIErrors::DescriptorConflict));
+                asset = file.record.id;
                 digest = file.sourceDigest;
                 rows = std::move(decoded.Value().rows);
                 schema = std::make_shared<const AI::BlackboardSchema>(std::move(decoded).Value().schema);
             }
             if (!schema)
                 return Captured::Failure(MakeError(Application::DecisionCookErrors::Invalid));
-            return Captured::Success({std::move(schema), digest, std::move(inputs).Value(), std::move(rows)});
+            return Captured::Success({std::move(schema), asset, digest, std::move(inputs).Value(), std::move(rows)});
+        }
+
+        /** @brief Checks a navigation request against the exact active graph and its current compiler report. */
+        bool HasDecisionDiagnosticKey(const DecisionGraphWorkspaceDocument &document, const DecisionDiagnosticKeyRequest &request) {
+            if (document.revision != request.fence.revision || !document.validation || !request.key.IsValid() ||
+                !request.schema.IsValid() || document.graph->blackboard != request.schema)
+                return false;
+            return std::ranges::any_of(document.validation->Diagnostics(), [&](const auto &finding) {
+                const auto &target = finding.target;
+                return target.asset == document.graph->asset && target.blackboard == request.schema && target.key == request.key;
+            });
         }
 
         /** @brief Finds the output declaration owned by the exact installed task contract. */
@@ -1571,6 +1585,11 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::ProcessDecisionGraphEdit */
     bool EditorWorkspaceController::ProcessDecisionGraphEdit(const EditorWorkspaceViewCommandData &cmd) {
+        if (cmd.command == EditorWorkspaceViewCommand::OpenDecisionDiagnosticKey) {
+            if (cmd.decisionDiagnosticKey)
+                OpenDecisionDiagnosticKey(*cmd.decisionDiagnosticKey);
+            return true;
+        }
         const auto route = [this]<typename Request>(const std::optional<Request> &request, std::optional<AI::DecisionPlanKind> family) {
             if (!request)
                 return;
@@ -1591,6 +1610,8 @@ namespace Horo::Editor {
             });
             if (document == documents.end() || (family && document->family != *family))
                 return;
+            if (m_viewModel.contentBrowserOperationError.starts_with("workspace.decision_graph.diagnostic_key_"))
+                m_viewModel.contentBrowserOperationError.clear();
             document->validation.reset();
             try {
                 const auto result = [&] {
@@ -1622,6 +1643,61 @@ namespace Horo::Editor {
             default:
                 return false;
         }
+    }
+
+    /** @copydoc EditorWorkspaceController::OpenDecisionDiagnosticKey */
+    void EditorWorkspaceController::OpenDecisionDiagnosticKey(const DecisionDiagnosticKeyRequest &request) {
+        auto &host = m_viewModel.workspacePanelHost;
+        if (host.ActiveDocument() != request.fence.instance)
+            return;
+        constexpr auto unavailable = "workspace.decision_graph.diagnostic_key_unavailable";
+        auto &feedback = m_viewModel.contentBrowserOperationError;
+        feedback = unavailable;
+        if (m_mutableAssetRegistry)
+            RefreshAssets(m_mutableAssetRegistry->Snapshot());
+        const auto &graphs = m_viewModel.decisionGraphDocuments;
+        const auto graph = std::ranges::find_if(graphs, [&](const auto &document) {
+            return document.identity.instance == request.fence.instance;
+        });
+        if (graph == graphs.end() || !HasDecisionDiagnosticKey(*graph, request))
+            return;
+
+        const auto schema = CaptureDecisionDraftSchema(ProjectRoot(), m_assetRegistry, *graph->graph);
+        if (schema.HasError())
+            return;
+        const auto &captured = schema.Value();
+        if (!std::ranges::binary_search(captured.schema->Keys(), request.key, {}, &AI::BlackboardKeyDescriptor::key)) {
+            feedback = "workspace.decision_graph.diagnostic_key_missing";
+            return;
+        }
+        auto &blackboards = m_viewModel.blackboardDocuments;
+        const auto findDocument = [&] {
+            return std::ranges::find_if(blackboards, [&](const auto &document) {
+                return document.snapshot.source->asset == captured.asset;
+            });
+        };
+        const auto canSelect = [&](const BlackboardWorkspaceDocument &document) {
+            return document.snapshot.sourceDigest == captured.digest && !document.snapshot.conflict &&
+                   document.diagnosticKeyRequest < std::numeric_limits<std::uint64_t>::max() &&
+                   std::ranges::binary_search(document.snapshot.schema->Keys(), request.key, {}, &AI::BlackboardKeyDescriptor::key);
+        };
+        const auto *source = captured.inputs.Find(captured.asset);
+        if (!source || captured.inputs.VerifyUnchanged().HasError())
+            return;
+        if (const auto existing = findDocument(); existing != blackboards.end() && !canSelect(*existing))
+            return;
+        OpenSourceFile({.path = Foundation::Paths::Resolve(ProjectRoot(), source->record.sourcePath),
+                        .origin = SourceOpenOrigin::DiagnosticNavigation,
+                        .mode = SourceOpenMode::EmbeddedOnly});
+        const auto selected = findDocument();
+        if (!feedback.empty() || selected == blackboards.end() || host.ActiveDocument() != selected->snapshot.document.instance ||
+            !canSelect(*selected)) {
+            static_cast<void>(host.FocusDocument(request.fence.instance));
+            feedback = unavailable;
+            return;
+        }
+        selected->diagnosticKey = request.key;
+        ++selected->diagnosticKeyRequest;
     }
 
     /** @copydoc EditorWorkspaceController::DecisionGraphRevisions */
