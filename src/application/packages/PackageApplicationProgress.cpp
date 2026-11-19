@@ -2,7 +2,29 @@
 #include "Horo/Packages/PackageLifecycleErrors.h"
 #include "PackageApplicationInternal.h"
 
+#include <new>
+#include <type_traits>
+
 namespace Horo::Application {
+    namespace {
+        /** @brief Keeps framework callbacks from reentering the operation while its selection is borrowed by lifecycle. */
+        struct PumpScope final {
+            explicit PumpScope(bool &active) noexcept : active_(active) {
+                active_ = true;
+            }
+
+            ~PumpScope() {
+                active_ = false;
+            }
+
+            PumpScope(const PumpScope &) = delete;
+            PumpScope &operator=(const PumpScope &) = delete;
+
+        private:
+            bool &active_;
+        };
+    }  // namespace
+
     using PackageOperations::Failure;
 
     void PackageApplication::Impl::PumpRestore() {
@@ -79,29 +101,48 @@ namespace Horo::Application {
     void PackageApplication::Impl::PumpActivation(const Packages::PackageActivationBoundary boundary) {
         if (cancellation.Token().IsCancellationRequested()) {
             Finish(Result<void>::Failure(Failure("packages.application.cancelled")), true);
-            enabled.clear();
             return;
         }
         if (boundary == Packages::PackageActivationBoundary::Running)
             return;
-        if (enabled.empty() && !lifecycle.Active()) {
+        if (!activation) {
+            Finish(Result<void>::Failure(Failure("packages.application.incomplete_operation")));
+            return;
+        }
+        if (std::visit(
+                [](const auto &selected) {
+            return selected.empty();
+        }, *activation) &&
+            !lifecycle.Active()) {
             Finish(Result<void>::Success());
             return;
         }
         if (auto current = configuration.validateAdmission(); current.HasError()) {
             Finish(std::move(current));
-            enabled.clear();
             return;
         }
-        auto result = lifecycle.Activate(enabled, boundary, cancellation.Token());
-        if (result.HasValue()) {
-            const auto active = lifecycle.Active();
-            operation->activeGeneration = active ? std::optional{active->generation} : std::nullopt;
+        const auto previousAttempt = lifecycle.State().attemptedGeneration;
+        auto result = std::visit([&](const auto &selected) {
+            using Entry = typename std::decay_t<decltype(selected)>::value_type;
+            if constexpr (std::is_same_v<Entry, Packages::EnabledPackageModule>)
+                return lifecycle.ActivateModules(selected, boundary, cancellation.Token());
+            else
+                return lifecycle.Activate(selected, boundary, cancellation.Token());
+        }, *activation);
+        try {
+            auto attempt = lifecycle.State();
+            if (attempt.attemptedGeneration > previousAttempt) {
+                operation->attemptedActivationGeneration = attempt.attemptedGeneration;
+                operation->moduleReports = std::move(attempt.modules);
+            }
+        } catch (const std::bad_alloc &) {
+            // Report allocation must not retry or overwrite a committed activation outcome.
         }
+        const auto active = lifecycle.Active();
+        operation->activeGeneration = active ? std::optional{active->generation} : std::nullopt;
         const bool cancelled =
             result.HasError() && result.ErrorValue().code.Value() == Packages::PackageLifecycleErrors::Cancelled.code.Value();
         Finish(std::move(result), cancelled);
-        enabled.clear();
     }
 
     /** @copydoc PackageApplication::Pump */
@@ -110,9 +151,12 @@ namespace Horo::Application {
             return lane;
         if (impl_->closed)
             return Result<void>::Failure(Failure("packages.application.closed"));
+        if (impl_->pumping)
+            return Result<void>::Failure(Failure("packages.application.busy"));
         if (boundary != Packages::PackageActivationBoundary::Startup && boundary != Packages::PackageActivationBoundary::Quiescent &&
             boundary != Packages::PackageActivationBoundary::Running)
             return Result<void>::Failure(Failure("packages.application.invalid_input"));
+        PumpScope guard{impl_->pumping};
         if (impl_->operation && impl_->operation->outcome == PackageOperationOutcome::Running) {
             if (impl_->restoreOperation)
                 impl_->PumpRestore();

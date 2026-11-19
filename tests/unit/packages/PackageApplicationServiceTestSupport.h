@@ -165,16 +165,21 @@ namespace Horo::Tests::PackageApplicationService {
         bool admissionAllowed{true};
         std::unique_ptr<PackageApplication> application;
 
-        explicit Fixture(bool native = false)
+        explicit Fixture(bool native = false, std::shared_ptr<IPackageModuleHost> moduleHost = {},
+                         const IPackageExtensionTrust *executionTrust = nullptr)
             : graph(native), cache(CreateCache(files, content.Path() / "cache")),
               jobs({.workerCount = 1, .maxQueuedJobs = 8, .ioWorkerCount = 1}), source(graph.bytes),
               install(CreateInstall(files, std::filesystem::canonical(project.Path()))) {
             auto restored = PackageRestoreService::Create(jobs, files, cache, &source);
             REQUIRE(restored.HasValue());
             restore.emplace(std::move(restored).Value());
-            auto activated = PackageLifecycleService::Create(install, trust,
-                                                             {.temporaryRoot = std::filesystem::canonical(content.Path()),
-                                                              .artifactGate = Tests::CreateAcceptingArtifactGate()});
+            PackageLifecycleConfiguration lifecyclePolicy{.temporaryRoot = std::filesystem::canonical(content.Path()),
+                                                          .artifactGate = Tests::CreateAcceptingArtifactGate()};
+            if (moduleHost) {
+                lifecyclePolicy.moduleHosts.push_back(std::move(moduleHost));
+                lifecyclePolicy.moduleRetirements = std::make_shared<PackageModuleRetirementQueue>(4);
+            }
+            auto activated = PackageLifecycleService::Create(install, executionTrust ? *executionTrust : trust, std::move(lifecyclePolicy));
             REQUIRE(activated.HasValue());
             lifecycle = std::move(activated).Value();
             auto created = PackageApplication::Create(jobs, *restore, install, *lifecycle, Configuration());

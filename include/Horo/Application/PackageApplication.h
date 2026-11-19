@@ -50,6 +50,8 @@ namespace Horo::Application {
         std::optional<Error> diagnostic;
         std::optional<std::uint64_t> installedRevision; /**< Actual sealed availability publication, including before activation failure. */
         std::optional<std::uint64_t> activeGeneration;  /**< Actual existing active graph, never inferred from requested enablement. */
+        std::optional<std::uint64_t> attemptedActivationGeneration; /**< Set only when this operation reached a lifecycle attempt. */
+        std::vector<Packages::PackageModuleReport> moduleReports;   /**< Exact attempted role outcomes, including unpublished failures. */
     };
 
     /** @brief Evidence shown by adapters; neither value grants execution trust. */
@@ -83,7 +85,7 @@ namespace Horo::Application {
         std::optional<Packages::ValidatedPackageLockfileV1> lockedPlan; /**< Already validated host project snapshot, when available. */
         std::function<Result<void>()> validateAdmission; /**< Owner-lane current metadata/policy check; retained through Close. */
         const WallClock *wallClock{};                    /**< Host clock retained through Close; mandatory for publisher verification. */
-        std::size_t maximumEnabledDescriptors{64};
+        std::size_t maximumEnabledDescriptors{64};       /**< Application bound for descriptor or module selections. */
     };
 
     /**
@@ -136,7 +138,14 @@ namespace Horo::Application {
          * @return New operation or typed validation/admission failure. */
         [[nodiscard]] Result<PackageOperationId> Activate(std::span<const Packages::EnabledPackageExtension> enabled,
                                                           const CancellationToken &cancellation = {});
-        /** @brief Queues empty enablement without uninstalling content or changing trust.
+        /** @brief Queues an explicit role-aware selection through the same restore/install and activation operation.
+         * @param enabled Exact package/descriptor/module/role identities with required or optional policy.
+         * @param cancellation Parent cancellation.
+         * @return New operation or typed admission failure. Lifecycle selects the owning hosts and enforces trust at the safe point.
+         */
+        [[nodiscard]] Result<PackageOperationId> ActivateModules(std::span<const Packages::EnabledPackageModule> enabled,
+                                                                 const CancellationToken &cancellation = {});
+        /** @brief Queues withdrawal of the current composition without uninstalling content or changing trust.
          * @param cancellation Parent cancellation. @return New operation or typed admission failure. */
         [[nodiscard]] Result<PackageOperationId> Disable(const CancellationToken &cancellation = {});
         /** @brief Advances completed work and, only when quiescent, queued activation without waiting.
@@ -148,9 +157,9 @@ namespace Horo::Application {
         /** @brief Returns the current operation projection without inventing an operation or mutating authorities.
          * @return Current retained operation, empty before admission, or typed owner-lane failure. */
         [[nodiscard]] Result<std::optional<PackageOperationSnapshot>> Current() const;
-        /** @brief Observes whether the current package activation attempt was denied execution trust.
-         * @return True only when the terminal activation failure carries the typed package lifecycle trust-required cause,
-         * or an owner-lane failure. Does not copy operation reports or change activation.
+        /** @brief Observes whether the current activation attempt has authoritative execution trust denial evidence.
+         * @return True for the typed lifecycle trust-required cause in the terminal operation or an independently denied role,
+         * false with no current denial, or typed owner-lane failure. Does not copy operation reports or change activation.
          */
         [[nodiscard]] Result<bool> ActivationTrustRequired() const;
         /** @brief Returns the immutable precomputed plan, with evidence status separate from actual installed/active state.

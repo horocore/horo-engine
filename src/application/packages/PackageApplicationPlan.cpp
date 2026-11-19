@@ -1,6 +1,7 @@
 #include "Horo/Packages/PackageLifecycleErrors.h"
 #include "PackageApplicationInternal.h"
 
+#include <algorithm>
 #include <limits>
 #include <new>
 #include <stdexcept>
@@ -49,9 +50,16 @@ namespace Horo::Application {
             return Result<bool>::Failure(lane.ErrorValue());
         const auto &current = impl_->operation;
         const auto &required = Packages::PackageLifecycleErrors::TrustRequired;
-        return Result<bool>::Success(!impl_->closing && current && current->kind == PackageOperationKind::Activate &&
-                                     current->outcome == PackageOperationOutcome::Failed && current->diagnostic &&
-                                     ErrorChainContains(*current->diagnostic, required.domain, required.code));
+        if (impl_->closing || !current || current->kind != PackageOperationKind::Activate ||
+            current->outcome == PackageOperationOutcome::Cancelled)
+            return Result<bool>::Success(false);
+        if (current->outcome == PackageOperationOutcome::Failed && current->diagnostic &&
+            ErrorChainContains(*current->diagnostic, required.domain, required.code))
+            return Result<bool>::Success(true);
+        return Result<bool>::Success(std::ranges::any_of(current->moduleReports, [&required](const auto &report) {
+            return report.outcome == Packages::PackageModuleOutcome::Denied && report.diagnostic &&
+                   ErrorChainContains(*report.diagnostic, required.domain, required.code);
+        }));
     }
 
     /** @copydoc PackageApplication::Plan */

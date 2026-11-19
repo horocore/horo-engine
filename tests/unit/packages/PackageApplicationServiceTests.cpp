@@ -4,6 +4,94 @@
 
 namespace Horo::Tests::PackageApplicationService {
     namespace {
+        /** @brief Explicit digest-bound test approval for the real role-aware lifecycle. */
+        class ExactRoleTrust final : public IPackageExtensionTrust {
+        public:
+            Result<PackageExtensionTrustApproval> Approve(const PackageRestorePackage &package,
+                                                          const Extensions::ExtensionManifest &) const override {
+                ++calls;
+                return Result<PackageExtensionTrustApproval>::Success(
+                    {package.archive->Digest(), package.archive->PackageManifestDigest(), {.revision = 1}});
+            }
+
+            mutable unsigned calls{};
+        };
+
+        /** @brief Observes the role handoff and real lifecycle retirement without loading fixture bytes. */
+        class TestRoleHost final : public IPackageModuleHost {
+        public:
+            [[nodiscard]] std::string_view Identity() const noexcept override {
+                return "fixture.application.role";
+            }
+
+            [[nodiscard]] bool Supports(const Extensions::ExtensionModuleRole role) const noexcept override {
+                return role == Extensions::ExtensionModuleRole::BackendCapability;
+            }
+
+            Result<std::unique_ptr<IPackageModuleActivation>> Activate(const VerifiedPackageModule &module,
+                                                                       std::span<const std::shared_ptr<IPackageModuleActivation>>,
+                                                                       const CancellationToken &) override {
+                ++activated;
+                if (onActivate)
+                    onActivate();
+                return Result<std::unique_ptr<IPackageModuleActivation>>::Success(std::make_unique<Receipt>(*this, module.Activation()));
+            }
+
+            std::function<void()> onActivate;
+            unsigned activated{}, retired{}, finalized{};
+
+        private:
+            class Receipt final : public IPackageModuleActivation {
+            public:
+                Receipt(TestRoleHost &host, Extensions::ExtensionActivationLease proof) : host_(host), proof_(std::move(proof)) {}
+
+                bool IsActive() const noexcept override {
+                    return !retired_ && proof_.IsUsable();
+                }
+
+                void Retire() noexcept override {
+                    if (!retired_) {
+                        retired_ = true;
+                        ++host_.retired;
+                    }
+                }
+
+                bool Finalize() noexcept override {
+                    if (!retired_)
+                        return false;
+                    ++host_.finalized;
+                    return true;
+                }
+
+            private:
+                TestRoleHost &host_;
+                Extensions::ExtensionActivationLease proof_;
+                bool retired_{};
+            };
+        };
+
+        /** @brief Selects a role explicitly declared in the same verified fixture archive. */
+        EnabledPackageModule SelectedRole(const Fixture &fixture) {
+            return {fixture.graph.package, Parse<PackagePath>("extensions/native/extension.json"), "com.horo.application-fixture.native",
+                    Extensions::ExtensionModuleRole::BackendCapability};
+        }
+
+        /** @brief Advances install work while retaining a running product boundary. */
+        PackageOperationSnapshot WaitForActivation(Fixture &fixture, PackageOperationId operation) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+            while (std::chrono::steady_clock::now() < deadline) {
+                REQUIRE(fixture.application->Pump(PackageActivationBoundary::Running).HasValue());
+                auto snapshot = fixture.application->Query(operation);
+                REQUIRE(snapshot.HasValue());
+                if (snapshot.Value().phase == PackageOperationPhase::Activating ||
+                    snapshot.Value().outcome != PackageOperationOutcome::Running)
+                    return std::move(snapshot).Value();
+                std::this_thread::yield();
+            }
+            FAIL("Restore and install did not reach the activation boundary.");
+            return {};
+        }
+
         TEST_CASE("Package application creation and plan projection do not restore install or approve execution",
                   "[packages][application][ownership]") {
             Fixture fixture;
@@ -138,6 +226,102 @@ namespace Horo::Tests::PackageApplicationService {
             CHECK_FALSE(fixture.application->ActivationTrustRequired().Value());
             CHECK(WaitForTerminal(fixture, replacement.Value()).outcome == PackageOperationOutcome::Succeeded);
             CHECK_FALSE(fixture.application->ActivationTrustRequired().Value());
+        }
+
+        TEST_CASE("Package application commits role-aware selections at its real boundary and retires them through Disable",
+                  "[packages][application][activation][modules]") {
+            ExactRoleTrust trust;
+            auto host = std::make_shared<TestRoleHost>();
+            Fixture fixture{true, host, &trust};
+            auto selected = SelectedRole(fixture);
+            const auto started = fixture.application->ActivateModules(std::span{&selected, 1});
+            REQUIRE(started.HasValue());
+            selected.module.clear();
+            const auto queued = WaitForActivation(fixture, started.Value());
+            REQUIRE(queued.phase == PackageOperationPhase::Activating);
+            CHECK(queued.outcome == PackageOperationOutcome::Running);
+            CHECK(queued.installedRevision);
+            CHECK_FALSE(queued.attemptedActivationGeneration);
+            CHECK(queued.moduleReports.empty());
+            CHECK(trust.calls == 0);
+            CHECK(host->activated == 0);
+            bool reentryRejected{};
+            host->onActivate = [&] {
+                const auto nested = fixture.application->Pump(PackageActivationBoundary::Quiescent);
+                reentryRejected = nested.HasError() && nested.ErrorValue().code.Value() == "packages.application.busy";
+            };
+            const auto result = WaitForTerminal(fixture, started.Value());
+            REQUIRE(result.outcome == PackageOperationOutcome::Succeeded);
+            REQUIRE(result.attemptedActivationGeneration);
+            CHECK(result.attemptedActivationGeneration == result.activeGeneration);
+            REQUIRE(result.moduleReports.size() == 1);
+            CHECK(result.moduleReports[0].module == SelectedRole(fixture).module);
+            CHECK(result.moduleReports[0].host == host->Identity());
+            CHECK(result.moduleReports[0].outcome == PackageModuleOutcome::Active);
+            CHECK(host->activated == 1);
+            CHECK(reentryRejected);
+            CHECK(trust.calls == 1);
+
+            auto missing = SelectedRole(fixture);
+            missing.module = "com.horo.application-fixture.missing";
+            const auto rejected = fixture.application->ActivateModules(std::span{&missing, 1});
+            REQUIRE(rejected.HasValue());
+            const auto failure = WaitForTerminal(fixture, rejected.Value());
+            CHECK(failure.outcome == PackageOperationOutcome::Failed);
+            CHECK(failure.activeGeneration == result.activeGeneration);
+            CHECK(failure.attemptedActivationGeneration > failure.activeGeneration);
+            CHECK(failure.moduleReports.empty());
+            CHECK(host->retired == 0);
+
+            const auto disable = fixture.application->Disable();
+            REQUIRE(disable.HasValue());
+            REQUIRE(fixture.application->Pump(PackageActivationBoundary::Running).HasValue());
+            CHECK(host->retired == 0);
+            const auto disabled = WaitForTerminal(fixture, disable.Value());
+            CHECK(disabled.kind == PackageOperationKind::Disable);
+            REQUIRE(disabled.outcome == PackageOperationOutcome::Succeeded);
+            CHECK(disabled.installedRevision == result.installedRevision);
+            CHECK(disabled.activeGeneration > result.activeGeneration);
+            CHECK(disabled.moduleReports.empty());
+            CHECK(fixture.lifecycle->Active()->modules.empty());
+            CHECK(host->retired == 1);
+            CHECK(host->finalized == 1);
+        }
+
+        TEST_CASE("Package application reports role trust decisions without reusing stale attempt evidence",
+                  "[packages][application][activation][modules]") {
+            auto host = std::make_shared<TestRoleHost>();
+            Fixture fixture{true, host};
+            auto selected = SelectedRole(fixture);
+            SECTION("required trust denial rejects the composition") {}
+            SECTION("optional trust denial remains a visible independent outcome") {
+                selected.requirement = PackageModuleRequirement::Optional;
+            }
+            const auto started = fixture.application->ActivateModules(std::span{&selected, 1});
+            REQUIRE(started.HasValue());
+            const auto result = WaitForTerminal(fixture, started.Value());
+            const bool optional = selected.requirement == PackageModuleRequirement::Optional;
+            CHECK(result.outcome == (optional ? PackageOperationOutcome::Succeeded : PackageOperationOutcome::Failed));
+            CHECK(result.activeGeneration.has_value() == optional);
+            REQUIRE(result.attemptedActivationGeneration);
+            REQUIRE(result.moduleReports.size() == 1);
+            const auto &report = result.moduleReports[0];
+            CHECK(report.generation == *result.attemptedActivationGeneration);
+            CHECK(report.outcome == PackageModuleOutcome::Denied);
+            REQUIRE(report.diagnostic);
+            CHECK(report.diagnostic->code.Value() == PackageLifecycleErrors::TrustRequired.code.Value());
+            CHECK(fixture.application->ActivationTrustRequired().Value());
+            CHECK(host->activated == 0);
+
+            const auto pending = fixture.application->ActivateModules(std::span{&selected, 1});
+            REQUIRE(pending.HasValue());
+            REQUIRE(fixture.application->RequestCancel(pending.Value()).HasValue());
+            const auto cancelled = WaitForTerminal(fixture, pending.Value());
+            CHECK(cancelled.outcome == PackageOperationOutcome::Cancelled);
+            CHECK_FALSE(cancelled.attemptedActivationGeneration);
+            CHECK(cancelled.moduleReports.empty());
+            CHECK_FALSE(fixture.application->ActivationTrustRequired().Value());
+            CHECK(fixture.trust.calls == 1);
         }
 
         TEST_CASE("Package application Close retains blocked work and leaves borrowed authorities open after cancellation",

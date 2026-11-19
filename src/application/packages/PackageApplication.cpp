@@ -46,7 +46,7 @@ namespace Horo::Application {
         restoreOperation.reset();
         installJob.reset();
         completion.reset();
-        enabled.clear();
+        activation.reset();
         return Result<PackageOperationId>::Success(operation->id);
     }
 
@@ -63,6 +63,7 @@ namespace Horo::Application {
         if (result.HasError())
             operation->diagnostic = std::move(result).ErrorValue();
         ++operation->revision;
+        activation.reset();
     }
 
     /** @copydoc PackageApplication::Create */
@@ -158,32 +159,51 @@ namespace Horo::Application {
         }
     }
 
-    /** @copydoc PackageApplication::Activate */
-    Result<PackageOperationId> PackageApplication::Activate(const std::span<const Packages::EnabledPackageExtension> enabled,
-                                                            const CancellationToken &cancellation) {
-        if (const auto valid = impl_->CheckAdmission(); valid.HasError())
+    /** @copydoc PackageApplication::Impl::BeginActivation */
+    Result<PackageOperationId> PackageApplication::Impl::BeginActivation(PackageOperationKind kind, const ActivationRequest &request,
+                                                                         const CancellationToken &parent) {
+        if (const auto valid = CheckAdmission(); valid.HasError())
             return Result<PackageOperationId>::Failure(valid.ErrorValue());
-        if (enabled.size() > impl_->configuration.maximumEnabledDescriptors)
+        const auto count = std::visit([](auto selected) {
+            return selected.size();
+        }, request);
+        if (count > configuration.maximumEnabledDescriptors)
             return Result<PackageOperationId>::Failure(Failure("packages.application.capacity"));
-        std::vector<Packages::EnabledPackageExtension> owned(enabled.begin(), enabled.end());
-        const auto installed = impl_->install.InstalledRecord();
+        auto selection = std::visit([](auto selected) -> ActivationSelection {
+            using Entries = std::vector<typename decltype(selected)::value_type>;
+            return ActivationSelection{std::in_place_type<Entries>, selected.begin(), selected.end()};
+        }, request);
+        const auto installed = install.InstalledRecord();
         const bool needsAvailability =
-            !owned.empty() && (!installed || installed->Graph()->requestHash != impl_->configuration.restore.expectedRequestHash);
-        auto admitted = needsAvailability ? impl_->BeginRestore(PackageOperationKind::Activate, cancellation)
-                                          : impl_->Admit(PackageOperationKind::Activate, cancellation);
-        if (admitted.HasValue() && impl_->operation->outcome == PackageOperationOutcome::Running) {
-            impl_->enabled = std::move(owned);
+            count != 0 && (!installed || installed->Graph()->requestHash != configuration.restore.expectedRequestHash);
+        auto admitted = needsAvailability ? BeginRestore(kind, parent) : Admit(kind, parent);
+        if (admitted.HasValue() && operation->outcome == PackageOperationOutcome::Running) {
+            activation = std::move(selection);
             if (!needsAvailability)
-                impl_->operation->phase = PackageOperationPhase::Activating;
+                operation->phase = PackageOperationPhase::Activating;
         }
         return admitted;
     }
 
+    /** @copydoc PackageApplication::Activate */
+    Result<PackageOperationId> PackageApplication::Activate(const std::span<const Packages::EnabledPackageExtension> enabled,
+                                                            const CancellationToken &cancellation) {
+        return impl_->BeginActivation(PackageOperationKind::Activate, enabled, cancellation);
+    }
+
+    /** @copydoc PackageApplication::ActivateModules */
+    Result<PackageOperationId> PackageApplication::ActivateModules(const std::span<const Packages::EnabledPackageModule> enabled,
+                                                                   const CancellationToken &cancellation) {
+        return impl_->BeginActivation(PackageOperationKind::Activate, enabled, cancellation);
+    }
+
     /** @copydoc PackageApplication::Disable */
     Result<PackageOperationId> PackageApplication::Disable(const CancellationToken &cancellation) {
-        auto result = Activate({}, cancellation);
-        if (result.HasValue())
-            impl_->operation->kind = PackageOperationKind::Disable;
-        return result;
+        if (const auto lane = impl_->CheckLane(); lane.HasError())
+            return Result<PackageOperationId>::Failure(lane.ErrorValue());
+        const auto active = impl_->lifecycle.Active();
+        if (active && !active->modules.empty())
+            return impl_->BeginActivation(PackageOperationKind::Disable, std::span<const Packages::EnabledPackageModule>{}, cancellation);
+        return impl_->BeginActivation(PackageOperationKind::Disable, std::span<const Packages::EnabledPackageExtension>{}, cancellation);
     }
 }  // namespace Horo::Application
