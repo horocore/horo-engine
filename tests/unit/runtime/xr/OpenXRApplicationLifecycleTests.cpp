@@ -2523,14 +2523,35 @@ namespace Horo::Tests::OpenXRApplication {
         const auto device = RequireValue(Viewport::Device(viewport));
         const auto &support = frontend.Capabilities().support;
         const auto cook = ApplicationVulkanFixture::CookMotion();
+        enum class CoverageMode {
+            Absent,
+            Fits,
+            SceneGrew
+        };
+        const auto coverageMode = GENERATE(CoverageMode::Absent, CoverageMode::Fits, CoverageMode::SceneGrew);
+        const bool withCoverage = coverageMode != CoverageMode::Absent;
+        const bool expectCoverage = coverageMode == CoverageMode::Fits;
         viewport.StageXrMotionProgram(
             RequireValue(Editor::LoadEditorVulkanMultiviewMotionCook(cook.compiled.payload,
                                                                      RequireValue(EncodeReflectedShaderArtifact(cook.reflected)))));
         REQUIRE(
             RequireValue(Viewport::PrepareMotionPipeline(viewport, RenderTextureFormat::Rgba16Float, RenderTextureFormat::Depth32Float)));
+        if (withCoverage) {
+            const auto coverage = ApplicationVulkanFixture::CookCoverage();
+            viewport.StageXrCoverageProgram(RequireValue(
+                Editor::LoadEditorVulkanMultiviewCoverageCook(coverage.compiled.payload,
+                                                              RequireValue(EncodeReflectedShaderArtifact(coverage.reflected)))));
+        }
         auto geometry = RequireValue(fixture.source.Port().Capture(fixture.definition.Revision(), fixture.scene->View()));
-        const auto instances = RequireValue(geometry->Update(fixture.scene->View()));
-        REQUIRE(instances.size() == 1);
+        const auto initialInstances = RequireValue(geometry->Update(fixture.scene->View()));
+        REQUIRE(initialInstances.size() == 1);
+        std::vector<RenderStaticMeshInstance> instances(initialInstances.begin(), initialInstances.end());
+        const auto initialObjects = geometry->MotionObjects();
+        std::vector<RenderMotionObjectId> objects(initialObjects.begin(), initialObjects.end());
+        if (coverageMode == CoverageMode::SceneGrew) {
+            instances.push_back(instances.front());
+            objects.push_back(RenderMotionObjectId{objects.front().value + 1});
+        }
         const auto makeImage = [&](const std::uintptr_t native, const FramebufferExtent extent, const RenderTextureFormat format,
                                    const bool isDepth) {
             auto source = std::make_shared<ViewportWriterImage>();
@@ -2552,7 +2573,7 @@ namespace Horo::Tests::OpenXRApplication {
                                            {depthSource->allocation, depthSource->AcquiredState(), depthSource->RequiredFinalState()},
                                            {{{6, 8}, {8, 5}}}};
         RequireValue(Viewport::Prepare(viewport, geometry->Resources(), firstSource->allocation, firstSource->AcquiredState(),
-                                       firstSource->RequiredFinalState(), true, &plan));
+                                       firstSource->RequiredFinalState(), true, &plan, initialInstances.size()));
         const auto first = ImportWriterImage(frontend, firstSource);
         const auto second = ImportWriterImage(frontend, secondSource);
         const auto motion = ImportWriterImage(frontend, motionSource);
@@ -2565,23 +2586,38 @@ namespace Horo::Tests::OpenXRApplication {
         clip.values[14] = 0.5F;
         std::array eyes{MultiviewSceneView{0, clip}, MultiviewSceneView{1, clip}};
         MultiviewPublication publication{1, 1, 1, 1, support.deviceIncarnation, support.capabilityRevision};
-        Viewport::MotionInput motionFrame{{publication, 1, 1'000'000}, geometry->MotionObjects()};
+        Viewport::MotionInput motionFrame{{publication, 1, 1'000'000}, objects};
+        const auto predecessor = motionFrame.frame;
         CHECK(Viewport::Bind(viewport, first.texture, first.views, publication, eyes, instances, &motionFrame,
                              Editor::EditorXrProjectionAlpha::Opaque, &pair)
                   .HasError());
         RequireValue(Viewport::Bind(viewport, first.texture, first.views, publication, eyes, instances, &motionFrame));
         const auto submit = [&](const std::uint64_t sequence) {
+            CHECK_FALSE(Viewport::TakeCoverage(viewport, motionFrame.frame));
             auto frame = RequireValue(frontend.BeginFrame({sequence, {8, 8}}));
             RequireValue(Viewport::Execute(viewport, frame, {}));
             RequireValue(frame.Present());
+            CHECK_FALSE(Viewport::TakeCoverage(viewport, motionFrame.frame));
             vulkan.commandState.state.Complete();
             RequireValue(Viewport::Poll(viewport));
+            if (expectCoverage && sequence == 2) {
+                CHECK_FALSE(Viewport::TakeCoverage(viewport, predecessor));
+                const auto coverage = Viewport::TakeCoverage(viewport, motionFrame.frame);
+                REQUIRE(coverage);
+                CHECK(coverage->frame == motionFrame.frame);
+                CHECK(coverage->predecessor == predecessor);
+                CHECK(coverage->texture.IsValid());
+                CHECK(coverage->eyes.front() != coverage->eyes.back());
+                CHECK(coverage->extent == FramebufferExtent{8, 8});
+                CHECK(coverage->completion.IsValid());
+            }
+            CHECK_FALSE(Viewport::TakeCoverage(viewport, motionFrame.frame));
             // This is the fixture's caller-supplied projection result, independent of any GPU coverage claim.
             Viewport::CompleteMotion(viewport, motionFrame.frame, true);
         };
         submit(1);
         const auto previousDraws = vulkan.encoded.drawCalls.size();
-        REQUIRE(previousDraws == 2);
+        REQUIRE(previousDraws == instances.size() * 2);
         CHECK(fixture.vulkan->port.motionUniformWrites == 0);
         const auto begins = vulkan.encoded.renderingCalls.size();
         ++publication.frame;
@@ -2592,8 +2628,9 @@ namespace Horo::Tests::OpenXRApplication {
         RequireValue(Viewport::Bind(viewport, second.texture, second.views, publication, eyes, instances, &motionFrame,
                                     Editor::EditorXrProjectionAlpha::Opaque, &pair));
         submit(2);
-        CHECK(vulkan.encoded.drawCalls.size() == previousDraws + 4);
-        REQUIRE(vulkan.encoded.renderingCalls.size() == begins + 4);
+        const auto expected = expectCoverage ? 6U : 4U;
+        CHECK(vulkan.encoded.drawCalls.size() == previousDraws + expected * instances.size());
+        REQUIRE(vulkan.encoded.renderingCalls.size() == begins + expected);
         const auto commands = std::span{vulkan.encoded.renderingCalls}.subspan(begins);
         CHECK(commands[2].extent.width == 6);
         CHECK(commands[2].extent.height == 8);
@@ -2603,7 +2640,7 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(commands[3].depth);
         CHECK(commands[2].colorClear.color.float32[3] == 0.0F);
         CHECK(commands[3].colorClear.color.float32[3] == 0.0F);
-        CHECK(fixture.vulkan->port.motionUniformWrites == 1);
+        CHECK(fixture.vulkan->port.motionUniformWrites == (expectCoverage ? 2 : 1) * instances.size());
         CHECK(vulkan.commandState.state.accepted.size() == 2);
         CHECK(vulkan.commandState.state.waitCalls == 0);
         RequireValue(Viewport::Retire(viewport));

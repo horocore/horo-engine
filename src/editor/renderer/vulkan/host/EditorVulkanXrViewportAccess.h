@@ -67,6 +67,7 @@ namespace Horo::Editor {
 
          * @param retainPreviousDepth Current optional policy admits retaining sampled predecessor depth.
          * @param auxiliary Exact optional producer tuple; absent keeps the ordinary graph.
+         * @param coverageDrawCapacity Initial scene instance bound for cold coverage descriptors; zero disables coverage.
          * @return Original owner/resource/graph error or successful preparation before interactive admission.
          */
         [[nodiscard]] static Result<void> Prepare(EditorViewportRendererVulkan &viewport,
@@ -74,7 +75,7 @@ namespace Horo::Editor {
                                                   const Render::RenderTextureDescriptor &color,
                                                   const Render::RenderGraphLogicalState &acquired,
                                                   const Render::RenderGraphLogicalState &requiredFinal, bool retainPreviousDepth,
-                                                  const AuxiliaryPlan *auxiliary = nullptr);
+                                                  const AuxiliaryPlan *auxiliary = nullptr, std::size_t coverageDrawCapacity = 0);
         /** @brief Bind one real acquisition before BeginFrame, using fixed owner storage and exact live publications.
          * @param viewport Existing owner. @param color Fresh native import. @param views Exact layer views.
          * @param publication Current Scene/frame/origin/device evidence. @param cameras Actual native view matrices.
@@ -119,6 +120,26 @@ namespace Horo::Editor {
          * restore the committed attachment state before releasing the borrow.
          */
         [[nodiscard]] static std::optional<PreviousEyeDepth> PreviousDepth(const EditorViewportRendererVulkan &viewport) noexcept;
+
+        /** @brief Exact queue-observed coverage observation for one live frame and its retained predecessor.
+         * @details Borrowed renderer identities are valid on the owner lane until the next bind or frame completion.
+         * Pixel validity and any native compositor encoding must be verified separately.
+         */
+        struct CoverageObservation final {
+            Render::MultiviewMotionFrame frame;
+            Render::MultiviewMotionFrame predecessor;
+            Render::RenderTextureHandle texture;
+            std::array<Render::RenderTextureViewHandle, 2> eyes;
+            Render::FramebufferExtent extent;
+            Render::RenderTimelinePoint completion;
+        };
+
+        /** @brief Consumes a completed observation once for the exact live frame.
+         * @param viewport Selected device owner. @param frame Exact requested frame.
+         * @return Observed GPU pass with exact depth ancestry, or absence while pending, stale, or unavailable.
+         */
+        [[nodiscard]] static std::optional<CoverageObservation> TakeCoverage(EditorViewportRendererVulkan &viewport,
+                                                                             const Render::MultiviewMotionFrame &frame) noexcept;
         /** @brief Records the exact projection or zero-layer completion after successful native end only. */
         static void CompleteMotion(EditorViewportRendererVulkan &viewport, const std::optional<Render::MultiviewMotionFrame> &frame,
                                    bool projected) noexcept;

@@ -78,6 +78,20 @@ namespace Horo::Tests::ShaderCook {
         json.replace(position, before.size(), after);
     }
 
+    /** @brief Scripted coverage interface used by loader and injected graphics command qualification. */
+    inline std::array<SpirvReflectionStage, 2> MultiviewCoverageEvidence() {
+        auto evidence = MultiviewMotionEvidence();
+        evidence[0].entryPoint = "VSCoverage";
+        ReplaceEvidence(evidence[0].json, "\"VSMain\"", "\"VSCoverage\"");
+        ReplaceEvidence(evidence[0].json, R"("location":1}])", R"("location":1},{"name":"eye","type":"uint","location":2}])");
+        evidence[1].entryPoint = "PSCoverage";
+        evidence[1].json = R"({"entryPoints":[{"name":"PSCoverage","mode":"frag"}],
+          "inputs":[{"name":"currentClip","type":"vec4","location":0},{"name":"previousClip","type":"vec4","location":1},{"name":"eye","type":"uint","location":2}],
+          "outputs":[{"name":"coverage","type":"float","location":0}],
+          "separate_images":[{"name":"PreviousLeftDepth","type":"texture2D","set":0,"binding":1},{"name":"PreviousRightDepth","type":"texture2D","set":0,"binding":2}]})";
+        return evidence;
+    }
+
     /** @brief Scripted same-boundary fixture for loader validation only; its payload is never native execution evidence. */
     inline std::array<SpirvReflectionStage, 2> ShadowEvidence() {
         return {{{ShaderStage::Vertex, "VSMain", R"({"entryPoints":[{"name":"VSMain","mode":"vert"}],
@@ -92,6 +106,7 @@ namespace Horo::Tests::ShaderCook {
         SceneLinear,
         Multiview,
         MultiviewMotion,
+        MultiviewCoverage,
         Shadow
     };
 
@@ -105,6 +120,8 @@ namespace Horo::Tests::ShaderCook {
                 return EditorVulkanMultiviewShaderManifest();
             case CookFixtureRole::MultiviewMotion:
                 return EditorVulkanMultiviewMotionShaderManifest();
+            case CookFixtureRole::MultiviewCoverage:
+                return EditorVulkanMultiviewCoverageShaderManifest();
             case CookFixtureRole::Shadow:
                 return EditorVulkanShadowShaderManifest();
         }
@@ -120,6 +137,8 @@ namespace Horo::Tests::ShaderCook {
                 return EditorVulkanMultiviewReflectionNames();
             case CookFixtureRole::MultiviewMotion:
                 return EditorVulkanMultiviewMotionReflectionNames();
+            case CookFixtureRole::MultiviewCoverage:
+                return EditorVulkanMultiviewCoverageReflectionNames();
             case CookFixtureRole::Shadow:
                 return EditorVulkanShadowReflectionNames();
         }

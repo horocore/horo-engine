@@ -178,13 +178,22 @@ texture and its actual depth-attachment state for a graph-synchronized
 sampled read. Missing preparation, a skipped or aborted projection, or
 incompatible history leaves no previous-depth borrow.
 
-Play still renders color and internal depth. The current motion shader
-checks previous clip boundaries. Activation requires a selected
-classification or resolution pass that samples the previous surface and
-reports coverage through a bounded observation path before the native
-cutoff. EXT ignores the engine validity alpha and FB consumes the RGB
-vector. Neither a finished draw nor a successful image release
-establishes that coverage.
+The optional coverage program is a separate offline pair under
+`shaders/runtime/multiview-coverage-vulkan` with the same
+`.horoshdr` and `.reflection.json` extensions. Cook it with
+`HoroEditorVulkanShaderCook` and `--multiview-coverage`. The viewport
+records coverage only when compatible previous depth exists for both eyes.
+The owner can consume one queue-observed result for the exact current
+frame and its predecessor. Play sizes coverage bindings from the render
+instances present during scene preparation. Missing coverage assets or
+scene growth beyond that capacity preserve color and internal depth
+projection.
+
+Before the native cutoff, optional composition still requires classification
+of the actual coverage pixels and the provider-specific invalid-pixel
+encoding. A completed graphics pass reports execution of the coverage
+program. EXT ignores the engine validity alpha, and FB consumes the RGB
+vector.
 [OpenXR frame synthesis contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrFrameSynthesisInfoEXT.html)
 
 ## Public contract migration and evidence

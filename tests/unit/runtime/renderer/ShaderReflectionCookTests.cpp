@@ -208,15 +208,7 @@ TEST_CASE("Motion shader cooking requires signed XYZ transport and both exact pr
 }
 
 TEST_CASE("XR coverage cook admits only the exact predecessor sampled depth and scalar output", "[renderer][shader-cook][xr]") {
-    auto evidence = MultiviewMotionEvidence();
-    evidence[0].entryPoint = "VSCoverage";
-    ReplaceEvidence(evidence[0].json, "\"VSMain\"", "\"VSCoverage\"");
-    ReplaceEvidence(evidence[0].json, R"("location":1}])", R"("location":1},{"name":"eye","type":"uint","location":2}])");
-    evidence[1].entryPoint = "PSCoverage";
-    evidence[1].json = R"({"entryPoints":[{"name":"PSCoverage","mode":"frag"}],
-      "inputs":[{"name":"currentClip","type":"vec4","location":0},{"name":"previousClip","type":"vec4","location":1},{"name":"eye","type":"uint","location":2}],
-      "outputs":[{"name":"coverage","type":"float","location":0}],
-      "separate_images":[{"name":"PreviousLeftDepth","type":"texture2D","set":0,"binding":1},{"name":"PreviousRightDepth","type":"texture2D","set":0,"binding":2}]})";
+    auto evidence = MultiviewCoverageEvidence();
     const auto manifest = EditorVulkanMultiviewCoverageShaderManifest();
     const auto names = EditorVulkanMultiviewCoverageReflectionNames();
     const auto target = EditorVulkanViewportShaderTarget();

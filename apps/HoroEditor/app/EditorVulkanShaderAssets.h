@@ -26,4 +26,6 @@ namespace Horo::Editor {
      * @return The exact motion program or a typed missing, altered or foreign-program error.
      */
     [[nodiscard]] Result<EditorVulkanMultiviewCook> LoadPackagedVulkanMultiviewMotionShader(const std::filesystem::path &assetRoot);
+    /** @brief Loads the optional Vulkan stereo depth coverage program and its exact reflected sidecar. */
+    [[nodiscard]] Result<EditorVulkanMultiviewCook> LoadPackagedVulkanMultiviewCoverageShader(const std::filesystem::path &assetRoot);
 }  // namespace Horo::Editor

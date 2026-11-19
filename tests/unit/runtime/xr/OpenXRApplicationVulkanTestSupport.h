@@ -174,6 +174,25 @@ namespace Horo::Tests::OpenXRApplication {
             return ShaderCook::CookFixture{ShaderCook::CookFixtureRole::MultiviewMotion, ShaderCook::MultiviewMotionEvidence(), stages};
         }
 
+        /** @brief Entry records for the injected shader dispatch, with no native shader execution claim. */
+        static ShaderCook::CookFixture CookCoverage() {
+            using namespace Render;
+            const auto stage = [](ShaderStage type, std::string_view entry) {
+                const std::uint32_t nameWords = static_cast<std::uint32_t>((entry.size() + 4) / 4);
+                const std::array
+                    words{0x07230203U, 0x00010600U, 0U, 2U, 0U, ((3 + nameWords) << 16) | 15U, type == ShaderStage::Vertex ? 0U : 4U, 1U};
+                auto source = std::as_bytes(std::span{words});
+                std::vector<std::uint8_t> bytes((words.size() + nameWords) * 4);
+                std::ranges::transform(source, bytes.begin(), [](const std::byte value) {
+                    return std::to_integer<std::uint8_t>(value);
+                });
+                std::ranges::copy(entry, bytes.begin() + source.size());
+                return ShaderArtifactStage{type, std::string{entry}, std::move(bytes)};
+            };
+            const std::array stages{stage(ShaderStage::Vertex, "VSCoverage"), stage(ShaderStage::Fragment, "PSCoverage")};
+            return {ShaderCook::CookFixtureRole::MultiviewCoverage, ShaderCook::MultiviewCoverageEvidence(), stages};
+        }
+
         /** @brief Uses the shared canonical shadow role and unchanged scripted evidence; this is never native shader execution proof. */
         static ShaderCook::CookFixture CookShadow() {
             const std::array stages{Render::ShaderArtifactStage{Render::ShaderStage::Vertex, "VSMain", Code(Render::ShaderStage::Vertex)},

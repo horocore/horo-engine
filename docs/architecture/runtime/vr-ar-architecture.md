@@ -702,6 +702,14 @@ and the initialized predecessor depth as a declared graphics sampled read.
 Two ordered static sampled descriptors name the exact predecessor eye views.
 The Vulkan recorder checks their native image, state and array-layer identity,
 and the graph completion lease retains those views with the submitted work.
+The normal Play viewport stages the optional packaged
+`multiview-coverage-vulkan` artifact and prepares two cold graph variants
+for the alternating retained depth slots. Only an adjacent completed native
+projection with compatible renderer history can supply the opposite eye
+views. The viewport can report a one-shot observation after its exact graphics
+submission completes. That observation identifies the current frame,
+predecessor, coverage images and completion point. Pixel reduction and
+provider-specific encoding remain prerequisites for compositor admission.
 
 See the [Khronos space-warp layer contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrCompositionLayerSpaceWarpInfoFB.html)
 for the distinction between runtime motion inputs and internal Renderer UV history.

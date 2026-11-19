@@ -20,7 +20,8 @@ namespace {
                (aspect == RenderTextureAspect::Depth && format == RenderTextureFormat::Depth32Float);
     }
 
-    template <typename View> bool VulkanWholeDepthSample(const View &view) noexcept {
+    /** @brief Accepts one complete depth mip in the admitted whole-image or exact stereo layer. */
+    template <typename View> bool VulkanDepthSample(const View &view) noexcept {
         if (view.aspect != RenderTextureAspect::Depth)
             return true;
         const auto &texture = view.texture->descriptor;
@@ -29,11 +30,19 @@ namespace {
                                texture.mipCount == 1,
                                range.baseMip == 0,
                                range.mipCount == 1,
-                               range.baseLayer == 0,
+                               range.baseLayer < texture.layerCount,
                                range.layerCount == 1};
         return std::ranges::all_of(valid, [](bool value) {
             return value;
         });
+    }
+
+    /** @brief Multi-layer material sampling is limited to one eye of an owned stereo D32 attachment. */
+    template <typename View> bool VulkanMaterialSampleLayers(const View &view) noexcept {
+        const auto &descriptor = view.texture->descriptor;
+        return descriptor.layerCount == 1 ||
+               (descriptor.layerCount == 2 && view.texture->externalSource == nullptr && view.aspect == RenderTextureAspect::Depth &&
+                descriptor.usage == (RenderTextureUsage::RenderAttachment | RenderTextureUsage::Sampled));
     }
 
     template <typename View> bool VulkanSampledMaterialView(const View &view) noexcept {
@@ -42,16 +51,16 @@ namespace {
                                HasTextureUsage(descriptor.usage, RenderTextureUsage::Sampled),
                                descriptor.sampleCount == 1,
                                descriptor.dimension == RenderTextureDimension::TwoD,
-                               descriptor.layerCount == 1,
+                               VulkanMaterialSampleLayers(view),
                                view.descriptor.dimension == RenderTextureViewDimension::TwoD,
-                               VulkanWholeDepthSample(view)};
+                               VulkanDepthSample(view)};
         return std::ranges::all_of(valid, [](bool value) {
             return value;
         });
     }
 }  // namespace
 
-/** @brief Resolves exact sampled color or whole Depth32Float views; both use the same image state journal. */
+/** @brief Resolves sampled color or a single complete Depth32Float layer in the exact image state journal. */
 Result<VulkanMaterialResource> VulkanResourceRuntime::Impl::ResolveMaterialView(const MaterialResidentResource &resident) const {
     const auto *view = Find(views, resident.instance);
     if (resident.kind != MaterialResidentResourceKind::TextureView || resident.offset || resident.byteCount || !view)
@@ -65,7 +74,7 @@ Result<VulkanMaterialResource> VulkanResourceRuntime::Impl::ResolveMaterialView(
                                                         .backing = views.at(resident.instance)});
     return Result<VulkanMaterialResource>::Failure(
         MakeError(VulkanBackendErrors::ResourceIdentityInvalid,
-                  "Material texture view must be an admitted sampled 2D color or whole Depth32Float generation."));
+                  "Material texture view must be an admitted sampled 2D color or complete Depth32Float layer."));
 }
 
 /** @copydoc VulkanResourceRuntime::InitializeShaders */

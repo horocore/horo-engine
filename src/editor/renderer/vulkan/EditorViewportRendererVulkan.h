@@ -54,6 +54,8 @@ namespace Horo::Editor {
          * bundle from the selected packaged root.
          */
         void StageXrMotionProgram(EditorVulkanMultiviewCook cooked) noexcept;
+        /** @brief Stages the optional packaged stereo depth coverage cook before Play records frames. */
+        void StageXrCoverageProgram(EditorVulkanMultiviewCook cooked) noexcept;
         /** @brief Prepares the selected same-device pipeline for the exact native/renderer format pair.
          * @param motion Admitted
          * signed floating-point color attachment.
@@ -83,7 +85,8 @@ namespace Horo::Editor {
                                                   const Render::RenderTextureDescriptor &color,
                                                   const Render::RenderGraphLogicalState &acquired,
                                                   const Render::RenderGraphLogicalState &requiredFinal, bool retainPreviousDepth = false,
-                                                  const EditorVulkanXrViewportAccess::AuxiliaryPlan *auxiliary = nullptr);
+                                                  const EditorVulkanXrViewportAccess::AuxiliaryPlan *auxiliary = nullptr,
+                                                  std::size_t coverageDrawCapacity = 0);
         /** @brief Binds a fresh native eye acquisition to the cold graph before the SAME RenderFrameScope begins.
          * @param color Fresh imported acquisition. @param eyeViews Exact current per-layer frontend views.
          * @param publication Canonical Scene/frame/origin/view and actual device/capability evidence.
@@ -182,8 +185,14 @@ namespace Horo::Editor {
             const Render::MultiviewPublication &publication, Render::RenderTextureHandle color) noexcept;
         /** @brief Uploads exact adjacent motion matrices to the selected signed pass's cold uniform slots. */
         [[nodiscard]] Result<void> WriteXrMotionDraws(Render::FrameToken frame, const XrGraph &graph);
+        /** @brief Realizes the optional packaged coverage program for the owning Scene. */
+        [[nodiscard]] Result<void> PrepareXrCoveragePipeline();
         /** @brief Drops only cold scene graph/depth resources after their canonical scene/GUI lease has drained. */
         void ReleaseXrGraph() noexcept;
+        /** @brief Drops graph-held sampled descriptor generations before their device goes away. */
+        void ReleaseXrCoverageMaterials() noexcept;
+        /** @brief Unwinds optional cold coverage topology, material pins and owned scratch reservations. */
+        [[nodiscard]] Result<void> RetireXrCoverage();
         /** @brief Retires cold graph/depth storage with retryable typed errors and exact successful-prefix bookkeeping.
          * @return Original frontend release error, retaining unreleased owners, or complete retirement.
          * @pre Owner lane, no active frame, and actual native acquisition scene/GUI retirement proved by the App.
@@ -240,7 +249,7 @@ namespace Horo::Editor {
                                                              std::uint32_t frames, bool displayLinearOverlay = false);
             /** @brief Creates native shader stages into the same retained program, preserving partial prefixes. */
             [[nodiscard]] static Result<void> CreateProgramStages(Render::RenderFrontend &frontend, ShaderResources &program,
-                                                                  const char *fragmentEntry = "PSMain");
+                                                                  const char *fragmentEntry = "PSMain", const char *vertexEntry = "VSMain");
             /** @brief Realizes the exact dedicated scene-linear Vulkan material. */
             [[nodiscard]] static Result<void> CreateSceneLinearPipeline(Render::RenderFrontend &frontend, ShaderResources &program,
                                                                         std::uint32_t frames);
@@ -261,9 +270,11 @@ namespace Horo::Editor {
             [[nodiscard]] static Result<void> CreateUniformSlot(Render::RenderFrontend &frontend, const ShaderResources &program,
                                                                 DrawSlot &draw, std::uint64_t material,
                                                                 Render::RenderPipelineHandle pipeline,
-                                                                Render::RenderTextureViewHandle atlas = {});
+                                                                Render::RenderTextureViewHandle atlas = {},
+                                                                std::span<const Render::MaterialResourceBinding> sampled = {});
             [[nodiscard]] static Result<void> BindUniformSlot(const ShaderResources &program, DrawSlot &draw,
-                                                              Render::RenderPipelineHandle pipeline, Render::RenderTextureViewHandle atlas);
+                                                              Render::RenderPipelineHandle pipeline, Render::RenderTextureViewHandle atlas,
+                                                              std::span<const Render::MaterialResourceBinding> sampled = {});
             static void ReleaseMaterials(std::span<FrameSlot> slots) noexcept;
             /** @brief Packs one finite reflected parameter into caller-owned bounded storage. */
             [[nodiscard]] static Result<void> WriteParameter(const Render::MaterialBindingLayout &layout, std::span<std::byte> bytes,
@@ -369,7 +380,9 @@ namespace Horo::Editor {
         ShaderResources shadowShader_;
         ShaderResources xrShader_;
         std::optional<EditorVulkanMultiviewCook> xrMotionCook_;
+        std::optional<EditorVulkanMultiviewCook> xrCoverageCook_;
         ShaderResources xrMotionShader_;
+        ShaderResources xrCoverageShader_;
         std::array<DrawSlot, Render::RenderMaterialPass::MaximumDraws> xrMotionDrawSlots_;
         std::optional<std::pair<Render::RenderTextureFormat, Render::RenderTextureFormat>> xrMotionFormats_;
         std::shared_ptr<XrGraph> xrGraph_;

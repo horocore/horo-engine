@@ -86,6 +86,22 @@ namespace Horo::Render {
                    (requested & static_cast<std::uint8_t>(~allowed)) == 0 && support.IsValid() && support.Supports(descriptor);
         }
 
+        /** @brief Closed two-eye scalar coverage attachment shape, with no upload or copy roles. */
+        [[nodiscard]] constexpr bool IsStereoCoverageTexture(const RenderTextureDescriptor &descriptor) noexcept {
+            using enum RenderTextureUsage;
+            return descriptor.dimension == RenderTextureDimension::TwoD && descriptor.depth == 1 && descriptor.mipCount == 1 &&
+                   descriptor.layerCount == 2 && descriptor.sampleCount == 1 && descriptor.format == RenderTextureFormat::R32Float &&
+                   descriptor.usage == (Sampled | RenderAttachment);
+        }
+
+        /** @brief Admits the exact stereo coverage target only with selected device extent, format and multiview evidence. */
+        [[nodiscard]] constexpr bool AdmitStereoCoverageTexture(const RenderTextureDescriptor &descriptor,
+                                                                const RenderCapabilitySnapshot &support) noexcept {
+            return IsStereoCoverageTexture(descriptor) && support.IsValid() && support.Supports(descriptor) &&
+                   support.features.Supports(RenderCapability::ViewIndexedShaders) &&
+                   support.limits.maxMultiviewViews >= descriptor.layerCount;
+        }
+
         [[nodiscard]] constexpr ResourceDescriptorAdmission AdmitCurrentTextureDescriptor(const RenderTextureDescriptor &descriptor,
                                                                                           const bool uiPaintAvailable) noexcept {
             using enum RenderTextureUsage;
@@ -143,7 +159,7 @@ namespace Horo::Render {
             return AdmitCurrentTextureDescriptor(descriptor, support.features.Supports(RenderCapability::UiPaint)) ==
                        ResourceDescriptorAdmission::Supported ||
                    AdmitColorTextureDescriptor(descriptor, support) || AdmitDepthCopySourceDescriptor(descriptor, support) ||
-                   AdmitReconstructionTextureDescriptor(descriptor, support);
+                   AdmitReconstructionTextureDescriptor(descriptor, support) || AdmitStereoCoverageTexture(descriptor, support);
         }
 
         [[nodiscard]] ResourceDescriptorAdmission AdmitCurrentTextureViewDescriptor(const RenderTextureViewDescriptor &descriptor,
@@ -167,6 +183,9 @@ namespace Horo::Render {
             if (IsDepthCopySourceDescriptor(descriptor) && !initialData.empty())
                 return Result<void>::Failure(MakeFrontendError(FrontendErrors::ResourceUnsupported,
                                                                "Depth copy-source attachments do not admit initial upload bytes."));
+            if (IsStereoCoverageTexture(descriptor) && !initialData.empty())
+                return Result<void>::Failure(MakeFrontendError(FrontendErrors::ResourceUnsupported,
+                                                               "Stereo coverage attachments do not admit initial upload bytes."));
             if (const auto bytes = RenderTextureBaseLevelByteSize(descriptor);
                 !bytes || (!initialData.empty() && initialData.size() != *bytes))
                 return Result<void>::Failure(

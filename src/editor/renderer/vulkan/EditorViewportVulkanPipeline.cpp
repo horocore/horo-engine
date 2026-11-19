@@ -62,7 +62,8 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportRendererVulkan::ProgramResources::CreateProgramStages */
     Result<void> EditorViewportRendererVulkan::ProgramResources::CreateProgramStages(Render::RenderFrontend &frontend,
-                                                                                     ShaderResources &program, const char *fragmentEntry) {
+                                                                                     ShaderResources &program, const char *fragmentEntry,
+                                                                                     const char *vertexEntry) {
         using namespace Render;
         const auto target = EditorVulkanViewportShaderTarget();
         const auto &reflection = program.metadata.reflection;
@@ -70,7 +71,7 @@ namespace Horo::Editor {
             return frontend.CreateShaderModule({target, kind, entry, program.metadata.cookedArtifactKey, reflection.interfaceCompatibility},
                                                program.payload);
         };
-        const auto vertex = stage(ShaderStage::Vertex, "VSMain");
+        const auto vertex = stage(ShaderStage::Vertex, vertexEntry);
         if (vertex.HasError())
             return Result<void>::Failure(vertex.ErrorValue());
         program.vertex = vertex.Value().handle;
@@ -164,11 +165,10 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorViewportRendererVulkan::ProgramResources::CreateUniformSlot */
-    Result<void> EditorViewportRendererVulkan::ProgramResources::CreateUniformSlot(Render::RenderFrontend &frontend,
-                                                                                   const ShaderResources &program, DrawSlot &draw,
-                                                                                   const std::uint64_t material,
-                                                                                   const Render::RenderPipelineHandle pipeline,
-                                                                                   const Render::RenderTextureViewHandle atlas) {
+    Result<void> EditorViewportRendererVulkan::ProgramResources::CreateUniformSlot(
+        Render::RenderFrontend &frontend, const ShaderResources &program, DrawSlot &draw, const std::uint64_t material,
+        const Render::RenderPipelineHandle pipeline, const Render::RenderTextureViewHandle atlas,
+        std::span<const Render::MaterialResourceBinding> sampled) {
         using namespace Render;
         const std::array<std::byte, MaximumUniformBytes> zero{};
         const auto buffer = frontend.CreateBuffer(RenderMemoryScopes::ViewportResources,
@@ -188,18 +188,20 @@ namespace Horo::Editor {
         draw.materialIdentity = material;
         if (program.shadowSampler.IsValid() && !atlas.IsValid())
             return Result<void>::Success();
-        return BindUniformSlot(program, draw, pipeline, atlas);
+        return BindUniformSlot(program, draw, pipeline, atlas, sampled);
     }
 
     Result<void> EditorViewportRendererVulkan::ProgramResources::BindUniformSlot(const ShaderResources &program, DrawSlot &draw,
                                                                                  Render::RenderPipelineHandle pipeline,
-                                                                                 Render::RenderTextureViewHandle atlas) {
+                                                                                 Render::RenderTextureViewHandle atlas,
+                                                                                 std::span<const Render::MaterialResourceBinding> sampled) {
         using namespace Render;
         std::vector<MaterialResourceBinding> resources{{{1}, 0, MaterialBufferBinding{draw.buffer, 0, program.uniformBytes}}};
         if (program.shadowSampler.IsValid()) {
             resources.push_back({{2}, 0, atlas});
             resources.push_back({{3}, 0, program.shadowSampler});
         }
+        resources.insert(resources.end(), sampled.begin(), sampled.end());
         const auto published = program.materials->Publish({.material = {draw.materialIdentity},
                                                            .revision = ++draw.materialRevision,
                                                            .pipeline = pipeline,
@@ -252,6 +254,46 @@ namespace Horo::Editor {
     void EditorViewportRendererVulkan::StageXrMotionProgram(EditorVulkanMultiviewCook cooked) noexcept {
         if (owner_ == std::this_thread::get_id() && initialized_ && !recordedEver_ && !xrMotionCook_)
             xrMotionCook_.emplace(std::move(cooked));
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::StageXrCoverageProgram */
+    void EditorViewportRendererVulkan::StageXrCoverageProgram(EditorVulkanMultiviewCook cooked) noexcept {
+        if (owner_ == std::this_thread::get_id() && initialized_ && !recordedEver_ && !xrCoverageCook_)
+            xrCoverageCook_.emplace(std::move(cooked));
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareXrCoveragePipeline */
+    Result<void> EditorViewportRendererVulkan::PrepareXrCoveragePipeline() {
+        using namespace Render;
+        if (xrCoverageShader_.pipeline.IsValid())
+            return Result<void>::Success();
+        const auto metadata = EncodeReflectedShaderArtifact(xrCoverageCook_->metadata);
+        if (metadata.HasError())
+            return Result<void>::Failure(metadata.ErrorValue());
+        auto admitted = LoadEditorVulkanMultiviewCoverageCook(xrCoverageCook_->payload, metadata.Value());
+        if (admitted.HasError())
+            return Result<void>::Failure(admitted.ErrorValue());
+        auto cooked = std::move(admitted).Value();
+        ShaderResources candidate{.payload = std::move(cooked.payload), .metadata = std::move(cooked.metadata)};
+        const auto realize = [&]() -> Result<void> {
+            if (auto stages = ProgramResources::CreateProgramStages(frontend_, candidate, "PSCoverage", "VSCoverage"); stages.HasError())
+                return stages;
+            const RenderGraphicsPipelineState state{.cull = RenderCullMode::None,
+                                                    .colorFormat = RenderTextureFormat::R32Float,
+                                                    .depthFormat = RenderTextureFormat::Depth32Float};
+            const auto pipeline =
+                ProgramResources::CreatePipelineState(frontend_, candidate, EditorVulkanMultiviewCoverageShaderManifest(), state);
+            if (pipeline.HasError())
+                return Result<void>::Failure(pipeline.ErrorValue());
+            candidate.pipeline = pipeline.Value();
+            return ProgramResources::CreateMaterialLayout(frontend_, candidate, candidate.metadata.reflection, device_.frames);
+        };
+        if (auto prepared = realize(); prepared.HasError()) {
+            RetireProgram(candidate, {});
+            return prepared;
+        }
+        xrCoverageShader_ = std::move(candidate);
+        return Result<void>::Success();
     }
 
     /** @copydoc EditorViewportRendererVulkan::PrepareXrMotionPipeline */

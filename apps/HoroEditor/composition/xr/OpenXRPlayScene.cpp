@@ -216,7 +216,7 @@ namespace Horo::Application::Internal {
                 using Viewport = Editor::EditorVulkanXrViewportAccess;
                 const auto prepare = [&](const Viewport::AuxiliaryPlan *auxiliary) {
                     return Viewport::Prepare(composition_.viewport, scene_->geometry->Resources(), scene_->projection->color, acquired,
-                                             requiredFinal, WantsMotionHistory(plan), auxiliary);
+                                             requiredFinal, WantsMotionHistory(plan), auxiliary, scene_->geometry->Instances().size());
                 };
                 if (const auto &writer = scene_->projection->writer) {
                     auto depthAcquired = acquired;

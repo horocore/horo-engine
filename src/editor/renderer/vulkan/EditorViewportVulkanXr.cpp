@@ -31,8 +31,8 @@ namespace Horo::Editor {
                                                        std::span<const RenderMeshResourceView> meshes, const RenderTextureDescriptor &color,
                                                        const RenderGraphLogicalState &acquired,
                                                        const RenderGraphLogicalState &requiredFinal, const bool retainPreviousDepth,
-                                                       const AuxiliaryPlan *auxiliary) {
-        return viewport.PrepareXrGraph(meshes, color, acquired, requiredFinal, retainPreviousDepth, auxiliary);
+                                                       const AuxiliaryPlan *auxiliary, const std::size_t coverageDrawCapacity) {
+        return viewport.PrepareXrGraph(meshes, color, acquired, requiredFinal, retainPreviousDepth, auxiliary, coverageDrawCapacity);
     }
 
     /** @copydoc EditorVulkanXrViewportAccess::Bind */
@@ -87,8 +87,8 @@ namespace Horo::Editor {
     /** @brief One cold scene topology and its exact owned depth allocation. */
     struct EditorViewportRendererVulkan::XrProjectionGraph final {
         static constexpr std::size_t MaximumDraws = RenderMaterialPass::MaximumDraws;
-        static constexpr std::size_t MaximumReads = MaximumDraws * 4;
-        static constexpr std::size_t MaximumAttachments = 4;
+        static constexpr std::size_t MaximumReads = MaximumDraws * 5;
+        static constexpr std::size_t MaximumAttachments = 7;
         ResourceCreation<RenderTextureHandle> depthTexture;
         std::array<ResourceCreation<RenderTextureViewHandle>, 2> depthViews{};
 
@@ -98,6 +98,13 @@ namespace Horo::Editor {
             RenderMeshHandle mesh;
             RenderGraphResourceId vertices;
             RenderGraphResourceId indices;
+        };
+
+        struct CoveragePlan final {
+            RenderTextureHandle color;
+            RenderTextureHandle depth;
+            RenderTextureHandle predecessor;
+            std::span<const DrawSlot> slots;
         };
 
         /** @brief Cold-creates depth storage and views, retaining every successful prefix for owner teardown. */
@@ -149,6 +156,40 @@ namespace Horo::Editor {
 
             std::optional<Auxiliary> auxiliary;
 
+            struct Coverage final {
+                RenderGraphPassRef pass;
+                RenderGraphResourceId color, depth, predecessor;
+                std::array<RenderGraphResourceId, MaximumDraws> parameters{};
+            };
+
+            std::optional<Coverage> coverage;
+
+            /** @brief Adds the private coverage targets and the preserved opposite history slot on the graphics queue. */
+            Result<void> DeclareCoverage(RenderGraphBuilder &builder, const CoveragePlan &plan) {
+                auto added = builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics);
+                if (added.HasError())
+                    return Result<void>::Failure(added.ErrorValue());
+                auto &output = coverage.emplace();
+                output.pass = added.Value();
+                if (auto order = builder.AddDependency({auxiliary ? auxiliary->pass : pass, output.pass}); order.HasError())
+                    return order;
+                const auto declare = [&](const RenderTextureHandle texture, RenderGraphResourceId &resource, const RenderGraphAccess access,
+                                         const RenderGraphUsageKind usage) -> Result<void> {
+                    auto imported = builder.ImportTexture(texture, RenderGraphResourceClass::Persistent);
+                    if (imported.HasError())
+                        return Result<void>::Failure(imported.ErrorValue());
+                    resource = imported.Value();
+                    return builder.AddUsage({output.pass, resource, access, usage});
+                };
+                if (auto color = declare(plan.color, output.color, RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment);
+                    color.HasError())
+                    return color;
+                if (auto depth = declare(plan.depth, output.depth, RenderGraphAccess::Write, RenderGraphUsageKind::DepthStencilAttachment);
+                    depth.HasError())
+                    return depth;
+                return declare(plan.predecessor, output.predecessor, RenderGraphAccess::Read, RenderGraphUsageKind::Sampled);
+            }
+
             /** @brief Declares the two exact auxiliary slots and one ordered graphics pass. */
             Result<void> DeclareAuxiliary(RenderGraphBuilder &builder, const EditorVulkanXrViewportAccess::AuxiliaryPlan &plan,
                                           std::uint64_t deviceIncarnation) {
@@ -178,12 +219,13 @@ namespace Horo::Editor {
                                                           const RenderGraphLogicalState &acquired,
                                                           const RenderGraphLogicalState &requiredFinal, std::uint64_t deviceIncarnation,
                                                           RenderTextureHandle projectionDepth,
-                                                          const EditorVulkanXrViewportAccess::AuxiliaryPlan *plan) {
-                const auto maximumPasses = plan ? 2U : 1U;
+                                                          const EditorVulkanXrViewportAccess::AuxiliaryPlan *plan,
+                                                          const CoveragePlan *coveragePlan) {
+                const auto maximumPasses = 1U + (plan ? 1U : 0U) + (coveragePlan ? 1U : 0U);
                 auto created = RenderGraphBuilder::Create({.maxPasses = maximumPasses,
                                                            .maxResources = MaximumReads + MaximumAttachments,
                                                            .maxUsages = MaximumDraws * 3 * maximumPasses + MaximumAttachments,
-                                                           .maxDependencies = 1});
+                                                           .maxDependencies = maximumPasses});
                 if (created.HasError())
                     return Result<RenderGraphBuilder>::Failure(created.ErrorValue());
                 auto builder = std::move(created).Value();
@@ -211,6 +253,9 @@ namespace Horo::Editor {
                 if (plan)
                     if (auto declared = DeclareAuxiliary(builder, *plan, deviceIncarnation); declared.HasError())
                         return Result<RenderGraphBuilder>::Failure(declared.ErrorValue());
+                if (coveragePlan)
+                    if (auto declared = DeclareCoverage(builder, *coveragePlan); declared.HasError())
+                        return Result<RenderGraphBuilder>::Failure(declared.ErrorValue());
                 return Result<RenderGraphBuilder>::Success(std::move(builder));
             }
 
@@ -237,6 +282,9 @@ namespace Horo::Editor {
                 if (sharedGeometry && auxiliary)
                     if (auto use = builder.AddUsage({auxiliary->pass, imported.Value(), RenderGraphAccess::Read, role}); use.HasError())
                         return Result<RenderGraphResourceId>::Failure(use.ErrorValue());
+                if (sharedGeometry && coverage)
+                    if (auto use = builder.AddUsage({coverage->pass, imported.Value(), RenderGraphAccess::Read, role}); use.HasError())
+                        return Result<RenderGraphResourceId>::Failure(use.ErrorValue());
                 initial.push_back({imported.Value(),
                                    {RenderGraphSynchronizationAccess::Read, RenderGraphSynchronizationOperation::GraphicsInputBuffer,
                                     RenderGraphPipelineScope::Graphics, RenderGraphTextureLayout::NotApplicable, queue}});
@@ -248,7 +296,8 @@ namespace Horo::Editor {
             /** @brief Cold-captures the canonical resident meshes and material slots without another geometry owner. */
             Result<void> PrepareReads(RenderGraphBuilder &builder, std::vector<RenderGraphImportedState> &initial,
                                       std::span<const EditorViewportMeshResourceView> meshes, const EditorViewportResources &resources,
-                                      std::span<const DrawSlot> slots, std::span<const DrawSlot> motionSlots, RenderQueueId queue) {
+                                      std::span<const DrawSlot> slots, std::span<const DrawSlot> motionSlots,
+                                      std::span<const DrawSlot> coverageSlots, RenderQueueId queue) {
                 std::vector<Input> inputs;
                 inputs.reserve(MaximumReads);
                 for (const auto &source : meshes) {
@@ -278,6 +327,13 @@ namespace Horo::Editor {
                         if (motion.HasError())
                             return Result<void>::Failure(motion.ErrorValue());
                         auxiliary->parameters[draw] = motion.Value();
+                    }
+                    if (coverage && draw < coverageSlots.size()) {
+                        auto uniform = ImportRead(builder, initial, inputs, queue, coverageSlots[draw].buffer,
+                                                  RenderGraphUsageKind::UniformBuffer, coverage->pass);
+                        if (uniform.HasError())
+                            return Result<void>::Failure(uniform.ErrorValue());
+                        coverage->parameters[draw] = uniform.Value();
                     }
                 }
                 return Result<void>::Success();
@@ -326,6 +382,8 @@ namespace Horo::Editor {
                     select(parameters[index], RenderGraphUsageKind::UniformBuffer);
                     if (auxiliary)
                         select(auxiliary->parameters[index], RenderGraphUsageKind::UniformBuffer);
+                    if (coverage)
+                        select(coverage->parameters[index], RenderGraphUsageKind::UniformBuffer);
                 }
                 std::array<Detail::RenderGraphExternalTextureBinding, 3> bindings{{{color.resource, colorTexture}}};
                 if (images) {
@@ -341,18 +399,28 @@ namespace Horo::Editor {
                                  const EditorViewportResources &resources, std::span<const DrawSlot> slots,
                                  const RenderTextureDescriptor &colorDescriptor, const RenderGraphLogicalState &acquired,
                                  const RenderGraphLogicalState &requiredFinal, RenderTextureHandle projectionDepth,
-                                 const EditorVulkanXrViewportAccess::AuxiliaryPlan *plan, std::span<const DrawSlot> motionSlots) {
+                                 const EditorVulkanXrViewportAccess::AuxiliaryPlan *plan, std::span<const DrawSlot> motionSlots,
+                                 const CoveragePlan *coveragePlan = nullptr) {
                 auto created = PrepareAttachments(colorDescriptor, acquired, requiredFinal,
-                                                  frontend.Capabilities().support.deviceIncarnation, projectionDepth, plan);
+                                                  frontend.Capabilities().support.deviceIncarnation, projectionDepth, plan, coveragePlan);
                 if (created.HasError())
                     return Result<void>::Failure(created.ErrorValue());
                 auto builder = std::move(created).Value();
                 std::vector<RenderGraphImportedState> initial;
-                initial.reserve(MaximumReads + 1);
+                initial.reserve(MaximumReads + MaximumAttachments);
                 initial.push_back({depth, {}, RenderGraphInitialContents::Discarded});
+                if (coverage) {
+                    initial.push_back({coverage->color, {}, RenderGraphInitialContents::Discarded});
+                    initial.push_back({coverage->depth, {}, RenderGraphInitialContents::Discarded});
+                    initial.push_back(
+                        {coverage->predecessor,
+                         {RenderGraphSynchronizationAccess::Write, RenderGraphSynchronizationOperation::DepthStencilAttachment,
+                          RenderGraphPipelineScope::Graphics, RenderGraphTextureLayout::DepthStencilAttachment, acquired.queue}});
+                }
                 reads.reserve(MaximumReads);
                 geometry.reserve(meshes.size());
-                if (auto imported = PrepareReads(builder, initial, meshes, resources, slots, motionSlots, acquired.queue);
+                if (auto imported = PrepareReads(builder, initial, meshes, resources, slots, motionSlots,
+                                                 coveragePlan ? coveragePlan->slots : std::span<const DrawSlot>{}, acquired.queue);
                     imported.HasError())
                     return imported;
                 auto graph = builder.Finalize();
@@ -376,6 +444,7 @@ namespace Horo::Editor {
 
         Topology ordinary;
         std::optional<Topology> paired;
+        std::optional<Topology> covered, pairedCovered;
 
         /** @brief Both cold graph shapes reference the same owned projection-depth allocation. */
         Result<void> Prepare(RenderFrontend &frontend, std::span<const EditorViewportMeshResourceView> meshes,
@@ -453,8 +522,7 @@ namespace Horo::Editor {
         std::array<MultiviewGraphTarget, 2> targets{};
         std::size_t drawCount{};
 
-        struct Auxiliary final {
-            EditorVulkanXrViewportAccess::AuxiliaryPlan plan;
+        struct ReprojectionDraws {
             std::shared_ptr<SnapshotStorage> payload{std::make_shared<SnapshotStorage>()};
             std::shared_ptr<const MultiviewSceneSnapshot> scene;
             std::array<MultiviewGraphGeometry, RenderMaterialPass::MaximumDraws> draws{};
@@ -464,6 +532,8 @@ namespace Horo::Editor {
             Result<MultiviewSceneSnapshot> Extract(const MultiviewSceneSnapshot &projection, const MultiviewMotionHistory &history,
                                                    const MultiviewMotionFrame &frame, std::span<const DrawSlot> slots,
                                                    const MultiviewCapabilities capabilities) const {
+                if (projection.Instances().size() > slots.size())
+                    return Result<MultiviewSceneSnapshot>::Failure(MakeError(RendererErrors::ViewportStaleTarget));
                 std::array<MultiviewSceneInstance, RenderMaterialPass::MaximumDraws> instances{};
                 std::ranges::copy(projection.Instances(), instances.begin());
                 for (const auto &draw : projection.Draws())
@@ -480,16 +550,26 @@ namespace Horo::Editor {
             }
 
             /** @brief Publishes only current selected draw leases and the exact admitted eye rectangles. */
-            void Publish(MultiviewSceneSnapshot &&snapshot, const Projection::Topology::Auxiliary &topology,
-                         const EditorVulkanXrViewportAccess::AuxiliaryImages &images, std::span<const MultiviewGraphGeometry> projection,
-                         std::span<const DrawSlot> slots) {
+            void Publish(MultiviewSceneSnapshot &&snapshot, std::span<const RenderGraphResourceId> parameters,
+                         std::span<const MultiviewGraphGeometry> projection, std::span<const DrawSlot> slots) {
                 payload->value.emplace(std::move(snapshot));
                 scene = std::shared_ptr<const MultiviewSceneSnapshot>{payload, &*payload->value};
                 for (std::size_t index = 0; index < projection.size(); ++index) {
                     const auto &draw = projection[index];
                     const auto instance = draw.instanceIndex;
-                    draws[index] = {instance, draw.vertices, draw.indices, topology.parameters[instance], slots[instance].material};
+                    draws[index] = {instance, draw.vertices, draw.indices, parameters[instance], slots[instance].material};
                 }
+            }
+        };
+
+        struct Auxiliary final : ReprojectionDraws {
+            explicit Auxiliary(const EditorVulkanXrViewportAccess::AuxiliaryPlan &value) : plan(value) {}
+
+            EditorVulkanXrViewportAccess::AuxiliaryPlan plan;
+
+            /** @brief Binds the exact current runtime-owned auxiliary rectangles and acquired views. */
+            void PublishTargets(const Projection::Topology::Auxiliary &topology,
+                                const EditorVulkanXrViewportAccess::AuxiliaryImages &images) {
                 for (std::uint32_t eye = 0; eye < targets.size(); ++eye) {
                     const auto [width, height] = plan.viewExtents[eye];
                     targets[eye] = {topology.motion.resource,
@@ -503,7 +583,84 @@ namespace Horo::Editor {
             }
         };
 
+        struct Coverage final : ReprojectionDraws {
+            ResourceCreation<RenderTextureHandle> color;
+            std::array<ResourceCreation<RenderTextureViewHandle>, 2> colorViews;
+            Projection scratchDepth;
+            std::array<std::array<DrawSlot, RenderMaterialPass::MaximumDraws>, 2> slots;
+            std::optional<MultiviewMotionFrame> frame, predecessor;
+            RenderTimelinePoint submission;
+            std::size_t drawCapacity{};
+            bool ready{};
+
+            /** @brief Discards any unconsumed live observation on rebind, completion or invalidation. */
+            void ResetObservation() noexcept {
+                frame.reset();
+                predecessor.reset();
+                submission = {};
+            }
+
+            /** @brief Retires exact scratch allocations after sampled descriptors and graph queue leases drain. */
+            Result<void> RetireTargets(RenderFrontend &frontend) {
+                for (auto &view : colorViews) {
+                    if (!view.handle.IsValid())
+                        continue;
+                    if (auto result = Detail::RenderFrontendResourceAccess::RetireCreation(frontend, view); result.HasError())
+                        return result;
+                    view = {};
+                }
+                if (color.handle.IsValid()) {
+                    if (auto result = Detail::RenderFrontendResourceAccess::RetireCreation(frontend, color); result.HasError())
+                        return result;
+                    color = {};
+                }
+                return scratchDepth.RetireDepth(frontend);
+            }
+
+            /** @brief Cold allocates owned scalar color plus a separate stereo hardware-depth target. */
+            Result<void> PrepareTargets(RenderFrontend &frontend, RenderTextureDescriptor output) {
+                if (auto depth = scratchDepth.PrepareDepth(frontend, output, false); depth.HasError())
+                    return depth;
+                output.format = RenderTextureFormat::R32Float;
+                auto created = frontend.CreateTexture(RenderMemoryScopes::ViewportResources, output);
+                if (created.HasError())
+                    return Result<void>::Failure(created.ErrorValue());
+                color = created.Value();
+                if (auto processed = frontend.ProcessResourceRequests(); processed.HasError())
+                    return Result<void>::Failure(processed.ErrorValue());
+                if (auto ready = frontend.ResourceOperationResult(color.operation); ready.HasError())
+                    return ready;
+                for (std::uint32_t eye = 0; eye < colorViews.size(); ++eye) {
+                    auto view = frontend.CreateTextureView({.texture = color.handle, .format = output.format, .baseLayer = eye});
+                    if (view.HasError())
+                        return Result<void>::Failure(view.ErrorValue());
+                    colorViews[eye] = view.Value();
+                    if (auto processed = frontend.ProcessResourceRequests(); processed.HasError())
+                        return Result<void>::Failure(processed.ErrorValue());
+                    if (auto ready = frontend.ResourceOperationResult(view.Value().operation); ready.HasError())
+                        return ready;
+                }
+                return Result<void>::Success();
+            }
+
+            /** @brief Selects exact prior eyes and full projection extent for renderer-owned coverage. */
+            void PublishTargets(const Projection::Topology::Coverage &topology, const Projection &prior, FramebufferExtent extent) {
+                for (std::uint32_t eye = 0; eye < targets.size(); ++eye)
+                    targets[eye] = {topology.color,
+                                    topology.depth,
+                                    colorViews[eye].handle,
+                                    scratchDepth.depthViews[eye].handle,
+                                    {0, 0, extent.width, extent.height},
+                                    eye,
+                                    eye,
+                                    topology.predecessor,
+                                    prior.depthViews[eye].handle,
+                                    eye};
+            }
+        };
+
         std::optional<Auxiliary> auxiliary;
+        std::optional<Coverage> coverage;
         const CompiledRenderGraphExecution *bound{};
         EditorVulkanXrMirrorProjection mirror;
         EditorVulkanXrProjectionAlphaState alpha;
@@ -511,6 +668,45 @@ namespace Horo::Editor {
         MultiviewMotionHistory motion;
         std::optional<MultiviewMotionFrame> motionFrame;
         bool motionSubmitted{};
+
+        /** @brief Binds each cold material table to the other stable depth slot before a frame can be acquired. */
+        Result<void> PrepareCoverage(EditorViewportRendererVulkan &viewport, std::span<const EditorViewportMeshResourceView> meshes,
+                                     const RenderTextureDescriptor &color, const RenderGraphLogicalState &acquired,
+                                     const RenderGraphLogicalState &requiredFinal, const std::size_t drawCapacity) {
+            auto &work = coverage.emplace();
+            work.drawCapacity = drawCapacity;
+            if (auto targets = work.PrepareTargets(viewport.frontend_, color); targets.HasError())
+                return targets;
+            for (std::size_t index = 0; index < history.size(); ++index) {
+                auto &output = history[index];
+                const auto &prior = history[1 - index];
+                const auto &bindings = MultiviewShaderParameterIds::PreviousEyeDepthBindings;
+                const std::array sampled{MaterialResourceBinding{bindings.front(), 0, prior.depthViews.front().handle},
+                                         MaterialResourceBinding{bindings.back(), 0, prior.depthViews.back().handle}};
+                const auto &program = viewport.xrCoverageShader_;
+                auto slots = std::span{work.slots[index]}.first(drawCapacity);
+                for (std::size_t draw = 0; draw < slots.size(); ++draw) {
+                    const auto identity = index * slots.size() + draw + 1;
+                    if (auto prepared = ProgramResources::CreateUniformSlot(viewport.frontend_, program, slots[draw], identity,
+                                                                            program.pipeline, {}, sampled);
+                        prepared.HasError())
+                        return prepared;
+                }
+                const Projection::CoveragePlan plan{work.color.handle, work.scratchDepth.depthTexture.handle, prior.depthTexture.handle,
+                                                    slots};
+                const auto prepare = [&](Projection::Topology &topology, const EditorVulkanXrViewportAccess::AuxiliaryPlan *aux) {
+                    return topology.Prepare(viewport.frontend_, meshes, viewport.resources_, viewport.xrDrawSlots_[0], color, acquired,
+                                            requiredFinal, output.depthTexture.handle, aux, viewport.xrMotionDrawSlots_, &plan);
+                };
+                if (auto result = prepare(output.covered.emplace(), nullptr); result.HasError())
+                    return result;
+                if (auxiliary)
+                    if (auto result = prepare(output.pairedCovered.emplace(), &auxiliary->plan); result.HasError())
+                        return result;
+            }
+            work.ready = true;
+            return Result<void>::Success();
+        }
 
         /** @brief Stores fixed scene/draw values only after canonical Bind proved the previous queue lease retired. */
         void PublishScene(const Projection &projection, const Projection::Topology &topology, MultiviewSceneSnapshot &&extracted,
@@ -562,6 +758,29 @@ namespace Horo::Editor {
                                 state};
     }
 
+    /** @copydoc EditorVulkanXrViewportAccess::TakeCoverage */
+    std::optional<EditorVulkanXrViewportAccess::CoverageObservation> EditorVulkanXrViewportAccess::TakeCoverage(
+        EditorViewportRendererVulkan &viewport, const MultiviewMotionFrame &frame) noexcept {
+        if (viewport.owner_ != std::this_thread::get_id() || !viewport.initialized_ || !viewport.xrGraph_)
+            return std::nullopt;
+        auto &graph = *viewport.xrGraph_;
+        auto &coverage = graph.coverage;
+        const auto &support = viewport.frontend_.Capabilities().support;
+        if (!coverage || coverage->frame != frame || !coverage->predecessor || !graph.previousDepth ||
+            graph.previousDepth->frame != *coverage->predecessor || graph.motionFrame != frame || !coverage->submission.IsValid() ||
+            coverage->submission != graph.observed || frame.publication.deviceIncarnation != support.deviceIncarnation ||
+            frame.publication.capabilityRevision != support.capabilityRevision)
+            return std::nullopt;
+        const CoverageObservation observation{frame,
+                                              *coverage->predecessor,
+                                              coverage->color.handle,
+                                              {coverage->colorViews.front().handle, coverage->colorViews.back().handle},
+                                              graph.extent,
+                                              coverage->submission};
+        coverage->ResetObservation();
+        return observation;
+    }
+
     /** @copydoc EditorViewportRendererVulkan::BorrowXrDevice */
     Result<Detail::VulkanEditorDevice> EditorViewportRendererVulkan::BorrowXrDevice() const {
         if (owner_ != std::this_thread::get_id() || !initialized_ || !bridge_.Port() || !xrShader_.pipeline.IsValid() ||
@@ -603,7 +822,8 @@ namespace Horo::Editor {
     Result<void> EditorViewportRendererVulkan::PrepareXrGraph(std::span<const EditorViewportMeshResourceView> meshes,
                                                               const RenderTextureDescriptor &color, const RenderGraphLogicalState &acquired,
                                                               const RenderGraphLogicalState &requiredFinal, const bool retainPreviousDepth,
-                                                              const EditorVulkanXrViewportAccess::AuxiliaryPlan *auxiliary) {
+                                                              const EditorVulkanXrViewportAccess::AuxiliaryPlan *auxiliary,
+                                                              const std::size_t coverageDrawCapacity) {
         if (owner_ != std::this_thread::get_id() || !initialized_ || !xrShader_.pipeline.IsValid() || xrGraph_ ||
             meshes.size() > RenderMaterialPass::MaximumDraws || !color.IsValid() || color.dimension != RenderTextureDimension::TwoD ||
             color.format != RenderTextureFormat::Rgba8Unorm || color.layerCount != 2 || color.mipCount != 1 || color.sampleCount != 1 ||
@@ -632,15 +852,24 @@ namespace Horo::Editor {
             return target.Prepare(frontend_, meshes, resources_, xrDrawSlots_[0], color, acquired, requiredFinal, sampled, auxiliary,
                                   xrMotionDrawSlots_);
         };
+        const bool wantsCoverage = xrCoverageCook_ && coverageDrawCapacity > 0 && coverageDrawCapacity <= RenderMaterialPass::MaximumDraws;
+        const auto prepareCoverage = [&] {
+            if (!storage.historyEnabled || !wantsCoverage)
+                return;
+            if (PrepareXrCoveragePipeline().HasError() ||
+                storage.PrepareCoverage(*this, meshes, color, acquired, requiredFinal, coverageDrawCapacity).HasError())
+                (void)RetireXrCoverage();
+        };
         if (auxiliary) {
             for (auto &slot : storage.history)
                 if (auto prepared = prepare(slot, true); prepared.HasError())
                     return prepared;
             storage.auxiliary.emplace(*auxiliary);
             storage.historyEnabled = true;
+            prepareCoverage();
             return Result<void>::Success();
         }
-        if (retainPreviousDepth && xrMotionShader_.pipeline.IsValid() && xrMotionShader_.materials) {
+        if (retainPreviousDepth && (wantsCoverage || (xrMotionShader_.pipeline.IsValid() && xrMotionShader_.materials))) {
             auto &first = storage.history.front();
             if (prepare(first, true).HasValue()) {
                 auto &second = storage.history.back();
@@ -649,6 +878,7 @@ namespace Horo::Editor {
                     storage.single = &first;
                     (void)second.RetireDepth(frontend_);  // Any unsuccessful release remains owned for Scene retirement.
                 }
+                prepareCoverage();
                 return Result<void>::Success();
             }
             (void)first.RetireDepth(frontend_);
@@ -669,6 +899,9 @@ namespace Horo::Editor {
             xrGraph_->alpha.Reset();
             xrGraph_->motionFrame.reset();
             xrGraph_->motionSubmitted = false;
+            if (auto &coverage = xrGraph_->coverage) {
+                coverage->ResetObservation();
+            }
         }
         if (owner_ != std::this_thread::get_id() || !initialized_ || !xrGraph_ || !publication.IsValid() || views.size() != 2 ||
             instances.size() > RenderMaterialPass::MaximumDraws ||
@@ -691,15 +924,16 @@ namespace Horo::Editor {
         auto &projection = storage.SelectOutput();
         if (auxiliary && (!projection.paired || !storage.auxiliary))
             return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
-        auto &topology = auxiliary ? *projection.paired : projection.ordinary;
+        auto &baseline = auxiliary ? *projection.paired : projection.ordinary;
         std::array<const XrGraph::Projection::Geometry *, RenderMaterialPass::MaximumDraws> meshes{};
-        auto extracted = topology.ExtractScene(publication, views, instances, frontend_, xrDrawSlots_[0], meshes);
+        auto extracted = baseline.ExtractScene(publication, views, instances, frontend_, xrDrawSlots_[0], meshes);
         if (extracted.HasError())
             return Result<void>::Failure(extracted.ErrorValue());
         const bool staged = motion && storage.motion.Stage(*motion, extracted.Value(), motionObjects);
+        const bool hasPrior = staged && storage.previousDepth && storage.motion.PreviousFrame(*motion) == storage.previousDepth->frame;
         std::optional<MultiviewSceneSnapshot> auxiliaryScene;
         if (auxiliary) {
-            if (!staged || !storage.previousDepth || storage.motion.PreviousFrame(*motion) != storage.previousDepth->frame)
+            if (!hasPrior)
                 return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleTarget));
             auto motionScene = storage.auxiliary->Extract(extracted.Value(), storage.motion, *motion, xrMotionDrawSlots_,
                                                           ResolveMultiviewCapabilities(frontend_.Capabilities().support));
@@ -707,7 +941,30 @@ namespace Horo::Editor {
                 return Result<void>::Failure(motionScene.ErrorValue());
             auxiliaryScene.emplace(std::move(motionScene).Value());
         }
-        auto bound = topology.BindReads(frontend_, color, extracted.Value(), meshes, auxiliary);
+        auto *topology = &baseline;
+        std::optional<MultiviewSceneSnapshot> coverageScene;
+        const auto &covered = auxiliary ? projection.pairedCovered : projection.covered;
+        if (hasPrior && covered && storage.coverage && storage.coverage->ready && !extracted.Value().Draws().empty()) {
+            auto &coverage = *storage.coverage;
+            const auto coverageSlots = std::span{coverage.slots[storage.activeHistorySlot]}.first(coverage.drawCapacity);
+            auto scene = coverage.Extract(extracted.Value(), storage.motion, *motion, coverageSlots,
+                                          ResolveMultiviewCapabilities(frontend_.Capabilities().support));
+            if (scene.HasValue()) {
+                coverageScene.emplace(std::move(scene).Value());
+                topology = &*(auxiliary ? projection.pairedCovered : projection.covered);
+                // Geometry graph identities belong to the chosen immutable topology.
+                for (std::size_t i = 0; i < instances.size(); ++i)
+                    meshes[i] = std::addressof(topology->geometry[meshes[i] - baseline.geometry.data()]);
+            }
+        }
+        auto bound = topology->BindReads(frontend_, color, extracted.Value(), meshes, auxiliary);
+        if (bound.HasError() && coverageScene) {
+            for (std::size_t i = 0; i < instances.size(); ++i)
+                meshes[i] = std::addressof(baseline.geometry[meshes[i] - topology->geometry.data()]);
+            topology = &baseline;
+            coverageScene.reset();
+            bound = topology->BindReads(frontend_, color, extracted.Value(), meshes, auxiliary);
+        }
         if (bound.HasError())
             return Result<void>::Failure(bound.ErrorValue());
         for (auto view : eyeViews) {
@@ -719,10 +976,20 @@ namespace Horo::Editor {
         }
         if (!storage.mirror.Bind(publication.frame, eyeViews[0]))
             return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleTarget));
-        storage.PublishScene(projection, topology, std::move(extracted).Value(), eyeViews, xrDrawSlots_[0], meshes);
-        if (auxiliary)
-            storage.auxiliary->Publish(std::move(*auxiliaryScene), *topology.auxiliary, *auxiliary,
-                                       std::span{storage.draws}.first(storage.drawCount), xrMotionDrawSlots_);
+        storage.PublishScene(projection, *topology, std::move(extracted).Value(), eyeViews, xrDrawSlots_[0], meshes);
+        const auto draws = std::span{storage.draws}.first(storage.drawCount);
+        if (auxiliary) {
+            storage.auxiliary->Publish(std::move(*auxiliaryScene), topology->auxiliary->parameters, draws, xrMotionDrawSlots_);
+            storage.auxiliary->PublishTargets(*topology->auxiliary, *auxiliary);
+        }
+        if (coverageScene) {
+            auto &coverage = *storage.coverage;
+            const auto &prior = *storage.previousDepth;
+            coverage.Publish(std::move(*coverageScene), topology->coverage->parameters, draws, coverage.slots[storage.activeHistorySlot]);
+            coverage.PublishTargets(*topology->coverage, storage.history[prior.slot], storage.extent);
+            coverage.frame = *motion;
+            coverage.predecessor = prior.frame;
+        }
         storage.bound = bound.Value();
         storage.alpha.Bind(alpha, storage.scene->Publication(), color);
         if (staged)
@@ -776,19 +1043,29 @@ namespace Horo::Editor {
     /** @copydoc EditorViewportRendererVulkan::WriteXrMotionDraws */
     Result<void> EditorViewportRendererVulkan::WriteXrMotionDraws(const FrameToken frame, const XrGraph &graph) {
         std::array<std::byte, MaximumUniformBytes> scratch{};
-        for (const auto &draw : graph.auxiliary->scene->Draws()) {
-            const auto instance = draw.instanceIndex;
-            const auto packed =
-                PackMultiviewMotionShaderParameters(xrMotionShader_.layout, graph.motion, *graph.motionFrame, instance, scratch);
-            if (packed.HasError())
-                return Result<void>::Failure(packed.ErrorValue());
-            if (packed.Value() != xrMotionShader_.parameterBytes)
-                return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
-            auto uploaded = bridge_.Port()->WriteFrameBuffer(frame, xrMotionDrawSlots_[instance].instance,
-                                                             std::span{scratch}.first(xrMotionShader_.uniformBytes));
-            if (uploaded.HasError())
-                return uploaded;
+        const auto write = [&](const ShaderResources &program, const MultiviewSceneSnapshot &scene,
+                               std::span<const DrawSlot> slots) -> Result<void> {
+            for (const auto &draw : scene.Draws()) {
+                const auto instance = draw.instanceIndex;
+                const auto packed =
+                    PackMultiviewMotionShaderParameters(program.layout, graph.motion, *graph.motionFrame, instance, scratch);
+                if (packed.HasError())
+                    return Result<void>::Failure(packed.ErrorValue());
+                if (packed.Value() != program.parameterBytes)
+                    return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
+                auto uploaded =
+                    bridge_.Port()->WriteFrameBuffer(frame, slots[instance].instance, std::span{scratch}.first(program.uniformBytes));
+                if (uploaded.HasError())
+                    return uploaded;
+            }
+            return Result<void>::Success();
+        };
+        if (graph.active->auxiliary) {
+            if (auto motion = write(xrMotionShader_, *graph.auxiliary->scene, xrMotionDrawSlots_); motion.HasError())
+                return motion;
         }
+        if (graph.active->coverage)
+            return write(xrCoverageShader_, *graph.coverage->scene, graph.coverage->slots[graph.activeHistorySlot]);
         return Result<void>::Success();
     }
 
@@ -821,7 +1098,8 @@ namespace Horo::Editor {
                 return fail(uploaded.ErrorValue());
         }
         const bool paired = storage.active->auxiliary.has_value();
-        if (paired)
+        const bool covered = storage.active->coverage.has_value();
+        if (paired || covered)
             if (auto written = WriteXrMotionDraws(frame.Token(), storage); written.HasError())
                 return fail(written.ErrorValue());
         auto reserved = frame.ReserveSubmission(RenderQueueRole::Graphics);
@@ -834,7 +1112,7 @@ namespace Horo::Editor {
         // clearing uncovered pixels to zero RGBA gives the compositor a premultiplied image.
         if (storage.alpha.IsPremultiplied())
             projection.clearColor = {0.0F, 0.0F, 0.0F, 0.0F};
-        std::array<RenderGraphPassWorkload, 2> workloads{{{storage.active->pass, projection}}};
+        std::array<RenderGraphPassWorkload, 3> workloads{{{storage.active->pass, projection}}};
         if (paired) {
             const auto &auxiliary = *storage.auxiliary;
             workloads[1] = {storage.active->auxiliary->pass,
@@ -845,6 +1123,16 @@ namespace Horo::Editor {
                                                  .clearColor = {0.0F, 0.0F, 0.0F, 0.0F},
                                                  .output = MultiviewOutput::MotionDepth}};
         }
+        if (covered) {
+            const auto &coverage = *storage.coverage;
+            workloads[paired ? 2 : 1] = {storage.active->coverage->pass,
+                                         RenderGraphMultiview{.scene = coverage.scene,
+                                                              .active = storage.scene->Publication(),
+                                                              .targets = coverage.targets,
+                                                              .geometry = std::span{coverage.draws}.first(storage.drawCount),
+                                                              .clearColor = {0.0F, 0.0F, 0.0F, 0.0F},
+                                                              .output = MultiviewOutput::ReprojectionCoverage}};
+        }
         recordedEver_ = true;
         auto executed = frame.ExecuteSubmittedGraph(*bound, std::span{workloads}.first(bound->Passes().size()), std::span{&submission, 1});
         if (executed.HasError())
@@ -853,6 +1141,8 @@ namespace Horo::Editor {
             storage.submitted = reserved.Value().signal;
             storage.alpha.Submit(storage.submitted);
             storage.motionSubmitted = storage.motionFrame.has_value();
+            if (covered)
+                storage.coverage->submission = storage.submitted;
         }
         return executed;
     }
@@ -863,6 +1153,8 @@ namespace Horo::Editor {
             return;
         auto &storage = *xrGraph_;
         storage.alpha.Reset();
+        if (storage.coverage && (!frame || storage.motionFrame == frame))
+            storage.coverage->ResetObservation();
         if (!frame) {
             storage.motion.Reset();
             storage.previousDepth.reset();
@@ -908,6 +1200,8 @@ namespace Horo::Editor {
             return Result<void>::Failure(MakeError(RendererErrors::ViewportNotInitialized));
         if (!xrGraph_)
             return Result<void>::Success();
+        if (auto retired = RetireXrCoverage(); retired.HasError())
+            return retired;
         for (auto *projection : {&xrGraph_->baseline, &xrGraph_->history.front(), &xrGraph_->history.back()})
             if (auto retired = projection->RetireDepth(frontend_); retired.HasError())
                 return retired;
@@ -916,10 +1210,55 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @copydoc EditorViewportRendererVulkan::RetireXrCoverage */
+    Result<void> EditorViewportRendererVulkan::RetireXrCoverage() {
+        ReleaseXrCoverageMaterials();
+        if (auto &coverage = xrGraph_->coverage) {
+            coverage->ready = false;
+            for (auto &history : xrGraph_->history) {
+                history.covered.reset();
+                history.pairedCovered.reset();
+            }
+            for (auto &slots : coverage->slots)
+                for (auto &draw : slots) {
+                    if (draw.buffer.IsValid())
+                        if (auto result = frontend_.ReleaseBuffer(draw.buffer); result.HasError())
+                            return result;
+                    draw = {};
+                }
+            if (auto retired = coverage->RetireTargets(frontend_); retired.HasError())
+                return retired;
+            coverage.reset();
+        }
+        RetireProgram(xrCoverageShader_, {});
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::ReleaseXrCoverageMaterials */
+    void EditorViewportRendererVulkan::ReleaseXrCoverageMaterials() noexcept {
+        if (xrGraph_ && xrGraph_->coverage) {
+            auto &coverage = *xrGraph_->coverage;
+            coverage.ResetObservation();
+            coverage.draws = {};
+            for (auto &slots : coverage.slots)
+                for (auto &draw : slots)
+                    draw.material.reset();
+        }
+        if (xrCoverageShader_.materials)
+            static_cast<void>(xrCoverageShader_.materials->Shutdown());
+        xrCoverageShader_.materials.reset();
+    }
+
     /** @copydoc EditorViewportRendererVulkan::ReleaseXrGraph */
     void EditorViewportRendererVulkan::ReleaseXrGraph() noexcept {
         if (!xrGraph_)
             return;
+        if (auto &coverage = xrGraph_->coverage) {
+            for (auto &slots : coverage->slots)
+                for (auto &draw : slots)
+                    RetireDraw(draw);
+            (void)coverage->RetireTargets(frontend_);
+        }
         for (const auto *projection : {&xrGraph_->baseline, &xrGraph_->history.front(), &xrGraph_->history.back()}) {
             for (const auto &view : projection->depthViews)
                 if (view.handle.IsValid())

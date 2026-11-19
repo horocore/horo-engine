@@ -69,6 +69,22 @@ TEST_CASE("Optional packaged Vulkan XR motion requires its own complete authenti
     CHECK(LoadPackagedVulkanMultiviewShader(bundle.root).HasValue());
 }
 
+TEST_CASE("Packaged Vulkan stereo coverage binds the separate reflected artifact", "[editor][shader-cook][assets][xr]") {
+    Bundle bundle;
+    constexpr std::string_view prefix = "multiview-coverage-vulkan";
+    CHECK(LoadPackagedVulkanMultiviewCoverageShader(bundle.root).HasError());
+    std::filesystem::create_directories(bundle.root / "shaders/runtime");
+    const std::array stages{ShaderArtifactStage{ShaderStage::Vertex, "VSCoverage", {1}},
+                            ShaderArtifactStage{ShaderStage::Fragment, "PSCoverage", {2}}};
+    const CookFixture coverage{CookFixtureRole::MultiviewCoverage, MultiviewCoverageEvidence(), stages};
+    bundle.WriteCook(prefix, coverage, "runtime");
+    const auto loaded = LoadPackagedVulkanMultiviewCoverageShader(bundle.root);
+    REQUIRE(loaded.HasValue());
+    CHECK(loaded.Value().metadata.cookedArtifactKey == coverage.reflected.cookedArtifactKey);
+    bundle.WriteCook(prefix, CookFixture{CookFixtureRole::MultiviewMotion, MultiviewMotionEvidence()}, "runtime");
+    CHECK(LoadPackagedVulkanMultiviewCoverageShader(bundle.root).HasError());
+}
+
 TEST_CASE("Packaged Vulkan scene raster admission requires its distinct compiled stage and matched reflection",
           "[editor][shader-cook][assets][reconstruction]") {
     Bundle bundle;

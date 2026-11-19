@@ -1541,6 +1541,9 @@ namespace Horo::Editor {
                 auto motion = LoadPackagedVulkanMultiviewMotionShader(EditorAssetRoot());
                 if (motion.HasValue())
                     composition.xrViewport->StageXrMotionProgram(std::move(motion).Value());
+                auto coverage = LoadPackagedVulkanMultiviewCoverageShader(EditorAssetRoot());
+                if (coverage.HasValue())
+                    composition.xrViewport->StageXrCoverageProgram(std::move(coverage).Value());
                 return Result<void>::Success();
             }
 #endif
