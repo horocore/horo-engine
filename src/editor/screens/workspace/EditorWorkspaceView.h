@@ -1,5 +1,6 @@
 #pragma once
 
+#include "DecisionTaskPalette.h"
 #include "ExtensionActivityView.h"
 #include "ExtensionRecoveryView.h"
 #include "Horo/Editor/EditorGuiContext.h"
@@ -227,7 +228,7 @@ namespace Horo::Editor {
             DocumentInstanceId instance;
             Assets::AssetId subtree;
             AI::DecisionNodeId node;
-            AI::DecisionNodeTypeId task;
+            DecisionTaskPaletteDraft palette;
         };
 
         mutable BehaviorTreeSelection m_behaviorTreeSelection;
@@ -256,7 +257,7 @@ namespace Horo::Editor {
             DocumentInstanceId instance;
             std::uint64_t revision{};
             AI::DecisionNodeId option;
-            AI::DecisionNodeTypeId task;
+            DecisionTaskPaletteDraft palette;
             std::optional<std::size_t> row;
             AI::UtilityConsideration score;
             std::array<std::string, 6> fields;

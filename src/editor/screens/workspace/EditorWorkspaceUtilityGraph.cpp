@@ -1,4 +1,5 @@
 #include "BlackboardScalarInput.h"
+#include "DecisionTaskPalette.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
@@ -344,21 +345,12 @@ namespace Horo::Editor {
             submit(AddConsideration, score);
         }
 
-        const auto &choices = viewModel.decisionTaskChoices;
-        const auto task = std::ranges::find(choices, draft.task, &DecisionTaskChoice::type);
-        auto taskIndex = task == choices.end() ? 0 : static_cast<int>(task - choices.begin()) + 1;
-        const auto &empty = text("workspace.decision_graph.select_task");
-        const Ui::ComboItemSource taskItems{.label = [&](int index) {
-            return index == 0 ? empty.c_str() : choices[static_cast<std::size_t>(index - 1)].label.c_str();
-        }};
-        Ui::FieldLabel(text("workspace.decision_graph.create_task").c_str(), fonts);
-        static_cast<void>(Ui::ComboControl("##UtilityAuthoringTask", &taskIndex, static_cast<int>(choices.size()) + 1, taskItems, fonts));
-        draft.task = taskIndex == 0 ? AI::DecisionNodeTypeId{} : choices[static_cast<std::size_t>(taskIndex - 1)].type;
+        const auto *task = DrawDecisionTaskPalette(viewModel.decisionTaskChoices, viewModel.availableBehaviorsRevision, draft.palette,
+                                                   m_context, outCommand);
         if (button("workspace.decision_graph.edit_utility_add_option",
-                   taskIndex != 0 && score && priority && compensation && source.options.size() < AI::UtilitySelector::MaximumOptions)) {
-            const auto &selected = choices[static_cast<std::size_t>(taskIndex - 1)];
+                   task && score && priority && compensation && source.options.size() < AI::UtilitySelector::MaximumOptions)) {
             submit(AddOption, score,
-                   DecisionTaskSelection{selected.type, selected.provider, selected.version, viewModel.availableBehaviorsRevision});
+                   DecisionTaskSelection{task->type, task->provider, task->version, viewModel.availableBehaviorsRevision});
         }
     }
 }  // namespace Horo::Editor

@@ -1,7 +1,9 @@
 #include "DecisionGraphCanvasModel.h"
 #include "DecisionProblemsView.h"
+#include "DecisionTaskPalette.h"
 #include "EditorWorkspaceView.h"
 #include "Horo/AI/DecisionAssetValidation.h"
+#include "Horo/AI/DecisionNodeRegistration.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
@@ -10,11 +12,20 @@
 #include <array>
 #include <charconv>
 #include <format>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
 namespace Horo::Editor {
     namespace {
+        /** @brief Matches literal metadata text, folding ASCII without changing UTF-8 bytes. */
+        bool MatchesTaskLabel(std::string_view label, std::string_view search) {
+            const auto fold = [](char value) {
+                return value >= 'A' && value <= 'Z' ? static_cast<char>(value + ('a' - 'A')) : value;
+            };
+            return search.empty() || !std::ranges::search(label, search, {}, fold, fold).empty();
+        }
+
         /** @brief Resolves a persisted node identity against the authored family currently shown by the canvas. */
         bool HasProblemNode(const AI::DecisionGraphSource &graph, const AI::DecisionNodeId node) {
             if (!node.IsValid())
@@ -339,28 +350,66 @@ namespace Horo::Editor {
         }
         if (button("workspace.decision_graph.edit_tree_unwrap", children == 1))
             emit(BehaviorTreeEditOperation::UnwrapComposite);
-        const auto &choices = viewModel.behaviorTreeTaskChoices;
-        if (choices.empty())
+        const auto *task = DrawDecisionTaskPalette(viewModel.behaviorTreeTaskChoices, viewModel.availableBehaviorsRevision,
+                                                   selection.palette, m_context, outCommand);
+        if (!task)
             return;
-        const auto chosen = std::ranges::find(choices, selection.task, &DecisionTaskChoice::type);
-        int taskIndex = chosen == choices.end() ? 0 : static_cast<int>(chosen - choices.begin());
-        const Ui::ComboItemSource taskItems{.label = [&](int slot) {
-            return choices[static_cast<std::size_t>(slot)].label.c_str();
-        }};
-        Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("workspace.decision_graph.create_task"), Theme::Text(),
-                        m_context.theme.fonts);
-        static_cast<void>(
-            Ui::ComboControl("##BehaviorTreeTask", &taskIndex, static_cast<int>(choices.size()), taskItems, m_context.theme.fonts));
-        const auto &task = choices[static_cast<std::size_t>(taskIndex)];
-        selection.task = task.type;
-        const DecisionTaskSelection selected{task.type, task.provider, task.version, viewModel.availableBehaviorsRevision};
-        if (task.queryOutput) {
+        const DecisionTaskSelection selected{task->type, task->provider, task->version, viewModel.availableBehaviorsRevision};
+        if (task->queryOutput) {
             if (room && children < node.maximumChildren)
                 DrawBehaviorTreeQueryOutput(viewModel, document, node, outCommand, selected);
             return;
         }
         if (button("workspace.decision_graph.edit_tree_append_task", room && children < node.maximumChildren))
             emit(BehaviorTreeEditOperation::AppendTask, selected);
+    }
+
+    /** @copydoc DrawDecisionTaskPalette */
+    const DecisionTaskChoice *DrawDecisionTaskPalette(std::span<const DecisionTaskChoice> choices, std::uint64_t catalogRevision,
+                                                      DecisionTaskPaletteDraft &draft, const EditorGuiContext &context,
+                                                      EditorWorkspaceViewCommandData &command) {
+        if (draft.catalogRevision != catalogRevision) {
+            draft.catalogRevision = catalogRevision;
+            draft.selected = {};
+        }
+        if (choices.empty())
+            return nullptr;
+
+        const auto text = [&](std::string_view key) -> const std::string & {
+            return context.localization.Get("editor", key);
+        };
+        const auto &fonts = context.theme.fonts;
+        Ui::FieldLabel(text("workspace.decision_graph.create_task").c_str(), fonts);
+        static_cast<void>(Ui::InputTextControl("##DecisionTaskSearch", draft.search.data(), draft.search.size(), fonts,
+                                               {.hint = text("workspace.source_edit.find").c_str()}));
+        command.sourceTextInputOwned = command.sourceTextInputOwned || ImGui::IsItemActive();
+
+        constexpr auto Maximum = AI::DecisionNodeGeneration::MaximumNodes;
+        std::array<std::size_t, Maximum> visible;
+        const std::string_view search(draft.search.begin(), std::ranges::find(draft.search, '\0'));
+        int count = 0;
+        int selection = 0;
+        for (std::size_t index = 0; index < std::min(choices.size(), Maximum); ++index) {
+            if (!MatchesTaskLabel(choices[index].label, search))
+                continue;
+            visible[static_cast<std::size_t>(count++)] = index;
+            if (choices[index].type == draft.selected)
+                selection = count;
+        }
+        if (count == 0) {
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("workspace.source_edit.no_match"), Theme::Text(), fonts);
+            return nullptr;
+        }
+        const auto &placeholder = text("workspace.decision_graph.select_task");
+        const auto choice = [&](int row) -> const DecisionTaskChoice & {
+            return choices[visible[static_cast<std::size_t>(row - 1)]];
+        };
+        const Ui::ComboItemSource items{.label = [&](int row) {
+            return row == 0 ? placeholder.c_str() : choice(row).label.c_str();
+        }};
+        if (Ui::ComboControl("##DecisionTaskChoice", &selection, count + 1, items, fonts))
+            draft.selected = selection == 0 ? AI::DecisionNodeTypeId{} : choice(selection).type;
+        return selection == 0 ? nullptr : &choice(selection);
     }
 
     /** @copydoc EditorWorkspaceView::ApplyDecisionCanvasInteraction */

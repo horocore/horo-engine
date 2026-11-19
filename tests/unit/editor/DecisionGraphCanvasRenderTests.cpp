@@ -9,6 +9,7 @@
 #include "editor/screens/workspace/DecisionGraphCanvas.h"
 #include "editor/screens/workspace/DecisionGraphCanvasModel.h"
 #include "editor/screens/workspace/DecisionProblemsView.h"
+#include "editor/screens/workspace/DecisionTaskPalette.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "support/DecisionGraphCompilerTestSupport.h"
 
@@ -22,6 +23,7 @@
 #include <map>
 #include <memory>
 #include <span>
+#include <string_view>
 
 namespace Horo::Editor {
     namespace {
@@ -147,6 +149,43 @@ namespace Horo::Editor {
             });
         }
     }  // namespace
+
+    TEST_CASE("Decision task palette only offers an explicit visible selection from the current catalog",
+              "[unit][editor][decision][palette]") {
+        CanvasFixture fixture;
+        const auto task = AI::DecisionNodeTypeId::Create(101).Value();
+        const auto query = AI::DecisionNodeTypeId::Create(102).Value();
+        const std::array choices{
+            DecisionTaskChoice{task, AI::DecisionProviderId::Create(202).Value(), 3, "Native Movement (101)", false},
+            DecisionTaskChoice{query, AI::DecisionProviderId::Create(203).Value(), 7, "Query Task (102)", true},
+        };
+        DecisionTaskPaletteDraft draft{.selected = query, .catalogRevision = 4};
+        const auto draw = [&](std::span<const DecisionTaskChoice> catalog, std::uint64_t revision, std::string_view filter) {
+            draft.search.fill('\0');
+            std::ranges::copy(filter, draft.search.begin());
+            EditorWorkspaceViewCommandData command;
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos({0, 0});
+            ImGui::SetNextWindowSize({220, 210});
+            ImGui::Begin("Decision palette test", nullptr, ImGuiWindowFlags_NoSavedSettings);
+            const auto *choice = DrawDecisionTaskPalette(catalog, revision, draft, fixture.context, command);
+            ImGui::End();
+            ImGui::Render();
+            REQUIRE(ImGui::GetDrawData()->TotalVtxCount > 0);
+            return choice;
+        };
+
+        CHECK(draw(choices, 4, "qUeRy") == &choices[1]);
+        CHECK(fixture.labels.Used("workspace.source_edit.find"));
+        CHECK(draw(choices, 4, "101") == nullptr);
+        CHECK(draft.selected == query);
+        CHECK(draw(choices, 4, "nonexistent") == nullptr);
+        CHECK(fixture.labels.Used("workspace.source_edit.no_match"));
+        CHECK(draw(choices, 4, "102") == &choices[1]);
+        CHECK(draw(std::span{choices}.first(1), 4, "") == nullptr);
+        CHECK(draw(choices, 5, "query") == nullptr);
+        CHECK_FALSE(draft.selected.IsValid());
+    }
 
     TEST_CASE("Decision canvas validation resolves only exact visible nodes and clears replaced findings",
               "[unit][editor][decision][canvas]") {
