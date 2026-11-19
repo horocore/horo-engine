@@ -1,4 +1,5 @@
 #include "DecisionGraphCanvasModel.h"
+#include "DecisionProblemsView.h"
 #include "EditorWorkspaceView.h"
 #include "Horo/AI/DecisionAssetValidation.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
@@ -14,6 +15,84 @@
 
 namespace Horo::Editor {
     namespace {
+        /** @brief Resolves a persisted node identity against the authored family currently shown by the canvas. */
+        bool HasProblemNode(const AI::DecisionGraphSource &graph, const AI::DecisionNodeId node) {
+            if (!node.IsValid())
+                return false;
+            return std::visit([node](const auto &source) {
+                using Source = std::remove_cvref_t<decltype(source)>;
+                if constexpr (std::is_same_v<Source, std::shared_ptr<const AI::BehaviorTreeAsset>>) {
+                    return source && source->FindNode(AI::BehaviorTreeNodeId::Create(node.Value()).Value());
+                } else if constexpr (std::is_same_v<Source, AI::StateMachineAssetDescriptor>) {
+                    return std::ranges::find(source.states, node, &AI::StateMachineState::id) != source.states.end();
+                } else {
+                    return source.root == node || std::ranges::any_of(source.options, [node](const auto &entry) {
+                        return entry.option.id == node;
+                    });
+                }
+            }, graph.body);
+        }
+
+        /** @brief Uses the same localized severity vocabulary as Build Output. */
+        const char *ProblemSeverityLabel(const DiagnosticSeverity severity) {
+            using enum DiagnosticSeverity;
+            switch (severity) {
+                case Warning:
+                    return "workspace.global_dock.build_output.row_status.warning";
+                case Error:
+                    return "workspace.global_dock.console.row.error";
+                case Fatal:
+                    return "workspace.global_dock.build_output.row_status.fatal";
+                default:
+                    return "workspace.global_dock.build_output.row_status.info";
+            }
+        }
+
+        /** @brief Formats the exact source span without interpreting the diagnostic's semantic path. */
+        std::string ProblemSourceLabel(const SourceLocation &source) {
+            if (!source.line)
+                return source.source;
+            if (!source.column)
+                return std::format("{}:{}", source.source, source.line);
+            return std::format("{}:{}:{}", source.source, source.line, source.column);
+        }
+
+        /** @brief Renders one finding and admits only actions owned by that finding and the active graph. */
+        AI::DecisionNodeId DrawDecisionProblem(const DecisionGraphWorkspaceDocument &document,
+                                               const AI::DecisionAssetValidationDiagnostic &finding, const EditorGuiContext &context,
+                                               EditorWorkspaceViewCommandData &command) {
+            const auto text = [&](const char *key) -> const std::string & {
+                return context.localization.Get("editor", key);
+            };
+            const auto label = [&](std::string_view value, ImVec4 color) {
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, value, color, context.theme.fonts);
+            };
+            const auto severity = finding.severity >= DiagnosticSeverity::Error
+                                      ? Theme::Err()
+                                      : (finding.severity == DiagnosticSeverity::Warning ? Theme::Warn() : Theme::Text());
+            label(std::format("{} · {} · {}", text(ProblemSeverityLabel(finding.severity)), finding.code.Value(), finding.message),
+                  severity);
+            if (!finding.source.source.empty())
+                label(ProblemSourceLabel(finding.source), Theme::Muted());
+            const auto &target = finding.target;
+            if (target.asset != document.graph->asset)
+                return {};
+            const DecisionGraphDocumentFence fence{document.identity.instance, document.revision};
+            if (target.blackboard == document.graph->blackboard && target.key.IsValid() &&
+                Ui::Button({.label = text("workspace.decision_graph.open_diagnostic_key").c_str(), .font = context.theme.fonts.sans})) {
+                command.command = EditorWorkspaceViewCommand::OpenDecisionDiagnosticKey;
+                command.decisionDiagnosticKey = DecisionDiagnosticKeyRequest{fence, target.blackboard, target.key};
+            }
+            if (target.node.IsValid()) {
+                if (!HasProblemNode(*document.graph, target.node))
+                    label(text("workspace.decision_graph.problem_node_missing"), Theme::Muted());
+                else if (Ui::Button(
+                             {.label = text("workspace.decision_graph.locate_problem_node").c_str(), .font = context.theme.fonts.sans}))
+                    return target.node;
+            }
+            return {};
+        }
+
         /** @brief Projects bounded family information without instantiating or preparing the graph. */
         struct DecisionSummary final {
             const char *familyLabel;
@@ -319,6 +398,56 @@ namespace Horo::Editor {
             outCommand = {.command = EditorWorkspaceViewCommand::EditDecisionLayout, .decisionLayoutEdit = interaction.layout};
     }
 
+    /** @copydoc DrawDecisionProblems */
+    AI::DecisionNodeId DrawDecisionProblems(const DecisionGraphWorkspaceDocument &document,
+                                            std::span<const AI::DecisionAssetValidationDiagnostic> findings,
+                                            const EditorGuiContext &context, EditorWorkspaceViewCommandData &command) {
+        if (findings.empty())
+            return {};
+        const auto text = [&](const char *key) -> const std::string & {
+            return context.localization.Get("editor", key);
+        };
+        const auto documentId = std::to_string(document.identity.instance.Value());
+        ImGui::PushID(documentId.c_str());
+        auto &storage = *ImGui::GetStateStorage();
+        const auto pageId = ImGui::GetID("##DecisionProblemsPage");
+        const auto heading = std::format("{} ({})", text("workspace.decision_graph.problems"), findings.size());
+        Ui::Card card({.id = "##DecisionProblems"});
+        card.DrawTitleBar({.id = "##title", .title = heading.c_str(), .fonts = context.theme.fonts});
+        AI::DecisionNodeId focus;
+        if (card.BeginBody()) {
+            constexpr std::size_t PageSize = 6;
+            const auto lastPage = static_cast<int>((findings.size() - 1) / PageSize);
+            auto page = std::clamp(storage.GetInt(pageId), 0, lastPage);
+            const auto start = static_cast<std::size_t>(page) * PageSize;
+            const auto visible = findings.subspan(start, std::min(PageSize, findings.size() - start));
+            for (std::size_t index = 0; index < visible.size(); ++index) {
+                ImGui::PushID(static_cast<int>(start + index));
+                if (const auto node = DrawDecisionProblem(document, visible[index], context, command); node.IsValid())
+                    focus = node;
+                ImGui::PopID();
+                if (index + 1 < visible.size())
+                    ImGui::Separator();
+            }
+            if (lastPage > 0) {
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, std::format("{} / {}", page + 1, lastPage + 1), Theme::Muted(),
+                                context.theme.fonts);
+                if (Ui::Button({.label = text("workspace.blackboard.usage_previous").c_str(),
+                                .enabled = page > 0,
+                                .font = context.theme.fonts.sans}))
+                    --page;
+                if (Ui::Button({.label = text("workspace.blackboard.usage_next").c_str(),
+                                .enabled = page < lastPage,
+                                .font = context.theme.fonts.sans}))
+                    ++page;
+                storage.SetInt(pageId, page);
+            }
+        }
+        card.Finish();
+        ImGui::PopID();
+        return focus;
+    }
+
     /** @copydoc EditorWorkspaceView::DrawDecisionGraphDocument */
     bool EditorWorkspaceView::DrawDecisionGraphDocument(const EditorWorkspaceViewModel &viewModel,
                                                         EditorWorkspaceViewCommandData &outCommand) const {
@@ -350,24 +479,15 @@ namespace Horo::Editor {
                      code == Application::DecisionCookErrors::Stale.code.Value())
                 key = "workspace.decision_graph.subtree_stale";
             label(text(key), Theme::Warn());
-            if (!opened->diagnostic->diagnostics.empty()) {
+            if (!opened->validation && !opened->diagnostic->diagnostics.empty()) {
                 const auto &finding = opened->diagnostic->diagnostics.front();
                 label(std::format("{} · {}", finding.code.Value(), finding.message), Theme::Text());
             }
-            if (opened->validation) {
-                const auto findings = opened->validation->Diagnostics();
-                const auto keyFinding = std::ranges::find_if(findings, [&](const auto &finding) {
-                    const auto &target = finding.target;
-                    return target.asset == opened->graph->asset && target.blackboard == opened->graph->blackboard && target.key.IsValid();
-                });
-                if (keyFinding != findings.end() && Ui::Button({.label = text("workspace.decision_graph.open_diagnostic_key").c_str(),
-                                                                .font = m_context.theme.fonts.sans})) {
-                    outCommand.command = EditorWorkspaceViewCommand::OpenDecisionDiagnosticKey;
-                    outCommand.decisionDiagnosticKey = DecisionDiagnosticKeyRequest{{opened->identity.instance, opened->revision},
-                                                                                    keyFinding->target.blackboard,
-                                                                                    keyFinding->target.key};
-                }
-            }
+        }
+        if (opened->validation) {
+            const auto node = DrawDecisionProblems(*opened, opened->validation->Diagnostics(), m_context, outCommand);
+            if (node.IsValid())
+                m_decisionGraphCanvas.RequestFocus({opened->identity.instance, opened->revision}, node);
         }
         const auto &feedback = viewModel.contentBrowserOperationError;
         if (feedback == "workspace.decision_graph.diagnostic_key_missing" ||

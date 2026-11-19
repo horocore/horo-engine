@@ -8,6 +8,7 @@
 #include "Horo/Foundation/DataBus.h"
 #include "editor/screens/workspace/DecisionGraphCanvas.h"
 #include "editor/screens/workspace/DecisionGraphCanvasModel.h"
+#include "editor/screens/workspace/DecisionProblemsView.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "support/DecisionGraphCompilerTestSupport.h"
 
@@ -17,6 +18,7 @@
 #include <cmath>
 #include <cstdint>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <map>
 #include <memory>
 #include <span>
@@ -191,6 +193,69 @@ namespace Horo::Editor {
         document.validation.reset();
         fixture.Draw(document, 280.0F);
         CHECK_FALSE(fixture.labels.Used("workspace.decision_canvas.validation_issue"));
+    }
+
+    TEST_CASE("Decision Problems pages findings and routes the exact activated target", "[unit][editor][decision][canvas]") {
+        using namespace AI::DecisionGraphTestSupport;
+        CanvasFixture fixture;
+        const auto source = std::make_shared<const AI::DecisionGraphSource>(
+            Tree(4, {TreeNode(1, AI::DecisionControlKind::Root), TreeNode(2, AI::DecisionControlKind::Task)}, {Edge(1, 1, 2)}));
+        DecisionGraphWorkspaceDocument document;
+        document.identity.instance = DocumentInstanceId::Create(21).Value();
+        document.graph = source;
+        document.revision = 3;
+        std::array<AI::DecisionAssetValidationDiagnostic, 8> findings{};
+        const auto firstKey = AI::BlackboardKeyId::Create(4).Value();
+        const auto secondKey = AI::BlackboardKeyId::Create(6).Value();
+        findings[0].target = {Graph(5), Node(1), source->blackboard, firstKey};
+        findings[1].target = {source->asset, Node(1), source->blackboard, firstKey};
+        findings[2].target = {source->asset, Node(2), source->blackboard, secondKey};
+        findings[6].severity = DiagnosticSeverity::Fatal;
+        findings[7].target = {source->asset, Node(99), {}, {}};
+
+        const auto draw = [&] {
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos({0, 0});
+            ImGui::SetNextWindowSize({480, 680});
+            ImGui::Begin("Decision Problems test", nullptr, ImGuiWindowFlags_NoSavedSettings);
+            EditorWorkspaceViewCommandData command;
+            const auto node = DrawDecisionProblems(document, findings, fixture.context, command);
+            ImGui::End();
+            ImGui::Render();
+            return std::pair{node, std::move(command)};
+        };
+        auto initial = draw();
+        CHECK(initial.second.command == EditorWorkspaceViewCommand::None);
+        CHECK_FALSE(fixture.labels.Used("workspace.global_dock.build_output.row_status.fatal"));
+        ImGuiWindow *card{};
+        for (auto *window : ImGui::GetCurrentContext()->Windows) {
+            if (window->Active && std::string_view{window->Name}.find("/##DecisionProblems_") != std::string_view::npos)
+                card = window;
+        }
+        REQUIRE(card);
+        ImGui::FocusWindow(card);
+        const auto activate = [&](const char *key, int index) {
+            const auto &label = fixture.labels.Get("editor", key);
+            const auto seed = ImHashData(&index, sizeof(index), card->ID);
+            ImGui::ActivateItemByID(ImHashStr(label.c_str(), 0, seed));
+        };
+        activate("workspace.decision_graph.open_diagnostic_key", 0);
+        CHECK(draw().second.command == EditorWorkspaceViewCommand::None);
+        activate("workspace.decision_graph.open_diagnostic_key", 2);
+        const auto selected = draw().second.decisionDiagnosticKey;
+        REQUIRE(selected);
+        CHECK(selected->key == secondKey);
+        CHECK(selected->fence.instance == document.identity.instance);
+        CHECK(selected->fence.revision == document.revision);
+        activate("workspace.decision_graph.locate_problem_node", 1);
+        CHECK(draw().first == Node(1));
+
+        const auto &next = fixture.labels.Get("editor", "workspace.blackboard.usage_next");
+        ImGui::ActivateItemByID(card->GetID(next.c_str()));
+        static_cast<void>(draw());
+        static_cast<void>(draw());
+        CHECK(fixture.labels.Used("workspace.global_dock.build_output.row_status.fatal"));
+        CHECK(fixture.labels.Used("workspace.decision_graph.problem_node_missing"));
     }
 
     TEST_CASE("Decision graph canvas renders native links across revisions and narrow widths", "[unit][editor][decision][canvas]") {
