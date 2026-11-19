@@ -5,11 +5,21 @@
 
 namespace Horo::XR {
     namespace {
+        /** @brief Rejects a missing fixed bound or mixed fixed and observed evidence policies. */
+        bool ValidCadence(const XRReprojectionPolicy &policy) noexcept {
+            switch (policy.cadence) {
+                case XRReprojectionCadenceMode::FixedInterval:
+                    return policy.maximumPredictionIntervalNanoseconds > 0;
+                case XRReprojectionCadenceMode::ObservedNativePeriods:
+                    return policy.maximumPredictionIntervalNanoseconds == 0;
+            }
+            return false;
+        }
+
         /** @brief This envelope is deliberately narrower than any one native extension's full formats. */
         bool CompatiblePolicy(const XRReprojectionPolicy &policy) noexcept {
             using enum Render::RenderTextureFormat;
-            return policy.maximumPredictionIntervalNanoseconds > 0 &&
-                   policy.motion == XRReprojectionMotionConvention::CurrentNdcMinusPreviousNdcXYZ &&
+            return ValidCadence(policy) && policy.motion == XRReprojectionMotionConvention::CurrentNdcMinusPreviousNdcXYZ &&
                    (policy.motionFormat == Rgba16Float || policy.motionFormat == Rgba32Float) &&
                    (policy.depthFormat == Depth16Unorm || policy.depthFormat == Depth32Float);
         }
@@ -65,6 +75,28 @@ namespace Horo::XR {
                        a.pose.target == b.pose.target && a.pose.components.positionMeters.value && a.pose.components.orientation.value &&
                        b.pose.components.positionMeters.value && b.pose.components.orientation.value;
             });
+        }
+
+        /** @brief Checks that every submitted view is expressed in the observed native projection space. */
+        bool UsesReference(const XRViewRenderPlan &plan, const XRPoseSample &reference) noexcept {
+            return std::ranges::all_of(plan.Views(), [&](const auto &view) {
+                return view.pose.target == reference.Source();
+            });
+        }
+
+        /** @brief Allows both exact quaternion encodings of the same rotation without inventing a tolerance. */
+        bool SameRotation(const Math::Quaternion a, const Math::Quaternion b) noexcept {
+            return a == b || a == Math::Quaternion{-b.x, -b.y, -b.z, -b.w};
+        }
+
+        /** @brief Proves that the app-controlled projection reference did not move between these native predictions. */
+        bool UnchangedReference(const XRViewRenderPlan &current, const std::optional<XRPoseSample> &now, const XRViewRenderPlan &previous,
+                                const std::optional<XRPoseSample> &before) noexcept {
+            if (!now || !before || now->Source() != before->Source() || now->Target() != before->Target() ||
+                !UsesReference(current, *now) || !UsesReference(previous, *before))
+                return false;
+            return now->Components().positionMeters.value == before->Components().positionMeters.value &&
+                   SameRotation(*now->Components().orientation.value, *before->Components().orientation.value);
         }
 
         /** @brief Requires complete zero-unresolved coverage of both actual released outputs for every view. */
@@ -220,9 +252,32 @@ namespace Horo::XR {
         if (const auto status = ValidateProjectionEnd(frame, plan); status != XRFrameStatus::Ok)
             return status;
         if (reprojection_)
-            previousProjection_ = plan;
+            previousProjection_.emplace(ProjectionHistory{plan, currentPeriod_, currentReference_});
         lastEnded_ = frame;
         ClearFrame();
+        return XRFrameStatus::Ok;
+    }
+
+    /** @copydoc XRFrameLifecycle::RecordReprojectionReference */
+    XRFrameStatus XRFrameLifecycle::RecordReprojectionReference(const XRFrameId &frame, const XRPoseSample &reference) noexcept {
+        if (const auto valid = ValidateCurrent(frame); valid != XRFrameStatus::Ok)
+            return valid;
+        if (!reprojection_ || reprojection_->cadence != XRReprojectionCadenceMode::ObservedNativePeriods)
+            return XRFrameStatus::Unsupported;
+        if (current_.phase != XRFramePhase::ImagesAcquired)
+            return XRFrameStatus::OutOfOrder;
+        if (currentReference_)
+            return XRFrameStatus::Duplicate;
+        const auto source = reference.Source().kind;
+        if (reference.Session() != frame.session || (source != XRSpaceKind::Local && source != XRSpaceKind::Stage) ||
+            reference.Target().kind != XRSpaceKind::World || reference.Purpose() != XRPosePurpose::PresentationPrediction ||
+            reference.Time().renderPrediction != current_.predictedDisplayTime)
+            return XRFrameStatus::InvalidInput;
+        const auto &components = reference.Components();
+        if (components.positionMeters.validity != XRPoseComponentValidity::Tracked ||
+            components.orientation.validity != XRPoseComponentValidity::Tracked || components.loss != XRTrackingLossState::None)
+            return XRFrameStatus::InvalidInput;
+        currentReference_ = reference;
         return XRFrameStatus::Ok;
     }
 
@@ -247,14 +302,22 @@ namespace Horo::XR {
         if (!reprojection_)
             return BaselineProjection;
         if (!previousProjection_ || frame.sequence <= 1 || lastEnded_.sequence != frame.sequence - 1 ||
-            inputs.previousFrameSequence != lastEnded_.sequence || inputs.previousPrediction != previousProjection_->PredictedDisplayTime())
+            inputs.previousFrameSequence != lastEnded_.sequence ||
+            inputs.previousPrediction != previousProjection_->plan.PredictedDisplayTime())
             return HistoryUnavailable;
+        const bool observedCadence = reprojection_->cadence == XRReprojectionCadenceMode::ObservedNativePeriods;
+        const auto maximumInterval = observedCadence ? std::min(currentPeriod_, previousProjection_->period).ToNanoseconds()
+                                                     : reprojection_->maximumPredictionIntervalNanoseconds;
         const auto interval = plan.PredictedDisplayTime().Nanoseconds() - inputs.previousPrediction.Nanoseconds();
-        if (interval <= 0 || interval > reprojection_->maximumPredictionIntervalNanoseconds ||
-            !CompatibleHistory(plan, *previousProjection_))
+        if (interval <= 0 || interval > maximumInterval || !CompatibleHistory(plan, previousProjection_->plan))
+            return HistoryUnavailable;
+        if (observedCadence && !UnchangedReference(plan, currentReference_, previousProjection_->plan, previousProjection_->reference))
             return HistoryUnavailable;
         if (!ValidApplicationDelta(inputs.applicationDelta) || inputs.views.size() != plan.Views().size() ||
             inputs.views.size() != reprojection_->viewCount)
+            return InputsInvalid;
+        if (observedCadence && (inputs.applicationDelta->translationMeters != Math::Vec3{} ||
+                                !SameRotation(inputs.applicationDelta->rotation, Math::Quaternion::Identity())))
             return InputsInvalid;
         for (std::size_t i = 0; i < inputs.views.size(); ++i) {
             const auto &view = inputs.views[i];

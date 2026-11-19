@@ -314,13 +314,25 @@ namespace Horo::Tests::OpenXR {
                 UnavailableCoverage,
                 UnresolvedSample,
                 WrongExtent,
+                ExplicitApplicationDelta,
+                MissingCurrentPeriod,
+                ShortPreviousPeriod,
+                MissingPreviousReference,
+                ReplacedReference,
+                MovedReference,
+                ContradictoryDelta,
                 NativeFailure
             };
             const auto handoff =
                 GENERATE(Handoff::Exact, Handoff::Revoked, Handoff::LateRevoke, Handoff::ForeignOwner, Handoff::UnavailableCoverage,
-                         Handoff::UnresolvedSample, Handoff::WrongExtent, Handoff::NativeFailure);
+                         Handoff::UnresolvedSample, Handoff::WrongExtent, Handoff::ExplicitApplicationDelta, Handoff::MissingCurrentPeriod,
+                         Handoff::ShortPreviousPeriod, Handoff::MissingPreviousReference, Handoff::ReplacedReference,
+                         Handoff::MovedReference, Handoff::ContradictoryDelta, Handoff::NativeFailure);
             const auto route = GENERATE(NativeReprojectionRoute::FrameSynthesisExt, NativeReprojectionRoute::SpaceWarpFb);
-            CompositorFixture f{false, true, true, route};
+            const bool explicitDelta = handoff == Handoff::ExplicitApplicationDelta;
+            const auto cadence =
+                explicitDelta ? XRReprojectionCadenceMode::FixedInterval : XRReprojectionCadenceMode::ObservedNativePeriods;
+            CompositorFixture f{false, true, true, route, false, 1, cadence};
             const bool extension = route == NativeReprojectionRoute::FrameSynthesisExt;
             CHECK(f.synthesisExtents[0] == Render::FramebufferExtent{640, 512});
             CHECK(f.synthesisExtents[1] == Render::FramebufferExtent{extension ? 800U : 640U, 512});
@@ -331,8 +343,13 @@ namespace Horo::Tests::OpenXR {
             CHECK(f.native.owner.RegisterReprojectionProvider(f.session, f.native.preflight.Attempt()).HasError());
             OpenXRReprojectionFrameImages pair{f.frames, f.motionOwner, f.synthesisDepthOwner};
 
+            const auto predictionPeriod = f.script.period;
+            if (handoff == Handoff::ShortPreviousPeriod)
+                f.script.period = 4'000'000;
             const auto prior = f.Begin();
             const auto priorColor = f.Acquire(prior);
+            if (!explicitDelta && handoff != Handoff::MissingPreviousReference)
+                f.RecordReference(prior);
             const std::array priorImages{priorColor};
             const auto priorPlan = f.Plan(prior, priorColor);
             f.images.complete = true;
@@ -343,8 +360,12 @@ namespace Horo::Tests::OpenXR {
             REQUIRE(f.compositor.EndProjection(prior, priorPlan, priorTargets).HasValue());
 
             f.script.prediction += 5'000'000;
+            f.script.period = handoff == Handoff::MissingCurrentPeriod ? 0 : predictionPeriod;
             const auto frame = f.Begin();
             const auto color = f.Acquire(frame);
+            if (!explicitDelta)
+                f.RecordReference(frame, handoff == Handoff::MovedReference ? Math::Vec3{0.25F, 0.0F, 0.0F} : Math::Vec3{},
+                                  handoff == Handoff::ReplacedReference ? 2 : 1);
             const std::array images{color};
             const auto plan = f.Plan(frame, color);
             const std::array targets{NativeProjectionTarget{&f.color, color}};
@@ -376,8 +397,9 @@ namespace Horo::Tests::OpenXR {
                 eyes.back().motion.rectangle.width = wrongWidth;
                 eyes.back().depth.rectangle.width = wrongWidth;
             }
+            const float delta = explicitDelta || handoff == Handoff::ContradictoryDelta ? 0.125F : 0.0F;
             XRReprojectionInputs input{priorPlan.PredictedDisplayTime(), prior.sequence,
-                                       XRReprojectionSpaceDelta{f.local, {0.125F, 0.0F, 0.0F}, Math::Quaternion::Identity()}, eyes};
+                                       XRReprojectionSpaceDelta{f.local, {delta, 0.0F, 0.0F}, Math::Quaternion::Identity()}, eyes};
             // These completed classification values are scripted with the other native fixture inputs.
             std::array<XRReprojectionViewCoverage, 2> reported{};
             for (std::size_t eye = 0; eye < eyes.size(); ++eye) {
@@ -398,8 +420,12 @@ namespace Horo::Tests::OpenXR {
                 CHECK(expected == XRReprojectionStatus::CoverageUnavailable);
             else if (handoff == Handoff::UnresolvedSample)
                 CHECK(expected == XRReprojectionStatus::CoverageRejected);
-            else if (handoff == Handoff::WrongExtent)
+            else if (handoff == Handoff::WrongExtent || handoff == Handoff::ContradictoryDelta)
                 CHECK(expected == XRReprojectionStatus::InputsInvalid);
+            else if (handoff == Handoff::MissingCurrentPeriod || handoff == Handoff::ShortPreviousPeriod ||
+                     handoff == Handoff::MissingPreviousReference || handoff == Handoff::ReplacedReference ||
+                     handoff == Handoff::MovedReference)
+                CHECK(expected == XRReprojectionStatus::HistoryUnavailable);
             else
                 REQUIRE(expected == XRReprojectionStatus::Ready);
             if (handoff == Handoff::Revoked)
@@ -422,14 +448,14 @@ namespace Horo::Tests::OpenXR {
                 f.Recover();
             } else {
                 REQUIRE(actual.HasValue());
-                if (expected == XRReprojectionStatus::Ready && handoff != Handoff::Exact)
+                if (expected == XRReprojectionStatus::Ready && handoff != Handoff::Exact && !explicitDelta)
                     expected = XRReprojectionStatus::InputsInvalid;
                 CHECK(actual.Value() == expected);
             }
             for (std::size_t eye = 0; eye < eyes.size(); ++eye) {
                 const auto &ext = f.script.ext[eye];
                 const auto &fb = f.script.fb[eye];
-                const bool synthesized = handoff == Handoff::Exact || handoff == Handoff::NativeFailure;
+                const bool synthesized = handoff == Handoff::Exact || explicitDelta || handoff == Handoff::NativeFailure;
                 if (!synthesized) {
                     CHECK(f.script.encoded[eye].next == nullptr);
                     continue;
@@ -458,7 +484,7 @@ namespace Horo::Tests::OpenXR {
                 CHECK(motion.imageRect.extent.height == static_cast<std::int32_t>(height));
                 CHECK(depth.imageRect.extent.width == static_cast<std::int32_t>(width));
                 CHECK(depth.imageRect.extent.height == static_cast<std::int32_t>(height));
-                CHECK((extension ? ext.appSpaceDeltaPose.position.x : fb.appSpaceDeltaPose.position.x) == 0.125F);
+                CHECK((extension ? ext.appSpaceDeltaPose.position.x : fb.appSpaceDeltaPose.position.x) == delta);
                 CHECK((extension ? ext.minDepth : fb.minDepth) == 0.25F);
                 CHECK((extension ? ext.maxDepth : fb.maxDepth) == 0.75F);
                 CHECK((extension ? ext.nearZ : fb.nearZ) == 0.2F);

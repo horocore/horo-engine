@@ -79,6 +79,13 @@ namespace Horo::XR {
 
     /** @copydoc XRFrameLifecycle::RecordWait */
     XRFrameWaitOutcome XRFrameLifecycle::RecordWait(const XRRenderPredictionTime predictedDisplayTime, const bool shouldRender) noexcept {
+        return RecordWaitWithNativePeriod(predictedDisplayTime, shouldRender, {});
+    }
+
+    /** @copydoc XRFrameLifecycle::RecordWaitWithNativePeriod */
+    XRFrameWaitOutcome XRFrameLifecycle::RecordWaitWithNativePeriod(const XRRenderPredictionTime predictedDisplayTime,
+                                                                    const bool shouldRender,
+                                                                    const Duration predictedDisplayPeriod) noexcept {
         if (!sessions_->IsOwnerThread())
             return {XRFrameStatus::WrongThread, {}};
         if (shutdown_)
@@ -88,6 +95,7 @@ namespace Horo::XR {
 
         const XRFrameId frame = current_.frame;
         current_.predictedDisplayTime = predictedDisplayTime;
+        currentPeriod_ = predictedDisplayPeriod;
         current_.phase = XRFramePhase::Waited;
         current_.shouldRender = shouldRender;
         if (!predictedDisplayTime.IsValid())
@@ -321,6 +329,8 @@ namespace Horo::XR {
     /** @copydoc XRFrameLifecycle::ClearFrame */
     void XRFrameLifecycle::ClearFrame() noexcept {
         current_ = {};
+        currentPeriod_ = {};
+        currentReference_.reset();
         images_.fill({});
         released_.fill(false);
         aborted_ = false;

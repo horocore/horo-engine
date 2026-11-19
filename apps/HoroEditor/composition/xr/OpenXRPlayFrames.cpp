@@ -547,6 +547,8 @@ namespace Horo::Application::Internal {
         }
         if (prepareMotion)
             render_->motionFrame = motion.frame;
+        // Optional calibration is useful only when the canonical reprojection policy requested the same observation.
+        static_cast<void>(frames_.RecordReprojectionReference(frame.frame, reference.Value()));
         render_->plan.emplace(std::move(plan).Value());
         render_->hostFrameNumber = frameNumber;
         return Result<void>::Success();

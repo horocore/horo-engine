@@ -131,7 +131,8 @@ namespace Horo::XR::OpenXRInternal {
         const auto prediction = XRRenderPredictionTime::Create(state.predictedDisplayTime);
         // SYNC: a completed native wait always creates begin/end debt, even with unusable prediction evidence.
         const auto recorded =
-            frames_->RecordWait(prediction.HasValue() ? prediction.Value() : XRRenderPredictionTime{}, state.shouldRender == XR_TRUE);
+            frames_->RecordWaitWithNativePeriod(prediction.HasValue() ? prediction.Value() : XRRenderPredictionTime{},
+                                                state.shouldRender == XR_TRUE, Duration::FromNanoseconds(state.predictedDisplayPeriod));
         return Outcome::Success(recorded);
     }
 

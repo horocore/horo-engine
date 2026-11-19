@@ -5,6 +5,7 @@
  * @brief Bounded, backend-neutral predicted-frame transaction owned by XRRuntime.
  */
 
+#include "Horo/Foundation/Time.h"
 #include "Horo/XR/XRReprojection.h"
 #include "Horo/XR/XRSessionLifecycle.h"
 #include "Horo/XR/XRSpacePose.h"
@@ -162,6 +163,15 @@ namespace Horo::XR {
          */
         [[nodiscard]] XRFrameWaitOutcome RecordWait(XRRenderPredictionTime predictedDisplayTime, bool shouldRender) noexcept;
 
+        /** @brief Records the reserved frame with actual cadence supplied by the same native wait.
+         * @param predictedDisplayTime Runtime prediction.
+         * @param shouldRender Runtime-supplied intent.
+         * @param predictedDisplayPeriod Actual period. Nonpositive periods leave cadence unproven.
+         * @return Same native obligation and result as RecordWait.
+         */
+        [[nodiscard]] XRFrameWaitOutcome RecordWaitWithNativePeriod(XRRenderPredictionTime predictedDisplayTime, bool shouldRender,
+                                                                    Duration predictedDisplayPeriod) noexcept;
+
         /** @brief Record native begin for the waited frame. @param frame Exact open frame. @return Typed order/owner result. */
         [[nodiscard]] XRFrameStatus Begin(const XRFrameId &frame) noexcept;
 
@@ -250,6 +260,13 @@ namespace Horo::XR {
          */
         [[nodiscard]] XRFrameStatus EndProjection(const XRFrameId &frame, const XRViewRenderPlan &plan) noexcept;
 
+        /** @brief Records the tracked native projection-reference to World observation for runtime-observed reprojection.
+         * @param frame Exact acquired frame before renderer admission. @param reference Calibrated pose at the same prediction.
+         * @return Ok or a typed failure. Missing evidence leaves ordinary projection available.
+         * @details Only a successful native projection End promotes this observation to predecessor evidence.
+         */
+        [[nodiscard]] XRFrameStatus RecordReprojectionReference(const XRFrameId &frame, const XRPoseSample &reference) noexcept;
+
         /** @brief Checks optional provider inputs at the runtime-owned submission cutoff.
          * @param frame Exact begun/rendered frame. @param plan Independently valid baseline projection intent.
          * @param inputs Exact released auxiliary subresources, preceding frame and app-space delta.
@@ -312,7 +329,17 @@ namespace Horo::XR {
         XRFrameLimits limits_{};
         XRFrameSnapshot current_{};
         XRFrameId lastEnded_{};
-        std::optional<XRViewRenderPlan> previousProjection_;
+
+        /** @brief Calibration and cadence owned by this exact successfully submitted native projection. */
+        struct ProjectionHistory final {
+            XRViewRenderPlan plan;
+            Duration period;
+            std::optional<XRPoseSample> reference;
+        };
+
+        std::optional<ProjectionHistory> previousProjection_;
+        Duration currentPeriod_;
+        std::optional<XRPoseSample> currentReference_;
         std::optional<XRReprojectionPolicy> reprojection_;
         std::array<std::optional<XRReprojectionImage>, XRFrameHardLimits::MaximumImages> reprojectionImages_{};
         std::array<XRSwapchainImageId, XRFrameHardLimits::MaximumImages> images_{};

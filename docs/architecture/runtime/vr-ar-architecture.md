@@ -754,6 +754,12 @@ through GUI recording. The native backend must accept that signal before Play
 records canonical submission. A closed unissued recording drains as a
 zero-layer frame. Only the same accepted signal can qualify its paired GPU
 coverage counters.
+An explicit observed-cadence reprojection policy takes the actual display period from
+each native wait. The interval to the last successfully ended projection must
+fit both periods. That prior projection must also carry the same tracked
+Local or Stage to World reference as the current projection before an identity
+application-space delta can be submitted. A missing period, missing reference
+or changed transform leaves ordinary projection available.
 
 See the [Khronos space-warp layer contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrCompositionLayerSpaceWarpInfoFB.html)
 for the distinction between runtime motion inputs and internal Renderer UV history.

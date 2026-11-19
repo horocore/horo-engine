@@ -113,7 +113,8 @@ namespace Horo::Tests::OpenXR {
 
             explicit CompositorFixture(bool enableDepth = false, bool requestSpaceWarp = false, bool enableSynthesis = false,
                                        NativeReprojectionRoute route = NativeReprojectionRoute::SpaceWarpFb, bool enablePassthrough = false,
-                                       std::uint32_t maximumLayers = 1)
+                                       std::uint32_t maximumLayers = 1,
+                                       XRReprojectionCadenceMode cadence = XRReprojectionCadenceMode::FixedInterval)
                 : synthesisRoute(route) {
                 if (enableSynthesis) {
                     native.capabilities = Capabilities(16, true);
@@ -174,9 +175,14 @@ namespace Horo::Tests::OpenXR {
                     REQUIRE(offer.HasValue());
                     synthesisExtents = offer.Value().extents;
                     XRReprojectionPolicy policy{.viewCount = static_cast<std::uint32_t>(synthesisExtents.size()),
-                                                .maximumPredictionIntervalNanoseconds = 20'000'000,
                                                 .motion = XRReprojectionMotionConvention::CurrentNdcMinusPreviousNdcXYZ};
                     std::ranges::copy(synthesisExtents, policy.viewExtents.begin());
+                    if (cadence == XRReprojectionCadenceMode::FixedInterval) {
+                        REQUIRE(frames.BindConfiguration(configuration, native.capabilities, {2, 3, 1}, policy) ==
+                                XRFrameStatus::InvalidInput);
+                        policy.maximumPredictionIntervalNanoseconds = 20'000'000;
+                    }
+                    policy.cadence = cadence;
                     REQUIRE(frames.BindConfiguration(configuration, native.capabilities, {2, 3, 1}, policy) == XRFrameStatus::Ok);
                 } else {
                     REQUIRE(frames.BindConfiguration(configuration, native.capabilities, {2, 2, maximumLayers}) == XRFrameStatus::Ok);
@@ -289,6 +295,20 @@ namespace Horo::Tests::OpenXR {
                         .projection = {-1, 1, -1, 1},
                         .recommendedExtent = {800, 600},
                         .maximumExtent = {800, 600}};
+            }
+
+            /** @brief Records the native Local-to-World sample from the same active scripted frame. */
+            void RecordReference(const XRFrameId &frame, const Math::Vec3 offset = {}, const std::uint32_t worldGeneration = 1) {
+                const auto prediction = frames.Snapshot().predictedDisplayTime;
+                auto pose = View(0, prediction).pose;
+                pose.source = local;
+                pose.target = {.id = {session, {30, worldGeneration}},
+                               .kind = XRSpaceKind::World,
+                               .worldOriginRevision = local.worldOriginRevision};
+                pose.components.positionMeters.value = offset;
+                const auto observed = XRPoseSample::Create(pose, session, local.worldOriginRevision);
+                REQUIRE(observed.HasValue());
+                REQUIRE(frames.RecordReprojectionReference(frame, observed.Value()) == XRFrameStatus::Ok);
             }
 
             XRViewRenderPlan Plan(const XRFrameId &frame, const XRSwapchainImageId &image, const XRSwapchainImageId *depthImage = nullptr,

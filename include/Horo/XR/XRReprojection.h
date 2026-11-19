@@ -17,16 +17,24 @@ namespace Horo::XR {
         Count
     };
 
+    /** @brief Selects the source of the bound on the interval between adjacent native projections. */
+    enum class XRReprojectionCadenceMode : std::uint8_t {
+        FixedInterval,        /**< Uses an explicit positive interval and caller-provided application delta. */
+        ObservedNativePeriods /**< Uses both actual native wait periods and an unchanged tracked reference. */
+    };
+
     /** @brief Admitted formats and ordered view extents shared by the runtime provider and Renderer producer.
      * @details Copy the exact provider extent for each projection view, repeating the extent for uniform providers.
+     * Observed cadence requires proof of an unchanged app-controlled projection reference.
      */
     struct XRReprojectionPolicy final {
         Render::RenderTextureFormat motionFormat{Render::RenderTextureFormat::Rgba16Float}; /**< Three signed components in RGB. */
         Render::RenderTextureFormat depthFormat{Render::RenderTextureFormat::Depth32Float}; /**< Normalized device depth. */
         std::array<Render::FramebufferExtent, XRHardLimits::MaximumViews> viewExtents{}; /**< Motion/depth extents in projection order. */
         std::uint32_t viewCount{};                                                       /**< Number of admitted entries in viewExtents. */
-        std::int64_t maximumPredictionIntervalNanoseconds{}; /**< Positive provider-supported predecessor interval ceiling. */
+        std::int64_t maximumPredictionIntervalNanoseconds{}; /**< Positive for fixed cadence and zero for observed cadence. */
         XRReprojectionMotionConvention motion{XRReprojectionMotionConvention::Count}; /**< Explicit producer/provider agreement. */
+        XRReprojectionCadenceMode cadence{XRReprojectionCadenceMode::FixedInterval};  /**< Existing callers retain an explicit interval. */
     };
 
     /** @brief Auxiliary allocation role, independent of ordinary projection-layer depth. */
