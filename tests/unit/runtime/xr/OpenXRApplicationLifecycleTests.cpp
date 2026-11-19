@@ -22,8 +22,17 @@
 #include <type_traits>
 #include <utility>
 
+namespace {
+    thread_local PFN_xrGetInstanceProcAddr resolveNativePlayFixture{};
+}
+
 extern "C" [[gnu::visibility("default")]] XRAPI_ATTR XrResult XRAPI_CALL HoroTestOpenXRResolve(XrInstance instance, const char *name,
                                                                                                PFN_xrVoidFunction *function) {
+    if (resolveNativePlayFixture) {
+        const auto result = resolveNativePlayFixture(instance, name, function);
+        if (result != XR_ERROR_FUNCTION_UNSUPPORTED)
+            return result;
+    }
     return Horo::Tests::OpenXRApplication::ApplicationNativeScript::Resolve(instance, name, function);
 }
 
@@ -987,8 +996,7 @@ namespace Horo::Tests::OpenXRApplication {
             Input::RawInputSnapshot raw_;
         };
 
-        std::unique_ptr<Runtime::SceneActivationCandidate> ActivatePlay(ApplicationFixture &fixture,
-                                                                        const std::optional<Input::PlayerId> player) {
+        std::unique_ptr<Runtime::SceneActivationCandidate> ActivatePlay(auto &fixture, const std::optional<Input::PlayerId> player) {
             REQUIRE(fixture.play);
             REQUIRE(fixture.play->SetPlayState(Editor::EditorPlayState::Playing).HasValue());
             const auto input = fixture.InputPort(player);
@@ -3096,6 +3104,8 @@ namespace Horo::Tests::OpenXRApplication {
         REQUIRE(RequireValue(fixture.ClosePlay()));
     }
 }  // namespace Horo::Tests::OpenXRApplication
+
+#include "OpenXRRealVulkanReprojectionSmoke.inl"
 
 namespace Horo::Tests::OpenXRApplication {
     TEST_CASE("Selected XR depth history keeps ordinary projection on optional second allocation failure", "[xr][vulkan][host][depth]") {

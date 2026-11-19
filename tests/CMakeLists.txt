@@ -6830,6 +6830,7 @@ if (HORO_BUILD_RENDER_VULKAN)
         target_include_directories(HoroRenderVulkanTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
         target_link_libraries(HoroRenderVulkanTests PRIVATE HoroOpenXRApplicationHost HoroEngine::RenderNull HoroEngine::SceneRenderExtraction
             HoroHostSignatureDocuments HoroEditorVulkanShaderInternal nlohmann_json::nlohmann_json MbedTLS::mbedcrypto miniz)
+        target_link_libraries(HoroRenderVulkanTests PRIVATE HoroThirdParty::ImGuiVulkan ${HORO_SDL3_TARGET})
         target_compile_definitions(HoroRenderVulkanTests PRIVATE HORO_TEST_OPENXR_LOADER="$<TARGET_FILE:HoroScriptedOpenXRLoader>")
         set_target_properties(HoroRenderVulkanTests PROPERTIES ENABLE_EXPORTS ON)
         add_dependencies(HoroRenderVulkanTests HoroScriptedOpenXRLoader)
