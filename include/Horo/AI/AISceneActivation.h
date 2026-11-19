@@ -374,6 +374,10 @@ namespace Horo::AI {
          */
         [[nodiscard]] Result<bool> SyncDecisionQueryAtBlackboardSync(DecisionQueryTask &task, const Runtime::RuntimeSceneView &scene,
                                                                      std::uint64_t tick) const;
+        /** @brief Resolves the exact live Scene entity for owner-side query context capture.
+         * @param agent Current AI agent generation. @return Exact entity reference or a typed stale-owner failure.
+         */
+        [[nodiscard]] Result<Runtime::EntityRef> ResolveDecisionQueryOwnerAtSafePoint(AgentHandle agent) const;
 
         /** @brief Composes the active scene's scheduler once, at the owner safe point.
          * @param jobs Process JobSystem, retained until every worker image pin drains.

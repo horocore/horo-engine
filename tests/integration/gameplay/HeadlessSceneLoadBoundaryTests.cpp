@@ -1,6 +1,7 @@
 #include "CommittedSceneAssets.h"
 #include "DecisionGraphCompilerTestSupport.h"
 #include "HeadlessCookedDecisionAdmission.h"
+#include "HeadlessNetworkServices.h"
 #include "HeadlessSceneLoadBoundary.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
@@ -263,8 +264,17 @@ namespace {
         const auto committed = CommittedSceneAssets::Capture(NativeDurableFileSystem{}, {directory.Path(), target}, assets.Snapshot());
         REQUIRE(committed.HasValue());
         Runtime::SceneDefinitionBuilder builder{{7}, {1}};
-        builder.Add({.object = {9}});
-        const auto scene = std::move(builder).Build();
+        builder.Add({.object = {8}, .localTransform = {.translation = {2, 0, 0}}});
+        Runtime::RuntimeEntityDefinition querier{.object = {9},
+                                                 .parent = Runtime::SceneObjectId{8},
+                                                 .localTransform = {.translation = {0.5F, 0, 0}}};
+        const auto identity = Decisions::MakeIdentity<AgentId>(50);
+        querier.components.aiAgent = AiAgentComponent{.agent = identity};
+        querier.components.aiController = AiControllerComponent{.controller = controller.controller,
+                                                                .decisionAsset = graph.asset,
+                                                                .blackboardSchema = fixture.schema->Identity()};
+        builder.Add(querier);
+        auto scene = std::move(builder).Build();
         REQUIRE(scene.HasValue());
         const auto limits = Prefab::PrefabLimitProfile::Create({});
         REQUIRE(limits.HasValue());
@@ -282,5 +292,55 @@ namespace {
             CHECK(admitted.ErrorValue().code.Value() == AIErrors::EnvironmentQueryDescriptorUnavailable.code.Value());
         }
         CHECK(fixture.probe.factories == 0);
+#if HORO_TEST_PHYSICS_NATIVE
+        if (available) {
+            JobSystem jobs{{1, 8}};
+            Assets::AssetLoadService loads{jobs, committed.Value()->SceneProvider()};
+            const HeadlessSceneLoadBoundary load{{}, std::chrono::steady_clock::now() + std::chrono::seconds{5}};
+            auto execution = input;
+            execution.execution.emplace(AiSceneCookedDecisionExecution{jobs, {}, {}});
+            auto composed =
+                ComposeHeadlessSceneNetworkServices(std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(scene).Value()),
+                                                    {.mode = Physics::PhysicsRuntimeMode::Canonical,
+                                                     .settings = Physics::Settings(),
+                                                     .registry = assets,
+                                                     .loads = loads,
+                                                     .load = load,
+                                                     .aiControllers = catalog,
+                                                     .cookedDecisions =
+                                                         std::make_shared<const HeadlessCookedDecisionInput>(std::move(execution))});
+            REQUIRE(composed.HasValue());
+            using namespace Network;
+            const auto service = [&](NetworkModeServiceKind kind) {
+                return composed.Value().factories.services[static_cast<std::size_t>(kind)](
+                    {kind, NetworkProjectRole::Standalone, {}, NetworkModeWorldKind::Standalone, {7}});
+            };
+            auto sceneService = service(NetworkModeServiceKind::Scene);
+            REQUIRE(sceneService.HasValue());
+            REQUIRE(sceneService.Value()->Prepare().HasValue());
+            auto physics = service(NetworkModeServiceKind::Physics);
+            REQUIRE(physics.HasValue());
+            REQUIRE(physics.Value()->Prepare().HasValue());
+            REQUIRE(physics.Value()->Activate().HasValue());
+            const auto before = InspectHeadlessDecisionValue(*physics.Value(), identity, key);
+            REQUIRE(before.HasValue());
+            CHECK_FALSE(before.Value());
+            for (std::uint64_t tick = 1; tick <= 5; ++tick) {
+                const auto frame = physics.Value()->RunFixedTick({tick, Duration::FromNanoseconds(16'666'667), {}});
+                if (frame.HasError())
+                    UNSCOPED_INFO(frame.ErrorValue().message);
+                REQUIRE(frame.HasValue());
+            }
+            const auto after = InspectHeadlessDecisionValue(*physics.Value(), identity, key);
+            REQUIRE(after.HasValue());
+            REQUIRE(after.Value());
+            const auto &winner = std::get<Math::WorldCoordinate64>(std::get<BlackboardScalarValue>(*after.Value()));
+            CHECK(winner == Math::WorldCoordinate64::FromMillimeters(2000, 0, -500));
+            CHECK(fixture.probe.factories == 0);
+            physics.Value()->Shutdown();
+            sceneService.Value()->Shutdown();
+            CHECK(InspectHeadlessDecisionValue(*physics.Value(), identity, key).HasError());
+        }
+#endif
     }
 }  // namespace

@@ -146,7 +146,7 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Composes the exact available hierarchy from live and prospective generation-fenced views. */
-        Result<Math::WorldCoordinate64> CapturePosition(const HeadlessPerceptionPolicy &policy, const Runtime::RuntimeSceneView &scene,
+        Result<Math::WorldCoordinate64> CapturePosition(Math::WorldCoordinate64 origin, const Runtime::RuntimeSceneView &scene,
                                                         Runtime::RuntimeEntityView entity,
                                                         const std::span<const Runtime::RuntimeEntityView> prospective) {
             using Output = Result<Math::WorldCoordinate64>;
@@ -162,7 +162,7 @@ namespace Horo::Application::Internal {
                     const auto point = Math::TryTransformPoint(matrix, {});
                     if (point.HasError())
                         return Output::Failure(point.ErrorValue());
-                    return GlobalPosition(policy.origin, point.Value());
+                    return GlobalPosition(origin, point.Value());
                 }
                 const auto parent = std::ranges::lower_bound(prospective, *entity.parent, {}, &Runtime::RuntimeEntityView::entity);
                 if (parent != prospective.end() && parent->entity == *entity.parent) {
@@ -323,6 +323,15 @@ namespace Horo::Application::Internal {
         }
     }
 
+    /** @copydoc CaptureHeadlessWorldPosition */
+    Result<Math::WorldCoordinate64> CaptureHeadlessWorldPosition(const Runtime::RuntimeSceneView &scene, Runtime::EntityRef entity,
+                                                                 Math::WorldCoordinate64 origin) {
+        const auto live = scene.Get(entity);
+        if (live.HasError())
+            return Result<Math::WorldCoordinate64>::Failure(live.ErrorValue());
+        return CapturePosition(origin, scene, live.Value(), {});
+    }
+
     /** @copydoc MakeHeadlessPerceptionPositionSources */
     HeadlessPerceptionPositionSources MakeHeadlessPerceptionPositionSources(std::shared_ptr<const HeadlessPerceptionPolicy> policy) {
         return {[policy](const Runtime::RuntimeSceneView &scene) {
@@ -336,7 +345,7 @@ namespace Horo::Application::Internal {
                 constexpr auto maximumEndpoints = AI::PerceptionSpatialLimits::Listeners + AI::PerceptionSpatialLimits::Sources;
                 if (result.size() == maximumEndpoints)
                     return Positions::Failure(MakeError(AI::AIErrors::PerceptionSpatialLimitExceeded));
-                const auto position = CapturePosition(*policy, scene, *entity, {});
+                const auto position = CapturePosition(policy->origin, scene, *entity, {});
                 if (position.HasError())
                     return Positions::Failure(position.ErrorValue());
                 result.push_back({entity->entity, position.Value()});
@@ -350,7 +359,7 @@ namespace Horo::Application::Internal {
             for (const auto &entity : prospective) {
                 if (!Selects(*policy, entity))
                     return Positions::Failure(MakeError(AI::AIErrors::PerceptionDependencyMissing));
-                const auto position = CapturePosition(*policy, scene, entity, prospective);
+                const auto position = CapturePosition(policy->origin, scene, entity, prospective);
                 if (position.HasError())
                     return Positions::Failure(position.ErrorValue());
                 result.push_back({entity.entity, position.Value()});

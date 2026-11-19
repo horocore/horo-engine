@@ -2348,6 +2348,11 @@ bounded test lookup and evaluation. It rejects a retired Scene revision before
 publishing a winner. A Decision task can commit the winning point through the
 existing typed Blackboard binding at BlackboardSync.
 
+The editor can frame a retained sampled point in the authoring viewport while
+its saved query source and pinned Scene revision still match. The command
+identifies the exact preview publication and resolves the point from that
+publication. It changes the viewport camera only.
+
 A Decision task can store a `QueryOutput` property with the query, result
 schema and version, item type, Blackboard key and timeout. The Decision compiler
 requires a writable scalar point or entity key declaration. Runtime binding
@@ -2378,6 +2383,13 @@ generation while preserving the existing cooked instance layout.
 The Scene's BlackboardSync entry point resolves the task's exact live agent
 and writes through that agent's existing Blackboard owner. Mutable Blackboard
 access stays within the Scene owner.
+
+The headless gameplay composition retains the admitted plans for its exact
+world and supplies the task binder for both initial and prefab-spawned agents.
+Its fixed-step order publishes Blackboard results before Decision, dispatches
+intents, and advances active queries against bounded per-agent and world work
+allowances. Native point queries capture the live entity hierarchy in global
+millimeters using the mounted world's current origin when present.
 
 Each native distance stage can store a positive integer relative score weight.
 An omitted weight means `1` and keeps existing source payloads valid. The scorer

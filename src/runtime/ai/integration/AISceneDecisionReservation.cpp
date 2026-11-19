@@ -58,6 +58,17 @@ namespace Horo::AI {
         };
     }  // namespace
 
+    /** @copydoc AiSceneRuntime::ResolveDecisionQueryOwnerAtSafePoint */
+    Result<Runtime::EntityRef> AiSceneRuntime::ResolveDecisionQueryOwnerAtSafePoint(AgentHandle agent) const {
+        using Owner = Result<Runtime::EntityRef>;
+        if (auto valid = CapabilityAtSafePoint().ValidateAtSafePoint(); valid.HasError())
+            return Owner::Failure(valid.ErrorValue());
+        const auto selected = DecisionAgent(*active_, agent);
+        if (selected.HasError())
+            return Owner::Failure(selected.ErrorValue());
+        return Owner::Success(selected.Value()->record.owner);
+    }
+
     /** @copydoc AiSceneRuntime::SyncDecisionQueryAtBlackboardSync */
     Result<bool> AiSceneRuntime::SyncDecisionQueryAtBlackboardSync(DecisionQueryTask &task, const Runtime::RuntimeSceneView &scene,
                                                                    std::uint64_t tick) const {

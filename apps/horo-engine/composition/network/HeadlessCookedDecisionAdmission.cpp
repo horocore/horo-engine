@@ -31,30 +31,22 @@ namespace Horo::Application::Internal {
         using Selections = std::map<AI::ControllerTypeId, ControllerSelection>;
         using Descriptors = std::map<AI::ControllerTypeId, AI::AiControllerDescriptor>;
 
-        struct QueryContract final {
-            AI::QueryResultSchema result;
-            AI::QueryItemKind kind;
-        };
-
-        using QueryContracts = std::map<AI::QueryId, QueryContract>;
-
-        /** @brief Resolves query contracts from the same verified generation as the selected Decision artifacts. */
-        Result<QueryContracts> LoadQueryContracts(const HeadlessCookedDecisionInput &input, const CancellationToken &cancellation) {
-            using Loaded = Result<QueryContracts>;
+        /** @brief Resolves query plans from the same verified generation as the selected Decision artifacts. */
+        Result<HeadlessQueryPlanCatalog> LoadQueryPlans(const HeadlessCookedDecisionInput &input, const CancellationToken &cancellation) {
+            using Loaded = Result<HeadlessQueryPlanCatalog>;
             if (!input.querySchema)
                 return Loaded::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
-            QueryContracts queries;
+            HeadlessQueryPlanCatalog queries;
             for (const auto &artifact : input.committed.Artifacts()) {
                 if (cancellation.IsCancellationRequested())
                     return Loaded::Failure(JobCancelled().ErrorValue());
                 if (artifact.type.Value() != AI::EnvironmentQuerySourceAssetType)
                     continue;
-                const auto plan = AI::EnvironmentQueryCookedCodec::Decode(artifact.payload, *input.querySchema);
+                auto plan = AI::EnvironmentQueryCookedCodec::Decode(artifact.payload, *input.querySchema);
                 if (plan.HasError())
                     return Loaded::Failure(plan.ErrorValue());
-                const auto &result = plan.Value().ResultSchema();
-                const auto kind = input.querySchema->Find(result.itemType)->kind;
-                if (!queries.emplace(plan.Value().Id(), QueryContract{result, kind}).second)
+                const auto id = plan.Value().Id();
+                if (!queries.emplace(id, std::make_shared<const AI::EnvironmentQueryPlan>(std::move(plan).Value())).second)
                     return Loaded::Failure(MakeError(AI::AIErrors::EnvironmentQueryIdentityConflict));
             }
             return Loaded::Success(std::move(queries));
@@ -62,10 +54,10 @@ namespace Horo::Application::Internal {
 
         /** @brief Validates exact query output identity before publishing a controller, loading queries only when referenced. */
         Result<void> ValidateQueryOutput(const AI::BehaviorTreeQueryOutput &output, const HeadlessCookedDecisionInput &input,
-                                         const CancellationToken &cancellation, std::optional<QueryContracts> &queries,
+                                         const CancellationToken &cancellation, std::optional<HeadlessQueryPlanCatalog> &queries,
                                          std::span<const AI::DecisionPlanBlackboardBinding> bindings) {
             if (!queries) {
-                auto loaded = LoadQueryContracts(input, cancellation);
+                auto loaded = LoadQueryPlans(input, cancellation);
                 if (loaded.HasError())
                     return Result<void>::Failure(loaded.ErrorValue());
                 queries.emplace(std::move(loaded).Value());
@@ -73,7 +65,8 @@ namespace Horo::Application::Internal {
             const auto query = queries->find(output.query);
             if (query == queries->end())
                 return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
-            const auto &[result, kind] = query->second;
+            const auto &result = query->second->ResultSchema();
+            const auto kind = input.querySchema->Find(result.itemType)->kind;
             if (result.id != output.result || result.version != output.resultVersion || result.itemType != output.item)
                 return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryVersionIncompatible));
             const auto key = std::ranges::find(bindings, output.key, &AI::DecisionPlanBlackboardBinding::key);
@@ -88,7 +81,7 @@ namespace Horo::Application::Internal {
 
         /** @brief Checks query dependencies throughout the selected compiled graph closure. */
         Result<void> ValidatePlanQueries(const AI::CookedDecisionPlan &plan, const HeadlessCookedDecisionInput &input,
-                                         const CancellationToken &cancellation, std::optional<QueryContracts> &queries) {
+                                         const CancellationToken &cancellation, std::optional<HeadlessQueryPlanCatalog> &queries) {
             for (const auto &graph : plan.Graphs()) {
                 for (const auto &node : graph.providerProperties) {
                     for (const auto &property : node.properties) {
@@ -319,7 +312,8 @@ namespace Horo::Application::Internal {
         /** @brief Captures independent public descriptors; all validation occurs before the app constructs its Scene participant. */
         [[nodiscard]] Result<Catalog> Admit(const std::span<const AI::AiControllerDescriptor> catalog,
                                             const Runtime::RuntimeSceneDefinition &scene, const HeadlessCookedDecisionInput &input,
-                                            const Prefab::PrefabLimitProfile &prefabLimits, const CancellationToken &cancellation) {
+                                            const Prefab::PrefabLimitProfile &prefabLimits, const CancellationToken &cancellation,
+                                            HeadlessQueryPlanCatalog *queryPlans) {
             Descriptors descriptors;
             for (const auto &descriptor : catalog)
                 if (!descriptors.emplace(descriptor.controller, descriptor).second)
@@ -332,7 +326,7 @@ namespace Horo::Application::Internal {
             if (environment.HasError())
                 return Result<Catalog>::Failure(environment.ErrorValue());
             std::map<Assets::AssetId, Plan> plans;
-            std::optional<QueryContracts> queries;
+            std::optional<HeadlessQueryPlanCatalog> queries;
             auto remaining = input.limits.compilation.maximumCoreBytes;
             for (const auto &[identity, binding] : selected.Value()) {
                 if (cancellation.IsCancellationRequested())
@@ -369,6 +363,8 @@ namespace Horo::Application::Internal {
             admitted.reserve(descriptors.size());
             for (auto &[identity, descriptor] : descriptors)
                 admitted.push_back(std::move(descriptor));
+            if (queryPlans)
+                *queryPlans = queries ? std::move(*queries) : HeadlessQueryPlanCatalog{};
             return Result<Catalog>::Success(std::move(admitted));
         }
     }  // namespace
@@ -376,11 +372,12 @@ namespace Horo::Application::Internal {
     /** @copydoc AdmitHeadlessCookedControllers */
     Result<Catalog> AdmitHeadlessCookedControllers(const std::span<const AI::AiControllerDescriptor> catalog,
                                                    const Runtime::RuntimeSceneDefinition &scene, const HeadlessCookedDecisionInput &input,
-                                                   const Prefab::PrefabLimitProfile &prefabLimits, const CancellationToken &cancellation) {
+                                                   const Prefab::PrefabLimitProfile &prefabLimits, const CancellationToken &cancellation,
+                                                   HeadlessQueryPlanCatalog *queryPlans) {
         if (catalog.size() > AI::MaximumAiSceneAgents || input.bindings.size() > AI::MaximumAiSceneAgents)
             return Result<Catalog>::Failure(MakeError(AI::AIErrors::AgentCapacityExceeded));
         try {
-            return Admit(catalog, scene, input, prefabLimits, cancellation);
+            return Admit(catalog, scene, input, prefabLimits, cancellation, queryPlans);
         } catch (const std::bad_alloc &) {
             return Result<Catalog>::Failure(MakeError(AI::AIErrors::AgentCapacityExceeded));
         }

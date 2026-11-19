@@ -1339,6 +1339,8 @@ namespace Horo::Editor {
         /** @brief Captures exact authoring inputs and submits pure bounded lattice evaluation. */
         Result<void> StartEnvironmentQueryPreview(EnvironmentQueryWorkspaceDocument &document,
                                                   const EnvironmentQueryPreviewRequest &request);
+        /** @brief Frames a retained point from the same saved query and active authoring Scene revision. */
+        void FocusEnvironmentQueryCandidate(EnvironmentQueryWorkspaceDocument &document, const EnvironmentQueryPreviewRequest &request);
         /** @brief Cancels the worker and detaches its result before retiring the controller. */
         void StopEnvironmentQueryPreview();
         /** @brief Returns true for the same published editor preview Scene and selected query anchor. */

@@ -133,6 +133,9 @@ namespace Horo::Application::Internal {
      */
     [[nodiscard]] Result<AI::PerceptionMemorySnapshot> InspectHeadlessPerceptionMemory(const Network::INetworkModeService &service,
                                                                                        Runtime::EntityRef recipient);
+    /** @brief Reads a detached typed Blackboard value from the current authoritative world. */
+    [[nodiscard]] Result<std::optional<AI::BlackboardValue>> InspectHeadlessDecisionValue(const Network::INetworkModeService &service,
+                                                                                          AI::AgentId agent, AI::BlackboardKeyId key);
 
     /** @brief Borrows the committed configured Scene for read-only diagnostics on its owner lane.
      * @param service Actual retained Scene/Physics service facade.

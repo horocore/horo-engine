@@ -283,6 +283,8 @@ TEST_CASE("Environment Query workspace previews the saved native lattice from an
     bool mixedContexts = false;
     bool usesTarget = false;
     bool usesProvider = false;
+    bool framePoint = false;
+    bool editBeforeFrame = false;
     SECTION("registered provider choices are named and used only with the host grants") {
         auto selection = location;
         SECTION("the owner grants the selected provider capability") {
@@ -400,6 +402,13 @@ TEST_CASE("Environment Query workspace previews the saved native lattice from an
     SECTION("the retained preview is bounded, stable and leaves the Scene owner unchanged") {
         submit(pinned);
         REQUIRE(document.preview.status == Running);
+        SECTION("the current point can be framed in the viewport") {
+            framePoint = true;
+        }
+        SECTION("a Scene edit revokes a delayed frame action") {
+            framePoint = true;
+            editBeforeFrame = true;
+        }
     }
     SECTION("a legitimate Scene edit revokes an outstanding preview") {
         submit(pinned);
@@ -433,6 +442,33 @@ TEST_CASE("Environment Query workspace previews the saved native lattice from an
     }
     REQUIRE(document.preview.snapshot);
     const auto &preview = *document.preview.snapshot;
+    if (framePoint) {
+        REQUIRE_FALSE(preview.candidates.empty());
+        const auto &sample = preview.candidates.front();
+        REQUIRE(sample.point);
+        const auto millimeters = sample.point->Millimeters();
+        const auto initialTarget = model.viewportCamera.target;
+        auto navigation = pinned;
+        navigation.action = EnvironmentQueryPreviewAction::FocusCandidate;
+        navigation.previewEvidence = document.preview.snapshot;
+        navigation.candidate = sample.index;
+        if (editBeforeFrame) {
+            transform.translation.x += 1;
+            controller.ProcessCommand(
+                {.command = EditorWorkspaceViewCommand::CommitObjectTransform, .objectPayload = object, .transformPayload = transform});
+            REQUIRE(model.documentRevision != pinned.scene);
+            submit(navigation);
+            CHECK(model.viewportCamera.target == initialTarget);
+            CHECK(document.preview.status == Stale);
+            return;
+        }
+        submit(navigation);
+        const Math::Vec3 target{static_cast<float>(millimeters[0]) / 1000.0F, static_cast<float>(millimeters[1]) / 1000.0F,
+                                static_cast<float>(millimeters[2]) / 1000.0F};
+        CHECK(model.viewportCamera.target == target);
+        CHECK(model.documentRevision == pinned.scene);
+        CHECK_FALSE(controller.HasDirtySourceDocuments());
+    }
     if (usesProvider) {
         REQUIRE(preview.candidates.size() == 9);
         CHECK(preview.candidates[4].point == locationSource.point);

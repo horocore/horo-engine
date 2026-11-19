@@ -835,6 +835,7 @@
     "workspace.environment_query.read_only": {"text": "Saved query source (read-only)"},
     "workspace.environment_query.preview_run": {"text": "Preview in Scene"},
     "workspace.environment_query.preview_cancel": {"text": "Cancel Preview"},
+    "workspace.environment_query.preview_frame_candidate": {"text": "Frame Point in Viewport"},
     "workspace.environment_query.preview_select_scene_object": {"text": "Select an object in the authoring Scene to place the query."},
     "workspace.environment_query.preview_running": {"text": "Generating candidate points…"},
     "workspace.environment_query.preview_ready": {"text": "Preview ready"},

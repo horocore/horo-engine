@@ -835,6 +835,7 @@
     "workspace.environment_query.read_only": {"text": "Kaydedilmiş sorgu kaynağı (salt okunur)"},
     "workspace.environment_query.preview_run": {"text": "Sahnede Önizle"},
     "workspace.environment_query.preview_cancel": {"text": "Önizlemeyi İptal Et"},
+    "workspace.environment_query.preview_frame_candidate": {"text": "Noktayı Görünüm Alanında Çerçevele"},
     "workspace.environment_query.preview_select_scene_object": {"text": "Sorguyu konumlandırmak için düzenleme sahnesinden bir nesne seçin."},
     "workspace.environment_query.preview_running": {"text": "Aday noktalar oluşturuluyor…"},
     "workspace.environment_query.preview_ready": {"text": "Önizleme hazır"},

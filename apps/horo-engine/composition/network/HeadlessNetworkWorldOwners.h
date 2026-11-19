@@ -22,6 +22,10 @@
 #include <optional>
 #include <utility>
 
+namespace Horo::Application::Internal {
+    class HeadlessDecisionQueries;
+}
+
 namespace Horo::Application::Internal::HeadlessNetworkDetail {
     class HeadlessFixedParticipant;
 
@@ -43,6 +47,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         bool closeRequested{};
         bool closed{};
         std::unique_ptr<AI::AiSceneRuntime> ai;
+        std::shared_ptr<HeadlessDecisionQueries> decisionQueries; /**< Keeps task binding and phase inventory scoped to this world. */
         AI::PerceptionSpatialBroadphase perception;
         std::unique_ptr<ProjectSceneNavigationWorld> navigation;
         std::unique_ptr<HeadlessNavigationPathScope>

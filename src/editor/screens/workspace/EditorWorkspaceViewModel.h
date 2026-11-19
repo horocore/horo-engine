@@ -390,7 +390,8 @@ namespace Horo::Editor {
     /** @brief One workspace-only preview action. */
     enum class EnvironmentQueryPreviewAction : std::uint8_t {
         Run,
-        Cancel
+        Cancel,
+        FocusCandidate
     };
 
     /** @brief A request correlated to the exact saved query and current authored Scene. */
@@ -401,6 +402,8 @@ namespace Horo::Editor {
         std::optional<SceneObjectId> anchor;
         EnvironmentQueryPreviewAction action{EnvironmentQueryPreviewAction::Run};
         std::optional<SceneObjectId> target;
+        std::shared_ptr<const AI::QueryDebugSnapshot> previewEvidence; /**< Exact presented publication for candidate navigation. */
+        std::optional<std::uint32_t> candidate;
     };
 
     /** @brief Ordinary semantic edit and history actions from the saved Query tab. */

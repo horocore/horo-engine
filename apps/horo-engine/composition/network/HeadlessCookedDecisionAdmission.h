@@ -7,9 +7,12 @@
 #include "Horo/Assets/AssetId.h"
 #include "Horo/Prefab/PrefabLimits.h"
 
+#include <map>
+
 namespace Horo::AI {
     class QuerySchemaRegistry;
-}
+    class EnvironmentQueryPlan;
+}  // namespace Horo::AI
 
 namespace Horo::Runtime {
     class RuntimeSceneDefinition;
@@ -17,6 +20,7 @@ namespace Horo::Runtime {
 
 namespace Horo::Application::Internal {
     class CommittedSceneAssets;
+    using HeadlessQueryPlanCatalog = std::map<AI::QueryId, std::shared_ptr<const AI::EnvironmentQueryPlan>>;
 
     /** @brief Durable project asset selection for one existing AI controller descriptor. */
     struct HeadlessCookedDecisionBinding final {
@@ -48,9 +52,11 @@ namespace Horo::Application::Internal {
      * @param input Owning application capture and typed selections. Unselected descriptors keep their existing bindings.
      * @param prefabLimits Exact project limits also used by the runtime template provider.
      * @param cancellation Exact startup/Scene owner ancestry sampled before and between decodes.
+     * @param queryPlans Optional output for the immutable plans from the exact same generation, assigned only on success.
      * @return Owned descriptors for both initial and structural owners, or original typed admission failure.
      */
     [[nodiscard]] Result<std::vector<AI::AiControllerDescriptor>> AdmitHeadlessCookedControllers(
         std::span<const AI::AiControllerDescriptor> catalog, const Runtime::RuntimeSceneDefinition &scene,
-        const HeadlessCookedDecisionInput &input, const Prefab::PrefabLimitProfile &prefabLimits, const CancellationToken &cancellation);
+        const HeadlessCookedDecisionInput &input, const Prefab::PrefabLimitProfile &prefabLimits, const CancellationToken &cancellation,
+        HeadlessQueryPlanCatalog *queryPlans = nullptr);
 }  // namespace Horo::Application::Internal

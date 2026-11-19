@@ -78,4 +78,8 @@ namespace Horo::Application::Internal {
      */
     [[nodiscard]] HeadlessPerceptionPositionSources MakeHeadlessPerceptionPositionSources(
         std::shared_ptr<const HeadlessPerceptionPolicy> policy);
+
+    /** @brief Resolves a live entity's hierarchy to exact millimeters relative to the supplied world origin. */
+    [[nodiscard]] Result<Math::WorldCoordinate64> CaptureHeadlessWorldPosition(const Runtime::RuntimeSceneView &scene,
+                                                                               Runtime::EntityRef entity, Math::WorldCoordinate64 origin);
 }  // namespace Horo::Application::Internal

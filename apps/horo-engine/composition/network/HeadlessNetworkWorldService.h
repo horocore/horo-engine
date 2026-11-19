@@ -4,6 +4,7 @@
  */
 #include "HeadlessAnimationFixed.h"
 #include "HeadlessCookedDecisionAdmission.h"
+#include "HeadlessDecisionQueries.h"
 #include "HeadlessNetworkWorldOwners.h"
 #include "HeadlessPerceptionPolicy.h"
 #include "Horo/AI/AIErrors.h"
@@ -45,6 +46,18 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             if (!scene || !record_->ai)
                 return Result<AI::PerceptionMemorySnapshot>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
             return record_->ai->ReadPerceptionAtSafePoint(*scene, recipient);
+        }
+
+        /** @brief Reads a copied Blackboard value from this exact live owner for product inspection. */
+        Result<std::optional<AI::BlackboardValue>> ReadDecisionValue(AI::AgentId identity, AI::BlackboardKeyId key) const {
+            using Value = Result<std::optional<AI::BlackboardValue>>;
+            if (!ActiveScene() || !record_->ai)
+                return Value::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+            const auto capability = record_->ai->CapabilityAtSafePoint();
+            const auto agent = capability.ResolveAgent(identity);
+            if (agent.HasError())
+                return Value::Failure(agent.ErrorValue());
+            return capability.ReadBlackboard(agent.Value(), key);
         }
 
         /** @brief Borrows the committed configured Scene on the current owner lane. */
@@ -360,11 +373,19 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             }
             std::span<const AI::AiControllerDescriptor> catalog = input.aiControllers;
             if (IsAuthoritativeWorld() && input.cookedDecisions) {
-                auto prepared = PrepareCookedControllers(catalog, *input.cookedDecisions);
+                HeadlessQueryPlanCatalog queries;
+                auto prepared = PrepareCookedControllers(catalog, *input.cookedDecisions, queries);
                 if (prepared.HasError())
                     return Result<void>::Failure(prepared.ErrorValue());
                 record_->admittedControllers = std::move(prepared).Value();
                 catalog = record_->admittedControllers;
+                if (OwnsCookedDecisionExecution() && !queries.empty()) {
+                    auto driver = HeadlessDecisionQueries::Create(std::move(queries), input.cookedDecisions->querySchema,
+                                                                  input.cookedDecisions->execution->scheduler);
+                    if (driver.HasError())
+                        return Result<void>::Failure(driver.ErrorValue());
+                    record_->decisionQueries = std::move(driver).Value();
+                }
             }
             if (OwnsPerception() && input.perceptionProject) {
                 auto prepared = PreparePerceptionControllers(catalog, *input.perceptionProject);
@@ -374,7 +395,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 catalog = record_->admittedControllers;
             }
             auto ai = OwnsCookedDecisionExecution() && !record_->preparedGameplay
-                          ? AI::AiSceneRuntime::Create(settings, *input.cookedDecisions->execution)
+                          ? AI::AiSceneRuntime::Create(settings, ConfiguredDecisionExecution())
                           : AI::AiSceneRuntime::Create(settings);
             if (ai.HasError())
                 return Result<void>::Failure(ai.ErrorValue());
@@ -398,6 +419,14 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             return Result<void>::Success();
         }
 
+        /** @brief Adds this world's explicit query owner to the selected immutable scheduler policy. */
+        AI::AiSceneCookedDecisionExecution ConfiguredDecisionExecution() const {
+            auto execution = *owners_->configured->cookedDecisions->execution;
+            if (record_->decisionQueries)
+                execution.queryTasks = record_->decisionQueries;
+            return execution;
+        }
+
         /** @brief Resolves authored endpoints using either the explicit registry or the same prepared native image. */
         Result<std::vector<AI::AiControllerDescriptor>> PreparePerceptionControllers(
             std::span<const AI::AiControllerDescriptor> catalog, const HeadlessPerceptionProjectAdmission &project) const {
@@ -417,12 +446,14 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
 
         /** @brief Captures exact native provider metadata before any platform scope or game callback is exposed. */
         Result<std::vector<AI::AiControllerDescriptor>> PrepareCookedControllers(std::span<const AI::AiControllerDescriptor> catalog,
-                                                                                 const HeadlessCookedDecisionInput &selection) const {
+                                                                                 const HeadlessCookedDecisionInput &selection,
+                                                                                 HeadlessQueryPlanCatalog &queries) const {
             auto limits = Prefab::PrefabLimitProfile::Create(owners_->configured->prefabPolicy);
             if (limits.HasError())
                 return Result<std::vector<AI::AiControllerDescriptor>>::Failure(limits.ErrorValue());
             if (selection.provider == HeadlessDecisionProvider::Captured)
-                return AdmitHeadlessCookedControllers(catalog, *owners_->definition, selection, limits.Value(), record_->sceneCancellation);
+                return AdmitHeadlessCookedControllers(catalog, *owners_->definition, selection, limits.Value(), record_->sceneCancellation,
+                                                      &queries);
             const auto &gameplay = *owners_->gameplay;
             auto image = Gameplay::GameModuleHost::PrepareImage(gameplay.nativeArtifact,
                                                                 {gameplay.moduleId, Gameplay::CurrentGameplayBuildFingerprint(),
@@ -436,7 +467,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return Result<std::vector<AI::AiControllerDescriptor>>::Failure(nodes.ErrorValue());
             auto configured = selection;
             configured.environment.nodes = std::move(nodes).Value();
-            return AdmitHeadlessCookedControllers(catalog, *owners_->definition, configured, limits.Value(), record_->sceneCancellation);
+            return AdmitHeadlessCookedControllers(catalog, *owners_->definition, configured, limits.Value(), record_->sceneCancellation,
+                                                  &queries);
         }
 
         /** @brief Installs one authoritative navigation aggregate; paired client worlds stay presentation-only. */
@@ -573,8 +605,9 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 std::optional<GameplayPreparedPerception> perception;
                 if (SelectsNativePerception())
                     perception.emplace(GameplayPreparedPerception{record_->perception, *input.perceptionProject->policy->native});
-                const GameplayPreparedDecisions prepared{*record_->preparedGameplay, record_->sceneCancellation, *record_->ai,
-                                                         *input.cookedDecisions->execution, perception ? &*perception : nullptr};
+                const auto execution = ConfiguredDecisionExecution();
+                const GameplayPreparedDecisions prepared{*record_->preparedGameplay, record_->sceneCancellation, *record_->ai, execution,
+                                                         perception ? &*perception : nullptr};
                 return GameplayWorldComposition::CreatePrepared(*record_->scenes, record_->templates.get(), world, request_.scene.value,
                                                                 selected, character, prepared);
             }
@@ -603,15 +636,40 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return JobCancelled();
             if (record_->decisionTick != 0 && record_->decisionTick == context.simulationTick)
                 return Result<void>::Success();
+            auto result = record_->decisionQueries ? RunConfiguredDecisionQueries(context.simulationTick)
+                                                   : EvaluateConfiguredDecisions(context.simulationTick);
+            if (result.HasValue())
+                record_->decisionTick = context.simulationTick;
+            return result;
+        }
+
+        /** @brief Drives the exact Scene and its current origin through all deterministic query phases. */
+        Result<void> RunConfiguredDecisionQueries(std::uint64_t tick) const {
+            const auto scene = record_->scenes->ActiveScene();
+            if (!scene)
+                return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryContextStale));
+            Math::WorldCoordinate64 origin;
+            if (record_->mountedWorld) {
+                const auto lease = record_->mountedWorld->Origin().Lease();
+                if (lease.HasError())
+                    return Result<void>::Failure(lease.ErrorValue());
+                const auto frame = lease.Value().Get();
+                if (frame.HasError())
+                    return Result<void>::Failure(frame.ErrorValue());
+                origin = frame.Value().Origin();
+            }
+            return record_->decisionQueries->RunAtFixedTick(*record_->ai, *scene, origin, tick);
+        }
+
+        /** @brief Executes the registered decision phases for worlds without authored query tasks. */
+        Result<void> EvaluateConfiguredDecisions(std::uint64_t tick) const {
             const auto scheduler = record_->ai->TaskSchedulerAtSafePoint();
             if (scheduler.HasError())
                 return Result<void>::Failure(scheduler.ErrorValue());
-            if (const auto evaluated = scheduler.Value()->EvaluateAtDecision(context.simulationTick); evaluated.HasError())
+            if (const auto evaluated = scheduler.Value()->EvaluateAtDecision(tick); evaluated.HasError())
                 return Result<void>::Failure(evaluated.ErrorValue());
-            if (const auto committed = scheduler.Value()->CommitAtIntentDispatch(context.simulationTick); committed.HasError())
-                return Result<void>::Failure(committed.ErrorValue());
-            record_->decisionTick = context.simulationTick;
-            return Result<void>::Success();
+            const auto committed = scheduler.Value()->CommitAtIntentDispatch(tick);
+            return committed.HasError() ? Result<void>::Failure(committed.ErrorValue()) : Result<void>::Success();
         }
 
         /** @brief Polls native observations once on the configured authority's exact fixed tick and Scene. */

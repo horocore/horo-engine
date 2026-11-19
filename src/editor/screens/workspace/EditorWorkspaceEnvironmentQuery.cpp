@@ -458,6 +458,41 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @copydoc EditorWorkspaceController::FocusEnvironmentQueryCandidate */
+    void EditorWorkspaceController::FocusEnvironmentQueryCandidate(EnvironmentQueryWorkspaceDocument &document,
+                                                                   const EnvironmentQueryPreviewRequest &request) {
+        auto &preview = document.preview;
+        if (preview.status != EnvironmentQueryPreviewStatus::Ready || !preview.snapshot || !request.candidate ||
+            request.previewEvidence != preview.snapshot || request.scene != preview.scene.document)
+            return;
+        const auto current = m_runtimeScene.ActiveScene();
+        if (!RegisteredQueryDocument(document, m_assetRegistry) || !IsEnvironmentQueryPreviewCurrent(preview.scene, current)) {
+            preview = {.status = EnvironmentQueryPreviewStatus::Stale, .diagnostic = MakeError(AI::AIErrors::EnvironmentQueryContextStale)};
+            return;
+        }
+        const auto source = CaptureQuerySource(ProjectRoot(), m_assetRegistry, document.asset);
+        if (source.HasError() || source.Value().Sources().front().sourceDigest != request.source ||
+            source.Value().VerifyUnchanged().HasError()) {
+            preview = {.status = EnvironmentQueryPreviewStatus::Stale, .diagnostic = MakeError(Assets::AssetSourceErrors::Conflict)};
+            return;
+        }
+        const auto &samples = preview.snapshot->candidates;
+        const auto candidate = std::ranges::find(samples, *request.candidate, &AI::QueryDebugCandidate::index);
+        if (candidate == samples.end() || !candidate->point)
+            return;
+        const auto millimeters = candidate->point->Millimeters();
+        const auto meters = [](std::int64_t value) {
+            return static_cast<float>(static_cast<double>(value) / 1000.0);
+        };
+        const Math::Vec3 point{meters(millimeters[0]), meters(millimeters[1]), meters(millimeters[2])};
+        const auto framed = m_viewport.Focus({point, point}, 1.0F);
+        ApplyViewportCameraChange(framed, "Query preview focus");
+        if (framed.HasValue())
+            static_cast<void>(ProcessActivePanelCommand({.command = EditorWorkspaceViewCommand::ChangeActivePanel,
+                                                         .targetIndex = static_cast<int>(WorkspaceDockArea::Document),
+                                                         .stringPayload = "horo.viewport"}));
+    }
+
     /** @copydoc EditorWorkspaceController::ProcessEnvironmentQueryPreview */
     bool EditorWorkspaceController::ProcessEnvironmentQueryPreview(const EditorWorkspaceViewCommandData &command) {
         if (command.command != EditorWorkspaceViewCommand::PreviewEnvironmentQuery)
@@ -473,6 +508,10 @@ namespace Horo::Editor {
         });
         if (document == documents.end())
             return true;
+        if (request.action == EnvironmentQueryPreviewAction::FocusCandidate) {
+            FocusEnvironmentQueryCandidate(*document, request);
+            return true;
+        }
         const bool ownsJob = m_environmentQueryPreviewWork && m_environmentQueryPreviewWork->instance == request.instance;
         if (request.action == EnvironmentQueryPreviewAction::Cancel) {
             if (ownsJob) {
@@ -826,8 +865,24 @@ namespace Horo::Editor {
                           text("workspace.environment_query.preview_ranked"), snapshot.winnerCount,
                           text("workspace.environment_query.preview_invalid_coordinates"), snapshot.invalidCoordinates),
               Theme::Text());
-        for (const auto &candidate : snapshot.candidates)
+        for (const auto &candidate : snapshot.candidates) {
             DrawQueryPreviewCandidate(snapshot, candidate, m_context.localization, m_context.theme.fonts);
+            if (!candidate.point || preview.status != Ready || snapshot.stale)
+                continue;
+            ImGui::PushID(static_cast<int>(candidate.index));
+            const bool focus = Ui::Button(
+                {.label = text("workspace.environment_query.preview_frame_candidate").c_str(), .font = m_context.theme.fonts.sans});
+            ImGui::PopID();
+            if (focus)
+                outCommand = {.command = EditorWorkspaceViewCommand::PreviewEnvironmentQuery,
+                              .environmentQueryPreview =
+                                  EnvironmentQueryPreviewRequest{.instance = opened->identity.instance,
+                                                                 .source = opened->source,
+                                                                 .scene = preview.scene.document,
+                                                                 .action = EnvironmentQueryPreviewAction::FocusCandidate,
+                                                                 .previewEvidence = preview.snapshot,
+                                                                 .candidate = candidate.index}};
+        }
         return true;
     }
 }  // namespace Horo::Editor

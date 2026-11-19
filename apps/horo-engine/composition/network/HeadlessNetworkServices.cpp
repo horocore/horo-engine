@@ -264,6 +264,15 @@ namespace Horo::Application::Internal {
         return world->PerceptionMemory(recipient);
     }
 
+    /** @copydoc InspectHeadlessDecisionValue */
+    Result<std::optional<AI::BlackboardValue>> InspectHeadlessDecisionValue(const Network::INetworkModeService &service, AI::AgentId agent,
+                                                                            AI::BlackboardKeyId key) {
+        const auto *world = dynamic_cast<const WorldService *>(&service);
+        if (!world)
+            return Result<std::optional<AI::BlackboardValue>>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+        return world->ReadDecisionValue(agent, key);
+    }
+
     /** @copydoc InspectHeadlessScene */
     std::optional<Runtime::RuntimeSceneView> InspectHeadlessScene(const Network::INetworkModeService &service) noexcept {
         const auto *world = dynamic_cast<const WorldService *>(&service);

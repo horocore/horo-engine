@@ -758,7 +758,7 @@ namespace {
     }
 }  // namespace
 
-TEST_CASE("Decision query output authoring copy resolves in both shipped locales", "[unit][editor][decision][localization]") {
+TEST_CASE("Decision query authoring and preview copy resolve in both shipped locales", "[unit][editor][decision][localization]") {
     const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
     Horo::Editor::LocalizationService service{Horo::Editor::LocaleTag{"en-US"}};
     Horo::Editor::LocalizationError error;
@@ -775,6 +775,9 @@ TEST_CASE("Decision query output authoring copy resolves in both shipped locales
             CHECK_FALSE(service.Get("editor", full).empty());
             CHECK(service.Get("editor", full) != full);
         }
+        constexpr auto framePoint = "workspace.environment_query.preview_frame_candidate";
+        CHECK_FALSE(service.Get("editor", framePoint).empty());
+        CHECK(service.Get("editor", framePoint) != framePoint);
     }
 }
 
