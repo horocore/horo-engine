@@ -242,6 +242,11 @@ namespace Horo::AI {
         return Failure<void>(AIErrors::EnvironmentQuerySchemaInvalid);
     }
 
+    /** @copydoc DecisionQueryTask::ActiveAgent */
+    AgentHandle DecisionQueryTask::ActiveAgent() const noexcept {
+        return query_ && !operation_.IsCancellationRequested() ? operation_.agent : AgentHandle{};
+    }
+
     /** @copydoc DecisionQueryTask::AdvanceQuery */
     void DecisionQueryTask::AdvanceQuery(const std::uint64_t tick, const QueryExecutionBudget budget) {
         if (!query_)

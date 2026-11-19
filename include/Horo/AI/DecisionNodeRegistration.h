@@ -66,6 +66,20 @@ namespace Horo::AI {
         std::vector<BehaviorTreeProperty> properties;
     };
 
+    /** @brief Explicit owner-side factory for authored query tasks in an executable Behavior Tree. */
+    class IDecisionQueryTaskBinder {
+    public:
+        virtual ~IDecisionQueryTaskBinder() = default;
+
+        /** @brief Constructs an occurrence-local task once the registered node contract is validated.
+         * @param tree Exact compiled tree authorizing output bindings.
+         * @param configuration Exact authored node properties, including its query output.
+         * @return Owned executor or a typed host admission failure. A null result is invalid.
+         */
+        [[nodiscard]] virtual Result<std::unique_ptr<IBehaviorTreeExecutor>> BindQueryTask(
+            const BehaviorTreeExecutionPlan &tree, const DecisionNodeConfiguration &configuration) = 0;
+    };
+
     /** @brief Validates one bounded declaration without invoking provider code. */
     [[nodiscard]] Result<void> ValidateDecisionNodeRegistration(const DecisionNodeRegistration &registration);
 
@@ -108,10 +122,19 @@ namespace Horo::AI {
         [[nodiscard]] Result<std::unique_ptr<IBehaviorTreeExecutor>> CreateExecutor(
             std::shared_ptr<const DecisionNodeGeneration> self, const DecisionAssetPlan &plan, AiCapabilitySet capabilities,
             std::span<const DecisionNodeConfiguration> configuration = {}) const;
-        /** @brief Binds only provider callbacks selected by actual executable topology; core control nodes remain flat runtime data. */
+        /** @brief Binds provider callbacks selected by actual executable topology. */
         [[nodiscard]] Result<std::unique_ptr<IBehaviorTreeExecutor>> CreateExecutor(
             std::shared_ptr<const DecisionNodeGeneration> self, const BehaviorTreeExecutionPlan &plan, AiCapabilitySet capabilities,
             std::span<const DecisionNodeConfiguration> configuration = {}) const;
+        /** @brief Binds provider callbacks with explicit owner admission for typed query tasks.
+         * @param self Exact retained provider generation. @param plan Compiled executable topology.
+         * @param capabilities Allowed provider capabilities. @param configuration Authored node properties.
+         * @param queryTasks Optional owner binder used for every authored query task; borrowed during construction.
+         * @return Owned callback set or typed failure before any task starts.
+         */
+        [[nodiscard]] Result<std::unique_ptr<IBehaviorTreeExecutor>> CreateExecutor(
+            std::shared_ptr<const DecisionNodeGeneration> self, const BehaviorTreeExecutionPlan &plan, AiCapabilitySet capabilities,
+            std::span<const DecisionNodeConfiguration> configuration, IDecisionQueryTaskBinder *queryTasks) const;
 
     private:
         friend class RegisteredDecisionNodeExecutor;

@@ -7,6 +7,8 @@
 #include "Horo/AI/DecisionStepTrace.h"
 
 namespace Horo::AI {
+    class IDecisionQueryTaskBinder;
+
     /** @brief Actual owner-issued range and operation identity; compilation never invents task/provider identities. */
     struct DecisionGraphInstanceBinding final {
         BlackboardInstanceBinding blackboard;
@@ -67,6 +69,15 @@ namespace Horo::AI {
         [[nodiscard]] static Result<std::unique_ptr<DecisionGraphInstance>> Create(std::shared_ptr<const CookedDecisionPlan> plan,
                                                                                    AiDecisionTaskReservation reservation,
                                                                                    AiTaskOperationContext operation);
+        /** @brief Creates a Scene graph with explicit owner admission of authored query tasks.
+         * @param plan Complete current closure. @param reservation Actual Scene owner's exclusive task range.
+         * @param operation Exact parent operation. @param queryTasks Owner binder retained through occurrence teardown.
+         * @return Owned graph or a typed admission or storage failure.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<DecisionGraphInstance>> Create(std::shared_ptr<const CookedDecisionPlan> plan,
+                                                                                   AiDecisionTaskReservation reservation,
+                                                                                   AiTaskOperationContext operation,
+                                                                                   std::shared_ptr<IDecisionQueryTaskBinder> queryTasks);
         /** @brief Logical composition-adapter allocation per occurrence; family kernels report their own extents. */
         [[nodiscard]] static std::uint64_t CoreStorageBytes(const DecisionCompiledGraph &graph) noexcept;
         [[nodiscard]] Result<AiTaskState> Step(const DecisionGraphStepInput &input);
@@ -92,6 +103,14 @@ namespace Horo::AI {
         struct CallAdapter;
         struct ActionAdapter;
         struct UtilityAdapter;
+        /** @brief Shares non-Scene and reserved Scene construction while retaining the optional query owner. */
+        [[nodiscard]] static Result<std::unique_ptr<DecisionGraphInstance>> CreateBound(
+            std::shared_ptr<const CookedDecisionPlan> plan, std::shared_ptr<const DecisionNodeGeneration> providers,
+            DecisionGraphInstanceBinding binding, std::shared_ptr<IDecisionQueryTaskBinder> queryTasks);
+        /** @brief Admits the exclusive Scene reservation before constructing any occurrences. */
+        [[nodiscard]] static Result<std::unique_ptr<DecisionGraphInstance>> CreateReserved(
+            std::shared_ptr<const CookedDecisionPlan> plan, std::shared_ptr<const DecisionNodeGeneration> providers,
+            AiDecisionTaskReservation reservation, AiTaskOperationContext operation, std::shared_ptr<IDecisionQueryTaskBinder> queryTasks);
         /** @brief Shares the exact evaluation path for traced and untraced steps. */
         [[nodiscard]] Result<AiTaskState> StepImpl(const DecisionGraphStepInput &input, DecisionStepTrace *trace);
         /** @brief Runs one admitted step using the existing evaluation and cancellation boundaries. */
@@ -108,7 +127,7 @@ namespace Horo::AI {
         /** @brief Requires host allowances only for closures that contain Utility. */
         [[nodiscard]] bool UtilityBudgetsAvailable(const DecisionGraphStepInput &input) const noexcept;
         [[nodiscard]] Result<void> ValidateStep(const DecisionGraphStepInput &input) const;
-        [[nodiscard]] Result<void> BuildOccurrence(std::size_t index);
+        [[nodiscard]] Result<void> BuildOccurrence(std::size_t index, IDecisionQueryTaskBinder *queryTasks);
         [[nodiscard]] Result<void> ResetOccurrence(std::size_t index);
         [[nodiscard]] Result<AiTaskState> Advance(std::size_t index);
         /** @brief Advances one Utility occurrence using its canonical task kernel and host allowances. */

@@ -1,5 +1,7 @@
 #include "AiSceneTestSupport.h"
 #include "DecisionGraphCompilerTestSupport.h"
+#include "Horo/AI/DecisionQueryTask.h"
+#include "Horo/AI/EnvironmentQueryGenerators.h"
 
 #include <catch2/generators/catch_generators.hpp>
 
@@ -177,6 +179,146 @@ namespace Horo::AI {
             runtime.BeginShutdown();
             CHECK(fixture.probe.aborts == 1);
             CHECK(fixture.probe.cleanups == 1);
+        }
+
+        /** @brief Uses a real admitted native query and observes the Scene scheduler's exact owner operation. */
+        class PointQueryOwner final : public IDecisionQueryTaskBinder, public IDecisionQueryTaskHost {
+        public:
+            PointQueryOwner(const Runtime::RuntimeScene &scene, Runtime::EntityRef entity, EnvironmentQueryPlan plan,
+                            QuerySchemaRegistry schema)
+                : scene_(scene), entity_(entity), plan_(std::move(plan)), schema_(std::move(schema)) {}
+
+            Result<std::unique_ptr<IBehaviorTreeExecutor>> BindQueryTask(const BehaviorTreeExecutionPlan &tree,
+                                                                         const DecisionNodeConfiguration &configuration) override {
+                using Executor = Result<std::unique_ptr<IBehaviorTreeExecutor>>;
+                auto bound = DecisionQueryTask::BindAuthored(configuration, plan_, schema_, tree, *this);
+                if (bound.HasError())
+                    return Executor::Failure(bound.ErrorValue());
+                ++bindings;
+                task = bound.Value().get();
+                return Executor::Success(std::move(bound).Value());
+            }
+
+            Result<std::unique_ptr<QueryExecution>> Admit(const DecisionQueryTaskDescriptor &, const AiTaskOperationContext &operation,
+                                                          std::uint64_t tick, std::uint64_t deadline) override {
+                using Execution = Result<std::unique_ptr<QueryExecution>>;
+                const auto providers = QueryContextProviderRegistry::Capture({}, schema_);
+                if (providers.HasError())
+                    return Execution::Failure(providers.ErrorValue());
+                QueryContextCapture capture;
+                const auto current = scene_.View();
+                const auto contexts =
+                    capture.Capture(plan_, schema_, providers.Value(), current, {.querier = entity_, .executionRevision = tick});
+                if (contexts.HasError())
+                    return Execution::Failure(contexts.ErrorValue());
+                auto admitted =
+                    AdmitBuiltinPointQuery(plan_, schema_, current, {operation.agent, contexts.Value(), operation.ownerCancellation},
+                                           {.submittedTick = tick, .deadlineTick = deadline, .maximumCandidates = 9, .bestCount = 1});
+                if (admitted.HasValue()) {
+                    ++admissions;
+                    observed = operation;
+                }
+                return admitted;
+            }
+
+            std::size_t bindings{};
+            std::size_t admissions{};
+            std::optional<AiTaskOperationContext> observed;
+            DecisionQueryTask *task{};
+
+        private:
+            const Runtime::RuntimeScene &scene_;
+            Runtime::EntityRef entity_;
+            EnvironmentQueryPlan plan_;
+            QuerySchemaRegistry schema_;
+        };
+
+        TEST_CASE("Cooked Scene query tasks bind through the selected owner and inherit agent retirement",
+                  "[unit][ai][scene][decision_reservation][scheduler][eqs]") {
+            Fixture fixture;
+            const auto key = MakeIdentity<BlackboardKeyId>(22);
+            const std::array keys{BlackboardKeyDescriptor{.key = key,
+                                                          .kind = BlackboardValueKind::WorldCoordinate,
+                                                          .presence = BlackboardKeyPresence::Optional}};
+            auto schema = BlackboardSchema::Capture({.identity = SchemaId(), .keys = keys});
+            REQUIRE(schema.HasValue());
+            fixture.schema = std::make_shared<const BlackboardSchema>(std::move(schema).Value());
+            auto registry = CaptureBuiltinQuerySchema();
+            REQUIRE(registry.HasValue());
+            const auto query =
+                CreateBuiltinLatticeQuery(MakeIdentity<QueryId>(23), MakeIdentity<QueryStageId>(24), MakeIdentity<QueryResultSchemaId>(25),
+                                          "Guard points", {.stepMillimeters = 500, .outerSteps = 1}, 8);
+            REQUIRE(query.HasValue());
+            auto queryPlan = EnvironmentQueryPlan::Compile(query.Value(), registry.Value());
+            REQUIRE(queryPlan.HasValue());
+            const auto &result = queryPlan.Value().ResultSchema();
+            const BehaviorTreeQueryOutput output{queryPlan.Value().Id(), result.id, result.version, result.itemType, key, 16};
+            auto registration = Registration(fixture.probe);
+            registration.contract.properties.emplace_back(MakeIdentity<BehaviorTreePropertyId>(26), "query output",
+                                                          BehaviorTreePropertyKind::QueryOutput, output);
+            auto providers = DecisionNodeGeneration::Capture({&registration, 1}, fixture.admission);
+            REQUIRE(providers.HasValue());
+            fixture.providers = std::move(providers).Value();
+            auto task = TreeNode(2, DecisionControlKind::Task);
+            task.properties = registration.contract.properties;
+            task.requirements = {
+                {.key = key, .kind = BlackboardValueKind::WorldCoordinate, .access = BlackboardKeyAccess::ReadWrite, .source = Location()}};
+            auto graph = Tree(11, {TreeNode(1, DecisionControlKind::Root), task}, {Edge(1, 1, 2)});
+            graph.executionTask = MakeIdentity<TaskId>(9000);
+            const auto plan = fixture.Compile(std::span{&graph, 1}, 11);
+            auto scene = SceneFixture(fixture, *plan);
+            scene.descriptor.cookedPlan = plan;
+            Runtime::SceneDefinitionBuilder builder{{7}, {1}};
+            builder.Add({.object = {1}});
+            const auto definition = std::move(builder).Build();
+            REQUIRE(definition.HasValue());
+            const auto live = Runtime::RuntimeScene::Create(definition.Value(), scene.binding.scene);
+            REQUIRE(live.HasValue());
+            auto owner =
+                std::make_shared<PointQueryOwner>(*live.Value(), scene.owner, std::move(queryPlan).Value(), std::move(registry).Value());
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+            auto runtime = std::move(AiSceneRuntime::Create()).Value();
+            auto publication = TestSupport::Publish(runtime, scene);
+
+            TestSupport::ExpectError(runtime.ActivateCookedDecisionsAtSafePoint({jobs, {}, {}}), AIErrors::CapabilityUnavailable);
+            CHECK(runtime.TaskSchedulerAtSafePoint().HasError());
+            CHECK(fixture.probe.factories == 0);
+            REQUIRE(runtime.ActivateCookedDecisionsAtSafePoint({jobs, {}, {}, owner}).HasValue());
+            CHECK(owner->bindings == 1);
+            CHECK(owner->admissions == 0);
+            const auto scheduler = runtime.TaskSchedulerAtSafePoint();
+            REQUIRE(scheduler.HasValue());
+            REQUIRE(scheduler.Value()->EvaluateAtDecision(1).HasValue());
+            REQUIRE(scheduler.Value()->CommitAtIntentDispatch(1).HasValue());
+            CHECK(owner->admissions == 1);
+            CHECK(fixture.probe.factories == 0);
+            REQUIRE(owner->observed);
+            CHECK_FALSE(owner->observed->IsCancellationRequested());
+            REQUIRE(owner->task);
+            const auto agent = owner->observed->agent;
+            bool published = false;
+            for (std::uint64_t tick = 1; tick < 16 && !published; ++tick) {
+                if (tick != 1) {
+                    const auto sync = runtime.SyncDecisionQueryAtBlackboardSync(*owner->task, live.Value()->View(), tick);
+                    REQUIRE(sync.HasValue());
+                    published = sync.Value();
+                    const auto snapshot = runtime.CaptureDecisionSnapshotAtSafePoint(agent);
+                    REQUIRE(snapshot.HasValue());
+                    const auto value = snapshot.Value().Read(key);
+                    REQUIRE(value.HasValue());
+                    CHECK(value.Value().has_value() == published);
+                    if (published)
+                        CHECK(std::holds_alternative<Math::WorldCoordinate64>(std::get<BlackboardScalarValue>(*value.Value())));
+                    REQUIRE(scheduler.Value()->EvaluateAtDecision(tick).HasValue());
+                    REQUIRE(scheduler.Value()->CommitAtIntentDispatch(tick).HasValue());
+                }
+                AiWorkBudget budget{128};
+                owner->task->AdvanceQuery(tick, {budget, budget, budget});
+            }
+            REQUIRE(published);
+            CHECK_FALSE(owner->task->ActiveAgent().IsValid());
+            runtime.BeginShutdown();
+            CHECK(owner->observed->IsCancellationRequested());
         }
 
         TEST_CASE("Cooked controller publication rejects a provider retired after Scene preparation",

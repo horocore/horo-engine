@@ -28,6 +28,8 @@
 
 namespace Horo::AI {
     class AiSceneRuntime;
+    class DecisionQueryTask;
+    class IDecisionQueryTaskBinder;
     class PerceptionSpatialBroadphase;
     class PerceptionSpatialSnapshot;
     class PerceptionSenseGeneration;
@@ -259,6 +261,7 @@ namespace Horo::AI {
         JobSystem &jobs; /**< Process executor must outlive the scene scheduler and its worker image pins. */
         AiTaskSchedulerSettings scheduler;
         AiAgentSchedulePolicy agent; /**< Maximum per-agent allowances; compiled plans reserve only required work units. */
+        std::shared_ptr<IDecisionQueryTaskBinder> queryTasks; /**< Explicit Scene owner binding for authored query tasks. */
     };
 
     /**
@@ -363,6 +366,14 @@ namespace Horo::AI {
          * Call while the initial Scene is still private to the host, before entering its first simulation tick.
          */
         [[nodiscard]] Result<void> ActivateCookedDecisionsAtSafePoint(AiSceneCookedDecisionExecution execution);
+
+        /** @brief Runs one admitted query task's BlackboardSync against its exact Scene-owned destination.
+         * @param task Existing owner-bound query task. @param scene Current view for output revalidation.
+         * @param tick Exact simulation tick before that agent's next decision.
+         * @return True if an output was committed, false for idle or pending work, or a typed stale or publication error.
+         */
+        [[nodiscard]] Result<bool> SyncDecisionQueryAtBlackboardSync(DecisionQueryTask &task, const Runtime::RuntimeSceneView &scene,
+                                                                     std::uint64_t tick) const;
 
         /** @brief Composes the active scene's scheduler once, at the owner safe point.
          * @param jobs Process JobSystem, retained until every worker image pin drains.

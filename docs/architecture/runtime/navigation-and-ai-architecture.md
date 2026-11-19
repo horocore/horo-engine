@@ -2369,6 +2369,16 @@ committed generation as the selected Decision plans. It rejects missing or
 ambiguous query IDs and checks the result contract against the compiled
 Blackboard destination before making the controller available.
 
+Cooked Behavior Tree execution routes the explicit query property through the
+Scene owner's task binder after descriptor and Blackboard validation. It still
+uses the registered executor's normal begin, resume and retirement routing.
+Missing owner binding produces a typed capability failure before native
+factory construction. The graph retains the binder with the provider
+generation while preserving the existing cooked instance layout.
+The Scene's BlackboardSync entry point resolves the task's exact live agent
+and writes through that agent's existing Blackboard owner. Mutable Blackboard
+access stays within the Scene owner.
+
 Each native distance stage can store a positive integer relative score weight.
 An omitted weight means `1` and keeps existing source payloads valid. The scorer
 normalizes enabled scoring stages by their total weight. A filter-only stage

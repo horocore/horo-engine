@@ -15,6 +15,12 @@ namespace Horo::AI {
             return state == Succeeded || state == Failed || state == Cancelled;
         }
 
+        /** @brief Retains the query host with the exact executable generation without changing the cooked instance layout. */
+        struct QueryProviderLease final {
+            std::shared_ptr<const DecisionNodeGeneration> providers;
+            std::shared_ptr<IDecisionQueryTaskBinder> queryTasks;
+        };
+
         bool ValidRange(const DecisionGraphInstanceBinding &binding, const CookedDecisionPlan &plan) noexcept {
             const auto count = plan.Storage().taskSlots;
             if (binding.firstTaskGeneration == 0 || count > binding.availableTaskSlots || count > std::numeric_limits<std::uint32_t>::max())
@@ -63,13 +69,26 @@ namespace Horo::AI {
     Result<std::unique_ptr<DecisionGraphInstance>> DecisionGraphInstance::Create(std::shared_ptr<const CookedDecisionPlan> plan,
                                                                                  std::shared_ptr<const DecisionNodeGeneration> providers,
                                                                                  DecisionGraphInstanceBinding binding) {
+        return CreateBound(std::move(plan), std::move(providers), std::move(binding), {});
+    }
+
+    /** @copydoc DecisionGraphInstance::CreateBound */
+    Result<std::unique_ptr<DecisionGraphInstance>> DecisionGraphInstance::CreateBound(
+        std::shared_ptr<const CookedDecisionPlan> plan, std::shared_ptr<const DecisionNodeGeneration> providers,
+        DecisionGraphInstanceBinding binding, std::shared_ptr<IDecisionQueryTaskBinder> queryTasks) {
         if (auto admitted = Admit(plan, providers, binding); admitted.HasError())
             return Result<std::unique_ptr<DecisionGraphInstance>>::Failure(admitted.ErrorValue());
         try {
             auto result = std::make_unique<DecisionGraphInstance>();
             result->owner_ = std::this_thread::get_id();
             result->plan_ = std::move(plan);
-            result->providers_ = std::move(providers);
+            auto *binder = queryTasks.get();
+            if (binder) {
+                const auto *generation = providers.get();
+                auto lease = std::make_shared<QueryProviderLease>(std::move(providers), std::move(queryTasks));
+                result->providers_ = std::shared_ptr<const DecisionNodeGeneration>{std::move(lease), generation};
+            } else
+                result->providers_ = std::move(providers);
             result->binding_ = std::move(binding);
             result->usesUtility_ = std::ranges::any_of(result->plan_->Graphs(), [](const auto &graph) {
                 return std::holds_alternative<std::shared_ptr<const CookedUtilityPlan>>(graph.execution);
@@ -77,7 +96,7 @@ namespace Horo::AI {
             result->occurrences_.reserve(result->plan_->Occurrences().size());
             for (std::size_t index = 0; index < result->plan_->Occurrences().size(); ++index) {
                 result->occurrences_.push_back(std::make_unique<OccurrenceState>());
-                if (auto built = result->BuildOccurrence(index); built.HasError())
+                if (auto built = result->BuildOccurrence(index, binder); built.HasError())
                     return Result<std::unique_ptr<DecisionGraphInstance>>::Failure(built.ErrorValue());
             }
             result->occurrences_[0]->active = true;
@@ -105,12 +124,12 @@ namespace Horo::AI {
         return operation;
     }
 
-    Result<void> DecisionGraphInstance::BuildOccurrence(std::size_t index) {
+    Result<void> DecisionGraphInstance::BuildOccurrence(std::size_t index, IDecisionQueryTaskBinder *queryTasks) {
         auto &state = *occurrences_[index];
         const auto &graph = plan_->Graphs()[plan_->Occurrences()[index].plan];
         state.generation = binding_.firstTaskGeneration;
         if (const auto *tree = std::get_if<std::shared_ptr<const BehaviorTreeExecutionPlan>>(&graph.execution)) {
-            auto callbacks = providers_->CreateExecutor(providers_, **tree, plan_->Capabilities(), graph.providerProperties);
+            auto callbacks = providers_->CreateExecutor(providers_, **tree, plan_->Capabilities(), graph.providerProperties, queryTasks);
             if (callbacks.HasError())
                 return Result<void>::Failure(callbacks.ErrorValue());
             BehaviorTreeInstanceBinding binding{binding_.operation.agent, binding_.operation.cancellation,

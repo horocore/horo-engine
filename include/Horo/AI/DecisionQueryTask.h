@@ -79,6 +79,10 @@ namespace Horo::AI {
         /** @copydoc IBehaviorTreeExecutor::Service */
         [[nodiscard]] Result<void> Service(const BehaviorTreeEvaluationContext &context) noexcept override;
 
+        /** @brief Identifies the exact active result owner on the simulation lane.
+         * @return Live-operation identity, or an empty handle when the query is idle or retired.
+         */
+        [[nodiscard]] AgentHandle ActiveAgent() const noexcept;
         /** @brief Delegates budgeted work to the admitted query after BlackboardSync. */
         void AdvanceQuery(std::uint64_t tick, QueryExecutionBudget budget);
         /** @brief Collects already available provider completion at BlackboardSync. */

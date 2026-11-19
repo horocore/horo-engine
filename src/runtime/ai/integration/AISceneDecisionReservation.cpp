@@ -1,5 +1,6 @@
 #include "AISceneRuntimeDetail.h"
 #include "Horo/AI/DecisionGraphInstance.h"
+#include "Horo/AI/DecisionQueryTask.h"
 
 #include <limits>
 #include <new>
@@ -57,6 +58,27 @@ namespace Horo::AI {
         };
     }  // namespace
 
+    /** @copydoc AiSceneRuntime::SyncDecisionQueryAtBlackboardSync */
+    Result<bool> AiSceneRuntime::SyncDecisionQueryAtBlackboardSync(DecisionQueryTask &task, const Runtime::RuntimeSceneView &scene,
+                                                                   std::uint64_t tick) const {
+        using Sync = Result<bool>;
+        if (auto valid = CapabilityAtSafePoint().ValidateAtSafePoint(); valid.HasError())
+            return Sync::Failure(valid.ErrorValue());
+        if (tick == 0)
+            return Sync::Failure(MakeError(AIErrors::TaskContextInvalid));
+        const auto state = active_;
+        if (!scene.IsCurrent() || scene.RuntimeId() != state->binding.scene)
+            return Sync::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
+        const auto owner = task.ActiveAgent();
+        if (!owner.IsValid())
+            return Sync::Success(false);
+        const auto selected = DecisionAgent(*state, owner);
+        if (selected.HasError())
+            return Sync::Failure(selected.ErrorValue());
+        task.SyncQuery(tick);
+        return task.CommitOutput(tick, scene, *selected.Value()->blackboard);
+    }
+
     /** @copydoc AiSceneRuntime::PrepareCookedDecisionRegistrations */
     Result<std::vector<AiScheduledDecisionRegistration>> AiSceneRuntime::PrepareCookedDecisionRegistrations(
         const std::shared_ptr<Detail::AiSceneRuntimeState> &state, const std::span<const Detail::AgentRuntimeState> agents,
@@ -95,7 +117,7 @@ namespace Horo::AI {
                                                        .agent = handle,
                                                        .cancellation = cancellation};
                 AiDecisionTaskReservation reservation{agent.blackboardBinding, agent.schema, cursor + 1, count, cancellation};
-                auto decision = DecisionGraphInstance::Create(plan, std::move(reservation), operation);
+                auto decision = DecisionGraphInstance::Create(plan, std::move(reservation), operation, decisionExecution_->queryTasks);
                 if (decision.HasError())
                     return Output::Failure(decision.ErrorValue());
 
