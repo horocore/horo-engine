@@ -611,6 +611,21 @@ class AndroidAssemblyTests(unittest.TestCase):
             "android/gradle/gradle.lockfile",
         })
 
+    def test_hosted_openxr_cache_contains_only_the_verified_locked_archive(self):
+        workflow = (android_package.ROOT / ".github/workflows/android-package.yml").read_text()
+        cache = workflow.split("- name: Restore locked OpenXR loader", 1)[1]
+        cache = cache.split("- name: Create external disposable qualification signing identity", 1)[0]
+        self.assertEqual(cache.count("${{ runner.temp }}/openxr-loader.aar"), 2)
+        self.assertEqual(cache.count("hashFiles('android/openxr-loader-lock.json')"), 2)
+        self.assertIn('if [[ -f "$loader" ]] && verified "$loader"', cache)
+        self.assertIn('if ! verified "$pending"', cache)
+        self.assertLess(cache.index('if ! verified "$pending"'), cache.index('mv -- "$pending" "$loader"'))
+        self.assertNotIn("restore-keys:", cache)
+        self.assertNotIn("qualification.p12", cache)
+        build = workflow.split("- name: Build two isolated signed packages and compare evidence", 1)[1]
+        self.assertIn('--openxr-loader "$RUNNER_TEMP/openxr-loader.aar"', build)
+        self.assertNotIn("curl ", build)
+
     def test_tool_preflight_actual_metadata_and_version_commands(self):
         arguments = self.arguments()
         for root, revision in ((arguments.ndk,self.tools["ndk"]),

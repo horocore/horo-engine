@@ -76,6 +76,45 @@ jobs:
           unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
           unzip -q "$RUNNER_TEMP/ninja.zip" -d "$RUNNER_TEMP/android-bin"
           printf '%s\n' "$RUNNER_TEMP/android-bin" >> "$GITHUB_PATH"
+      - name: Restore locked OpenXR loader
+        if: matrix.profile == 'qualification-openxr-development'
+        id: openxr-loader-cache
+        continue-on-error: true
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ runner.temp }}/openxr-loader.aar
+          key: android-openxr-aar-v1-${{ hashFiles('android/openxr-loader-lock.json') }}
+      - name: Verify or download locked OpenXR loader
+        if: matrix.profile == 'qualification-openxr-development'
+        shell: bash
+        run: |
+          set -euo pipefail
+          loader="$RUNNER_TEMP/openxr-loader.aar"
+          loader_sha=$(python3 -c 'import json; print(json.load(open("android/openxr-loader-lock.json"))["sha256"])')
+          [[ "$loader_sha" =~ ^[0-9a-f]{64}$ ]]
+          verified() {
+            printf '%s  %s\n' "$loader_sha" "$1" | sha256sum --check --strict --status
+          }
+          if [[ -f "$loader" ]] && verified "$loader"; then
+            exit 0
+          fi
+          loader_url=$(python3 -c 'import json; print(json.load(open("android/openxr-loader-lock.json"))["url"])')
+          pending="$loader.download"
+          trap 'rm -f -- "$pending"' EXIT
+          curl --proto =https --proto-redir =https --fail --location --connect-timeout 15 --max-time 60 \
+            --retry 4 --retry-delay 20 --retry-max-time 180 --output "$pending" -- "$loader_url"
+          if ! verified "$pending"; then
+            echo 'Locked OpenXR loader digest mismatch.' >&2
+            exit 1
+          fi
+          mv -- "$pending" "$loader"
+      - name: Save verified OpenXR loader
+        if: matrix.profile == 'qualification-openxr-development' && steps.openxr-loader-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ runner.temp }}/openxr-loader.aar
+          key: android-openxr-aar-v1-${{ hashFiles('android/openxr-loader-lock.json') }}
       - name: Create external disposable qualification signing identity
         shell: bash
         run: |
@@ -100,8 +139,6 @@ jobs:
           fi
           xr_args=()
           if [[ "$PACKAGE_PROFILE" == qualification-openxr-development ]]; then
-            loader_url="$(python3 -c 'import json; print(json.load(open("android/openxr-loader-lock.json"))["url"])')"
-            curl --proto =https --proto-redir =https --fail --location --retry 3 --max-time 60 --output "$RUNNER_TEMP/openxr-loader.aar" -- "$loader_url"
             xr_args+=(--openxr-loader "$RUNNER_TEMP/openxr-loader.aar")
           fi
           for iteration in first second; do
