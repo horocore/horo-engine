@@ -1868,6 +1868,9 @@ queue/dispatcher drops and retention can limit evidence. The summary lists the
 data categories it includes and excludes and reports failure counts using the
 closed Save failure taxonomy. Failed or cancelled rows with missing or invalid
 category evidence contribute to the unclassified count.
+Editor and CLI bundles withhold both the Save telemetry namespace and the Save
+error domain from their raw JSON evidence. A Save error embedded as a cause in
+another subsystem's crash record is omitted with its entire cause subtree.
 
 ## Qualification And Implementation Status
 

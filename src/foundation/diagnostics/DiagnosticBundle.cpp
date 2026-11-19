@@ -125,7 +125,7 @@ namespace Horo::Diagnostics {
         [[nodiscard]] bool SummaryOnlyRecord(const Json &value, const std::span<const std::string> namespaces) {
             if (namespaces.empty() || !value.is_object())
                 return false;
-            for (const auto key : {"category", "subsystem"}) {
+            for (const auto key : {"category", "subsystem", "domain"}) {
                 const auto field = value.find(key);
                 if (field == value.end() || !field->is_string())
                     continue;

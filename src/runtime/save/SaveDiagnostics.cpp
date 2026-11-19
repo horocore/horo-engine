@@ -12,7 +12,6 @@
 
 namespace Horo::Runtime {
     namespace {
-        constexpr std::string_view SaveErrorDomain = "horo.save";
 
         struct DiagnosticPolicy final {
             const ErrorCodeDescriptor *descriptor;
@@ -165,7 +164,7 @@ namespace Horo::Runtime {
         }
 
         std::optional<DiagnosticPolicy> PolicyFor(const Error &error) noexcept {
-            if (error.domain.Value() != SaveErrorDomain)
+            if (error.domain.Value() != SaveDiagnosticErrorDomain)
                 return std::nullopt;
             for (const auto &policy : Policies()) {
                 if (error.code.Value() == policy.descriptor->code.Value())

@@ -64,7 +64,7 @@ namespace {
                                  includeSave ? Telemetry::MetricCollectionLevel::Core : Telemetry::MetricCollectionLevel::Off,
                              .echoToStderr = false},
                  .summaries = {&SummarizeSaveTelemetry},
-                 .summaryOnlyNamespaces = {std::string{SaveTelemetryDiagnosticNamespace}}});
+                 .summaryOnlyNamespaces = {std::string{SaveTelemetryDiagnosticNamespace}, std::string{SaveDiagnosticErrorDomain}}});
         }
 
         ~Session() {
@@ -331,21 +331,26 @@ TEST_CASE("Support bundles keep only summarized Save records across logs, histor
           "\n");
     const auto crash = session.directory / "crash.json";
     write(crash, R"({"breadcrumbs":[{"category":"runtime.save.restore","message":"private-crash-breadcrumb"},)"
-                 R"({"category":"editor.scene","message":"control-unrelated-crash"}]})");
+                 R"({"category":"editor.scene","message":"control-unrelated-crash"}],)"
+                 R"("error":{"domain":"horo.scene","code":"scene.restore.failed","message":"control-outer-error",)"
+                 R"("cause":{"domain":"horo.save","code":"save.restore.failed","message":"private-save-cause",)"
+                 R"("cause":{"domain":"horo.platform","code":"platform.storage.failed","message":"private-provider-cause"}}},)"
+                 R"("other":{"domain":"horo.saver","message":"control-domain-prefix"}})");
     const auto bundled = session.host->GenerateDiagnosticBundle(
         {.outputPath = session.directory / "bundle.zip",
          .crashMetadata = Application::HostDiagnosticFile{.sourcePath = crash, .archivePath = "crash/report.json"}});
     REQUIRE(bundled.HasValue());
     const auto archive = Read(bundled.Value().outputPath);
     // Diagnostic bundles use ZIP32 stored entries, so the payload sentinels remain literal archive bytes.
-    for (const auto control :
-         {"logs/save.1.jsonl", "history/save.1.operations.jsonl", "control-unrelated-log", "control-unrelated-rolled-log",
-          "control-unrelated-history", "control-unrelated-crash", "data_categories", "save.summary", R"("observations\":1)"}) {
+    for (const auto control : {"logs/save.1.jsonl", "history/save.1.operations.jsonl", "control-unrelated-log",
+                               "control-unrelated-rolled-log", "control-unrelated-history", "control-unrelated-crash",
+                               "control-outer-error", "control-domain-prefix", "data_categories", "save.summary", R"("observations\":1)"}) {
         CAPTURE(control);
         CHECK(archive.find(control) != std::string::npos);
     }
-    for (const auto secret : {"private-current-row-payload", "private-rolled-row-display", "private-unknown-field", "private-slot",
-                              "private-history-name", "private-history-field", "private-crash-breadcrumb"}) {
+    for (const auto secret :
+         {"private-current-row-payload", "private-rolled-row-display", "private-unknown-field", "private-slot", "private-history-name",
+          "private-history-field", "private-crash-breadcrumb", "private-save-cause", "private-provider-cause"}) {
         CAPTURE(secret);
         CHECK(archive.find(secret) == std::string::npos);
     }

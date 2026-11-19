@@ -20,6 +20,9 @@
 #include <variant>
 
 namespace Horo::Runtime {
+    /** @brief Save error domain withheld from raw support-bundle entries. */
+    inline constexpr std::string_view SaveDiagnosticErrorDomain{"horo.save"};
+
     inline constexpr std::size_t MaximumSaveDiagnosticContextEntries = 8;
     inline constexpr std::size_t MaximumSaveDiagnosticCauseDepth = 4;
     inline constexpr std::size_t MaximumSavePartialDataFacts = 8;
