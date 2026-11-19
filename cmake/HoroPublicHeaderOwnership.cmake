@@ -1154,6 +1154,7 @@ horo_configure_target_header_boundary(HoroXRInputBindings PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroXRCharacterLocomotion PUBLIC_HEADERS
     Horo/XR/XRCharacterLocomotion.h
+    Horo/XR/XRLocomotionPolicy.h
 )
 horo_configure_target_header_boundary(HoroTerrainApi PUBLIC_HEADERS
     Horo/Terrain/FoliageDefinition.h

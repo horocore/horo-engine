@@ -15,6 +15,7 @@ Owns XR capabilities, session and frame lifecycle, tracking and interaction cont
 | Session state, shutdown or frame ordering | [Session lifecycle](runtime/XRSessionLifecycle.cpp), [frame lifecycle](runtime/XRFrameLifecycle.cpp) |
 | Controller actions or tracking delivery to the engine | [Action bindings](input/XRActionBindings.cpp), [tracking publication](runtime/XRTrackingPublication.cpp) |
 | Sending XR locomotion to Character and the calibration owner | [Locomotion adapter](locomotion/XRCharacterLocomotion.cpp) |
+| Mapping gameplay actions and calibrated tracking to movement | [Locomotion policy](locomotion/XRLocomotionPolicy.cpp) |
 | Native views, swapchains or composition | [OpenXR frame compositor](openxr/OpenXRFrameCompositor.cpp), [Vulkan adapter](openxr/vulkan/) |
 | Quest passthrough | [Meta Quest provider](openxr/modules/meta_quest/README.md) |
 | Reproducing input with the simulator | [Simulator runtime](simulator/XRSimulatorRuntime.cpp), [simulator tests](../../../tests/unit/runtime/xr/XRSimulatorRuntimeTests.cpp) |

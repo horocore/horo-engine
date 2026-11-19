@@ -2169,7 +2169,10 @@ target_sources(HoroXRInputBindingsPublicHeaderConsumer PRIVATE public_headers/XR
 target_sources(HoroXRCharacterLocomotionPublicHeaderConsumer PRIVATE public_headers/XRCharacterLocomotionConsumer.cpp)
 target_sources(HoroXRRuntimePublicHeaderConsumer PRIVATE public_headers/XRProjectSettingsConsumer.cpp)
 
-add_executable(HoroXRCharacterLocomotionTests unit/runtime/xr/XRCharacterLocomotionTests.cpp)
+add_executable(HoroXRCharacterLocomotionTests
+    unit/runtime/xr/XRCharacterLocomotionTests.cpp
+    unit/runtime/xr/XRLocomotionPolicyTests.cpp
+)
 target_include_directories(HoroXRCharacterLocomotionTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/src/physics)
 target_link_libraries(HoroXRCharacterLocomotionTests PRIVATE HoroEngine::XRCharacterLocomotion)
 add_dependencies(HoroXRCharacterLocomotionTests HoroXRCharacterLocomotionPublicHeaderConsumer)

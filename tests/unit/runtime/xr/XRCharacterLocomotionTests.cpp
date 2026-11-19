@@ -2,6 +2,7 @@
 #include "Horo/Runtime/RuntimeLifecycle.h"
 #include "Horo/XR/XRCharacterLocomotion.h"
 #include "Horo/XR/XRErrors.h"
+#include "Horo/XR/XRLocomotionPolicy.h"
 #include "support/TypedIdentityTestSupport.h"
 
 #include <functional>
@@ -293,5 +294,37 @@ namespace {
         REQUIRE(teleport->Apply(host.World(), query, target.destinationRevision).HasError());
         REQUIRE(blocked.calls > 0);
         REQUIRE(host.World().ControllerTransform(host.Controller()).Value().position == original.position);
+    }
+
+    TEST_CASE("Routed XR movement policy submits through the live Character command boundary", "[xr][character][locomotion]") {
+        Fixture host;
+        const auto tracking = host.Tracking();
+        const XRLocomotionScope scope{DescribeXRInteractionCutoff(tracking), Fixture::player, Fixture::revision};
+        auto created =
+            XRLocomotionPolicy::Create({XRSmoothMove{4.0F, 0.0F}}, scope.tracking.session, scope.player, scope.assignmentRevision);
+        REQUIRE(created.HasValue());
+        auto policy = std::move(created).Value();
+        auto adapter = host.Adapter();
+        const auto route = [&tracking, &scope, &policy, &adapter](const Runtime::FixedStepContext &step) {
+            const XRLocomotionSample sample{.scope = scope,
+                                            .tick = step.simulationTick,
+                                            .sequence = step.simulationTick,
+                                            .fixedStepNanoseconds = step.fixedDelta.ToNanoseconds(),
+                                            .move = {1, 1},
+                                            .gameplayYawRadians = 0.716F};
+            const auto intent = policy.Evaluate(sample, tracking);
+            REQUIRE(intent.HasValue());
+            REQUIRE(intent.Value());
+            REQUIRE(adapter.Submit(*intent.Value(), tracking, Fixture::revision, step).Value() == XRLocomotionAdmission::Queued);
+        };
+        CommandTrace first;
+        host.Tick(route);
+        REQUIRE(host.World().AdvanceFixedTick(FixedTick(1, first.Observer())).HasValue());
+        REQUIRE(first.movements[0].desiredVelocityMetersPerSecond == Math::Vec3{});
+        CommandTrace moving;
+        host.Tick(route);
+        REQUIRE(host.World().AdvanceFixedTick(FixedTick(2, moving.Observer())).HasValue());
+        REQUIRE(moving.movementCount == 1);
+        REQUIRE(Math::Length(*moving.movements[0].desiredVelocityMetersPerSecond) > 3.99F);
     }
 }  // namespace

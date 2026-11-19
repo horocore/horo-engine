@@ -814,6 +814,16 @@ the destination revision and clearance before committing a teleport. The applica
 calibration owner handles recentering separately. Replacing the binding or shutting
 down revokes unfrozen Character commands and cancels pending placement and calibration.
 
+The gameplay host can bind `XRLocomotionPolicy` to that player's assignment and select
+smooth move, arm-swing, room-scale reconciliation, teleport or no translation.
+Snap turn is independent and uses distinct release and engage thresholds. The host
+provides committed action values, calibrated pose positions and the destination
+tick duration. Physical motion uses only fresh tracking samples in the same
+calibration, with authored speed and continuity bounds. Profile changes, tracking
+loss and origin changes reset the pose history and require a neutral tick before
+resuming. Teleport checks a destination through the installed gameplay query owner,
+with the Character placement check still deciding whether the root can move.
+
 When artificial locomotion/rotation exists, disable controls where gameplay permits,
 snap-turn configuration, speed/handedness, seated/standing/recenter behavior, motion-
 reduction controls and declared teleport/continuous availability remain visible across

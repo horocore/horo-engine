@@ -2532,7 +2532,10 @@ add_library(HoroEngine::XRInputBindings ALIAS HoroXRInputBindings)
 target_compile_features(HoroXRInputBindings PUBLIC cxx_std_20)
 target_link_libraries(HoroXRInputBindings PUBLIC HoroEngine::XRApi HoroEngine::Input)
 
-add_library(HoroXRCharacterLocomotion STATIC runtime/xr/locomotion/XRCharacterLocomotion.cpp)
+add_library(HoroXRCharacterLocomotion STATIC
+    runtime/xr/locomotion/XRCharacterLocomotion.cpp
+    runtime/xr/locomotion/XRLocomotionPolicy.cpp
+)
 add_library(HoroEngine::XRCharacterLocomotion ALIAS HoroXRCharacterLocomotion)
 target_compile_features(HoroXRCharacterLocomotion PUBLIC cxx_std_20)
 target_link_libraries(HoroXRCharacterLocomotion PUBLIC HoroEngine::XRApi HoroEngine::Input HoroEngine::Physics HoroEngine::Runtime)

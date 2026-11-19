@@ -1,4 +1,4 @@
-#include "Horo/XR/XRCharacterLocomotion.h"
+#include "Horo/XR/XRLocomotionPolicy.h"
 
 #include <concepts>
 #include <type_traits>
