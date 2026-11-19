@@ -4,6 +4,7 @@
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/GuiScreenHost.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "editor/design_system/components/EditorUiLabelWrap.h"
 
 #include <algorithm>
 #include <format>
@@ -29,56 +30,13 @@ namespace Horo::Editor {
             return Cancel;
         }
 
-        struct LoadingActionPresentation final {
-            std::string label;
-            float width{};
-            float height{};
-        };
-
         struct LoadingActions final {
-            LoadingActionPresentation primary;
-            LoadingActionPresentation back;
+            Ui::WrappedButtonLabel primary;
+            Ui::WrappedButtonLabel back;
             bool stacked{};
             float width{};
             float height{};
         };
-
-        /** @brief Wraps the visible label at glyph boundaries while preserving the full localized text. */
-        std::string WrapLoadingAction(std::string_view label, const float width) {
-            auto &font = *ImGui::GetFont();
-            const float scale = ImGui::GetFontSize() / font.FontSize;
-            const char *remaining = label.data();
-            const char *end = remaining + label.size();
-            std::string wrapped;
-            while (remaining < end) {
-                const char *lineEnd = font.CalcWordWrapPositionA(scale, remaining, end, width);
-                if (lineEnd == remaining) {
-                    unsigned int codepoint{};
-                    lineEnd += std::max(1, ImTextCharFromUtf8(&codepoint, remaining, end));
-                }
-                wrapped.append(remaining, lineEnd);
-                remaining = lineEnd;
-                while (remaining < end && *remaining == ' ')
-                    ++remaining;
-                if (remaining < end)
-                    wrapped.push_back('\n');
-            }
-            return wrapped;
-        }
-
-        /** @brief Measures one localized action using the exact face and padding of the shared button. */
-        LoadingActionPresentation MeasureLoadingAction(const std::string &label, std::string_view id, const float available,
-                                                       const DesignSystem::ComponentSizeMetrics &metrics) {
-            const float labelWidth = ImGui::CalcTextSize(label.c_str()).x;
-            const float horizontalPadding = metrics.paddingX * 2.0F;
-            const float width = std::min(available, std::max(Ui::ScaledLayoutValue(128.0F), labelWidth + horizontalPadding));
-            const float textWidth = std::max(1.0F, width - horizontalPadding);
-            auto visible = labelWidth > textWidth ? WrapLoadingAction(label, textWidth) : label;
-            const float height = std::max(metrics.minimumHeight, ImGui::CalcTextSize(visible.c_str()).y + metrics.paddingY * 2.0F);
-            visible.append("###");
-            visible.append(id);
-            return {std::move(visible), width, height};
-        }
 
         /** @brief Measures and arranges the recovery actions at the current viewport width. */
         LoadingActions MeasureLoadingActions(const ProjectLoadingViewState &state, const EditorGuiContext &ctx,
@@ -86,13 +44,15 @@ namespace Horo::Editor {
             const auto *key = PrimaryProjectLoadingKey(state);
             Theme::ScopedTextStyle text(ctx.theme.fonts.sansCompact, metrics.fontSize, Theme::FontPx::SansCompact);
             LoadingActions actions;
-            actions.primary = MeasureLoadingAction(ProjectLoadingTextScope.Text(ctx.localization, key), key, available, metrics);
+            const float minimumWidth = Ui::ScaledLayoutValue(128.0F);
+            actions.primary =
+                Ui::MeasureWrappedButtonLabel(ProjectLoadingTextScope.Text(ctx.localization, key), key, available, metrics, minimumWidth);
             actions.width = actions.primary.width;
             actions.height = actions.primary.height;
             if (!state.hasFailed || !state.canRetry)
                 return actions;
-            actions.back =
-                MeasureLoadingAction(ProjectLoadingTextScope.Text(ctx.localization, "action.back"), "action.back", available, metrics);
+            actions.back = Ui::MeasureWrappedButtonLabel(ProjectLoadingTextScope.Text(ctx.localization, "action.back"), "action.back",
+                                                         available, metrics, minimumWidth);
             actions.stacked = actions.primary.width + gap + actions.back.width > available;
             if (actions.stacked)
                 actions.height += gap + actions.back.height;
@@ -104,7 +64,7 @@ namespace Horo::Editor {
         }
 
         /** @brief Draws an action using the shared button while retaining its semantic ID after wrapping. */
-        bool DrawLoadingAction(const LoadingActionPresentation &action, const Theme::Fonts &fonts) {
+        bool DrawLoadingAction(const Ui::WrappedButtonLabel &action, const Theme::Fonts &fonts) {
             const float scale = Theme::GetActiveTokens().sizes.uiScale;
             return Ui::Button({.label = action.label.c_str(),
                                .size = {action.width / scale, action.height / scale},

@@ -3,6 +3,7 @@
 #include "Horo/Editor/EditorUiComponents.h"
 
 #include "EditorControlMetadata.h"
+#include "EditorUiLabelWrap.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Runtime/Input.h"
@@ -1845,7 +1846,7 @@ namespace Horo::Editor::Ui {
                                        const CheckboxTextTone textTone) {
         const float padding = std::max(0.0F, (minimumBoxSize - Theme::TextPx::Label()) * 0.5F);
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2{padding, padding});
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2{8.0F, 0.0F});
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2{CheckboxLabelGap, 0.0F});
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, Theme::GetActiveTokens().radii.control);
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0F);
         PushControlColors(Theme::Bg3(), Theme::Border(), textTone == CheckboxTextTone::Primary ? Theme::Text() : Theme::Muted());
