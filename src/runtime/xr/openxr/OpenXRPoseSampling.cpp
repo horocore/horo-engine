@@ -86,6 +86,25 @@ namespace Horo::XR::OpenXRInternal {
             return ValidateLocation(location, &velocity);
         }
 
+        /** @brief Decodes a fully tracked rigid calibration pose without normalizing invalid native data. */
+        Result<Math::Transform> DecodeCalibrationPose(const XrSpaceLocation &location, const XrSpaceVelocity &velocity) {
+            using Pose = Result<Math::Transform>;
+            if (const auto valid = ValidateLocation(location, velocity); valid.HasError())
+                return Pose::Failure(valid.ErrorValue());
+            constexpr XrSpaceLocationFlags complete = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT |
+                                                      XR_SPACE_LOCATION_POSITION_TRACKED_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
+            if (location.locationFlags != complete)
+                return Pose::Failure(MakeError(XRErrors::OperationUnavailable, "OpenXR calibration requires a fully tracked relation."));
+            const auto &native = location.pose;
+            const Math::Vec3 position{native.position.x, native.position.y, native.position.z};
+            const Math::Quaternion orientation{native.orientation.x, native.orientation.y, native.orientation.z, native.orientation.w};
+            const auto lengthSquared = Math::LengthSquared(Math::Vec4{orientation.x, orientation.y, orientation.z, orientation.w});
+            constexpr float UnitTolerance = 1.0e-4F;
+            if (!Math::IsFinite(position) || !std::isfinite(lengthSquared) || std::abs(lengthSquared - 1.0F) > UnitTolerance)
+                return Pose::Failure(MakeError(XRErrors::PoseInvalid));
+            return Pose::Success({position, orientation});
+        }
+
         /** @brief Validates complete stereo ABI, independent component flags and asymmetric view ranges before any publication. */
         Result<void> ValidatePresentationViews(const NativePresentationViews &output, const XrViewState &state,
                                                std::uint32_t expectedViews) {
@@ -349,6 +368,51 @@ namespace Horo::XR::OpenXRInternal {
             return Result<XRPoseDescriptor>::Failure(valid.ErrorValue());
         return Result<XRPoseDescriptor>::Success(
             {context.Session(), baseIdentity, worldIdentity, XRPosePurpose::PresentationPrediction, time, Components(reference, velocity)});
+    }
+
+    /** @copydoc OpenXRActionBindings::Tracking::ValidateCalibrationBinding */
+    Result<void> OpenXRActionBindings::Tracking::ValidateCalibrationBinding(const XRCoordinateSpace &reference,
+                                                                            const XRCoordinateSpace &target) const {
+        if (!request || base == XR_NULL_HANDLE || world == XR_NULL_HANDLE)
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
+        if (reference != baseIdentity || target != worldIdentity || reference.worldOriginRevision != request->origin ||
+            target.worldOriginRevision != request->origin)
+            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRActionBindings::ObserveReferenceCalibration */
+    Result<NativeReferenceCalibrationObservation> OpenXRActionBindings::ObserveReferenceCalibration(const XRCoordinateSpace reference,
+                                                                                                    const XRCoordinateSpace world,
+                                                                                                    const XRRuntimeTime now) const {
+        using Outcome = Result<NativeReferenceCalibrationObservation>;
+        if (const auto lane = ControlLane(); lane.HasError())
+            return Outcome::Failure(lane.ErrorValue());
+        if (!now.IsValid())
+            return Outcome::Failure(MakeError(XRErrors::TimeDomainIncompatible));
+        if (sampling_ || !active_ || !dispatch_.locate)
+            return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
+        if (const auto binding = tracking_.ValidateCalibrationBinding(reference, world); binding.HasError())
+            return Outcome::Failure(binding.ErrorValue());
+
+        const Operation operation{sampling_};
+        const auto current = Current(reference.id.session);
+        if (current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        XrSpaceVelocity velocity{XR_TYPE_SPACE_VELOCITY};
+        XrSpaceLocation location{XR_TYPE_SPACE_LOCATION, &velocity};
+        const auto sampled = dispatch_.locate(tracking_.base, tracking_.world, now.Nanoseconds(), &location);
+        if (sampled != XR_SUCCESS)
+            return Outcome::Failure(PoseFailure("observe calibration reference in World", sampled));
+        const auto fenced = Current(reference.id.session);
+        if (fenced.HasError())
+            return Outcome::Failure(fenced.ErrorValue());
+        if (fenced.Value().incarnation != current.Value().incarnation)
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+        if (const auto binding = tracking_.ValidateCalibrationBinding(reference, world); binding.HasError())
+            return Outcome::Failure(binding.ErrorValue());
+        const auto pose = DecodeCalibrationPose(location, velocity);
+        return pose.HasError() ? Outcome::Failure(pose.ErrorValue()) : Outcome::Success({reference, world, now, pose.Value()});
     }
 
     /** @copydoc OpenXRActionBindings::LocatePresentation */

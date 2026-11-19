@@ -340,6 +340,68 @@ namespace Horo::Tests::OpenXRAction {
         CHECK(fixture.actions.owner.BorrowPresentationReference(reference).HasError());
     }
 
+    TEST_CASE("OpenXR cold reference calibration observes only the exact bound runtime spaces", "[xr][native][poses][reference]") {
+        TrackingFixture fixture;
+        REQUIRE(fixture.Prepare(Math::Transform{.translation = {1.0F, 2.0F, 3.0F}}).HasValue());
+        fixture.Activate(6);
+        auto &owner = fixture.actions.owner;
+        auto &script = fixture.actions.script;
+        const auto session = fixture.actions.session.Request().candidate;
+        const auto references = owner.References(session);
+        const auto world = owner.WorldSpace(session);
+        REQUIRE(references.HasValue());
+        REQUIRE(world.HasValue());
+        auto reference = references.Value().local;
+        auto target = world.Value();
+        const auto sample = IdentityValue<XRRuntimeTime>(503);
+
+        SECTION("current references yield a runtime-domain relation without Sync or a frame") {
+            script.sample.reentrantOwner = &owner;
+            const auto received = owner.ObserveReferenceCalibration(reference, target, sample);
+            REQUIRE(received.HasValue());
+            CHECK(received.Value().reference == reference);
+            CHECK(received.Value().world == target);
+            CHECK(received.Value().observedAt == sample);
+            CHECK(received.Value().worldFromReference.translation == Math::Vec3{1.0F, 2.0F, 3.0F});
+            CHECK(script.tracking.locatedTime == 503);
+            const auto nativeWorld = owner.BorrowWorldSpace(target);
+            REQUIRE(nativeWorld.HasValue());
+            CHECK(script.tracking.locatedBase == nativeWorld.Value());
+            CHECK(script.sample.closeRejected);
+        }
+        SECTION("retired space generation and replaced origin fail before native work") {
+            ++reference.id.slot.generation;
+            REQUIRE(owner.ObserveReferenceCalibration(reference, target, sample).HasError());
+            reference = references.Value().local;
+            target.worldOriginRevision = IdentityValue<XRWorldOriginRevision>(2);
+            const auto stale = owner.ObserveReferenceCalibration(reference, target, sample);
+            REQUIRE(stale.HasError());
+            CHECK(stale.ErrorValue().code.Value() == XRErrors::IdentityStale.code.Value());
+            CHECK(script.tracking.locatedTime == 0);
+        }
+        SECTION("an invalid runtime timestamp cannot authorize a locate") {
+            const auto invalid = owner.ObserveReferenceCalibration(reference, target, {});
+            REQUIRE(invalid.HasError());
+            CHECK(invalid.ErrorValue().code.Value() == XRErrors::TimeDomainIncompatible.code.Value());
+            CHECK(script.tracking.locatedTime == 0);
+        }
+        SECTION("inferred components do not qualify the relation") {
+            script.tracking.flags &= ~XR_SPACE_LOCATION_POSITION_TRACKED_BIT;
+            const auto inferred = owner.ObserveReferenceCalibration(reference, target, sample);
+            REQUIRE(inferred.HasError());
+            CHECK(inferred.ErrorValue().code.Value() == XRErrors::OperationUnavailable.code.Value());
+        }
+        SECTION("failed native location cannot publish a partial relation") {
+            fixture.actions.session.script.fail = "locate-space";
+            const auto unavailable = owner.ObserveReferenceCalibration(reference, target, sample);
+            REQUIRE(unavailable.HasError());
+            CHECK(unavailable.ErrorValue().code.Value() == XRErrors::OperationUnavailable.code.Value());
+            fixture.actions.session.script.fail = {};
+        }
+        REQUIRE(owner.Close().HasValue());
+        CHECK(owner.ObserveReferenceCalibration(references.Value().local, world.Value(), sample).HasError());
+    }
+
     TEST_CASE("OpenXR presentation reference borrows reject every distinct owner identity", "[xr][native][views]") {
         TrackingFixture fixture;
         PresentationScript native;

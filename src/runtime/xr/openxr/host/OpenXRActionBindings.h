@@ -172,6 +172,18 @@ namespace Horo::XR::OpenXRInternal {
         XRPoseDescriptor referenceToWorld;
     };
 
+    /** @brief Native reference-to-created-World relation at one authorized runtime sample.
+     * @details The source and target carry the exact session, space generations and origin revision.
+     * The runtime may report a tracked relation between offsets on the same entity without physical tracking.
+     * Mounted World admission must still compare this relation with the independently authored placement and current origin lease.
+     */
+    struct NativeReferenceCalibrationObservation final {
+        XRCoordinateSpace reference;
+        XRCoordinateSpace world;
+        XRRuntimeTime observedAt;
+        Math::Transform worldFromReference;
+    };
+
     /**
      * @brief Single-control-thread native action transaction; session/loader owner must outlive it.
      *
@@ -279,6 +291,17 @@ namespace Horo::XR::OpenXRInternal {
          */
         [[nodiscard]] Result<NativePoseObservations> ObserveWorldPoses(const XRSessionId &session, const XRTimeEvidence &time,
                                                                        XRWorldOriginRevision origin) const;
+        /** @brief Observes the exact native base-to-World relation for cold calibration before product publication.
+         * @param reference Already bound selected Local or Stage space.
+         * @param world Already bound native-created World space from the same origin and session.
+         * @param now Fresh sample from the same instance's admitted runtime clock.
+         * @return Fully tracked, finite rigid relation or typed unavailable, stale, invalid or native failure.
+         * @pre Owner lane. The caller owns the runtime sample and separately verifies mounted geometry/placement lineage.
+         * @post No frame wait, Input sync or publication authority is introduced.
+         */
+        [[nodiscard]] Result<NativeReferenceCalibrationObservation> ObserveReferenceCalibration(XRCoordinateSpace reference,
+                                                                                                XRCoordinateSpace world,
+                                                                                                XRRuntimeTime now) const;
         /** @brief Returns the distinct calibrated World identity after native creation and canonical binding.
          * @param session Exact active native owner. @return Current World space or typed unavailable/stale failure.
          */
@@ -540,6 +563,9 @@ namespace Horo::XR::OpenXRInternal {
             XRCoordinateSpace gazeIdentity;
             mutable std::uint64_t gazeSequence{};
 
+            /** @brief Checks the exact current native spaces and origin for a reference calibration. */
+            [[nodiscard]] Result<void> ValidateCalibrationBinding(const XRCoordinateSpace &reference,
+                                                                  const XRCoordinateSpace &target) const;
             /** @brief Validates exact registered grip/aim paths before creating native children. */
             [[nodiscard]] Result<void> ValidatePosePaths(const NativeActionBindingRequest &bindingRequest,
                                                          std::uint32_t maximumActions) const;
