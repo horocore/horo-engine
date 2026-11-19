@@ -66,6 +66,8 @@ namespace Horo::Network {
         [[nodiscard]] Result<void> Begin(std::uint64_t tick, std::span<const std::byte> body);
         /** @brief Adds the next contiguous slice to the current record. */
         [[nodiscard]] Result<void> Append(std::uint64_t tick, std::span<const std::byte> body);
+        /** @brief Opens a new record or checks the next exact offset of an in-progress record. */
+        [[nodiscard]] Result<void> PrepareRecord(NetworkObjectId object, std::size_t total, std::size_t offset);
         /** @brief Reserves one record within the remaining manifest budget. */
         [[nodiscard]] Result<void> StartRecord(NetworkObjectId object, std::size_t bytes);
         /** @brief Checks that the complete record and byte inventories arrived. */

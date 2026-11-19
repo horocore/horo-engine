@@ -77,17 +77,21 @@ namespace Horo::Network {
             std::span<const std::byte> body;
         };
 
+        /** @brief Reads the fixed version and rejects unknown frame kinds before reading the scope. */
+        bool ReadFrameKind(Reader &reader, FrameKind &kind) {
+            std::uint16_t version{};
+            return reader.Number(version, 2) && version == Version && reader.Number(kind, 2) &&
+                   (kind == FrameKind::Manifest || kind == FrameKind::Segment);
+        }
+
         /** @brief Admits a versioned manifest or segment up to the Control frame ceiling. */
         Result<FrameView> ReadFrame(std::span<const std::byte> payload) {
             if (payload.size() > MaximumNetworkInitialStateFrameBytes)
                 return Reject<FrameView>(NetworkErrors::MessageEnvelopeCapacityExceeded);
             Reader reader{payload};
-            std::uint16_t version{};
             FrameView frame;
-            if (!reader.Number(version, 2) || version != Version || !reader.Number(frame.kind, 2) || !reader.Number(frame.session, 8) ||
-                !reader.Number(frame.epoch, 8) || !reader.Number(frame.tick, 8))
-                return Reject<FrameView>();
-            if (frame.tick == 0 || (frame.kind != FrameKind::Manifest && frame.kind != FrameKind::Segment))
+            if (!ReadFrameKind(reader, frame.kind) || !reader.Number(frame.session, 8) || !reader.Number(frame.epoch, 8) ||
+                !reader.Number(frame.tick, 8) || frame.tick == 0)
                 return Reject<FrameView>();
             frame.body = payload.subspan(ScopeBytes);
             return Result<FrameView>::Success(frame);
@@ -99,6 +103,12 @@ namespace Horo::Network {
                    message.schema == route.schema && message.schemaVersion == route.version;
         }
 
+        /** @brief Compares the context to the canonical owner of the admitted peer. */
+        bool MatchesPeer(const InboundMessageContext &context, const ReplicationInboundAuthority &authority) {
+            return context.connection == authority.connection && context.session == authority.session &&
+                   context.generation == authority.generation;
+        }
+
         /** @brief Snapshot chunk that borrows only the admitted envelope payload. */
         struct SegmentView final {
             NetworkObjectId object;
@@ -106,6 +116,11 @@ namespace Horo::Network {
             std::size_t offset{};
             std::span<const std::byte> bytes;
         };
+
+        /** @brief Verifies that a nonempty segment lies within its declared record. */
+        bool ContainsSegment(std::size_t total, std::size_t offset, std::size_t count) {
+            return total >= MinimumRecordBytes && total <= MaximumRecordBytes && offset < total && count != 0 && count <= total - offset;
+        }
 
         /** @brief Rejects empty, truncated and overflowing slices before any assembly allocation. */
         Result<SegmentView> ReadSegment(std::span<const std::byte> body, ReplicationAuthorityEpoch epoch) {
@@ -115,13 +130,18 @@ namespace Horo::Network {
             if (!reader.Number(slot, 8) || !reader.Number(generation, 4) || !reader.Number(total, 4) || !reader.Number(offset, 4))
                 return Reject<SegmentView>();
             const auto bytes = body.subspan(NetworkInitialStateSegmentHeaderBytes - ScopeBytes);
-            if (total < MinimumRecordBytes || total > MaximumRecordBytes || offset > total || bytes.empty() ||
-                bytes.size() > total - offset)
+            if (!ContainsSegment(total, offset, bytes.size()))
                 return Reject<SegmentView>();
             auto object = NetworkObjectId::Create(epoch, slot, generation);
             if (object.HasError())
                 return Reject<SegmentView>();
             return Result<SegmentView>::Success({object.Value(), total, offset, bytes});
+        }
+
+        /** @brief Writes the record identity, bounds and exact bytes of a checked segment. */
+        bool WriteSegment(Writer &writer, const SegmentView &segment) {
+            return writer.Number(segment.object.Slot(), 8) && writer.Number(segment.object.Generation(), 4) &&
+                   writer.Number(segment.total, 4) && writer.Number(segment.offset, 4) && writer.Bytes(segment.bytes);
         }
     }  // namespace
 
@@ -157,12 +177,11 @@ namespace Horo::Network {
         if (!ValidRecord(snapshot, record) || offset >= record.wire.size())
             return Reject<NetworkInitialStateSegment>();
         const auto count = std::min(maximumPayloadBytes - NetworkInitialStateSegmentHeaderBytes, record.wire.size() - offset);
+        const SegmentView segment{record.object, record.wire.size(), offset, std::span{record.wire}.subspan(offset, count)};
         try {
             std::vector<std::byte> bytes(NetworkInitialStateSegmentHeaderBytes + count);
             Writer writer{bytes};
-            if (!WriteScope(writer, FrameKind::Segment, snapshot) || !writer.Number(record.object.Slot(), 8) ||
-                !writer.Number(record.object.Generation(), 4) || !writer.Number(record.wire.size(), 4) || !writer.Number(offset, 4) ||
-                !writer.Bytes(std::span{record.wire}.subspan(offset, count)))
+            if (!WriteScope(writer, FrameKind::Segment, snapshot) || !WriteSegment(writer, segment))
                 return Reject<NetworkInitialStateSegment>();
             return Result<NetworkInitialStateSegment>::Success({std::move(bytes), offset + count});
         } catch (const std::bad_alloc &) {
@@ -184,8 +203,7 @@ namespace Horo::Network {
     Result<void> NetworkInitialStateInbox::Admit(const InboundMessageContext &context, const MessageEnvelope &message) const {
         if (std::this_thread::get_id() != owner_ || transferred_ || !authority_.session || context.cancellation.IsCancellationRequested())
             return Reject<void>(NetworkErrors::NetworkModeUnavailable);
-        if (context.connection != authority_.connection || context.session != authority_.session ||
-            context.generation != authority_.generation)
+        if (!MatchesPeer(context, authority_))
             return Reject<void>(NetworkErrors::NetworkModeStale);
         if (context.delivery != DeliveryPolicy::ReliableOrdered || !MatchesControl(message, message_) ||
             message_.protocol != authority_.protocol || message_.id != authority_.message)
@@ -245,19 +263,23 @@ namespace Horo::Network {
         if (decoded.HasError())
             return Result<void>::Failure(decoded.ErrorValue());
         const auto &segment = decoded.Value();
-        if (pendingBytes_ == 0) {
-            if (segment.offset != 0)
-                return Reject<void>();
-            if (auto started = StartRecord(segment.object, segment.total); started.HasError())
-                return started;
-        }
+        if (auto prepared = PrepareRecord(segment.object, segment.total, segment.offset); prepared.HasError())
+            return prepared;
         auto &record = snapshot_.records.back();
-        if (segment.object != record.object || segment.offset != record.wire.size() || segment.total != pendingBytes_)
-            return Reject<void>();
         record.wire.insert(record.wire.end(), segment.bytes.begin(), segment.bytes.end());
         remainingBytes_ -= segment.bytes.size();
         if (record.wire.size() == pendingBytes_)
             pendingBytes_ = 0;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc NetworkInitialStateInbox::PrepareRecord */
+    Result<void> NetworkInitialStateInbox::PrepareRecord(NetworkObjectId object, std::size_t total, std::size_t offset) {
+        if (pendingBytes_ == 0)
+            return offset == 0 ? StartRecord(object, total) : Reject<void>();
+        const auto &record = snapshot_.records.back();
+        if (object != record.object || offset != record.wire.size() || total != pendingBytes_)
+            return Reject<void>();
         return Result<void>::Success();
     }
 

@@ -642,6 +642,7 @@ horo_register_catch_test(HoroReplicationStateCodecTests LABELS "unit;network;hea
 
 add_executable(HoroReplicationInboundApplyTests
         unit/runtime/networking/ReplicationInboundApplyTests.cpp
+        unit/runtime/networking/NetworkInitialStateStreamTests.cpp
 )
 target_compile_features(HoroReplicationInboundApplyTests PRIVATE cxx_std_20)
 target_link_libraries(HoroReplicationInboundApplyTests PRIVATE HoroEngine::NetworkRuntime HoroEngine::NetworkTransportNull HoroEngine::NetworkChaosHarness)
