@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import cmp_to_key
 from pathlib import Path, PurePosixPath
@@ -14,6 +15,7 @@ import pathlib
 import platform as host_platform
 import re
 from queue import Empty, Queue
+import secrets
 import shutil
 import signal
 import struct
@@ -34,6 +36,8 @@ OPENXR_DEVELOPMENT_PROFILE = "qualification-openxr-development"
 OPENXR_LOADER_NAME = "libopenxr_loader.so"
 OPENXR_LOADER_LICENSE = "licenses/openxr-loader.txt"
 OPENXR_PERMISSIONS = ("org.khronos.openxr.permission.OPENXR", "org.khronos.openxr.permission.OPENXR_SYSTEM")
+DEPLOY_LAUNCH_EXTRA = "org.horocore.qualification.LAUNCH"
+DEPLOY_LAUNCH_MARKER = "host-launch nonce="
 
 
 # D203 and D211 conflict; retain the PEP-257 no-blank class docstring style.
@@ -631,7 +635,19 @@ def apk_write_project(stage: Path, tools: dict, profile: dict, abis: list[str], 
     java_root.mkdir(parents=True)
     source = (f"package {profile['applicationId']};\n"
               "public final class PackageActivity extends org.horocore.platform.HoroInputActivity {\n"
-              f"    static {{ System.loadLibrary(\"{profile['nativeLibrary']}\"); }}\n}}\n")
+              f"    static {{ System.loadLibrary(\"{profile['nativeLibrary']}\"); }}\n"
+              "    private static boolean activityCreated;\n"
+              "    @Override public void onCreate(android.os.Bundle state) {\n"
+              "        boolean firstActivity = !activityCreated;\n"
+              "        activityCreated = true;\n"
+              "        android.content.Intent intent = getIntent();\n"
+              f"        String nonce = intent.getStringExtra(\"{DEPLOY_LAUNCH_EXTRA}\");\n"
+              f"        intent.removeExtra(\"{DEPLOY_LAUNCH_EXTRA}\");\n"
+              "        super.onCreate(state);\n"
+              "        if (firstActivity && state == null && nonce != null && nonce.matches(\"[0-9a-f]{32}\")) {\n"
+              f"            android.util.Log.i(\"HoroPackageQualification\", \"{DEPLOY_LAUNCH_MARKER}\" + nonce);\n"
+              "        }\n"
+              "    }\n}\n")
     (java_root / "PackageActivity.java").write_text(source, encoding="utf-8")
     input_root = stage / "java/org/horocore/platform"
     input_root.mkdir(parents=True, exist_ok=True)
@@ -1197,10 +1213,8 @@ def openxr_log_evidence(message: str) -> dict:
     raise AndroidDeployError("openxr_diagnostic_invalid")
 
 
-def package_log_evidence(log: str, process: DeployedProcess, after: int, through: int, *, openxr: bool = False) -> dict:
-    """Project named telemetry only from the exact UID, PID and admitted time interval."""
-    evidence = {"crashObserved": False}
-    latest = {}
+def process_log_entries(log: str, process: DeployedProcess, after: int, through: int) -> Iterator[tuple[int, str, str, str]]:
+    """Yield only entries from the exact UID, PID and admitted time interval."""
     user, app = divmod(process.uid, 100_000)
     accepted_uids = {str(process.uid)}
     if app >= 10_000:
@@ -1213,8 +1227,15 @@ def package_log_evidence(log: str, process: DeployedProcess, after: int, through
         if uid not in accepted_uids or int(pid) != process.pid:
             continue
         logged = log_epoch_nanoseconds(stamp)
-        if not after < logged <= through:
-            continue
+        if after < logged <= through:
+            yield logged, priority, tag, message
+
+
+def package_log_evidence(log: str, process: DeployedProcess, after: int, through: int, *, openxr: bool = False) -> dict:
+    """Project named telemetry only from the exact UID, PID and admitted time interval."""
+    evidence = {"crashObserved": False}
+    latest = {}
+    for logged, priority, tag, message in process_log_entries(log, process, after, through):
         if tag == "AndroidRuntime":
             evidence["crashObserved"] |= priority in ("E", "F") and message.startswith("FATAL EXCEPTION:")
             continue
@@ -1267,14 +1288,20 @@ def deployed_process(device: AdmittedAdbDevice, application: str, uid: int) -> D
     return DeployedProcess(pid, uid, started)
 
 
-def deploy_diagnostics(device: AdmittedAdbDevice, application: str, process: DeployedProcess, start: AndroidLogClock,
-                       *, openxr: bool = False) -> dict:
-    """Collect bounded markers from the exact process captured by this launch."""
+def read_deployed_process_log(device: AdmittedAdbDevice, process: DeployedProcess, start: AndroidLogClock) -> tuple[str, int]:
+    """Read bounded logcat output and validate the device clock interval."""
     raw = device.run("logcat", f"--pid={process.pid}", "-v", "time,epoch,nsec,uid", "-t", "200", "-s",
                      "HoroPackageQualification:I", "AndroidRuntime:E")
     end = AndroidLogClock.read(device)
     end.require_continuity(start)
-    facts = package_log_evidence(raw, process, start.nanoseconds, end.nanoseconds, openxr=openxr)
+    return raw, end.nanoseconds
+
+
+def deploy_diagnostics(device: AdmittedAdbDevice, application: str, process: DeployedProcess, start: AndroidLogClock,
+                       *, openxr: bool = False) -> dict:
+    """Collect bounded markers from the exact process captured by this launch."""
+    raw, through = read_deployed_process_log(device, process, start)
+    facts = package_log_evidence(raw, process, start.nanoseconds, through, openxr=openxr)
     if facts["crashObserved"] and device.process_id(application) is None:
         return facts
     if deployed_process(device, application, process.uid) != process:
@@ -1293,9 +1320,18 @@ def await_openxr_diagnostics(device: AdmittedAdbDevice, application: str, proces
     raise AndroidDeployError("openxr_diagnostic_timeout")
 
 
+@dataclass(frozen=True)
+class AndroidLaunchRecovery:
+    """Device observations needed to attribute an interrupted launch."""
+
+    uid: int
+    started: AndroidLogClock
+    nonce: str
+
+
 @dataclass
 class AndroidPackageLaunch:
-    """Retains rollback ownership only after an admitted launch produces an exact process."""
+    """Tracks the issued launch and its attributable process for rollback."""
 
     device: AdmittedAdbDevice
     application: str
@@ -1303,6 +1339,7 @@ class AndroidPackageLaunch:
     digest: str
     process: DeployedProcess | None = None
     attempted: bool = False
+    recovery: AndroidLaunchRecovery | None = None
 
     def start(self) -> tuple[DeployedProcess, AndroidLogClock]:
         uid = deployed_uid(self.device, self.application, self.user)
@@ -1310,21 +1347,39 @@ class AndroidPackageLaunch:
             raise AndroidDeployError("application_already_running")
         component = f"{self.application}/{self.application}.{PACKAGE_ACTIVITY}"
         start = AndroidLogClock.read(self.device)
+        nonce = secrets.token_hex(16)
+        self.recovery = AndroidLaunchRecovery(uid, start, nonce)
         self.attempted = True
-        launched = self.device.run("shell", "am", "start", "-W", "--user", self.user, "-n", component)
+        launched = self.device.run("shell", "am", "start", "-W", "--user", self.user, "-n", component,
+                                   "--es", DEPLOY_LAUNCH_EXTRA, nonce)
         allowed_components = {component, f"{self.application}/.{PACKAGE_ACTIVITY}"}
         states = re.findall(r"^LaunchState: ([A-Z]+)$", launched, re.MULTILINE)
         activities = re.findall(r"^Activity: (\S+)$", launched, re.MULTILINE)
         if (re.findall(r"^Status: ([a-z]+)$", launched, re.MULTILINE) != ["ok"]
                 or len(activities) != 1 or activities[0] not in allowed_components
                 or states not in ([], ["COLD"]) or "Warning: Activity not started" in launched):
+            self.recovery = None
             raise AndroidDeployError("launch_unconfirmed")
         self.process = deployed_process(self.device, self.application, uid)
         return self.process, start
 
+    def recover_process(self, device: AdmittedAdbDevice, uid: int) -> DeployedProcess:
+        """Prove that this operation started a first Activity in the live package process."""
+        recovery = self.recovery
+        if recovery is None or recovery.uid != uid:
+            raise AndroidDeployError("launch_process_unattributed")
+        process = deployed_process(device, self.application, uid)
+        log, through = read_deployed_process_log(device, process, recovery.started)
+        marker = DEPLOY_LAUNCH_MARKER + recovery.nonce
+        matches = sum(priority == "I" and tag == "HoroPackageQualification" and message == marker
+                      for _, priority, tag, message in process_log_entries(log, process, recovery.started.nanoseconds, through))
+        if matches != 1:
+            raise AndroidDeployError("launch_process_unattributed")
+        return process
+
     def rollback(self) -> dict:
-        """Use a separate bounded deadline to stop only the already attributed package process."""
-        if self.process is None:
+        """Use a separate deadline to stop only a provably attributed package process."""
+        if self.process is None and self.recovery is None:
             return {"status": "unconfirmed", "reason": "launch_process_unattributed"}
         device = AdmittedAdbDevice(self.device.executable, self.device.serial, self.device.transport,
                                    time.monotonic() + DEPLOY_CLEANUP_SECONDS, self.device.connection)
@@ -1332,10 +1387,13 @@ class AndroidPackageLaunch:
             if device.run("get-serialno") != device.serial:
                 raise AndroidDeployError("device_transport_changed")
             if device.process_id(self.application) is None:
+                if self.process is None:
+                    raise AndroidDeployError("launch_process_unattributed")
                 return {"status": "already_exited"}
             deploy_verified_install(device, self.application, self.user, self.digest)
-            if (deployed_uid(device, self.application, self.user) != self.process.uid
-                    or deployed_process(device, self.application, self.process.uid) != self.process):
+            uid = deployed_uid(device, self.application, self.user)
+            process = self.process or self.recover_process(device, uid)
+            if uid != process.uid or deployed_process(device, self.application, process.uid) != process:
                 raise AndroidDeployError("application_process_changed")
             device.run("shell", "am", "force-stop", "--user", self.user, self.application)
             if device.process_id(self.application) is not None:
