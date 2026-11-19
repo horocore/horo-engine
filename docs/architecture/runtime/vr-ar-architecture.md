@@ -806,6 +806,14 @@ reach Character through typed commands; moving the camera or recentering trackin
 is not a collision-safe teleport. Camera/view composition combines committed Character
 root, calibration and tracked head pose without acquiring movement authority.
 
+`HoroEngine::XRCharacterLocomotion` is an opt-in bridge composed by the gameplay host.
+Submit routed intent during the bound scheduler's fixed dispatch before Character
+closes admission. The intent carries the exact XR tracking cutoff and player assignment.
+Character queues velocity and heading, and the Character-side placement owner validates
+the destination revision and clearance before committing a teleport. The application
+calibration owner handles recentering separately. Replacing the binding or shutting
+down revokes unfrozen Character commands and cancels pending placement and calibration.
+
 When artificial locomotion/rotation exists, disable controls where gameplay permits,
 snap-turn configuration, speed/handedness, seated/standing/recenter behavior, motion-
 reduction controls and declared teleport/continuous availability remain visible across
