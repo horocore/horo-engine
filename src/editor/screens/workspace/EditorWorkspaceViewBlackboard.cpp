@@ -225,6 +225,83 @@ namespace Horo::Editor {
             return "operation_failed";
         }
 
+        /** @brief Formats the stable authored object address without relying on display names. */
+        std::string BindingAddress(const Application::BlackboardSchemaBindingObject &object) {
+            return std::visit([](const auto &value) -> std::string {
+                if constexpr (std::is_same_v<std::remove_cvref_t<decltype(value)>, Application::BlackboardPlacedPrefabObject>) {
+                    auto address = std::to_string(value.key.instance.Value());
+                    for (const auto slot : value.key.object.NestedInstanceScope())
+                        address += std::format("/{}", slot.value);
+                    return address + std::format("/{}", value.key.object.SourceObject().value);
+                } else {
+                    return std::to_string(value.value);
+                }
+            }, object);
+        }
+
+        /** @brief Projects one row within the concatenated bounded review collections. */
+        void DrawUsageRow(const BlackboardFrame &frame, const Application::BlackboardUsageReview &review, std::size_t index) {
+            if (index < review.uses.size()) {
+                const auto &usage = review.uses[index];
+                frame.Label(std::format("{} ({})", usage.sourcePath, usage.use.node.Value()));
+                return;
+            }
+            index -= review.uses.size();
+            if (index < review.queryUsages.size()) {
+                const auto &usage = review.queryUsages[index];
+                const auto target = usage.queryAsset ? usage.queryPath : std::to_string(usage.use.output.query.Value());
+                frame.Label(std::format("{} ({}) → {}", usage.decisionPath, usage.use.node.Value(), target));
+                return;
+            }
+            index -= review.queryUsages.size();
+            if (index < review.schemaBindings.size()) {
+                const auto &binding = review.schemaBindings[index];
+                frame.Label(std::format("{} ({})", binding.sourcePath, BindingAddress(binding.object)));
+                return;
+            }
+            const auto &gap = review.gaps[index - review.schemaBindings.size()];
+            frame.Caption(UseGapLabel(gap.kind));
+            if (gap.asset)
+                frame.Label(gap.asset->ToString());
+            if (gap.node)
+                frame.Label(std::to_string(gap.node->Value()));
+        }
+
+        /** @brief Pages the captured rows without copying the usage collections. */
+        void DrawUsagePage(const BlackboardFrame &frame, const Application::BlackboardUsageReview &review, std::size_t &page) {
+            constexpr std::size_t RowsPerPage = 12;
+            const auto count = review.uses.size() + review.queryUsages.size() + review.schemaBindings.size() + review.gaps.size();
+            if (!count)
+                return;
+            const auto lastPage = (count - 1) / RowsPerPage;
+            page = std::min(page, lastPage);
+            const auto start = page * RowsPerPage;
+            const auto end = std::min(start + RowsPerPage, count);
+            for (auto index = start; index < end; ++index)
+                DrawUsageRow(frame, review, index);
+            if (lastPage) {
+                frame.Label(std::format("{} / {}", page + 1, lastPage + 1));
+                if (frame.Button("usage_previous", page > 0))
+                    --page;
+                if (frame.Button("usage_next", page < lastPage))
+                    ++page;
+            }
+        }
+
+        /** @brief Labels the evidence present in the current review. */
+        void DrawUsageSummary(const BlackboardFrame &frame, const Application::BlackboardUsageReview &review) {
+            if (!review.uses.empty())
+                frame.Caption("usage_found");
+            else if (review.queryUsages.empty())
+                frame.Caption("usage_none");
+            if (!review.queryUsages.empty())
+                frame.Caption("usage_query_outputs");
+            if (!review.schemaBindings.empty())
+                frame.Caption("usage_schema_bindings");
+            if (!review.gaps.empty())
+                frame.Caption("usage_incomplete");
+        }
+
         /** @brief Displays scoped review evidence for the selected durable key. */
         void DrawUsages(const BlackboardFrame &frame, const BlackboardWorkspaceDocument &document, AI::BlackboardKeyId key,
                         Assets::AssetRegistryRevision currentRegistry, std::size_t &page) {
@@ -247,55 +324,8 @@ namespace Horo::Editor {
                 frame.Caption("usage_stale");
                 return;
             }
-            frame.Caption(review->uses.empty() ? "usage_none" : "usage_found");
-            if (!review->schemaBindings.empty())
-                frame.Caption("usage_schema_bindings");
-            if (!review->gaps.empty())
-                frame.Caption("usage_incomplete");
-            constexpr std::size_t RowsPerPage = 12;
-            const auto bindingEnd = review->uses.size() + review->schemaBindings.size();
-            const auto count = bindingEnd + review->gaps.size();
-            if (!count)
-                return;
-            const auto lastPage = (count - 1) / RowsPerPage;
-            page = std::min(page, lastPage);
-            const auto start = page * RowsPerPage;
-            const auto end = std::min(start + RowsPerPage, count);
-            for (auto index = start; index < end; ++index) {
-                if (index < review->uses.size()) {
-                    const auto &usage = review->uses[index];
-                    frame.Label(std::format("{} ({})", usage.sourcePath, usage.use.node.Value()));
-                    continue;
-                }
-                if (index < bindingEnd) {
-                    const auto &binding = review->schemaBindings[index - review->uses.size()];
-                    const auto object = std::visit([](const auto &value) -> std::string {
-                        if constexpr (std::is_same_v<std::remove_cvref_t<decltype(value)>, Application::BlackboardPlacedPrefabObject>) {
-                            auto address = std::to_string(value.key.instance.Value());
-                            for (const auto slot : value.key.object.NestedInstanceScope())
-                                address += std::format("/{}", slot.value);
-                            return address + std::format("/{}", value.key.object.SourceObject().value);
-                        } else {
-                            return std::to_string(value.value);
-                        }
-                    }, binding.object);
-                    frame.Label(std::format("{} ({})", binding.sourcePath, object));
-                    continue;
-                }
-                const auto &gap = review->gaps[index - bindingEnd];
-                frame.Caption(UseGapLabel(gap.kind));
-                if (gap.asset)
-                    frame.Label(gap.asset->ToString());
-                if (gap.node)
-                    frame.Label(std::to_string(gap.node->Value()));
-            }
-            if (lastPage) {
-                frame.Label(std::format("{} / {}", page + 1, lastPage + 1));
-                if (frame.Button("usage_previous", page > 0))
-                    --page;
-                if (frame.Button("usage_next", page < lastPage))
-                    ++page;
-            }
+            DrawUsageSummary(frame, *review);
+            DrawUsagePage(frame, *review, page);
         }
 
         /** @brief Shows actionable source conflicts alongside shared save and history controls. */

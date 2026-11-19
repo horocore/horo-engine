@@ -338,6 +338,36 @@ namespace Horo::AI {
                 }
             }
         }
+
+        /** @brief Collects authored query outputs independently of provider availability. */
+        Result<void> CollectQueryOutputs(std::span<const DecisionNodeConfiguration> configurations, BlackboardKeyId key,
+                                         std::vector<DecisionBlackboardQueryUse> &outputs) {
+            for (const auto &configuration : configurations) {
+                for (const auto &property : configuration.properties) {
+                    const auto *output = std::get_if<BehaviorTreeQueryOutput>(&property.value);
+                    if (!output || output->key != key)
+                        continue;
+                    if (outputs.size() == DecisionAssetValidationHardLimits::TotalRequirements)
+                        return Result<void>::Failure(MakeError(AIErrors::DecisionAssetLimitExceeded));
+                    outputs.emplace_back(configuration.node, *output);
+                }
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Copies matching requirement evidence with its originating declaration. */
+        bool CollectMatchingRequirements(std::vector<DecisionBlackboardSourceUse> &uses, DecisionNodeId node, BlackboardKeyId key,
+                                         std::span<const DecisionBlackboardRequirement> requirements,
+                                         std::optional<DecisionDescriptorOrigin> origin = {}) {
+            for (const auto &requirement : requirements) {
+                if (requirement.key != key)
+                    continue;
+                if (uses.size() == DecisionAssetValidationHardLimits::TotalRequirements)
+                    return false;
+                uses.emplace_back(node, requirement, origin);
+            }
+            return true;
+        }
     }  // namespace
 
     /** @copydoc InspectDecisionProviderBindings */
@@ -371,18 +401,8 @@ namespace Horo::AI {
             return Report::Failure(lowered.ErrorValue());
         DecisionBlackboardSourceUses result;
         const auto contracts = providers ? providers->Descriptors() : std::span<const DecisionNodeDescriptor>{};
-        const auto append = [&](const DecisionAssetNode &node, std::span<const DecisionBlackboardRequirement> requirements,
-                                std::optional<DecisionDescriptorOrigin> origin = {}) {
-            for (const auto &requirement : requirements)
-                if (requirement.key == key) {
-                    if (result.uses.size() == DecisionAssetValidationHardLimits::TotalRequirements)
-                        return false;
-                    result.uses.push_back({node.id, requirement, origin});
-                }
-            return true;
-        };
         for (const auto &node : lowered.Value().metadata.nodes) {
-            if (!append(node, node.requirements))
+            if (!CollectMatchingRequirements(result.uses, node.id, key, node.requirements))
                 return Report::Failure(MakeError(AIErrors::DecisionAssetLimitExceeded));
             if (node.intrinsic != DecisionControlKind::Unspecified)
                 continue;
@@ -391,9 +411,11 @@ namespace Horo::AI {
                 result.unresolvedProviders.push_back(node.id);
                 continue;
             }
-            if (!append(node, found->requirements, found->origin))
+            if (!CollectMatchingRequirements(result.uses, node.id, key, found->requirements, found->origin))
                 return Report::Failure(MakeError(AIErrors::DecisionAssetLimitExceeded));
         }
+        if (auto outputs = CollectQueryOutputs(lowered.Value().properties, key, result.queryOutputs); outputs.HasError())
+            return Report::Failure(outputs.ErrorValue());
         return Report::Success(std::move(result));
     }
 }  // namespace Horo::AI

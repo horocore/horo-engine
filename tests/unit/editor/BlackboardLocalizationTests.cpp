@@ -55,6 +55,7 @@ TEST_CASE("Blackboard workspace controls resolve in both shipped locales", "[uni
         "usage_pending",
         "usage_stale",
         "usage_found",
+        "usage_query_outputs",
         "usage_none",
         "usage_incomplete",
         "usage_registry",

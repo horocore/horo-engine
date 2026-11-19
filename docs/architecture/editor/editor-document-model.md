@@ -753,21 +753,24 @@ publication. The source retains the reviewed graph identity and exact graph
 schema version. Cross-family and legacy calls remain inspectable.
 
 The workspace usage review submits one bounded Project-owned read of the exact
-durable schema bytes and registered Decision sources. The application holds the
-project mutation lease through source verification, uses the same typed source
-decode and lowering as cooking, and records registry, canonical source and
-observed provider evidence. The owner thread detaches the loaded native
-gameplay image's declared Decision requirements through its existing metadata
-admission. The review job retains only copied declarations. It never starts a
-provider or extends executable module lifetime. A closed opening, newer document
-revision, replaced registry or different native declaration owner cannot publish
-an older worker result. The review also reports direct saved Scene and concrete
-Prefab controller bindings through the existing typed codecs and exact source
-registrations. These rows identify schema associations. Only Decision requirement
-rows identify individual keys. Unsupported component owners and unresolved
-placements, variants, overrides, Query and Perception remain incomplete coverage.
-The review grants no authority to change a durable key. An exact multi-document reference-resolution transaction remains
-required for that gesture.
+durable schema bytes and registered Decision and Environment Query sources. The
+application holds the project mutation lease through source verification, uses
+the same typed source decode and lowering as cooking, and records registry,
+canonical source and observed provider evidence. The owner thread detaches the
+loaded native gameplay image's declared Decision requirements through its
+existing metadata admission. The review job retains only copied declarations.
+It never starts a provider or extends executable module lifetime. A closed
+opening, newer document revision, replaced registry or different native
+declaration owner cannot publish an older worker result. The review also
+reports direct saved Scene and concrete Prefab controller bindings through the
+existing typed codecs and exact source registrations. These rows identify
+schema associations. Decision requirements and authored query result bindings
+identify individual keys. The review resolves each query result binding by its
+query identity and result contract against the saved sources in the same
+capture. Malformed sources and missing, ambiguous or incompatible bindings
+leave explicit gaps. Unsupported component owners, unresolved placements,
+variants, overrides and Perception also limit coverage. Changing a durable key
+requires a separate multi-document reference-resolution transaction.
 
 ## Cinematic Sequence Asset Documents
 

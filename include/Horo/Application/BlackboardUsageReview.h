@@ -52,6 +52,15 @@ namespace Horo::Application {
         AI::DecisionBlackboardSourceUse use;
     };
 
+    /** @brief An authored result binding and its registered query asset when the source contract resolves. */
+    struct BlackboardQueryUsage final {
+        Assets::AssetId decisionAsset;
+        std::string decisionPath;
+        AI::DecisionBlackboardQueryUse use;
+        std::optional<Assets::AssetId> queryAsset;
+        std::string queryPath;
+    };
+
     /** @brief A source-resolved controller occurrence in an explicitly authored Scene placement. */
     struct BlackboardPlacedPrefabObject final {
         Assets::AssetId rootPrefab;          /**< Asset named by the containing Scene placement. */
@@ -93,6 +102,7 @@ namespace Horo::Application {
         std::vector<BlackboardDecisionUsage> uses;
         std::vector<BlackboardSchemaBinding> schemaBindings;
         std::vector<BlackboardUsageGap> gaps;
+        std::vector<BlackboardQueryUsage> queryUsages;
     };
 
     /** @brief Captures and reviews actual registered source/sidecar pairs under the Project mutation coordinator.

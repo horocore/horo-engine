@@ -2,6 +2,7 @@
 
 /** @file BlackboardUsageInspection.h @brief Detached provider and typed Blackboard evidence from Decision source. */
 
+#include "Horo/AI/BehaviorTree.h"
 #include "Horo/AI/DecisionAssetValidation.h"
 
 namespace Horo::AI {
@@ -57,16 +58,24 @@ namespace Horo::AI {
         std::optional<DecisionDescriptorOrigin> provider;
     };
 
+    /** @brief A typed authored query result written to the selected Blackboard key. */
+    struct DecisionBlackboardQueryUse final {
+        DecisionNodeId node;
+        BehaviorTreeQueryOutput output;
+    };
+
     /** @brief Owned metadata projection. Unresolved providers make the source inventory incomplete. */
     struct DecisionBlackboardSourceUses final {
         std::vector<DecisionBlackboardSourceUse> uses;
         std::vector<DecisionNodeId> unresolvedProviders;
+        std::vector<DecisionBlackboardQueryUse> queryOutputs;
     };
 
     /** @brief Finds exact typed requirements through the canonical Decision lowering path.
      * @param source Decoded graph compatible with the caller's exact schema.
      * @param key Stable key identity to match. @param providers Optional detached metadata from the exact observed generation.
-     * @return Declared uses and unresolved providers, or a typed source/limit error. No compiler, factory or arbitrary property is invoked.
+     * @return Declared uses, authored query outputs and unresolved providers, or a typed source/limit error.
+     * No executable provider code is invoked.
      */
     [[nodiscard]] Result<DecisionBlackboardSourceUses> InspectDecisionBlackboardUses(const DecisionGraphSource &source, BlackboardKeyId key,
                                                                                      const DecisionBlackboardProviderMetadata *providers);

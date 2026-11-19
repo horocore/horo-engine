@@ -11,12 +11,13 @@
 namespace Horo::Application {
     namespace {
         constexpr AI::DecisionCompilationLimits GraphLimits;
-        constexpr std::size_t MaximumSources = AI::DecisionAssetValidationHardLimits::Schemas + GraphLimits.maximumAssets;
+        constexpr std::size_t MaximumDecisionSources = AI::DecisionAssetValidationHardLimits::Schemas + GraphLimits.maximumAssets;
+        constexpr std::size_t MaximumQuerySources = 256;
         constexpr std::size_t MaximumScenePrefabSources = 256;
         using BlackboardUsageSources::AddGap;
         using BlackboardUsageSources::MaximumFindings;
         using BlackboardUsageSources::OwnerKind;
-        constexpr std::size_t MaximumSourceBytes = AI::DecisionCodecLimits{}.maximumBytes;
+        constexpr auto MaximumSourceBytes = std::max(AI::DecisionCodecLimits{}.maximumBytes, AI::EnvironmentQuerySourceCodec::MaximumBytes);
         constexpr std::uint64_t MaximumCapturedBytes = 64ULL * 1024ULL * 1024ULL;
 
         /** @brief Checks the engine's typed Decision families through the canonical asset-type identities. */
@@ -24,10 +25,23 @@ namespace Horo::Application {
             return type == DecisionBehaviorTreeSourceType || type == DecisionStateMachineSourceType || type == DecisionUtilitySourceType;
         }
 
-        /** @brief Keeps the existing Decision capture independently bounded from optional Scene/Prefab sources. */
+        /** @brief Holds the decision and query source closure separately from Scene and Prefab sources. */
         struct SourceSelection final {
-            std::vector<Assets::AssetId> decision;
+            std::vector<Assets::AssetId> ai;
             std::vector<Assets::AssetId> hierarchy;
+            std::size_t queryCount{};
+            std::size_t decisionCount{};
+
+            /** @brief Admits one registered AI source within its family budget. */
+            Result<void> AddAi(Assets::AssetId asset, bool query) {
+                auto &count = query ? queryCount : decisionCount;
+                if (const auto limit = query ? MaximumQuerySources : MaximumDecisionSources; count == limit)
+                    return Result<void>::Failure(
+                        MakeError(query ? AI::AIErrors::EnvironmentQueryLimitExceeded : AI::AIErrors::DecisionAssetLimitExceeded));
+                ai.push_back(asset);
+                ++count;
+                return Result<void>::Success();
+            }
         };
 
         /** @brief Selects typed current registry sources and records any hierarchy inputs beyond the review budget. */
@@ -39,10 +53,10 @@ namespace Horo::Application {
                 if (cancellation.IsCancellationRequested())
                     return Selection::Failure(MakeError(DecisionCookErrors::Cancelled));
                 const auto &type = record.type.Value();
-                if (type == AI::BlackboardSchemaAssetType || IsDecision(type)) {
-                    if (selected.decision.size() == MaximumSources)
-                        return Selection::Failure(MakeError(AI::AIErrors::DecisionAssetLimitExceeded));
-                    selected.decision.push_back(record.id);
+                const bool query = type == AI::EnvironmentQuerySourceAssetType;
+                if (query || type == AI::BlackboardSchemaAssetType || IsDecision(type)) {
+                    if (auto added = selected.AddAi(record.id, query); added.HasError())
+                        return Selection::Failure(added.ErrorValue());
                 } else if (const auto kind = OwnerKind(type)) {
                     if (selected.hierarchy.size() < MaximumScenePrefabSources)
                         selected.hierarchy.push_back(record.id);
@@ -108,9 +122,79 @@ namespace Horo::Application {
             return found ? Result<void>::Success() : Result<void>::Failure(MakeError(DecisionCookErrors::Invalid));
         }
 
+        /** @brief Authored query result contract with the exact registered owner in the active snapshot. */
+        struct QuerySource final {
+            AI::QueryId id;
+            AI::QueryResultSchema result;
+            const Assets::AssetRecord *record;
+        };
+
+        /** @brief Indexes semantic query identities without compiling or executing contributed stages. */
+        Result<std::vector<QuerySource>> IndexQueries(BlackboardUsageReview &review, const Assets::AssetCookInputSnapshot &capture,
+                                                      const CancellationToken &cancellation) {
+            using Index = Result<std::vector<QuerySource>>;
+            std::vector<QuerySource> queries;
+            for (const auto &file : capture.Sources()) {
+                if (cancellation.IsCancellationRequested())
+                    return Index::Failure(MakeError(DecisionCookErrors::Cancelled));
+                if (file.record.type.Value() != AI::EnvironmentQuerySourceAssetType)
+                    continue;
+                if (const auto query = AI::EnvironmentQuerySourceCodec::Decode(file.bytes); query.HasValue()) {
+                    queries.emplace_back(query.Value().Id(), query.Value().ResultSchema(), &file.record);
+                } else if (auto gap =
+                               AddGap(review, {BlackboardUsageGapKind::EnvironmentQueryBindings, file.record.id, {}, query.ErrorValue()});
+                           gap.HasError()) {
+                    return Index::Failure(gap.ErrorValue());
+                }
+            }
+            std::ranges::sort(queries, {}, &QuerySource::id);
+            return Index::Success(std::move(queries));
+        }
+
+        /** @brief Resolves a binding only when one registered asset provides its exact authored result contract. */
+        Result<const Assets::AssetRecord *> ResolveQuery(std::span<const QuerySource> queries, const AI::BehaviorTreeQueryOutput &output) {
+            using Resolved = Result<const Assets::AssetRecord *>;
+            const auto matches = std::ranges::equal_range(queries, output.query, {}, &QuerySource::id);
+            if (matches.empty())
+                return Resolved::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
+            if (matches.size() != 1)
+                return Resolved::Failure(MakeError(AI::AIErrors::EnvironmentQueryIdentityConflict));
+            const auto &match = *matches.begin();
+            if (match.result.id != output.result || match.result.version != output.resultVersion || match.result.itemType != output.item)
+                return Resolved::Failure(MakeError(AI::AIErrors::EnvironmentQueryVersionIncompatible));
+            return Resolved::Success(match.record);
+        }
+
+        /** @brief Retains the typed authoring occurrence even when its target needs repair. */
+        Result<void> AppendQueryUsage(BlackboardUsageReview &review, const Assets::AssetRecord &decision,
+                                      const AI::DecisionBlackboardQueryUse &use, std::span<const QuerySource> queries) {
+            BlackboardQueryUsage usage{decision.id, std::string{decision.sourcePath.String()}, use};
+            if (const auto target = ResolveQuery(queries, use.output); target.HasValue()) {
+                usage.queryAsset = target.Value()->id;
+                usage.queryPath = target.Value()->sourcePath.String();
+            } else if (auto gap =
+                           AddGap(review, {BlackboardUsageGapKind::EnvironmentQueryBindings, decision.id, use.node, target.ErrorValue()});
+                       gap.HasError()) {
+                return gap;
+            }
+            review.queryUsages.push_back(std::move(usage));
+            return Result<void>::Success();
+        }
+
+        /** @brief Binds the selected key's authored outputs against the indexed source closure. */
+        Result<void> AppendQueryUsages(BlackboardUsageReview &review, const Assets::AssetRecord &decision,
+                                       std::span<const AI::DecisionBlackboardQueryUse> uses, std::span<const QuerySource> queries) {
+            if (uses.size() > MaximumFindings - review.queryUsages.size())
+                return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetLimitExceeded));
+            for (const auto &use : uses)
+                if (auto appended = AppendQueryUsage(review, decision, use, queries); appended.HasError())
+                    return appended;
+            return Result<void>::Success();
+        }
+
         /** @brief Projects one admitted source while preserving exact unresolved or malformed source identities. */
         Result<void> InspectFile(BlackboardUsageReview &review, const Assets::AssetCookPinnedSource &file,
-                                 const AI::DecisionBlackboardProviderMetadata *providers) {
+                                 const AI::DecisionBlackboardProviderMetadata *providers, std::span<const QuerySource> queries) {
             const auto unresolved = [&](const Error &error) {
                 return AddGap(review, {BlackboardUsageGapKind::DecisionSource, file.record.id, {}, error});
             };
@@ -129,6 +213,41 @@ namespace Horo::Application {
                 review.uses.push_back({file.record.id, graph.Value().asset, std::string{file.record.sourcePath.String()}, std::move(use)});
             for (const auto node : inspected.Value().unresolvedProviders)
                 review.gaps.push_back({BlackboardUsageGapKind::DecisionProvider, file.record.id, node});
+            return AppendQueryUsages(review, file.record, inspected.Value().queryOutputs, queries);
+        }
+
+        /** @brief Checks the durable key and inspects Decision sources against the same registered query capture. */
+        Result<void> InspectAiSources(BlackboardUsageReview &review, const Assets::AssetCookInputSnapshot &capture,
+                                      const AI::DecisionBlackboardProviderMetadata *providers, const CancellationToken &cancellation) {
+            if (auto checked = CheckSchema(capture, review.selection); checked.HasError())
+                return checked;
+            const auto queries = IndexQueries(review, capture, cancellation);
+            if (queries.HasError())
+                return Result<void>::Failure(queries.ErrorValue());
+            for (const auto &file : capture.Sources()) {
+                if (cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(DecisionCookErrors::Cancelled));
+                AppendStamp(review, file);
+                if (!IsDecision(file.record.type.Value()))
+                    continue;
+                if (auto inspected = InspectFile(review, file, providers, queries.Value()); inspected.HasError())
+                    return inspected;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Adds Scene and Prefab evidence and verifies the separately bounded hierarchy capture. */
+        Result<void> InspectHierarchy(BlackboardUsageReview &review, const std::filesystem::path &root,
+                                      const Assets::AssetCookInputSnapshot &owners, const CancellationToken &cancellation) {
+            if (auto inspected = BlackboardUsageSources::Inspect(review, root, owners, cancellation); inspected.HasError())
+                return inspected;
+            review.sources.reserve(review.sources.size() + owners.Sources().size());
+            for (const auto &file : owners.Sources())
+                AppendStamp(review, file);
+            if (auto verified = owners.VerifyUnchanged(cancellation); verified.HasError())
+                return verified;
+            const std::array scopes{review.closure, owners.ClosureDigest()};
+            review.closure = ComputeSha256(std::as_bytes(std::span{scopes}));
             return Result<void>::Success();
         }
     }  // namespace
@@ -155,42 +274,26 @@ namespace Horo::Application {
         BlackboardUsageReview review{.selection = selection, .registry = pinned.Revision(), .providers = providers};
         if (completeInventory != pinned.Revision())
             review.gaps.push_back({BlackboardUsageGapKind::RegistryInventory});
-        review.gaps.push_back({BlackboardUsageGapKind::EnvironmentQueryBindings});
         review.gaps.push_back({BlackboardUsageGapKind::PerceptionPolicy});
         const auto selected = SelectSources(pinned, review, cancellation);
         if (selected.HasError())
             return Review::Failure(selected.ErrorValue());
-        const Assets::AssetCookLimits limits{.maximumSourceBytes = MaximumSourceBytes, .maximumAssets = MaximumSources};
-        const auto capture = Assets::AssetCookInputSnapshot::CaptureSelected(root, pinned, selected.Value().decision, limits,
-                                                                             MaximumCapturedBytes, cancellation);
+        const Assets::AssetCookLimits limits{.maximumSourceBytes = MaximumSourceBytes,
+                                             .maximumAssets = MaximumDecisionSources + MaximumQuerySources};
+        const auto capture =
+            Assets::AssetCookInputSnapshot::CaptureSelected(root, pinned, selected.Value().ai, limits, MaximumCapturedBytes, cancellation);
         if (capture.HasError())
             return Review::Failure(capture.ErrorValue());
-        if (const auto checked = CheckSchema(capture.Value(), selection); checked.HasError())
-            return Review::Failure(checked.ErrorValue());
+        review.closure = capture.Value().ClosureDigest();
+        review.sources.reserve(capture.Value().Sources().size());
+        if (auto inspected = InspectAiSources(review, capture.Value(), providers.get(), cancellation); inspected.HasError())
+            return Review::Failure(inspected.ErrorValue());
         const auto hierarchy = CaptureHierarchy(root, pinned, selected.Value().hierarchy, review, cancellation);
         if (hierarchy.HasError())
             return Review::Failure(hierarchy.ErrorValue());
-
-        review.closure = capture.Value().ClosureDigest();
-        review.sources.reserve(capture.Value().Sources().size() + (hierarchy.Value() ? hierarchy.Value()->Sources().size() : 0));
-        for (const auto &file : capture.Value().Sources()) {
-            if (cancellation.IsCancellationRequested())
-                return Review::Failure(MakeError(DecisionCookErrors::Cancelled));
-            AppendStamp(review, file);
-            if (IsDecision(file.record.type.Value())) {
-                if (const auto inspected = InspectFile(review, file, providers.get()); inspected.HasError())
-                    return Review::Failure(inspected.ErrorValue());
-            }
-        }
         if (const auto &owners = hierarchy.Value()) {
-            if (const auto inspected = BlackboardUsageSources::Inspect(review, root, *owners, cancellation); inspected.HasError())
+            if (auto inspected = InspectHierarchy(review, root, *owners, cancellation); inspected.HasError())
                 return Review::Failure(inspected.ErrorValue());
-            for (const auto &file : owners->Sources())
-                AppendStamp(review, file);
-            if (const auto verified = owners->VerifyUnchanged(cancellation); verified.HasError())
-                return Review::Failure(verified.ErrorValue());
-            const std::array scopes{review.closure, owners->ClosureDigest()};
-            review.closure = ComputeSha256(std::as_bytes(std::span{scopes}));
         }
         std::ranges::sort(review.sources, {}, &BlackboardUsageSourceStamp::asset);
         if (const auto verified = capture.Value().VerifyUnchanged(cancellation); verified.HasError())
