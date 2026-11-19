@@ -223,8 +223,15 @@ namespace Horo::Render {
                 return frame;
             }
 
-            Result<void> Execute(const RenderExecutionPlan &) override {
-                return UnsupportedVoid();
+            Result<void> Execute(const RenderExecutionPlan &plan) override {
+                // A GUI-only frame enters native submission through PrepareGuiComposition.
+                if (!requirePresentation_ || !plan.frame.IsValid() || !plan.orderedPasses.empty())
+                    return UnsupportedVoid();
+                if (const auto access = CommandAccess(); access.HasError())
+                    return access;
+                if (plan.frame != activeFrame_)
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
+                return Result<void>::Success();
             }
 
             Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request) override {

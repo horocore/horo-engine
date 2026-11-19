@@ -254,12 +254,24 @@ namespace Horo::Tests::VulkanEditor {
             Check(viewport->ExecutePreparedFrame(frame, passes));
             const auto view = viewport->TextureView();
             REQUIRE(view.IsValid());
+            ComposeGui(frame, &view);
+        }
+
+        void ExecuteGuiOnly(RenderFrameScope &frame) {
+            Check(bridge->Port()->PreparePrimaryOutput(frame.Token(), {}), "prepare acquired SDR output");
+            Check(frame.Execute({}), "admit the frame for GUI-only submission");
+            ComposeGui(frame, nullptr);
+        }
+
+        void ComposeGui(RenderFrameScope &frame, const EditorViewportTextureView *view) {
             Check(gui->BeginFrame());
             ImGui::NewFrame();
-            ImGui::GetForegroundDrawList()->AddImage(static_cast<ImTextureID>(view.textureId), {0, 0}, {320, 240});
+            if (view) {
+                ImGui::GetForegroundDrawList()->AddImage(static_cast<ImTextureID>(view->textureId), {0, 0}, {320, 240});
+                gui->BindViewportTexture(*view);
+            }
             ImGui::GetForegroundDrawList()->AddText({8, 8}, IM_COL32_WHITE, "Canonical Vulkan GUI tail");
             ImGui::Render();
-            gui->BindViewportTexture(view);
             Check(frame.ComposeGui(*gui));
         }
     };
@@ -377,11 +389,9 @@ namespace Horo::Tests::VulkanEditor {
             REQUIRE(initialOutput.HasError());
             CHECK(initialOutput.ErrorValue().code.Value() == RenderPresentationErrors::OutputUnsupported.code.Value());
         }
-        host.CreateViewport();
         {
-            host.PrepareScene();
             auto initial = host.Frame(1);
-            host.ExecuteSceneAndGui(initial);
+            host.ExecuteGuiOnly(initial);
             Check(initial.Present(), "present initial SDR output");
         }
         constexpr FramebufferExtent logical{512, 384};
@@ -434,9 +444,8 @@ namespace Horo::Tests::VulkanEditor {
             const auto retiredExtent = host.frontend->PollPresentationAvailability(host.extent);
             Check(retiredExtent, "poll the superseded pixel extent");
             CHECK_FALSE(retiredExtent.Value());
-            host.PrepareScene();
             auto resumed = host.Frame(3, output);
-            host.ExecuteSceneAndGui(resumed);
+            host.ExecuteGuiOnly(resumed);
             Check(resumed.Present(), "present the resized SDR output");
         }
         REQUIRE(host.Drain());
