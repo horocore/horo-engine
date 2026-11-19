@@ -36,12 +36,15 @@ ctest --test-dir build/presentation-contract --no-tests=error --output-on-failur
 | SDL Vulkan on Linux or Windows | Configure the native GUI build with `BUILD_TESTING=ON`, `HORO_BUILD_RENDER_VULKAN=ON` and `HORO_ENABLE_GPU_SMOKE_TESTS=ON`. Build `HoroEditorVulkanPresentationSmoke` and `HoroRenderVulkanTests`. Run the latter with `[renderer][vulkan][wsi]` for scripted debt/failure checks. Run the smoke on a Vulkan display with validation layers and the [locked viewport cook](vulkan-editor-presentation-integration.md). Record the exact ICD/device and validation log. The Linux shader job already uses Xvfb and retains the driver facts, cook catalog, CTest XML, and native log. Reject validation errors, warnings, and VUID diagnostics. |
 | Metal on macOS | The `ci-macos-debug` producer builds the native GUI with `HORO_ENABLE_GPU_SMOKE_TESTS=ON`. The `macos-metal` job consumes the verified same-commit artifact and runs the packaged native tests. For local hardware, run `ctest --test-dir build/ci-metal --no-tests=error --output-on-failure -R '^HoroEditorViewportMetalSmoke::'` after the producer build. Retain the native result and display facts. A linear EDR skip leaves that row unqualified even if SDR and drawable lifecycle pass. |
 
-The standalone Vulkan resize case uses a single real SDL window, independent of
-viewport shader cooking. It can run on its own with the configured Vulkan
-validation layer and a display or Xvfb.
+The standalone Vulkan resize and suspension cases use a real SDL window without
+viewport shader cooking. The suspension case waits for the window manager to
+acknowledge minimization, verifies that the host's empty drawable extent admits
+no presentation, then restores and presents at the observed pixel extent. The
+resize case can run on Xvfb. An environment without native minimization leaves
+the suspension case unqualified.
 
 ```sh
-ctest --test-dir build/presentation-vulkan --no-tests=error --output-on-failure -R '^HoroEditorVulkanPresentationSmoke::Native Vulkan keeps frame ownership'
+ctest --test-dir build/presentation-vulkan --no-tests=error --output-on-failure -R '^HoroEditorVulkanPresentationSmoke::Native Vulkan (keeps frame ownership|suspends and resumes)'
 ```
 
 ## Physical Display Lane

@@ -444,6 +444,22 @@ namespace Horo::Tests::VulkanEditor {
         CHECK(SDL_GetWindowID(host.window.get()) != 0);
     }
 
+    /** @brief Completes the actual native resize or restore within the qualification deadline. */
+    void RealizeNativePresentation(Host &host, const FramebufferExtent output, const std::chrono::steady_clock::time_point deadline) {
+        for (;;) {
+            const auto resized = host.frontend->Resize(output);
+            if (resized.HasValue())
+                return;
+            const auto &error = resized.ErrorValue();
+            INFO("Vulkan / swapchain / realize current output: " << error.domain.Value() << "/" << error.code.Value() << ": "
+                                                                 << error.message);
+            REQUIRE(error.code.Value() == RenderPresentationErrors::DrawableUnavailable.code.Value());
+            REQUIRE(std::chrono::steady_clock::now() < deadline);
+            SDL_PumpEvents();
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+    }
+
     /** @brief Waits only in qualification for the actual SDL extent and the native surface that admits it. */
     FramebufferExtent ResizeNativePresentation(Host &host, const FramebufferExtent logical) {
         INFO("Vulkan / SDL window / resize requested logical extent to " << logical.width << "x" << logical.height);
@@ -463,18 +479,57 @@ namespace Horo::Tests::VulkanEditor {
             SDL_PumpEvents();
             std::this_thread::sleep_for(std::chrono::milliseconds{1});
         }
-        for (;;) {
-            const auto resized = host.frontend->Resize(output);
-            if (resized.HasValue())
-                return output;
-            const auto &error = resized.ErrorValue();
-            INFO("Vulkan / swapchain / realize resized output: " << error.domain.Value() << "/" << error.code.Value() << ": "
-                                                                 << error.message);
-            REQUIRE(error.code.Value() == RenderPresentationErrors::DrawableUnavailable.code.Value());
-            REQUIRE(std::chrono::steady_clock::now() < deadline);
+        RealizeNativePresentation(host, output, deadline);
+        return output;
+    }
+
+    /** @brief Observes an actual window-manager flag change in the finite native test lane. */
+    bool WaitForWindowMinimized(SDL_Window *window, const bool minimized) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        do {
             SDL_PumpEvents();
+            if (((SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) != 0) == minimized)
+                return true;
             std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        } while (std::chrono::steady_clock::now() < deadline);
+        return false;
+    }
+
+    TEST_CASE("Native Vulkan suspends and resumes GUI presentation across an actual SDL minimize and restore",
+              "[native-smoke][vulkan][presentation][suspension]") {
+        Host host;
+        INFO("Vulkan / SDL window suspend and restore / " << SDL_GetCurrentVideoDriver());
+        host.RecordCapabilities();
+        {
+            auto initial = host.Frame(1);
+            host.ExecuteGuiOnly(initial);
+            Check(initial.Present(), "present before minimizing");
         }
+
+        if (!SDL_MinimizeWindow(host.window.get()) || !WaitForWindowMinimized(host.window.get(), true))
+            SKIP("The window manager did not acknowledge SDL minimization: " << SDL_GetError());
+        const auto suspended = host.frontend->PollPresentationAvailability({});
+        Check(suspended, "poll the minimized window without a drawable");
+        REQUIRE_FALSE(suspended.Value());
+
+        INFO(SDL_GetError());
+        REQUIRE(SDL_RestoreWindow(host.window.get()));
+        REQUIRE(WaitForWindowMinimized(host.window.get(), false));
+        int width{}, height{};
+        REQUIRE(SDL_GetWindowSizeInPixels(host.window.get(), &width, &height));
+        REQUIRE(width > 0);
+        REQUIRE(height > 0);
+        const FramebufferExtent restored{static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)};
+        RealizeNativePresentation(host, restored, std::chrono::steady_clock::now() + std::chrono::seconds{5});
+        {
+            auto frame = host.Frame(2, restored);
+            host.ExecuteGuiOnly(frame);
+            Check(frame.Present(), "present at the observed restored extent");
+        }
+        REQUIRE(host.Drain());
+        CHECK(host.frontend->MemorySnapshot().allocationCount == 0);
+        CHECK(host.port->GetInstanceProcAddr() == nullptr);
+        CHECK(SDL_GetWindowID(host.window.get()) != 0);
     }
 
     TEST_CASE("Native Vulkan presents the active cinematic camera at a new SDL pixel extent",
