@@ -125,6 +125,54 @@ namespace Horo::AI {
             CHECK(harness.runtime.Find(harness.handle).Value().hasRunningTask);
         }
 
+        TEST_CASE("Canonical AI record uses the active population and refuses incomplete or transient state", "[unit][ai][restore][save]") {
+            constexpr std::size_t limit = 4096;
+            RestoreHarness harness;
+            const auto original = harness.Capture();
+            const auto saved = EncodeAiCanonicalStateRecord(original, limit);
+            REQUIRE(saved.HasValue());
+            harness.StartTask();
+            const auto savedWhileRunning = EncodeAiCanonicalStateRecord(harness.Capture(), limit);
+            REQUIRE(savedWhileRunning.HasValue());
+            CHECK(savedWhileRunning.Value() == saved.Value());
+
+            SECTION("the exact decoded population stages through the canonical owner") {
+                const auto restored = DecodeAiCanonicalStateRecord(saved.Value(), saved.Value().size());
+                REQUIRE(restored.HasValue());
+                CHECK(restored.Value() == original);
+                auto candidate = harness.Stage(restored.Value());
+                CHECK(harness.runtime.Find(harness.handle).Value().hasRunningTask);
+                RequireCommit(harness.runtime, std::move(candidate));
+                CHECK(harness.Capture() == original);
+                CHECK_FALSE(harness.runtime.Find(harness.handle).Value().hasRunningTask);
+            }
+            SECTION("malformed and oversized records leave the current population unchanged") {
+                auto bytes = saved.Value();
+                ExpectError(EncodeAiCanonicalStateRecord(original, bytes.size() - 1), AIErrors::CanonicalStateInvalid);
+                ExpectError(DecodeAiCanonicalStateRecord(bytes, bytes.size() - 1), AIErrors::CanonicalStateInvalid);
+                bytes.pop_back();
+                ExpectError(DecodeAiCanonicalStateRecord(bytes, limit), AIErrors::CanonicalStateInvalid);
+                bytes = saved.Value();
+                bytes.push_back(0);
+                ExpectError(DecodeAiCanonicalStateRecord(bytes, limit), AIErrors::CanonicalStateInvalid);
+                bytes.front() = 255;
+                ExpectError(DecodeAiCanonicalStateRecord(bytes, limit), AIErrors::CanonicalSchemaUnsupported);
+                CHECK(harness.Capture() == original);
+                CHECK(harness.runtime.Find(harness.handle).Value().hasRunningTask);
+            }
+            SECTION("duplicate keys and Scene-local entity projections cannot enter a Save record") {
+                auto invalid = original;
+                auto &entries = RestoreHarness::Blackboard(invalid).entries;
+                entries.push_back(entries.front());
+                ExpectError(EncodeAiCanonicalStateRecord(invalid, limit), AIErrors::CanonicalStateInvalid);
+                entries.pop_back();
+                const BlackboardStoredEntityReference reference{harness.scene->View().RuntimeId().value, 1, 1};
+                REQUIRE(reference.IsValid());
+                entries.front().value = BlackboardValue{BlackboardScalarValue{reference}};
+                ExpectError(EncodeAiCanonicalStateRecord(invalid, limit), AIErrors::CanonicalStateInvalid);
+            }
+        }
+
         TEST_CASE("Canonical AI migration preserves prior state and authored bindings on failure", "[unit][ai][restore][migration]") {
             RestoreHarness harness;
             harness.StartTask();

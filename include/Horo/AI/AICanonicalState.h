@@ -60,6 +60,24 @@ namespace Horo::AI {
         [[nodiscard]] bool operator==(const AiCanonicalState &) const noexcept = default;
     };
 
+    /**
+     * @brief Encodes the canonical base-agent population for a single bounded Save participant record.
+     * @param state Exact canonical population in ascending agent and Blackboard key order.
+     * @param maximumBytes Byte allowance granted by the Save participant.
+     * @return Owned record bytes or a typed version, shape, or capacity failure.
+     * @details The record excludes Scene-local entity references; a host needs stable reference projection before enabling them.
+     */
+    [[nodiscard]] Result<std::vector<std::uint8_t>> EncodeAiCanonicalStateRecord(const AiCanonicalState &state, std::size_t maximumBytes);
+
+    /**
+     * @brief Decodes a bounded Save participant record into the canonical AI model without mutating a Scene.
+     * @param bytes Complete record payload.
+     * @param maximumBytes Byte allowance granted by the Save participant.
+     * @return Detached population or a typed version, shape, or capacity failure.
+     * @details Actual destination Scene, controller, and Blackboard schema validation belongs to canonical restore.
+     */
+    [[nodiscard]] Result<AiCanonicalState> DecodeAiCanonicalStateRecord(std::span<const std::uint8_t> bytes, std::size_t maximumBytes);
+
     /** @brief Explicit stable key rename/removal; an invalid destination deliberately discards the source. */
     struct BlackboardKeyMigration final {
         BlackboardKeyId source;

@@ -74,8 +74,6 @@ namespace Horo::AI {
         AiScenePerceptionGroupPositionSource positions; /**< Missing authority rejects additions and permits retirement. */
     };
 
-    inline constexpr std::size_t MaximumAiSceneAgents = 65'536;
-
     /** @brief Exact AI and RuntimeScene incarnation used by one detached activation candidate. */
     struct AiSceneActivationBinding final {
         AiRuntimeIncarnation incarnation;
@@ -312,6 +310,14 @@ namespace Horo::AI {
          * @pre Called on the simulation owner; the Scene remains alive for the call.
          */
         [[nodiscard]] Result<AiCanonicalState> CaptureCanonicalState(Runtime::RuntimeSceneView scene) const;
+        /**
+         * @brief Captures canonical AI with a host-admitted limit on detached population storage.
+         * @param scene Current Scene borrow.
+         * @param maximumBytes Maximum requested storage for owned agent and Blackboard entry elements.
+         * @return Complete population or a typed limit, lifecycle, or storage failure.
+         * @pre Called on the simulation owner; the Scene remains alive for the call.
+         */
+        [[nodiscard]] Result<AiCanonicalState> CaptureCanonicalState(Runtime::RuntimeSceneView scene, std::size_t maximumBytes) const;
         /**
          * @brief Validates and stages a complete population restore without changing live or authored state.
          * @param scene Current destination Scene borrow; its owner must outlive staging through commit or rollback.

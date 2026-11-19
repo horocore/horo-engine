@@ -141,6 +141,7 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroAINavigationIntegrationPublicHeaderConsumer
     HoroAIPublicHeaderConsumer
     HoroAISceneIntegrationPublicHeaderConsumer
+    HoroAISaveIntegrationPublicHeaderConsumer
     HoroAISightIntegrationPublicHeaderConsumer
     HoroGameplayPerceptionIntegrationPublicHeaderConsumer
     HoroMaterialBindingTests

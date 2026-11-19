@@ -1251,6 +1251,7 @@ add_executable(HoroAITests
         unit/runtime/ai/AISceneDecisionReservationTests.cpp
         unit/runtime/ai/DecisionGraphSceneReservationTests.cpp
         unit/runtime/ai/AISceneRestoreTests.cpp
+        unit/runtime/ai/AISaveCaptureTests.cpp
         unit/runtime/ai/AISceneComponentsTests.cpp
         unit/runtime/ai/AITaskLifecycleTests.cpp
         unit/runtime/ai/BehaviorTreeTests.cpp
@@ -1276,7 +1277,7 @@ add_executable(HoroAITests
         unit/runtime/ai/PerceptionSpatialBroadphaseTests.cpp
 )
 target_compile_features(HoroAITests PRIVATE cxx_std_20)
-target_link_libraries(HoroAITests PRIVATE HoroEngine::AI HoroEngine::AISceneIntegration HoroEngine::GameplayPerceptionIntegration HoroEngine::GameplayLua)
+target_link_libraries(HoroAITests PRIVATE HoroEngine::AI HoroEngine::AISceneIntegration HoroEngine::AISaveIntegration HoroEngine::GameplayPerceptionIntegration HoroEngine::GameplayLua)
 horo_register_catch_test(HoroAITests LABELS "unit;ai;headless")
 target_include_directories(HoroAITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 

@@ -203,18 +203,35 @@ namespace Horo::AI {
 
     /** @copydoc AiSceneRuntime::CaptureCanonicalState */
     Result<AiCanonicalState> AiSceneRuntime::CaptureCanonicalState(const Runtime::RuntimeSceneView scene) const {
+        return CaptureCanonicalState(scene, std::numeric_limits<std::size_t>::max());
+    }
+
+    /** @copydoc AiSceneRuntime::CaptureCanonicalState(Runtime::RuntimeSceneView, std::size_t) const */
+    Result<AiCanonicalState> AiSceneRuntime::CaptureCanonicalState(const Runtime::RuntimeSceneView scene, std::size_t maximumBytes) const {
         if (shutdown_ || !active_)
             return Result<AiCanonicalState>::Failure(MakeError(AIErrors::RuntimeUnavailable));
         if (const auto valid = ValidateScene(scene, active_->binding); valid.HasError())
             return Result<AiCanonicalState>::Failure(valid.ErrorValue());
+        const auto count = static_cast<std::size_t>(std::ranges::count_if(active_->agents, [](const auto &slot) {
+            return !slot.retired;
+        }));
+        if (count > maximumBytes / sizeof(AiAgentCanonicalState))
+            return Result<AiCanonicalState>::Failure(MakeError(AIErrors::CanonicalStateInvalid));
+        maximumBytes -= count * sizeof(AiAgentCanonicalState);
         try {
             AiCanonicalState state;
-            state.agents.reserve(active_->agents.size());
+            state.agents.reserve(count);
             for (const auto &slot : active_->agents) {
                 if (slot.retired)
                     continue;
                 if (const auto valid = ValidateOwner(scene, slot.record); valid.HasError())
                     return Result<AiCanonicalState>::Failure(valid.ErrorValue());
+                if (slot.blackboard && slot.schema) {
+                    const auto keys = slot.schema->Keys().size();
+                    if (keys > maximumBytes / sizeof(BlackboardCanonicalEntry))
+                        return Result<AiCanonicalState>::Failure(MakeError(AIErrors::CanonicalStateInvalid));
+                    maximumBytes -= keys * sizeof(BlackboardCanonicalEntry);
+                }
                 auto captured = CaptureAgent(slot, scene);
                 if (captured.HasError())
                     return Result<AiCanonicalState>::Failure(captured.ErrorValue());

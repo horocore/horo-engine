@@ -12,6 +12,7 @@
 #include "Horo/Foundation/Result.h"
 
 #include <compare>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -22,6 +23,9 @@ namespace Horo::AI {
 
     /** @brief Current semantic version of the authored AI scene component contract. */
     inline constexpr std::uint32_t CurrentAiSceneComponentSchemaVersion = 1;
+
+    /** @brief Hard admission bound shared by live Scene populations and their canonical records. */
+    inline constexpr std::size_t MaximumAiSceneAgents = 65'536;
 
     /** @brief Policy controlling when an authored AI controller may become active. */
     enum class AiStartupPolicy : std::uint8_t {

@@ -269,29 +269,61 @@ namespace Horo::AI::Detail {
         }
     }
 
-    namespace {
-        void WriteValue(DecisionWriter &writer, const BlackboardValue &value) {
-            writer.Unsigned(value.index(), 1);
-            std::visit([&]<typename VisitedValue>(const VisitedValue &item) {
-                using T = std::decay_t<decltype(item)>;
-                if constexpr (std::is_same_v<T, BlackboardScalarValue>)
-                    WriteScalar(writer, item);
-                else if constexpr (std::is_same_v<T, BlackboardCollectionValue>) {
-                    writer.Enumeration(item.elementKind);
-                    if (!writer.Count(item.count, MaximumBlackboardCollectionElements))
-                        return;
-                    for (std::size_t index = 0; index < item.count; ++index)
-                        WriteScalar(writer, item.elements[index]);
-                } else {
-                    writer.Unsigned(item.schemaVersion, 4);
-                    writer.Unsigned(item.serializedType, 4);
-                    if (!writer.Count(item.size, MaximumBlackboardOpaqueBytes))
-                        return;
-                    writer.Bytes({reinterpret_cast<const std::uint8_t *>(item.bytes.data()), item.size});
-                }
-            }, value);
-        }
+    /** @copydoc WriteBlackboardValue */
+    void WriteBlackboardValue(DecisionWriter &writer, const BlackboardValue &value) {
+        writer.Unsigned(value.index(), 1);
+        std::visit([&]<typename VisitedValue>(const VisitedValue &item) {
+            using T = std::decay_t<decltype(item)>;
+            if constexpr (std::is_same_v<T, BlackboardScalarValue>)
+                WriteScalar(writer, item);
+            else if constexpr (std::is_same_v<T, BlackboardCollectionValue>) {
+                writer.Enumeration(item.elementKind);
+                if (!writer.Count(item.count, MaximumBlackboardCollectionElements))
+                    return;
+                for (std::size_t index = 0; index < item.count; ++index)
+                    WriteScalar(writer, item.elements[index]);
+            } else {
+                writer.Unsigned(item.schemaVersion, 4);
+                writer.Unsigned(item.serializedType, 4);
+                if (!writer.Count(item.size, MaximumBlackboardOpaqueBytes))
+                    return;
+                writer.Bytes({reinterpret_cast<const std::uint8_t *>(item.bytes.data()), item.size});
+            }
+        }, value);
+    }
 
+    /** @copydoc ReadBlackboardValue */
+    BlackboardValue ReadBlackboardValue(DecisionReader &reader) {
+        switch (reader.Unsigned(1)) {
+            case 0:
+                return ReadScalar(reader);
+            case 1: {
+                BlackboardCollectionValue value;
+                value.elementKind = reader.Enumeration(BlackboardValueKind::Count);
+                value.count = reader.Count(MaximumBlackboardCollectionElements);
+                for (std::size_t index = 0; index < value.count && reader.Valid(); ++index)
+                    value.elements[index] = ReadScalar(reader);
+                return value;
+            }
+            case 2: {
+                BlackboardOpaqueValue value;
+                value.schemaVersion = static_cast<std::uint32_t>(reader.Unsigned(4));
+                value.serializedType = static_cast<std::uint32_t>(reader.Unsigned(4));
+                value.size = reader.Count(MaximumBlackboardOpaqueBytes);
+                const auto bytes = reader.Bytes(value.size);
+                std::ranges::transform(bytes, value.bytes.begin(), [](std::uint8_t byte) {
+                    return static_cast<std::byte>(byte);
+                });
+                return value;
+            }
+            default:
+                reader.Reject();
+                return BlackboardScalarValue{false};
+        }
+    }
+
+    namespace {
+        /** @brief Writes the stable schema declaration and its optional default. */
         void WriteKey(DecisionWriter &writer, const BlackboardKeyDescriptor &key) {
             writer.IdentityValue(key.key);
             writer.Enumeration(key.kind);
@@ -301,37 +333,7 @@ namespace Horo::AI::Detail {
             writer.Enumeration(key.access);
             writer.Unsigned(key.defaultValue.has_value(), 1);
             if (key.defaultValue)
-                WriteValue(writer, *key.defaultValue);
-        }
-
-        /** @brief Reads the bounded default of one exact schema key. */
-        BlackboardValue ReadBlackboardDefault(DecisionReader &reader) {
-            switch (reader.Unsigned(1)) {
-                case 0:
-                    return ReadScalar(reader);
-                case 1: {
-                    BlackboardCollectionValue value;
-                    value.elementKind = reader.Enumeration(BlackboardValueKind::Count);
-                    value.count = reader.Count(MaximumBlackboardCollectionElements);
-                    for (std::size_t index = 0; index < value.count && reader.Valid(); ++index)
-                        value.elements[index] = ReadScalar(reader);
-                    return value;
-                }
-                case 2: {
-                    BlackboardOpaqueValue value;
-                    value.schemaVersion = static_cast<std::uint32_t>(reader.Unsigned(4));
-                    value.serializedType = static_cast<std::uint32_t>(reader.Unsigned(4));
-                    value.size = reader.Count(MaximumBlackboardOpaqueBytes);
-                    const auto bytes = reader.Bytes(value.size);
-                    std::ranges::transform(bytes, value.bytes.begin(), [](std::uint8_t byte) {
-                        return static_cast<std::byte>(byte);
-                    });
-                    return value;
-                }
-                default:
-                    reader.Reject();
-                    return BlackboardScalarValue{false};
-            }
+                WriteBlackboardValue(writer, *key.defaultValue);
         }
 
         /** @brief Reads one key without bypassing BlackboardSchema::Capture's semantic checks. */
@@ -344,7 +346,7 @@ namespace Horo::AI::Detail {
             key.presence = reader.Enumeration(BlackboardKeyPresence::Count);
             key.access = reader.Enumeration(BlackboardKeyAccess::Count);
             if (reader.Boolean())
-                key.defaultValue = ReadBlackboardDefault(reader);
+                key.defaultValue = ReadBlackboardValue(reader);
             return key;
         }
     }  // namespace

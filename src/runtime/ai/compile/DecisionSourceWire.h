@@ -31,6 +31,10 @@ namespace Horo::AI::Detail {
     void WriteBlackboardSchema(DecisionWriter &writer, const BlackboardSchema &schema);
     void WriteScalar(DecisionWriter &writer, const BlackboardScalarValue &value);
     [[nodiscard]] BlackboardScalarValue ReadScalar(DecisionReader &reader);
+    /** @brief Writes an owned bounded Blackboard value including its kind. */
+    void WriteBlackboardValue(DecisionWriter &writer, const BlackboardValue &value);
+    /** @brief Reads an owned bounded Blackboard value including its kind. */
+    [[nodiscard]] BlackboardValue ReadBlackboardValue(DecisionReader &reader);
     void WriteCall(DecisionWriter &writer, const std::optional<DecisionSubplanCall> &value);
     [[nodiscard]] std::optional<DecisionSubplanCall> ReadCall(DecisionReader &reader);
     void WriteTree(DecisionWriter &writer, const BehaviorTreeAsset &tree);

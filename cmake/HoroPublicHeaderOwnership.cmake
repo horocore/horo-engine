@@ -886,6 +886,9 @@ horo_configure_target_header_boundary(HoroAISceneIntegration PUBLIC_HEADERS
     Horo/AI/EnvironmentQueryCache.h
     Horo/AI/EnvironmentQueryPerception.h
 )
+horo_configure_target_header_boundary(HoroAISaveIntegration PUBLIC_HEADERS
+    Horo/AI/AISaveCapture.h
+)
 horo_configure_target_header_boundary(HoroAISightIntegration PUBLIC_HEADERS
     Horo/AI/PerceptionSight.h
     Horo/AI/EnvironmentQueryPhysics.h

@@ -1776,6 +1776,7 @@ add_library(HoroAI STATIC
         runtime/ai/compile/DecisionSourceReachability.cpp
         runtime/ai/compile/DecisionSourceTree.cpp
         runtime/ai/compile/DecisionSourceValues.cpp
+        runtime/ai/compile/AICanonicalStateRecord.cpp
         runtime/ai/compile/BlackboardSchemaSourceCodec.cpp
         runtime/ai/api/DecisionNodeRegistration.cpp
         runtime/ai/api/DecisionNodeExecutor.cpp
@@ -1861,6 +1862,11 @@ add_library(HoroAISceneIntegration STATIC
 add_library(HoroEngine::AISceneIntegration ALIAS HoroAISceneIntegration)
 target_compile_features(HoroAISceneIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroAISceneIntegration PUBLIC HoroEngine::AI HoroEngine::RuntimeScene)
+
+add_library(HoroAISaveIntegration STATIC runtime/ai/save/AISaveCapture.cpp)
+add_library(HoroEngine::AISaveIntegration ALIAS HoroAISaveIntegration)
+target_compile_features(HoroAISaveIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroAISaveIntegration PUBLIC HoroEngine::AISceneIntegration HoroEngine::Runtime)
 
 # Explicit gameplay composition above the AI scene owner; core AI never depends on Gameplay or Extensions.
 add_library(HoroGameplayAiIntegration STATIC gameplay/GameplayAiContext.cpp gameplay/TacticalCover.cpp)

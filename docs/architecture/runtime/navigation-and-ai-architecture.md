@@ -2675,6 +2675,9 @@ This seam does not by itself implement composed active-path/schema migration.
 
 1. **Save And Restore**:
    - Under ADR-114, the AI subsystem contributes one owned canonical state adapter to `RuntimeSaveService` and captures state only at the aggregate save snapshot safe point. Component reflection and Scene serialization are not alternate authorities.
+   - The bounded base-agent Save record carries `AiCanonicalState` directly. It preserves the canonical version, ordered agents, authored controller identities, and complete ordered Blackboard entries. It rejects unsupported versions, invalid record bounds, and Scene-local entity projections. A host that supports entity-valued keys in saves needs an explicit persistent-identity projection and restore resolution.
+   - The AI capture adapter binds an explicit current Scene source and checks the Save capture's incarnation, structural revision, owner lane, and storage allowance before copying a record. The product opts in by registering the adapter and using the decoded state in aggregate Scene restore.
+   - This record contains base-agent state only. Decision continuation and perception memory require explicit canonical ownership and product policy before the Save participant can include them.
    - Durable state includes plan asset/schema identity, bounded execution-frame stacks keyed by stable `DecisionNodeId`, serializable decorator/timer memory, and schema-approved blackboard values.
    - `JobHandle`, cancellation tokens, path/query handles, pointers, and cooked array indices are transient and never serialized. Restore resolves plans in staging and restarts asynchronous work only after atomic state application. Missing or incompatible plans reset the affected agent to its root with a typed diagnostic.
 
