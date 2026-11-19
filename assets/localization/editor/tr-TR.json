@@ -1009,6 +1009,7 @@
     "workspace.decision_graph.palette_properties_unavailable": {"text": "Bu grafik, düğümün gerekli özelliklerini düzenleyemiyor."},
     "workspace.decision_graph.palette_implementation_unavailable": {"text": "Mevcut katalog bir uygulama sağlamadı."},
     "workspace.decision_graph.palette_query_requires_tree": {"text": "Sorgu çıktısı görevleri Davranış Ağaçlarında desteklenir."},
+    "workspace.decision_graph.palette_query_requires_wiring": {"text": "Grafiği bir başlangıç göreviyle oluşturun, ardından sorgu çıktısını grafik düzenleyicide ekleyip bağlayın."},
     "workspace.decision_graph.task_properties_entry": {"text": "Giriş eylemi özellikleri"},
     "workspace.decision_graph.task_properties_update": {"text": "Güncelleme eylemi özellikleri"},
     "workspace.decision_graph.task_properties_exit": {"text": "Çıkış eylemi özellikleri"},

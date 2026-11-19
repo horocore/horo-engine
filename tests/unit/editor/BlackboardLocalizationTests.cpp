@@ -315,7 +315,8 @@ TEST_CASE("Decision graph workspace and initial state machine labels resolve in 
                                            "palette_ports_required",
                                            "palette_properties_unavailable",
                                            "palette_implementation_unavailable",
-                                           "palette_query_requires_tree"};
+                                           "palette_query_requires_tree",
+                                           "palette_query_requires_wiring"};
         constexpr GuiLocalizationScope paletteText{"workspace.decision_graph"};
         for (const auto label : PaletteLabels)
             CHECK_FALSE(paletteText.Text(service, label).starts_with("[missing:"));

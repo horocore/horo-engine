@@ -1,6 +1,5 @@
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserDialogs.h"
 
-#include "Horo/AI/DecisionNodeRegistration.h"
 #include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorTheme.h"
@@ -15,7 +14,6 @@
 #include <array>
 #include <charconv>
 #include <format>
-#include <limits>
 #include <span>
 #include <string>
 
@@ -408,35 +406,43 @@ namespace Horo::Editor {
             return index > 0;
         }
 
-        /** @brief Selects the actual installed Task contract and preserves its exact version and owner. */
-        void ChooseDecisionTask(std::span<const DecisionTaskChoice> tasks, TaskDecisionCreationRequest &draft,
-                                const EditorGuiContext &context) {
-            const auto &fonts = context.theme.fonts;
-            const auto &empty = context.localization.Get("editor", "workspace.decision_graph.select_task");
-            Ui::FieldLabel(context.localization.Get("editor", "workspace.decision_graph.create_task").c_str(), fonts);
-            std::array<const DecisionTaskChoice *, AI::DecisionNodeGeneration::MaximumNodes> eligible{};
-            std::size_t count{};
-            int index{};
-            for (const auto &task : tasks) {
-                if (draft.family == AI::DecisionPlanKind::BehaviorTree && task.version > std::numeric_limits<std::uint16_t>::max())
+        /** @brief Picks a clean opened schema for the selected registered asset. Save-time validation still owns publication. */
+        const BlackboardSchemaDocumentSnapshot *FindCreationSchema(const EditorWorkspaceViewModel &model, Assets::AssetId asset) {
+            const BlackboardSchemaDocumentSnapshot *matched{};
+            for (const auto &document : model.blackboardDocuments) {
+                const auto &snapshot = document.snapshot;
+                if (!snapshot.source || snapshot.source->asset != asset || !snapshot.schema || !snapshot.sourceDigest || snapshot.dirty ||
+                    snapshot.conflict)
                     continue;
-                eligible[count++] = &task;
-                if (task.type == draft.task && task.provider == draft.provider && task.version == draft.version)
-                    index = static_cast<int>(count);
+                if (matched)
+                    return nullptr;
+                matched = &snapshot;
             }
-            const Ui::ComboItemSource choices{.label = [&](int item) {
-                return item == 0 ? empty.c_str() : eligible[static_cast<std::size_t>(item - 1)]->label.c_str();
-            }};
-            if (Ui::ComboControl("##NewDecisionProviderTask", &index, static_cast<int>(count) + 1, choices, fonts)) {
-                const auto selected = index == 0 ? DecisionTaskChoice{} : *eligible[static_cast<std::size_t>(index - 1)];
-                draft.task = selected.type;
-                draft.provider = selected.provider;
-                draft.version = selected.version;
-            }
+            return matched;
+        }
+
+        /** @brief Uses the shared Decision palette and projects its visible selection into the modal submission. */
+        void ChooseDecisionTask(AssetBrowserInteractionState &state, const EditorWorkspaceViewModel &model,
+                                const BlackboardSchemaDocumentSnapshot *schema, const EditorGuiContext &context,
+                                EditorWorkspaceViewCommandData &command) {
+            auto &draft = state.createTaskDecision;
+            DrawDecisionPackageTrustRequired(model.decisionPackageActivationTrustRequired, context);
+            const DecisionTaskPaletteCatalog catalog{
+                .choices = model.decisionTaskPaletteChoices,
+                .revision = model.availableBehaviorsRevision,
+                .providers = model.decisionProviderMetadata.get(),
+                .schema = schema ? schema->schema.get() : nullptr,
+                .allowQueryOutput = draft.family == AI::DecisionPlanKind::BehaviorTree,
+                .initialFamily = draft.family,
+            };
+            const auto *selected = DrawDecisionTaskPalette(catalog, state.initialTaskPalette, context, command);
+            draft.task = selected ? selected->type : AI::DecisionNodeTypeId{};
+            draft.provider = selected ? selected->provider : AI::DecisionProviderId{};
+            draft.version = selected ? selected->version : 0;
         }
 
         /** @brief Draws Utility scoring keys from a clean opened Blackboard, whose durable version is rechecked on commit. */
-        void ChooseUtilityScore(AssetBrowserInteractionState &state, const EditorWorkspaceViewModel &model,
+        void ChooseUtilityScore(AssetBrowserInteractionState &state, const BlackboardSchemaDocumentSnapshot *source,
                                 const EditorGuiContext &context) {
             auto &draft = state.createTaskDecision;
             if (!draft.score)
@@ -446,21 +452,18 @@ namespace Horo::Editor {
             const auto text = [&](std::string_view key) -> const std::string & {
                 return context.localization.Get("editor", key);
             };
-            const auto source = std::ranges::find_if(model.blackboardDocuments, [&](const auto &document) {
-                return document.snapshot.source->asset == draft.schema && !document.snapshot.dirty && !document.snapshot.conflict;
-            });
-            if (source == model.blackboardDocuments.end() || !source->snapshot.sourceDigest) {
+            if (!source) {
                 score.key = {};
                 score.schemaSource = {};
                 Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("workspace.decision_graph.open_scoring_schema"), Theme::Muted(),
                                 fonts);
                 return;
             }
-            score.schemaSource = *source->snapshot.sourceDigest;
+            score.schemaSource = *source->sourceDigest;
             std::array<const BlackboardSchemaRow *, AI::MaximumBlackboardKeys> scalar{};
             std::size_t count{};
             int index{};
-            for (const auto &row : source->snapshot.source->rows) {
+            for (const auto &row : source->source->rows) {
                 if (row.descriptor.kind != AI::BlackboardValueKind::Scalar ||
                     row.descriptor.cardinality != AI::BlackboardValueCardinality::Scalar)
                     continue;
@@ -520,8 +523,9 @@ namespace Horo::Editor {
                                                        AI::BlackboardSchemaAuthoringRow::MaximumLabelBytes + 1, fonts));
                 const bool schemaSelected =
                     ChooseDecisionSchema(model.decisionSchemaChoices, draft.schema, context, "##NewTaskDecisionSchema");
-                ChooseDecisionTask(model.decisionTaskChoices, draft, context);
-                ChooseUtilityScore(state, model, context);
+                const auto *schema = FindCreationSchema(model, draft.schema);
+                ChooseDecisionTask(state, model, schema, context, command);
+                ChooseUtilityScore(state, schema, context);
                 const bool current = draft.catalogRevision == model.availableBehaviorsRevision;
                 if (!current)
                     Ui::ErrorText(text("workspace.decision_graph.catalog_changed").c_str(), fonts);

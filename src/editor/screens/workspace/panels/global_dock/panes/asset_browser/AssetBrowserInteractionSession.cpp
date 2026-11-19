@@ -78,6 +78,7 @@ namespace Horo::Editor {
     void AssetBrowserInteractionSession::OpenCreateTaskDecision(std::string_view directory, AI::DecisionPlanKind family,
                                                                 std::uint64_t catalogRevision) {
         m_state.createTaskDecision = {.directory = std::string{directory}, .family = family, .catalogRevision = catalogRevision};
+        m_state.initialTaskPalette = {};
         if (family == AI::DecisionPlanKind::Utility)
             m_state.createTaskDecision.score.emplace();
         m_state.utilityMinimum = 0;

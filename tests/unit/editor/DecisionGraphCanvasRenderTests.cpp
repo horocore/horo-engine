@@ -12,6 +12,8 @@
 #include "editor/screens/workspace/DecisionTaskPalette.h"
 #include "editor/screens/workspace/DecisionTaskPropertiesView.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserDialogs.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
 #include "support/DecisionGraphCompilerTestSupport.h"
 
 #include <algorithm>
@@ -21,6 +23,7 @@
 #include <cstdint>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <limits>
 #include <map>
 #include <memory>
 #include <span>
@@ -226,6 +229,68 @@ namespace Horo::Editor {
         CHECK_FALSE(draft.origin);
         CHECK_FALSE(draft.role);
         CHECK_FALSE(draft.selected.IsValid());
+    }
+
+    TEST_CASE("New Decision graph modal uses the shared palette and rejects incompatible starter tasks",
+              "[unit][editor][decision][palette]") {
+        using namespace AI;
+        CanvasFixture fixture;
+        EditorWorkspaceViewModel model;
+        model.availableBehaviorsRevision = 3;
+        const auto schema = Assets::AssetId::FromBytes({7});
+        model.decisionSchemaChoices.push_back({schema, "assets/guard.horo_bb"});
+        const auto task = DecisionNodeTypeId::Create(101).Value();
+        const auto query = DecisionNodeTypeId::Create(102).Value();
+        const auto largeVersion = DecisionNodeTypeId::Create(103).Value();
+        const auto provider = DecisionProviderId::Create(202).Value();
+        model.decisionTaskPaletteChoices = {
+            {task, provider, 3, "Starter task"},
+            {query, provider, 7, "Query output", true},
+            {largeVersion, provider, std::uint32_t{std::numeric_limits<std::uint16_t>::max()} + 1, "Large version"},
+        };
+        model.decisionPackageActivationTrustRequired = true;
+        AssetBrowserInteractionSession browser;
+        browser.OpenCreateTaskDecision("assets", DecisionPlanKind::BehaviorTree, model.availableBehaviorsRevision);
+        auto &state = browser.State();
+        state.createTaskDecision.name = "Guard";
+        state.createTaskDecision.schema = schema;
+        state.initialTaskPalette.catalogRevision = model.availableBehaviorsRevision;
+        const auto draw = [&](DecisionNodeTypeId node) {
+            state.initialTaskPalette.selected = node;
+            EditorWorkspaceViewCommandData command;
+            ImGui::NewFrame();
+            ImGui::SetNextWindowSize({600, 650});
+            ImGui::Begin("Decision creation test", nullptr, ImGuiWindowFlags_NoSavedSettings);
+            DrawAssetBrowserDialogs(state, model, command, fixture.context);
+            ImGui::End();
+            ImGui::Render();
+        };
+
+        draw(task);
+        CHECK(state.createTaskDecision.task == task);
+        CHECK(state.createTaskDecision.provider == provider);
+        CHECK(state.createTaskDecision.version == 3);
+        CHECK(AssetBrowserInteractionSession::CanConfirmTaskDecision(state.createTaskDecision));
+        CHECK(fixture.labels.Used("workspace.decision_graph.task_filter_verified_compatible"));
+        CHECK(fixture.labels.Used("workspace.packages.execution_trust_required"));
+
+        draw(query);
+        CHECK_FALSE(AssetBrowserInteractionSession::CanConfirmTaskDecision(state.createTaskDecision));
+        CHECK(fixture.labels.Used("workspace.decision_graph.palette_query_requires_wiring"));
+        state.createTaskDecision.family = DecisionPlanKind::Utility;
+        draw(query);
+        CHECK_FALSE(state.createTaskDecision.task.IsValid());
+        CHECK(fixture.labels.Used("workspace.decision_graph.palette_query_requires_tree"));
+        state.createTaskDecision.family = DecisionPlanKind::BehaviorTree;
+        draw(largeVersion);
+        CHECK_FALSE(AssetBrowserInteractionSession::CanConfirmTaskDecision(state.createTaskDecision));
+        CHECK(fixture.labels.Used("workspace.decision_canvas.provider_version_mismatch"));
+
+        ++model.availableBehaviorsRevision;
+        draw(task);
+        CHECK_FALSE(state.initialTaskPalette.selected.IsValid());
+        CHECK_FALSE(AssetBrowserInteractionSession::CanConfirmTaskDecision(state.createTaskDecision));
+        CHECK(fixture.labels.Used("workspace.decision_graph.catalog_changed"));
     }
 
     TEST_CASE("Decision task palette explains exact saved schema incompatibilities without creating a provider",

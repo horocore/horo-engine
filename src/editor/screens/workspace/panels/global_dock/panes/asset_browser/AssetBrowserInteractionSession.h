@@ -1,5 +1,6 @@
 #pragma once
 
+#include "editor/screens/workspace/DecisionTaskPalette.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 
 #include <array>
@@ -57,6 +58,7 @@ namespace Horo::Editor {
         StateMachineCreationRequest createStateMachine;
         bool openCreateStateMachine{};
         TaskDecisionCreationRequest createTaskDecision;
+        DecisionTaskPaletteDraft initialTaskPalette;
         float utilityMinimum{};
         float utilityMaximum{1};
         bool openCreateTaskDecision{};

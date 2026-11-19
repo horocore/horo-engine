@@ -1009,6 +1009,7 @@
     "workspace.decision_graph.palette_properties_unavailable": {"text": "This graph cannot author the node's required properties."},
     "workspace.decision_graph.palette_implementation_unavailable": {"text": "The current catalog did not provide an implementation."},
     "workspace.decision_graph.palette_query_requires_tree": {"text": "Query output tasks are supported in Behavior Trees."},
+    "workspace.decision_graph.palette_query_requires_wiring": {"text": "Create the graph with a starter task, then add and bind the query output in the graph editor."},
     "workspace.decision_graph.task_properties_entry": {"text": "Entry action properties"},
     "workspace.decision_graph.task_properties_update": {"text": "Update action properties"},
     "workspace.decision_graph.task_properties_exit": {"text": "Exit action properties"},

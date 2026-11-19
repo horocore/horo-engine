@@ -40,6 +40,7 @@ namespace Horo::Editor {
         const AI::DecisionBlackboardProviderMetadata *providers{};
         const AI::BlackboardSchema *schema{};
         bool allowQueryOutput{true};
+        std::optional<AI::DecisionPlanKind> initialFamily; /**< Initial asset creation has no authored query wiring. */
     };
 
     /** @brief Owns the search and selection for one Decision document's task picker. */

@@ -15,6 +15,7 @@
 #include <array>
 #include <charconv>
 #include <format>
+#include <limits>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -162,25 +163,60 @@ namespace Horo::Editor {
             return nullptr;
         }
 
+        /** @brief Reports family-independent restrictions from the exact authoring generation. */
+        const char *TaskAdmissionDiagnostic(DecisionPaletteAdmission admission) noexcept {
+            using enum DecisionPaletteAdmission;
+            switch (admission) {
+                case Allowed:
+                    return nullptr;
+                case UnsupportedRole:
+                    return "workspace.decision_graph.palette_role_unavailable";
+                case CapabilitiesUnavailable:
+                    return "workspace.decision_graph.palette_capability_unavailable";
+                case PortWiringRequired:
+                    return "workspace.decision_graph.palette_ports_required";
+                case UnsupportedProperties:
+                    return "workspace.decision_graph.palette_properties_unavailable";
+                case ImplementationUnavailable:
+                    return "workspace.decision_graph.palette_implementation_unavailable";
+            }
+            return "workspace.decision_graph.palette_implementation_unavailable";
+        }
+
+        /** @brief Checks the capacity and wiring offered by the active authoring entry point. */
+        const char *TaskPlacementDiagnostic(const DecisionTaskPaletteCatalog &catalog, const DecisionTaskChoice &choice) noexcept {
+            if (!catalog.allowQueryOutput && choice.queryOutput)
+                return "workspace.decision_graph.palette_query_requires_tree";
+            if (catalog.initialFamily && choice.queryOutput)
+                return "workspace.decision_graph.palette_query_requires_wiring";
+            if (catalog.initialFamily == AI::DecisionPlanKind::BehaviorTree && choice.version > std::numeric_limits<std::uint16_t>::max())
+                return "workspace.decision_canvas.provider_version_mismatch";
+            return nullptr;
+        }
+
+        /** @brief Reports the first incompatibility against a verified saved Blackboard schema. */
+        TaskAvailability InspectTaskSchema(const AI::BlackboardSchema *schema,
+                                           std::span<const AI::DecisionBlackboardRequirement> requirements) {
+            if (requirements.empty())
+                return {};
+            if (!schema)
+                return {"workspace.decision_graph.task_schema_unverified"};
+            const auto keys = schema->Keys();
+            for (const auto &requirement : requirements) {
+                const auto key = std::ranges::lower_bound(keys, requirement.key, {}, &AI::BlackboardKeyDescriptor::key);
+                const auto issues = AI::InspectDecisionBlackboardBinding(requirement, key == keys.end() ? nullptr : &*key);
+                if (const auto *reason = BindingDiagnostic(issues))
+                    return {reason, true};
+            }
+            return {};
+        }
+
         /** @brief Uses exact provider and schema evidence without calling a provider or weakening final compiler validation. */
         TaskAvailability InspectPaletteTask(const DecisionTaskPaletteCatalog &catalog, const DecisionTaskChoice &choice) {
-            using enum DecisionPaletteAdmission;
-            switch (choice.admission) {
-                case Allowed:
-                    break;
-                case UnsupportedRole:
-                    return {"workspace.decision_graph.palette_role_unavailable", true};
-                case CapabilitiesUnavailable:
-                    return {"workspace.decision_graph.palette_capability_unavailable", true};
-                case PortWiringRequired:
-                    return {"workspace.decision_graph.palette_ports_required", true};
-                case UnsupportedProperties:
-                    return {"workspace.decision_graph.palette_properties_unavailable", true};
-                case ImplementationUnavailable:
-                    return {"workspace.decision_graph.palette_implementation_unavailable", true};
-            }
-            if (!catalog.allowQueryOutput && choice.queryOutput)
-                return {"workspace.decision_graph.palette_query_requires_tree", true};
+            if (const auto *reason = TaskAdmissionDiagnostic(choice.admission))
+                return {reason, true};
+            if (const auto *reason = TaskPlacementDiagnostic(catalog, choice))
+                return {reason, true};
             if (!catalog.providers)
                 return {"workspace.decision_canvas.provider_catalog_unavailable"};
             const auto descriptors = catalog.providers->Descriptors();
@@ -190,18 +226,7 @@ namespace Horo::Editor {
                 return {"workspace.decision_canvas.provider_missing", true};
             if (descriptor->origin.version != choice.version)
                 return {"workspace.decision_canvas.provider_version_mismatch", true};
-            if (descriptor->requirements.empty())
-                return {};
-            if (!catalog.schema)
-                return {"workspace.decision_graph.task_schema_unverified"};
-            const auto keys = catalog.schema->Keys();
-            for (const auto &requirement : descriptor->requirements) {
-                const auto key = std::ranges::lower_bound(keys, requirement.key, {}, &AI::BlackboardKeyDescriptor::key);
-                const auto issues = AI::InspectDecisionBlackboardBinding(requirement, key == keys.end() ? nullptr : &*key);
-                if (const auto *reason = BindingDiagnostic(issues))
-                    return {reason, true};
-            }
-            return {};
+            return InspectTaskSchema(catalog.schema, descriptor->requirements);
         }
 
         /** @brief Resolves a persisted node identity against the authored family currently shown by the canvas. */
