@@ -65,11 +65,11 @@ namespace Horo::Render {
     /** @copydoc MultiviewMotionParameterBytes */
     Result<std::size_t> MultiviewMotionParameterBytes(const MaterialBindingLayout &layout, const std::size_t viewCount) {
         using namespace MultiviewShaderParameterIds;
-        if (viewCount == 0 || layout.resources.size() != 1 || layout.parameters.size() != 2)
+        if (viewCount == 0 || layout.parameters.size() != 2)
             return Result<std::size_t>::Failure(MakeError(MultiviewExtractionErrors::InvalidInput));
-        const auto &buffer = layout.resources.front();
-        if (!buffer.active || buffer.id != Buffer || buffer.kind != ShaderResourceKind::UniformBuffer ||
-            buffer.access != ShaderResourceAccess::ReadOnly || buffer.arrayCount != 1 ||
+        const auto buffer = std::ranges::find(layout.resources, Buffer, &ShaderReflectedBinding::id);
+        if (buffer == layout.resources.end() || !buffer->active || buffer->kind != ShaderResourceKind::UniformBuffer ||
+            buffer->access != ShaderResourceAccess::ReadOnly || buffer->arrayCount != 1 ||
             !MotionField(layout, CurrentLocalToClip, viewCount) || !MotionField(layout, PreviousLocalToClip, viewCount))
             return Result<std::size_t>::Failure(MakeError(MultiviewExtractionErrors::InvalidInput));
         return ComputeMaterialParameterBufferByteSize(layout, Buffer);

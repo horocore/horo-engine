@@ -35,6 +35,9 @@ namespace Horo::Render::Detail {
             VkImageView depthArray{};
             VkImage colorImage{};
             VkImage depthImage{};
+            VkImageView predecessorView{};
+            VkImage predecessorImage{};
+            const VulkanGraphResourceState *predecessorState{};
             RenderTextureDescriptor colorDescriptor;
             RenderTextureDescriptor depthDescriptor;
             MultiviewRenderRectangle rectangle;
@@ -71,6 +74,9 @@ namespace Horo::Render::Detail {
                                                                RenderTextureAspect) const;
         [[nodiscard]] Result<void> PrepareTargets(const RenderGraphExecutionRequest &, const RenderGraphMultiview &,
                                                   std::span<const VulkanGraphResource>, const VulkanResourceRuntime &);
+        /** @brief Resolves the retained exact sampled layer of an initialized stereo D32 allocation. */
+        [[nodiscard]] Result<void> PrepareCoverageTarget(const RenderGraphExecutionRequest &, const MultiviewGraphTarget &,
+                                                         std::span<const VulkanGraphResource>, const VulkanResourceRuntime &, Target &);
         /** @brief Captures the actual mesh and validates its exact graph buffer dependencies and immutable ranges. */
         [[nodiscard]] Result<VulkanMaterialMesh> DrawMesh(const RenderGraphExecutionRequest &, const MultiviewGraphGeometry &,
                                                           RenderMeshHandle, std::span<const VulkanGraphResource>,

@@ -209,11 +209,14 @@ TEST_CASE("Motion shader cooking requires signed XYZ transport and both exact pr
 
 TEST_CASE("XR coverage cook admits only the exact predecessor sampled depth and scalar output", "[renderer][shader-cook][xr]") {
     auto evidence = MultiviewMotionEvidence();
+    evidence[0].entryPoint = "VSCoverage";
+    ReplaceEvidence(evidence[0].json, "\"VSMain\"", "\"VSCoverage\"");
+    ReplaceEvidence(evidence[0].json, R"("location":1}])", R"("location":1},{"name":"eye","type":"uint","location":2}])");
     evidence[1].entryPoint = "PSCoverage";
     evidence[1].json = R"({"entryPoints":[{"name":"PSCoverage","mode":"frag"}],
-      "inputs":[{"name":"currentClip","type":"vec4","location":0},{"name":"previousClip","type":"vec4","location":1}],
+      "inputs":[{"name":"currentClip","type":"vec4","location":0},{"name":"previousClip","type":"vec4","location":1},{"name":"eye","type":"uint","location":2}],
       "outputs":[{"name":"coverage","type":"float","location":0}],
-      "separate_images":[{"name":"PreviousEyeDepth","type":"texture2D","set":0,"binding":1}]})";
+      "separate_images":[{"name":"PreviousLeftDepth","type":"texture2D","set":0,"binding":1},{"name":"PreviousRightDepth","type":"texture2D","set":0,"binding":2}]})";
     const auto manifest = EditorVulkanMultiviewCoverageShaderManifest();
     const auto names = EditorVulkanMultiviewCoverageReflectionNames();
     const auto target = EditorVulkanViewportShaderTarget();
@@ -230,12 +233,12 @@ TEST_CASE("XR coverage cook admits only the exact predecessor sampled depth and 
     };
     const auto variant = GENERATE(Evidence::Exact, Evidence::DepthOptimizedOut, Evidence::ForeignOutput, Evidence::ForeignStage);
     if (variant == Evidence::DepthOptimizedOut)
-        ReplaceEvidence(evidence[1].json, R"([{"name":"PreviousEyeDepth","type":"texture2D","set":0,"binding":1}])", "[]");
+        ReplaceEvidence(evidence[1].json, R"(,{"name":"PreviousRightDepth","type":"texture2D","set":0,"binding":2})", "");
     if (variant == Evidence::ForeignOutput)
         ReplaceEvidence(evidence[1].json, R"("coverage","type":"float")", R"("coverage","type":"vec4")");
     const auto reflected = NormalizeVulkanReflection(manifest, target, evidence, names);
     REQUIRE(reflected.HasValue());
-    const std::array stages{ShaderArtifactStage{ShaderStage::Vertex, "VSMain", {1}},
+    const std::array stages{ShaderArtifactStage{ShaderStage::Vertex, "VSCoverage", {1}},
                             ShaderArtifactStage{ShaderStage::Fragment, variant == Evidence::ForeignStage ? "PSMain" : "PSCoverage", {2}}};
     const auto payload = PackageShaderArtifactStages(target.backend, target.payloadFormat, stages, 1024);
     REQUIRE(payload.HasValue());

@@ -54,6 +54,12 @@ namespace Horo::Render::Detail {
                         resolved.HasError())
                         return resolved;
                 }
+                if (target.predecessorDepth.IsValid()) {
+                    if (auto resolved = Resolve(target.predecessorDepthView, RenderResourceClass::TextureView, output.views,
+                                                output.viewCount, registry);
+                        resolved.HasError())
+                        return resolved;
+                }
             }
             return Result<void>::Success();
         }

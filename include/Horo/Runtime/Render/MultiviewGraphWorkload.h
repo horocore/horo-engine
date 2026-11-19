@@ -32,7 +32,10 @@ namespace Horo::Render {
         RenderTextureViewHandle depthView; /**< Exact prepared single-layer view when depth is present. */
         MultiviewRenderRectangle rectangle;
         std::uint32_t arrayLayer{};
-        std::uint32_t depthArrayLayer{}; /**< Depth mapping is independent of color; instanced routing requires agreement. */
+        std::uint32_t depthArrayLayer{};              /**< Depth mapping is independent of color; instanced routing requires agreement. */
+        RenderGraphResourceId predecessorDepth;       /**< Coverage-only exact read resource. */
+        RenderTextureViewHandle predecessorDepthView; /**< Coverage-only retained single-eye D32 depth view. */
+        std::uint32_t predecessorDepthLayer{};        /**< Exact source array layer sampled by the preceding view. */
     };
 
     /** @brief One visible canonical instance's ready resident mesh/material and exact graph buffer dependencies. */
@@ -59,7 +62,8 @@ namespace Horo::Render {
     /** @brief Explicit color/depth layout and reflected shader contract for a multiview pass. */
     enum class MultiviewOutput : std::uint8_t {
         ProjectionColor,
-        MotionDepth, /**< Separate multipass signed XYZ motion and matching hardware forward depth. */
+        MotionDepth,          /**< Separate multipass signed XYZ motion and matching hardware forward depth. */
+        ReprojectionCoverage, /**< Stereo multipass depth consistency into a renderer-owned R32Float attachment. */
         Count
     };
 
@@ -71,7 +75,7 @@ namespace Horo::Render {
     struct RenderGraphMultiview final {
         static constexpr std::size_t MaximumPassesPerFrame = static_cast<std::size_t>(MultiviewOutput::Count); /**< One per output. */
         static constexpr std::size_t MaximumMeshInstances = MultiviewExtractionLimits::HardMaximumInstances * MaximumPassesPerFrame;
-        static constexpr std::size_t MaximumAttachmentViews = MultiviewExtractionLimits::HardMaximumViews * 2 * MaximumPassesPerFrame;
+        static constexpr std::size_t MaximumAttachmentViews = MultiviewExtractionLimits::HardMaximumViews * 2 * MaximumPassesPerFrame + 2;
 
         std::shared_ptr<const MultiviewSceneSnapshot> scene;
         MultiviewPublication active;

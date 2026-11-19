@@ -694,9 +694,14 @@ as occluded, and a farther depth rejects depth consistency. The R32Float
 attachment records distinct per-fragment observations, with zero reserved
 for an unwritten pixel. Agreement within the small device-depth comparison
 tolerance establishes depth consistency only. The owning graph still needs
-to bind the exact retained predecessor view, verify current visible coverage
-and retire completed GPU evidence for the requested frame before any
-compositor reprojection is admitted.
+to verify current visible coverage and retire completed GPU evidence for
+the requested frame before any compositor reprojection is admitted. A
+stereo coverage graph pass requires a separate R32Float color and D32 depth
+target, the same visible scene and eye transforms as its color projection,
+and the initialized predecessor depth as a declared graphics sampled read.
+Two ordered static sampled descriptors name the exact predecessor eye views.
+The Vulkan recorder checks their native image, state and array-layer identity,
+and the graph completion lease retains those views with the submitted work.
 
 See the [Khronos space-warp layer contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrCompositionLayerSpaceWarpInfoFB.html)
 for the distinction between runtime motion inputs and internal Renderer UV history.

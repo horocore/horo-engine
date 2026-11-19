@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Render/MaterialBinding.h"
 #include "Horo/Runtime/Render/MultiviewExtractionErrors.h"
+#include "Horo/Runtime/Render/MultiviewShaderParameters.h"
 #include "VulkanMultiviewRuntime.h"
 #include "VulkanRenderBackendErrors.h"
 #include "VulkanShaderRuntime.h"
@@ -101,7 +102,34 @@ namespace Horo::Render::Detail {
                 target.depthDescriptor = depth->textureDescriptor;
                 target.depthLayer = input.depthArrayLayer;
             }
+            if (workload.output == MultiviewOutput::ReprojectionCoverage) {
+                if (const auto retained = PrepareCoverageTarget(request, input, resources, registry, target); retained.HasError())
+                    return retained;
+            }
         }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc VulkanMultiviewRecorder::PrepareCoverageTarget */
+    Result<void> VulkanMultiviewRecorder::PrepareCoverageTarget(const RenderGraphExecutionRequest &request,
+                                                                const MultiviewGraphTarget &input,
+                                                                const std::span<const VulkanGraphResource> resources,
+                                                                const VulkanResourceRuntime &registry, Target &target) {
+        using enum RenderTextureFormat;
+        using enum RenderTextureUsage;
+        const auto *prior = Resource(request, resources, input.predecessorDepth);
+        if (target.colorDescriptor.format != R32Float || !HasTextureUsage(target.colorDescriptor.usage, Sampled | RenderAttachment) ||
+            !target.depth || target.depthDescriptor.format != Depth32Float || !prior || prior->kind != RenderGraphResourceKind::Texture ||
+            prior->textureDescriptor.format != Depth32Float || prior->textureDescriptor.layerCount != 2 ||
+            prior->textureDescriptor.sampleCount != 1 || !HasTextureUsage(prior->textureDescriptor.usage, Sampled | RenderAttachment))
+            return Unsupported("Reprojection coverage requires R32 float output and sampled, single-sample stereo D32 history.");
+        const auto view =
+            Attachment(request, registry, *prior, input.predecessorDepthView, input.predecessorDepthLayer, RenderTextureAspect::Depth);
+        if (view.HasError())
+            return Result<void>::Failure(view.ErrorValue());
+        target.predecessorView = view.Value().view;
+        target.predecessorImage = prior->image;
+        target.predecessorState = prior->state;
         return Result<void>::Success();
     }
 
@@ -166,7 +194,7 @@ namespace Horo::Render::Detail {
                 mode_ == MultiviewExecutionMode::Instanced ? RenderViewRouting::VertexLayer : RenderViewRouting::SingleView;
             draw.state.viewRouting != required || draw.state.sampleCount != 1)
             return Unsupported("Cooked shader routing or samples differ from the admitted multiview execution mode.");
-        if (output == MultiviewOutput::MotionDepth &&
+        if (output != MultiviewOutput::ProjectionColor &&
             (draw.state.blend != RenderBlendMode::Disabled || !draw.state.depthTest || !draw.state.depthWrite ||
              draw.state.depthCompare != RenderCompareFunction::LessEqual || draw.state.depthOnly))
             return Unsupported("Motion requires unblended coverage and matching forward hardware depth.");
@@ -175,6 +203,14 @@ namespace Horo::Render::Detail {
             const auto depth = target.depth ? std::optional{target.depthDescriptor.format} : std::nullopt;
             if (draw.state.colorFormat != target.colorDescriptor.format || draw.state.depthFormat != depth)
                 return Invalid<void>("Cooked native pipeline attachment formats differ from the exact XR target tuple.");
+            if (output == MultiviewOutput::ReprojectionCoverage) {
+                const auto binding = MultiviewShaderParameterIds::PreviousEyeDepthBindings[view];
+                const auto sampled = std::ranges::find(material->resources, binding, &VulkanMaterialResource::binding);
+                if (sampled == material->resources.end() || !sampled->backing || !target.predecessorState ||
+                    sampled->view != target.predecessorView || sampled->image != target.predecessorImage ||
+                    sampled->state != target.predecessorState)
+                    return Invalid<void>("Coverage descriptor differs from the exact retained predecessor eye generation.");
+            }
         }
         return Result<void>::Success();
     }

@@ -346,11 +346,23 @@ namespace Horo::Render {
             for (const auto &target : color.targets) {
                 if (std::ranges::any_of(motion.targets, [&](const auto &auxiliary) {
                     return target.color == auxiliary.color || target.color == auxiliary.depth ||
-                           (target.depth.IsValid() && (target.depth == auxiliary.color || target.depth == auxiliary.depth));
+                           (target.depth.IsValid() && (target.depth == auxiliary.color || target.depth == auxiliary.depth)) ||
+                           (auxiliary.predecessorDepth.IsValid() &&
+                            (target.color == auxiliary.predecessorDepth || target.depth == auxiliary.predecessorDepth));
                 }))
                     return false;
             }
             return true;
+        }
+
+        /** @brief Requires the coverage replay to use the projection's exact visible geometry, without its material. */
+        bool SameCoverageGeometry(const RenderGraphMultiview &projection, const RenderGraphMultiview &coverage) {
+            const auto equivalent = [&](const auto &a, const auto &b) {
+                const auto &first = projection.scene->Instances()[a.instanceIndex];
+                const auto &second = coverage.scene->Instances()[b.instanceIndex];
+                return a.visibleViews == b.visibleViews && first.mesh == second.mesh && first.localToWorld == second.localToWorld;
+            };
+            return std::ranges::equal(projection.scene->Draws(), coverage.scene->Draws(), equivalent);
         }
 
         Result<void> ValidateTypedWorkloads(const RenderGraphExecutionRequest &request) {
@@ -375,9 +387,14 @@ namespace Horo::Render {
             }
             const auto *color = multiview[static_cast<std::size_t>(MultiviewOutput::ProjectionColor)];
             const auto *motion = multiview[static_cast<std::size_t>(MultiviewOutput::MotionDepth)];
+            const auto *coverage = multiview[static_cast<std::size_t>(MultiviewOutput::ReprojectionCoverage)];
             if (color && motion && (!SameMultiviewProjection(*color, *motion) || !DisjointMultiviewTargets(*color, *motion)))
                 return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph,
                                                        "Paired multiview outputs require the same exact views and disjoint attachments."));
+            if (coverage && (!color || !SameMultiviewProjection(*color, *coverage) || !SameCoverageGeometry(*color, *coverage) ||
+                             !DisjointMultiviewTargets(*color, *coverage) || (motion && !DisjointMultiviewTargets(*motion, *coverage))))
+                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph,
+                                                       "Coverage requires the exact current projection geometry and disjoint outputs."));
             return Result<void>::Success();
         }
 

@@ -109,7 +109,7 @@ namespace Horo::Editor {
 
     /** @brief Returns the per-eye coverage recipe sharing the exact current and predecessor clip transforms. */
     [[nodiscard]] Render::ShaderManifest EditorVulkanMultiviewCoverageShaderManifest();
-    /** @brief Names the transform block and unfiltered previous single-eye depth image. */
+    /** @brief Names the transform block and both unfiltered predecessor eye depth images. */
     [[nodiscard]] std::vector<Render::ShaderReflectionBindingName> EditorVulkanMultiviewCoverageReflectionNames();
     /** @brief Checks the exact compiled coverage stages, sampled depth binding and scalar float color output.
      * @param payload Same-operation SPIR-V package. @param metadata Exact reflected sidecar bytes.

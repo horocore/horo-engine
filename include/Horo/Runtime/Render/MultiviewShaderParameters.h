@@ -5,11 +5,14 @@
 #include "Horo/Runtime/Render/MaterialBinding.h"
 #include "Horo/Runtime/Render/MultiviewMotionHistory.h"
 
+#include <array>
+
 namespace Horo::Render {
 
     /** @brief Canonical logical IDs for the shipped runtime multiview mesh shader. */
     namespace MultiviewShaderParameterIds {
         inline constexpr ShaderBindingId Buffer{1};
+        inline constexpr std::array PreviousEyeDepthBindings{ShaderBindingId{2}, ShaderBindingId{3}};
         inline constexpr ShaderParameterId WorldToClip{1};
         inline constexpr ShaderParameterId LocalToWorld{2};
         inline constexpr ShaderParameterId ViewLayers{3};
@@ -36,7 +39,7 @@ namespace Horo::Render {
      * @return Required uniform bytes including tail alignment, or typed invalid/unsupported/capacity failure. */
     [[nodiscard]] Result<std::size_t> MultiviewShaderParameterBytes(const MaterialBindingLayout &layout, std::size_t viewCount);
 
-    /** @brief Checks reflected layout of the distinct multipass motion program.
+    /** @brief Checks the distinct multipass motion or stereo coverage program's uniform block.
      * @param layout Exact program layout. @param viewCount Active ordered view count.
      * @return Required bytes or typed invalid/unsupported layout.
      */

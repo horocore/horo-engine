@@ -7,10 +7,6 @@
 #include "Horo/Runtime/Render/ShaderReflectionErrors.h"
 
 namespace Horo::Editor {
-    namespace {
-        constexpr Render::ShaderBindingId PreviousEyeDepthBinding{2};
-    }
-
     /** @copydoc EditorVulkanViewportShaderTarget */
     Render::ShaderTargetRequirement EditorVulkanViewportShaderTarget() {
         return {.backend = Render::ShaderTargetBackend::Vulkan,
@@ -323,8 +319,7 @@ namespace Horo::Editor {
         /** @brief Validates the shared multipass vertex/clip ABI and the selected float output width. */
         Result<EditorVulkanMultiviewCook> LoadMultiviewMotionProgram(const Render::ShaderManifest &manifest,
                                                                      const std::span<const std::uint8_t> payload,
-                                                                     const std::span<const std::uint8_t> metadata,
-                                                                     const std::uint32_t outputColumns) {
+                                                                     const std::span<const std::uint8_t> metadata, const bool coverage) {
             using namespace Render;
             using Outcome = Result<EditorVulkanMultiviewCook>;
             auto reflected = DecodeReflectedShaderArtifact(manifest, EditorVulkanViewportShaderTarget(), payload, metadata);
@@ -332,29 +327,27 @@ namespace Horo::Editor {
                 return Outcome::Failure(reflected.ErrorValue());
             const auto &reflection = reflected.Value().reflection;
             const auto matches = [&reflection](const ShaderStage stage, const ShaderInterfaceDirection direction,
-                                               const std::uint32_t location, const std::uint32_t columns) {
+                                               const std::uint32_t location, const std::uint32_t columns,
+                                               const ShaderValueType type = ShaderValueType::Float32) {
                 const auto found = std::ranges::find_if(reflection.stageInterface, [=](const auto &attribute) {
                     return attribute.stage == stage && attribute.direction == direction && attribute.location == location;
                 });
-                return found != reflection.stageInterface.end() && found->type == ShaderValueType::Float32 && found->rows == 1 &&
-                       found->columns == columns && found->arrayCount == 1;
+                return found != reflection.stageInterface.end() && found->type == type && found->rows == 1 && found->columns == columns &&
+                       found->arrayCount == 1;
             };
             using enum ShaderInterfaceDirection;
-            if (reflection.stageInterface.size() != 6 || !matches(ShaderStage::Vertex, Input, 0, 3) ||
+            if (reflection.stageInterface.size() != (coverage ? 8 : 6) || !matches(ShaderStage::Vertex, Input, 0, 3) ||
                 !matches(ShaderStage::Vertex, Output, 0, 4) || !matches(ShaderStage::Vertex, Output, 1, 4) ||
                 !matches(ShaderStage::Fragment, Input, 0, 4) || !matches(ShaderStage::Fragment, Input, 1, 4) ||
-                !matches(ShaderStage::Fragment, Output, 0, outputColumns))
+                !matches(ShaderStage::Fragment, Output, 0, coverage ? 1 : 4))
                 return Outcome::Failure(MakeError(ShaderReflectionErrors::StageInterfaceMismatch));
-            auto prepared = PrepareMaterialBindingLayout(reflection);
-            if (prepared.HasError())
-                return Outcome::Failure(prepared.ErrorValue());
-            auto layout = std::move(prepared).Value();
-            // The shared motion packer owns only the matrix block. Coverage's depth
-            // binding is validated independently and remains in the returned reflection.
-            std::erase_if(layout.resources, [](const auto &entry) {
-                return entry.id == PreviousEyeDepthBinding;
-            });
-            const auto bytes = MultiviewMotionParameterBytes(layout, MultiviewExtractionLimits::HardMaximumViews);
+            if (coverage && (!matches(ShaderStage::Vertex, Output, 2, 1, ShaderValueType::Uint32) ||
+                             !matches(ShaderStage::Fragment, Input, 2, 1, ShaderValueType::Uint32)))
+                return Outcome::Failure(MakeError(ShaderReflectionErrors::StageInterfaceMismatch));
+            const auto layout = PrepareMaterialBindingLayout(reflection);
+            if (layout.HasError())
+                return Outcome::Failure(layout.ErrorValue());
+            const auto bytes = MultiviewMotionParameterBytes(layout.Value(), MultiviewExtractionLimits::HardMaximumViews);
             if (bytes.HasError())
                 return Outcome::Failure(bytes.ErrorValue());
             constexpr auto blockBytes = MultiviewExtractionLimits::HardMaximumViews * 2 * sizeof(Math::Mat4);
@@ -367,23 +360,27 @@ namespace Horo::Editor {
     /** @copydoc LoadEditorVulkanMultiviewMotionCook */
     Result<EditorVulkanMultiviewCook> LoadEditorVulkanMultiviewMotionCook(const std::span<const std::uint8_t> payload,
                                                                           const std::span<const std::uint8_t> metadata) {
-        return LoadMultiviewMotionProgram(EditorVulkanMultiviewMotionShaderManifest(), payload, metadata, 4);
+        return LoadMultiviewMotionProgram(EditorVulkanMultiviewMotionShaderManifest(), payload, metadata, false);
     }
 
     /** @copydoc EditorVulkanMultiviewCoverageShaderManifest */
     Render::ShaderManifest EditorVulkanMultiviewCoverageShaderManifest() {
         using namespace Render;
         auto manifest = EditorVulkanMultiviewMotionShaderManifest();
+        manifest.entryPoints.front().name = "VSCoverage";
         manifest.entryPoints.back().name = "PSCoverage";
-        manifest.bindings.push_back({PreviousEyeDepthBinding, ShaderResourceKind::SampledTexture, ShaderResourceAccess::ReadOnly, 1,
-                                     ShaderStageVisibility::Fragment});
+        for (const auto binding : MultiviewShaderParameterIds::PreviousEyeDepthBindings)
+            manifest.bindings.push_back(
+                {binding, ShaderResourceKind::SampledTexture, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment});
         return manifest;
     }
 
     /** @copydoc EditorVulkanMultiviewCoverageReflectionNames */
     std::vector<Render::ShaderReflectionBindingName> EditorVulkanMultiviewCoverageReflectionNames() {
         auto names = EditorVulkanMultiviewMotionReflectionNames();
-        names.push_back({PreviousEyeDepthBinding, "PreviousEyeDepth", {}});
+        const auto &bindings = Render::MultiviewShaderParameterIds::PreviousEyeDepthBindings;
+        names.push_back({bindings[0], "PreviousLeftDepth", {}});
+        names.push_back({bindings[1], "PreviousRightDepth", {}});
         return names;
     }
 
@@ -395,13 +392,15 @@ namespace Horo::Editor {
         const auto manifest = EditorVulkanMultiviewCoverageShaderManifest();
         if (const auto stages = ValidateViewportStageEntries(manifest, EditorVulkanViewportShaderTarget(), payload); stages.HasError())
             return Outcome::Failure(stages.ErrorValue());
-        auto cook = LoadMultiviewMotionProgram(manifest, payload, metadata, 1);
+        auto cook = LoadMultiviewMotionProgram(manifest, payload, metadata, true);
         if (cook.HasError())
             return cook;
         const auto &bindings = cook.Value().metadata.reflection.bindings;
-        const auto depth = std::ranges::find(bindings, PreviousEyeDepthBinding, &ShaderReflectedBinding::id);
-        if (depth == bindings.end() || !depth->active || depth->stages != ShaderStageVisibility::Fragment)
-            return Outcome::Failure(MakeError(ShaderReflectionErrors::LayoutMismatch));
+        for (const auto binding : MultiviewShaderParameterIds::PreviousEyeDepthBindings) {
+            const auto depth = std::ranges::find(bindings, binding, &ShaderReflectedBinding::id);
+            if (depth == bindings.end() || !depth->active || depth->stages != ShaderStageVisibility::Fragment)
+                return Outcome::Failure(MakeError(ShaderReflectionErrors::LayoutMismatch));
+        }
         return cook;
     }
 }  // namespace Horo::Editor

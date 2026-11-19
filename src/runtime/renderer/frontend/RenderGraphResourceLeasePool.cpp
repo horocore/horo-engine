@@ -303,6 +303,12 @@ namespace Horo::Render::Detail {
                     pin.HasError())
                     return pin;
             }
+            if (target.predecessorDepth.IsValid()) {
+                const auto depth = target.predecessorDepthView;
+                if (const auto pin = PinIdentity({RenderResourceClass::TextureView, {depth.owner, depth.slot, depth.generation}});
+                    pin.HasError())
+                    return pin;
+            }
         }
         return Result<void>::Success();
     }
