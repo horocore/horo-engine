@@ -146,6 +146,8 @@ namespace Horo::Application::Internal {
             if (input.perceptionExecution && (!input.perceptionPositions || !input.perceptionExecution->generation))
                 return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid,
                                                        "Native Perception requires a selected producer and Scene positions."));
+            if (input.publicTransforms && (!gameplay || !gameplay->enabled))
+                return Result<void>::Failure(MakeError(Network::NetworkErrors::ReplicationDescriptorIncompatible));
             const auto &decisions = input.cookedDecisions;
             if (decisions && decisions->provider == HeadlessDecisionProvider::SelectedNativeGameplay &&
                 (!decisions->execution || decisions->environment.nodes || !gameplay || !gameplay->enabled ||
@@ -229,7 +231,8 @@ namespace Horo::Application::Internal {
                                               [owners](std::uint32_t maximumRecords) {
             return owners->PollRetirement(maximumRecords);
         }};
-        if (owners->configured->animationIdentities || (owners->gameplay && owners->gameplay->vfxScene)) {
+        if (owners->configured->animationIdentities || owners->configured->publicTransforms ||
+            (owners->gameplay && owners->gameplay->vfxScene)) {
             if (owners->configured->animationIdentities && !owners->configured->animationTarget.IsValid())
                 return Result<NetworkProductComposition>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
             composition.fixedParticipant = [owners](Runtime::RuntimeDispatchSource source) {
@@ -248,6 +251,13 @@ namespace Horo::Application::Internal {
     const Runtime::SceneAnimationRuntime *InspectHeadlessAnimation(const Network::INetworkModeService &service) noexcept {
         const auto *world = dynamic_cast<const WorldService *>(&service);
         return world ? world->AnimationOwner() : nullptr;
+    }
+
+    /** @copydoc AcquireHeadlessPublicTransforms */
+    std::shared_ptr<const Network::SceneReplicationCommitSource> AcquireHeadlessPublicTransforms(
+        const Network::INetworkModeService &service) noexcept {
+        const auto *world = dynamic_cast<const WorldService *>(&service);
+        return world ? world->PublicTransforms() : nullptr;
     }
 
     /** @copydoc InspectHeadlessPerception */

@@ -196,8 +196,14 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         }
 
         void CommitGameplay(const Runtime::FixedStepContext &context) noexcept {
-            for (std::size_t index = 0; index < gameplayCount_; ++index)
-                gameplay_[index]->activeGameplay->CommitFixedUpdate(context);
+            for (std::size_t index = 0; index < gameplayCount_; ++index) {
+                const auto &record = gameplay_[index];
+                record->activeGameplay->CommitFixedUpdate(context);
+                if (record->publicTransforms && !record->sceneCancellation.IsCancellationRequested()) {
+                    if (const auto scene = record->scenes->ActiveScene())
+                        static_cast<void>(record->publicTransforms->ObserveCommittedTick(*scene, context.dispatchEvidence));
+                }
+            }
         }
 
         void AbortGameplay(const Runtime::FixedStepContext &context) noexcept {

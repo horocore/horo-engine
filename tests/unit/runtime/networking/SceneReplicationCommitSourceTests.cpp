@@ -1,4 +1,5 @@
 #include "AllocationProbe.h"
+#include "Horo/Runtime/RuntimeHost.h"
 #include "ReplicationCaptureTestSupport.h"
 
 namespace Horo::Network {
@@ -49,7 +50,129 @@ namespace Horo::Network {
                 return capture->Latest(Object().object).Value();
             }
         };
+
+        /** @brief Drives fixed attempts directly through the Runtime clock interface. */
+        class CaptureClock final : public Clock {
+        public:
+            [[nodiscard]] Duration MonotonicNow() const override {
+                return now;
+            }
+
+            Duration now;
+        };
+
+        /** @brief Uses the real runtime callbacks to distinguish attempted Scene writes from committed evidence. */
+        class ObservedScene final : public Runtime::RuntimeLifecycleParticipant {
+        public:
+            ObservedScene(SceneFixture &fixture, std::shared_ptr<SceneReplicationCommitSource> source)
+                : fixture_(fixture), source_(std::move(source)) {}
+
+            Result<void> Startup(const CancellationToken &) override {
+                return Result<void>::Success();
+            }
+
+            Result<void> OnPhase(Runtime::RuntimePhase, const Runtime::FrameContext &) override {
+                return Result<void>::Success();
+            }
+
+            Result<void> OnFixedUpdate(const Runtime::FixedStepContext &context) override {
+                evidence = context.dispatchEvidence;
+                premature = source_->ObserveCommittedTick(fixture_.scene->View(), evidence);
+                if (reject)
+                    return Result<void>::Failure(MakeError(ReplicationCaptureErrors::Uncommitted));
+                Runtime::SceneCommandBuffer commands;
+                Math::Transform transform;
+                transform.translation = {3, 4, 5};
+                commands.SetLocalTransform(fixture_.entity, transform);
+                const auto committed = fixture_.scene->Commit(commands);
+                return committed.HasError() ? Result<void>::Failure(committed.ErrorValue()) : Result<void>::Success();
+            }
+
+            void CommitFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+                observed = source_->ObserveCommittedTick(fixture_.scene->View(), context.dispatchEvidence);
+                repeated = source_->ObserveCommittedTick(fixture_.scene->View(), context.dispatchEvidence);
+            }
+
+            void Shutdown() noexcept override {}
+
+            Runtime::RuntimeDispatchEvidence evidence;
+            bool reject{}, premature{}, observed{}, repeated{};
+
+        private:
+            SceneFixture &fixture_;
+            std::shared_ptr<SceneReplicationCommitSource> source_;
+        };
     }  // namespace
+
+    TEST_CASE("Application-owned Scene capture accepts only the real committed fixed callback and exact mapped schema",
+              "[network][capture][scene]") {
+        SceneFixture fixture;
+
+        struct SceneScope final {
+            std::shared_ptr<const Runtime::RuntimeScene> scene;
+        };
+
+        auto owner = std::make_shared<SceneScope>(SceneScope{fixture.scene});
+        const std::weak_ptr<const SceneScope> lifetime = owner;
+        CaptureClock clock;
+        auto runtime = Runtime::RuntimeHost::Create(clock, {.fixedStep = Duration::FromMilliseconds(10)}).Value();
+        const auto mapping = Object();
+        using enum SceneReplicationProperty;
+        const std::array fields{SceneReplicationFieldBinding{FieldIdValue(1), TranslationX},
+                                SceneReplicationFieldBinding{FieldIdValue(2), TranslationY},
+                                SceneReplicationFieldBinding{FieldIdValue(3), TranslationZ}};
+        auto source =
+            SceneReplicationCommitSource::CreateObserved(fixture.scene->View().RuntimeId(), runtime->DispatchSource(),
+                                                         mapping.provenance.schema, mapping.provenance.schemaVersion, fields, owner);
+        REQUIRE(source.HasValue());
+        CHECK(source.Value()->CommitSimulationTick({}, 1).HasError());
+        const std::array targets{ReplicationCaptureTarget{mapping, source.Value()}};
+        auto capture = ReplicationStateCapture::Prepare(Read(fixture.lifecycle), fixture.registry, targets).Value();
+        auto observer = std::make_unique<ObservedScene>(fixture, source.Value());
+        auto &state = *observer;
+        REQUIRE(runtime->AddParticipant(std::move(observer)).HasValue());
+        REQUIRE(runtime->Startup().HasValue());
+        REQUIRE(runtime->RunFrame().HasValue());
+        CHECK(source.Value()->BeginRead(mapping, 1).HasError());
+        SECTION("failed fixed work remains entirely unpublished") {
+            state.reject = true;
+            clock.now = Duration::FromMilliseconds(10);
+            REQUIRE(runtime->RunFrame().HasError());
+            CHECK_FALSE(state.premature);
+            CHECK_FALSE(state.observed);
+            CHECK(source.Value()->CaptureAfterCommit(fixture.lifecycle, *capture, Runtime::RuntimePhase::NetworkFlush).HasError());
+        }
+        SECTION("complete post-commit capture reads only the configured public transform") {
+            clock.now = Duration::FromMilliseconds(10);
+            REQUIRE(runtime->RunFrame().HasValue());
+            CHECK_FALSE(state.premature);
+            CHECK(state.observed);
+            CHECK_FALSE(state.repeated);
+            CHECK_FALSE(source.Value()->ObserveCommittedTick(fixture.scene->View(), state.evidence));
+            auto mismatched = mapping;
+            ++mismatched.provenance.schemaVersion.minor;
+            CHECK(source.Value()->BeginRead(mismatched, 1).HasError());
+            REQUIRE(
+                source.Value()->CaptureAfterCommit(fixture.lifecycle, *capture, Runtime::RuntimePhase::NetworkFlush).Value().published ==
+                1);
+            const auto captured = capture->Latest(mapping.object).Value();
+            CHECK(captured->SimulationTick() == 1);
+            CHECK(std::get<double>(captured->Fields()[0].value) == 3.0);
+            CHECK(std::get<double>(captured->Fields()[1].value) == 4.0);
+            CHECK(std::get<double>(captured->Fields()[2].value) == 5.0);
+
+            const auto opened = source.Value()->BeginRead(mapping, 1);
+            REQUIRE(opened.HasValue());
+            owner.reset();
+            CHECK_FALSE(lifetime.expired());
+            CHECK(source.Value()->IsCurrent(opened.Value()));
+            source.Value()->EndRead(opened.Value());
+            CHECK(lifetime.expired());
+            REQUIRE(fixture.scene->View().IsCurrent());
+            CHECK(source.Value()->BeginRead(mapping, 1).HasError());
+            CHECK(source.Value()->CaptureAfterCommit(fixture.lifecycle, *capture, Runtime::RuntimePhase::NetworkFlush).HasError());
+        }
+    }
 
     TEST_CASE("Real Scene capture observes the complete committed tick and three declared scalar fields", "[network][capture][scene]") {
         SceneFixture fixture;

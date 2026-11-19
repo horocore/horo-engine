@@ -87,15 +87,21 @@ namespace Horo::Network {
         builder.Add(std::move(spawner));
         auto definition = std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(builder).Build().Value());
         HeadlessSceneLoadBoundary load{{}, std::chrono::steady_clock::now() + std::chrono::seconds{5}};
+        const auto declaration = NativePrefabDeclaration();
         HeadlessSceneActivationInput input{.mode = Physics::PhysicsRuntimeMode::Canonical,
                                            .settings = Physics::Settings(),
                                            .registry = registry,
                                            .loads = loads,
                                            .load = load,
-                                           .prefabLoads = &loads};
+                                           .prefabLoads = &loads,
+                                           .publicTransforms =
+                                               HeadlessSceneTransformReplication{declaration.schema.id,
+                                                                                 declaration.schema.version,
+                                                                                 {{declaration.schema.fields.front().id,
+                                                                                   SceneReplicationProperty::TranslationX}}}};
         Gameplay::GameplayReplicationAdmissionPolicy admission;
         admission.inventory.completeness = NetworkReplicationInventoryCompleteness::Complete;
-        admission.inventory.declarations = {NativePrefabDeclaration()};
+        admission.inventory.declarations = {declaration};
         admission.use = ReplicationDeclarationUse::ServerActivation;
         const GameplayWorldSelection selection{.moduleId = "game.tests",
                                                .nativeArtifact = HORO_TEST_GAME_MODULE_PATH,
@@ -112,8 +118,21 @@ namespace Horo::Network {
         const auto project = NetworkProjectSettings::Create(projectInput).Value();
         const auto facts = ProductFacts(project, mode, false);
         const auto owners = std::make_shared<ProductOwners>();
+        std::uint64_t fixedTick{};
+        owners->onTransportFixed = [&fixedTick](const Runtime::FixedStepContext &context) {
+            fixedTick = context.simulationTick;
+        };
         auto factories = ComposeHeadlessSceneNetworkServices(definition, input, ProductFactories(owners), selection, admission);
         REQUIRE(factories.HasValue());
+        auto composition = std::move(factories).Value();
+        const INetworkModeService *sceneOwner{};
+        auto &sceneFactory = composition.factories.services[static_cast<std::size_t>(NetworkModeServiceKind::Scene)];
+        sceneFactory = [factory = std::move(sceneFactory), &sceneOwner](const NetworkModeServiceRequest &request) {
+            auto created = factory(request);
+            if (created.HasValue())
+                sceneOwner = created.Value().get();
+            return created;
+        };
         DeterministicClock clock;
         auto host = NetworkProductHost::Create(clock,
                                                {project,
@@ -127,14 +146,19 @@ namespace Horo::Network {
                                                 {},
                                                 owners->sessions,
                                                 NetworkWorldCompositionPurpose::Gameplay,
-                                                owners->worldSetup},
-                                               std::move(factories).Value().factories)
+                                                owners->worldSetup,
+                                                composition.fixedParticipant,
+                                                composition.pollRetirement},
+                                               std::move(composition.factories))
                         .Value();
         const auto started = host->Startup();
         if (started.HasError())
             UNSCOPED_INFO(started.ErrorValue().message);
         REQUIRE(started.HasValue());
         REQUIRE(host->RunFrame().HasValue());
+        REQUIRE(sceneOwner);
+        const auto source = AcquireHeadlessPublicTransforms(*sceneOwner);
+        REQUIRE(source);
         const auto scene = worlds.front().scene;
         const auto role = host->Role(kind, scene).Value();
         const auto snapshot = [&] {
@@ -160,6 +184,12 @@ namespace Horo::Network {
         const auto spawned = awaitMappings(2);
         const auto mappings = spawned.Mapping().Entries();
         REQUIRE(mappings.size() == 2);
+        const auto spawnFrameTick = fixedTick;
+        REQUIRE(spawnFrameTick > 0);
+        // Deferred Scene publication follows fixed commitment and invalidates that frame's old Scene view.
+        const auto beforeFixed = source->BeginRead(mappings.front(), spawnFrameTick);
+        REQUIRE(beforeFixed.HasError());
+        CHECK(beforeFixed.ErrorValue().code.Value() == ReplicationCaptureErrors::Uncommitted.code.Value());
         std::vector<std::uint32_t> slots;
         for (const auto &mapping : mappings) {
             CHECK(mapping.entity.runtime == scene);
@@ -187,11 +217,33 @@ namespace Horo::Network {
         REQUIRE(reconstructed.HasValue());
         CHECK(reconstructed.Value().source.asset == prefab);
         CHECK(reconstructed.Value().source.artifactDigest == artifact);
+        std::optional<Result<ReplicationCommittedRead>> committed;
+        bool currentAtFlush{};
+        owners->onTransportFlush = [&] {
+            committed.emplace(source->BeginRead(mappings.front(), fixedTick));
+            if (committed->HasValue()) {
+                currentAtFlush = source->IsCurrent(committed->Value());
+                source->EndRead(committed->Value());
+            }
+        };
+        clock.Advance(Duration::FromNanoseconds(16'666'667));
+        const auto capturedFrame = host->RunFrame();
+        owners->onTransportFlush = {};
+        REQUIRE(capturedFrame.HasValue());
+        REQUIRE(fixedTick > spawnFrameTick);
+        REQUIRE(committed.has_value());
+        if (committed->HasError())
+            UNSCOPED_INFO(committed->ErrorValue().message);
+        REQUIRE(committed->HasValue());
+        CHECK(currentAtFlush);
+
+        const auto committedTick = fixedTick;
         CHECK(awaitMappings(0).Mapping().Entries().empty());
         CHECK(CaptureNetworkPrefabSpawn(snapshot(), decoded.occurrence).HasError());
         host->Shutdown();
         CHECK(spawned.IsRevoked());
         CHECK(CaptureNetworkPrefabSpawn(spawned, decoded.occurrence).HasError());
+        CHECK(source->BeginRead(mappings.front(), committedTick).HasError());
     }
 
     TEST_CASE("Network Prefab intent reconstructs typed inputs and authored references in the local Scene",

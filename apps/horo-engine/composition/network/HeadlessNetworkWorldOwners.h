@@ -48,6 +48,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         bool closeRequested{};
         bool closed{};
         std::unique_ptr<AI::AiSceneRuntime> ai;
+        std::shared_ptr<Network::SceneReplicationCommitSource> publicTransforms;
         std::shared_ptr<HeadlessDecisionQueries> decisionQueries; /**< Keeps task binding and phase inventory scoped to this world. */
         AI::PerceptionSpatialBroadphase perception;
         std::unique_ptr<ProjectSceneNavigationWorld> navigation;
@@ -182,6 +183,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         if (record.fixedReserved)
             return;
         record.closed = true;
+        record.publicTransforms.reset();
         if (record.animation)
             record.animation->Shutdown();
         if (record.templates)

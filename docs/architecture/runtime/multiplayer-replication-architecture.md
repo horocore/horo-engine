@@ -515,6 +515,16 @@ adapter copies values while the view is current; snapshots retain no ECS view.
 The existing NetworkRuntime-to-RuntimeScene dependency owns this composition;
 NetworkApi remains Scene-implementation neutral.
 
+The configured headless authority keeps its existing Scene transaction path.
+Its optional public transform policy names an exact installed schema and version
+and a complete set of floating-point field-to-translation bindings. The host
+admits that policy against the selected gameplay generation and creates the
+read-only Scene source with `CreateObserved`. At successful fixed commit the
+same host observes its current Scene with the scheduler's live committed
+dispatch evidence. The source borrows the Scene and pins the owner for each
+active read. A failed fixed attempt, stale Scene, or mismatched schema cannot
+offer a sample. Existing direct-Scene callers retain `CommitSimulationTick`.
+
 Pool ownership persists across latest-pin replacement, `Shutdown`, and external
 pin release. Shutdown closes admission and revokes snapshots without reclaiming
 pool or module storage on a callback/frame path. The host waits for

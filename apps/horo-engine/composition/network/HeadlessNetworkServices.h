@@ -6,6 +6,7 @@
 #include "Horo/AI/AISceneActivation.h"
 #include "Horo/Navigation/NavigationAreas.h"
 #include "Horo/Network/NetworkModeComposition.h"
+#include "Horo/Network/SceneReplicationCommitSource.h"
 #include "Horo/Prefab/PrefabLimits.h"
 #include "Horo/Runtime/Scene/RuntimeSceneDefinition.h"
 #include "Horo/Runtime/Scene/SceneAnimationRuntime.h"
@@ -59,6 +60,13 @@ namespace Horo::Application::Internal {
         }
     };
 
+    /** @brief Explicit installed schema and public Scene transform fields for authority capture. */
+    struct HeadlessSceneTransformReplication final {
+        Network::ReplicationSchemaId schema;
+        Network::ReplicationSchemaVersion version;
+        std::vector<Network::SceneReplicationFieldBinding> fields;
+    };
+
     // Installs the real gameplay-world participants shared by standalone and dedicated products.
     // Network and presentation factories remain explicit application decisions.
     [[nodiscard]] Network::NetworkModeFactories ComposeHeadlessNetworkServices(
@@ -106,6 +114,7 @@ namespace Horo::Application::Internal {
         std::shared_ptr<const CommittedWorldSelection> mountedWorld; /**< Optional exact standalone World cook selection. */
         std::vector<Network::NetworkObjectProvenance>
             replicatedSceneObjects; /**< Explicit stable object/schema bindings for this definition. */
+        std::optional<HeadlessSceneTransformReplication> publicTransforms;
     };
 
     /** @brief Composes actual project Scene services and their sole aggregate-owned Physics/Character pair.
@@ -127,6 +136,10 @@ namespace Horo::Application::Internal {
 
     /** @brief Borrow canonical Animation observation on the service owner lane; no ownership or mutation grant. */
     [[nodiscard]] const Runtime::SceneAnimationRuntime *InspectHeadlessAnimation(const Network::INetworkModeService &service) noexcept;
+    /** @brief Acquires the configured authority world's exact committed transform producer for an existing capture coordinator.
+     * @param service Retained world service facade. @return Read-only producer, absent on client/standalone/unconfigured/retired worlds. */
+    [[nodiscard]] std::shared_ptr<const Network::SceneReplicationCommitSource> AcquireHeadlessPublicTransforms(
+        const Network::INetworkModeService &service) noexcept;
     /** @brief Reads the authoritative world's last complete spatial publication on its owner lane. */
     [[nodiscard]] std::shared_ptr<const AI::PerceptionSpatialSnapshot> InspectHeadlessPerception(
         const Network::INetworkModeService &service) noexcept;

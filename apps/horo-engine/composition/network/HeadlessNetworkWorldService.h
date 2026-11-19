@@ -16,6 +16,14 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         /** @copydoc Network::INetworkModeService::CaptureAuthoredScene */
         [[nodiscard]] Result<Network::NetworkAuthoredSceneProjection> CaptureAuthoredScene() const override;
 
+        /** @copydoc AcquireHeadlessPublicTransforms */
+        std::shared_ptr<const Network::SceneReplicationCommitSource> PublicTransforms() const noexcept {
+            if (std::this_thread::get_id() != owners_->owner || !record_ || record_->closeRequested ||
+                request_.world != Network::NetworkModeWorldKind::AuthorityServer)
+                return {};
+            return record_->publicTransforms;
+        }
+
         [[nodiscard]] std::shared_ptr<const Gameplay::GameplayPhysicsContext> PhysicsContext() const noexcept {
             return gameplay_ ? gameplay_->PhysicsContext() : nullptr;
         }
@@ -615,11 +623,14 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             gameplay_ = std::move(gameplay).Value();
             record_->activeGameplay = gameplay_.get();
             record_->gameplay = gameplay_->PhysicsContext();
-            return Result<void>::Success();
+            return BindAuthoritySceneTransforms();
         }
 
         /** @brief Installs the cooked Prefab mapping adapter for this exact authority Scene only. */
         [[nodiscard]] Result<void> BindAuthorityPrefabs(GameplayWorldSelection &selected) const;
+
+        /** @brief Installs an explicitly configured public transform source after exact schema admission. */
+        [[nodiscard]] Result<void> BindAuthoritySceneTransforms() const;
 
         /** @brief Installs protected Prefab consumption on the exact client Scene, with explicit cooked asset authority. */
         [[nodiscard]] Result<void> BindReplicaPrefabs();

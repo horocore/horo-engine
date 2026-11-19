@@ -12,6 +12,28 @@ namespace Horo::Application::Internal {
         using HeadlessNetworkDetail::WorldRecord;
         using HeadlessNetworkDetail::WorldService;
 
+        /** @brief Validates the complete transform field set and its actual installed scalar serializers. */
+        bool MatchesPublicTransformFields(const HeadlessSceneTransformReplication &selection,
+                                          const Gameplay::GameplayReplicationLease &installed) {
+            const auto schema = installed.Descriptors()->Find(selection.schema);
+            if (schema.HasError() || schema.Value()->version != selection.version ||
+                schema.Value()->fields.size() != selection.fields.size())
+                return false;
+
+            std::array<bool, 3> used{};
+            if (selection.fields.empty() || selection.fields.size() > used.size())
+                return false;
+            for (const auto &field : selection.fields) {
+                const auto axis = static_cast<std::size_t>(field.property);
+                if (axis >= used.size() || std::exchange(used[axis], true))
+                    return false;
+                const auto descriptor = installed.Serializers().DescriptorFor(selection.schema, field.field);
+                if (descriptor.HasError() || descriptor.Value()->valueKind != Network::ReplicationValueKind::FloatingPoint)
+                    return false;
+            }
+            return true;
+        }
+
         /** @brief Resolves one object against the committed Scene and the admitted live schema registry. */
         Result<Network::ReplicationAuthoredSceneObject> ResolveAuthoredObject(const Runtime::RuntimeSceneView &scene,
                                                                               const Network::NetworkObjectProvenance &binding,
@@ -272,6 +294,27 @@ namespace Horo::Application::Internal {
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(MakeError(Network::NetworkErrors::ReplicationWorldCapacityExceeded));
         }
+    }
+
+    /** @copydoc HeadlessNetworkDetail::WorldService::BindAuthoritySceneTransforms */
+    Result<void> WorldService::BindAuthoritySceneTransforms() const {
+        const auto &selection = owners_->configured->publicTransforms;
+        if (!selection || request_.world != Network::NetworkModeWorldKind::AuthorityServer)
+            return Result<void>::Success();
+        const auto invalid = [] {
+            return Result<void>::Failure(MakeError(Network::NetworkErrors::ReplicationDescriptorIncompatible));
+        };
+        const auto *installed = record_->activeGameplay->Replication();
+        const auto admitted = record_->activeGameplay->AdmittedReplicationSchemas();
+        if (!owners_->fixed || !installed || std::ranges::find(admitted, selection->schema) == admitted.end() ||
+            !MatchesPublicTransformFields(*selection, *installed))
+            return invalid();
+        auto source = Network::SceneReplicationCommitSource::CreateObserved(request_.scene, owners_->fixed->Source(), selection->schema,
+                                                                            selection->version, selection->fields, record_);
+        if (source.HasError())
+            return Result<void>::Failure(std::move(source).ErrorValue());
+        record_->publicTransforms = std::move(source).Value();
+        return Result<void>::Success();
     }
 
     /** @copydoc HeadlessNetworkDetail::WorldService::CaptureAuthoredScene */
