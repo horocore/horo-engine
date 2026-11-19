@@ -41,12 +41,13 @@ namespace Horo::Application::Internal {
     };
 
     /** @brief Adds canonical capture and optional replica Scene application while retaining existing client recipient admission. */
-    class HeadlessInitialStateHost final : public Network::INetworkInitialStateHost {
+    class HeadlessInitialStateHost final : public Network::INetworkInitialStateHost, public Network::INetworkStateUpdateHost {
     public:
         /** @brief Retains exact admitted server role policy and existing client owner without invoking them. */
         HeadlessInitialStateHost(std::shared_ptr<const IHeadlessInitialStateAuthority> authority,
                                  std::shared_ptr<Network::INetworkInitialStateHost> client,
-                                 std::shared_ptr<const IHeadlessInitialReplicaAuthority> replica = {}) noexcept;
+                                 std::shared_ptr<const IHeadlessInitialReplicaAuthority> replica = {},
+                                 std::shared_ptr<Network::INetworkStateUpdateHost> updates = {}) noexcept;
         /** @brief Bind to one configured application composition before any transport can open its listener. */
         [[nodiscard]] Result<void> BindWorlds(const std::shared_ptr<HeadlessNetworkDetail::WorldOwners> &worlds);
 
@@ -65,12 +66,26 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<Network::NetworkInitialStateTarget> PrepareReceiver(
             const Network::ReplicationInboundAuthority &authority, Network::ReplicationWorldLifecycle &world,
             std::span<const Network::ReplicationInitialOwnership> ownership, std::uint64_t now) override;
+        /** @copydoc Network::INetworkStateUpdateHost::CaptureUpdates */
+        [[nodiscard]] Result<std::optional<Network::NetworkStateUpdateBatch>> CaptureUpdates(
+            const Network::ReplicationWorldReadLease &world, const Network::ReplicationWorldLifecycle &lifecycle,
+            const Network::PeerSessionLifecycle &peer, std::span<const Network::ReplicationInitialOwnership> ownership, std::uint64_t now,
+            const Network::NetworkStateUpdatePolicy &policy) override;
+        /** @copydoc Network::INetworkStateUpdateHost::PrepareUpdates */
+        [[nodiscard]] Result<Network::NetworkInitialStateTarget> PrepareUpdates(
+            const Network::ReplicationInboundAuthority &authority, Network::ReplicationWorldLifecycle &world,
+            std::span<const Network::ReplicationInitialOwnership> ownership, std::uint64_t now) override;
 
     private:
+        /** @brief Prepare the requested codec and owner against the exact admitted replica world. */
+        [[nodiscard]] Result<Network::NetworkInitialStateTarget> PrepareSceneReceiver(
+            const Network::ReplicationInboundAuthority &authority, Network::ReplicationWorldLifecycle &world,
+            std::span<const Network::ReplicationInitialOwnership> ownership, std::uint64_t now, Network::ReplicationRecordKind record);
         std::weak_ptr<HeadlessNetworkDetail::WorldOwners> worlds_;
         std::shared_ptr<const IHeadlessInitialStateAuthority> authority_;
         std::shared_ptr<Network::INetworkInitialStateHost> client_;
         std::shared_ptr<const IHeadlessInitialReplicaAuthority> replica_;
+        std::shared_ptr<Network::INetworkStateUpdateHost> updates_;
         bool bound_{};
     };
 }  // namespace Horo::Application::Internal

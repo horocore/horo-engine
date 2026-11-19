@@ -117,39 +117,7 @@ namespace Horo::Network {
             std::shared_ptr<const ReplicationSerializerRegistry> registry{MovementRegistry()};
         };
 
-        /** @brief Records actual incremental publication at the product structural dispatch. */
-        class SnapshotApplyRecorder final : public IReplicationApplyOwner {
-        public:
-            Result<std::unique_ptr<IReplicationApplyCandidate>> Prepare(std::span<const ReplicationApplyUpdate> updates) override {
-                REQUIRE(updates.size() == 1);
-                REQUIRE(updates.front().mapping.provenance.authoredObject == AuthoredObject);
-                const auto fields = updates.front().state.Fields();
-                REQUIRE(fields.size() == 1);
-                return Result<std::unique_ptr<IReplicationApplyCandidate>>::Success(
-                    std::make_unique<Candidate>(*this, std::get<double>(fields.front().value)));
-            }
-
-            std::optional<double> applied;
-
-        private:
-            class Candidate final : public IReplicationApplyCandidate {
-            public:
-                Candidate(SnapshotApplyRecorder &owner, double value) : owner_(owner), value_(value) {}
-
-                Result<void> Commit(const CancellationToken &cancellation) override {
-                    if (cancellation.IsCancellationRequested())
-                        return Result<void>::Failure(MakeError(NetworkErrors::ReplicationWorldCancelled));
-                    owner_.applied = value_;
-                    return Result<void>::Success();
-                }
-
-            private:
-                SnapshotApplyRecorder &owner_;
-                double value_;
-            };
-        };
-
-        /** @brief Supplies an explicit full-record sender and transaction recorder through the normal world binding. */
+        /** @brief Supplies a controlled full-record sender to the product's real Scene receiver. */
         class SnapshotFieldPublisher final : public INetworkStateUpdateHost {
         public:
             Result<std::optional<NetworkStateUpdateBatch>> CaptureUpdates(const ReplicationWorldReadLease &world,
@@ -165,7 +133,7 @@ namespace Horo::Network {
                 const auto read =
                     lifecycle.AcquireCaptureRead({descriptor.scene, descriptor.session, Runtime::RuntimePhase::NetworkFlush, tick}).Value();
                 auto source = std::make_shared<CaptureTestSupport::Owner>();
-                source->Commit(tick, 18.25);
+                source->Commit(tick, translationX);
                 const std::array targets{ReplicationCaptureTarget{mapping, source}};
                 ReplicationCaptureLimits limits;
                 limits.publicationMode = ReplicationCapturePublicationMode::ExactCommit;
@@ -185,34 +153,18 @@ namespace Horo::Network {
                 return Result<std::optional<NetworkStateUpdateBatch>>::Success(std::move(batch));
             }
 
-            Result<NetworkInitialStateTarget> PrepareUpdates(const ReplicationInboundAuthority &authority, ReplicationWorldLifecycle &world,
-                                                             std::span<const ReplicationInitialOwnership> cohort,
-                                                             std::uint64_t now) override {
-                ++preparations;
-                auto receiver = ReplicationInboundApply::Create(authority, world, recorder, now).Value();
-                const auto mapping = world.Acquire({authority.scene, authority.networkSession, Runtime::RuntimePhase::NetworkPoll}).Value();
-                const auto entries = mapping.Mapping().Entries();
-                REQUIRE(entries.size() == cohort.size());
-                for (std::size_t index{}; index < entries.size(); ++index) {
-                    const auto role =
-                        ProjectInitialReplicationRole(cohort[index], entries[index], authority.networkSession, authority.localRecipient)
-                            .Value();
-                    auto codec = ReplicationStateCodec::Create(registry, role, ReplicationRecordKind::Update, 1).Value();
-                    auto roleState = std::make_shared<ReplicationRoleState>(ReplicationRoleState::Create(role).Value());
-                    REQUIRE(receiver->RegisterObject(entries[index], std::move(roleState), std::move(codec)).HasValue());
-                }
-                observedReceiver = receiver;
-                return Result<NetworkInitialStateTarget>::Success({recorder, std::move(receiver)});
+            Result<NetworkInitialStateTarget> PrepareUpdates(const ReplicationInboundAuthority &, ReplicationWorldLifecycle &,
+                                                             std::span<const ReplicationInitialOwnership>, std::uint64_t) override {
+                FAIL("Expected the product's actual Scene receiver.");
+                return Result<NetworkInitialStateTarget>::Failure(MakeError(NetworkErrors::ReplicationWorldUnavailable));
             }
 
             std::shared_ptr<const ReplicationSerializerRegistry> registry{MovementRegistry()};
-            std::shared_ptr<SnapshotApplyRecorder> recorder{std::make_shared<SnapshotApplyRecorder>()};
-            std::weak_ptr<ReplicationInboundApply> observedReceiver;
             std::uint64_t tick{AuthorityTick + 1};
             std::uint64_t recipient{7};
             std::uint64_t generation{1};
+            double translationX{18.25};
             std::size_t captures{};
-            std::size_t preparations{};
             bool wrongRevision{};
         };
 
@@ -380,14 +332,15 @@ namespace Horo::Network {
 
             static InboundDispatchReport Poll(ModeBindingTests::BindingFixture &wire, ConnectionHandle connection,
                                               std::vector<std::byte> payload, ChannelId channel = {},
-                                              DeliveryPolicy delivery = DeliveryPolicy::ReliableOrdered) {
+                                              DeliveryPolicy delivery = DeliveryPolicy::ReliableOrdered,
+                                              std::uint64_t now = AdmissionTick) {
                 wire.transport.event = {.kind = NetworkTransportEventKind::PacketReceived,
                                         .connection = connection,
                                         .channel = channel,
                                         .delivery = delivery,
                                         .payload = std::move(payload)};
                 wire.transport.queued = true;
-                return wire.dispatcher->RunNetworkPoll(AdmissionTick).Value();
+                return wire.dispatcher->RunNetworkPoll(now).Value();
             }
 
             std::shared_ptr<NetworkWorldBindingController> owner;
@@ -440,6 +393,8 @@ namespace Horo::Network {
                 : setup(InitialProductTestSupport::InitialSetup(fields, authorityUpdates)), remote(setup, resources, *definition) {
                 owners->worldSetup = setup;
                 owners->worldSetup.initialStateHost = initialSceneState;
+                if (setup.policy.stateUpdates)
+                    owners->worldSetup.stateUpdateHost = initialSceneState;
                 host = CreateReplica(resources, owners, clock, definition, observedScene, initialSceneState);
                 auto &wire = *owners->binding;
                 wire.setup = owners->worldSetup;
@@ -646,8 +601,8 @@ namespace Horo::Network {
         for (int index{}; index < 5; ++index)
             product.Receive();  // Reconstruct Prefab and deliver the full reliable initial manifests.
         product.WaitForFields();
-        CHECK(updates->preparations == 1);
-        REQUIRE_FALSE(updates->observedReceiver.expired());
+        CHECK(product.codec->preparations == 2);
+        CHECK(product.AuthoredX() == 7.5F);
         product.remote.FlushAt(AdmissionTick + 1);
         CHECK(updates->captures == 0);
         product.ConfirmFields();
@@ -666,16 +621,16 @@ namespace Horo::Network {
                                                  ChannelId::Create(3, 4).Value(), DeliveryPolicy::UnreliableUnordered);
         REQUIRE(wrong.lastPacketRejection);
         CHECK(wrong.lastPacketRejection->code.Value() == MakeError(NetworkErrors::MessageDeliveryInvalid).code.Value());
-        CHECK_FALSE(updates->recorder->applied);
+        CHECK(product.AuthoredX() == 7.5F);
         const auto delivered =
             RemotePublisher::Poll(client, product.peer->Connection(), {wire.begin(), wire.end()}, sent.lastChannel, sent.lastDelivery);
         if (delivered.lastPacketRejection)
             UNSCOPED_INFO(delivered.lastPacketRejection->message);
         REQUIRE(delivered.rejectedPackets == 0);
-        CHECK_FALSE(updates->recorder->applied);
+        CHECK(product.AuthoredX() == 7.5F);
         product.clock.Advance(Duration::FromNanoseconds(16'666'667));
         REQUIRE(product.host->RunFrame().HasValue());
-        CHECK(updates->recorder->applied == 18.25);
+        CHECK(product.AuthoredX() == 18.25F);
 
         updates->wrongRevision = true;
         ++updates->tick;
@@ -706,7 +661,22 @@ namespace Horo::Network {
         CHECK(overBudget.lastPacketRejection->code.Value() == MakeError(NetworkErrors::TransportLimitExceeded).code.Value());
         CHECK(product.peer->State() == PeerSessionState::Active);
         CHECK(client.transport.closed == 0);
+        CHECK(product.AuthoredX() == 18.25F);
+
+        ++updates->tick;
+        updates->translationX = -12.5;
+        product.remote.FlushAt(AdmissionTick + 7);
+        const auto freshWire = std::span{sent.sent}.first(sent.size);
+        const auto fresh = RemotePublisher::Poll(client, product.peer->Connection(), {freshWire.begin(), freshWire.end()}, sent.lastChannel,
+                                                 sent.lastDelivery, AdmissionTick + 1);
+        if (fresh.lastPacketRejection)
+            UNSCOPED_INFO(fresh.lastPacketRejection->message);
+        REQUIRE(fresh.rejectedPackets == 0);
+        CHECK(product.AuthoredX() == 18.25F);
+        product.clock.Advance(Duration::FromNanoseconds(16'666'667));
+        REQUIRE(product.host->RunFrame().HasValue());
+        CHECK(product.AuthoredX() == -12.5F);
+        product.VerifyPrivateAiUnavailable(ReplicaScene);
         product.host->Shutdown();
-        CHECK(updates->observedReceiver.expired());
     }
 }  // namespace Horo::Network

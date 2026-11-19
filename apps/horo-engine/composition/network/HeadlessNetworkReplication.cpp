@@ -11,11 +11,14 @@
 
 namespace Horo::Application::Internal {
     namespace {
+        using HeadlessNetworkDetail::WorldOwners;
         using HeadlessNetworkDetail::WorldRecord;
         using HeadlessNetworkDetail::WorldService;
         namespace Net = Network;
         using InitialCapture = Result<std::optional<Net::ReplicationInitialStateSnapshot>>;
         using InitialReceiver = Result<Net::NetworkInitialStateTarget>;
+        using UpdateCapture = Result<std::optional<Net::NetworkStateUpdateBatch>>;
+        using SceneApplyOwner = Result<std::shared_ptr<Net::SceneReplicationApplyOwner>>;
         constexpr auto FlushPhase = Runtime::RuntimePhase::NetworkFlush;
         constexpr auto CommitPhase = Runtime::RuntimePhase::CommitDeferredLifecycleChanges;
 
@@ -132,9 +135,9 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Initial state needs one full projection per current mapping row, all from the same grant. */
-        Result<std::vector<std::shared_ptr<Net::ReplicationStateCodec>>> ProjectInitialCodecs(
+        Result<std::vector<std::shared_ptr<Net::ReplicationStateCodec>>> ProjectReplicaCodecs(
             const Net::ReplicationWorldReadLease &world, const HeadlessInitialRecipient &grant,
-            const std::shared_ptr<const Net::ReplicationSerializerRegistry> &serializers) {
+            const std::shared_ptr<const Net::ReplicationSerializerRegistry> &serializers, Net::ReplicationRecordKind recordKind) {
             using Codecs = Result<std::vector<std::shared_ptr<Net::ReplicationStateCodec>>>;
             const auto entries = world.Mapping().Entries();
             std::vector<std::shared_ptr<Net::ReplicationStateCodec>> codecs;
@@ -144,8 +147,7 @@ namespace Horo::Application::Internal {
                     Net::ProjectInitialReplicationRole(grant.ownership[index], entries[index], world.Descriptor().session, grant.peer);
                 if (role.HasError())
                     return Codecs::Failure(role.ErrorValue());
-                auto codec = Net::ReplicationStateCodec::Create(serializers, role.Value(), Net::ReplicationRecordKind::Spawn,
-                                                                grant.descriptorGeneration);
+                auto codec = Net::ReplicationStateCodec::Create(serializers, role.Value(), recordKind, grant.descriptorGeneration);
                 if (codec.HasError())
                     return Codecs::Failure(std::move(codec).ErrorValue());
                 codecs.emplace_back(std::move(codec).Value());
@@ -226,7 +228,7 @@ namespace Horo::Application::Internal {
             if (prepared.HasError())
                 return InitialCapture::Failure(prepared.ErrorValue());
             auto &inventory = *prepared.Value();
-            auto codecs = ProjectInitialCodecs(world, grant, inventory.serializers);
+            auto codecs = ProjectReplicaCodecs(world, grant, inventory.serializers, Net::ReplicationRecordKind::Spawn);
             if (codecs.HasError())
                 return InitialCapture::Failure(std::move(codecs).ErrorValue());
             if (const auto sampled = SampleInitialInventory(inventory, read, entries.size(), cancellation); sampled.HasError())
@@ -237,25 +239,61 @@ namespace Horo::Application::Internal {
                                       : InitialCapture::Success(std::move(encoded).Value());
         }
 
+        /** @brief Binds a Scene transaction to this exact owner-acquired view and current structural dispatch. */
+        SceneApplyOwner OpenReplicaSceneWriter(const WorldRecord &record, const HeadlessSceneTransformReplication &selection,
+                                               const Runtime::RuntimeDispatchEvidence &dispatch) {
+            const auto view = record.scenes->ActiveScene();
+            if (!view)
+                return SceneApplyOwner::Failure(MakeError(Net::NetworkErrors::ReplicationWorldStale));
+            return Net::SceneReplicationApplyOwner::CreateForService(record.scenes, *view, dispatch, selection.schema, selection.version,
+                                                                     selection.fields);
+        }
+
+        /** @brief Acquires a fresh Scene writer on the exact owner lane for each live Snapshot commit. */
+        class LiveReplicaSceneApply final : public Net::IReplicationApplyOwner {
+        public:
+            LiveReplicaSceneApply(std::weak_ptr<const WorldOwners> owners, std::weak_ptr<const WorldRecord> record) noexcept
+                : owners_(std::move(owners)), record_(std::move(record)) {}
+
+            /** @copydoc Net::IReplicationApplyOwner::Prepare */
+            Result<std::unique_ptr<Net::IReplicationApplyCandidate>> Prepare(
+                std::span<const Net::ReplicationApplyUpdate> updates) override {
+                using Candidate = Result<std::unique_ptr<Net::IReplicationApplyCandidate>>;
+                const auto owners = owners_.lock();
+                const auto record = record_.lock();
+                if (!owners || !record || std::this_thread::get_id() != owners->owner || record->closeRequested ||
+                    owners->retirementStarted || !record->scenes)
+                    return Candidate::Failure(MakeError(Net::NetworkErrors::ReplicationWorldStale));
+                if (!owners->fixed || !owners->configured || !owners->configured->publicTransforms)
+                    return Candidate::Failure(MakeError(Net::NetworkErrors::ReplicationWorldUnavailable));
+                const auto &dispatch = owners->fixed->SceneDispatch();
+                Runtime::RuntimeDispatchFacts facts;
+                if (dispatch.Read(owners->fixed->Source(), CommitPhase, facts) != Runtime::RuntimeDispatchStatus::Valid)
+                    return Candidate::Failure(MakeError(Net::NetworkErrors::ReplicationWorldPhaseInvalid));
+                auto owner = OpenReplicaSceneWriter(*record, *owners->configured->publicTransforms, dispatch);
+                if (owner.HasError())
+                    return Candidate::Failure(owner.ErrorValue());
+                return owner.Value()->Prepare(updates);
+            }
+
+        private:
+            std::weak_ptr<const WorldOwners> owners_;
+            std::weak_ptr<const WorldRecord> record_;
+        };
+
         /** @brief Creates one detached typed receiver against every exact rebuilt local mapping occurrence. */
         InitialReceiver PrepareReplicaReceiver(const WorldRecord &record, Net::ReplicationWorldLifecycle &lifecycle,
                                                const Net::ReplicationWorldReadLease &world,
                                                const Net::ReplicationInboundAuthority &authority, const HeadlessInitialRecipient &grant,
-                                               const HeadlessSceneTransformReplication &selection,
-                                               const Runtime::RuntimeDispatchEvidence &dispatch, std::uint64_t now) {
-            const auto view = record.scenes->ActiveScene();
-            if (!view)
-                return InitialReceiver::Failure(MakeError(Net::NetworkErrors::ReplicationWorldStale));
-            auto owner = Net::SceneReplicationApplyOwner::CreateForService(record.scenes, *view, dispatch, selection.schema,
-                                                                           selection.version, selection.fields);
-            if (owner.HasError())
-                return InitialReceiver::Failure(std::move(owner).ErrorValue());
+                                               std::shared_ptr<Net::IReplicationApplyOwner> owner, Net::ReplicationRecordKind recordKind,
+                                               std::uint64_t now) {
             Net::ReplicationInboundLimits limits;
             if (grant.ownership.size() > limits.maximumObjects)
                 return InitialReceiver::Failure(MakeError(Net::ReplicationStateErrors::Capacity));
             limits.maximumPending = std::max(limits.maximumPending, grant.ownership.size());
-            auto receiver = Net::ReplicationInboundApply::Create(authority, lifecycle, owner.Value(), now, limits,
-                                                                 Net::ReplicationInboundApplyMode::InitialSnapshot);
+            const auto mode = recordKind == Net::ReplicationRecordKind::Spawn ? Net::ReplicationInboundApplyMode::InitialSnapshot
+                                                                              : Net::ReplicationInboundApplyMode::Incremental;
+            auto receiver = Net::ReplicationInboundApply::Create(authority, lifecycle, owner, now, limits, mode);
             if (receiver.HasError())
                 return InitialReceiver::Failure(std::move(receiver).ErrorValue());
             const auto entries = world.Mapping().Entries();
@@ -263,7 +301,7 @@ namespace Horo::Application::Internal {
                 auto serializers = PinInitialSerializers(record);
                 if (!serializers)
                     return InitialReceiver::Failure(MakeError(Net::NetworkErrors::ReplicationDescriptorIncompatible));
-                auto codecs = ProjectInitialCodecs(world, grant, serializers);
+                auto codecs = ProjectReplicaCodecs(world, grant, serializers, recordKind);
                 if (codecs.HasError())
                     return InitialReceiver::Failure(std::move(codecs).ErrorValue());
                 for (std::size_t index{}; index < entries.size(); ++index) {
@@ -278,7 +316,7 @@ namespace Horo::Application::Internal {
                         return InitialReceiver::Failure(std::move(registered).ErrorValue());
                 }
             }
-            return InitialReceiver::Success({std::move(owner).Value(), std::move(receiver).Value()});
+            return InitialReceiver::Success({std::move(owner), std::move(receiver).Value()});
         }
 
         /** @brief Validates the complete transform field set and its actual installed scalar serializers. */
@@ -559,8 +597,9 @@ namespace Horo::Application::Internal {
 
     HeadlessInitialStateHost::HeadlessInitialStateHost(std::shared_ptr<const IHeadlessInitialStateAuthority> authority,
                                                        std::shared_ptr<Network::INetworkInitialStateHost> client,
-                                                       std::shared_ptr<const IHeadlessInitialReplicaAuthority> replica) noexcept
-        : authority_(std::move(authority)), client_(std::move(client)), replica_(std::move(replica)) {}
+                                                       std::shared_ptr<const IHeadlessInitialReplicaAuthority> replica,
+                                                       std::shared_ptr<Network::INetworkStateUpdateHost> updates) noexcept
+        : authority_(std::move(authority)), client_(std::move(client)), replica_(std::move(replica)), updates_(std::move(updates)) {}
 
     /** @copydoc HeadlessInitialStateHost::BindWorlds */
     Result<void> HeadlessInitialStateHost::BindWorlds(const std::shared_ptr<HeadlessNetworkDetail::WorldOwners> &worlds) {
@@ -604,6 +643,37 @@ namespace Horo::Application::Internal {
         const std::span<const Network::ReplicationInitialOwnership> ownership, const std::uint64_t now) {
         if (!replica_)
             return client_->PrepareReceiver(authority, world, ownership, now);
+        return PrepareSceneReceiver(authority, world, ownership, now, Net::ReplicationRecordKind::Spawn);
+    }
+
+    /** @copydoc HeadlessInitialStateHost::CaptureUpdates */
+    UpdateCapture HeadlessInitialStateHost::CaptureUpdates(const Net::ReplicationWorldReadLease &world,
+                                                           const Net::ReplicationWorldLifecycle &lifecycle,
+                                                           const Net::PeerSessionLifecycle &peer,
+                                                           std::span<const Net::ReplicationInitialOwnership> ownership, std::uint64_t now,
+                                                           const Net::NetworkStateUpdatePolicy &policy) {
+        if (!updates_)
+            return UpdateCapture::Failure(MakeError(Net::NetworkErrors::ReplicationWorldUnavailable));
+        return updates_->CaptureUpdates(world, lifecycle, peer, ownership, now, policy);
+    }
+
+    /** @copydoc HeadlessInitialStateHost::PrepareUpdates */
+    InitialReceiver HeadlessInitialStateHost::PrepareUpdates(const Net::ReplicationInboundAuthority &authority,
+                                                             Net::ReplicationWorldLifecycle &world,
+                                                             std::span<const Net::ReplicationInitialOwnership> ownership,
+                                                             std::uint64_t now) {
+        if (replica_)
+            return PrepareSceneReceiver(authority, world, ownership, now, Net::ReplicationRecordKind::Update);
+        if (!updates_)
+            return InitialReceiver::Failure(MakeError(Net::NetworkErrors::ReplicationWorldUnavailable));
+        return updates_->PrepareUpdates(authority, world, ownership, now);
+    }
+
+    /** @copydoc HeadlessInitialStateHost::PrepareSceneReceiver */
+    InitialReceiver HeadlessInitialStateHost::PrepareSceneReceiver(const Net::ReplicationInboundAuthority &authority,
+                                                                   Net::ReplicationWorldLifecycle &world,
+                                                                   std::span<const Net::ReplicationInitialOwnership> ownership,
+                                                                   std::uint64_t now, Net::ReplicationRecordKind recordKind) {
         const auto owners = worlds_.lock();
         if (!owners || !owners->configured || !owners->configured->publicTransforms || !owners->fixed)
             return InitialReceiver::Failure(MakeError(Net::NetworkErrors::ReplicationWorldStale));
@@ -615,8 +685,16 @@ namespace Horo::Application::Internal {
             auto grant = ResolveReplicaGrant(*replica_, read, authority, ownership, now);
             if (grant.HasError())
                 return InitialReceiver::Failure(std::move(grant).ErrorValue());
-            return PrepareReplicaReceiver(*read.record, world, read.mapping, authority, grant.Value(),
-                                          *owners->configured->publicTransforms, read.dispatch, now);
+            std::shared_ptr<Net::IReplicationApplyOwner> owner;
+            if (recordKind == Net::ReplicationRecordKind::Spawn) {
+                auto sceneWriter = OpenReplicaSceneWriter(*read.record, *owners->configured->publicTransforms, read.dispatch);
+                if (sceneWriter.HasError())
+                    return InitialReceiver::Failure(sceneWriter.ErrorValue());
+                owner = std::move(sceneWriter).Value();
+            } else {
+                owner = std::make_shared<LiveReplicaSceneApply>(owners, read.record);
+            }
+            return PrepareReplicaReceiver(*read.record, world, read.mapping, authority, grant.Value(), std::move(owner), recordKind, now);
         } catch (const std::bad_alloc &) {
             return InitialReceiver::Failure(MakeError(Net::ReplicationCaptureErrors::Capacity));
         }

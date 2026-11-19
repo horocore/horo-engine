@@ -431,10 +431,13 @@ namespace Horo::Application::Internal {
             if (const auto valid = ValidateInitialSceneSelection(launch, capabilities, binding); valid.HasError())
                 return Outcome::Failure(valid.ErrorValue());
             try {
-                auto adapter = std::make_shared<HeadlessInitialStateHost>(scene.authority, binding->initialStateHost, scene.replica);
-                auto configured =
-                    NetworkProductAdmission::Capture(admission->Policy(), admission->Providers(), admission->Codecs(),
-                                                     admission->Handlers(), binding->policy, adapter, binding->stateUpdateHost);
+                auto adapter = std::make_shared<HeadlessInitialStateHost>(scene.authority, binding->initialStateHost, scene.replica,
+                                                                          binding->stateUpdateHost);
+                auto updates = binding->stateUpdateHost;
+                if (updates && scene.replica)
+                    updates = adapter;
+                auto configured = NetworkProductAdmission::Capture(admission->Policy(), admission->Providers(), admission->Codecs(),
+                                                                   admission->Handlers(), binding->policy, adapter, std::move(updates));
                 if (configured.HasError())
                     return Outcome::Failure(std::move(configured).ErrorValue());
                 capabilities.admission = std::move(configured).Value();
