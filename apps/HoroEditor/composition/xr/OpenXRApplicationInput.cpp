@@ -518,7 +518,10 @@ namespace Horo::Application::Internal {
             RevokePlaneCapture();
             return;
         }
-        planes_.allowed = true;
+        if (!planes_.allowed && planes_.lastGrant != std::numeric_limits<std::uint64_t>::max()) {
+            ++planes_.lastGrant;
+            planes_.allowed = true;
+        }
     }
 
     /** @copydoc OpenXRApplicationSession::RevokePlaneCapture */
@@ -570,7 +573,8 @@ namespace Horo::Application::Internal {
         const auto scope = *planes_.scope;
         const auto now = planes_.latestCutoff;
         auto result = planes_.native->Read(scope, now);
-        if (!planes_.allowed || planes_.scope != scope)
+        // Revocation clears the exact scope before retiring the native capture.
+        if (planes_.scope != scope)
             return Outcome::Failure(MakeError(XRErrors::PermissionDenied));
         return result;
     }
@@ -584,21 +588,30 @@ namespace Horo::Application::Internal {
                 RevokePlaneCapture();
             return;
         }
-        const auto space = WorldSpace(tracking.Session());
+        const auto session = tracking.Session();
+        const auto now = tracking.SampledAt();
+        const auto grant = planes_.lastGrant;
+        const auto admitted = planes_.scope;
+        const auto currentGrant = [&] {
+            return planes_.allowed && planes_.lastGrant == grant && planes_.scope == admitted;
+        };
+        const auto space = WorldSpace(session);
+        if (!currentGrant())
+            return;
         if (space.HasError()) {
             RevokePlaneCapture();
             return;
         }
         const auto world = BorrowWorldSpace(space.Value());
+        // Host admission can revoke or replace the grant during either lookup.
+        if (!currentGrant())
+            return;
         if (world.HasError()) {
             RevokePlaneCapture();
             return;
         }
-        if (!planes_.allowed)
-            return;
-        const auto now = tracking.SampledAt();
         if (!planes_.native) {
-            if (!StartPlaneCapture(tracking.Session(), space.Value(), now))
+            if (!StartPlaneCapture(session, space.Value(), now) && currentGrant())
                 RevokePlaneCapture();
             return;
         }
@@ -606,14 +619,14 @@ namespace Horo::Application::Internal {
             RevokePlaneCapture();
             return;
         }
-        const XRPlaneScope scope{tracking.Session(), space.Value(), planes_.scope->grant};
+        const XRPlaneScope scope{session, space.Value(), planes_.scope->grant};
         const auto progress = planes_.native->Advance(scope, world.Value(), now);
-        if (progress.HasError()) {
+        if (!currentGrant())
+            return;
+        if (progress.HasError() || planes_.scope != scope) {
             RevokePlaneCapture();
             return;
         }
-        if (!planes_.allowed)
-            return;
         planes_.latestCutoff = now;
         if (progress.Value())
             planes_.publishedAt = now;
@@ -621,15 +634,14 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRApplicationSession::StartPlaneCapture */
     bool OpenXRApplicationSession::StartPlaneCapture(const XRSessionId &session, const XRCoordinateSpace &space, XRRuntimeTime now) {
-        if (planes_.lastGrant == std::numeric_limits<std::uint64_t>::max())
-            return false;
-        const auto grant = XRPlaneGrant::Create(++planes_.lastGrant);
+        const auto consent = planes_.lastGrant;
+        const auto grant = XRPlaneGrant::Create(consent);
         if (grant.HasError())
             return false;
         planes_.native.emplace(*native_);
         const XRPlaneScope scope{session, space, grant.Value()};
         if (const auto started = planes_.native->Start(selection_.attempt, scope, PlaneCapturePolicy, now);
-            started.HasError() || !planes_.allowed)
+            started.HasError() || !planes_.allowed || planes_.lastGrant != consent)
             return false;
         planes_.scope = scope;
         planes_.latestCutoff = now;

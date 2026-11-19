@@ -14,6 +14,7 @@
 #include "unit/editor/SceneDocumentHierarchyFixture.h"
 
 #include <algorithm>
+#include <bit>
 #include <catch2/generators/catch_generators.hpp>
 #include <functional>
 #include <type_traits>
@@ -56,6 +57,40 @@ namespace Horo::Tests::OpenXRApplication {
             REQUIRE(schema.Seal().HasValue());
             return schema;
         }
+
+        /** @brief Revokes through the real operator route while native plane scan dispatch is still active. */
+        struct PlaneScanRevocation final {
+            static inline PlaneScanRevocation *armed{};
+            Editor::IEditorXrPlaneCapturePreview &preview;
+            bool observed{};
+
+            explicit PlaneScanRevocation(Editor::IEditorXrPlaneCapturePreview &target) : preview(target) {
+                armed = this;
+            }
+
+            ~PlaneScanRevocation() {
+                if (armed == this)
+                    armed = nullptr;
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL Start(XrSpatialContextEXT context, const XrSpatialDiscoverySnapshotCreateInfoEXT *info,
+                                                        XrFutureEXT *future) {
+                const auto result = OpenXR::SpatialCaptureScript::StartScan(context, info, future);
+                if (auto *revocation = std::exchange(armed, nullptr)) {
+                    revocation->observed = true;
+                    revocation->preview.RevokePlaneCapture();
+                }
+                return result;
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL Resolve(XrInstance instance, const char *name, PFN_xrVoidFunction *function) {
+                if (std::string_view{name} == "xrCreateSpatialDiscoverySnapshotAsyncEXT") {
+                    *function = std::bit_cast<PFN_xrVoidFunction>(&Start);
+                    return XR_SUCCESS;
+                }
+                return OpenXR::SpatialCaptureScript::GetProc(instance, name, function);
+            }
+        };
 
         /** @brief Owns real installation, native preparation and canonical scene/input parents through explicit cleanup. */
         struct ApplicationFixture final {
@@ -1064,7 +1099,7 @@ namespace Horo::Tests::OpenXRApplication {
                                                              XR_EXT_SPATIAL_PLANE_TRACKING_EXTENSION_NAME};
         fixture.script.native.extraExtensions = extensions;
         fixture.script.native.extensionCount += static_cast<std::uint32_t>(extensions.size());
-        fixture.script.census.extraProc = &OpenXR::SpatialCaptureScript::GetProc;
+        fixture.script.census.extraProc = &PlaneScanRevocation::Resolve;
         fixture.CreatePlay();
         auto &preview = *fixture.play->PlaneCapturePreview();
         REQUIRE(preview.ReadPlaneCaptureState() == Ready);
@@ -1112,9 +1147,17 @@ namespace Horo::Tests::OpenXRApplication {
             CHECK(hits.Hits().front().confidence == plane.confidence);
             CHECK(preview.ReadPlaneCaptureState() == Tracking);
             CHECK(native.scans == 1);
-            CHECK(sample(620'000'000).HasValue());
+            SECTION("operator revokes after the next scan is queued") {
+                CHECK(sample(620'000'000).HasValue());
+                preview.RevokePlaneCapture();
+            }
+            SECTION("operator revokes during the native scan call") {
+                PlaneScanRevocation revocation{preview};
+                CHECK(sample(620'000'000).HasError());
+                CHECK(revocation.observed);
+                CHECK(preview.ReadPlaneCaptureState() == Unavailable);
+            }
             CHECK(native.scans == 2);
-            preview.RevokePlaneCapture();
             CHECK(fixture.play->QueryPlaneHits(ray).HasError());
             CHECK(fixture.play->ReadPlaneObservations().HasError());
             RequireValue(fixture.play->PollEvents());
