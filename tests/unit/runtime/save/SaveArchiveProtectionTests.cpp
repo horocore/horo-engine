@@ -1,3 +1,5 @@
+#include "Horo/Foundation/Logging/LogContext.h"
+#include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Runtime/Save/SaveArchiveAuthenticity.h"
 #include "Horo/Runtime/Save/SaveArchiveProtection.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
@@ -29,6 +31,14 @@ namespace {
 
     constexpr std::array AssociatedData{std::byte{1}, std::byte{2}};
 
+    /** @brief Exercises the actual emergency sink admission from an unclassified callback. */
+    void CheckProviderDiagnosticScope() {
+        CHECK(Log::DiagnosticsSuppressed());
+        const auto before = Log::Logger::Statistics().emergencyRecords;
+        Log::Logger::WriteEmergency("save.test.protection", Log::Level::Error, "private-token-must-not-escape");
+        CHECK(Log::Logger::Statistics().emergencyRecords == before);
+    }
+
     class MockProvider final : public SaveArchiveProtectionProvider {
     public:
         std::array<std::uint8_t, 16> Id() const noexcept override {
@@ -41,6 +51,7 @@ namespace {
 
         Result<SaveProtectedArchive> Seal(std::array<std::uint8_t, 16>, std::span<const std::byte>, std::span<const std::byte>) override {
             ++sealCalls;
+            CheckProviderDiagnosticScope();
             if (failure != nullptr)
                 return Result<SaveProtectedArchive>::Failure(MakeError(*failure, "private-token-must-not-escape"));
             return Result<SaveProtectedArchive>::Success(Protected());
@@ -48,6 +59,7 @@ namespace {
 
         Result<std::vector<std::byte>> Open(const SaveProtectedArchive &, std::span<const std::byte>) override {
             ++openCalls;
+            CheckProviderDiagnosticScope();
             if (failure != nullptr)
                 return Result<std::vector<std::byte>>::Failure(MakeError(*failure, "private-token-must-not-escape"));
             return Result<std::vector<std::byte>>::Success({std::byte{7}});
@@ -60,6 +72,7 @@ namespace {
     };
 
     void CheckCode(const Error &error, const ErrorCodeDescriptor &expected) {
+        CHECK_FALSE(Log::DiagnosticsSuppressed());
         CHECK(error.code.Value() == expected.code.Value());
         CHECK(error.message.find("private-token-must-not-escape") == std::string::npos);
     }
@@ -95,6 +108,7 @@ namespace {
         Result<void> Verify(const std::array<std::uint8_t, 16> keyId, std::span<const std::byte> scope, std::span<const std::byte> message,
                             std::span<const std::byte> signature) override {
             ++verifyCalls;
+            CheckProviderDiagnosticScope();
             CHECK(keyId.front() == 7);
             CHECK(scope.size() == AssociatedData.size());
             CHECK(std::equal(scope.begin(), scope.end(), AssociatedData.begin(), AssociatedData.end()));

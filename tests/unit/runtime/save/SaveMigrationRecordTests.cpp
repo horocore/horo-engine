@@ -1,3 +1,5 @@
+#include "Horo/Foundation/Logging/LogContext.h"
+#include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Runtime/Save/SaveDiagnostics.h"
 #include "Horo/Runtime/Save/SaveMigration.h"
 #include "SaveTestUtils.h"
@@ -163,16 +165,26 @@ namespace {
         auto step = ParticipantStep("scene.fail.1_to_2");
         step.migrate = {};
         step.migrateRecord = [](std::span<const std::byte>, const SaveMigrationRecordContext &context) {
+            CHECK(Log::DiagnosticsSuppressed());
+            Log::Logger::WriteEmergency("save.test.migration", Log::Level::Error, "private migration record value");
             return Result<std::vector<std::byte>>::Failure(
                 context.Fail(MakeError(SaveErrors::MigrationCandidateInvalid, "invalid value"), "transform.position.x"));
         };
         const auto before = source;
+        const auto emergencyRecords = Log::Logger::Statistics().emergencyRecords;
         const auto result = Migrate(source, step);
         REQUIRE(result.HasError());
+        CHECK(Log::Logger::Statistics().emergencyRecords == emergencyRecords);
+        CHECK_FALSE(Log::DiagnosticsSuppressed());
         REQUIRE(result.ErrorValue().cause.Get() != nullptr);
         CHECK(result.ErrorValue().message.find("scene.fail.1_to_2") != std::string::npos);
         CHECK(result.ErrorValue().message.find("field=transform.position.x") != std::string::npos);
         CHECK(result.ErrorValue().cause.Get()->cause.Get()->message.find("field=transform.position.x") != std::string::npos);
+        const auto report = RedactSaveDiagnosticError(result.ErrorValue());
+        for (const Error *cause = &report; cause; cause = cause->cause.Get()) {
+            CHECK(cause->message.find("transform.position.x") == std::string::npos);
+            CHECK(cause->message.find("invalid value") == std::string::npos);
+        }
         CHECK(source == before);
     }
 

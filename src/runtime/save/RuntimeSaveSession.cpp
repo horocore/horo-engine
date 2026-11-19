@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Save/RuntimeSaveSession.h"
 
+#include "Horo/Foundation/Logging/LogContext.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 #include "RuntimeSaveSessionInternal.h"
 
@@ -51,7 +52,11 @@ namespace Horo::Runtime {
         Result<void> Write(Work &work, const CancellationToken &cancellation) {
             if (work.producer.PublishProgress(SaveOperationStage::Serializing, {}) != SaveOperationTransitionResult::Applied)
                 return JobCancelled();
-            if (auto prepared = work.writer->Prepare(work.capture, cancellation); prepared.HasError())
+            auto prepared = [&] {
+                const Log::ScopedDiagnosticSuppression suppressWriterDiagnostics;
+                return work.writer->Prepare(work.capture, cancellation);
+            }();
+            if (prepared.HasError())
                 return Fail(work, std::move(prepared).ErrorValue());
             if (cancellation.IsCancellationRequested()) {
                 (void)work.handle.RequestCancellation();
@@ -63,7 +68,10 @@ namespace Horo::Runtime {
             if (work.producer.BeginCommit() != SaveCommitGateResult::Entered)
                 return JobCancelled();
             try {
-                auto committed = work.writer->Commit();
+                auto committed = [&] {
+                    const Log::ScopedDiagnosticSuppression suppressWriterDiagnostics;
+                    return work.writer->Commit();
+                }();
                 if (committed.HasError())
                     return Fail(work, std::move(committed).ErrorValue(), SaveOperationCommitOutcome::Unknown);
             } catch (...) {
@@ -77,7 +85,10 @@ namespace Horo::Runtime {
         Result<void> Read(Work &work, const CancellationToken &cancellation) {
             if (work.producer.PublishProgress(SaveOperationStage::VerifyingArchive, {}) != SaveOperationTransitionResult::Applied)
                 return JobCancelled();
-            auto staged = work.source->Stage(work.context, work.participants, cancellation);
+            auto staged = [&] {
+                const Log::ScopedDiagnosticSuppression suppressSourceDiagnostics;
+                return work.source->Stage(work.context, work.participants, cancellation);
+            }();
             if (staged.HasError())
                 return Fail(work, std::move(staged).ErrorValue());
             if (work.producer.ObserveCancellation() == SaveCancellationObservation::Cancelled)

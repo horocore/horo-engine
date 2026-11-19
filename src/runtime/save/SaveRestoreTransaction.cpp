@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Save/SaveRestoreTransaction.h"
 
+#include "Horo/Foundation/Logging/LogContext.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 #include "Horo/Runtime/Save/SaveTelemetry.h"
 
@@ -20,10 +21,22 @@ namespace Horo::Runtime {
             return phase == SaveParticipantDependencyPhase::Restore || phase == SaveParticipantDependencyPhase::CaptureAndRestore;
         }
 
+        /** @brief Contains diagnostics emitted while a participant discards private prepared state. */
+        void RollbackParticipant(IStagedRestoreParticipant &participant) noexcept {
+            const Log::ScopedDiagnosticSuppression suppressParticipantDiagnostics;
+            participant.RollbackPrepared();
+        }
+
+        /** @brief Borrows the detached state through the same diagnostic boundary as its participant. */
+        const ICanonicalRestorePreparedState *ReadPreparedState(const IStagedRestoreParticipant &participant) noexcept {
+            const Log::ScopedDiagnosticSuppression suppressParticipantDiagnostics;
+            return participant.PreparedState();
+        }
+
         void RollbackAll(std::vector<std::unique_ptr<IStagedRestoreParticipant>> &staged) noexcept {
             for (auto iterator = staged.rbegin(); iterator != staged.rend(); ++iterator) {
                 if (*iterator)
-                    (*iterator)->RollbackPrepared();
+                    RollbackParticipant(**iterator);
             }
         }
 
@@ -168,7 +181,7 @@ namespace Horo::Runtime {
                 });
                 if (visible == visiblePlan_.end())
                     return nullptr;
-                return staged_[*visible]->PreparedState();
+                return ReadPreparedState(*staged_[*visible]);
             }
 
         private:
@@ -358,7 +371,10 @@ namespace Horo::Runtime {
         if (auto claimed = BeginAggregateCommit(aggregate); claimed.HasError())
             return claimed;
         for (const std::size_t index : restorePlan_) {
-            staged_[index]->PublishPrepared();
+            {
+                const Log::ScopedDiagnosticSuppression suppressParticipantDiagnostics;
+                staged_[index]->PublishPrepared();
+            }
             Record(StagedRestorePhase::Activate, StagedRestoreEventOutcome::Succeeded, index);
         }
         aggregate.PublishPrepared();
@@ -442,7 +458,10 @@ namespace Horo::Runtime {
             auto *capability = dynamic_cast<IStagedRestoreTransientRetirement *>(staged_[index].get());
             if (!capability)
                 continue;
-            auto released = capability->RetirePublishedTransient();
+            const auto released = [&] {
+                const Log::ScopedDiagnosticSuppression suppressParticipantDiagnostics;
+                return capability->RetirePublishedTransient();
+            }();
             if (released.HasError())
                 return Outcome::Failure(released.ErrorValue());
             if (!released.Value())
@@ -506,7 +525,7 @@ namespace Horo::Runtime {
 
     void StagedRestoreTransaction::RollbackCandidates() noexcept {
         for (const std::size_t index : std::views::reverse(restorePlan_)) {
-            staged_[index]->RollbackPrepared();
+            RollbackParticipant(*staged_[index]);
             Record(StagedRestorePhase::Rollback, StagedRestoreEventOutcome::Succeeded, index);
         }
     }
@@ -542,6 +561,7 @@ namespace Horo::Runtime {
         try {
             RestoreDependencyLookup dependencies{participants_, requirements_, staged_,
                                                  std::span<const std::size_t>{restorePlan_}.first(visiblePlanLength), participantIndex};
+            const Log::ScopedDiagnosticSuppression suppressParticipantDiagnostics;
             switch (phase) {
                 case Decode:
                     result = staged_[participantIndex]->Decode(context_);
@@ -569,7 +589,7 @@ namespace Horo::Runtime {
         }
         if (result.HasError())
             return FailPreparation(result.ErrorValue(), phase, participantIndex);
-        if (phase == Instantiate && staged_[participantIndex]->PreparedState() == nullptr)
+        if (phase == Instantiate && ReadPreparedState(*staged_[participantIndex]) == nullptr)
             return FailPreparation(MakeError(SaveErrors::RestoreAdapterContractInvalid), phase, participantIndex);
         Record(phase, StagedRestoreEventOutcome::Succeeded, participantIndex);
         ++completedUnits;

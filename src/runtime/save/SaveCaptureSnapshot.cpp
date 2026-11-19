@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Save/SaveCaptureSnapshot.h"
 
+#include "Horo/Foundation/Logging/LogContext.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 #include "Horo/Runtime/Save/SaveTelemetry.h"
 
@@ -68,6 +69,7 @@ namespace Horo::Runtime {
             const std::uint64_t maximumBytes) {
             if (payload == nullptr)
                 return Result<std::pair<std::uint64_t, std::size_t>>::Failure(MakeError(SaveErrors::CaptureRecordInvalid));
+            const Log::ScopedDiagnosticSuppression suppressPayloadDiagnostics;
             const std::size_t segments = payload->SegmentCount();
             const std::uint64_t declaredBytes = payload->ByteLength();
             if (segments == 0 || segments > maximumSegments || declaredBytes > maximumBytes)
@@ -138,7 +140,10 @@ namespace Horo::Runtime {
 
     /** @copydoc OwnedCanonicalSnapshot::Segment */
     std::span<const std::byte> OwnedCanonicalSnapshot::Segment(const std::size_t index) const noexcept {
-        return payload_ == nullptr || index >= segmentCount_ ? std::span<const std::byte>{} : payload_->Segment(index);
+        if (payload_ == nullptr || index >= segmentCount_)
+            return {};
+        const Log::ScopedDiagnosticSuppression suppressPayloadDiagnostics;
+        return payload_->Segment(index);
     }
 
     /** @copydoc OwnedCanonicalSnapshot::ByteLength */
@@ -454,7 +459,11 @@ namespace Horo::Runtime {
                 return Result<void>::Failure(MakeError(SaveErrors::CaptureAdapterContractInvalid));
 
             ParticipantCaptureSink sink{*this, descriptor};
-            const Result<CanonicalCaptureDisposition> captured = binding.Adapter()->Capture(MakeContext(binding), sink);
+            const auto context = MakeContext(binding);
+            const auto captured = [&] {
+                const Log::ScopedDiagnosticSuppression suppressParticipantDiagnostics;
+                return binding.Adapter()->Capture(context, sink);
+            }();
             if (captured.HasError())
                 return Result<void>::Failure(captured.ErrorValue());
             if (sink.RejectedWrite() || (captured.Value() != Captured && captured.Value() != Omitted) ||

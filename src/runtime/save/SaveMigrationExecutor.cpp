@@ -1,3 +1,4 @@
+#include "Horo/Foundation/Logging/LogContext.h"
 #include "Horo/Runtime/Save/SaveTelemetry.h"
 #include "SaveMigrationInternal.h"
 
@@ -264,7 +265,10 @@ namespace Horo::Runtime {
                                                                .to = ParticipantSchemaVersion::Create(step.to).Value(),
                                                                .maximumOutputBytes =
                                                                    std::min(limits.maximumParticipantPayloadBytes, remainingWorkBytes)};
-                auto output = (*step.migrateRecord)(std::span<const std::byte>{record.payload}, recordContext);
+                auto output = [&] {
+                    const Log::ScopedDiagnosticSuppression suppressMigrationDiagnostics;
+                    return (*step.migrateRecord)(std::span<const std::byte>{record.payload}, recordContext);
+                }();
                 if (output.HasError())
                     return Result<void>::Failure(
                         WithCause(MigrationError(SaveErrors::MigrationStepFailed,
@@ -295,8 +299,10 @@ namespace Horo::Runtime {
             try {
                 if (auto records = MigrateOwnedRecords(candidate, step, limits, context.remainingWorkBytes); records.HasError())
                     return Result<SaveMigrationCandidate>::Failure(records.ErrorValue());
-                if (step.migrate && *step.migrate)
+                if (step.migrate && *step.migrate) {
+                    const Log::ScopedDiagnosticSuppression suppressMigrationDiagnostics;
                     return (*step.migrate)(std::move(candidate), context);
+                }
                 return Result<SaveMigrationCandidate>::Success(std::move(candidate));
             } catch (const std::bad_alloc &) {
                 return Result<SaveMigrationCandidate>::Failure(MigrationError(SaveErrors::MigrationAllocationFailed));

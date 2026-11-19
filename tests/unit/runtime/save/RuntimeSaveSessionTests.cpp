@@ -1,3 +1,4 @@
+#include "Horo/Foundation/Logging/LogContext.h"
 #include "Horo/Runtime/Save/RuntimeSaveSession.h"
 #include "SaveCaptureSnapshotTestUtils.h"
 
@@ -31,6 +32,7 @@ namespace Horo::Runtime {
 
             Result<void> Prepare(const RuntimeSaveSnapshot &snapshot, const CancellationToken &token) override {
                 preparedThread = std::this_thread::get_id();
+                prepareDiagnosticsSuppressed = Log::DiagnosticsSuppressed();
                 if (started) {
                     started->set_value();
                     while (release.wait_for(std::chrono::milliseconds(1)) != std::future_status::ready &&
@@ -45,6 +47,7 @@ namespace Horo::Runtime {
 
             Result<void> Commit() override {
                 ++commits;
+                commitDiagnosticsSuppressed = Log::DiagnosticsSuppressed();
                 if (failCommit)
                     return Result<void>::Failure(Error{ErrorCode{"game.save.commit_uncertain"}});
                 std::lock_guard lock(store->mutex);
@@ -59,6 +62,8 @@ namespace Horo::Runtime {
             std::shared_future<void> release;
             bool failPrepare{};
             bool failCommit{};
+            bool prepareDiagnosticsSuppressed{};
+            bool commitDiagnosticsSuppressed{};
             int commits{};
         };
 
@@ -130,6 +135,7 @@ namespace Horo::Runtime {
             Result<RuntimeSaveRestoreStaging> Stage(const StagedRestoreContext &, const SaveParticipantRegistrySnapshot &,
                                                     const CancellationToken &) override {
                 stagedThread = std::this_thread::get_id();
+                diagnosticsSuppressed = Log::DiagnosticsSuppressed();
                 RuntimeSaveSnapshot snapshot;
                 {
                     std::lock_guard lock(store_->mutex);
@@ -150,6 +156,7 @@ namespace Horo::Runtime {
             }
 
             bool fail{};
+            bool diagnosticsSuppressed{};
             std::thread::id stagedThread;
 
         private:
@@ -446,6 +453,9 @@ namespace Horo::Runtime {
             CHECK(terminals == 1);
             CHECK(writer->preparedThread != std::this_thread::get_id());
             CHECK(writer->commits == 1);
+            CHECK(writer->prepareDiagnosticsSuppressed);
+            CHECK(writer->commitDiagnosticsSuppressed);
+            CHECK_FALSE(Log::DiagnosticsSuppressed());
             CHECK(fixture.value->captures == 2);
             REQUIRE(fixture.session->Acknowledge().HasValue());
             auto mutation = fixture.barrier->BeginMutation(fixture.owners[0]).Value();
@@ -457,6 +467,7 @@ namespace Horo::Runtime {
             fixture.Finish(loaded);
             CHECK(loaded.Operation().Snapshot()->state == SaveOperationState::Completed);
             CHECK(source->stagedThread != std::this_thread::get_id());
+            CHECK(source->diagnosticsSuppressed);
             CHECK(fixture.value->value == std::byte{0x31});
             CHECK(fixture.value->published == std::vector<std::string>{"game.a", "game.b"});
         }

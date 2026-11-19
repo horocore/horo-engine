@@ -1,3 +1,5 @@
+#include "Horo/Foundation/Logging/LogContext.h"
+#include "Horo/Foundation/Logging/Logger.h"
 #include "SaveCaptureSnapshotTestUtils.h"
 
 #include <array>
@@ -11,6 +13,60 @@
 namespace Horo::Runtime {
     namespace {
         using namespace CaptureTestSupport;
+
+        TEST_CASE("Participant capture suppresses private diagnostics and preserves typed failures", "[unit][save][capture][privacy]") {
+            CanonicalStateParticipantRegistry registry;
+            const auto counter = std::make_shared<int>();
+            const auto callback = std::make_shared<CallbackCaptureAdapter>([](const CanonicalCaptureContext &, ICanonicalCaptureSink &) {
+                CHECK(Log::DiagnosticsSuppressed());
+                Log::Logger::WriteEmergency("save.test.capture", Log::Level::Error, "private participant payload");
+                return Result<CanonicalCaptureDisposition>::Failure(MakeError(SaveErrors::CompositionInjectedFailure));
+            }, counter);
+            Register(registry, Descriptor("project.capture.private", {Test::Id<SaveRecordId>(26)}), callback);
+            const auto participants = registry.Snapshot().Value();
+            auto builder = RuntimeSaveCaptureBuilder::Create(Provenance(participants), participants).Value();
+            const auto before = Log::Logger::Statistics().emergencyRecords;
+            RequireError(builder.CaptureParticipants(), SaveErrors::CompositionInjectedFailure);
+            CHECK(Log::Logger::Statistics().emergencyRecords == before);
+            CHECK_FALSE(Log::DiagnosticsSuppressed());
+        }
+
+        TEST_CASE("Sealed capture prevents immutable payload reads from publishing diagnostics", "[unit][save][capture][privacy]") {
+            class PrivatePayload final : public IImmutableCanonicalPayload {
+            public:
+                std::uint64_t ByteLength() const noexcept override {
+                    return bytes_.size();
+                }
+
+                std::size_t SegmentCount() const noexcept override {
+                    return 1;
+                }
+
+                std::span<const std::byte> Segment(std::size_t) const noexcept override {
+                    Log::Logger::WriteEmergency("save.test.capture", Log::Level::Error, "private immutable payload");
+                    return bytes_;
+                }
+
+            private:
+                const std::array<std::byte, 1> bytes_{std::byte{0x27}};
+            };
+
+            CanonicalStateParticipantRegistry registry;
+            const auto record = Test::Id<SaveRecordId>(27);
+            Register(registry, Descriptor("project.capture.private_payload", {record}), std::make_shared<int>());
+            const auto participants = registry.Snapshot().Value();
+            auto builder = RuntimeSaveCaptureBuilder::Create(Provenance(participants), participants).Value();
+            const auto before = Log::Logger::Statistics().emergencyRecords;
+            REQUIRE(builder.AddImmutableRecord(CaptureRecord("project.capture.private_payload", record), std::make_shared<PrivatePayload>())
+                        .HasValue());
+            const auto snapshot = builder.Seal().Value();
+            REQUIRE(snapshot.Records().size() == 1);
+            const auto bytes = snapshot.Records().front().Segment(0);
+            REQUIRE(bytes.size() == 1);
+            CHECK(bytes.front() == std::byte{0x27});
+            CHECK(Log::Logger::Statistics().emergencyRecords == before);
+            CHECK_FALSE(Log::DiagnosticsSuppressed());
+        }
 
         TEST_CASE("Empty optional capture publishes omission without payload records", "[unit][save][capture]") {
             auto destructionCount = std::make_shared<int>();
