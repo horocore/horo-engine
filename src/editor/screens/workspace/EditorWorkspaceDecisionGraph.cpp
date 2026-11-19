@@ -1265,11 +1265,62 @@ namespace Horo::Editor {
         return Closed::Success(true);
     }
 
+    /** @copydoc EditorWorkspaceController::CaptureDecisionHistoryFence */
+    DecisionGraphHistoryFence EditorWorkspaceController::CaptureDecisionHistoryFence(const DecisionGraphWorkspaceDocument &document,
+                                                                                     const DecisionGraphDraft &draft) noexcept {
+        return {{document.identity.instance, document.revision},
+                document.source,
+                {document.graph, document.layout, draft.currentDigest},
+                document.conflict};
+    }
+
+    /** @copydoc EditorWorkspaceController::PrepareDecisionReferenceChange */
+    Result<DecisionGraphDocumentHistory::Prepared> EditorWorkspaceController::PrepareDecisionReferenceChange(
+        const DecisionGraphWorkspaceDocument &document, const DecisionGraphDraft &draft, std::uint64_t revision,
+        const Assets::AssetCookPinnedSource &source, std::uint64_t group) const {
+        using Prepared = Result<DecisionGraphDocumentHistory::Prepared>;
+        if (!group || !document.editable || document.revision != revision || document.dirty || document.conflict ||
+            document.asset != source.record.id || document.source != source.sourceDigest ||
+            document.identity.key.source.Value() != source.record.sourcePath.String())
+            return Prepared::Failure(MakeError(Application::DecisionCookErrors::Stale));
+
+        auto decoded = Application::DecodeRegisteredDecisionGraphSource(source);
+        if (decoded.HasError())
+            return Prepared::Failure(decoded.ErrorValue());
+        const auto &candidate = decoded.Value();
+        const auto &current = *document.graph;
+        const auto digest = ComputeSha256(std::as_bytes(std::span{source.bytes}));
+        if (candidate.asset != current.asset || candidate.schemaVersion != current.schemaVersion ||
+            candidate.blackboard != current.blackboard || candidate.blackboardVersion != current.blackboardVersion ||
+            candidate.executionTask != current.executionTask || DecisionFamily(candidate) != document.family ||
+            digest == draft.currentDigest)
+            return Prepared::Failure(MakeError(Application::DecisionCookErrors::Invalid));
+
+        return draft.history.PrepareChange(CaptureDecisionHistoryFence(document, draft),
+                                           {std::make_shared<const AI::DecisionGraphSource>(std::move(decoded).Value()), document.layout,
+                                            digest},
+                                           draft.acceptedBytes + source.bytes.size(), group);
+    }
+
+    /** @copydoc EditorWorkspaceController::PublishDecisionGraphChange */
+    bool EditorWorkspaceController::PublishDecisionGraphChange(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
+                                                               DecisionGraphDocumentHistory::Prepared &prepared) noexcept {
+        if (!draft.history.Publish(prepared, CaptureDecisionHistoryFence(document, draft)))
+            return false;
+        const auto &candidate = prepared.Candidate();
+        document.graph = candidate.graph;
+        document.layout = candidate.layout;
+        draft.currentDigest = candidate.digest;
+        document.validation.reset();
+        ++document.revision;
+        return true;
+    }
+
     /** @copydoc EditorWorkspaceController::ProjectDecisionGraphDraft */
     void EditorWorkspaceController::ProjectDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, const DecisionGraphDraft &draft) {
         document.dirty = draft.currentDigest != draft.savedDigest || *document.layout != *draft.savedLayout;
-        document.canUndo = draft.history.UndoCount() != 0;
-        document.canRedo = draft.history.RedoCount() != 0;
+        document.canUndo = draft.history.HasReplay(false);
+        document.canRedo = draft.history.HasReplay(true);
         static_cast<void>(m_viewModel.workspacePanelHost.SetDocumentDirty(document.identity.instance, document.dirty));
     }
 
@@ -1297,13 +1348,13 @@ namespace Horo::Editor {
             return Edited::Success();
         auto candidate = std::make_shared<const DecisionGraphLayout>(std::move(layout).Value());
         const auto bytes = (document.layout->size() + candidate->size()) * sizeof(DecisionNodePlacement);
-        auto prepared = draft.history.Prepare(
-            {document.graph, document.graph, draft.currentDigest, draft.currentDigest, document.layout, candidate, bytes});
-        if (!prepared)
-            return Edited::Failure(MakeError(Assets::AssetSourceErrors::Limit));
-        draft.history.Commit(*prepared);
-        document.layout = std::move(candidate);
-        ++document.revision;
+        auto prepared = draft.history.PrepareChange(CaptureDecisionHistoryFence(document, draft),
+                                                    {document.graph, std::move(candidate), draft.currentDigest}, bytes);
+        if (prepared.HasError())
+            return Edited::Failure(prepared.ErrorValue());
+        auto reservation = std::move(prepared).Value();
+        if (!PublishDecisionGraphChange(document, draft, reservation))
+            return Edited::Failure(MakeError(Application::DecisionCookErrors::Stale));
         ProjectDecisionGraphDraft(document, draft);
         return Edited::Success();
     }
@@ -1312,11 +1363,11 @@ namespace Horo::Editor {
     Result<void> EditorWorkspaceController::ReplayDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
                                                                      bool redo) {
         using Replay = Result<void>;
-        const auto *entry = draft.history.Next(redo);
-        if (!entry || document.graph != (redo ? entry->before : entry->after) ||
-            document.layout != (redo ? entry->beforeLayout : entry->afterLayout))
-            return Replay::Failure(MakeError(Application::DecisionCookErrors::Stale));
-        const auto &candidate = redo ? entry->after : entry->before;
+        auto prepared = draft.history.PrepareReplay(CaptureDecisionHistoryFence(document, draft), redo);
+        if (prepared.HasError())
+            return Replay::Failure(prepared.ErrorValue());
+        auto reservation = std::move(prepared).Value();
+        const auto &candidate = reservation.Candidate().graph;
         if (candidate != document.graph) {
             const auto root = ProjectRoot();
             const auto lease = m_mutations->TryAcquire({root, ProjectMutationOwner::Asset, "decision-history-replay"});
@@ -1329,11 +1380,8 @@ namespace Horo::Editor {
             if (auto admitted = ValidateDecisionDraft(root, registry, *candidate, providers.Value(), document); admitted.HasError())
                 return admitted;
         }
-        document.graph = candidate;
-        document.layout = redo ? entry->afterLayout : entry->beforeLayout;
-        draft.currentDigest = redo ? entry->afterDigest : entry->beforeDigest;
-        draft.history.DidReplay(redo);
-        ++document.revision;
+        if (!PublishDecisionGraphChange(document, draft, reservation))
+            return Replay::Failure(MakeError(Application::DecisionCookErrors::Stale));
         ProjectDecisionGraphDraft(document, draft);
         return Replay::Success();
     }
@@ -1499,15 +1547,14 @@ namespace Horo::Editor {
                 layout = std::make_shared<const DecisionGraphLayout>(std::move(surviving));
         }
         const auto layoutBytes = layout == document.layout ? 0 : (layout->size() + document.layout->size()) * sizeof(DecisionNodePlacement);
-        auto prepared = draft.history.Prepare({document.graph, candidate, draft.currentDigest, candidateDigest, document.layout, layout,
-                                               before.Value().size() + after.Value().size() + layoutBytes});
-        if (!prepared)
-            return Edit::Failure(MakeError(Assets::AssetSourceErrors::Limit));
-        draft.history.Commit(*prepared);
-        draft.currentDigest = candidateDigest;
-        document.graph = std::move(candidate);
-        document.layout = std::move(layout);
-        ++document.revision;
+        auto prepared = draft.history.PrepareChange(CaptureDecisionHistoryFence(document, draft),
+                                                    {std::move(candidate), std::move(layout), candidateDigest},
+                                                    before.Value().size() + after.Value().size() + layoutBytes);
+        if (prepared.HasError())
+            return Edit::Failure(prepared.ErrorValue());
+        auto reservation = std::move(prepared).Value();
+        if (!PublishDecisionGraphChange(document, draft, reservation))
+            return Edit::Failure(MakeError(Application::DecisionCookErrors::Stale));
         ProjectDecisionGraphDraft(document, draft);
         return Edit::Success();
     }

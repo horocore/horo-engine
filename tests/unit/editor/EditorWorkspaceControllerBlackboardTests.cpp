@@ -17,6 +17,7 @@
 #include "editor/screens/workspace/BlackboardScalarInput.h"
 #include "editor/screens/workspace/DecisionGraphCanvas.h"
 #include "editor/screens/workspace/DecisionGraphCanvasModel.h"
+#include "editor/screens/workspace/DecisionGraphDocumentHistory.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/WorkspacePathText.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
@@ -35,6 +36,94 @@
 namespace {
     using namespace Horo;
     using namespace Horo::Editor;
+
+    TEST_CASE("Decision document reserves a complete exact root before touching its history", "[editor][decision-graph][history]") {
+        DecisionGraphDocumentHistory history;
+        const DecisionGraphDocumentRoot original{std::make_shared<const AI::DecisionGraphSource>(),
+                                                 std::make_shared<const DecisionGraphLayout>(),
+                                                 {}};
+        const DecisionGraphHistoryFence current{{DocumentInstanceId::Create(1).Value(), 3}, {}, original};
+        auto candidate = original;
+        candidate.graph = std::make_shared<const AI::DecisionGraphSource>();
+        candidate.digest.bytes.front() = 1;
+
+        CHECK(history.PrepareChange(current, candidate, 8 * 1024 * 1024).HasError());
+        auto pending = history.PrepareChange(current, candidate, 32);
+        REQUIRE(pending.HasValue());
+        auto prepared = std::move(pending).Value();
+        CHECK_FALSE(history.HasReplay(false));
+        CHECK(prepared.Candidate() == candidate);
+
+        auto stale = current;
+        ++stale.document.revision;
+        CHECK_FALSE(history.CanPublish(prepared, stale));
+        stale = current;
+        stale.document.instance = DocumentInstanceId::Create(2).Value();
+        CHECK_FALSE(history.CanPublish(prepared, stale));
+        stale = current;
+        stale.acceptedSource.bytes.front() = 2;
+        CHECK_FALSE(history.CanPublish(prepared, stale));
+        stale = current;
+        stale.root.layout = std::make_shared<const DecisionGraphLayout>();
+        CHECK_FALSE(history.CanPublish(prepared, stale));
+        stale = current;
+        stale.conflict = true;
+        CHECK_FALSE(history.CanPublish(prepared, stale));
+        const DecisionGraphDocumentHistory foreign;
+        CHECK_FALSE(foreign.CanPublish(prepared, current));
+
+        auto alsoPending = history.PrepareChange(current, candidate, 32);
+        REQUIRE(alsoPending.HasValue());
+        CHECK_FALSE(history.Publish(prepared, stale));
+        CHECK_FALSE(history.HasReplay(false));
+        REQUIRE(history.Publish(prepared, current));
+        CHECK(history.HasReplay(false));
+        CHECK_FALSE(history.Publish(prepared, current));
+        CHECK_FALSE(history.CanPublish(alsoPending.Value(), current));
+    }
+
+    TEST_CASE("Decision coordinated history requires the exact group for undo and redo", "[editor][decision-graph][history]") {
+        DecisionGraphDocumentHistory history;
+        constexpr std::uint64_t group = 7;
+        const DecisionGraphDocumentRoot original{std::make_shared<const AI::DecisionGraphSource>(),
+                                                 std::make_shared<const DecisionGraphLayout>(),
+                                                 {}};
+        DecisionGraphHistoryFence current{{DocumentInstanceId::Create(1).Value(), 1}, {}, original};
+        auto candidate = original;
+        candidate.graph = std::make_shared<const AI::DecisionGraphSource>();
+        candidate.digest.bytes.front() = 1;
+        auto pending = history.PrepareChange(current, candidate, 48, group);
+        REQUIRE(pending.HasValue());
+        auto prepared = std::move(pending).Value();
+        REQUIRE(history.Publish(prepared, current));
+        current.root = prepared.Candidate();
+        ++current.document.revision;
+
+        CHECK(history.NextReferenceGroup(false) == group);
+        CHECK(history.PrepareReplay(current, false).HasError());
+        CHECK(history.PrepareReplay(current, false, group + 1).HasError());
+        auto next = history.PrepareReplay(current, false, group);
+        REQUIRE(next.HasValue());
+        auto pendingUndo = std::move(next).Value();
+        auto undo = std::move(pendingUndo);
+        CHECK_FALSE(history.Publish(pendingUndo, current));
+        CHECK(undo.Candidate() == original);
+        CHECK(history.NextReferenceGroup(false) == group);
+        CHECK_FALSE(history.HasReplay(true));
+        REQUIRE(history.Publish(undo, current));
+        current.root = undo.Candidate();
+        ++current.document.revision;
+
+        CHECK(history.NextReferenceGroup(true) == group);
+        CHECK(history.PrepareReplay(current, true).HasError());
+        auto nextRedo = history.PrepareReplay(current, true, group);
+        REQUIRE(nextRedo.HasValue());
+        auto redo = std::move(nextRedo).Value();
+        CHECK(redo.Candidate() == candidate);
+        REQUIRE(history.Publish(redo, current));
+        CHECK(history.NextReferenceGroup(false) == group);
+        CHECK_FALSE(history.HasReplay(true));
+    }
 
     /** @brief Injects one layout failure while keeping Project leases and source publication native. */
     class DecisionSaveFaultFiles final : public TestSupport::NativePublicationFiles {

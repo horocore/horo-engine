@@ -32,6 +32,7 @@
 #include "editor/project_model/EditorSelectionModel.h"
 #include "editor/project_model/EditorViewportModel.h"
 #include "editor/renderer/xr/EditorXrSceneGeometry.h"
+#include "editor/screens/workspace/DecisionGraphDocumentHistory.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/PCGPreviewWorkspace.h"
 #include "editor/screens/workspace/prefab/PrefabApplyTransaction.h"
@@ -566,17 +567,6 @@ namespace Horo::Editor {
         std::optional<SceneSource::TriggerVolumeConversionContext> m_triggerBinding;
         EditorPlaySceneFactory m_playSceneFactory;
 
-        /** @brief Shared semantic roots and charged encoded bytes retained by decision document history. */
-        struct DecisionGraphHistoryEntry final {
-            std::shared_ptr<const AI::DecisionGraphSource> before;
-            std::shared_ptr<const AI::DecisionGraphSource> after;
-            Sha256Digest beforeDigest;
-            Sha256Digest afterDigest;
-            std::shared_ptr<const DecisionGraphLayout> beforeLayout;
-            std::shared_ptr<const DecisionGraphLayout> afterLayout;
-            std::size_t bytes{};
-        };
-
         /** @brief Accepted disk identity and bounded authoring state for a single Decision session. */
         struct DecisionGraphDraft final {
             std::weak_ptr<const AI::DecisionBlackboardProviderMetadata> reviewedSubtreeCatalog;
@@ -585,7 +575,7 @@ namespace Horo::Editor {
             std::size_t acceptedBytes{};
             Assets::AssetSourceIdentity acceptedLayout;
             std::shared_ptr<const DecisionGraphLayout> savedLayout;
-            SemanticDocumentHistory<DecisionGraphHistoryEntry> history{};
+            DecisionGraphDocumentHistory history;
         };
 
         std::map<DocumentInstanceId, DecisionGraphDraft> m_decisionGraphDrafts;
@@ -607,6 +597,25 @@ namespace Horo::Editor {
                                               const DecisionGraphLayoutRequest &request);
         /** @brief Replays the next heterogeneous Decision history entry. */
         Result<void> ReplayDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft, bool redo);
+        /** @brief Captures one exact current Decision document for prepared publication. */
+        [[nodiscard]] static DecisionGraphHistoryFence CaptureDecisionHistoryFence(const DecisionGraphWorkspaceDocument &document,
+                                                                                   const DecisionGraphDraft &draft) noexcept;
+        /** @brief Reserves reviewed key-retarget bytes for a clean session with the exact previously accepted source.
+         * @param document Existing Decision participant. @param draft Its history and accepted source state.
+         * @param revision Expected document revision. @param source Reviewed registered record and canonical replacement bytes.
+         * @param group Shared nonzero Blackboard transaction identity.
+         * @return Detached reservation, or the typed decoder, stale-source or capacity failure.
+         * @pre The coordinator has validated the entire candidate closure against its paired schema.
+         */
+        [[nodiscard]] Result<DecisionGraphDocumentHistory::Prepared> PrepareDecisionReferenceChange(
+            const DecisionGraphWorkspaceDocument &document, const DecisionGraphDraft &draft, std::uint64_t revision,
+            const Assets::AssetCookPinnedSource &source, std::uint64_t group) const;
+        /** @brief Publishes one fully prepared Decision root before the coordinated view refresh.
+         * @param document Same participant session. @param draft Its authoring history. @param prepared Exact live reservation.
+         * @return False if the owner no longer matches the reservation. No state is changed on failure.
+         */
+        [[nodiscard]] bool PublishDecisionGraphChange(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
+                                                      DecisionGraphDocumentHistory::Prepared &prepared) noexcept;
         /** @brief Publishes the semantic draft flags to shared tab lifecycle. */
         void ProjectDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, const DecisionGraphDraft &draft);
 
