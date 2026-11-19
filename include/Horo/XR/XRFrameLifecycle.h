@@ -299,9 +299,10 @@ namespace Horo::XR {
                                                        std::span<const XRSwapchainImageId> completedImages) const noexcept;
         [[nodiscard]] XRFrameStatus ValidateReprojectionImage(const XRReprojectionImage &image) const noexcept;
         void RecordReprojectionImage(const XRReprojectionImage &image) noexcept;
+        /** @brief Checks a released subresource against its exact admitted view extent. */
         [[nodiscard]] bool MatchesReprojectionImage(const XRFrameId &frame, const XRReprojectionSubImage &input,
-                                                    XRReprojectionImageKind kind) const noexcept;
-        /** @brief Admits the declared format envelope for the exact negotiated current session. */
+                                                    XRReprojectionImageKind kind, Render::FramebufferExtent extent) const noexcept;
+        /** @brief Admits the format and ordered view extent envelope for the negotiated current session. */
         [[nodiscard]] XRFrameStatus ValidateReprojectionPolicy(const std::optional<XRReprojectionPolicy> &candidate,
                                                                XRFrameLimits limits) const noexcept;
 

@@ -8,10 +8,24 @@ namespace Horo::XR {
         /** @brief This envelope is deliberately narrower than any one native extension's full formats. */
         bool CompatiblePolicy(const XRReprojectionPolicy &policy) noexcept {
             using enum Render::RenderTextureFormat;
-            return policy.extent.IsValid() && policy.maximumPredictionIntervalNanoseconds > 0 &&
+            return policy.maximumPredictionIntervalNanoseconds > 0 &&
                    policy.motion == XRReprojectionMotionConvention::CurrentNdcMinusPreviousNdcXYZ &&
                    (policy.motionFormat == Rgba16Float || policy.motionFormat == Rgba32Float) &&
                    (policy.depthFormat == Depth16Unorm || policy.depthFormat == Depth32Float);
+        }
+
+        /** @brief Verifies every active extent before frame admission can index the policy. */
+        bool ValidViewExtents(const XRReprojectionPolicy &policy, const XRFrameLimits limits) noexcept {
+            if (policy.viewCount == 0 || policy.viewCount > limits.maximumViews || policy.viewCount > policy.viewExtents.size())
+                return false;
+            return std::ranges::all_of(std::span{policy.viewExtents}.first(policy.viewCount), &Render::FramebufferExtent::IsValid);
+        }
+
+        /** @brief Array storage must contain the exact rectangles of all admitted views. */
+        bool CoversViewExtents(const XRReprojectionPolicy &policy, const Render::FramebufferExtent allocation) noexcept {
+            return std::ranges::all_of(std::span{policy.viewExtents}.first(policy.viewCount), [&](const auto extent) {
+                return allocation.width >= extent.width && allocation.height >= extent.height;
+            });
         }
 
         /** @brief Rejects invalid camera movement without silently substituting an identity delta. */
@@ -88,7 +102,7 @@ namespace Horo::XR {
         const bool enabled = plan && plan->Decision(XRCapability::SpaceWarp).state == XRFeatureDecisionState::OptionalEnabled;
         if (!enabled)
             return candidate ? XRFrameStatus::Unsupported : XRFrameStatus::Ok;
-        if (!candidate || !CompatiblePolicy(*candidate))
+        if (!candidate || !CompatiblePolicy(*candidate) || !ValidViewExtents(*candidate, limits))
             return XRFrameStatus::InvalidInput;
         return limits.maximumImages >= 3 ? XRFrameStatus::Ok : XRFrameStatus::CapacityExceeded;
     }
@@ -100,12 +114,12 @@ namespace Horo::XR {
         const auto &allocation = image.allocation;
         if (image.kind >= XRReprojectionImageKind::Count || !allocation.IsValid() ||
             allocation.dimension != Render::RenderTextureDimension::TwoD || allocation.sampleCount != 1 || allocation.mipCount != 1 ||
-            allocation.layerCount > XRViewRenderHardLimits::MaximumArrayLayers)
+            allocation.layerCount < reprojection_->viewCount || allocation.layerCount > XRViewRenderHardLimits::MaximumArrayLayers)
             return XRFrameStatus::InvalidInput;
         const auto expected = image.kind == XRReprojectionImageKind::Motion ? reprojection_->motionFormat : reprojection_->depthFormat;
         const auto required = Render::RenderTextureUsage::RenderAttachment | Render::RenderTextureUsage::Sampled;
         if (allocation.format != expected || !Render::HasTextureUsage(allocation.usage, required) ||
-            allocation.extent.width < reprojection_->extent.width || allocation.extent.height < reprojection_->extent.height)
+            !CoversViewExtents(*reprojection_, allocation.extent))
             return XRFrameStatus::InvalidInput;
         return XRFrameStatus::Ok;
     }
@@ -136,7 +150,7 @@ namespace Horo::XR {
             return CapacityExceeded;
         if (motion.kind != XRReprojectionImageKind::Motion || depth.kind != XRReprojectionImageKind::Depth ||
             motion.allocation.extent != depth.allocation.extent || motion.allocation.layerCount != depth.allocation.layerCount ||
-            motion.allocation.layerCount < current_.locatedViews)
+            current_.locatedViews != reprojection_->viewCount)
             return InvalidInput;
         if (motion.image.target.slot.index == depth.image.target.slot.index)
             return Duplicate;
@@ -214,13 +228,14 @@ namespace Horo::XR {
 
     /** @copydoc XRFrameLifecycle::MatchesReprojectionImage */
     bool XRFrameLifecycle::MatchesReprojectionImage(const XRFrameId &frame, const XRReprojectionSubImage &input,
-                                                    const XRReprojectionImageKind kind) const noexcept {
+                                                    const XRReprojectionImageKind kind,
+                                                    const Render::FramebufferExtent extent) const noexcept {
         if (ValidateReleasedImage(frame, input.image) != XRFrameStatus::Ok)
             return false;
         const auto &registered = reprojectionImages_[FindImage(input.image)];
         return registered && registered->kind == kind && input.arrayLayer < registered->allocation.layerCount &&
-               input.rectangle.FitsWithin(registered->allocation.extent) && input.rectangle.width == reprojection_->extent.width &&
-               input.rectangle.height == reprojection_->extent.height;
+               input.rectangle.FitsWithin(registered->allocation.extent) && input.rectangle.width == extent.width &&
+               input.rectangle.height == extent.height;
     }
 
     /** @copydoc XRFrameLifecycle::ValidateReprojection */
@@ -238,13 +253,15 @@ namespace Horo::XR {
         if (interval <= 0 || interval > reprojection_->maximumPredictionIntervalNanoseconds ||
             !CompatibleHistory(plan, *previousProjection_))
             return HistoryUnavailable;
-        if (!ValidApplicationDelta(inputs.applicationDelta) || inputs.views.size() != plan.Views().size())
+        if (!ValidApplicationDelta(inputs.applicationDelta) || inputs.views.size() != plan.Views().size() ||
+            inputs.views.size() != reprojection_->viewCount)
             return InputsInvalid;
         for (std::size_t i = 0; i < inputs.views.size(); ++i) {
             const auto &view = inputs.views[i];
+            const auto extent = reprojection_->viewExtents[i];
             if (view.view != plan.Views()[i].id || inputs.applicationDelta->reference != plan.Views()[i].pose.target || !ValidDepth(view) ||
-                !MatchesReprojectionImage(frame, view.motion, XRReprojectionImageKind::Motion) ||
-                !MatchesReprojectionImage(frame, view.depth, XRReprojectionImageKind::Depth))
+                !MatchesReprojectionImage(frame, view.motion, XRReprojectionImageKind::Motion, extent) ||
+                !MatchesReprojectionImage(frame, view.depth, XRReprojectionImageKind::Depth, extent))
                 return InputsInvalid;
             if (std::ranges::any_of(inputs.views.first(i), [&](const auto &prior) {
                 return Aliases(view.motion, prior.motion) || Aliases(view.depth, prior.depth);

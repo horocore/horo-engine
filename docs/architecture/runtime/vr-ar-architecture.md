@@ -653,25 +653,30 @@ the ordinary projection fallback. The selected OpenXR Play composition publishes
 baseline projection. It has a color producer and omits the optional feature
 until the selected runtime and Renderer share a qualified auxiliary path.
 
-For that optional request, selected OpenXR discovery reports a compatible
-advertised frame-synthesis route as a missing producer dependency. The
-instance remains on its ordinary projection extensions. An explicitly enabled
-route can publish its native motion/depth extent offer to the owning
-composition. The EXT route supplies one recommendation per stereo eye. The
-legacy FB route supplies one system recommendation. Invalid, unavailable and
-stale offers carry separate evidence, and native sizing alone does not grant a
-provider or admit GPU work.
+For that optional request, selected OpenXR discovery can enable the native
+frame-synthesis extension and report the missing producer dependency. If the
+runtime rejects the optional extension, the host retries instance creation
+once with ordinary projection extensions. An enabled route can publish its
+native motion/depth extent offer to the owning composition. The EXT route
+supplies one recommendation per stereo eye. The legacy FB route supplies one
+system recommendation. Invalid, unavailable and stale offers carry separate
+evidence. Producer and provider admission still require a qualified GPU path.
 
 The XR frame owner fences that future handoff with a typed per-session
 contract. Motion uses signed current-minus-previous XYZ in normalized device
 coordinates. Device depth is normalized with explicit metric endpoints, and
 the application-space delta is independent of the runtime-tracked eye poses.
 The exact image owners record formats, extents, usage and array layers at
-acquisition. Evaluation requires completed Renderer submission and native release
-for those exact images. Only a successful native projection establishes
-history. Skipped frames, session or origin replacement and incompatible views,
-allocations, or prediction times break that history. Failed optional inputs
-leave a separately valid ordinary projection available.
+acquisition. Frame owners migrating from the scalar `XRReprojectionPolicy::extent`
+set `viewCount` and copy the runtime recommendations into `viewExtents` in
+projection order. A uniform recommendation is repeated for each view. Shared
+motion and depth images must cover the maximum width and height and supply
+enough layers. Submission validates the motion and depth rectangles against the
+individual view's recommendation. Evaluation requires completed Renderer
+submission and native release for those exact images. Only a successful native
+projection establishes history. Skipped frames, session or origin replacement,
+and incompatible views, allocations, or prediction times break that history.
+Failed optional inputs leave a separately valid ordinary projection available.
 
 See the [Khronos space-warp layer contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrCompositionLayerSpaceWarpInfoFB.html)
 for the distinction between runtime motion inputs and internal Renderer UV history.

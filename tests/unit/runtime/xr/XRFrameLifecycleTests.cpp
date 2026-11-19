@@ -174,11 +174,20 @@ namespace Horo::XR {
             const auto capabilities = Capabilities(1, 1, true);
             const auto session = Activate(sessions, capabilities, SynthesisRequest);
             XRFrameLifecycle frames{sessions};
-            constexpr XRReprojectionPolicy policy{.extent = {64, 64},
+            constexpr XRReprojectionPolicy policy{.viewExtents = {{{64, 48}, {40, 64}}},
+                                                  .viewCount = 2,
                                                   .maximumPredictionIntervalNanoseconds = 1000,
                                                   .motion = XRReprojectionMotionConvention::CurrentNdcMinusPreviousNdcXYZ};
             const auto configuration = Configuration(session);
             REQUIRE(frames.BindConfiguration(configuration, capabilities, {2, 3, 1}) == XRFrameStatus::InvalidInput);
+            auto invalid = policy;
+            invalid.viewCount = 0;
+            CHECK(frames.BindConfiguration(configuration, capabilities, {2, 3, 1}, invalid) == XRFrameStatus::InvalidInput);
+            invalid.viewCount = 3;
+            CHECK(frames.BindConfiguration(configuration, capabilities, {2, 3, 1}, invalid) == XRFrameStatus::InvalidInput);
+            invalid = policy;
+            invalid.viewExtents[1].height = 0;
+            CHECK(frames.BindConfiguration(configuration, capabilities, {2, 3, 1}, invalid) == XRFrameStatus::InvalidInput);
             REQUIRE(frames.BindConfiguration(configuration, capabilities, {2, 3, 1}, policy) == XRFrameStatus::Ok);
             const auto first = Wait(frames, session);
             const auto color = Image(session, 1);
@@ -203,6 +212,14 @@ namespace Horo::XR {
                                         .usage = usage}};
             CHECK(frames.AcquireReprojectionImage(second, motion) == XRFrameStatus::InvalidInput);
             motion.allocation.format = policy.motionFormat;
+            motion.allocation.extent = policy.viewExtents[0];
+            CHECK(frames.AcquireReprojectionImage(second, motion) == XRFrameStatus::InvalidInput);
+            motion.allocation.extent = policy.viewExtents[1];
+            CHECK(frames.AcquireReprojectionImage(second, motion) == XRFrameStatus::InvalidInput);
+            motion.allocation.extent = {64, 64};
+            motion.allocation.layerCount = 1;
+            CHECK(frames.AcquireReprojectionImage(second, motion) == XRFrameStatus::InvalidInput);
+            motion.allocation.layerCount = 2;
             REQUIRE(frames.AcquireReprojectionImage(second, motion) == XRFrameStatus::Ok);
             const XRReprojectionImage depth{Image(session, 3),
                                             XRReprojectionImageKind::Depth,
@@ -214,19 +231,25 @@ namespace Horo::XR {
             REQUIRE(frames.Release(second, motion.image) == XRFrameStatus::Ok);
 
             std::array<XRReprojectionViewInput, 2> views{};
-            for (std::uint32_t i = 0; i < views.size(); ++i)
-                views[i] =
-                    {current.Views()[i].id, {motion.image, {0, 0, 64, 64}, i}, {depth.image, {0, 0, 64, 64}, i}, 0.0F, 1.0F, 0.1F, 100.0F};
+            for (std::uint32_t i = 0; i < views.size(); ++i) {
+                const auto [width, height] = policy.viewExtents[i];
+                const XRRenderRectangle rectangle{0, 0, width, height};
+                views[i] = {current.Views()[i].id, {motion.image, rectangle, i}, {depth.image, rectangle, i}, 0.0F, 1.0F, 0.1F, 100.0F};
+            }
             XRReprojectionInputs inputs{prior.PredictedDisplayTime(), first.sequence,
                                         XRReprojectionSpaceDelta{current.Views().front().pose.target, {}, Math::Quaternion::Identity()},
                                         views};
             CHECK(frames.ValidateReprojection(second, current, inputs) == XRReprojectionStatus::ProjectionInvalid);
             REQUIRE(frames.Release(second, depth.image) == XRFrameStatus::Ok);
+            inputs.views = std::span{views}.first(1);
+            CHECK(frames.ValidateReprojection(second, current, inputs) == XRReprojectionStatus::InputsInvalid);
+            inputs.views = views;
             CHECK(frames.ValidateReprojection(second, current, inputs) == XRReprojectionStatus::CoverageUnavailable);
             std::array<XRReprojectionViewCoverage, 2> observed{};
             for (std::size_t eye = 0; eye < views.size(); ++eye) {
                 const auto &view = views[eye];
-                observed[eye] = {view.view, view.motion, view.depth, 64 * 64, 0};
+                const auto [width, height] = policy.viewExtents[eye];
+                observed[eye] = {view.view, view.motion, view.depth, std::uint64_t{width} * height, 0};
             }
             inputs.coverage.emplace(XRReprojectionCoverage{.session = session,
                                                            .frameSequence = second.sequence,

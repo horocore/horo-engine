@@ -8,6 +8,7 @@
 #include "support/OpenXRPassthroughTestSupport.h"
 #include "support/OpenXRSwapchainTestSupport.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/generators/catch_generators.hpp>
 #include <cmath>
@@ -97,6 +98,7 @@ namespace Horo::Tests::OpenXR {
             XRCoordinateSpace local;
             NativeSwapchainRequest allocation;
             NativeReprojectionRoute synthesisRoute;
+            std::array<Render::FramebufferExtent, 2> synthesisExtents{};
 
             static XRAPI_ATTR XrResult XRAPI_CALL ResolveSynthesisProperties(XrInstance instance, const char *name,
                                                                              PFN_xrVoidFunction *function) {
@@ -118,7 +120,6 @@ namespace Horo::Tests::OpenXR {
                     native.script.resolveExtra = &ResolveSynthesisProperties;
                     native.script.spaceWarpExtension = route == NativeReprojectionRoute::SpaceWarpFb;
                     native.script.synthesisExtension = route == NativeReprojectionRoute::FrameSynthesisExt;
-                    census.synthesisEyeWidthStep = 0;
                     ++native.script.extensionCount;
                     requestSpaceWarp = true;
                 }
@@ -169,13 +170,14 @@ namespace Horo::Tests::OpenXR {
                          .worldOriginRevision = IdentityValue<XRWorldOriginRevision>(1)};
                 spaces.reference = local;
                 if (enableSynthesis) {
-                    REQUIRE(
-                        frames.BindConfiguration(configuration, native.capabilities, {2, 3, 1},
-                                                 XRReprojectionPolicy{.extent = {640, 512},
-                                                                      .maximumPredictionIntervalNanoseconds = 20'000'000,
-                                                                      .motion =
-                                                                          XRReprojectionMotionConvention::CurrentNdcMinusPreviousNdcXYZ}) ==
-                        XRFrameStatus::Ok);
+                    const auto offer = native.owner.DiscoverReprojection(native.preflight.Attempt(), session);
+                    REQUIRE(offer.HasValue());
+                    synthesisExtents = offer.Value().extents;
+                    XRReprojectionPolicy policy{.viewCount = static_cast<std::uint32_t>(synthesisExtents.size()),
+                                                .maximumPredictionIntervalNanoseconds = 20'000'000,
+                                                .motion = XRReprojectionMotionConvention::CurrentNdcMinusPreviousNdcXYZ};
+                    std::ranges::copy(synthesisExtents, policy.viewExtents.begin());
+                    REQUIRE(frames.BindConfiguration(configuration, native.capabilities, {2, 3, 1}, policy) == XRFrameStatus::Ok);
                 } else {
                     REQUIRE(frames.BindConfiguration(configuration, native.capabilities, {2, 2, maximumLayers}) == XRFrameStatus::Ok);
                 }
@@ -195,7 +197,8 @@ namespace Horo::Tests::OpenXR {
             }
 
             void CreateSynthesisPair() {
-                constexpr Render::FramebufferExtent extent{640, 512};
+                const Render::FramebufferExtent extent{std::max(synthesisExtents[0].width, synthesisExtents[1].width),
+                                                       std::max(synthesisExtents[0].height, synthesisExtents[1].height)};
                 NativeSwapchainRequest request{.target = {session, {5, 1}},
                                                .texture = {.extent = extent,
                                                            .format = Render::RenderTextureFormat::Rgba16Float,
@@ -203,9 +206,8 @@ namespace Horo::Tests::OpenXR {
                                                            .usage = Render::RenderTextureUsage::Sampled |
                                                                     Render::RenderTextureUsage::RenderAttachment},
                                                .role = NativeSwapchainRole::Motion,
-                                               .reprojection = NativeReprojectionAllocation{native.preflight.Attempt(),
-                                                                                            synthesisRoute,
-                                                                                            {extent, extent}}};
+                                               .reprojection = NativeReprojectionAllocation{native.preflight.Attempt(), synthesisRoute,
+                                                                                            synthesisExtents}};
                 motionImages.textureSlot = 2;
                 synthesisDepthImages.textureSlot = 3;
                 REQUIRE(motionOwner.Create(request, &SwapchainScript::GetProc).HasValue());

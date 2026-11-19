@@ -7,6 +7,7 @@
 
 #include "Horo/XR/XRViewRenderPlan.h"
 
+#include <array>
 #include <optional>
 
 namespace Horo::XR {
@@ -16,11 +17,14 @@ namespace Horo::XR {
         Count
     };
 
-    /** @brief Admitted formats and resource/timing envelope common to the runtime provider and its Renderer producer. */
+    /** @brief Admitted formats and ordered view extents shared by the runtime provider and Renderer producer.
+     * @details Copy the exact provider extent for each projection view, repeating the extent for uniform providers.
+     */
     struct XRReprojectionPolicy final {
         Render::RenderTextureFormat motionFormat{Render::RenderTextureFormat::Rgba16Float}; /**< Three signed components in RGB. */
         Render::RenderTextureFormat depthFormat{Render::RenderTextureFormat::Depth32Float}; /**< Normalized device depth. */
-        Render::FramebufferExtent extent;                    /**< Exact runtime-recommended per-view motion/depth rectangle. */
+        std::array<Render::FramebufferExtent, XRHardLimits::MaximumViews> viewExtents{}; /**< Motion/depth extents in projection order. */
+        std::uint32_t viewCount{};                                                       /**< Number of admitted entries in viewExtents. */
         std::int64_t maximumPredictionIntervalNanoseconds{}; /**< Positive provider-supported predecessor interval ceiling. */
         XRReprojectionMotionConvention motion{XRReprojectionMotionConvention::Count}; /**< Explicit producer/provider agreement. */
     };
