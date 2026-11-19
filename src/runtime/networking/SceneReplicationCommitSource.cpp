@@ -3,7 +3,6 @@
 #include "SceneReplicationTransformFields.h"
 
 #include <algorithm>
-#include <bitset>
 #include <limits>
 #include <new>
 
@@ -16,14 +15,14 @@ namespace Horo::Network {
                 return Bindings::Failure(MakeError(ReplicationCaptureErrors::Invalid));
             std::vector<SceneReplicationFieldBinding> bindings{fields.begin(), fields.end()};
             std::ranges::sort(bindings, {}, &SceneReplicationFieldBinding::field);
-            std::uint8_t properties{};
+            Detail::SceneTransformProperties properties;
             for (std::size_t index{}; index < bindings.size(); ++index) {
                 if (!bindings[index].field.IsValid() || bindings[index].property > SceneReplicationProperty::RotationW ||
                     (index > 0 && bindings[index - 1].field == bindings[index].field))
                     return Bindings::Failure(MakeError(ReplicationCaptureErrors::Invalid));
-                properties |= Detail::TransformPropertyBit(bindings[index].property);
+                properties.set(Detail::TransformPropertyIndex(bindings[index].property));
             }
-            if (!Detail::HasCompleteRotation(properties))
+            if (!Detail::HasCompleteRotation(Detail::RotationPropertyCount(properties)))
                 return Bindings::Failure(MakeError(ReplicationCaptureErrors::Invalid));
             return Bindings::Success(std::move(bindings));
         }
@@ -36,9 +35,9 @@ namespace Horo::Network {
 
         /** @brief The explicit observed Scene projection owns one field per supported transform axis. */
         bool UniqueObservedAxes(std::span<const SceneReplicationFieldBinding> validated) {
-            std::bitset<Detail::SceneTransformPropertyCount> used;
+            Detail::SceneTransformProperties used;
             for (const auto &binding : validated) {
-                const auto axis = static_cast<std::size_t>(binding.property);
+                const auto axis = Detail::TransformPropertyIndex(binding.property);
                 if (used.test(axis))
                     return false;
                 used.set(axis);

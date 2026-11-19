@@ -15,6 +15,24 @@ namespace Horo::Network {
             return std::shared_ptr<Runtime::RuntimeScene>{
                 Runtime::RuntimeScene::Create(std::move(builder).Build().Value(), Runtime::SceneRuntimeId{10}).Value()};
         }
+
+        /** @brief Preserves valid scalar framing while replacing all quaternion payload values with zero. */
+        void ZeroRotationValues(std::vector<std::byte> &wire, const std::size_t fields) {
+            constexpr std::size_t fieldHeaderBytes = 16;
+            constexpr std::size_t scalarBytes = 8;
+            for (std::size_t index = 0; index < fields; ++index)
+                Put(wire, WireHeaderBytes + index * (fieldHeaderBytes + scalarBytes) + fieldHeaderBytes, 0, scalarBytes);
+        }
+
+        /** @brief A decodable but invalid rotation leaves the actual replica unchanged. */
+        void CheckRejectedRotation(SceneReplicationApplyOwner &owner, const Runtime::RuntimeScene &replica, ReplicationStateCodec &codec,
+                                   std::span<const std::byte> wire) {
+            auto decoded = codec.Decode(wire, Object());
+            REQUIRE(decoded.HasValue());
+            const std::array updates{ReplicationApplyUpdate{Object(), Recipient(), std::move(decoded).Value(), {}, {}}};
+            REQUIRE(owner.Prepare(updates).HasError());
+            CHECK(replica.View().Get(Object().entity).Value().localTransform->rotation == Math::Quaternion::Identity());
+        }
     }  // namespace
 
     TEST_CASE("State encoding consumes actual committed Scene snapshots without reopening owner reads", "[network][state-codec][scene]") {
@@ -114,23 +132,13 @@ namespace Horo::Network {
             partialCapture.Capture(1, 0.5);
             auto partialCodec = MakeCodec(partialCapture.registry);
             const auto partialWire = partialCodec->Encode(partialCapture.Pin()).Value();
-            const std::array updates{
-                ReplicationApplyUpdate{Object(), Recipient(), partialCodec->Decode(partialWire, Object()).Value(), {}, {}}};
-            REQUIRE(owner->Prepare(updates).HasError());
-            CHECK(replica->View().Get(entity).Value().localTransform->rotation == Math::Quaternion::Identity());
+            CheckRejectedRotation(*owner, *replica, *partialCodec, partialWire);
         }
 
         SECTION("A complete zero-length quaternion also leaves the replica unchanged") {
             auto zeroRotation = wire;
-            constexpr std::size_t fieldHeaderBytes = 16;
-            constexpr std::size_t scalarBytes = 8;
-            for (std::size_t index = 0; index < fields.size(); ++index)
-                Put(zeroRotation, WireHeaderBytes + index * (fieldHeaderBytes + scalarBytes) + fieldHeaderBytes, 0, scalarBytes);
-            auto decoded = codec->Decode(zeroRotation, Object());
-            REQUIRE(decoded.HasValue());
-            const std::array updates{ReplicationApplyUpdate{Object(), Recipient(), std::move(decoded).Value(), {}, {}}};
-            REQUIRE(owner->Prepare(updates).HasError());
-            CHECK(replica->View().Get(entity).Value().localTransform->rotation == Math::Quaternion::Identity());
+            ZeroRotationValues(zeroRotation, fields.size());
+            CheckRejectedRotation(*owner, *replica, *codec, zeroRotation);
         }
     }
 }  // namespace Horo::Network

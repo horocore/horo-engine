@@ -2,25 +2,33 @@
 
 #include "Horo/Network/SceneReplicationCommitSource.h"
 
+#include <algorithm>
+#include <array>
+#include <bitset>
 #include <exception>
 
 namespace Horo::Network::Detail {
     inline constexpr std::size_t SceneTransformPropertyCount = static_cast<std::size_t>(SceneReplicationProperty::RotationW) + 1;
-    static_assert(SceneTransformPropertyCount <= 8);
+    using SceneTransformProperties = std::bitset<SceneTransformPropertyCount>;
 
-    /** @brief Finds the bit of a previously validated transform binding. */
-    [[nodiscard]] constexpr std::uint8_t TransformPropertyBit(SceneReplicationProperty property) noexcept {
-        return static_cast<std::uint8_t>(1U << static_cast<unsigned int>(property));
+    /** @brief Finds the set entry for a previously validated transform binding. */
+    [[nodiscard]] constexpr std::size_t TransformPropertyIndex(SceneReplicationProperty property) noexcept {
+        return static_cast<std::size_t>(property);
     }
 
-    inline constexpr auto SceneRotationProperties =
-        TransformPropertyBit(SceneReplicationProperty::RotationX) | TransformPropertyBit(SceneReplicationProperty::RotationY) |
-        TransformPropertyBit(SceneReplicationProperty::RotationZ) | TransformPropertyBit(SceneReplicationProperty::RotationW);
+    inline constexpr std::array SceneRotationProperties{SceneReplicationProperty::RotationX, SceneReplicationProperty::RotationY,
+                                                        SceneReplicationProperty::RotationZ, SceneReplicationProperty::RotationW};
+
+    /** @brief Counts the quaternion components selected in this projection. */
+    [[nodiscard]] inline std::size_t RotationPropertyCount(const SceneTransformProperties &properties) noexcept {
+        return static_cast<std::size_t>(std::ranges::count_if(SceneRotationProperties, [&](SceneReplicationProperty property) {
+            return properties.test(TransformPropertyIndex(property));
+        }));
+    }
 
     /** @brief Allows a translation-only projection or a complete quaternion without mixing rotation generations. */
-    [[nodiscard]] constexpr bool HasCompleteRotation(const std::uint8_t properties) noexcept {
-        const auto rotation = properties & SceneRotationProperties;
-        return rotation == 0 || rotation == SceneRotationProperties;
+    [[nodiscard]] constexpr bool HasCompleteRotation(const std::size_t count) noexcept {
+        return count == 0 || count == SceneRotationProperties.size();
     }
 
     /** @brief Selects the same validated transform member for capture and apply. */

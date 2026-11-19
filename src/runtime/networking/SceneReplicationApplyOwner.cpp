@@ -85,6 +85,11 @@ namespace Horo::Network {
             return Result<Math::Transform>::Success(*entity.Value().localTransform);
         }
 
+        /** @brief Validates stable sorted field identities before indexing their transform properties. */
+        bool ValidField(const SceneReplicationFieldBinding &field, const FieldId previous) noexcept {
+            return field.field.IsValid() && field.field != previous && field.property <= SceneReplicationProperty::RotationW;
+        }
+
         /** @brief Owns exactly one field per transform property for both Scene ownership modes. */
         Result<std::vector<SceneReplicationFieldBinding>> ValidateBindings(ReplicationSchemaId schema, ReplicationSchemaVersion version,
                                                                            std::span<const SceneReplicationFieldBinding> fields) {
@@ -93,18 +98,18 @@ namespace Horo::Network {
                 return Bindings::Failure(MakeError(ReplicationStateErrors::Invalid));
             std::vector<SceneReplicationFieldBinding> bindings{fields.begin(), fields.end()};
             std::ranges::sort(bindings, {}, &SceneReplicationFieldBinding::field);
-            std::uint8_t properties{};
-            for (std::size_t index{}; index < bindings.size(); ++index) {
-                const auto &field = bindings[index];
-                if (!field.field.IsValid() || field.property > SceneReplicationProperty::RotationW ||
-                    (index > 0 && bindings[index - 1].field == field.field))
+            Detail::SceneTransformProperties properties;
+            FieldId previous;
+            for (const auto &field : bindings) {
+                if (!ValidField(field, previous))
                     return Bindings::Failure(MakeError(ReplicationStateErrors::Invalid));
-                const auto bit = Detail::TransformPropertyBit(field.property);
-                if ((properties & bit) != 0)
+                const auto index = Detail::TransformPropertyIndex(field.property);
+                if (properties.test(index))
                     return Bindings::Failure(MakeError(ReplicationStateErrors::Invalid));
-                properties |= bit;
+                properties.set(index);
+                previous = field.field;
             }
-            if (!Detail::HasCompleteRotation(properties))
+            if (!Detail::HasCompleteRotation(Detail::RotationPropertyCount(properties)))
                 return Bindings::Failure(MakeError(ReplicationStateErrors::Invalid));
             return Bindings::Success(std::move(bindings));
         }
@@ -112,18 +117,19 @@ namespace Horo::Network {
         /** @brief Applies projected fields and validates any complete rotation before staging a Scene command. */
         Result<void> ProjectFields(Math::Transform &transform, const ReplicationDecodedState &state,
                                    std::span<const SceneReplicationFieldBinding> bindings) {
-            std::uint8_t properties{};
+            Detail::SceneTransformProperties properties;
             for (const auto &field : state.Fields()) {
                 const auto binding = std::ranges::find(bindings, field.field, &SceneReplicationFieldBinding::field);
                 if (binding == bindings.end())
                     return Result<void>::Failure(MakeError(ReplicationStateErrors::Invalid));
                 if (const auto set = SetField(transform, binding->property, field.value); set.HasError())
                     return set;
-                properties |= Detail::TransformPropertyBit(binding->property);
+                properties.set(Detail::TransformPropertyIndex(binding->property));
             }
-            if (!Detail::HasCompleteRotation(properties))
+            const auto rotationCount = Detail::RotationPropertyCount(properties);
+            if (!Detail::HasCompleteRotation(rotationCount))
                 return Result<void>::Failure(MakeError(ReplicationStateErrors::Invalid));
-            if ((properties & Detail::SceneRotationProperties) != 0) {
+            if (rotationCount != 0) {
                 const auto rotation = transform.rotation.TryNormalized();
                 if (rotation.HasError())
                     return Result<void>::Failure(MakeError(ReplicationStateErrors::Invalid));
