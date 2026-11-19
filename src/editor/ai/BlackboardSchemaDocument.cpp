@@ -66,7 +66,17 @@ namespace Horo::Editor {
             std::optional<PositionedRow> before;
             std::optional<PositionedRow> after;
             std::size_t bytes{};
+            std::uint64_t referenceGroup{};
         };
+
+        /** @brief Charges one exact row transition against semantic history retention. */
+        void ChargeDelta(RowDelta &delta) {
+            delta.bytes = sizeof(RowDelta);
+            if (delta.before && delta.before->row.displayName)
+                delta.bytes += delta.before->row.displayName->size();
+            if (delta.after && delta.after->row.displayName)
+                delta.bytes += delta.after->row.displayName->size();
+        }
 
         /** @brief Builds detached authored rows for one exact edit or replay. */
         std::shared_ptr<const BlackboardSchemaSource> ApplyRowDelta(const BlackboardSchemaSource &source,
@@ -210,7 +220,8 @@ namespace Horo::Editor {
         /** @brief Presents precisely the next executable history step, including save barriers. */
         bool CanReplay(bool redo) const {
             const auto *delta = history.Next(redo);
-            return delta && !ResolvesDurableKey(redo ? delta->before : delta->after, redo ? delta->after : delta->before);
+            return delta && delta->referenceGroup == 0 &&
+                   !ResolvesDurableKey(redo ? delta->before : delta->after, redo ? delta->after : delta->before);
         }
 
         /** @brief Rejects wrong-thread, stale and cancelled mutations before borrowed state is accessed. */
@@ -250,6 +261,14 @@ namespace Horo::Editor {
             ++revision;
             return Result<void>::Success();
         }
+    };
+
+    struct BlackboardSchemaDocument::PreparedReferenceChange final {
+        BlackboardDocumentFence fence;
+        std::shared_ptr<const BlackboardSchemaSource> expected;
+        std::shared_ptr<const BlackboardSchemaSource> candidate;
+        Schema schema;
+        std::unique_ptr<SemanticDocumentHistory<RowDelta>> history;
     };
 
     /** @copydoc BlackboardSchemaDocument::Open */
@@ -389,6 +408,87 @@ namespace Horo::Editor {
                                  std::move(schema).Value()});
     }
 
+    /** @copydoc BlackboardSchemaDocument::PrepareReferenceChange */
+    Result<std::shared_ptr<BlackboardSchemaDocument::PreparedReferenceChange>> BlackboardSchemaDocument::PrepareReferenceChange(
+        std::uint64_t expectedRevision, const BlackboardSchemaEdit &edit, std::uint64_t group, CancellationToken cancellation) const {
+        using Prepared = Result<std::shared_ptr<PreparedReferenceChange>>;
+        auto preview = PreviewReferenceEdit(expectedRevision, edit, cancellation);
+        if (preview.HasError())
+            return Prepared::Failure(preview.ErrorValue());
+        if (!group)
+            return Prepared::Failure(MakeError(InvalidEdit));
+        if (state_->conflict || state_->DirtySource())
+            return Prepared::Failure(MakeError(Dirty));
+        auto change = MakeDelta(*state_->source, edit, state_->issuedKey);
+        if (change.HasError())
+            return Prepared::Failure(change.ErrorValue());
+        auto entry = std::move(change).Value();
+        entry.referenceGroup = group;
+        ChargeDelta(entry);
+        auto history = state_->history.Prepare(std::move(entry));
+        if (!history)
+            return Prepared::Failure(MakeError(HistoryCapacity));
+        if (cancellation.IsCancellationRequested())
+            return Prepared::Failure(MakeError(Cancelled));
+        auto candidate = std::move(preview).Value();
+        return Prepared::Success(
+            std::make_shared<PreparedReferenceChange>(PreparedReferenceChange{candidate.fence, state_->source, std::move(candidate.source),
+                                                                              std::move(candidate.schema), std::move(history)}));
+    }
+
+    /** @copydoc BlackboardSchemaDocument::PrepareReferenceReplay */
+    Result<std::shared_ptr<BlackboardSchemaDocument::PreparedReferenceChange>> BlackboardSchemaDocument::PrepareReferenceReplay(
+        std::uint64_t expectedRevision, std::uint64_t group, bool redo, CancellationToken cancellation) const {
+        using Prepared = Result<std::shared_ptr<PreparedReferenceChange>>;
+        if (auto current = state_->Check(expectedRevision, cancellation); current.HasError())
+            return Prepared::Failure(current.ErrorValue());
+        if (state_->conflict)
+            return Prepared::Failure(MakeError(Dirty));
+        const auto *entry = state_->history.Next(redo);
+        if (!group || !entry || entry->referenceGroup != group)
+            return Prepared::Failure(MakeError(HistoryUnavailable));
+        auto candidate = ApplyRowDelta(*state_->source, redo ? entry->before : entry->after, redo ? entry->after : entry->before);
+        auto schema = CaptureSchema(*candidate);
+        if (schema.HasError())
+            return Prepared::Failure(schema.ErrorValue());
+        auto history = std::make_unique<SemanticDocumentHistory<RowDelta>>(state_->history);
+        history->DidReplay(redo);
+        if (cancellation.IsCancellationRequested())
+            return Prepared::Failure(MakeError(Cancelled));
+        return Prepared::Success(
+            std::make_shared<PreparedReferenceChange>(PreparedReferenceChange{{state_->document.instance, expectedRevision},
+                                                                              state_->source,
+                                                                              std::move(candidate),
+                                                                              std::move(schema).Value(),
+                                                                              std::move(history)}));
+    }
+
+    /** @copydoc BlackboardSchemaDocument::NextReferenceGroup */
+    std::optional<std::uint64_t> BlackboardSchemaDocument::NextReferenceGroup(bool redo) const noexcept {
+        if (state_->lane != std::this_thread::get_id() || state_->fileOperation)
+            return {};
+        const auto *entry = state_->history.Next(redo);
+        return entry && entry->referenceGroup ? std::optional{entry->referenceGroup} : std::nullopt;
+    }
+
+    /** @copydoc BlackboardSchemaDocument::CanPublishReferenceChange */
+    bool BlackboardSchemaDocument::CanPublishReferenceChange(const PreparedReferenceChange &prepared) const noexcept {
+        return state_->lane == std::this_thread::get_id() && !state_->fileOperation && !state_->conflict && prepared.history &&
+               prepared.fence.instance == state_->document.instance && prepared.fence.revision == state_->revision &&
+               prepared.expected == state_->source;
+    }
+
+    /** @copydoc BlackboardSchemaDocument::PublishReferenceChange */
+    bool BlackboardSchemaDocument::PublishReferenceChange(PreparedReferenceChange &prepared) noexcept {
+        if (!CanPublishReferenceChange(prepared))
+            return false;
+        state_->history.Commit(*prepared.history);
+        state_->source = std::move(prepared.candidate);
+        state_->runtime = std::move(prepared.schema);
+        ++state_->revision;
+        return true;
+    }
+
     /** @copydoc BlackboardSchemaDocument::Execute */
     Result<void> BlackboardSchemaDocument::Execute(const std::uint64_t expectedRevision, const BlackboardSchemaEdit &edit,
                                                    const CancellationToken cancellation) {
@@ -401,11 +501,7 @@ namespace Horo::Editor {
         if (delta.before && delta.after && delta.before->index == delta.after->index &&
             delta.before->row.descriptor == delta.after->row.descriptor && delta.before->row.displayName == delta.after->row.displayName)
             return Result<void>::Success();
-        delta.bytes = sizeof(RowDelta);
-        if (delta.before && delta.before->row.displayName)
-            delta.bytes += delta.before->row.displayName->size();
-        if (delta.after && delta.after->row.displayName)
-            delta.bytes += delta.after->row.displayName->size();
+        ChargeDelta(delta);
 
         auto history = state_->history.Prepare(delta);
         if (!history)
@@ -511,6 +607,8 @@ namespace Horo::Editor {
         const auto *delta = state_->history.Next(redo);
         if (!delta)
             return Result<void>::Failure(MakeError(HistoryUnavailable));
+        if (delta->referenceGroup)
+            return Result<void>::Failure(MakeError(ReferenceResolutionRequired));
         const auto &before = redo ? delta->before : delta->after;
         const auto &after = redo ? delta->after : delta->before;
         if (auto published = state_->Publish(before, after, cancellation); published.HasError())

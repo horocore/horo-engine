@@ -156,6 +156,58 @@ namespace {
         CHECK(BlackboardSchemaDocument::Open(Document(), std::move(source)).HasError());
     }
 
+    TEST_CASE("Blackboard coordinated removal reserves and replays its exact history group", "[editor][blackboard]") {
+        auto document = Open();
+        const auto original = document->Snapshot().Value();
+        const auto key = original.source->rows.front().descriptor.key;
+        constexpr std::uint64_t group = 17;
+        const auto removal = document->PrepareReferenceChange(original.revision, RemoveBlackboardKey{key}, group);
+        REQUIRE(removal.HasValue());
+        REQUIRE(document->CanPublishReferenceChange(*removal.Value()));
+        CHECK(document->Snapshot().Value().source == original.source);
+        CHECK_FALSE(document->NextReferenceGroup(false));
+        REQUIRE(document->PublishReferenceChange(*removal.Value()));
+        CHECK_FALSE(document->PublishReferenceChange(*removal.Value()));
+        const auto removed = document->Snapshot().Value();
+        CHECK(removed.schema->Keys().size() + 1 == original.schema->Keys().size());
+        CHECK(removed.dirty);
+        CHECK_FALSE(removed.canUndo);
+        CHECK(document->NextReferenceGroup(false) == group);
+        CHECK(document->Undo(removed.revision).HasError());
+        CHECK(document->PrepareReferenceReplay(removed.revision, group + 1, false).HasError());
+        const auto undo = document->PrepareReferenceReplay(removed.revision, group, false);
+        REQUIRE(undo.HasValue());
+        CHECK(document->Snapshot().Value().source == removed.source);
+        REQUIRE(document->PublishReferenceChange(*undo.Value()));
+        const auto restored = document->Snapshot().Value();
+        CHECK(restored.source->rows == original.source->rows);
+        CHECK_FALSE(restored.dirty);
+        CHECK(document->NextReferenceGroup(true) == group);
+        CHECK(document->Redo(restored.revision).HasError());
+        const auto redo = document->PrepareReferenceReplay(restored.revision, group, true);
+        REQUIRE(redo.HasValue());
+        REQUIRE(document->PublishReferenceChange(*redo.Value()));
+        CHECK(document->Snapshot().Value().source->rows == removed.source->rows);
+    }
+
+    TEST_CASE("A stale Blackboard reference reservation cannot replace the latest authoring root", "[editor][blackboard]") {
+        auto document = Open();
+        auto other = Open();
+        const auto original = document->Snapshot().Value();
+        const auto key = original.source->rows.front().descriptor.key;
+        constexpr std::uint64_t group = 18;
+        const auto removal = document->PrepareReferenceChange(original.revision, RemoveBlackboardKey{key}, group);
+        REQUIRE(removal.HasValue());
+        CHECK_FALSE(other->CanPublishReferenceChange(*removal.Value()));
+        CHECK_FALSE(other->PublishReferenceChange(*removal.Value()));
+        REQUIRE(document->Execute(original.revision, RenameBlackboardKey{key, "New name"}).HasValue());
+        const auto renamed = document->Snapshot().Value();
+        CHECK_FALSE(document->CanPublishReferenceChange(*removal.Value()));
+        CHECK_FALSE(document->PublishReferenceChange(*removal.Value()));
+        CHECK(document->Snapshot().Value().source == renamed.source);
+        CHECK_FALSE(document->NextReferenceGroup(false));
+    }
+
     TEST_CASE("Blackboard history fences cancellation stale revisions and reissuing an accepted key", "[editor][blackboard]") {
         auto document = Open();
         const auto begin = document->Snapshot().Value();

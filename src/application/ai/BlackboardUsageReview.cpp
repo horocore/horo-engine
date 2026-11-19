@@ -10,6 +10,14 @@
 #include <ranges>
 
 namespace Horo::Application {
+    /** @brief Holds the bounded source captures needed for byte-exact review revalidation. */
+    class BlackboardUsageCommitEvidence final {
+    public:
+        const Assets::AssetRegistry *registry;
+        Assets::AssetCookInputSnapshot ai;
+        std::optional<Assets::AssetCookInputSnapshot> hierarchy;
+    };
+
     namespace {
         constexpr AI::DecisionCompilationLimits GraphLimits;
         constexpr std::size_t MaximumDecisionSources = AI::DecisionAssetValidationHardLimits::Schemas + GraphLimits.maximumAssets;
@@ -32,6 +40,7 @@ namespace Horo::Application {
             std::vector<Assets::AssetId> hierarchy;
             std::size_t queryCount{};
             std::size_t decisionCount{};
+            bool hierarchyComplete{true};
 
             /** @brief Admits one registered AI source within its family budget. */
             Result<void> AddAi(Assets::AssetId asset, bool query) {
@@ -61,9 +70,12 @@ namespace Horo::Application {
                 } else if (const auto kind = OwnerKind(type)) {
                     if (selected.hierarchy.size() < MaximumScenePrefabSources)
                         selected.hierarchy.push_back(record.id);
-                    else if (auto gap = AddGap(review, {*kind, record.id, {}, MakeError(AI::AIErrors::DecisionAssetLimitExceeded)});
-                             gap.HasError())
-                        return Selection::Failure(gap.ErrorValue());
+                    else {
+                        selected.hierarchyComplete = false;
+                        if (auto gap = AddGap(review, {*kind, record.id, {}, MakeError(AI::AIErrors::DecisionAssetLimitExceeded)});
+                            gap.HasError())
+                            return Selection::Failure(gap.ErrorValue());
+                    }
                 }
             }
             return Selection::Success(std::move(selected));
@@ -372,6 +384,20 @@ namespace Horo::Application {
             review.closure = ComputeSha256(std::as_bytes(std::span{scopes}));
             return Result<void>::Success();
         }
+
+        /** @brief Compares exact host provenance, including formerly present declarations that have expired. */
+        template <typename T> bool SameAuthority(const std::weak_ptr<const T> &reviewed, const std::shared_ptr<const T> &current) noexcept {
+            return !reviewed.owner_before(current) && !current.owner_before(reviewed) && reviewed.lock().get() == current.get();
+        }
+
+        /** @brief A nonempty validated Decision closure always needs the exact live compiler generation. */
+        bool CurrentCommitAuthority(const BlackboardUsageReview &review,
+                                    const std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> &providers,
+                                    const std::shared_ptr<const AI::DecisionNodeGeneration> &nodes) noexcept {
+            const auto &validation = *review.decisionValidation;
+            return SameAuthority(review.providers, providers) && SameAuthority(validation.nodes, nodes) &&
+                   (nodes ? nodes->CanUse() : validation.roots == 0);
+        }
     }  // namespace
 
     /** @copydoc CaptureBlackboardUsageReview */
@@ -425,6 +451,51 @@ namespace Horo::Application {
             return Review::Failure(verified.ErrorValue());
         if (registry.Snapshot().Revision() != review.registry)
             return Review::Failure(MakeError(DecisionCookErrors::Stale));
+        if (review.decisionValidation && completeInventory == review.registry && selected.Value().hierarchyComplete &&
+            (hierarchy.Value() || selected.Value().hierarchy.empty()))
+            review.commitEvidence = std::make_shared<const BlackboardUsageCommitEvidence>(
+                BlackboardUsageCommitEvidence{&registry, capture.Value(), hierarchy.Value()});
         return Review::Success(std::move(review));
+    }
+
+    /** @copydoc VerifyBlackboardUsageCommitFence */
+    Result<void> VerifyBlackboardUsageCommitFence(const std::filesystem::path &root, const Assets::AssetRegistry &registry,
+                                                  const Editor::ProjectMutationLease &, const BlackboardUsageReview &review,
+                                                  const std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> &currentProviders,
+                                                  const std::shared_ptr<const AI::DecisionNodeGeneration> &currentNodes,
+                                                  const CancellationToken &cancellation) {
+        const auto stale = [] {
+            return Result<void>::Failure(MakeError(DecisionCookErrors::Stale));
+        };
+        if (cancellation.IsCancellationRequested())
+            return Result<void>::Failure(MakeError(DecisionCookErrors::Cancelled));
+        if (!review.commitEvidence || !review.decisionValidation)
+            return Result<void>::Failure(MakeError(DecisionCookErrors::Invalid));
+        const auto &evidence = *review.commitEvidence;
+        if (evidence.registry != &registry || evidence.ai.SourceRoot() != root || evidence.ai.Registry().Revision() != review.registry)
+            return stale();
+        const auto current = [&] {
+            return registry.Snapshot().Revision() == review.registry && CurrentCommitAuthority(review, currentProviders, currentNodes);
+        };
+        if (!current())
+            return stale();
+
+        const auto verify = [&](const Assets::AssetCookInputSnapshot &capture) -> Result<void> {
+            const auto rechecked = capture.VerifyUnchanged(cancellation);
+            if (rechecked.HasValue())
+                return Result<void>::Success();
+            return Result<void>::Failure(
+                WrapError(cancellation.IsCancellationRequested() ? DecisionCookErrors::Cancelled : DecisionCookErrors::Stale,
+                          rechecked.ErrorValue()));
+        };
+        if (const auto ai = verify(evidence.ai); ai.HasError())
+            return ai;
+        if (evidence.hierarchy) {
+            if (const auto hierarchy = verify(*evidence.hierarchy); hierarchy.HasError())
+                return hierarchy;
+        }
+        if (cancellation.IsCancellationRequested())
+            return Result<void>::Failure(MakeError(DecisionCookErrors::Cancelled));
+        return current() ? Result<void>::Success() : stale();
     }
 }  // namespace Horo::Application

@@ -2327,6 +2327,11 @@ TEST_CASE("Blackboard workspace pins the selected replacement to a removal propo
 TEST_CASE("Blackboard workspace reviews the loaded native Decision catalog and rejects its retired stamp",
           "[unit][editor][blackboard][workspace]") {
     BlackboardWorkspaceFixture project;
+    const auto replacement = AI::BlackboardKeyId::Create(project.key.Value() + 1).Value();
+    const std::array keys{AI::BlackboardKeyDescriptor{.key = project.key}, AI::BlackboardKeyDescriptor{.key = replacement}};
+    const std::array rows{AI::BlackboardSchemaAuthoringRow{project.key, "Original"},
+                          AI::BlackboardSchemaAuthoringRow{replacement, "Replacement"}};
+    project.WriteSchema(keys, rows);
     Horo::Tests::WriteReplicationProject(project.root);
     const auto manifest = Horo::Tests::WriteGameplayModuleManifest(project.root, HORO_TEST_AI_MODULE_PATH, "game.ai.tests",
                                                                    Gameplay::CurrentGameplayBuildFingerprint(),
@@ -2358,7 +2363,8 @@ TEST_CASE("Blackboard workspace reviews the loaded native Decision catalog and r
     controller.ProcessCommand({.command = EditorWorkspaceViewCommand::BlackboardDocument,
                                .blackboard = BlackboardWorkspaceRequest{.fence = project.Current(controller),
                                                                         .operation = BlackboardDocumentOperation::ReviewUsages,
-                                                                        .reviewKey = project.key}});
+                                                                        .edit = RemoveBlackboardKey{project.key},
+                                                                        .replacement = replacement}});
     REQUIRE(controller.ViewModel().blackboardDocuments.front().reviewingUsages);
 
     bool replaced = false;
@@ -2378,6 +2384,11 @@ TEST_CASE("Blackboard workspace reviews the loaded native Decision catalog and r
         CHECK(view.diagnostic->code.Value() == Application::DecisionCookErrors::Stale.code.Value());
     } else {
         REQUIRE(view.usageReview);
+        REQUIRE(view.usageReview->decisionValidation);
+        CHECK(view.usageReview->decisionValidation->roots == 1);
+        const auto generation = view.usageReview->decisionValidation->nodes.lock();
+        REQUIRE(generation);
+        CHECK(generation->CanUse());
         const auto providers = view.usageReview->providers.lock();
         REQUIRE(providers);
         REQUIRE(providers->Descriptors().size() == 2);

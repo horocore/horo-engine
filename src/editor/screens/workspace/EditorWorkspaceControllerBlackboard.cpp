@@ -180,6 +180,7 @@ namespace Horo::Editor {
             if (snapshot.Value().revision != found->snapshot.revision) {
                 found->usageReview.reset();
                 found->referencePreview.reset();
+                m_blackboardReviewGenerations.erase(document.Identity().instance);
                 if (m_blackboardUsageWork && m_blackboardUsageWork->fence.instance == document.Identity().instance)
                     static_cast<void>(m_blackboardUsageWork->job.RequestCancel());
             }
@@ -266,6 +267,7 @@ namespace Horo::Editor {
         const auto providerMetadata = m_gameplayRegistry ? m_gameplayRegistry->DecisionUsageMetadata() : nullptr;
         auto validation = request.replacement ? CaptureDecisionValidation(*preview, m_gameplayRegistry.get(), m_querySchema)
                                               : Application::BlackboardRetargetValidationInput{};
+        auto generation = validation.nodes;
         auto result = std::make_shared<std::shared_ptr<const Application::BlackboardUsageReview>>();
         auto job = m_sourceRecoveryJobs->SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Io},
                                                       [root = m_sourceOpenService.ProjectRoot(), assets = m_mutableAssetRegistry,
@@ -280,7 +282,9 @@ namespace Horo::Editor {
         });
         if (job.HasError())
             return Result<void>::Failure(job.ErrorValue());
-        m_blackboardUsageWork.emplace(BlackboardUsageWork{std::move(job).Value(), request.fence, std::move(result), std::move(preview)});
+        m_blackboardUsageWork.emplace(
+            BlackboardUsageWork{std::move(job).Value(), request.fence, std::move(result), std::move(preview), std::move(generation)});
+        m_blackboardReviewGenerations.erase(request.fence.instance);
         const auto view = std::ranges::find_if(m_viewModel.blackboardDocuments, [&](const auto &entry) {
             return entry.snapshot.document.instance == request.fence.instance;
         });
@@ -295,10 +299,13 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::UpdateBlackboardUsageReview */
     void EditorWorkspaceController::UpdateBlackboardUsageReview() {
         const auto providerMetadata = m_gameplayRegistry ? m_gameplayRegistry->DecisionUsageMetadata() : nullptr;
+        const auto registry = m_mutableAssetRegistry ? m_mutableAssetRegistry->Snapshot().Revision() : Assets::AssetRegistryRevision{};
         for (auto &view : m_viewModel.blackboardDocuments) {
-            if (view.usageReview && !HasCurrentReviewAuthority(*view.usageReview, providerMetadata)) {
+            if (view.usageReview &&
+                (view.usageReview->registry != registry || !HasCurrentReviewAuthority(*view.usageReview, providerMetadata))) {
                 view.usageReview.reset();
                 view.referencePreview.reset();
+                m_blackboardReviewGenerations.erase(view.snapshot.document.instance);
             }
         }
         if (!m_blackboardUsageWork)
@@ -321,8 +328,9 @@ namespace Horo::Editor {
             return;
         }
         auto result = std::move(*work.result);
-        if (result && result->registry == m_mutableAssetRegistry->Snapshot().Revision() &&
-            HasCurrentReviewAuthority(*result, providerMetadata)) {
+        if (result && result->registry == registry && HasCurrentReviewAuthority(*result, providerMetadata)) {
+            if (result->decisionValidation && result->decisionValidation->roots != 0)
+                m_blackboardReviewGenerations.emplace(work.fence.instance, std::move(work.generation));
             view->usageReview = std::move(result);
             view->referencePreview = std::move(work.preview);
         } else {
@@ -332,6 +340,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::StopBlackboardUsageReview */
     void EditorWorkspaceController::StopBlackboardUsageReview() {
+        m_blackboardReviewGenerations.clear();
         if (!m_blackboardUsageWork)
             return;
         static_cast<void>(m_blackboardUsageWork->job.RequestCancel());
@@ -364,6 +373,7 @@ namespace Horo::Editor {
             return Result<bool>::Failure(closed.ErrorValue());
         if (m_blackboardUsageWork && m_blackboardUsageWork->fence.instance == fence.instance)
             static_cast<void>(m_blackboardUsageWork->job.RequestCancel());
+        m_blackboardReviewGenerations.erase(fence.instance);
         std::erase_if(m_viewModel.blackboardDocuments, [fence](const auto &entry) {
             return entry.snapshot.document.instance == fence.instance;
         });

@@ -793,6 +793,90 @@ namespace {
             REQUIRE(report.Value().decisionRetargets.size() == 1);
             CHECK(report.Value().decisionRetargets.front().original.asset == query.project.child);
         }
+        SECTION("the migration commit fence rechecks exact project witnesses under the parent lease") {
+            constexpr auto scenePath = "assets/level.horo";
+            const auto sceneAsset = AssetId::FromBytes({0xd5});
+            const std::array sceneObjects{SceneSource::SceneObjectSnapshot{.id = {7}, .name = "Review witness"}};
+            const auto writeScene = [&](std::string_view text) {
+                Files::WriteFile(query.project.source.path / scenePath, {reinterpret_cast<const std::uint8_t *>(text.data()), text.size()});
+            };
+            const auto scene = SceneSource::EncodeSceneSource({sceneObjects, {}});
+            writeScene(scene);
+            query.WriteSidecar(scenePath, sceneAsset, "core.scene");
+            const auto report = query.Review(selection, metadata.Value(), validation);
+            REQUIRE(report.HasValue());
+            REQUIRE(report.Value().commitEvidence);
+            REQUIRE(std::ranges::find(report.Value().sources, sceneAsset, &BlackboardUsageSourceStamp::asset) !=
+                    report.Value().sources.end());
+            NativeDurableFileSystem files;
+            Editor::ProjectMutationCoordinator mutations{files};
+            const auto &root = query.project.source.path;
+            const auto lease = mutations.TryAcquire({root, Editor::ProjectMutationOwner::Asset, "blackboard-migration-fence-test"});
+            REQUIRE(lease.HasValue());
+            auto currentMetadata = metadata.Value();
+            auto currentNodes = environment.nodes;
+            CancellationSource cancellation;
+            const auto verify = [&] {
+                return VerifyBlackboardUsageCommitFence(root, query.project.registry, lease.Value(), report.Value(), currentMetadata,
+                                                        currentNodes, cancellation.Token());
+            };
+            REQUIRE(verify().HasValue());
+
+            const auto *expected = &DecisionCookErrors::Stale;
+            SECTION("Decision closure inputs change while the registry revision stays fixed") {
+                query.WriteQuery(query.SourcePath, query.output.query, 2);
+            }
+            SECTION("a semantically identical sidecar rewrite breaks exact byte authority") {
+                const auto reformatted = Files::SidecarJson(query.asset.ToString(), EnvironmentQuerySourceAssetType) + "\n";
+                Files::WriteFile(root / (std::string{query.SourcePath} + ".horo"),
+                                 {reinterpret_cast<const std::uint8_t *>(reformatted.data()), reformatted.size()});
+            }
+            SECTION("the separately captured Scene witness changes") {
+                writeScene(scene + "\n");
+            }
+            SECTION("an equivalent rebuild replaces the exact registry revision") {
+                CHECK(query.Rebuild() != report.Value().registry);
+            }
+            SECTION("the current provider declarations have been replaced") {
+                const auto otherMetadata = DecisionBlackboardProviderMetadata::Capture(*environment.nodes);
+                REQUIRE(otherMetadata.HasValue());
+                currentMetadata = otherMetadata.Value();
+            }
+            SECTION("a different live compiler generation cannot authorize the reviewed candidate") {
+                const auto replacementNodes = DecisionNodeGeneration::Capture({}, query.project.ai.admission);
+                REQUIRE(replacementNodes.HasValue());
+                REQUIRE(replacementNodes.Value()->CanUse());
+                currentNodes = replacementNodes.Value();
+            }
+            SECTION("the live compiler generation was revoked") {
+                query.project.ai.admission->store(false, std::memory_order_release);
+            }
+            SECTION("the owner cancels before the final reads") {
+                cancellation.RequestCancellation();
+                expected = &DecisionCookErrors::Cancelled;
+            }
+            const auto rejected = verify();
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == expected->code.Value());
+        }
+        SECTION("compiler validation without complete registry inventory cannot issue commit evidence") {
+            const auto revision = query.Rebuild();
+            REQUIRE(revision.value != 0);
+            NativeDurableFileSystem files;
+            Editor::ProjectMutationCoordinator mutations{files};
+            const auto &root = query.project.source.path;
+            const auto report =
+                CaptureBlackboardUsageReview(root, query.project.registry, {}, mutations, selection, metadata.Value(), {}, validation);
+            REQUIRE(report.HasValue());
+            REQUIRE(report.Value().decisionValidation);
+            CHECK_FALSE(report.Value().commitEvidence);
+            const auto lease = mutations.TryAcquire({root, Editor::ProjectMutationOwner::Asset, "blackboard-migration-fence-test"});
+            REQUIRE(lease.HasValue());
+            const auto rejected = VerifyBlackboardUsageCommitFence(root, query.project.registry, lease.Value(), report.Value(),
+                                                                   metadata.Value(), environment.nodes);
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == DecisionCookErrors::Invalid.code.Value());
+        }
         SECTION("a saved query version mismatch prevents a validation receipt") {
             query.WriteQuery(query.SourcePath, query.output.query, 2);
             const auto report = query.Review(selection, metadata.Value(), validation);

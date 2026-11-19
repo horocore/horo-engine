@@ -918,9 +918,11 @@ namespace Horo::Editor {
             BlackboardDocumentFence fence;
             std::shared_ptr<std::shared_ptr<const Application::BlackboardUsageReview>> result;
             std::optional<BlackboardReferenceEditPreview> preview;
+            std::shared_ptr<const AI::DecisionNodeGeneration> generation;
         };
 
         std::optional<BlackboardUsageWork> m_blackboardUsageWork;
+        std::map<DocumentInstanceId, std::shared_ptr<const AI::DecisionNodeGeneration>> m_blackboardReviewGenerations;
         std::vector<UiCanvasDocument> m_uiCanvasDocuments;
         float m_uiCanvasAutosaveSeconds{};
 

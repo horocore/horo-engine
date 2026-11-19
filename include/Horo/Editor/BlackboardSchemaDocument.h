@@ -121,6 +121,9 @@ namespace Horo::Editor {
      */
     class BlackboardSchemaDocument final {
     public:
+        /** @brief Detached source and history reservation for a coordinated reference change. */
+        struct PreparedReferenceChange;
+
         /** @brief Validates and opens the exact existing asset source.
          * @param document Asset document session issued by the host.
          * @param source Complete authored rows, stable identities and version.
@@ -180,6 +183,36 @@ namespace Horo::Editor {
         [[nodiscard]] Result<BlackboardReferenceEditPreview> PreviewReferenceEdit(std::uint64_t expectedRevision,
                                                                                   const BlackboardSchemaEdit &edit,
                                                                                   CancellationToken cancellation = {}) const;
+        /** @brief Reserves a validated durable-key edit and its coordinated history entry.
+         * @param expectedRevision Current clean document revision. @param edit Reviewed durable-key edit.
+         * @param group Nonzero transaction identity shared by the affected authoring documents.
+         * @param cancellation Synchronous validation fence.
+         * @return Detached reservation or the original validation or history error.
+         */
+        [[nodiscard]] Result<std::shared_ptr<PreparedReferenceChange>> PrepareReferenceChange(std::uint64_t expectedRevision,
+                                                                                              const BlackboardSchemaEdit &edit,
+                                                                                              std::uint64_t group,
+                                                                                              CancellationToken cancellation = {}) const;
+        /** @brief Reserves replay of a coordinated entry at this owner's exact history head.
+         * @param expectedRevision Current document revision. @param group Exact coordinated group identity.
+         * @param redo Replay direction. @param cancellation Synchronous validation fence.
+         * @return Detached reservation or a typed stale, validation or history error.
+         */
+        [[nodiscard]] Result<std::shared_ptr<PreparedReferenceChange>> PrepareReferenceReplay(std::uint64_t expectedRevision,
+                                                                                              std::uint64_t group, bool redo,
+                                                                                              CancellationToken cancellation = {}) const;
+        /** @brief Returns the group at the current history boundary, when it is coordinated.
+         * @param redo Replay direction. @return Group identity when admitted on the owner thread.
+         */
+        [[nodiscard]] std::optional<std::uint64_t> NextReferenceGroup(bool redo) const noexcept;
+        /** @brief Checks an outstanding reservation against the exact current owner and source root.
+         * @param prepared Detached reservation. @return Whether the reservation is current.
+         */
+        [[nodiscard]] bool CanPublishReferenceChange(const PreparedReferenceChange &prepared) const noexcept;
+        /** @brief Publishes a fully reserved change on the owner thread after the coordinator fences all participants.
+         * @param prepared Exact previously reserved transition. @return False if its document fence has expired.
+         */
+        [[nodiscard]] bool PublishReferenceChange(PreparedReferenceChange &prepared) noexcept;
         /** @brief Validates an edit and publishes one semantic delta, or preserves every current value on failure.
          * @param expectedRevision Current snapshot revision.
          * @param edit One exact typed operation.

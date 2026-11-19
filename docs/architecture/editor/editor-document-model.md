@@ -781,8 +781,9 @@ and opaque properties require their owning provider to resolve the reference.
 The explicit replacement review also overlays the proposed schema and prepared
 sources in memory, then runs the cooker checks for affected roots, callers and
 their query targets. The review records successful admission and a weak provider
-generation stamp, or a typed validation gap. The transaction must recheck its
-publication fences before applying the candidates.
+generation stamp, or a typed validation gap. The workspace owner retains the
+revocable generation while the matching review is current. The transaction must
+recheck its publication fences before applying the candidates.
 
 ## Cinematic Sequence Asset Documents
 

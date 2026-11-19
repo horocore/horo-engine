@@ -15,7 +15,8 @@
 
 namespace Horo::Editor {
     class ProjectMutationCoordinator;
-}
+    class ProjectMutationLease;
+}  // namespace Horo::Editor
 
 namespace Horo::AI {
     class QuerySchemaRegistry;
@@ -115,6 +116,8 @@ namespace Horo::Application {
         std::shared_ptr<const AI::QuerySchemaRegistry> queries;
     };
 
+    class BlackboardUsageCommitEvidence;
+
     /** @brief Read-only observations scoped to a captured Project publication.
      * @details The weak provider stamp identifies the host-owned detached declaration snapshot. The publishing host must recheck it.
      * Gaps represent unknown coverage. This value grants no document mutation authority.
@@ -131,6 +134,7 @@ namespace Horo::Application {
         std::vector<BlackboardQueryUsage> queryUsages;
         std::vector<BlackboardDecisionRetarget> decisionRetargets;
         std::optional<BlackboardDecisionValidation> decisionValidation;
+        std::shared_ptr<const BlackboardUsageCommitEvidence> commitEvidence; /**< Exact bounded migration witnesses. */
     };
 
     /** @brief Captures and reviews actual registered source/sidecar pairs under the Project mutation coordinator.
@@ -147,4 +151,21 @@ namespace Horo::Application {
         std::optional<Assets::AssetRegistryRevision> completeInventory, const Editor::ProjectMutationCoordinator &mutations,
         BlackboardUsageSelection selection, std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> providers = {},
         const CancellationToken &cancellation = {}, const BlackboardRetargetValidationInput &validation = {});
+
+    /** @brief Rechecks the complete registered source witnesses at the Blackboard migration commit boundary.
+     * @param root Exact canonical project root used for the review.
+     * @param registry Live Project registry publisher that supplied the reviewed revision.
+     * @param lease Caller-owned exclusive mutation lease for this project.
+     * @param review Original immutable review with successful Decision validation and complete captured source witnesses.
+     * @param currentProviders Current detached provider declarations supplied by the same Project host.
+     * @param currentNodes Current compiler generation supplied by the same host, including a live owner for a nonempty closure.
+     * @param cancellation Cooperative stop fence, checked during bounded source and sidecar reads.
+     * @return Success while registered source and sidecar bytes, registry revision, and reviewed provider identities remain current.
+     * @pre The caller keeps the live lease through publication and resolves review gaps and document revision fences separately.
+     * @details This read-only check does not admit a mutation. The original candidate generation must survive until confirmation.
+     */
+    [[nodiscard]] Result<void> VerifyBlackboardUsageCommitFence(
+        const std::filesystem::path &root, const Assets::AssetRegistry &registry, const Editor::ProjectMutationLease &lease,
+        const BlackboardUsageReview &review, const std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> &currentProviders,
+        const std::shared_ptr<const AI::DecisionNodeGeneration> &currentNodes, const CancellationToken &cancellation = {});
 }  // namespace Horo::Application
