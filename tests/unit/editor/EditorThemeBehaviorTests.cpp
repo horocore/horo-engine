@@ -91,6 +91,45 @@ TEST_CASE("Theme candidates are fenced to the selected source and bounded before
     CHECK(Theme::Bg0().x == 17.0F / 255.0F);
 }
 
+TEST_CASE("Visual accessibility stays active across theme reload and restores both authored palettes", "[unit][editor][gui][theme]") {
+    using namespace Horo::Editor;
+    Tests::HeadlessEditorGuiFixture imgui;
+    const Horo::Tests::OwnedTestDirectory directory{"theme accessibility"};
+    const auto path = directory.Path() / "theme.json";
+    const auto write = [&path](std::string_view contents) {
+        std::ofstream stream{path, std::ios::binary | std::ios::trunc};
+        stream << contents;
+        REQUIRE(stream.good());
+    };
+    write(R"({"colors":{"WindowBg":"#112233","Text":"#999999"}})");
+    Theme::Apply(ImGui::GetStyle(), nullptr, directory.Path().string().c_str());
+    Theme::SelectThemeByIndex(static_cast<int>(Theme::GetThemeList().size() - 1U));
+    const auto &style = ImGui::GetStyle();
+    REQUIRE(Theme::Bg0().x == 17.0F / 255.0F);
+    Theme::ApplyVisualPreferences({.highContrast = true, .reduceMotion = true, .suppressFlash = true});
+    CHECK(Theme::GetVisualPreferences().suppressFlash);
+    CHECK(Theme::GetActiveTokens().motion.reduceMotion);
+    CHECK(Theme::Bg0().x == 0.0F);
+    CHECK(Theme::Text().x == 1.0F);
+    CHECK(style.Colors[ImGuiCol_WindowBg].x == Theme::Bg0().x);
+    CHECK(style.Colors[ImGuiCol_Text].x == Theme::Text().x);
+    CHECK(style.Colors[ImGuiCol_TextDisabled].x < style.Colors[ImGuiCol_Text].x);
+    CHECK(style.Colors[ImGuiCol_ButtonActive].z > style.Colors[ImGuiCol_Button].z);
+
+    write(R"({"colors":{"WindowBg":"#773355","Text":"#AABBCC"}})");
+    Theme::ThemeEntry candidate;
+    REQUIRE(Theme::LoadThemeFromJson(path.string().c_str(), candidate));
+    REQUIRE(Theme::ApplyReloadedTheme(std::move(candidate)));
+    CHECK(Theme::Bg0().x == 0.0F);
+    CHECK(style.Colors[ImGuiCol_WindowBg].x == 0.0F);
+
+    Theme::ApplyVisualPreferences({});
+    CHECK_FALSE(Theme::GetActiveTokens().motion.reduceMotion);
+    CHECK(Theme::Bg0().x == 119.0F / 255.0F);
+    CHECK(style.Colors[ImGuiCol_WindowBg].x == Theme::Bg0().x);
+    CHECK(style.Colors[ImGuiCol_Text].x == 170.0F / 255.0F);
+}
+
 TEST_CASE("Theme watcher publishes valid replacements and retains the last good theme after invalid saves",
           "[unit][editor][gui][theme][reload]") {
     using namespace Horo;

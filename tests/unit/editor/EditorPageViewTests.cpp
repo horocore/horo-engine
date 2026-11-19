@@ -77,6 +77,18 @@ namespace Horo::Editor::Tests {
         CHECK(capture.Frame()->revision == revision + 1);
         CHECK(capture.Frame()->interaction.disabledOpacity == 0.42F);
         CHECK(Extensions::ValidateEditorThemeFrame(*capture.Frame()).HasValue());
+
+        Theme::ApplyVisualPreferences({.highContrast = true, .reduceMotion = true, .suppressFlash = true});
+        REQUIRE(capture.Update(gui.context).HasValue());
+        CHECK(capture.Frame()->revision == revision + 2);
+        CHECK(capture.Frame()->accessibility.highContrast);
+        CHECK(capture.Frame()->accessibility.reduceMotion);
+        CHECK(capture.Frame()->accessibility.disableFlashEffects);
+        Theme::ApplyVisualPreferences({.highContrast = true, .reduceMotion = true});
+        REQUIRE(capture.Update(gui.context).HasValue());
+        CHECK(capture.Frame()->revision == revision + 3);
+        CHECK_FALSE(capture.Frame()->accessibility.disableFlashEffects);
+        Theme::ApplyVisualPreferences({});
     }
 
     TEST_CASE("Actual page view draws narrow localized exact integer drafts and survives provider removal", "[editor][EditorPage][View]") {

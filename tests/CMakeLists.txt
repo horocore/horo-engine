@@ -4112,7 +4112,8 @@ if (HORO_BUILD_EDITOR_GUI)
     target_compile_features(HoroExtensionActivityViewTests PRIVATE cxx_std_20)
     target_include_directories(HoroExtensionActivityViewTests PRIVATE
             ${PROJECT_SOURCE_DIR}/tests/support ${PROJECT_SOURCE_DIR}/tests)
-    target_link_libraries(HoroExtensionActivityViewTests PRIVATE HoroEngine::Gui HoroEngine::Extensions HoroThirdParty::ImGui)
+    target_link_libraries(HoroExtensionActivityViewTests
+        PRIVATE HoroEngine::Gui HoroEngine::Extensions HoroEngine::AISceneIntegration HoroThirdParty::ImGui)
     add_executable(HoroEditorUiComponentsRenderTests
             unit/editor/EditorUiComponentsRenderTests.cpp
             support/AllocationProbe.cpp

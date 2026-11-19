@@ -3,11 +3,14 @@
 #include "JsonUtils.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <imgui.h>
+#include <initializer_list>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <ranges>
 #include <string>
 #include <unordered_map>
@@ -33,8 +36,88 @@ namespace Horo::Editor::Theme {
             return tokens;
         }
 
+        struct VisualThemeState final {
+            VisualPreferences preferences;
+            ImGuiContext *context{};
+            std::optional<std::array<ImVec4, ImGuiCol_COUNT>> nativeBase;
+        };
+
+        /** @brief Keeps the active context's native base palette apart from the derived preference colours. */
+        VisualThemeState &VisualState() noexcept {
+            static VisualThemeState state;
+            if (const auto context = ImGui::GetCurrentContext(); state.context != context)
+                state = {.context = context};
+            return state;
+        }
+
+        /** @brief Supplies the shared opaque palette for readable text, controls, and focus across both theme layers. */
+        constexpr ColorTokens HighContrastColors() noexcept {
+            return {
+                .surfaceRoot = {0.0F, 0.0F, 0.0F, 1.0F},
+                .surfaceWindow = {0.04F, 0.04F, 0.04F, 1.0F},
+                .surfacePanel = {0.08F, 0.08F, 0.08F, 1.0F},
+                .surfaceRaised = {0.13F, 0.13F, 0.13F, 1.0F},
+                .surfaceHover = {0.22F, 0.22F, 0.22F, 1.0F},
+                .border = {0.72F, 0.72F, 0.72F, 1.0F},
+                .borderStrong = {0.93F, 0.93F, 0.93F, 1.0F},
+                .textPrimary = {1.0F, 1.0F, 1.0F, 1.0F},
+                .textMuted = {0.86F, 0.86F, 0.86F, 1.0F},
+                .textDim = {0.78F, 0.78F, 0.78F, 1.0F},
+                .actionPrimary = {0.02F, 0.31F, 0.55F, 1.0F},
+                .actionPrimaryHover = {0.03F, 0.36F, 0.59F, 1.0F},
+                .actionPrimaryActive = {0.02F, 0.25F, 0.46F, 1.0F},
+                .actionPrimarySoft = {0.07F, 0.24F, 0.38F, 1.0F},
+                .statusOk = {0.58F, 1.0F, 0.70F, 1.0F},
+                .statusWarn = {1.0F, 0.85F, 0.40F, 1.0F},
+                .statusError = {1.0F, 0.65F, 0.66F, 1.0F},
+                .textOnActionPrimary = {1.0F, 1.0F, 1.0F, 1.0F},
+            };
+        }
+
         void ResolveActiveTokens() {
             ActiveTokens() = UnscaledTokens();
+            const auto preferences = VisualState().preferences;
+            if (preferences.highContrast) {
+                ActiveTokens().colors = HighContrastColors();
+                ActiveTokens().sourceSyntax = {};
+            }
+            ActiveTokens().motion.reduceMotion |= preferences.reduceMotion;
+        }
+
+        /** @brief Restores the exact authored native colours before another theme or preference is selected. */
+        void RestoreNativePalette(ImGuiStyle &style) noexcept {
+            auto &base = VisualState().nativeBase;
+            if (base) {
+                std::ranges::copy(*base, style.Colors);
+                base.reset();
+            }
+        }
+
+        /** @brief Projects the same semantic palette to native text, window surfaces, controls and interaction states. */
+        void ApplyNativeContrast(ImGuiStyle &style) noexcept {
+            auto &state = VisualState();
+            if (!state.preferences.highContrast)
+                return;
+            std::ranges::copy(style.Colors, state.nativeBase.emplace().begin());
+            const auto c = HighContrastColors();
+            const auto assign = [&style](const ImVec4 color, const std::initializer_list<ImGuiCol> roles) {
+                for (const ImGuiCol role : roles)
+                    style.Colors[role] = color;
+            };
+            assign(c.textPrimary, {ImGuiCol_Text, ImGuiCol_CheckMark, ImGuiCol_SliderGrab, ImGuiCol_SliderGrabActive, ImGuiCol_NavCursor,
+                                   ImGuiCol_DragDropTarget});
+            assign(c.textDim, {ImGuiCol_TextDisabled});
+            assign(c.surfaceRoot, {ImGuiCol_WindowBg, ImGuiCol_TitleBg, ImGuiCol_TitleBgCollapsed});
+            assign(c.surfaceWindow, {ImGuiCol_ChildBg, ImGuiCol_MenuBarBg, ImGuiCol_TabDimmed, ImGuiCol_ScrollbarBg});
+            assign(c.surfacePanel, {ImGuiCol_PopupBg, ImGuiCol_TableHeaderBg, ImGuiCol_Tab});
+            assign(c.surfaceRaised, {ImGuiCol_FrameBg, ImGuiCol_Button, ImGuiCol_Header, ImGuiCol_TitleBgActive});
+            assign(c.surfaceHover, {ImGuiCol_FrameBgHovered, ImGuiCol_ButtonHovered, ImGuiCol_HeaderHovered, ImGuiCol_TabHovered});
+            assign(c.actionPrimaryActive, {ImGuiCol_FrameBgActive, ImGuiCol_ButtonActive, ImGuiCol_HeaderActive, ImGuiCol_TabSelected,
+                                           ImGuiCol_TabDimmedSelected, ImGuiCol_TextSelectedBg});
+            assign(c.border, {ImGuiCol_Border, ImGuiCol_Separator, ImGuiCol_TableBorderLight, ImGuiCol_ScrollbarGrab, ImGuiCol_ResizeGrip});
+            assign(c.borderStrong, {ImGuiCol_TableBorderStrong, ImGuiCol_SeparatorHovered, ImGuiCol_SeparatorActive,
+                                    ImGuiCol_ScrollbarGrabHovered, ImGuiCol_ScrollbarGrabActive, ImGuiCol_ResizeGripHovered,
+                                    ImGuiCol_ResizeGripActive, ImGuiCol_TabSelectedOverline, ImGuiCol_TabDimmedSelectedOverline});
         }
 
         void InstallUnscaledTokens(DesignTokens tokens) {
@@ -538,45 +621,11 @@ namespace Horo::Editor::Theme {
         ResolveActiveTokens();
     }
 
-    void SelectThemeByIndex(const int index) {
-        if (index < 0 || static_cast<std::size_t>(index) >= ThemeList().size())
-            return;
-
-        ActiveThemeIndex() = index;
-        const auto &entry = ThemeList()[index];
-
-        // Always apply ImGui style colors when the entry carries custom values.
-        if (!entry.colors.empty())
-            ApplyColorsToStyle(entry.colors, ImGui::GetStyle());
-
-        // Select the DesignTokens based on the built-in preset index.
-        // Built-in entries (0=HoroDark, 1=Midnight, 2=Light) may or may
-        // not carry a colors map, but the token set is always known.
-        if (entry.isBuiltIn) {
-            if (index == 0) {
-                // Horo Dark — apply style fallback if no colors in entry
-                if (entry.colors.empty())
-                    ApplyHoroDark(ImGui::GetStyle());
-                InstallUnscaledTokens(DefaultDesignTokens());
-            } else if (index == 1) {
-                // Midnight — dark surface + purple accent
-                if (entry.colors.empty())
-                    ApplyMidnight(ImGui::GetStyle());
-                ApplyMidnightDesignTokens();
-            } else if (index == 2) {
-                // Light — inverted surface + blue accent
-                if (entry.colors.empty())
-                    ApplyLight(ImGui::GetStyle());
-                ApplyLightDesignTokens();
-            } else {
-                // Future built-in: fall back to Horo Dark tokens
-                InstallUnscaledTokens(DefaultDesignTokens());
-            }
-        } else {
-            // Custom JSON theme: ImGui style already applied above;
-            // derive tokens from ImGui style colors.
+    namespace {
+        /** @brief Captures the native style's semantic colours for an authored custom theme. */
+        DesignTokens CustomThemeTokens(const ThemeEntry &entry, const ImGuiStyle &style) {
             DesignTokens tokens = entry.designTokens;
-            const ImVec4 *const c = ImGui::GetStyle().Colors;
+            const auto &c = style.Colors;
             tokens.colors.surfaceRoot = c[ImGuiCol_WindowBg];
             tokens.colors.surfaceWindow = c[ImGuiCol_ChildBg];
             tokens.colors.surfacePanel = c[ImGuiCol_PopupBg];
@@ -592,14 +641,73 @@ namespace Horo::Editor::Theme {
             tokens.colors.actionPrimaryActive = c[ImGuiCol_SliderGrabActive];
             tokens.colors.actionPrimarySoft = c[ImGuiCol_Header];
             tokens.colors.textOnActionPrimary = c[ImGuiCol_WindowBg];
-            InstallUnscaledTokens(std::move(tokens));
+            return tokens;
         }
+
+        /** @brief Installs the built-in preset and uses its native colours only when the entry has no overrides. */
+        void InstallBuiltInTheme(int index, bool useNativeDefaults, ImGuiStyle &style) {
+            switch (index) {
+                case 0:
+                    if (useNativeDefaults)
+                        ApplyHoroDark(style);
+                    InstallUnscaledTokens(DefaultDesignTokens());
+                    break;
+                case 1:
+                    if (useNativeDefaults)
+                        ApplyMidnight(style);
+                    ApplyMidnightDesignTokens();
+                    break;
+                case 2:
+                    if (useNativeDefaults)
+                        ApplyLight(style);
+                    ApplyLightDesignTokens();
+                    break;
+                default:
+                    InstallUnscaledTokens(DefaultDesignTokens());
+                    break;
+            }
+        }
+    }  // namespace
+
+    /** @copydoc SelectThemeByIndex */
+    void SelectThemeByIndex(const int index) {
+        if (index < 0 || static_cast<std::size_t>(index) >= ThemeList().size())
+            return;
+
         auto &style = ImGui::GetStyle();
+        RestoreNativePalette(style);
+        ActiveThemeIndex() = index;
+        const auto &entry = ThemeList()[index];
+        if (!entry.colors.empty())
+            ApplyColorsToStyle(entry.colors, style);
+        if (entry.isBuiltIn)
+            InstallBuiltInTheme(index, entry.colors.empty(), style);
+        else
+            InstallUnscaledTokens(CustomThemeTokens(entry, style));
+
         const auto &tokens = GetActiveTokens();
         style.FrameRounding = tokens.radii.control;
         style.GrabRounding = tokens.radii.control;
         style.ChildRounding = tokens.radii.card;
         style.PopupRounding = tokens.radii.modal;
+        ApplyNativeContrast(style);
+    }
+
+    /** @copydoc ApplyVisualPreferences */
+    void ApplyVisualPreferences(const VisualPreferences preferences) noexcept {
+        auto &state = VisualState();
+        if (state.preferences == preferences)
+            return;
+        auto &style = ImGui::GetStyle();
+        RestoreNativePalette(style);
+        state.preferences = preferences;
+        ResolveActiveTokens();
+        ApplyNativeContrast(style);
+    }
+
+    /** @copydoc GetVisualPreferences */
+    VisualPreferences GetVisualPreferences() noexcept {
+        return VisualState().preferences;
     }
 
     int GetActiveThemeIndex() {
@@ -733,6 +841,7 @@ namespace Horo::Editor::Theme {
 
     /** @copydoc Apply */
     void Apply(ImGuiStyle &style, const char *overridePath, const char *userThemesPath) {
+        VisualState() = {.context = ImGui::GetCurrentContext()};
         ImGui::StyleColorsDark();
         style.WindowRounding = 0;
         style.FrameRounding = Layout::Radius;
@@ -776,6 +885,7 @@ namespace Horo::Editor::Theme {
     }
 
     void ApplyCurrentTheme() {
+        RestoreNativePalette(ImGui::GetStyle());
         switch (CurrentPreset()) {
             case Preset::Midnight:
                 ApplyMidnight(ImGui::GetStyle());
@@ -790,5 +900,6 @@ namespace Horo::Editor::Theme {
                 InstallUnscaledTokens(DefaultDesignTokens());
                 break;
         }
+        ApplyNativeContrast(ImGui::GetStyle());
     }
 }  // namespace Horo::Editor::Theme

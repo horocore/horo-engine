@@ -492,6 +492,22 @@ namespace Horo::Editor::Theme {
     /** @brief Activates a theme by index into GetThemeList(). */
     void SelectThemeByIndex(int index);
 
+    /** @brief User preferences captured together by the editor frame owner. */
+    struct VisualPreferences final {
+        bool highContrast{};
+        bool reduceMotion{};
+        bool suppressFlash{};
+        auto operator<=>(const VisualPreferences &) const noexcept = default;
+    };
+
+    /** @brief Applies the captured preferences to the active theme and native style before the next GUI frame.
+     * @param preferences Current validated settings for the active ImGui context. */
+    void ApplyVisualPreferences(VisualPreferences preferences) noexcept;
+
+    /** @brief Returns the host preferences for the active theme.
+     * @return Last applied preferences, or defaults before the common configuration is available. */
+    [[nodiscard]] VisualPreferences GetVisualPreferences() noexcept;
+
     /**
      * @brief Compatibility hook for the temporarily disabled global UI scale setting.
      * @param percent Persisted scale value; currently ignored while UI scaling is disabled.

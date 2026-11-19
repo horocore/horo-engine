@@ -1705,24 +1705,52 @@ namespace Horo::Editor {
             bool healthy{false}; /**< Set only after runtime startup and a normal, completed main-loop closure. */
         };
 
-        /** @brief Forwards one committed UI and visual-safety preference without copying keys or polling native settings. */
+        struct EditorVisualSettings final {
+            Runtime::Ui::UiVisualPresentationPolicy ui;
+            bool suppressFlash{};
+        };
+
+        /** @brief Resolves the UI and effect preferences from one configuration revision. */
+        Result<EditorVisualSettings> CaptureEditorVisualSettings(const ConfigurationSnapshot &config) {
+            using Outcome = Result<EditorVisualSettings>;
+            const auto visual = Runtime::Ui::UiVisualAccessibilitySnapshot::Capture(config);
+            if (visual.HasError())
+                return Outcome::Failure(visual.ErrorValue());
+            const auto safety = Accessibility::VisualSafetySnapshot::Capture(config);
+            if (safety.HasError())
+                return Outcome::Failure(safety.ErrorValue());
+            return Outcome::Success({{config.Revision(), visual.Value().HighContrast(), safety.Value().ReduceMotion(),
+                                      visual.Value().ScaleFactor(), Runtime::Ui::DefaultUiAccessibleTargetDips},
+                                     safety.Value().SuppressFlash()});
+        }
+
+        /** @brief Forwards one committed preference to the Runtime UI presentation owner. */
         Result<void> RefreshRuntimeUiAccessibility(const ConfigurationService &configuration,
                                                    const Application::Internal::RuntimeUiPaintPort &port, ConfigurationRevision &applied) {
             const auto config = configuration.Snapshot();
             if (config.Revision() == applied)
                 return Result<void>::Success();
-            const auto visual = Runtime::Ui::UiVisualAccessibilitySnapshot::Capture(config);
+            const auto visual = CaptureEditorVisualSettings(config);
             if (visual.HasError())
                 return Result<void>::Failure(visual.ErrorValue());
-            const auto safety = Accessibility::VisualSafetySnapshot::Capture(config);
-            if (safety.HasError())
-                return Result<void>::Failure(safety.ErrorValue());
-            const auto update =
-                port.UpdateVisualAccessibility({config.Revision(), visual.Value().HighContrast(), safety.Value().ReduceMotion(),
-                                                visual.Value().ScaleFactor(), Runtime::Ui::DefaultUiAccessibleTargetDips});
+            const auto update = port.UpdateVisualAccessibility(visual.Value().ui);
             if (update.HasValue())
                 applied = config.Revision();
             return update;
+        }
+
+        /** @brief Applies a new captured preference before the editor starts rendering the frame. */
+        Result<void> RefreshEditorThemeAccessibility(const ConfigurationService &configuration, ConfigurationRevision &applied) {
+            const auto config = configuration.Snapshot();
+            if (config.Revision() == applied)
+                return Result<void>::Success();
+            const auto visual = CaptureEditorVisualSettings(config);
+            if (visual.HasError())
+                return Result<void>::Failure(visual.ErrorValue());
+            const auto &preferences = visual.Value();
+            Theme::ApplyVisualPreferences({preferences.ui.highContrast, preferences.ui.reduceMotion, preferences.suppressFlash});
+            applied = config.Revision();
+            return Result<void>::Success();
         }
 
         /** @brief Owner-thread pacing state bound to the current editor host and its selected backend. */
@@ -2386,6 +2414,8 @@ namespace Horo::Editor {
             }
 
             Result<void> UpdatePresentation(const Runtime::FrameContext &context) {
+                if (auto refreshed = RefreshEditorThemeAccessibility(p_->configuration, themeAccessibilityRevision_); refreshed.HasError())
+                    return refreshed;
                 const auto surface = Theme::Bg0();
                 const auto text = Theme::Text();
                 windowChrome_.Update(*p_->presentation.window, {{surface.x, surface.y, surface.z}, {text.x, text.y, text.z}});
@@ -2927,6 +2957,7 @@ namespace Horo::Editor {
             EditorRuntimeAuthorities authorities_;
             EditorPacingState pacing_;
             ConfigurationRevision uiAccessibilityRevision_{};
+            ConfigurationRevision themeAccessibilityRevision_{};
             std::unique_ptr<Application::Internal::EditorConsoleExecution> console_;
             std::unique_ptr<RuntimeConsoleView> consoleView_;
             std::string consoleActivationErrorCode_;
