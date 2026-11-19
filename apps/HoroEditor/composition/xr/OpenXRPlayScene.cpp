@@ -161,9 +161,28 @@ namespace Horo::Application::Internal {
                                                                device.Value().graphicsIdentity};
                 auto requiredFinal = acquired;
                 requiredFinal.scope = Render::RenderGraphPipelineScope::External;
-                return Editor::EditorVulkanXrViewportAccess::Prepare(composition_.viewport, scene_->geometry->Resources(),
-                                                                     scene_->projection->color, acquired, requiredFinal,
-                                                                     WantsMotionHistory(plan));
+                using Viewport = Editor::EditorVulkanXrViewportAccess;
+                const auto prepare = [&](const Viewport::AuxiliaryPlan *auxiliary) {
+                    return Viewport::Prepare(composition_.viewport, scene_->geometry->Resources(), scene_->projection->color, acquired,
+                                             requiredFinal, WantsMotionHistory(plan), auxiliary);
+                };
+                if (const auto &writer = scene_->projection->writer) {
+                    auto depthAcquired = acquired;
+                    depthAcquired.operation = Render::RenderGraphSynchronizationOperation::DepthStencilAttachment;
+                    depthAcquired.layout = Render::RenderGraphTextureLayout::DepthStencilAttachment;
+                    auto depthFinal = depthAcquired;
+                    depthFinal.scope = Render::RenderGraphPipelineScope::External;
+                    const Viewport::AuxiliaryPlan auxiliary{{writer->motion, acquired, requiredFinal},
+                                                            {writer->depth, depthAcquired, depthFinal},
+                                                            writer->selection.eyeExtents};
+                    if (prepare(&auxiliary).HasValue())
+                        return Result<void>::Success();
+                    // Retain native children on this candidate, but fall back to the ordinary graph.
+                    scene_->projection->writer.reset();
+                    if (auto retired = Viewport::Retire(composition_.viewport); retired.HasError())
+                        return retired;
+                }
+                return prepare(nullptr);
             }
             case InputAndUi: {
                 input_.coordinator = std::make_unique<XRActionBindingCoordinator>(candidate, static_cast<IXRBindingNeutralizer &>(*this));

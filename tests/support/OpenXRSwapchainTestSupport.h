@@ -67,16 +67,19 @@ namespace Horo::Tests::OpenXR {
             return result;
         }
 
-        static XRAPI_ATTR XrResult XRAPI_CALL Images(XrSwapchain, std::uint32_t capacity, std::uint32_t *count,
+        static XRAPI_ATTR XrResult XRAPI_CALL Images(XrSwapchain swapchain, std::uint32_t capacity, std::uint32_t *count,
                                                      XrSwapchainImageBaseHeader *images) {
             *count = active->imageCount;
 #if defined(XR_USE_GRAPHICS_API_VULKAN)
             if (capacity >= *count && images != nullptr) {
                 auto *typed = reinterpret_cast<XrSwapchainImageVulkanKHR *>(images);
+                // Each scripted swapchain owns a distinct bounded image range.
+                const auto base = 900 + reinterpret_cast<std::uintptr_t>(swapchain) * 64;
                 for (std::uint32_t index = 0; index < *count; ++index)
-                    typed[index].image = NativeHandle<VkImage>(900 + index);
+                    typed[index].image = NativeHandle<VkImage>(base + index);
             }
 #else
+            (void)swapchain;
             (void)capacity;
             (void)images;
 #endif

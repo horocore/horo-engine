@@ -9,6 +9,7 @@
 #include "OpenXRInstalledProductSelection.h"
 #include "OpenXRPlaneCapture.h"
 #include "OpenXRSelectedVulkanBinding.h"
+#include "OpenXRSwapchain.h"
 
 #include <functional>
 
@@ -55,6 +56,13 @@ namespace Horo::Application::Internal {
         PFN_xrGetInstanceProcAddr getProc;
     };
 
+    /** @brief Exact selected runtime offer and signed Editor writer allocation, without compositor admission. */
+    struct OpenXRProjectionWriter final {
+        XR::OpenXRInternal::NativeReprojectionAllocation selection;
+        Render::RenderTextureDescriptor motion;
+        Render::RenderTextureDescriptor depth;
+    };
+
     /** @brief Actual same-owner projection admission, captured before the lifecycle issues its candidate.
      * @details Contains observed capability facts and admitted native allocation intent, never Ready/frame evidence.
      * The selected resource stages still create the native swapchain and cold graph before Scene publication.
@@ -65,6 +73,7 @@ namespace Horo::Application::Internal {
         Render::RenderTextureDescriptor color;
         std::array<Render::FramebufferExtent, 2> recommended;
         std::array<Render::FramebufferExtent, 2> maximum;
+        std::optional<OpenXRProjectionWriter> writer;
     };
 
     /** @brief Vendor implementation version observed through the official loader. Independently versioned from the wire API. */

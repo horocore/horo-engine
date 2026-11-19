@@ -103,6 +103,174 @@ namespace Horo::Application::Internal {
         }
     }  // namespace
 
+    /** @copydoc OpenXRPlayHost::FrameState::WaitAndImport */
+    Result<bool> OpenXRPlayHost::FrameState::WaitAndImport(OpenXRSwapchain &owner, std::optional<NativeSwapchainAcquisition> &image) {
+        using enum NativeSwapchainPhase;
+        if (owner.Phase() == Available)
+            if (auto acquired = owner.Acquire(); acquired.HasError())
+                return Result<bool>::Failure(acquired.ErrorValue());
+        if (owner.Phase() == Acquired) {
+            const auto waited = owner.Wait(0);
+            if (waited.HasError() || !waited.Value())
+                return waited;
+        }
+        if (owner.Phase() == Ready) {
+            auto imported = owner.Import();
+            if (imported.HasError())
+                return Result<bool>::Failure(imported.ErrorValue());
+            image.emplace(std::move(imported).Value());
+        }
+        if (owner.Phase() != Imported || !image)
+            return Result<bool>::Failure(MakeError(XRErrors::OperationIncompatible));
+        return Result<bool>::Success(true);
+    }
+
+    /** @copydoc OpenXRPlayHost::FrameState::PrepareEyeViews */
+    Result<void> OpenXRPlayHost::FrameState::PrepareEyeViews(Render::RenderFrontend &frontend, const NativeSwapchainAcquisition &image,
+                                                             const Render::RenderTextureDescriptor &descriptor,
+                                                             const Render::RenderTextureAspect aspect,
+                                                             const std::span<Render::RenderTextureViewHandle> views) {
+        for (std::uint32_t eye = 0; eye < views.size(); ++eye) {
+            auto view = frontend.CreateTextureView(
+                {.texture = image.texture, .format = descriptor.format, .aspect = aspect, .baseLayer = eye, .layerCount = 1});
+            if (view.HasError())
+                return Result<void>::Failure(view.ErrorValue());
+            views[eye] = view.Value().handle;
+            if (auto processed = frontend.ProcessResourceRequests(); processed.HasError())
+                return Result<void>::Failure(processed.ErrorValue());
+            if (auto ready = frontend.ResourceOperationResult(view.Value().operation); ready.HasError())
+                return ready;
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRPlayHost::FrameState::ReleaseEyeViews */
+    Result<void> OpenXRPlayHost::FrameState::ReleaseEyeViews(Render::RenderFrontend &frontend,
+                                                             const std::span<Render::RenderTextureViewHandle> views) {
+        for (auto &view : views) {
+            if (!view.IsValid())
+                continue;
+            if (auto released = frontend.ReleaseTextureView(view); released.HasError())
+                return released;
+            view = {};
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRPlayHost::FrameState::RetireImage */
+    Result<bool> OpenXRPlayHost::FrameState::RetireImage(Render::RenderFrontend &frontend, OpenXRSwapchain &owner,
+                                                         const std::span<Render::RenderTextureViewHandle> views) {
+        using enum NativeSwapchainPhase;
+        if (auto released = ReleaseEyeViews(frontend, views); released.HasError())
+            return Result<bool>::Failure(released.ErrorValue());
+        if (owner.Phase() == Acquired) {
+            const auto ready = owner.Wait(0);
+            if (ready.HasError() || !ready.Value())
+                return ready;
+        }
+        return owner.Phase() == Available || owner.Phase() == Empty ? Result<bool>::Success(true) : owner.PollRelease();
+    }
+
+    /** @brief Constructs one native auxiliary owner from the selected session's same graphics binding. */
+    OpenXRPlayHost::FrameState::WriterPair::Target::Target(OpenXRPlayHost &host, OpenXRSelectedVulkanBinding &graphics,
+                                                           const XrGraphicsBindingVulkanKHR &binding, Render::RenderQueueId queue,
+                                                           Render::Detail::VulkanExternalViewDispatch dispatch)
+        : images(host.composition_.frontend, graphics, binding, queue, dispatch), owner(host.native_, images) {}
+
+    /** @brief Retains both native targets together until their exact frame and graphics obligations drain. */
+    OpenXRPlayHost::FrameState::WriterPair::WriterPair(OpenXRPlayHost &host, OpenXRSelectedVulkanBinding &graphics,
+                                                       const XrGraphicsBindingVulkanKHR &binding,
+                                                       const Render::Detail::VulkanEditorDevice &device,
+                                                       Render::Detail::VulkanExternalViewDispatch views)
+        : motion(host, graphics, binding, device.graphicsIdentity, views), depth(host, graphics, binding, device.graphicsIdentity, views) {}
+
+    /** @copydoc OpenXRPlayHost::FrameState::WriterPair::Prepare */
+    Result<void> OpenXRPlayHost::FrameState::WriterPair::Prepare(const XRSessionId &session, const OpenXRProjectionWriter &plan,
+                                                                 PFN_xrGetInstanceProcAddr getProc) {
+        const auto prepare = [&](Target &target, const std::uint32_t index, const Render::RenderTextureDescriptor &descriptor,
+                                 const NativeSwapchainRole role) -> Result<void> {
+            if (auto bound = target.images.Bind(target.owner); bound.HasError())
+                return bound;
+            return target.owner.Create({.target = {session, {.index = index, .generation = 1}},
+                                        .texture = descriptor,
+                                        .role = role,
+                                        .reprojection = plan.selection},
+                                       getProc);
+        };
+        if (auto ready = prepare(motion, 1, plan.motion, NativeSwapchainRole::Motion); ready.HasError())
+            return ready;
+        auto ready = prepare(depth, 2, plan.depth, NativeSwapchainRole::ReprojectionDepth);
+        available = ready.HasValue();
+        return ready;
+    }
+
+    /** @copydoc OpenXRPlayHost::FrameState::WriterPair::Acquire */
+    Result<std::optional<Editor::EditorVulkanXrViewportAccess::AuxiliaryImages>> OpenXRPlayHost::FrameState::WriterPair::Acquire(
+        Render::RenderFrontend &frontend, const XRFrameId &candidate, const OpenXRProjectionWriter &plan) {
+        using Outcome = Result<std::optional<Editor::EditorVulkanXrViewportAccess::AuxiliaryImages>>;
+        using enum Render::RenderTextureAspect;
+        if (frame == candidate && candidate.IsValid())
+            return Outcome::Success(ready);
+        if (!available || !candidate.IsValid() || frame.IsValid())
+            return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
+        frame = candidate;
+        const auto acquire = [&](Target &entry, const Render::RenderTextureDescriptor &descriptor, Render::RenderTextureAspect aspect) {
+            const auto imported = WaitAndImport(entry.owner, entry.acquisition);
+            if (imported.HasError() || !imported.Value())
+                return imported;
+            if (auto views = PrepareEyeViews(frontend, *entry.acquisition, descriptor, aspect, entry.views); views.HasError())
+                return Result<bool>::Failure(views.ErrorValue());
+            return Result<bool>::Success(true);
+        };
+        const auto color = acquire(motion, plan.motion, Color);
+        if (color.HasError())
+            return Outcome::Failure(color.ErrorValue());
+        if (!color.Value())
+            return Outcome::Success(std::nullopt);
+        const auto depthReady = acquire(depth, plan.depth, Depth);
+        if (depthReady.HasError())
+            return Outcome::Failure(depthReady.ErrorValue());
+        if (!depthReady.Value())
+            return Outcome::Success(std::nullopt);
+        ready.emplace(motion.acquisition->texture, depth.acquisition->texture, motion.views, depth.views);
+        return Outcome::Success(ready);
+    }
+
+    /** @copydoc OpenXRPlayHost::FrameState::WriterPair::Retire */
+    Result<bool> OpenXRPlayHost::FrameState::WriterPair::Retire(Render::RenderFrontend &frontend) {
+        if (!frame.IsValid())
+            return Result<bool>::Success(true);
+        ready.reset();
+        for (auto *target : {&motion, &depth}) {
+            const auto retired = RetireImage(frontend, target->owner, target->views);
+            if (retired.HasError() || !retired.Value())
+                return retired;
+            target->acquisition.reset();
+        }
+        frame = {};
+        return Result<bool>::Success(true);
+    }
+
+    /** @copydoc OpenXRPlayHost::FrameState::WriterPair::Close */
+    Result<bool> OpenXRPlayHost::FrameState::WriterPair::Close(Render::RenderFrontend &frontend, const XRSessionId &session,
+                                                               const bool lost) {
+        using enum NativeSwapchainPhase;
+        available = false;
+        ready.reset();
+        for (auto *target : {&motion, &depth}) {
+            if (auto views = ReleaseEyeViews(frontend, target->views); views.HasError())
+                return Result<bool>::Failure(views.ErrorValue());
+            const auto phase = target->owner.Phase();
+            const auto closed =
+                lost && phase != Empty && phase != Closing ? target->owner.CloseAfterSessionLoss(session) : target->owner.Close();
+            if (closed.HasError() || !closed.Value())
+                return closed;
+            target->acquisition.reset();
+        }
+        frame = {};
+        return Result<bool>::Success(true);
+    }
+
     /** @copydoc OpenXRPlayHost::PrepareFrameResources */
     Result<void> OpenXRPlayHost::PrepareFrameResources(const XRSessionId &candidate, const Render::RenderTextureDescriptor &color) {
         if (render_ || !candidate.IsValid() || frames_.Snapshot().phase != XRFramePhase::Idle)
@@ -132,7 +300,16 @@ namespace Horo::Application::Internal {
             return bound;
         // This is the single actual color allocation for this issued session. The session generation
         // fences its sole target slot; the swapchain owner independently issues every acquisition generation.
-        return render_->color.Create({{candidate, {.index = 0, .generation = 1}}, color}, getProc_);
+        if (auto created = render_->color.Create({{candidate, {.index = 0, .generation = 1}}, color}, getProc_); created.HasError())
+            return created;
+        if (scene_->projection->writer) {
+            auto &writer = render_->writer.emplace(*this, *graphics.Value(), *binding.Value(), selected, views);
+            const auto prepared = writer.Prepare(candidate, *scene_->projection->writer, getProc_);
+            // Optional preparation can leave a native prefix. The same Scene owner keeps it until explicit close.
+            if (prepared.HasError())
+                scene_->projection->writer.reset();
+        }
+        return Result<void>::Success();
     }
 
     /** @copydoc OpenXRPlayHost::FinishFrameResources */
@@ -150,8 +327,12 @@ namespace Horo::Application::Internal {
             return bound;
         render_->clockBound = true;
         events_.emplace(native_, sessions_, frames_);
-        const std::array owners{&render_->color};
-        if (auto bound = events_->Bind({getProc_}, owners); bound.HasError())
+        std::array<OpenXRSwapchain *, 3> owners{&render_->color};
+        if (render_->writer) {
+            owners[1] = &render_->writer->motion.owner;
+            owners[2] = &render_->writer->depth.owner;
+        }
+        if (auto bound = events_->Bind({getProc_}, std::span{owners}.first(render_->writer ? owners.size() : 1)); bound.HasError())
             return bound;
         eventsBound_ = true;
         return Result<void>::Success();
@@ -266,12 +447,21 @@ namespace Horo::Application::Internal {
             scope && HasPassthrough(*scope) && passthroughScope_ == scope && reference.Value().Target() == scope->world)
             render_->passthrough.emplace(*scope, publication, reference.Value());
         const auto alpha = render_->passthrough ? Editor::EditorXrProjectionAlpha::Premultiplied : Editor::EditorXrProjectionAlpha::Opaque;
-        if (auto bound =
-                Editor::EditorVulkanXrViewportAccess::Bind(composition_.viewport, render_->acquisition->texture, render_->eyeViews,
-                                                           publication, converted.Value().Scene().Views(), scene_->geometry->Instances(),
-                                                           prepareMotion ? &motion : nullptr, alpha);
-            bound.HasError())
-            return bound;
+        using Viewport = Editor::EditorVulkanXrViewportAccess;
+        const auto bind = [&](const Viewport::AuxiliaryImages *auxiliary) {
+            return Viewport::Bind(composition_.viewport, render_->acquisition->texture, render_->eyeViews, publication,
+                                  converted.Value().Scene().Views(), scene_->geometry->Instances(), prepareMotion ? &motion : nullptr,
+                                  alpha, auxiliary);
+        };
+        if (auto baseline = bind(nullptr); baseline.HasError())
+            return baseline;
+        if (render_->writer && scene_->projection->writer && Viewport::PreviousDepth(composition_.viewport)) {
+            const auto pair = render_->writer->Acquire(composition_.frontend, frame.frame, *scene_->projection->writer);
+            // Incomplete optional images still retire through the normal queue/native tail. The baseline binding stays usable.
+            if (pair.HasValue() && pair.Value() && bind(&*pair.Value()).HasError())
+                if (auto baseline = bind(nullptr); baseline.HasError())
+                    return baseline;
+        }
         if (prepareMotion)
             render_->motionFrame = motion.frame;
         render_->plan.emplace(std::move(plan).Value());
@@ -427,14 +617,7 @@ namespace Horo::Application::Internal {
             if (auto polled = Editor::EditorVulkanXrViewportAccess::Poll(host.composition_.viewport); polled.HasError())
                 return polled;
         }
-        for (auto &view : eyeViews) {
-            if (!view.IsValid())
-                continue;
-            if (auto released = host.composition_.frontend.ReleaseTextureView(view); released.HasError())
-                return released;
-            view = {};
-        }
-        return Result<void>::Success();
+        return ReleaseEyeViews(host.composition_.frontend, eyeViews);
     }
 
     /** @copydoc OpenXRPlayHost::FrameState::RetireResources */
@@ -473,6 +656,11 @@ namespace Horo::Application::Internal {
             if (lost) {
                 if (auto retired = host.render_->RetireViewsAfterLoss(); retired.HasError())
                     return Output::Failure(retired.ErrorValue());
+            }
+            if (host.render_->writer) {
+                const auto closed = host.render_->writer->Close(host.composition_.frontend, host.render_->session, lost);
+                if (closed.HasError() || !closed.Value())
+                    return closed;
             }
             if (const auto closed = lost ? host.render_->color.CloseAfterSessionLoss(host.render_->session) : host.render_->color.Close();
                 closed.HasError() || !closed.Value())

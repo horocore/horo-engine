@@ -3,6 +3,7 @@
  */
 #pragma once
 
+#include "EditorVulkanXrViewportAccess.h"
 #include "Horo/Runtime/Render/MultiviewMotionHistory.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/XR/XRMultiviewScene.h"
@@ -23,6 +24,43 @@ namespace Horo::Application::Internal {
         XR::OpenXRInternal::OpenXRVulkanSwapchainImages images;
         XR::OpenXRInternal::OpenXRSwapchain color;
         XR::OpenXRInternal::OpenXRFrameCompositor compositor;
+
+        /** @brief Native writer-only acquisitions retire through the canonical scene/GUI queue lease. */
+        struct WriterPair final {
+            struct Target final {
+                XR::OpenXRInternal::OpenXRVulkanSwapchainImages images;
+                XR::OpenXRInternal::OpenXRSwapchain owner;
+                std::optional<XR::OpenXRInternal::NativeSwapchainAcquisition> acquisition;
+                std::array<Render::RenderTextureViewHandle, 2> views{};
+
+                Target(OpenXRPlayHost &host, XR::OpenXRInternal::OpenXRSelectedVulkanBinding &graphics,
+                       const XrGraphicsBindingVulkanKHR &binding, Render::RenderQueueId queue,
+                       Render::Detail::VulkanExternalViewDispatch dispatch);
+            };
+
+            Target motion;
+            Target depth;
+            XR::XRFrameId frame;
+            std::optional<Editor::EditorVulkanXrViewportAccess::AuxiliaryImages> ready;
+            bool available{};
+
+            WriterPair(OpenXRPlayHost &host, XR::OpenXRInternal::OpenXRSelectedVulkanBinding &graphics,
+                       const XrGraphicsBindingVulkanKHR &binding, const Render::Detail::VulkanEditorDevice &device,
+                       Render::Detail::VulkanExternalViewDispatch views);
+
+            /** @brief Creates the exact session's auxiliary swapchains without registering a compositor provider. */
+            Result<void> Prepare(const XR::XRSessionId &session, const OpenXRProjectionWriter &plan, PFN_xrGetInstanceProcAddr getProc);
+            /** @brief Acquires both images at zero timeout; an incomplete pair retains exact retirement debt. */
+            Result<std::optional<Editor::EditorVulkanXrViewportAccess::AuxiliaryImages>> Acquire(Render::RenderFrontend &frontend,
+                                                                                                 const XR::XRFrameId &candidate,
+                                                                                                 const OpenXRProjectionWriter &plan);
+            /** @brief Retires all touched auxiliary images before the ordinary projection may finish. */
+            Result<bool> Retire(Render::RenderFrontend &frontend);
+            /** @brief Retires the candidate's native children, including incomplete cold prefixes. */
+            Result<bool> Close(Render::RenderFrontend &frontend, const XR::XRSessionId &session, bool lost);
+        };
+
+        std::optional<WriterPair> writer;
         Render::RenderTextureDescriptor allocation;
         std::optional<XR::OpenXRInternal::NativeSwapchainAcquisition> acquisition;
         std::array<Render::RenderTextureViewHandle, 2> eyeViews{};
@@ -63,6 +101,8 @@ namespace Horo::Application::Internal {
         Result<bool> StartPrediction() {
             using Output = Result<bool>;
             auto state = host.frames_.Snapshot();
+            if (writer && writer->frame.IsValid())
+                return Output::Failure(MakeError(XR::XRErrors::OperationIncompatible));
             if (!host.sessions_.Snapshot().admitsFrames)
                 return Output::Success(false);  // Real native Ready/Running events, never Scene publication, admit waits.
             rendered = false;
@@ -130,41 +170,33 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Acquires and retains the next native borrow without claiming render completion. */
+        static Result<bool> WaitAndImport(XR::OpenXRInternal::OpenXRSwapchain &owner,
+                                          std::optional<XR::OpenXRInternal::NativeSwapchainAcquisition> &image);
+        /** @brief Retains every successfully created eye view for retryable retirement. */
+        static Result<void> PrepareEyeViews(Render::RenderFrontend &frontend, const XR::OpenXRInternal::NativeSwapchainAcquisition &image,
+                                            const Render::RenderTextureDescriptor &descriptor, Render::RenderTextureAspect aspect,
+                                            std::span<Render::RenderTextureViewHandle> views);
+        /** @brief Releases the caller's view handles while retaining canonical queue pins. */
+        static Result<void> ReleaseEyeViews(Render::RenderFrontend &frontend, std::span<Render::RenderTextureViewHandle> views);
+        /** @brief Zero-time observes native wait/queue retirement before releasing the exact allocation. */
+        static Result<bool> RetireImage(Render::RenderFrontend &frontend, XR::OpenXRInternal::OpenXRSwapchain &owner,
+                                        std::span<Render::RenderTextureViewHandle> views);
+
         /** @brief Zero-time acquires/imports the same native image and creates its bounded eye views before native admission. */
         Result<bool> AcquireEyeImages() {
             using Output = Result<bool>;
             const auto state = host.frames_.Snapshot();
-            if (color.Phase() == XR::OpenXRInternal::NativeSwapchainPhase::Available) {
-                if (auto acquired = color.Acquire(); acquired.HasError())
-                    return Result<bool>::Failure(acquired.ErrorValue());
-            }
-            if (color.Phase() == XR::OpenXRInternal::NativeSwapchainPhase::Acquired) {
-                const auto ready = color.Wait(0);
-                if (ready.HasError())
-                    return Result<bool>::Failure(ready.ErrorValue());
-                if (!ready.Value())
-                    return Output::Success(false);  // Zero-time native readiness; retain exact wait/frame/acquisition for next event loop.
-            }
-            if (color.Phase() == XR::OpenXRInternal::NativeSwapchainPhase::Ready) {
-                auto imported = color.Import();
-                if (imported.HasError())
-                    return Result<bool>::Failure(imported.ErrorValue());
-                acquisition.emplace(std::move(imported).Value());
-                if (host.frames_.Acquire(state.frame, acquisition->image) != XR::XRFrameStatus::Ok)
-                    return Result<bool>::Failure(MakeError(XR::XRErrors::OperationIncompatible));
-                acquisitionRecorded = true;
-                for (std::uint32_t eye = 0; eye < eyeViews.size(); ++eye) {
-                    auto view = host.composition_.frontend.CreateTextureView(
-                        {.texture = acquisition->texture, .format = allocation.format, .baseLayer = eye, .layerCount = 1});
-                    if (view.HasError())
-                        return Result<bool>::Failure(view.ErrorValue());
-                    eyeViews[eye] = view.Value().handle;
-                    if (auto processed = host.composition_.frontend.ProcessResourceRequests(); processed.HasError())
-                        return Result<bool>::Failure(processed.ErrorValue());
-                    if (auto ready = host.composition_.frontend.ResourceOperationResult(view.Value().operation); ready.HasError())
-                        return Result<bool>::Failure(ready.ErrorValue());
-                }
-            }
+            const auto imported = WaitAndImport(color, acquisition);
+            if (imported.HasError() || !imported.Value() || acquisitionRecorded)
+                return imported;
+            if (host.frames_.Acquire(state.frame, acquisition->image) != XR::XRFrameStatus::Ok)
+                return Output::Failure(MakeError(XR::XRErrors::OperationIncompatible));
+            acquisitionRecorded = true;
+            if (auto ready =
+                    PrepareEyeViews(host.composition_.frontend, *acquisition, allocation, Render::RenderTextureAspect::Color, eyeViews);
+                ready.HasError())
+                return Output::Failure(ready.ErrorValue());
             return Output::Success(true);
         }
 
@@ -208,28 +240,12 @@ namespace Horo::Application::Internal {
          * @pre The same canonical tail has accepted GUI completion or explicit scene retirement; no normal-frame wait.
          */
         Result<bool> RetireImageReferences() {
-            for (auto &view : eyeViews) {
-                if (!view.IsValid())
-                    continue;
-                if (auto released = host.composition_.frontend.ReleaseTextureView(view); released.HasError())
-                    return Result<bool>::Failure(released.ErrorValue());
-                view = {};
+            if (writer) {
+                const auto retired = writer->Retire(host.composition_.frontend);
+                if (retired.HasError() || !retired.Value())
+                    return retired;
             }
-            if (color.Phase() == XR::OpenXRInternal::NativeSwapchainPhase::Acquired) {
-                auto ready = color.Wait(0);
-                if (ready.HasError())
-                    return Result<bool>::Failure(ready.ErrorValue());
-                if (!ready.Value())
-                    return Result<bool>::Success(false);
-            }
-            if (color.Phase() != XR::OpenXRInternal::NativeSwapchainPhase::Available) {
-                const auto released = color.PollRelease();
-                if (released.HasError())
-                    return Result<bool>::Failure(released.ErrorValue());
-                if (!released.Value())
-                    return Result<bool>::Success(false);
-            }
-            return Result<bool>::Success(true);
+            return RetireImage(host.composition_.frontend, color, eyeViews);
         }
 
         Result<XrSpace> Borrow(const XR::XRCoordinateSpace &space) const override {

@@ -2168,10 +2168,15 @@ namespace Horo::Tests::OpenXRApplication {
         REQUIRE(RequireValue(fixture.ClosePlay()));
     }
 
-    TEST_CASE("Selected Play retains previous sampled eye depths only after exact projection completion",
+    TEST_CASE("Selected Play writes exact auxiliary images while projection retains ordinary compositor admission",
               "[xr][application][play][reprojection][depth]") {
         using enum XR::XRProjectFeaturePolicy;
         using namespace Render;
+        bool delayAuxiliary = false;
+        SECTION("asymmetric writer with an adjacent predecessor") {}
+        SECTION("zero-time auxiliary wait defers release but leaves ordinary projection usable") {
+            delayAuxiliary = true;
+        }
         ApplicationFixture fixture{true, 5, Unrequested, Unrequested, Unrequested, true};
         constexpr std::array<std::int64_t, 3> formats{VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT};
         fixture.script.census.formats = formats.size();
@@ -2193,9 +2198,11 @@ namespace Horo::Tests::OpenXRApplication {
             REQUIRE(fixture.play->FinishGui(true).HasValue());
         };
         const auto complete = [&] {
+            const auto ended = fixture.script.frames.ends;
             vulkan.commandState.state.Complete();
             REQUIRE(fixture.play->ProgressRenderTail().HasValue());
-            fixture.script.frames.prediction += 1'000'000;
+            if (fixture.script.frames.ends != ended)
+                fixture.script.frames.prediction += 1'000'000;
         };
 
         REQUIRE(fixture.play->PrepareRenderFrame(1).Value());
@@ -2205,18 +2212,23 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(fixture.script.frames.ends == 0);
         CHECK_FALSE(previous());
         REQUIRE(vulkan.encoded.renderingCalls.size() >= 2);
-        const auto depthImage = [&] {
-            const auto &barriers = vulkan.encoded.imageBarriers;
-            const auto selected = std::find_if(barriers.rbegin(), barriers.rend(), [](const auto &barrier) {
+        const auto depthImage = [&](const std::size_t offset) {
+            const auto barriers = std::span{vulkan.encoded.imageBarriers}.subspan(offset);
+            const auto selected = std::ranges::find_if(barriers, [](const auto &barrier) {
                 return barrier.newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL &&
                        (barrier.subresourceRange.aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT) != 0;
             });
-            REQUIRE(selected != barriers.rend());
+            REQUIRE(selected != barriers.end());
             return selected->image;
         };
-        const auto firstDepth = depthImage();
+        const auto firstDepth = depthImage(0);
         const auto priorCalls = vulkan.encoded.renderingCalls.size();
+        const auto priorBarriers = vulkan.encoded.imageBarriers.size();
         complete();
+        REQUIRE(fixture.script.swapchain.creates == 3);
+        REQUIRE(fixture.script.swapchain.releases == 1);
+        if (delayAuxiliary)
+            fixture.script.swapchain.timeoutSwapchain = OpenXR::NativeHandle<XrSwapchain>(3);
         REQUIRE(fixture.play->PrepareRenderFrame(2).Value());
         const auto first = previous();
         REQUIRE(first);
@@ -2239,10 +2251,37 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(transition.Transitions().front().newState.layout == RenderGraphTextureLayout::ShaderReadOnly);
 
         submit(2);
-        REQUIRE(vulkan.encoded.renderingCalls.size() == priorCalls + 2);
-        CHECK(depthImage() != firstDepth);
+        const auto commands = std::span{vulkan.encoded.renderingCalls}.subspan(priorCalls);
+        REQUIRE(commands.size() == (delayAuxiliary ? 2 : 4));
+        CHECK(depthImage(priorBarriers) != firstDepth);
         CHECK_FALSE(previous());
+        if (!delayAuxiliary) {
+            CHECK(commands[2].extent.width == 640);
+            CHECK(commands[3].extent.width == 800);
+            CHECK(commands[2].extent.height == 512);
+            CHECK(commands[3].extent.height == 512);
+            CHECK(commands[2].depth);
+            CHECK(commands[3].depth);
+            CHECK(fixture.vulkan->port.motionUniformWrites == 1);
+        }
+        REQUIRE(fixture.play->ProgressRenderTail().HasValue());
+        CHECK(fixture.script.frames.ends == 1);
+        if (!delayAuxiliary)
+            CHECK(fixture.script.swapchain.releases == 1);
         complete();
+        if (delayAuxiliary) {
+            CHECK(fixture.script.frames.ends == 1);
+            fixture.script.swapchain.timeoutSwapchain = XR_NULL_HANDLE;
+            REQUIRE(fixture.play->ProgressRenderTail().HasValue());
+            fixture.script.frames.prediction += 1'000'000;
+            CHECK(fixture.vulkan->port.motionUniformWrites == 0);
+        }
+        CHECK(fixture.script.swapchain.releases == 4);
+        CHECK(fixture.script.frames.ends == 2);
+        CHECK(fixture.script.frames.layers == 1);
+        CHECK(std::ranges::all_of(fixture.script.frames.encoded, [](const auto &view) {
+            return view.next == nullptr;
+        }));
         REQUIRE(fixture.play->PrepareRenderFrame(3).Value());
         const auto second = previous();
         REQUIRE(second);

@@ -112,32 +112,54 @@ namespace Horo::Application::Internal {
             return Result<ProjectionTargets>::Success({color, stereo, exactImages});
         }
 
-        /** @brief Warms the optional Vulkan motion path while reporting native availability independently of producer admission. */
-        Result<XRCapabilityState> PrepareOptionalReprojection(const OpenXRNativeSession &native, XRLoaderPreflightAttempt attempt,
-                                                              std::span<const XRFeatureRequest> features,
-                                                              const Render::RenderFrontend &frontend,
-                                                              Editor::EditorViewportRendererVulkan &viewport,
-                                                              const NativeSessionCensus &session) {
-            using Evidence = Result<XRCapabilityState>;
+        struct ReprojectionEvidence final {
+            XRCapabilityState observed{XRCapabilityState::Unsupported};
+            std::optional<OpenXRProjectionWriter> writer;
+        };
+
+        /** @brief Admits exact selected-device writer allocations after validating the cooked motion pipeline. */
+        std::optional<OpenXRProjectionWriter> PrepareOptionalWriter(const NativeReprojectionOffer &offer,
+                                                                    const XRLoaderPreflightAttempt attempt,
+                                                                    const Render::RenderFrontend &frontend,
+                                                                    Editor::EditorViewportRendererVulkan &viewport,
+                                                                    const NativeSessionCensus &session) {
+            using namespace Render;
+            const auto &[left, right] = offer.extents;
+            if (offer.availabilityWithoutProducer != XRCapabilityState::DependencyMissing || !left.IsValid() || !right.IsValid())
+                return std::nullopt;
+            const FramebufferExtent extent{std::max(left.width, right.width), std::max(left.height, right.height)};
+            const auto formats = SelectOpenXRVulkanReprojectionFormats(frontend.Capabilities().support,
+                                                                       std::span{session.formats}.first(session.formatCount), extent);
+            if (!formats)
+                return std::nullopt;
+            const auto pipeline = Editor::EditorVulkanXrViewportAccess::PrepareMotionPipeline(viewport, formats->motion, formats->depth);
+            if (pipeline.HasError() || !pipeline.Value())
+                return std::nullopt;
+            constexpr auto usage = RenderTextureUsage::RenderAttachment | RenderTextureUsage::Sampled;
+            const RenderTextureDescriptor motion{.extent = extent, .format = formats->motion, .layerCount = 2, .usage = usage};
+            auto depth = motion;
+            depth.format = formats->depth;
+            return OpenXRProjectionWriter{{attempt, offer.route, offer.extents}, motion, depth};
+        }
+
+        /** @brief Observes compositor availability independently of the selected writer's preparation. */
+        Result<ReprojectionEvidence> PrepareOptionalReprojection(const OpenXRNativeSession &native, XRLoaderPreflightAttempt attempt,
+                                                                 std::span<const XRFeatureRequest> features,
+                                                                 const Render::RenderFrontend &frontend,
+                                                                 Editor::EditorViewportRendererVulkan &viewport,
+                                                                 const NativeSessionCensus &session) {
+            using Evidence = Result<ReprojectionEvidence>;
             const bool requested = std::ranges::any_of(features, [](const XRFeatureRequest &feature) {
                 return feature.capability == XRCapability::SpaceWarp && feature.kind == XRFeatureRequirementKind::Optional;
             });
             if (!requested)
-                return Evidence::Success(XRCapabilityState::Unsupported);
+                return Evidence::Success({});
             const auto result = native.DiscoverReprojection(attempt);
             if (result.HasError())
                 return Evidence::Failure(result.ErrorValue());
             const auto &offer = result.Value();
-            const auto &left = offer.extents.front();
-            const auto &right = offer.extents.back();
-            if (offer.availabilityWithoutProducer == XRCapabilityState::DependencyMissing && left.IsValid() && right.IsValid()) {
-                const Render::FramebufferExtent extent{std::max(left.width, right.width), std::max(left.height, right.height)};
-                const auto formats = SelectOpenXRVulkanReprojectionFormats(frontend.Capabilities().support,
-                                                                           std::span{session.formats}.first(session.formatCount), extent);
-                if (formats)
-                    (void)Editor::EditorVulkanXrViewportAccess::PrepareMotionPipeline(viewport, formats->motion, formats->depth);
-            }
-            return Evidence::Success(offer.availabilityWithoutProducer);
+            return Evidence::Success(
+                {offer.availabilityWithoutProducer, PrepareOptionalWriter(offer, attempt, frontend, viewport, session)});
         }
 
         struct OptionalProjectionEvidence final {
@@ -272,7 +294,7 @@ namespace Horo::Application::Internal {
             PrepareOptionalReprojection(*native_, selection_.attempt, settings_.Features(), frontend, viewport, session);
         if (reprojection.HasError())
             return Outcome::Failure(reprojection.ErrorValue());
-        optional.reprojection = reprojection.Value();
+        optional.reprojection = reprojection.Value().observed;
         auto capabilities =
             ProjectionCapabilities(observed, session, targets.Value(), observedSystem.Value(), revision.Value(), budget, optional);
         if (capabilities.HasError())
@@ -286,6 +308,7 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(current.ErrorValue());
         ++lastCapabilityRevision_;
         OpenXRApplicationProjection output{std::move(capabilities).Value(), std::move(plan).Value(), targets.Value().color};
+        output.writer = reprojection.Value().writer;
         for (std::size_t eye = 0; eye < output.recommended.size(); ++eye) {
             output.recommended[eye] = {observed.primaryViews[eye].recommendedImageRectWidth,
                                        observed.primaryViews[eye].recommendedImageRectHeight};
