@@ -2,6 +2,13 @@
 
 #include "host/OpenXRNativeNames.h"
 
+#if defined(__ANDROID__)
+#ifndef XR_USE_PLATFORM_ANDROID
+#define XR_USE_PLATFORM_ANDROID
+#endif
+#include <openxr/openxr_platform.h>
+#endif
+
 #include <algorithm>
 #include <bit>
 #include <exception>
@@ -288,6 +295,38 @@ namespace Horo::XR::OpenXRInternal {
                                              const IOpenXRCompositionFence &fence) noexcept
         : loader_(std::move(loader)), graphics_(&graphics), fence_(&fence) {}
 
+#if defined(__ANDROID__)
+    /** @copydoc OpenXRNativeSession::OpenXRNativeSession(std::shared_ptr<const Platform::DynamicLibrary>, IOpenXRGraphicsBinding &, const
+     * IOpenXRCompositionFence &, NativeOpenXRAndroidApplication) */
+    OpenXRNativeSession::OpenXRNativeSession(std::shared_ptr<const Platform::DynamicLibrary> loader, IOpenXRGraphicsBinding &graphics,
+                                             const IOpenXRCompositionFence &fence, NativeOpenXRAndroidApplication application) noexcept
+        : androidApplication_(std::move(application)), loader_(std::move(loader)), graphics_(&graphics), fence_(&fence) {}
+
+    /** @copydoc OpenXRNativeSession::InitializeAndroidLoader */
+    Result<void> OpenXRNativeSession::InitializeAndroidLoader(std::span<const NativeExtensionRequest> requested) {
+        const auto &application = androidApplication_;
+        if (!application.vm || !application.applicationContext || !application.activity || !application.lifetime)
+            return Result<void>::Failure(MakeError(XRErrors::LoaderPreflightInvalid,
+                                                   "Selected Android host has no retained OpenXR application context and Activity"));
+        if (requested.size() >= MaximumEnabledExtensions)
+            return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
+        if (!std::ranges::any_of(requested, [](const NativeExtensionRequest &extension) {
+            return extension.name == XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME && extension.required && !extension.promotedToCore;
+        }))
+            return Result<void>::Failure(
+                MakeError(XRErrors::LoaderPreflightInvalid, "Android OpenXR selection must require XR_KHR_android_create_instance"));
+
+        PFN_xrInitializeLoaderKHR initialize{};
+        if (auto resolved = Resolve(dispatch_.getProc, XR_NULL_HANDLE, "xrInitializeLoaderKHR", initialize); resolved.HasError())
+            return resolved;
+        const XrLoaderInitInfoAndroidKHR info{XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR, nullptr, application.vm,
+                                              application.applicationContext};
+        const auto initialized = initialize(reinterpret_cast<const XrLoaderInitInfoBaseHeaderKHR *>(&info));
+        return initialized == XR_SUCCESS ? Result<void>::Success()
+                                         : Result<void>::Failure(NativeError("xrInitializeLoaderKHR", initialized));
+    }
+#endif
+
     /** @copydoc OpenXRNativeSession::~OpenXRNativeSession */
     OpenXRNativeSession::~OpenXRNativeSession() {
         const auto retired = Close();
@@ -296,7 +335,7 @@ namespace Horo::XR::OpenXRInternal {
     }
 
     /** @copydoc OpenXRNativeSession::ResolveGlobal */
-    Result<void> OpenXRNativeSession::ResolveGlobal() {
+    Result<void> OpenXRNativeSession::ResolveGlobal([[maybe_unused]] const NativeDiscoveryRequest &request) {
         if (!loader_)
             return Result<void>::Failure(MakeError(XRErrors::LoaderAbsent));
         dispatch_.getProc = std::bit_cast<PFN_xrGetInstanceProcAddr>(loader_->GetSymbol("xrGetInstanceProcAddr"));
@@ -307,6 +346,10 @@ namespace Horo::XR::OpenXRInternal {
         dispatch_.destroyInstance = std::bit_cast<PFN_xrDestroyInstance>(loader_->GetSymbol("xrDestroyInstance"));
         if (!dispatch_.destroyInstance)
             return Result<void>::Failure(MakeError(XRErrors::LoaderIncompatible, "Verified loader has no bootstrap instance retirement"));
+#if defined(__ANDROID__)
+        if (auto initialized = InitializeAndroidLoader(request.extensions); initialized.HasError())
+            return initialized;
+#endif
         auto resolved = Resolve(dispatch_.getProc, XR_NULL_HANDLE, "xrEnumerateApiLayerProperties", dispatch_.enumerateLayers);
         if (resolved.HasError())
             return resolved;
@@ -499,6 +542,14 @@ namespace Horo::XR::OpenXRInternal {
         info.enabledApiLayerNames = names_.layers.data();
         info.enabledExtensionCount = names_.extensionCount;
         info.enabledExtensionNames = names_.extensions.data();
+#if defined(__ANDROID__)
+        const auto slot = ExtensionSlot(XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME);
+        if (slot == extensionEvidenceCount_ || extensionEvidence_[slot].admission.state != NativeExtensionState::Enabled)
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported, "Android OpenXR instance extension was not enabled"));
+        const XrInstanceCreateInfoAndroidKHR androidInfo{XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR, nullptr, androidApplication_.vm,
+                                                         androidApplication_.activity};
+        info.next = &androidInfo;
+#endif
         XrInstance candidate{XR_NULL_HANDLE};
         const auto result = dispatch_.createInstance(&info, &candidate);
         if (XR_FAILED(result))

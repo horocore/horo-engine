@@ -10,7 +10,25 @@
 
 #include <openxr/openxr.h>
 
+#if defined(__ANDROID__)
+#include <jni.h>
+#include <memory>
+#endif
+
 namespace Horo::XR::OpenXRInternal {
+#if defined(__ANDROID__)
+    /** @brief Android host's VM and retained JNI globals for one exact Activity.
+     * @details The host owns JNI reference management and keeps the application context alive until the selected loader unloads.
+     * This lease pins the context and Activity through native retirement. Activity replacement requires a new native owner.
+     */
+    struct NativeOpenXRAndroidApplication final {
+        JavaVM *vm{};
+        jobject applicationContext{};         /**< Global reference to the process application Context. */
+        jobject activity{};                   /**< Global reference to the exact selected Activity. */
+        std::shared_ptr<const void> lifetime; /**< Host-owned token retaining both global references. */
+    };
+#endif
+
     /** @brief Synchronous official-ABI resolver borrowed from the same retained native loader/instance.
      * @details This value owns no native object or authority. The existing loader/session owner outlives
      * every binding; null is rejected before mutation. No type-erased callable, allocation or alternate resolver is added.

@@ -48,6 +48,35 @@ class OpenXRCIContractTests(unittest.TestCase):
         self.assertEqual(self.preset("testPresets", "ci-test-base")["execution"]["noTestsAction"], "error")
         self.assertEqual(self.variables("sonar")["HORO_BUILD_XR_OPENXR"], "ON")
 
+    def test_android_loader_bootstrap_remains_private_and_precedes_native_discovery(self):
+        runtime = ROOT / "src/runtime/xr/openxr"
+        bindings = (runtime / "host/OpenXRHostBindings.h").read_text(encoding="utf-8")
+        self.assertRegex(bindings, r"#if defined\(__ANDROID__\)\s*#include <jni.h>")
+        owner = (runtime / "host/OpenXRNativeSession.h").read_text(encoding="utf-8")
+        self.assertLess(owner.index("NativeOpenXRAndroidApplication androidApplication_"),
+                        owner.index("std::shared_ptr<const Platform::DynamicLibrary> loader_;"))
+        session = (runtime / "OpenXRNativeSession.cpp").read_text(encoding="utf-8")
+        initializer = session.split("OpenXRNativeSession::InitializeAndroidLoader(", 1)[1].split("#endif", 1)[0]
+        self.assertIn('Resolve(dispatch_.getProc, XR_NULL_HANDLE, "xrInitializeLoaderKHR"', initializer)
+        self.assertIn("XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR", initializer)
+        self.assertIn("application.applicationContext", initializer)
+        self.assertIn("extension.required && !extension.promotedToCore", initializer)
+        global_dispatch = session.split("OpenXRNativeSession::ResolveGlobal(", 1)[1].split("\n    }", 1)[0]
+        self.assertLess(global_dispatch.index("InitializeAndroidLoader(request.extensions)"),
+                        global_dispatch.index('"xrEnumerateApiLayerProperties"'))
+
+    def test_android_instance_chain_uses_the_activity_after_enabled_extension_evidence(self):
+        runtime = ROOT / "src/runtime/xr/openxr"
+        preparation = (runtime / "OpenXRNativePreparation.cpp").read_text(encoding="utf-8")
+        transaction = preparation.split("OpenXRNativeSession::PrepareDiscoveryTransaction(", 1)[1].split("\n    }", 1)[0]
+        self.assertLess(transaction.index("DiscoverAndNegotiate(request)"), transaction.index("CreateInstance(request)"))
+        session = (runtime / "OpenXRNativeSession.cpp").read_text(encoding="utf-8")
+        create = session.split("OpenXRNativeSession::CreateInstance(", 1)[1].split("\n    }", 1)[0]
+        self.assertIn("ExtensionSlot(XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME)", create)
+        self.assertIn("androidApplication_.activity", create)
+        self.assertLess(create.index("NativeExtensionState::Enabled"), create.index("info.next = &androidInfo"))
+        self.assertLess(create.index("info.next = &androidInfo"), create.index("dispatch_.createInstance"))
+
     def test_off_composition_stays_off_and_checks_real_target_population(self):
         values = self.variables("ci-xr-disabled")
         self.assertEqual(values["HORO_BUILD_XR_OPENXR"], "OFF")

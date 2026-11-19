@@ -287,6 +287,28 @@ identity/digest/provenance and loader source policy. They do not package a vendo
 or development API layer as an implicit dependency. Non-XR Android profiles contain no
 OpenXR loader/backend artifact or runtime probe.
 
+The private OpenXR native owner accepts the Android host's Java VM, a global
+reference to the process application Context and a global reference to the
+selected Activity. The host manages JNI attachment and reference destruction.
+It retains the Context through loader unload and the Activity through native
+instance retirement. Activity replacement requires a new native owner after the
+old instance has retired.
+
+The native owner resolves `xrInitializeLoaderKHR` from the verified package
+loader and passes the application Context before enumerating layers or
+extensions. The selected Android product must require
+`XR_KHR_android_create_instance`. Only after that policy is enabled does the
+owner chain the exact Activity into instance creation. A missing host lease,
+unavailable loader entry point or failed initialization prevents native
+discovery.
+
+These contracts qualify separately from Android deployment. Compile the
+`HoroXROpenXR` target with the pinned OpenXR SDK headers and the Android NDK
+for each ABI enabled in the product. The current package qualification profiles
+omit this target. Product qualification also needs an explicit XR package
+profile, a verified ABI-specific loader, the GameActivity composition that
+issues the JNI references, and device evidence for discovery and shutdown.
+
 Developer deployment selects a device explicitly. Install, launch, log capture,
 termination, timeout, and disconnect use argv-based process APIs and bounded
 output. Multiple connected devices never cause implicit target selection.

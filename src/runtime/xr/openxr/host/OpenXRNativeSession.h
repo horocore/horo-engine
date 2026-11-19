@@ -207,6 +207,16 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Retains an exact verified loader lease and borrows host-selected ports. */
         OpenXRNativeSession(std::shared_ptr<const Platform::DynamicLibrary> loader, IOpenXRGraphicsBinding &graphics,
                             const IOpenXRCompositionFence &fence) noexcept;
+#if defined(__ANDROID__)
+        /** @brief Retains Activity-scoped bootstrap inputs alongside the exact selected loader.
+         * @param loader Verified loader for the admitted Android package.
+         * @param graphics Exact host-selected graphics binding, borrowed through teardown.
+         * @param fence Exact host composition fence, borrowed through teardown.
+         * @param application Host-owned VM and retained Activity and application context references.
+         */
+        OpenXRNativeSession(std::shared_ptr<const Platform::DynamicLibrary> loader, IOpenXRGraphicsBinding &graphics,
+                            const IOpenXRCompositionFence &fence, NativeOpenXRAndroidApplication application) noexcept;
+#endif
         /** @brief Performs reverse-order cleanup; host must quiesce native users and Renderer first. */
         ~OpenXRNativeSession();
         OpenXRNativeSession(const OpenXRNativeSession &) = delete;
@@ -409,7 +419,12 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] std::size_t ExtensionSlot(std::string_view name) const noexcept;
         /** @brief Checks the exact generation before lending or revoking a provider. */
         [[nodiscard]] bool OwnsFeatureProvider(const NativeFeatureProviderHandle &handle) const noexcept;
-        [[nodiscard]] Result<void> ResolveGlobal();
+        /** @brief Resolves global dispatch from the selected loader, bootstrapping Android before enumeration. */
+        [[nodiscard]] Result<void> ResolveGlobal(const NativeDiscoveryRequest &request);
+#if defined(__ANDROID__)
+        /** @brief Initializes the selected loader through the retained Android application context and mandatory policy. */
+        [[nodiscard]] Result<void> InitializeAndroidLoader(std::span<const NativeExtensionRequest> requested);
+#endif
         [[nodiscard]] Result<void> DiscoverAndNegotiate(const NativeDiscoveryRequest &request);
         /** @brief Validates a bounded layer publication and admits only explicitly approved requested layers. */
         [[nodiscard]] Result<void> DiscoverLayers(std::span<const std::string_view> requested);
@@ -479,6 +494,9 @@ namespace Horo::XR::OpenXRInternal {
 
         const std::thread::id controlThread_{std::this_thread::get_id()};
 
+#if defined(__ANDROID__)
+        NativeOpenXRAndroidApplication androidApplication_; /**< Outlives loader_ during reverse member destruction. */
+#endif
         std::shared_ptr<const Platform::DynamicLibrary> loader_;
         IOpenXRGraphicsBinding *graphics_;
         const IOpenXRCompositionFence *fence_;

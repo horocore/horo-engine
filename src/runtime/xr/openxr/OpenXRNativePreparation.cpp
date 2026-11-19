@@ -60,7 +60,7 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRNativeSession::PrepareDiscoveryTransaction */
     Result<void> OpenXRNativeSession::PrepareDiscoveryTransaction(const NativeDiscoveryRequest &request) {
-        auto prepared = ResolveGlobal();
+        auto prepared = ResolveGlobal(request);
         if (prepared.HasValue())
             prepared = DiscoverAndNegotiate(request);
         if (prepared.HasValue())
