@@ -206,19 +206,31 @@ namespace {
 
         Result<SaveStorageValue> Execute(const SaveStorageRequest &, const CancellationToken &) override {
             context = Telemetry::CaptureOperationContext();
-            // The producer fixture proves admission directly; concurrent Save stages may also update Logger counters.
-            for (std::size_t attempt = 0; attempt < 1000 && !logAccepted; ++attempt)
-                logAccepted = Telemetry::Runtime::EmitRecord({.subsystem = "runtime.save.provider",
-                                                              .context = context.diagnosticContext,
-                                                              .payload = Telemetry::LogRecord{.severity = Log::Level::Info,
-                                                                                              .category = "runtime.save.provider",
-                                                                                              .message = "Safe provider request"}});
+            Log::Logger::Write("runtime.save.provider", Log::Level::Warn, "private-provider-log");
+            Log::Logger::WriteEmergency("runtime.save.provider", Log::Level::Error, "private-provider-emergency");
+            logAccepted = Telemetry::Runtime::EmitRecord(
+                {.subsystem = "runtime.save.provider",
+                 .context = context.diagnosticContext,
+                 .payload = Telemetry::LogRecord{.category = "runtime.save.provider", .message = "private-provider-record"}});
+            metricRegistered = static_cast<bool>(Telemetry::Runtime::RegisterCounter({.name = "runtime.save.provider.raw_count",
+                                                                                      .subsystem = "runtime.save.provider",
+                                                                                      .description = "private-provider-metric"}));
+            std::jthread forwarded{[this, snapshot = context.diagnosticContext.With("provider.test", "forwarded")] {
+                explicitEventAccepted = Telemetry::Runtime::EmitEvent("runtime.save.provider", "maintenance", Log::Level::Info,
+                                                                      "private-provider-explicit-context", snapshot);
+                const Log::ScopedLogContext scope{snapshot};
+                forwardedEventAccepted =
+                    Telemetry::Runtime::EmitEvent("runtime.save.provider", "maintenance", Log::Level::Info, "private-provider-forwarded");
+            }};
             return fail ? Result<SaveStorageValue>::Failure(MakeError(SaveErrors::StoragePermanentIo, "private-provider-account"))
                         : Result<SaveStorageValue>::Success(true);
         }
 
         bool fail{};
         bool logAccepted{};
+        bool metricRegistered{};
+        bool explicitEventAccepted{};
+        bool forwardedEventAccepted{};
         Telemetry::OperationContext context;
     };
 
@@ -242,6 +254,7 @@ TEST_CASE("Save telemetry production storage jobs isolate private ambient contex
     auto provider = std::make_shared<Provider>();
     JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 4}};
     SaveStorageAdapter adapter{jobs, provider};
+    const EmergencyCapture emergency{session.directory / "provider-emergency.txt"};
     std::optional<SaveStorageOperation> operation;
     {
         Log::LogContext privateContext{"save.display_name",  "private-display", "account.id",      "private-account", "path",
@@ -252,7 +265,10 @@ TEST_CASE("Save telemetry production storage jobs isolate private ambient contex
     }
     jobs.Shutdown(ShutdownPolicy::Drain);
     REQUIRE(operation->Snapshot()->state == SaveOperationState::Completed);
-    REQUIRE(provider->logAccepted);
+    CHECK_FALSE(provider->logAccepted);
+    CHECK_FALSE(provider->metricRegistered);
+    CHECK_FALSE(provider->explicitEventAccepted);
+    CHECK_FALSE(provider->forwardedEventAccepted);
     REQUIRE(provider->context.operationId == 71);
     REQUIRE(provider->context.diagnosticContext.IsIsolationBoundary());
     REQUIRE(provider->context.diagnosticContext.Fields().size() == 2);
@@ -263,7 +279,9 @@ TEST_CASE("Save telemetry production storage jobs isolate private ambient contex
     REQUIRE(archive.find("save.summary") != std::string::npos);
     REQUIRE(archive.find("retained_logs") != std::string::npos);
     REQUIRE(archive.find("data_categories") != std::string::npos);
-    REQUIRE(archive.find("Safe provider request") != std::string::npos);
+    CHECK(archive.find("private-provider-") == std::string::npos);
+    CHECK(Read(session.directory / "save.jsonl").find("private-provider-") == std::string::npos);
+    CHECK(emergency.ReadOutput().find("private-provider-") == std::string::npos);
     for (const auto secret : {"private-display", "private-account", "/private/save/path", "private-payload", "private-secret"})
         REQUIRE(archive.find(secret) == std::string::npos);
 }

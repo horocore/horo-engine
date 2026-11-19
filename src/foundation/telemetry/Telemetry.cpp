@@ -234,6 +234,8 @@ namespace Horo::Telemetry {
             }
 
             [[nodiscard]] std::optional<InstrumentRegistration> Register(InstrumentDescriptor descriptor) {
+                if (Log::DiagnosticsSuppressed())
+                    return std::nullopt;
                 std::lock_guard lock(descriptorMutex_);
                 if (descriptors_.size() >= MaximumMetricInstruments || !IsValidDescriptor(descriptor) ||
                     std::ranges::any_of(descriptors_, [&descriptor](const RegisteredInstrument &registered) {
@@ -316,6 +318,8 @@ namespace Horo::Telemetry {
             }
 
             [[nodiscard]] bool TryPush(Record record) noexcept {
+                if (Log::DiagnosticsSuppressed())
+                    return false;
                 if (std::unique_lock lock(queue_.mutex, std::try_to_lock); lock.owns_lock()) {
                     if (stopping_.load()) {
                         CountDrop(health_->shutdownDrops);
@@ -619,7 +623,7 @@ namespace Horo::Telemetry {
     namespace {
         /** @brief Shares filtering, redaction and bounded ingestion over one captured runtime state. */
         bool EmitRecordToRuntime(Record record, std::optional<std::uint32_t> expectedGeneration) noexcept {
-            if (!Runtime::IsEnabled())
+            if (record.context.SuppressesDiagnostics() || !Runtime::IsEnabled())
                 return false;
             const auto state = Globals().LoadState();
             if (state == nullptr) {
@@ -742,7 +746,7 @@ namespace Horo::Telemetry {
     /** @copydoc Runtime::EmitEvent */
     bool Runtime::EmitEvent(const std::string_view subsystem, const std::string_view eventName, const Log::Level severity,
                             const std::string_view message, const std::span<const Field> fields, const Log::LogContextSnapshot &context) {
-        if (!IsEnabled())
+        if (context.SuppressesDiagnostics() || !IsEnabled())
             return false;
         const auto state = Globals().LoadState();
         if (state == nullptr)

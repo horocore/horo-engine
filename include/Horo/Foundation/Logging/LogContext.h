@@ -34,6 +34,8 @@ namespace Horo::Log {
         [[nodiscard]] static LogContextSnapshot Isolated(std::vector<MdcField> fields);
         /** @brief Returns whether rebinding this snapshot hides outer ambient context. @return Privacy-boundary state. */
         [[nodiscard]] bool IsIsolationBoundary() const noexcept;
+        /** @brief Returns the captured diagnostic publication policy. @return True if records from this context must be suppressed. */
+        [[nodiscard]] bool SuppressesDiagnostics() const noexcept;
 
         /**
          * @brief Returns the immutable ordered context fields.
@@ -53,7 +55,28 @@ namespace Horo::Log {
         friend LogContextSnapshot CaptureLogContext();
         std::shared_ptr<const std::vector<MdcField>> fields_;
         bool isolated_{};
+        bool diagnosticsSuppressed_{};
     };
+
+    /** @brief Suppresses managed diagnostic publication while handling unclassified data.
+     * @details Nested scopes and forwarded job contexts inherit suppression. Bind and destroy on the same thread.
+     * This constrains engine diagnostic channels. Provider-owned I/O remains subject to its own policy.
+     */
+    class ScopedDiagnosticSuppression final {
+    public:
+        /** @brief Suppresses diagnostics for this scope and context-aware work it schedules. */
+        ScopedDiagnosticSuppression() noexcept;
+        /** @brief Restores the preceding publication policy on this thread. */
+        ~ScopedDiagnosticSuppression();
+        ScopedDiagnosticSuppression(const ScopedDiagnosticSuppression &) = delete;
+        ScopedDiagnosticSuppression &operator=(const ScopedDiagnosticSuppression &) = delete;
+
+    private:
+        bool previous_{};
+    };
+
+    /** @brief Reports whether the current scope suppresses engine diagnostics. @return Current thread's policy. */
+    [[nodiscard]] bool DiagnosticsSuppressed() noexcept;
 
     /**
      * @brief RAII Mapped Diagnostic Context (MDC) for structured log enrichment.
@@ -149,6 +172,7 @@ namespace Horo::Log {
 
     private:
         std::size_t frameIndex_{};
+        bool previousSuppression_{};
     };
 
     /**

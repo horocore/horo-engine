@@ -255,6 +255,11 @@ decoded state, labels/free text, local paths, credentials or private provider me
 Repeated malformed/resource-limit/authentication failures are rate-limited without
 hiding the terminal operation outcome.
 
+Storage providers process unclassified request and result data. The storage adapter
+suppresses engine diagnostic publication during provider execution and through
+forwarded diagnostic contexts. The adapter emits the operation and stage outcomes
+using the engine's typed classifications outside that scope.
+
 ### 11. Qualification proves the boundary and non-goals
 
 Required evidence covers:
