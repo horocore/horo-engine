@@ -421,6 +421,7 @@ namespace Horo::Application::Internal {
 
         /** @brief Retain the same adapter in the world binding and selected secure transport factory. */
         [[nodiscard]] Result<std::shared_ptr<HeadlessInitialStateHost>> SelectSceneInitialState(const ProductLaunch &launch,
+                                                                                                const Net::NetworkProjectProfileV1 &profile,
                                                                                                 ProductRuntimeCapabilities &capabilities) {
             using Outcome = Result<std::shared_ptr<HeadlessInitialStateHost>>;
             if (!capabilities.initialState)
@@ -431,10 +432,15 @@ namespace Horo::Application::Internal {
             if (const auto valid = ValidateInitialSceneSelection(launch, capabilities, binding); valid.HasError())
                 return Outcome::Failure(valid.ErrorValue());
             try {
+                std::optional<HeadlessAuthorityUpdateLimits> limits;
+                if (binding->policy.stateUpdates && scene.authority)
+                    limits = HeadlessAuthorityUpdateLimits{profile.maxCapturedObjectsPerTick.value,
+                                                           profile.maxCandidatesPerConnectionPerTick.value,
+                                                           profile.maxSerializedFieldsPerConnectionPerTick.value};
                 auto adapter = std::make_shared<HeadlessInitialStateHost>(scene.authority, binding->initialStateHost, scene.replica,
-                                                                          binding->stateUpdateHost);
+                                                                          binding->stateUpdateHost, limits);
                 auto updates = binding->stateUpdateHost;
-                if (updates && scene.replica)
+                if (updates && (scene.replica || limits))
                     updates = adapter;
                 auto configured = NetworkProductAdmission::Capture(admission->Policy(), admission->Providers(), admission->Codecs(),
                                                                    admission->Handlers(), binding->policy, adapter, std::move(updates));
@@ -515,7 +521,7 @@ namespace Horo::Application::Internal {
             std::shared_ptr<Clock> clock, const ProductLaunch &launch, const Net::NetworkProjectSettings &project,
             std::shared_ptr<const Runtime::RuntimeSceneDefinition> scene, const ProductWorlds &worlds,
             Net::NetworkTargetDiagnostic &diagnostic, ProductRuntimeCapabilities capabilities) {
-            auto initialHost = SelectSceneInitialState(launch, capabilities);
+            auto initialHost = SelectSceneInitialState(launch, project.Profile(), capabilities);
             if (initialHost.HasError())
                 return Result<std::unique_ptr<NetworkProductHost>>::Failure(std::move(initialHost).ErrorValue());
             const auto binding = capabilities.admission ? capabilities.admission->WorldBinding() : std::nullopt;

@@ -27,23 +27,6 @@ namespace Horo::Network {
             return {.agent = AI::AgentId::Create(81).Value()};
         }
 
-        /** @brief Builds the registered movement schema and its actual canonical scalar codec. */
-        std::shared_ptr<const ReplicationSerializerRegistry> MovementRegistry() {
-            const auto schema = NativePrefabDeclaration().schema;
-            const auto &field = schema.fields.front();
-            const auto serializer = CanonicalScalarReplicationSerializer::Create({.valueType = field.valueType,
-                                                                                  .codec = field.codec,
-                                                                                  .owner = schema.owner,
-                                                                                  .valueKind = ReplicationValueKind::FloatingPoint,
-                                                                                  .maximumEncodedBytes = 8,
-                                                                                  .maximumElementCount = 1})
-                                        .Value();
-            const auto descriptors = BuildReplicationDescriptorSnapshot(std::span{&schema, 1}, TestSupport::Limits).Value();
-            const std::array<std::shared_ptr<const IReplicationFieldSerializer>, 1> serializers{serializer};
-            return std::make_shared<const ReplicationSerializerRegistry>(
-                ReplicationSerializerRegistry::Create(descriptors, serializers).Value());
-        }
-
         /** @brief Resolves only the authentic server and agreed descriptor selected by this product fixture. */
         class ReplicaCodecAuthority final : public IHeadlessInitialReplicaAuthority {
         public:

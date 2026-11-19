@@ -1,8 +1,10 @@
 #pragma once
 
+#include "../../unit/runtime/networking/ReplicationDescriptorTestSupport.h"
 #include "Horo/Assets/AssetCook.h"
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Network/ReplicationDeclarationPolicy.h"
+#include "Horo/Network/ReplicationSerializer.h"
 #include "Horo/Prefab/CookedPrefab.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -19,6 +21,23 @@ namespace Horo::Network::PrefabProductTestSupport {
                                        .codec = ReplicationCodecId::Create(1).Value(),
                                        .introducedVersion = {1, 0},
                                        .limits = {8, 1}}}}};
+    }
+
+    /** @brief Builds the registered movement schema and its actual canonical scalar codec. */
+    inline std::shared_ptr<const ReplicationSerializerRegistry> MovementRegistry() {
+        const auto schema = NativePrefabDeclaration().schema;
+        const auto &field = schema.fields.front();
+        const auto serializer = CanonicalScalarReplicationSerializer::Create({.valueType = field.valueType,
+                                                                              .codec = field.codec,
+                                                                              .owner = schema.owner,
+                                                                              .valueKind = ReplicationValueKind::FloatingPoint,
+                                                                              .maximumEncodedBytes = 8,
+                                                                              .maximumElementCount = 1})
+                                    .Value();
+        const auto descriptors = BuildReplicationDescriptorSnapshot(std::span{&schema, 1}, TestSupport::Limits).Value();
+        const std::array<std::shared_ptr<const IReplicationFieldSerializer>, 1> serializers{serializer};
+        return std::make_shared<const ReplicationSerializerRegistry>(
+            ReplicationSerializerRegistry::Create(descriptors, serializers).Value());
     }
 
     /** @brief Publishes a cooked Prefab containing two replicated members and a local-only child. */

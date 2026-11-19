@@ -72,6 +72,48 @@ namespace Horo::Network {
             mutable unsigned resolutions{};
         };
 
+        /** @brief Confirms the exact delivered manifest through the authenticated product control lane. */
+        void ConfirmInitialManifest(ModeBindingTests::BindingFixture &wire, ConnectionHandle peer, const NetworkInitialStateStamp &stamp,
+                                    std::uint64_t now) {
+            const auto receipt = EncodeNetworkInitialStateReceipt(stamp).Value();
+            const auto &route = wire.setup.policy.initialState->control;
+            const MessageEnvelopePayloadView frame{route.protocol, route.id, route.schema, {1, 0}, MessageSequenceNumber{1}, {}, 0,
+                                                   receipt};
+            std::array<std::byte, 512> buffer{};
+            const auto bytes = EncodeMessageEnvelopePayloadInto(frame, *wire.setup.codecs, buffer).Value();
+            wire.transport.event = {.kind = NetworkTransportEventKind::PacketReceived,
+                                    .connection = peer,
+                                    .channel = {},
+                                    .delivery = DeliveryPolicy::ReliableOrdered,
+                                    .payload = {buffer.begin(), buffer.begin() + bytes}};
+            wire.transport.queued = true;
+            const auto report = wire.dispatcher->RunNetworkPoll(now).Value();
+            if (report.lastPacketRejection)
+                UNSCOPED_INFO(report.lastPacketRejection->message);
+            REQUIRE(report.rejectedPackets == 0);
+        }
+
+        /** @brief Decodes the full Update against independent, exact recipient, schema and committed Scene evidence. */
+        void CheckCommittedSnapshot(const MessageEnvelope &frame, const ReplicationWorldReadLease &world,
+                                    const NetworkObjectMappingEntry &mapping, NetworkPeerId recipient, std::uint64_t tick,
+                                    const Runtime::RuntimeSceneView &scene) {
+            const ReplicationInitialOwnership ownership{mapping.object, Id<ReplicationRoleRevision>(6)};
+            const auto role = ProjectInitialReplicationRole(ownership, mapping, world.Descriptor().session, recipient).Value();
+            auto codec = ReplicationStateCodec::Create(MovementRegistry(), role, ReplicationRecordKind::Update, 9).Value();
+            const auto decoded = codec->Decode(frame.payload, mapping);
+            if (decoded.HasError())
+                UNSCOPED_INFO(decoded.ErrorValue().message);
+            REQUIRE(decoded.HasValue());
+            CHECK(decoded.Value().SimulationTick() == tick);
+            CHECK(decoded.Value().PublicationRevision() == tick);
+            const auto fields = decoded.Value().Fields();
+            REQUIRE(fields.size() == 1);
+            CHECK(fields.front().field == NativePrefabDeclaration().schema.fields.front().id);
+            const auto transform = scene.Get(mapping.entity).Value().localTransform;
+            REQUIRE(transform);
+            CHECK(std::get<double>(fields.front().value) == transform->translation.x);
+        }
+
         /** @brief Delivers Prefab records through the authenticated client dispatcher used by the product. */
         void DeliverReplicaRecord(ProductOwners &owners, const NetworkPrefabLifecycleRecord &record,
                                   MessageSequenceNumber::ValueType sequence) {
@@ -117,7 +159,14 @@ namespace Horo::Network {
               "[integration][network][mode][replication][prefab]") {
         if constexpr (!HORO_TEST_PHYSICS_NATIVE)
             SKIP("Canonical Physics is required for actual product world activation.");
-        const bool replacePeerDuringGrant = GENERATE(false, true);
+        enum class GrantCase {
+            SharedInitial,
+            ReplacePeer,
+            StreamSnapshots
+        };
+        const auto grantCase = GENERATE(GrantCase::SharedInitial, GrantCase::ReplacePeer, GrantCase::StreamSnapshots);
+        const bool replacePeerDuringGrant = grantCase == GrantCase::ReplacePeer;
+        const bool streamSnapshots = grantCase == GrantCase::StreamSnapshots;
         using namespace Application::Internal;
         const auto kind = NetworkModeWorldKind::AuthorityServer;
         const auto mode = NetworkProjectRole::DedicatedServer;
@@ -134,7 +183,8 @@ namespace Horo::Network {
                     .status == Assets::AssetRegistryBuildStatus::Complete);
         const auto artifact = PutNetworkPrefab(bytes, prefab, type);
         Runtime::SceneDefinitionBuilder builder{{19}, {1}};
-        Runtime::RuntimeEntityDefinition spawner{.object = {10}};
+        constexpr auto spawnerObject = Runtime::SceneObjectId{10};
+        Runtime::RuntimeEntityDefinition spawner{.object = spawnerObject};
         spawner.components.behaviors.emplace_back(Gameplay::BehaviorInstanceId{1},
                                                   Gameplay::BehaviorTypeId::Parse("game.tests.prefab_spawner").Value(), 1, true,
                                                   std::vector<Gameplay::BehaviorField>{{"asset", prefab.ToString()},
@@ -154,6 +204,8 @@ namespace Horo::Network {
                                                                                  declaration.schema.version,
                                                                                  {{declaration.schema.fields.front().id,
                                                                                    SceneReplicationProperty::TranslationX}}}};
+        if (streamSnapshots)
+            input.replicatedSceneObjects.push_back({declaration.schema.id, declaration.schema.version, spawnerObject});
         Gameplay::GameplayReplicationAdmissionPolicy admission;
         admission.inventory.completeness = NetworkReplicationInventoryCompleteness::Complete;
         admission.inventory.declarations = {declaration};
@@ -175,9 +227,17 @@ namespace Horo::Network {
         const auto owners = std::make_shared<ProductOwners>();
         const auto authority = std::make_shared<PrefabInitialAuthority>();
         const auto delegate = std::make_shared<UnusedInitialReceiver>();
-        const auto initialState = std::make_shared<HeadlessInitialStateHost>(authority, delegate);
+        std::optional<HeadlessAuthorityUpdateLimits> limits;
+        if (streamSnapshots) {
+            const auto &profile = project.Profile();
+            limits = HeadlessAuthorityUpdateLimits{profile.maxCapturedObjectsPerTick.value, profile.maxCandidatesPerConnectionPerTick.value,
+                                                   profile.maxSerializedFieldsPerConnectionPerTick.value};
+        }
+        const auto initialState = std::make_shared<HeadlessInitialStateHost>(authority, delegate, nullptr, nullptr, limits);
         input.initialSceneState = initialState;
-        owners->worldSetup = InitialProductTestSupport::InitialSetup(initialState);
+        owners->worldSetup = InitialProductTestSupport::InitialSetup(initialState, streamSnapshots ? initialState : nullptr);
+        if (auto &updates = owners->worldSetup.policy.stateUpdates; updates)
+            updates->maximumBytesPerTick = 1024;
         std::uint64_t fixedTick{};
         owners->onTransportFixed = [&fixedTick](const Runtime::FixedStepContext &context) {
             fixedTick = context.simulationTick;
@@ -227,7 +287,8 @@ namespace Horo::Network {
                                      ReplicationWorldCapability::CaptureCanonicalState)
                 .Value();
         };
-        REQUIRE(snapshot().Mapping().Entries().empty());
+        const std::size_t authoredCount = streamSnapshots ? 1 : 0;
+        REQUIRE(snapshot().Mapping().Entries().size() == authoredCount);
         const auto awaitMappings = [&](std::size_t count) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
             do {
@@ -241,8 +302,11 @@ namespace Horo::Network {
             FAIL("Expected the complete Prefab mapping transition.");
             return snapshot();
         };
-        const auto spawned = awaitMappings(2);
-        const auto mappings = spawned.Mapping().Entries();
+        const auto spawned = awaitMappings(authoredCount + 2);
+        const auto initialEntries = spawned.Mapping().Entries();
+        if (streamSnapshots)
+            REQUIRE(initialEntries.front().provenance.authoredObject == spawnerObject);
+        const auto mappings = initialEntries.subspan(authoredCount);
         REQUIRE(mappings.size() == 2);
         const auto spawnFrameTick = fixedTick;
         REQUIRE(spawnFrameTick > 0);
@@ -286,7 +350,9 @@ namespace Horo::Network {
         REQUIRE(binding);
         const auto admitPeer = [&](ConnectionHandle connection, NetworkOperationGeneration generation, NetworkPeerId recipient) {
             const auto peer = ModeBindingTests::Negotiating(connection, generation);
-            ModeBindingTests::CompleteAdmission(peer, generation, owners->worldSetup.policy.initialState->feature);
+            const auto &updates = wire.setup.policy.stateUpdates;
+            ModeBindingTests::CompleteAdmission(peer, generation, owners->worldSetup.policy.initialState->feature,
+                                                updates ? updates->feature : ProtocolFeatureId{});
             REQUIRE(peer->Authentication());
             authority->credentials.emplace_back(*peer->Authentication(), recipient);
             REQUIRE(owners->sessions->OnSessionActivated(AdmissionEndpoint::Server, peer, generation, 22).HasValue());
@@ -358,8 +424,55 @@ namespace Horo::Network {
         }
         CHECK(delegate->calls == 0);
 
+        if (streamSnapshots) {
+            for (std::size_t index{}; index < initialEntries.size(); ++index)
+                REQUIRE(binding->Flush(22).HasValue());  // Complete both bounded reliable field streams.
+            CHECK(binding->AdmitWorldDispatch(peer->Connection(), Session(), *peer, 22).HasError());
+            ConfirmInitialManifest(wire, peer->Connection(), manifests.front().second, 22);
+            CHECK(binding->AdmitWorldDispatch(peer->Connection(), Session(), *peer, 22).HasValue());
+            CHECK(binding->AdmitWorldDispatch(secondPeer->Connection(), Session(8), *secondPeer, 22).HasError());
+
+            std::vector<std::pair<ConnectionHandle, MessageEnvelope>> updates;
+            wire.transport.observeSend = [&](ConnectionHandle destination, std::span<const std::byte> payload) {
+                auto frame = DecodeMessageEnvelope(payload, *wire.setup.codecs).Value();
+                if (frame.message == wire.setup.policy.stateUpdates->snapshot.id)
+                    updates.emplace_back(destination, std::move(frame));
+            };
+            auto now = std::uint64_t{22};
+            owners->onTransportFlush = [&] {
+                REQUIRE(binding->Flush(now).HasValue());
+            };
+            auto live = snapshot();
+            for (std::size_t frame{}; frame < 6; ++frame) {
+                ++now;
+                updates.clear();
+                owners->sessionSource->Advance(Duration::FromNanoseconds(1));
+                clock.Advance(Duration::FromNanoseconds(16'666'667));
+                const auto updateFrame = host->RunFrame();
+                if (updateFrame.HasError())
+                    UNSCOPED_INFO(updateFrame.ErrorValue().message);
+                REQUIRE(updateFrame.HasValue());
+                live = snapshot();
+                UNSCOPED_INFO("fixedTick=" << fixedTick << " mapped=" << live.Mapping().Entries().size() << " snapshots=" << updates.size()
+                                           << " grantCalls=" << authority->resolutions);
+                if (live.Mapping().Entries().size() == authoredCount && !updates.empty())
+                    break;
+            }
+            owners->onTransportFlush = {};
+            wire.transport.observeSend = {};
+            REQUIRE(live.Mapping().Entries().size() == authoredCount);
+            REQUIRE(updates.size() == authoredCount);
+            REQUIRE(fixedTick > manifests.front().second.tick);
+            REQUIRE(wire.transport.lastDelivery == DeliveryPolicy::UnreliableUnordered);
+            const auto active = InspectHeadlessScene(*sceneOwner).value();
+            const auto &persistent = live.Mapping().Entries().front();
+            CHECK(persistent.object == initialEntries.front().object);
+            CHECK(updates.front().first == peer->Connection());
+            CheckCommittedSnapshot(updates.front().second, live, persistent, Id<NetworkPeerId>(71), fixedTick, active);
+        }
+
         const auto committedTick = fixedTick;
-        CHECK(awaitMappings(0).Mapping().Entries().empty());
+        CHECK(awaitMappings(authoredCount).Mapping().Entries().size() == authoredCount);
         CHECK(CaptureNetworkPrefabSpawn(snapshot(), decoded.occurrence).HasError());
         host->Shutdown();
         CHECK(spawned.IsRevoked());

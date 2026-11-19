@@ -40,6 +40,13 @@ namespace Horo::Application::Internal {
                                                                          const Network::HandshakeSelection &negotiated) const = 0;
     };
 
+    /** @brief Authoritative Snapshot work ceilings selected from the admitted immutable project profile. */
+    struct HeadlessAuthorityUpdateLimits final {
+        std::size_t capturedObjects{};
+        std::size_t recipientCandidates{};
+        std::size_t serializedFields{};
+    };
+
     /** @brief Adds canonical capture and optional replica Scene application while retaining existing client recipient admission. */
     class HeadlessInitialStateHost final : public Network::INetworkInitialStateHost, public Network::INetworkStateUpdateHost {
     public:
@@ -47,7 +54,8 @@ namespace Horo::Application::Internal {
         HeadlessInitialStateHost(std::shared_ptr<const IHeadlessInitialStateAuthority> authority,
                                  std::shared_ptr<Network::INetworkInitialStateHost> client,
                                  std::shared_ptr<const IHeadlessInitialReplicaAuthority> replica = {},
-                                 std::shared_ptr<Network::INetworkStateUpdateHost> updates = {}) noexcept;
+                                 std::shared_ptr<Network::INetworkStateUpdateHost> updates = {},
+                                 std::optional<HeadlessAuthorityUpdateLimits> updateLimits = std::nullopt) noexcept;
         /** @brief Bind to one configured application composition before any transport can open its listener. */
         [[nodiscard]] Result<void> BindWorlds(const std::shared_ptr<HeadlessNetworkDetail::WorldOwners> &worlds);
 
@@ -86,6 +94,7 @@ namespace Horo::Application::Internal {
         std::shared_ptr<Network::INetworkInitialStateHost> client_;
         std::shared_ptr<const IHeadlessInitialReplicaAuthority> replica_;
         std::shared_ptr<Network::INetworkStateUpdateHost> updates_;
+        std::optional<HeadlessAuthorityUpdateLimits> updateLimits_;
         bool bound_{};
     };
 }  // namespace Horo::Application::Internal
