@@ -4,6 +4,8 @@
 #include "HeadlessPerceptionPolicy.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/AIScenePerceptionSource.h"
+#include "Horo/AI/EnvironmentQueryGenerators.h"
+#include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/AI/PerceptionSenseProvider.h"
 #include "Horo/AI/PerceptionSpatialBroadphase.h"
 #include "Horo/Gameplay/GameModuleHost.h"
@@ -754,6 +756,82 @@ namespace Horo::Application::PrefabAtomicTest {
             REQUIRE(operation.State() == expected);
         }
 
+        /** @brief Drives the product query owner across real cooked prefab retirement and replacement. */
+        void RunSelectedQueryPrefab(Network::INetworkModeService &physics, NativeCookedDecisionProbe &probe,
+                                    const Prefab::PrefabTemplateLoadRequest &source, const CancellationToken &cancellation,
+                                    AI::BlackboardKeyId key) {
+            using enum Prefab::PrefabSpawnState;
+            const auto tick = [&](std::uint64_t frame) {
+                const auto result = physics.RunFixedTick({frame, Duration::FromNanoseconds(16'666'667), cancellation});
+                if (result.HasError())
+                    UNSCOPED_INFO(result.ErrorValue().message);
+                REQUIRE(result.HasValue());
+            };
+            tick(1);
+            const auto capability = probe.PrefabCapability();
+            REQUIRE(capability);
+            const auto spawn = [&](std::uint64_t frame) {
+                CAPTURE(frame);
+                auto operation = capability->Spawn({.source = source, .notBeforeTick = frame});
+                if (operation.HasError())
+                    UNSCOPED_INFO(operation.ErrorValue().code.Value() << ": " << operation.ErrorValue().message);
+                REQUIRE(operation.HasValue());
+                AwaitHeadlessAiPrefab(physics, operation.Value(), Committed);
+                auto instance = operation.Value().Spawned();
+                REQUIRE(instance.HasValue());
+                return std::move(instance).Value();
+            };
+            const auto agents = [&] {
+                const auto scene = Internal::InspectHeadlessScene(physics);
+                REQUIRE(scene);
+                std::vector<AI::AgentId> ids;
+                for (std::size_t slot = 0; slot < scene->SlotCount(); ++slot) {
+                    const auto entity = scene->EntityAt(slot);
+                    if (entity && entity->components->aiAgent)
+                        ids.push_back(entity->components->aiAgent->agent);
+                }
+                REQUIRE(ids.size() == 2);
+                return ids;
+            };
+            const auto expectUnset = [&](const std::vector<AI::AgentId> &ids) {
+                for (const auto id : ids) {
+                    const auto value = Internal::InspectHeadlessDecisionValue(physics, id, key);
+                    REQUIRE(value.HasValue());
+                    CHECK_FALSE(value.Value());
+                }
+            };
+            const auto first = spawn(1);
+            const auto retired = agents();
+            tick(2);
+            tick(3);
+            expectUnset(retired);
+            auto despawn = capability->Despawn(first, 3);
+            REQUIRE(despawn.HasValue());
+            AwaitHeadlessAiPrefab(physics, despawn.Value(), Committed);
+            tick(4);
+            for (const auto id : retired)
+                CHECK(Internal::InspectHeadlessDecisionValue(physics, id, key).HasError());
+
+            const auto replacement = spawn(4);
+            CHECK(replacement.Root() != first.Root());
+            const auto current = agents();
+            tick(5);
+            tick(6);
+            expectUnset(current);
+            for (std::uint64_t frame = 7; frame <= 9; ++frame)
+                tick(frame);
+            for (const auto id : current) {
+                CHECK(std::ranges::find(retired, id) == retired.end());
+                auto value = Internal::InspectHeadlessDecisionValue(physics, id, key);
+                REQUIRE(value.HasValue());
+                REQUIRE(value.Value());
+                const auto &winner = std::get<Math::WorldCoordinate64>(std::get<AI::BlackboardScalarValue>(*value.Value()));
+                CHECK(winner == Math::WorldCoordinate64::FromMillimeters(-500, 0, -500));
+            }
+            CHECK(probe.factories == 0);
+            CHECK((probe.decision == std::array<std::uint32_t, 3>{}));
+        }
+
         /** @brief Runs native task ownership through the real grouped spawn or atomic scheduler admission refusal. */
         void RunSelectedDecisionPrefab(Network::INetworkModeService &physics, NativeCookedDecisionProbe &probe,
                                        const Prefab::PrefabTemplateLoadRequest &source, const CancellationToken &cancellation,
@@ -924,6 +1002,7 @@ namespace Horo::Application::PrefabAtomicTest {
             bool selectNativePerception = false;
             std::optional<AI::PerceptionSenseContract> nativeSense;
             bool prefabOnly = false;
+            bool prefabQuery = false;
             bool rollbackPrefab = false;
             bool preserveInactive = false;
             auto selectedPrefab = prefabId;
@@ -965,6 +1044,11 @@ namespace Horo::Application::PrefabAtomicTest {
             SECTION("native prefab-only controller spawns two running decisions and retires both exact tasks on despawn") {
                 prepareNative = true;
                 prefabOnly = true;
+            }
+            SECTION("a cooked prefab query awaiting publication retires without writing to replacement agents") {
+                prepareNative = true;
+                prefabOnly = true;
+                prefabQuery = true;
             }
             SECTION("native prefab-only scheduler refusal rolls back the entire spawn without dispatch") {
                 prepareNative = true;
@@ -1079,6 +1163,46 @@ namespace Horo::Application::PrefabAtomicTest {
                 expected = &AI::AIErrors::RuntimeUnavailable;
             }
 
+            constexpr std::uint64_t QueryKeyValue = 4;
+            const auto queryKey = Decisions::MakeIdentity<AI::BlackboardKeyId>(QueryKeyValue);
+            std::shared_ptr<const AI::QuerySchemaRegistry> queryRegistry;
+            std::vector<std::uint8_t> queryBytes;
+            if (prefabQuery) {
+                auto registry = AI::CaptureBuiltinQuerySchema();
+                REQUIRE(registry.HasValue());
+                const auto query =
+                    AI::CreateBuiltinLatticeQuery(Decisions::MakeIdentity<AI::QueryId>(1), Decisions::MakeIdentity<AI::QueryStageId>(1),
+                                                  Decisions::MakeIdentity<AI::QueryResultSchemaId>(1), "Prefab query",
+                                                  {.stepMillimeters = 500, .outerSteps = 1}, 8);
+                REQUIRE(query.HasValue());
+                auto encoded = AI::EnvironmentQueryCookedCodec::Encode(query.Value(), registry.Value());
+                REQUIRE(encoded.HasValue());
+                queryBytes = std::move(encoded).Value();
+                queryRegistry = std::make_shared<const AI::QuerySchemaRegistry>(std::move(registry).Value());
+
+                const std::array keys{AI::BlackboardKeyDescriptor{.key = queryKey,
+                                                                  .kind = AI::BlackboardValueKind::WorldCoordinate,
+                                                                  .presence = AI::BlackboardKeyPresence::Optional}};
+                auto schema = AI::BlackboardSchema::Capture({.identity = Decisions::SchemaId(), .keys = keys});
+                REQUIRE(schema.HasValue());
+                ai.schema = std::make_shared<const AI::BlackboardSchema>(std::move(schema).Value());
+
+                auto task = Decisions::TreeNode(2, AI::DecisionControlKind::Task);
+                task.type = Decisions::MakeIdentity<AI::BehaviorTreeNodeTypeId>(102);
+                task.requirements = {{.key = queryKey,
+                                      .kind = AI::BlackboardValueKind::WorldCoordinate,
+                                      .access = AI::BlackboardKeyAccess::ReadWrite,
+                                      .source = Decisions::Location()}};
+                const auto &result = query.Value().ResultSchema();
+                const AI::BehaviorTreeQueryOutput output{query.Value().Id(), result.id, result.version, result.itemType, queryKey, 10};
+                task.properties.emplace_back(Decisions::MakeIdentity<AI::BehaviorTreePropertyId>(10), "output",
+                                             AI::BehaviorTreePropertyKind::QueryOutput, output);
+                const auto executionTask = graphSource.executionTask;
+                graphSource = Decisions::Tree(41, {Decisions::TreeNode(1, AI::DecisionControlKind::Root), std::move(task)},
+                                              {Decisions::Edge(1, 1, 2)});
+                graphSource.executionTask = executionTask;
+            }
+
             std::optional<Internal::GameplayWorldSelection> gameplay;
             std::optional<NativeCookedDecisionProbe> nativeProbe;
             auto environment = ai.Environment();
@@ -1131,6 +1255,17 @@ namespace Horo::Application::PrefabAtomicTest {
             std::vector manifest{Assets::AssetCookManifestEntry{artifactId, artifactType, artifactId.ToString() + ".cooked", digest}};
             std::vector records{Assets::AssetRecord{artifactId, artifactType, ProjectPath::Parse("assets/guard.horo_bt").Value(),
                                                     ProjectPath::Parse("assets/guard.horo_bt.horo").Value()}};
+            if (queryRegistry) {
+                const auto queryAsset = Assets::AssetId::FromBytes({105});
+                const auto queryType = Output::Type(AI::EnvironmentQuerySourceAssetType);
+                const auto queryDigest = Put(raw, queryAsset, queryType, target, std::move(queryBytes));
+                auto queryEnvelope = raw.Load(queryAsset, {});
+                REQUIRE(queryEnvelope.HasValue());
+                artifacts.push_back(std::move(queryEnvelope).Value());
+                manifest.push_back({queryAsset, queryType, queryAsset.ToString() + ".cooked", queryDigest});
+                records.push_back({queryAsset, queryType, ProjectPath::Parse("assets/position.horo_eqs").Value(),
+                                   ProjectPath::Parse("assets/position.horo_eqs.horo").Value()});
+            }
             auto controller = CookedController(ai, plan);
             controller.agent.controller->decisionAsset = declaredRoot;
             controller.descriptor.decisionAsset = declaredRoot;
@@ -1301,6 +1436,7 @@ namespace Horo::Application::PrefabAtomicTest {
                                                                     prefabOnly ? std::optional{selectedPrefab} : std::nullopt}}};
             if (duplicateSelection)
                 selected.bindings.push_back({selectedController, requestedId});
+            selected.querySchema = queryRegistry;
             if (loadSchemaFromCook)
                 selected.environment.schemas.clear();
             if (prepareNative) {
@@ -1376,6 +1512,8 @@ namespace Horo::Application::PrefabAtomicTest {
                     REQUIRE(memory.HasValue());
                     REQUIRE(memory.Value().count == 1);
                     CHECK(memory.Value().entries.front().lastKnownPosition == Math::WorldCoordinate64::FromMillimeters(1100, 200, -300));
+                } else if (nativeProbe && prefabQuery) {
+                    RunSelectedQueryPrefab(*physics.Value(), *nativeProbe, prefabSource, startup.Token(), queryKey);
                 } else if (nativeProbe && prefabOnly) {
                     CHECK(nativeProbe->module[3] == 1);
                     const auto degraded =
@@ -1410,7 +1548,7 @@ namespace Horo::Application::PrefabAtomicTest {
             if (nativeProbe) {
                 const auto modules = cancelBeforeNativeActivation || expected ? 0u : 1u;
                 const auto activeDecisions = selectNativePerception || (prefabOnly && !preserveInactive) ? 2u : 1u;
-                const auto tasks = modules == 0 || rollbackPrefab ? 0u : activeDecisions;
+                const auto tasks = modules == 0 || rollbackPrefab || prefabQuery ? 0u : activeDecisions;
                 CHECK(nativeProbe->module[3] == modules);
                 if (selectNativePerception)
                     CHECK((nativeProbe->module == std::array<std::uint32_t, 4>{2, 2, 2, 1}));
