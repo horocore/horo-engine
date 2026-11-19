@@ -26,6 +26,7 @@ namespace Horo::Tests::OpenXR {
         XrResult spatialComponentsResult{XR_SUCCESS};
         bool invalidReprojectionExtent{};
         std::uint32_t synthesisEyeWidthStep{160};
+        std::uint32_t synthesisEyeQueries{};
         std::string_view fail;
         PFN_xrGetInstanceProcAddr extraProc{};
         std::vector<std::string_view> calls;
@@ -133,6 +134,7 @@ namespace Horo::Tests::OpenXR {
                     values[index].recommendedSwapchainSampleCount = 1;
                     values[index].maxSwapchainSampleCount = 4;
                     if (values[index].next) {
+                        ++active->synthesisEyeQueries;
                         auto &synthesis = *static_cast<XrFrameSynthesisConfigViewEXT *>(values[index].next);
                         REQUIRE(synthesis.type == XR_TYPE_FRAME_SYNTHESIS_CONFIG_VIEW_EXT);
                         synthesis.recommendedMotionVectorImageRectWidth =

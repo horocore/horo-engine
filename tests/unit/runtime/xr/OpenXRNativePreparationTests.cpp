@@ -106,6 +106,59 @@ namespace Horo::Tests::OpenXR {
         REQUIRE(fixture.owner.Close().HasValue());
     }
 
+    TEST_CASE("OpenXR optional reprojection instance refusal preserves baseline discovery authority", "[unit][xr][native][reprojection]") {
+        Fixture fixture;
+        fixture.script.synthesisExtension = true;
+        fixture.script.spaceWarpExtension = true;
+        fixture.script.extensionCount += 2;
+        auto discovery = Discovery(fixture);
+        discovery.optionalReprojection = true;
+        bool succeeds = true;
+        std::size_t attempts = 1;
+        NativeExtensionState expected = NativeExtensionState::Enabled;
+        SECTION("both advertised optional routes prepare on the selected instance") {}
+        SECTION("one empty extension refusal retries only the same baseline instance request") {
+            fixture.script.refuseReprojectionInstance = true;
+            attempts = 2;
+            expected = NativeExtensionState::ProviderFailed;
+        }
+        SECTION("non-extension native failures keep the original failed owner outcome") {
+            fixture.script.fail = "instance";
+            succeeds = false;
+        }
+        SECTION("extension refusal without optional policy never retries the baseline") {
+            discovery.optionalReprojection = false;
+            fixture.script.fail = "instance";
+            fixture.script.failureResult = XR_ERROR_EXTENSION_NOT_PRESENT;
+            succeeds = false;
+        }
+        SECTION("a baseline extension failure remains terminal after the single omission") {
+            fixture.script.fail = "instance";
+            fixture.script.failureResult = XR_ERROR_EXTENSION_NOT_PRESENT;
+            attempts = 2;
+            succeeds = false;
+        }
+        REQUIRE(fixture.owner.PrepareDiscovery(discovery).HasValue() == succeeds);
+        CHECK(std::ranges::count(fixture.script.calls, "instance") == attempts);
+        CHECK(fixture.script.liveInstances == (succeeds ? 1U : 0U));
+        if (succeeds) {
+            const auto retained = fixture.owner.BorrowDiscovery(discovery.selection.attempt);
+            REQUIRE(retained.HasValue());
+            for (const auto name : {XR_EXT_FRAME_SYNTHESIS_EXTENSION_NAME, XR_FB_SPACE_WARP_EXTENSION_NAME}) {
+                const auto admission = fixture.owner.ReadExtensionAdmission(discovery.selection.attempt, name);
+                REQUIRE(admission.HasValue());
+                CHECK(admission.Value().state == expected);
+                CHECK(admission.Value().discoveredVersion >= 1);
+                const auto names = retained.Value().enabledExtensions;
+                CHECK((std::ranges::find(names, std::string_view{name}, [](const char *value) {
+                    return std::string_view{value};
+                }) != names.end()) == (expected == NativeExtensionState::Enabled));
+            }
+        }
+        REQUIRE(fixture.owner.Close().HasValue());
+        CHECK(fixture.script.liveInstances == 0);
+    }
+
     TEST_CASE("OpenXR observed system identity survives session retirement but not native rediscovery", "[unit][xr][native]") {
         Fixture fixture;
         CHECK(fixture.owner.PreparedSystem(Preparation(fixture)).HasError());

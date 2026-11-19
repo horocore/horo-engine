@@ -404,6 +404,17 @@ namespace Horo::XR::OpenXRInternal {
         return Outcome::Success(feature);
     }
 
+    /** @copydoc OpenXRNativeSession::ReprojectionExtensionRequests */
+    std::span<const NativeExtensionRequest> OpenXRNativeSession::ReprojectionExtensionRequests() noexcept {
+        static constexpr auto requests = [] {
+            std::array<NativeExtensionRequest, ReprojectionRoutes.size()> selected{};
+            for (std::size_t index = 0; index < selected.size(); ++index)
+                selected[index] = {.name = ReprojectionRoutes[index].extension, .minimumVersion = ReprojectionRoutes[index].minimumVersion};
+            return selected;
+        }();
+        return requests;
+    }
+
     /** @copydoc OpenXRNativeSession::DiscoverReprojection */
     Result<NativeReprojectionOffer> OpenXRNativeSession::DiscoverReprojection(const XRLoaderPreflightAttempt attempt,
                                                                               const std::optional<XRSessionId> session) const {

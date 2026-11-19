@@ -117,7 +117,7 @@ namespace Horo::Application::Internal {
                                                               std::span<const XRFeatureRequest> features,
                                                               const Render::RenderFrontend &frontend,
                                                               Editor::EditorViewportRendererVulkan &viewport,
-                                                              const NativeSessionCensus &session, Render::FramebufferExtent colorExtent) {
+                                                              const NativeSessionCensus &session) {
             using Evidence = Result<XRCapabilityState>;
             const bool requested = std::ranges::any_of(features, [](const XRFeatureRequest &feature) {
                 return feature.capability == XRCapability::SpaceWarp && feature.kind == XRFeatureRequirementKind::Optional;
@@ -128,12 +128,10 @@ namespace Horo::Application::Internal {
             if (result.HasError())
                 return Evidence::Failure(result.ErrorValue());
             const auto &offer = result.Value();
-            if (offer.route != NativeReprojectionRoute::None && offer.availabilityWithoutProducer == XRCapabilityState::DependencyMissing) {
-                const auto &left = offer.extents.front();
-                const auto &right = offer.extents.back();
-                const auto extent = left.IsValid() && right.IsValid()
-                                        ? Render::FramebufferExtent{std::max(left.width, right.width), std::max(left.height, right.height)}
-                                        : colorExtent;
+            const auto &left = offer.extents.front();
+            const auto &right = offer.extents.back();
+            if (offer.availabilityWithoutProducer == XRCapabilityState::DependencyMissing && left.IsValid() && right.IsValid()) {
+                const Render::FramebufferExtent extent{std::max(left.width, right.width), std::max(left.height, right.height)};
                 const auto formats = SelectOpenXRVulkanReprojectionFormats(frontend.Capabilities().support,
                                                                            std::span{session.formats}.first(session.formatCount), extent);
                 if (formats)
@@ -270,8 +268,8 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(revision.ErrorValue());
         OptionalProjectionEvidence optional{input_.handAvailability, input_.stageAvailability, XRCapabilityState::Unsupported,
                                             EyeGazeAvailability()};
-        const auto reprojection = PrepareOptionalReprojection(*native_, selection_.attempt, settings_.Features(), frontend, viewport,
-                                                              session, targets.Value().color.extent);
+        const auto reprojection =
+            PrepareOptionalReprojection(*native_, selection_.attempt, settings_.Features(), frontend, viewport, session);
         if (reprojection.HasError())
             return Outcome::Failure(reprojection.ErrorValue());
         optional.reprojection = reprojection.Value();

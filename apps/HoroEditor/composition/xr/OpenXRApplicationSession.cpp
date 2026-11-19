@@ -77,7 +77,8 @@ namespace Horo::Application::Internal {
     namespace {
         /** @brief Prepares exactly the installed extension routes usable by this editor composition. */
         Result<void> PrepareNativeDiscovery(OpenXRNativeSession &native, const XRLoaderPreflightRequest &selection, bool handsRequested,
-                                            bool planePreview, const std::optional<NativeExtensionRequest> &passthrough) {
+                                            bool planePreview, const std::optional<NativeExtensionRequest> &passthrough,
+                                            bool optionalReprojection) {
             const XRLoaderApiVersion compiled{XR_VERSION_MAJOR(XR_CURRENT_API_VERSION), XR_VERSION_MINOR(XR_CURRENT_API_VERSION),
                                               XR_VERSION_PATCH(XR_CURRENT_API_VERSION)};
             // The editor composition owns a time provider and color projection; its renderer has no native depth provider.
@@ -105,11 +106,9 @@ namespace Horo::Application::Internal {
             if (passthrough)
                 extensions[count++] = *passthrough;
             const auto requested = std::span{extensions}.first(count);
-            const NativeDiscoveryRequest request{selection,
-                                                 std::min(compiled, selection.admittedLoaderVersions.maximum),
-                                                 requested,
-                                                 {},
-                                                 false};
+            const NativeDiscoveryRequest request{selection, std::min(compiled, selection.admittedLoaderVersions.maximum),
+                                                 requested, {},
+                                                 false,     optionalReprojection};
             return native.PrepareDiscovery(request);
         }
     }  // namespace
@@ -118,13 +117,17 @@ namespace Horo::Application::Internal {
     Result<void> OpenXRApplicationSession::DiscoverRuntime() {
         const bool hands = WantsHands();
         const bool planes = settings_.AllowsPlaneCapturePreview();
+        const bool optionalReprojection = std::ranges::any_of(settings_.Features(), [](const XRFeatureRequest &feature) {
+            return feature.capability == XRCapability::SpaceWarp && feature.kind == XRFeatureRequirementKind::Optional;
+        });
         const auto *owner = native_.get();
         auto passthrough = NativePassthroughExtensionRequest();
         if (passthrough && (!policy_.passthroughPermission || !policy_.passthroughPermission->SupportsReconstruction()))
             passthrough.reset();
         if (!native_ || native_.get() != owner)
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
-        if (auto prepared = PrepareNativeDiscovery(*native_, selection_, hands, planes, passthrough); prepared.HasError())
+        if (auto prepared = PrepareNativeDiscovery(*native_, selection_, hands, planes, passthrough, optionalReprojection);
+            prepared.HasError())
             return prepared;
         auto actual = native_->DiscoverSystem(selection_.attempt);
         if (actual.HasError())

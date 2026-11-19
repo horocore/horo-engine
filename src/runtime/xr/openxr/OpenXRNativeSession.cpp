@@ -406,7 +406,23 @@ namespace Horo::XR::OpenXRInternal {
             (!request.developmentLayersApproved || request.selection.productMode != XRPreflightProductMode::Development))
             return Result<void>::Failure(MakeError(XRErrors::RuntimeOverrideRejected));
         const auto layers = DiscoverLayers(request.layers);
-        return layers.HasError() ? layers : NegotiateExtensions(request.extensions);
+        if (layers.HasError())
+            return layers;
+        if (!request.optionalReprojection)
+            return NegotiateExtensions(request.extensions);
+
+        const auto reprojection = ReprojectionExtensionRequests();
+        if (request.extensions.size() + reprojection.size() >= MaximumEnabledExtensions)
+            return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
+        // Baseline routes may never depend on extensions the same instance preparation can omit.
+        for (const auto &extension : request.extensions)
+            for (const auto dependency : extension.dependencies)
+                if (std::ranges::find(reprojection, dependency, &NativeExtensionRequest::name) != reprojection.end())
+                    return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
+        std::array<NativeExtensionRequest, MaximumEnabledExtensions> extensions{};
+        const auto copied = std::ranges::copy(request.extensions, extensions.begin());
+        const auto end = std::ranges::copy(reprojection, copied.out).out;
+        return NegotiateExtensions(std::span{extensions.begin(), end});
     }
 
     /** @copydoc OpenXRNativeSession::DiscoverLayers */
@@ -528,6 +544,24 @@ namespace Horo::XR::OpenXRInternal {
         return Result<void>::Success();
     }
 
+    /** @copydoc OpenXRNativeSession::OmitRefusedReprojectionExtensions */
+    bool OpenXRNativeSession::OmitRefusedReprojectionExtensions() noexcept {
+        const auto reprojection = ReprojectionExtensionRequests();
+        const auto enabled = std::span{names_.extensions}.first(names_.extensionCount);
+        const auto omitted = std::ranges::remove_if(enabled, [&](std::string_view name) {
+            return std::ranges::find(reprojection, name, &NativeExtensionRequest::name) != reprojection.end();
+        });
+        if (omitted.empty())
+            return false;
+        names_.extensionCount = static_cast<std::uint32_t>(omitted.begin() - enabled.begin());
+        for (const auto &route : reprojection) {
+            const auto slot = ExtensionSlot(route.name);
+            if (slot < extensionEvidenceCount_ && extensionEvidence_[slot].admission.state == NativeExtensionState::Enabled)
+                extensionEvidence_[slot].admission.state = NativeExtensionState::ProviderFailed;
+        }
+        return true;
+    }
+
     /** @copydoc OpenXRNativeSession::CreateInstance */
     Result<void> OpenXRNativeSession::CreateInstance(const NativeDiscoveryRequest &request) {
         XrInstanceCreateInfo info{XR_TYPE_INSTANCE_CREATE_INFO};
@@ -551,7 +585,12 @@ namespace Horo::XR::OpenXRInternal {
         info.next = &androidInfo;
 #endif
         XrInstance candidate{XR_NULL_HANDLE};
-        const auto result = dispatch_.createInstance(&info, &candidate);
+        auto result = dispatch_.createInstance(&info, &candidate);
+        if (result == XR_ERROR_EXTENSION_NOT_PRESENT && candidate == XR_NULL_HANDLE && request.optionalReprojection &&
+            OmitRefusedReprojectionExtensions()) {
+            info.enabledExtensionCount = names_.extensionCount;
+            result = dispatch_.createInstance(&info, &candidate);
+        }
         if (XR_FAILED(result))
             return Result<void>::Failure(NativeError("xrCreateInstance", result));
         instance_ = candidate;

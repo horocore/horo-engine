@@ -158,6 +158,7 @@ namespace Horo::XR::OpenXRInternal {
         std::span<const NativeExtensionRequest> extensions;
         std::span<const std::string_view> layers;
         bool developmentLayersApproved{};
+        bool optionalReprojection{}; /**< Explicit host request to census native auxiliary input contracts. */
     };
 
     /** @brief Native facts borrowed only during one serialized prepared-owner operation. */
@@ -441,6 +442,10 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> CollectExtensions(const char *layer,
                                                      std::array<XrExtensionProperties, MaximumNativeExtensions> &available,
                                                      std::uint32_t &availableCount) const;
+        /** @brief Returns exactly the provider-owned optional extension requests, in selection order. */
+        [[nodiscard]] static std::span<const NativeExtensionRequest> ReprojectionExtensionRequests() noexcept;
+        /** @brief Removes exact enabled optional reprojection names before the sole create-refusal retry. */
+        [[nodiscard]] bool OmitRefusedReprojectionExtensions() noexcept;
         [[nodiscard]] Result<void> CreateInstance(const NativeDiscoveryRequest &request);
         [[nodiscard]] Result<void> ResolveInstance();
         [[nodiscard]] Result<void> SelectSystem();

@@ -2080,12 +2080,13 @@ namespace Horo::Tests::OpenXRApplication {
     TEST_CASE("Selected Play cold prepares the staged Vulkan motion pipeline without activating synthesis",
               "[xr][application][play][reprojection]") {
         using enum XR::XRProjectFeaturePolicy;
-        ApplicationFixture fixture{true, 5, Unrequested, Unrequested, Unrequested, true};
         constexpr std::array<std::int64_t, 3> formats{VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_D16_UNORM};
-        fixture.script.census.formats = formats.size();
-        fixture.script.census.formatPublication = formats;
         bool stageBundle = true;
         bool rejectPipeline = false;
+        bool request = true;
+        bool advertise = true;
+        bool refuseExtension = false;
+        bool invalidExtent = false;
         SECTION("matching advertised tuple") {}
         SECTION("packaged motion pair absent") {
             stageBundle = false;
@@ -2093,6 +2094,30 @@ namespace Horo::Tests::OpenXRApplication {
         SECTION("selected native pipeline creation failure") {
             rejectPipeline = true;
         }
+        SECTION("runtime advertisement is ignored without explicit project policy") {
+            request = false;
+        }
+        SECTION("runtime does not advertise the optional route") {
+            advertise = false;
+        }
+        SECTION("runtime refuses the optional route during instance creation") {
+            refuseExtension = true;
+        }
+        SECTION("runtime supplies an out-of-bounds auxiliary extent") {
+            invalidExtent = true;
+        }
+        ApplicationFixture fixture{true, 5, Unrequested, Unrequested, Unrequested, request};
+        if (advertise != fixture.script.native.synthesisExtension) {
+            fixture.script.native.synthesisExtension = advertise;
+            if (advertise)
+                ++fixture.script.native.extensionCount;
+            else
+                --fixture.script.native.extensionCount;
+        }
+        fixture.script.native.refuseReprojectionInstance = refuseExtension;
+        fixture.script.census.invalidReprojectionExtent = invalidExtent;
+        fixture.script.census.formats = formats.size();
+        fixture.script.census.formatPublication = formats;
         if (stageBundle) {
             const auto motion = ApplicationVulkanFixture::CookMotion();
             fixture.viewport->StageXrMotionProgram(RequireValue(
@@ -2105,10 +2130,14 @@ namespace Horo::Tests::OpenXRApplication {
         if (rejectPipeline)
             driver.pipelineResult = VK_ERROR_OUT_OF_DEVICE_MEMORY;
         auto scene = PublishPlay(fixture);
-        CHECK(driver.pipelines == pipelines + (stageBundle ? 1U : 0U));
-        CHECK(std::ranges::find(fixture.script.native.enabledExtensions, XR_EXT_FRAME_SYNTHESIS_EXTENSION_NAME) ==
-              fixture.script.native.enabledExtensions.end());
-        if (stageBundle) {
+        const bool enabled = request && advertise && !refuseExtension;
+        const bool warmed = enabled && !invalidExtent && stageBundle;
+        CHECK(driver.pipelines == pipelines + (warmed ? 1U : 0U));
+        CHECK((std::ranges::find(fixture.script.native.enabledExtensions, XR_EXT_FRAME_SYNTHESIS_EXTENSION_NAME) !=
+               fixture.script.native.enabledExtensions.end()) == enabled);
+        CHECK((fixture.script.census.synthesisEyeQueries > 0) == enabled);
+        CHECK(std::ranges::count(fixture.script.native.calls, "instance") == (refuseExtension ? 2 : 1));
+        if (warmed) {
             CHECK(driver.colorFormat == VK_FORMAT_R32G32B32A32_SFLOAT);
             CHECK(driver.depthFormat == VK_FORMAT_D16_UNORM);
             CHECK(driver.depthTestEnabled);
@@ -2117,6 +2146,22 @@ namespace Horo::Tests::OpenXRApplication {
         if (rejectPipeline)
             CHECK(driver.destroyedShaders >= destroyedShaders + 2);
         driver.pipelineResult = VK_SUCCESS;
+        fixture.script.clock.sample = 1;
+        REQUIRE(RequireValue(fixture.play->PrepareRenderFrame(1)));
+        auto frame = RequireValue(fixture.frontend->BeginFrame({1, {8, 8}}));
+        RequireValue(fixture.play->ExecuteRenderFrame(frame, {}));
+        RequireValue(frame.Present());
+        RequireValue(fixture.play->FinishGui(true));
+        fixture.vulkan->native.commandState.state.Complete();
+        RequireValue(fixture.play->ProgressRenderTail());
+        CHECK(fixture.script.frames.ends == 1);
+        CHECK(fixture.script.frames.layers == 1);
+        CHECK(std::ranges::none_of(fixture.script.frames.ext, [](const auto &view) {
+            return view.type == XR_TYPE_FRAME_SYNTHESIS_INFO_EXT;
+        }));
+        CHECK(std::ranges::none_of(fixture.script.frames.fb, [](const auto &view) {
+            return view.type == XR_TYPE_COMPOSITION_LAYER_SPACE_WARP_INFO_FB;
+        }));
         scene->Shutdown();
         REQUIRE(RequireValue(fixture.ClosePlay()));
     }
