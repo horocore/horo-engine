@@ -177,6 +177,7 @@ namespace Horo::Editor {
 
     Result<void> XrSetupModal::OnOpen(EditorModalContext &) {
         gazeRejected_ = false;
+        passthroughRejected_ = false;
         return Result<void>::Success();
     }
 
@@ -359,6 +360,35 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc XrSetupModal::DrawPassthroughPreview */
+    void XrSetupModal::DrawPassthroughPreview(IEditorXrPassthroughPreview &preview) {
+        using enum EditorXrPassthroughState;
+        const auto state = preview.ReadPassthroughPreviewState();
+        if (state == Unavailable && !passthroughRejected_)
+            return;
+        const auto &fonts = context_.theme.fonts;
+        constexpr std::array keys{"passthrough_rejected", "passthrough_scope",  "passthrough_armed",
+                                  "passthrough_pending",  "passthrough_active", "passthrough_denied"};
+        const auto index = static_cast<std::size_t>(state);
+        if (index >= keys.size())
+            return;
+        Ui::WrappedText(ImGui::GetContentRegionAvail().x, Text(passthroughRejected_ ? "passthrough_rejected" : keys[index]), Theme::Muted(),
+                        fonts);
+        const bool canArm = state == Ready;
+        const bool canRevoke = state == Armed || state == Pending || state == Active;
+        if ((canArm || canRevoke) && Ui::Button({.label = Text(canArm ? "passthrough_allow" : "passthrough_revoke").c_str(),
+                                                 .variant = Ui::ButtonVariant::Secondary,
+                                                 .font = fonts.sans,
+                                                 .style = {.width = Ui::StyleWidth::FillAvailable}})) {
+            if (canArm)
+                passthroughRejected_ = preview.ArmPassthrough().HasError();
+            else {
+                preview.RevokePassthrough();
+                passthroughRejected_ = false;
+            }
+        }
+    }
+
     ModalFrameResult XrSetupModal::Draw() {
         const auto &fonts = context_.theme.fonts;
         Ui::ScopedModalShell shell({.id = "XrSetup",
@@ -391,6 +421,8 @@ namespace Horo::Editor {
             DrawPlaneCapturePreview(*preview);
         if (auto *preview = setup_ ? setup_->EyeGazePreview() : nullptr)
             DrawEyeGazePreview(*preview);
+        if (auto *preview = setup_ ? setup_->PassthroughPreview() : nullptr)
+            DrawPassthroughPreview(*preview);
         ImGui::EndChild();
 
         shell.BeginFooter({16, 12});

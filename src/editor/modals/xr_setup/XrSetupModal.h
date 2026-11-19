@@ -27,6 +27,8 @@ namespace Horo::Editor {
         /** @brief Shows consent controls and current redacted pointing evidence. */
         void DrawPlaneCapturePreview(IEditorXrPlaneCapturePreview &preview);
         void DrawEyeGazePreview(IEditorXrEyeGazePreview &preview);
+        /** @brief Draws next-Play passthrough consent controls without exposing provider data. */
+        void DrawPassthroughPreview(IEditorXrPassthroughPreview &preview);
         [[nodiscard]] const std::string &Text(const char *key) const;
         const EditorGuiContext &context_;
         IEditorXrSetup *setup_;
@@ -35,6 +37,7 @@ namespace Horo::Editor {
         bool previewRejected_{};
         bool planesRejected_{};
         bool gazeRejected_{};
+        bool passthroughRejected_{};
         bool rejected_{};
     };
 }  // namespace Horo::Editor

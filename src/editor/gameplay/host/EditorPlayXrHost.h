@@ -260,6 +260,28 @@ namespace Horo::Editor {
         virtual void RevokePlaneCapture() noexcept = 0;
     };
 
+    /** @brief Redacted operator state for runtime-composited passthrough. */
+    enum class EditorXrPassthroughState : std::uint8_t {
+        Unavailable,
+        Ready,
+        Armed,
+        Pending,
+        Active,
+        Denied
+    };
+
+    /** @brief Controls only the one-use operator consent in the selected Play owner. */
+    class IEditorXrPassthroughPreview {
+    public:
+        virtual ~IEditorXrPassthroughPreview() = default;
+        /** @return Current redacted state without camera inputs or native handles. */
+        [[nodiscard]] virtual EditorXrPassthroughState ReadPassthroughPreviewState() const noexcept = 0;
+        /** @return Success if one future Play grant was armed, or the original typed refusal. */
+        [[nodiscard]] virtual Result<void> ArmPassthrough() = 0;
+        /** @brief Stops queued or live consent immediately while the Play owner retires native work. */
+        virtual void RevokePassthrough() noexcept = 0;
+    };
+
     /** @brief Borrowed editor setup and optional preview composition. */
     class IEditorXrSetup {
     public:
@@ -277,6 +299,11 @@ namespace Horo::Editor {
 
         /** @return Optional consent control for the selected native plane capture provider. */
         [[nodiscard]] virtual IEditorXrPlaneCapturePreview *PlaneCapturePreview() noexcept {
+            return nullptr;
+        }
+
+        /** @return Optional compositor passthrough consent for the selected platform authority. */
+        [[nodiscard]] virtual IEditorXrPassthroughPreview *PassthroughPreview() noexcept {
             return nullptr;
         }
 

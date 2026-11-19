@@ -1084,6 +1084,8 @@ namespace Horo::Tests::OpenXRApplication {
 
         bool installAuthority = true;
         bool arm = true;
+        bool revokeArmed = false;
+        bool revokeOperatorInFlight = false;
         bool revokeInFlight = false;
         bool revokeDuringBind = false;
         bool revokeBeforeCreate = false;
@@ -1097,6 +1099,9 @@ namespace Horo::Tests::OpenXRApplication {
         }
         SECTION("an installed permission port does not provide operator consent") {
             arm = false;
+        }
+        SECTION("Setup revokes its queued one-use consent before entering Play") {
+            revokeArmed = true;
         }
         SECTION("the exact scoped platform permission was denied") {
             permission->permitted = false;
@@ -1116,6 +1121,9 @@ namespace Horo::Tests::OpenXRApplication {
         SECTION("platform revocation prevents an already rendered alpha frame from submitting underlay") {
             revokeInFlight = true;
         }
+        SECTION("Setup revokes its live operator consent before compositor submission") {
+            revokeOperatorInFlight = true;
+        }
 
         OpenXR::PassthroughScript native;
         if (denyNative)
@@ -1134,32 +1142,47 @@ namespace Horo::Tests::OpenXRApplication {
         fixture.script.census.passthroughCapabilities = XR_PASSTHROUGH_CAPABILITY_BIT_FB;
         fixture.script.census.maximumLayers = layerLimit;
         fixture.CreatePlay();
+        Editor::IEditorXrSetup &setup = *fixture.play;
+        auto *preview = setup.PassthroughPreview();
+        REQUIRE(preview);
+        using PreviewState = Editor::EditorXrPassthroughState;
         if (!provider) {
             CHECK(std::ranges::find(fixture.script.native.enabledExtensions, XR_FB_PASSTHROUGH_EXTENSION_NAME) ==
                   fixture.script.native.enabledExtensions.end());
-            CHECK(fixture.play->ArmPassthrough().HasError());
+            CHECK(preview->ReadPassthroughPreviewState() == PreviewState::Unavailable);
+            CHECK(preview->ArmPassthrough().HasError());
             CHECK(native.featuresCreated == 0);
             return;
         }
         CHECK((std::ranges::find(fixture.script.native.enabledExtensions, XR_FB_PASSTHROUGH_EXTENSION_NAME) !=
                fixture.script.native.enabledExtensions.end()) == installAuthority);
-        if (arm)
-            RequireValue(fixture.play->ArmPassthrough());
+        CHECK(preview->ReadPassthroughPreviewState() == (installAuthority ? PreviewState::Ready : PreviewState::Unavailable));
+        if (arm) {
+            RequireValue(preview->ArmPassthrough());
+            CHECK(preview->ReadPassthroughPreviewState() == PreviewState::Armed);
+        }
+        if (revokeArmed) {
+            preview->RevokePassthrough();
+            CHECK(preview->ReadPassthroughPreviewState() == PreviewState::Ready);
+        }
         if (!installAuthority)
-            CHECK(fixture.play->ArmPassthrough().HasError());
+            CHECK(preview->ArmPassthrough().HasError());
         CHECK(native.featuresCreated == 0);
         CHECK_FALSE(permission->observed);
         if (revokeBeforeCreate)
             permission->revokeOnRead = fixture.play.get();
 
         auto scene = ActivatePlay(fixture, std::nullopt);
-        const bool active = arm && permission->permitted && !revokeBeforeCreate && !denyNative && layerLimit >= 2;
+        const bool active = arm && !revokeArmed && permission->permitted && !revokeBeforeCreate && !denyNative && layerLimit >= 2;
         CHECK((fixture.play->ReadPassthroughState() == XR::XRCapabilityState::Available) == active);
+        CHECK((preview->ReadPassthroughPreviewState() == PreviewState::Active) == active);
         CHECK(native.featuresCreated == (active ? 1U : 0U));
         CHECK(native.running == active);
-        if (denyNative)
+        if (denyNative || !permission->permitted) {
             CHECK(fixture.play->ReadPassthroughState() == XR::XRCapabilityState::Denied);
-        if (arm)
+            CHECK(preview->ReadPassthroughPreviewState() == PreviewState::Denied);
+        }
+        if (arm && !revokeArmed)
             REQUIRE(permission->observed);
         if (active) {
             CHECK(permission->observed->session == *fixture.session->RetainedSession());
@@ -1186,10 +1209,14 @@ namespace Horo::Tests::OpenXRApplication {
             CHECK_FALSE(native.running);
             CHECK(fixture.play->ReadPassthroughState() == XR::XRCapabilityState::Denied);
         }
+        if (revokeOperatorInFlight) {
+            preview->RevokePassthrough();
+            CHECK(preview->ReadPassthroughPreviewState() == PreviewState::Unavailable);
+        }
         fixture.vulkan->native.commandState.state.Complete();
         RequireValue(fixture.play->ProgressRenderTail());
         CHECK(fixture.script.frames.ends == 1);
-        const bool composed = active && !revokeInFlight && !revokeDuringBind;
+        const bool composed = active && !revokeInFlight && !revokeDuringBind && !revokeOperatorInFlight;
         CHECK(fixture.script.frames.layers == (composed ? 2U : 1U));
         CHECK(fixture.script.frames.projectionFlags ==
               (composed ? std::uint64_t{XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT} : 0U));

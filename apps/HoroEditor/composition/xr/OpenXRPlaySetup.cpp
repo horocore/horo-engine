@@ -373,7 +373,23 @@ namespace Horo::Application::Internal {
         composition_.session.RevokePlaneCapture();
     }
 
-    /** @copydoc OpenXRPlayHost::ArmPassthrough */
+    /** @copydoc Editor::IEditorXrPassthroughPreview::ReadPassthroughPreviewState */
+    Editor::EditorXrPassthroughState OpenXRPlayHost::ReadPassthroughPreviewState() const noexcept {
+        using enum Editor::EditorXrPassthroughState;
+        if (std::this_thread::get_id() != lane_ || closing_ || busy_ || instanceLost_)
+            return Unavailable;
+        if (passthroughArmed_)
+            return Armed;
+        if (!passthroughScope_ && SetupIdle() && composition_.session.MayArmPassthrough())
+            return Ready;
+        if (passthroughState_ == XR::XRCapabilityState::Denied)
+            return Denied;
+        if (ReadPassthroughState() == XR::XRCapabilityState::Available)
+            return Active;
+        return scene_ && scene_->passthroughGrant ? Pending : Unavailable;
+    }
+
+    /** @copydoc Editor::IEditorXrPassthroughPreview::ArmPassthrough */
     Result<void> OpenXRPlayHost::ArmPassthrough() {
         if (auto lane = Lane(); lane.HasError())
             return lane;
@@ -392,7 +408,7 @@ namespace Horo::Application::Internal {
         return Result<void>::Success();
     }
 
-    /** @copydoc OpenXRPlayHost::RevokePassthrough */
+    /** @copydoc Editor::IEditorXrPassthroughPreview::RevokePassthrough */
     void OpenXRPlayHost::RevokePassthrough() noexcept {
         if (std::this_thread::get_id() != lane_)
             return;

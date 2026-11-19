@@ -111,6 +111,7 @@ namespace Horo::Application::Internal {
                                  public Editor::IEditorXrHapticPreview,
                                  public Editor::IEditorXrPlaneCapturePreview,
                                  public Editor::IEditorXrEyeGazePreview,
+                                 public Editor::IEditorXrPassthroughPreview,
                                  private XR::RuntimeInternal::IXRSessionRetirementResources,
                                  private XR::IXRBindingNeutralizer {
     public:
@@ -179,12 +180,14 @@ namespace Horo::Application::Internal {
          * finite ray.
          * @return Ordered placement candidates without mutating authored or runtime Scene objects. */
         [[nodiscard]] Result<XR::XRSpatialHits> QueryPlaneHits(const XR::XRSpatialHitRequest &request) const;
-        /** @brief Arms one next-Play operator grant through the selected Setup owner.
-         * @return Success or typed busy, capacity or missing-platform/extension evidence. No native feature is started.
-         */
-        [[nodiscard]] Result<void> ArmPassthrough();
-        /** @brief Withdraws queued and live compositor intent on the owner lane, retaining native cleanup debt. */
-        void RevokePassthrough() noexcept;
+
+        [[nodiscard]] Editor::IEditorXrPassthroughPreview *PassthroughPreview() noexcept override {
+            return this;
+        }
+
+        [[nodiscard]] Editor::EditorXrPassthroughState ReadPassthroughPreviewState() const noexcept override;
+        [[nodiscard]] Result<void> ArmPassthrough() override;
+        void RevokePassthrough() noexcept override;
         /** @brief Reads redacted current owner-lane availability; exposes no native handle or camera data. */
         [[nodiscard]] XR::XRCapabilityState ReadPassthroughState() const noexcept;
         /** @brief Supplies bounded, current runtime prerequisites to the separate device qualification runner. */
