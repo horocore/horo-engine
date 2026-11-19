@@ -163,6 +163,8 @@ namespace Horo::Editor::Theme {
             const float scale = tokens.sizes.uiScale;
             if (scale != 1.0F)
                 style.ScaleAllSizes(scale);
+            // ImGui rounds scaled sizes down to whole pixels, which can collapse its software cursor.
+            style.MouseCursorScale = state.layoutBase->MouseCursorScale * scale;
             style.FrameBorderSize *= scale;
             style.ChildBorderSize *= scale;
             style.WindowBorderSize *= scale;

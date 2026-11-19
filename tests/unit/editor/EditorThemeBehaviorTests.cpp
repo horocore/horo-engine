@@ -138,14 +138,17 @@ TEST_CASE("Editor scale follows logical DPI without rescaling the framebuffer or
     Theme::Apply(style);
     io.DisplayFramebufferScale = {2.0F, 2.0F};
     const float originalPadding = style.FramePadding.x;
+    const float originalCursorScale = style.MouseCursorScale;
     const float originalLabel = Theme::TextPx::Label();
     Theme::ApplyUiScale(125, 1.2F);
     CHECK(Theme::GetActiveTokens().sizes.uiScale == 1.5F);
     CHECK(Theme::TextPx::Label() == originalLabel * 1.5F);
     CHECK(style.FramePadding.x == originalPadding * 1.5F);
+    CHECK(style.MouseCursorScale == originalCursorScale * 1.5F);
     CHECK(io.DisplayFramebufferScale.x == 2.0F);
     Theme::SelectThemeByIndex(2);
     CHECK(style.FramePadding.x == originalPadding * 1.5F);
+    CHECK(style.MouseCursorScale == originalCursorScale * 1.5F);
 
     imgui.BeginFrame();
     ImGui::Begin("scaled typography", nullptr, ImGuiWindowFlags_NoSavedSettings);
@@ -165,8 +168,10 @@ TEST_CASE("Editor scale follows logical DPI without rescaling the framebuffer or
     CHECK(Theme::GetActiveTokens().sizes.uiScale == 0.75F);
     CHECK(Theme::TextPx::Label() == 16.0F);
     CHECK(io.FontDefault->FontSize * io.FontGlobalScale == 16.0F);
+    CHECK(style.MouseCursorScale == originalCursorScale * 0.75F);
     Theme::ApplyUiScale(100, 1.0F);
     CHECK(style.FramePadding.x == originalPadding);
+    CHECK(style.MouseCursorScale == originalCursorScale);
     CHECK(Theme::TextPx::Label() == originalLabel);
 }
 
