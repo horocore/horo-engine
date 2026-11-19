@@ -212,6 +212,13 @@ namespace Horo::Application::Internal {
         /** @brief Borrows the installed immutable replication generation on the world owner lane.
          * @return Active module lease, or null when unavailable. */
         [[nodiscard]] const Gameplay::GameplayReplicationLease *Replication() const noexcept;
+        /** @brief Queues the host-admitted replica through this world's actual cooked Prefab service. */
+        [[nodiscard]] Result<Prefab::PrefabOperation> SpawnReplicaPrefab(Prefab::PrefabSpawnRequest request,
+                                                                         std::shared_ptr<const Runtime::SceneGroupPublication> publication,
+                                                                         const CancellationToken &cancellation) const;
+        /** @brief Queues removal through the same replica occurrence owner. */
+        [[nodiscard]] Result<Prefab::PrefabOperation> DespawnReplicaPrefab(const Prefab::PrefabInstance &instance,
+                                                                           const CancellationToken &cancellation) const;
         /** @brief Returns the exact admitted schema subset. @return Borrowed IDs valid for the active module generation. */
         [[nodiscard]] std::span<const Network::ReplicationSchemaId> AdmittedReplicationSchemas() const noexcept;
         /** @brief Reads the selected module Character scope, including typed unavailable diagnostics. @return Owned holder. */

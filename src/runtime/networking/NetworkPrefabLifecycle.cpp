@@ -196,11 +196,18 @@ namespace Horo::Network {
         }
     }
 
+    /** @copydoc ValidateNetworkPrefabLifecycle */
+    Result<void> ValidateNetworkPrefabLifecycle(const NetworkPrefabLifecycleRecord &record) {
+        if (!record.session.IsValid() || !record.occurrence.IsValid() || (record.spawn && !ValidMembers(*record.spawn, record.occurrence)))
+            return Invalid<void>();
+        return Result<void>::Success();
+    }
+
     /** @copydoc EncodeNetworkPrefabLifecycle */
     Result<std::vector<std::byte>> EncodeNetworkPrefabLifecycle(const NetworkPrefabLifecycleRecord &record) {
         using Outcome = Result<std::vector<std::byte>>;
-        if (!record.session.IsValid() || !record.occurrence.IsValid() || (record.spawn && !ValidMembers(*record.spawn, record.occurrence)))
-            return Invalid<std::vector<std::byte>>();
+        if (auto valid = ValidateNetworkPrefabLifecycle(record); valid.HasError())
+            return Outcome::Failure(valid.ErrorValue());
         try {
             const auto kind = record.spawn ? RecordKind::Spawn : RecordKind::Despawn;
             const auto bodyBytes = record.spawn ? RecipeBytes + record.spawn->members.size() * MemberBytes : 0;

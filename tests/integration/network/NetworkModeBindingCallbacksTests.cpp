@@ -1,3 +1,4 @@
+#include "Horo/Assets/AssetProvider.h"
 #include "Horo/Foundation/Platform.h"
 #include "NetworkModeHostTestSupport.h"
 
@@ -115,6 +116,42 @@ namespace Horo::Network {
             fixture.transport.queued = true;
             return fixture.dispatcher->RunNetworkPoll(22).Value();
         }
+
+        /** @brief Commits actual Scene groups against the authenticated network binding. */
+        struct ClientSceneFixture final {
+            JobSystem jobs{{1, 4}};
+            Assets::AssetRegistry registry;
+            Assets::MemoryAssetProvider bytes;
+            Assets::AssetLoadService loads{jobs, bytes};
+            Runtime::RuntimeSceneService scenes;
+            CancellationToken cancellation;
+            std::uint64_t frame{};
+
+            explicit ClientSceneFixture(Runtime::SceneRuntimeId scene) : scenes(registry, loads, {}, scene) {
+                REQUIRE(registry.Publish(std::vector<Assets::AssetRecord>{}).status == Assets::AssetRegistryBuildStatus::Complete);
+                REQUIRE(scenes.Startup(cancellation).HasValue());
+                Runtime::SceneDefinitionBuilder definition{{1}, {1}};
+                REQUIRE(scenes.QueuePreparation(std::move(definition).Build().Value()).HasValue());
+                Pump();
+            }
+
+            void Pump() {
+                REQUIRE(scenes.OnPhase(CommitPhase, {.frameNumber = ++frame, .cancellation = cancellation}).HasValue());
+            }
+
+            Runtime::SceneStructuralAdmission Admission() const {
+                return {scenes.ActiveScene()->RuntimeId(), registry.Snapshot().Revision(), cancellation};
+            }
+
+            Runtime::StructuralCommitResult Publish(Runtime::SceneCommandBuffer commands,
+                                                    const std::shared_ptr<const Runtime::SceneGroupPublication> &owner) {
+                REQUIRE(commands.BindGroupPublication(owner).HasValue());
+                const auto receipt = scenes.QueueTrackedStructuralCommands(std::move(commands)).Value();
+                Pump();
+                REQUIRE(receipt->ResultValue());
+                return *receipt->ResultValue();
+            }
+        };
 
     }  // namespace
 
@@ -270,9 +307,30 @@ namespace Horo::Network {
         CHECK(created.spawn->recipe == source);
         CHECK(created.spawn->members.size() == 8);
         CHECK(fixture.transport.size > 256);
+        const auto localScene = Runtime::SceneRuntimeId{2};
+        ClientSceneFixture reconstruction{localScene};
+        const auto bound = inbox.Bind(created, reconstruction.cancellation).Value();
+        Runtime::SceneCommandBuffer creation;
+        std::vector<Runtime::RuntimeEntityGroupEntry> definitions(source.entityCount);
+        REQUIRE(creation.CreateGroup(std::move(definitions), {}, reconstruction.Admission()).HasValue());
+        const auto published = reconstruction.Publish(std::move(creation), bound);
+        const auto replicaView = [&] {
+            return mode
+                .AcquireReplication(NetworkModeWorldKind::Client, {localScene, created.session, Runtime::RuntimePhase::NetworkPoll},
+                                    ReplicationWorldCapability::ApplyAuthoritativeState)
+                .Value();
+        };
+        CHECK(replicaView().Mapping().Entries().size() == source.entityCount);
         const auto retired = receive(3);
         CHECK_FALSE(retired.spawn);
         CHECK(retired.occurrence == created.occurrence);
+        std::vector<Runtime::EntityRef> replicaEntities;
+        for (const auto &entry : published.created)
+            replicaEntities.push_back(entry.entity);
+        Runtime::SceneCommandBuffer destruction;
+        REQUIRE(destruction.DestroyGroup(std::move(replicaEntities), reconstruction.Admission()).HasValue());
+        (void)reconstruction.Publish(std::move(destruction), bound);
+        CHECK(replicaView().Mapping().Entries().empty());
         CHECK(flush().empty());
 
         for (std::size_t index = 0; index < entities.size(); ++index) {

@@ -346,6 +346,24 @@ namespace Horo::Prefab {
          * owner-lane state and is not thread-safe.
          */
         [[nodiscard]] Result<std::shared_ptr<Gameplay::GameplayPrefabContext>> Acquire(GameplayPrefabBinding binding) const;
+        /**
+         * @brief Queues an admitted replica with its exact Scene publication owner.
+         * @param request Verified local cooked source and resolved spawn intent.
+         * @param publication One replica mapping owner, retained through later despawn.
+         * @param cancellation Owning replica scope cancellation.
+         * @return Operation receipt or typed admission failure.
+         * @details Host-only submission uses the current safe-point cursor, including before the first fixed tick.
+         */
+        [[nodiscard]] Result<PrefabOperation> SpawnReplica(PrefabSpawnRequest request,
+                                                           std::shared_ptr<const Runtime::SceneGroupPublication> publication,
+                                                           const CancellationToken &cancellation) const;
+        /**
+         * @brief Retires an exact replica through its original group publication owner.
+         * @param instance Group previously committed through SpawnReplica.
+         * @param cancellation Owning replica scope cancellation.
+         * @return Operation receipt or typed admission failure.
+         */
+        [[nodiscard]] Result<PrefabOperation> DespawnReplica(const PrefabInstance &instance, const CancellationToken &cancellation) const;
         /** @brief Advances bounded load/completion work and at most one eligible
          * Scene transaction.
          * @param tick Monotonic committed fixed tick; zero is allowed only before the

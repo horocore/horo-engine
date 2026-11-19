@@ -153,6 +153,18 @@ namespace Horo::Network {
         return impl_->worlds.TakePrefab(scene, phase);
     }
 
+    /** @copydoc NetworkWorldBindingController::PrepareClientPrefab */
+    Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> NetworkWorldBindingController::PrepareClientPrefab(
+        Runtime::SceneRuntimeId scene, const NetworkPrefabLifecycleRecord &spawn, std::span<const Runtime::EntityRef> members,
+        bool creating, const CancellationToken &cancellation) const {
+        using Outcome = Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>;
+        if (auto checked = impl_->CheckOwner(); checked.HasError())
+            return Outcome::Failure(checked.ErrorValue());
+        if (!impl_->transport || !impl_->setup.policy.prefabLifecycle)
+            return Outcome::Failure(MakeError(NetworkErrors::ReplicationWorldUnavailable));
+        return impl_->worlds.PrepareClientPrefab(scene, spawn, members, creating, cancellation);
+    }
+
     /** @copydoc NetworkWorldBindingController::Ready */
     bool NetworkWorldBindingController::Ready(const NetworkModeWorldKind kind, const Runtime::SceneRuntimeId scene) const noexcept {
         return impl_->worlds.Ready(kind, scene);

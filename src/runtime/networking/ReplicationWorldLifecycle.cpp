@@ -2,6 +2,7 @@
 
 #include "Horo/Network/NetworkErrors.h"
 #include "Horo/Network/NetworkMetrics.h"
+#include "Horo/Network/NetworkPrefabLifecycle.h"
 
 #include <algorithm>
 #include <exception>
@@ -429,14 +430,15 @@ namespace Horo::Network {
     }
 
     /** @copydoc ReplicationWorldLifecycle::ValidateObjectBatch */
-    Result<void> ReplicationWorldLifecycle::ValidateObjectBatch(const ReplicationWorldWorkRequest &request) const {
+    Result<void> ReplicationWorldLifecycle::ValidateObjectBatch(const ReplicationWorldWorkRequest &request,
+                                                                ReplicationWorldCapability capability) const {
         if (auto active = RequireActive(request.scene, request.session); active.HasError())
             return active;
         if (active_->owner != std::this_thread::get_id() || active_->paused)
             return Failure<void>(NetworkErrors::ReplicationWorldUnavailable);
         if (request.phase != Runtime::RuntimePhase::CommitDeferredLifecycleChanges || !active_->descriptor.phases.Contains(request.phase))
             return Failure<void>(NetworkErrors::ReplicationWorldPhaseInvalid);
-        if (!active_->capabilities.publishAuthority)
+        if (!active_->capabilities.Contains(capability))
             return Failure<void>(NetworkErrors::ReplicationAuthorityDenied);
         if (request.cancellation.IsCancellationRequested())
             return Failure<void>(NetworkErrors::ReplicationWorldCancelled);
@@ -445,8 +447,9 @@ namespace Horo::Network {
 
     /** @copydoc ReplicationWorldLifecycle::CopyMappingForBatch */
     Result<NetworkObjectMapping> ReplicationWorldLifecycle::CopyMappingForBatch(const ReplicationWorldWorkRequest &request,
-                                                                                std::size_t added, std::size_t retired) const {
-        if (auto valid = ValidateObjectBatch(request); valid.HasError())
+                                                                                std::size_t added, std::size_t retired,
+                                                                                ReplicationWorldCapability capability) const {
+        if (auto valid = ValidateObjectBatch(request, capability); valid.HasError())
             return Result<NetworkObjectMapping>::Failure(valid.ErrorValue());
         if (added == 0 && retired == 0)
             return Failure<NetworkObjectMapping>(NetworkErrors::ReplicationWorldInvalid);
@@ -528,6 +531,57 @@ namespace Horo::Network {
             if (auto inserted = AddDynamicObjects(replacement, added); inserted.HasError())
                 return Prepared::Failure(inserted.ErrorValue());
             return FinishObjectBatch(std::move(replacement), request.cancellation, added.size(), retired.size());
+        } catch (const std::bad_alloc &) {
+            return Failure<std::unique_ptr<Runtime::SceneStructuralCandidate>>(NetworkErrors::ReplicationWorldCapacityExceeded);
+        }
+    }
+
+    /** @copydoc ReplicationWorldLifecycle::ApplyReplicaPrefab */
+    Result<void> ReplicationWorldLifecycle::ApplyReplicaPrefab(NetworkObjectMapping &mapping, const NetworkPrefabLifecycleRecord &spawn,
+                                                               std::span<const Runtime::EntityRef> members, bool creating) {
+        for (const auto &member : spawn.spawn->members) {
+            const NetworkObjectMappingEntry expected{member.object,
+                                                     members[member.entitySlot],
+                                                     {member.schema, member.version, std::nullopt,
+                                                      NetworkPrefabMemberProvenance{{spawn.spawn->recipe, member.entitySlot},
+                                                                                    spawn.occurrence}}};
+            if (creating) {
+                if (auto added = mapping.RegisterReplica(expected); added.HasError())
+                    return added;
+                continue;
+            }
+            if (const auto live = mapping.ResolveEntry(member.object); live.HasError() || live.Value() != expected)
+                return Failure<void>(NetworkErrors::NetworkObjectMappingUnknown);
+            if (auto removed = mapping.Retire(member.object); removed.HasError())
+                return removed;
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ReplicationWorldLifecycle::PrepareReplicaPrefab */
+    Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> ReplicationWorldLifecycle::PrepareReplicaPrefab(
+        const ReplicationWorldWorkRequest &request, const NetworkPrefabLifecycleRecord &spawn, std::span<const Runtime::EntityRef> members,
+        bool creating) const {
+        using Prepared = Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>;
+        if (!spawn.spawn || spawn.session != request.session || spawn.spawn->recipe.entityCount != members.size())
+            return Failure<std::unique_ptr<Runtime::SceneStructuralCandidate>>(NetworkErrors::ReplicationWorldInvalid);
+        if (std::ranges::any_of(members, [&request](Runtime::EntityRef entity) {
+            return !entity.IsValid() || entity.runtime != request.scene;
+        }))
+            return Failure<std::unique_ptr<Runtime::SceneStructuralCandidate>>(NetworkErrors::ReplicationWorldInvalid);
+        if (auto valid = ValidateNetworkPrefabLifecycle(spawn); valid.HasError())
+            return Prepared::Failure(valid.ErrorValue());
+        const auto count = spawn.spawn->members.size();
+        const auto added = creating ? count : 0;
+        const auto retired = creating ? 0 : count;
+        try {
+            auto copied = CopyMappingForBatch(request, added, retired, ReplicationWorldCapability::ApplyAuthoritativeState);
+            if (copied.HasError())
+                return Prepared::Failure(copied.ErrorValue());
+            auto replacement = std::move(copied).Value();
+            if (auto applied = ApplyReplicaPrefab(replacement, spawn, members, creating); applied.HasError())
+                return Prepared::Failure(applied.ErrorValue());
+            return FinishObjectBatch(std::move(replacement), request.cancellation, added, retired);
         } catch (const std::bad_alloc &) {
             return Failure<std::unique_ptr<Runtime::SceneStructuralCandidate>>(NetworkErrors::ReplicationWorldCapacityExceeded);
         }

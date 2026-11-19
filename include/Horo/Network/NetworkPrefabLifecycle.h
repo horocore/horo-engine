@@ -51,6 +51,10 @@ namespace Horo::Network {
      * @param world Immutable committed authority capture.
      * @return Owned complete groups or a typed invalid, revoked or capacity error. */
     [[nodiscard]] Result<std::vector<NetworkPrefabLifecycleRecord>> CaptureNetworkPrefabSpawns(const ReplicationWorldReadLease &world);
+    /** @brief Validates representation and canonical member order without allocating encoded bytes.
+     * @param record Spawn or despawn to check.
+     * @return Success or a typed invalid-record error. */
+    [[nodiscard]] Result<void> ValidateNetworkPrefabLifecycle(const NetworkPrefabLifecycleRecord &record);
 
     /**
      * @brief Encodes a validated canonical lifecycle payload in big-endian byte order.

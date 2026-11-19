@@ -141,6 +141,14 @@ namespace Horo::Network {
          * @return Ordered owned messages, or the typed stale, unavailable or wrong-phase error.
          */
         [[nodiscard]] Result<std::vector<NetworkPrefabLifecycleRecord>> Take(Runtime::RuntimePhase phase) const;
+        /**
+         * @brief Binds a received spawn to the exact client Scene group publication.
+         * @param spawn Spawn taken from this Scene inbox and retained through later despawn.
+         * @param cancellation Owner cancellation for this occurrence.
+         * @return Group publication or a typed malformed or unavailable error.
+         */
+        [[nodiscard]] Result<std::shared_ptr<const Runtime::SceneGroupPublication>> Bind(NetworkPrefabLifecycleRecord spawn,
+                                                                                         const CancellationToken &cancellation) const;
 
     private:
         friend class NetworkModeComposition;

@@ -4,6 +4,49 @@
 #include <new>
 
 namespace Horo::Network {
+    namespace {
+        /** @brief Retains exact authenticated group evidence and a weak client-world route. */
+        class ReplicaPrefabPublication final : public Runtime::SceneGroupPublication {
+        public:
+            ReplicaPrefabPublication(std::weak_ptr<NetworkWorldBindingController> binding, Runtime::SceneRuntimeId scene,
+                                     NetworkPrefabLifecycleRecord spawn, CancellationToken cancellation)
+                : binding_(std::move(binding)), scene_(scene), spawn_(std::move(spawn)), cancellation_(std::move(cancellation)) {}
+
+            Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(const Runtime::RuntimeSceneView &active,
+                                                                               std::span<const Runtime::EntityRef> members,
+                                                                               bool creating) const override {
+                const auto binding = binding_.lock();
+                if (!binding || active.RuntimeId() != scene_)
+                    return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
+                        MakeError(NetworkErrors::ReplicationWorldUnavailable));
+                return binding->PrepareClientPrefab(scene_, spawn_, members, creating, cancellation_);
+            }
+
+        private:
+            std::weak_ptr<NetworkWorldBindingController> binding_;
+            Runtime::SceneRuntimeId scene_;
+            NetworkPrefabLifecycleRecord spawn_;
+            CancellationToken cancellation_;
+        };
+    }  // namespace
+
+    /** @copydoc NetworkClientPrefabInbox::Bind */
+    Result<std::shared_ptr<const Runtime::SceneGroupPublication>> NetworkClientPrefabInbox::Bind(
+        NetworkPrefabLifecycleRecord spawn, const CancellationToken &cancellation) const {
+        using Outcome = Result<std::shared_ptr<const Runtime::SceneGroupPublication>>;
+        if (binding_.expired() || cancellation.IsCancellationRequested())
+            return Outcome::Failure(MakeError(NetworkErrors::ReplicationWorldUnavailable));
+        if (!spawn.spawn)
+            return Outcome::Failure(MakeError(NetworkErrors::ReplicationWorldInvalid));
+        if (auto valid = ValidateNetworkPrefabLifecycle(spawn); valid.HasError())
+            return Outcome::Failure(valid.ErrorValue());
+        try {
+            return Outcome::Success(std::make_shared<const ReplicaPrefabPublication>(binding_, scene_, std::move(spawn), cancellation));
+        } catch (const std::bad_alloc &) {
+            return Outcome::Failure(MakeError(NetworkErrors::ReplicationWorldCapacityExceeded));
+        }
+    }
+
     /** @copydoc NetworkWorldBindingController::Impl::QueuePrefabUpdate */
     Result<void> NetworkWorldBindingController::Impl::QueuePrefabUpdate(Peer &peer, const NetworkWorldBindingRecord *prepared,
                                                                         const NetworkWorldBindingRecord *current,

@@ -148,6 +148,16 @@ The matching client candidate can stage ordered data received in the same
 poll, and exposes it only after Scene publication. A packet that cannot fit
 the negotiated codec or transport budget fails that peer's publication.
 
+A client can bind a received spawn as the owner of a cooked Prefab group
+transaction. Scene assigns local entity generations and NetworkRuntime
+publishes the authenticated authority IDs with the same commit. The same
+binding verifies every member on retirement. A newer replica generation
+may skip occurrences the sender never published, while duplicate generations
+and stale retirements leave the Scene and mapping unchanged. Host replica
+submission uses the structural safe point before the first fixed tick and
+shares verified loading, member projection and rollback with ordinary Prefab
+work.
+
 ```cpp
 enum class ReplicationExecutionRole : std::uint8_t {
     Standalone,

@@ -22,6 +22,7 @@
 
 namespace Horo::Network {
     class NetworkMetrics;
+    struct NetworkPrefabLifecycleRecord;
 
     namespace Detail {
         struct ReplicationWorldRecord;
@@ -298,6 +299,17 @@ namespace Horo::Network {
         [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareDynamicObjectBatch(
             const ReplicationWorldWorkRequest &request, std::span<const ReplicationDynamicSceneObject> added,
             std::span<const Runtime::EntityRef> retired) const;
+        /**
+         * @brief Prepares the mappings that publish with one client Scene group.
+         * @param request Exact client Scene, session, structural phase and cancellation.
+         * @param spawn Retained authenticated spawn record, also used to verify exact retirement.
+         * @param members Full detached group in the verified cooked order, including local-only members.
+         * @param creating True for reconstruction and false for retirement.
+         * @return A detached mapping candidate or the typed admission or mapping error.
+         */
+        [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareReplicaPrefab(
+            const ReplicationWorldWorkRequest &request, const NetworkPrefabLifecycleRecord &spawn,
+            std::span<const Runtime::EntityRef> members, bool creating) const;
 
         /** @brief Acquires an immutable capability only for an active matching world and declared phase. */
         [[nodiscard]] Result<ReplicationWorldReadLease> Acquire(const ReplicationWorldWorkRequest &request) const;
@@ -343,10 +355,15 @@ namespace Horo::Network {
         [[nodiscard]] Result<void> RequireWorldIdentity(Runtime::SceneRuntimeId scene, NetworkSessionGeneration session) const;
         [[nodiscard]] Result<void> RequireActive(Runtime::SceneRuntimeId scene, NetworkSessionGeneration session) const;
         /** @brief Validates structural mapping admission before allocating a detached copy. */
-        [[nodiscard]] Result<void> ValidateObjectBatch(const ReplicationWorldWorkRequest &request) const;
+        [[nodiscard]] Result<void> ValidateObjectBatch(const ReplicationWorldWorkRequest &request,
+                                                       ReplicationWorldCapability capability) const;
         /** @brief Captures the exact authority indexes and tombstones after batch admission. */
-        [[nodiscard]] Result<NetworkObjectMapping> CopyMappingForBatch(const ReplicationWorldWorkRequest &request, std::size_t added,
-                                                                       std::size_t retired) const;
+        [[nodiscard]] Result<NetworkObjectMapping> CopyMappingForBatch(
+            const ReplicationWorldWorkRequest &request, std::size_t added, std::size_t retired,
+            ReplicationWorldCapability capability = ReplicationWorldCapability::PublishAuthority) const;
+        /** @brief Applies replica additions or verifies and retires the exact previously published rows. */
+        [[nodiscard]] static Result<void> ApplyReplicaPrefab(NetworkObjectMapping &mapping, const NetworkPrefabLifecycleRecord &spawn,
+                                                             std::span<const Runtime::EntityRef> members, bool creating);
         /** @brief Assigns dynamic rows and one common identity for a prepared Prefab group. */
         [[nodiscard]] static Result<void> AddDynamicObjects(NetworkObjectMapping &mapping,
                                                             std::span<const ReplicationDynamicSceneObject> added);

@@ -1,4 +1,5 @@
 #include "Horo/Network/NetworkErrors.h"
+#include "Horo/Network/NetworkPrefabLifecycle.h"
 #include "Horo/Network/ReplicationWorldLifecycle.h"
 #include "Horo/Prefab/PreparedPrefabSpawn.h"
 #include "PrefabAtomicOwnerTestSupport.h"
@@ -6,6 +7,26 @@
 namespace Horo::Application::PrefabAtomicTest {
 #if HORO_TEST_PHYSICS_NATIVE
     namespace {
+        /** @brief Maps exact authority objects through the client Scene publication callback. */
+        class ReplicaGroupPublication final : public Runtime::SceneGroupPublication {
+        public:
+            ReplicaGroupPublication(Network::ReplicationWorldLifecycle &world, Network::NetworkPrefabLifecycleRecord spawn)
+                : world_(world), spawn_(std::move(spawn)) {}
+
+            Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(const Runtime::RuntimeSceneView &scene,
+                                                                               std::span<const Runtime::EntityRef> members,
+                                                                               bool creating) const override {
+                const Network::ReplicationWorldWorkRequest work{.scene = scene.RuntimeId(),
+                                                                .session = spawn_.session,
+                                                                .phase = Runtime::RuntimePhase::CommitDeferredLifecycleChanges};
+                return world_.PrepareReplicaPrefab(work, spawn_, members, creating);
+            }
+
+        private:
+            Network::ReplicationWorldLifecycle &world_;
+            Network::NetworkPrefabLifecycleRecord spawn_;
+        };
+
         /** @brief Issues network identities for Scene handles in the verified cooked recipe order. */
         class NetworkGroupPublication final : public Runtime::SceneGroupPublication {
         public:
@@ -125,6 +146,77 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(fixture.Count() == 1);
             CHECK(fixture.Bodies() == 0);
             CHECK(fixture.ai.Snapshot().Value().Agents().size() == 1);
+        }
+
+        TEST_CASE("Cooked replica spawn and despawn publish exact authority mappings without a gameplay request",
+                  "[prefab][integration][atomic][network]") {
+            auto world = Network::ReplicationWorldLifecycle::Create().Value();
+            Fixture fixture;
+            const auto scene = fixture.scenes.ActiveScene()->RuntimeId();
+            const auto epoch = Network::ReplicationAuthorityEpoch::Create(17).Value();
+            const auto session = Network::NetworkSessionGeneration::Create(6).Value();
+            const Network::ReplicationWorldActivationDescriptor descriptor{scene, session, epoch,
+                                                                           Network::ReplicationExecutionRole::AutonomousClient};
+            REQUIRE(world.Stage(descriptor).HasValue());
+            REQUIRE(world.CommitAtSafePoint(scene, session).HasValue());
+            const auto schema = Network::ReplicationSchemaId::Create(7).Value();
+            const auto submit = [&](std::uint32_t generation, Assets::AssetId asset, const CancellationToken &cancellation) {
+                const auto object = Network::NetworkObjectId::Create(epoch, 5, generation).Value();
+                const Network::NetworkPrefabLifecycleRecord record{session, object,
+                                                                   Network::NetworkPrefabSpawnRecord{{asset, fixture.artifact, 2},
+                                                                                                     {{1, object, schema, {1, 0}}}}};
+                return fixture.gameplay->SpawnReplicaPrefab({.source = {asset, fixture.artifact, fixture.target}},
+                                                            std::make_shared<const ReplicaGroupPublication>(world, record), cancellation);
+            };
+            const auto mapped = [&] {
+                return world
+                    .AcquireFor({scene, session, Runtime::RuntimePhase::NetworkPoll},
+                                Network::ReplicationWorldCapability::ApplyAuthoritativeState)
+                    .Value();
+            };
+            using enum Prefab::PrefabSpawnState;
+            const auto sceneCancellation = fixture.cancellation.Token();
+            const auto unknown = submit(3, Assets::AssetId::FromBytes({9}), sceneCancellation);
+            REQUIRE(unknown.HasError());
+            CHECK(unknown.ErrorValue().code.Value() == Prefab::PrefabErrors::AssetNotFound.code.Value());
+            CancellationSource cancel;
+            const auto cancelled = submit(3, fixture.asset, cancel.Token()).Value();
+            cancel.RequestCancellation();
+            fixture.AwaitState(cancelled, Cancelled);
+            CHECK(fixture.Count() == 1);
+            const auto created = submit(3, fixture.asset, sceneCancellation).Value();
+            CHECK(mapped().Mapping().Entries().empty());
+            fixture.AwaitState(created, Committed);
+            const auto instance = created.Spawned().Value();
+            const auto active = mapped();
+            const auto records = active.Mapping().Entries();
+            REQUIRE(records.size() == 1);
+            CHECK(records.front().object.Generation() == 3);
+            CHECK(fixture.scenes.ActiveScene()->Get(records.front().entity).Value().parent == instance.Root());
+
+            const auto duplicate = submit(3, fixture.asset, sceneCancellation).Value();
+            fixture.AwaitState(duplicate, Failed);
+            REQUIRE(duplicate.Failure());
+            CHECK(duplicate.Failure()->code.Value() == Network::NetworkErrors::NetworkObjectMappingConflict.code.Value());
+            CHECK(fixture.Count() == 3);
+            const auto removal = fixture.gameplay->DespawnReplicaPrefab(instance, fixture.cancellation.Token()).Value();
+            fixture.AwaitState(removal, Committed);
+            CHECK(mapped().Mapping().Entries().empty());
+            CHECK(fixture.Count() == 1);
+            const auto stale = submit(3, fixture.asset, sceneCancellation).Value();
+            fixture.AwaitState(stale, Failed);
+            REQUIRE(stale.Failure());
+            CHECK(stale.Failure()->code.Value() == Network::NetworkErrors::NetworkObjectMappingUnknown.code.Value());
+            CHECK(fixture.Count() == 1);
+
+            const auto replacement = submit(6, fixture.asset, sceneCancellation).Value();
+            fixture.AwaitState(replacement, Committed);
+            const auto staleRemoval = fixture.gameplay->DespawnReplicaPrefab(instance, sceneCancellation);
+            if (staleRemoval.HasValue())
+                fixture.AwaitState(staleRemoval.Value(), Failed);
+            const auto next = mapped();
+            REQUIRE(next.Mapping().Entries().size() == 1);
+            CHECK(next.Mapping().Entries().front().object.Generation() == 6);
         }
 
     }  // namespace

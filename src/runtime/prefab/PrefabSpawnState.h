@@ -70,6 +70,7 @@ namespace Horo::Prefab::Detail {
                                                                              shutdown only borrows it. */
         std::vector<Assets::AssetId> lineage;
         std::string creator;
+        std::shared_ptr<const Runtime::SceneGroupPublication> replicaPublication;
 
         /** @brief Adopts exactly the real receipt's complete group using capacity reserved before queue admission. */
         void PublishCreatedGroup() noexcept {
@@ -209,12 +210,12 @@ namespace Horo::Prefab::Detail {
         /** @brief Checks finite request/observation capacities and overflow-safe
          * scheduling before allocation. */
         [[nodiscard]] Result<void> Admit(const std::uint64_t due, const CancellationToken &scope, const CancellationToken &cancellation,
-                                         bool *overflow = nullptr) {
+                                         bool *overflow = nullptr, bool replica = false) {
             if (auto valid = Check(); valid.HasError())
                 return valid;
             if (scope.IsCancellationRequested() || cancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(PrefabErrors::Cancelled));
-            if (!ValidDue(due))
+            if (!ValidDue(due) && !(replica && due == 0 && tick == 0))
                 return Result<void>::Failure(MakeError(PrefabErrors::AdmissionRejected, "Invalid bounded prefab safe-point tick."));
             std::erase_if(retained, [](const auto &entry) {
                 return entry.expired();
@@ -356,9 +357,11 @@ namespace Horo::Prefab::Detail {
         /** @brief Retains the admitted request only after its real asynchronous load is accepted. */
         Result<PrefabOperation> QueueSpawn(const PrefabSpawnRequest &request, const std::uint64_t scopeId, const CancellationToken &scope,
                                            const CancellationToken &cancellation, const std::span<const Assets::AssetId> lineage,
-                                           std::string_view creator, PrefabMetricOperation &attempt) {
+                                           std::string_view creator, PrefabMetricOperation &attempt,
+                                           std::shared_ptr<const Runtime::SceneGroupPublication> replica) {
             auto operation = std::make_shared<PrefabSpawnOperation>(cancellation);
             operation->creator = creator;
+            operation->replicaPublication = std::move(replica);
             operation->scope = scopeId;
             operation->scopeCancellation = scope;
             operation->due = request.notBeforeTick;
@@ -381,11 +384,12 @@ namespace Horo::Prefab::Detail {
          * data or queuing structural work. */
         [[nodiscard]] Result<PrefabOperation> Spawn(const PrefabSpawnRequest &request, const std::uint64_t scopeId,
                                                     const CancellationToken &scope, const CancellationToken &cancellation,
-                                                    const std::span<const Assets::AssetId> lineage, std::string_view creator) {
+                                                    const std::span<const Assets::AssetId> lineage, std::string_view creator,
+                                                    std::shared_ptr<const Runtime::SceneGroupPublication> replica = {}) {
             PrefabMetricOperation attempt{metrics, PrefabMetricPhase::Spawn};
             bool overflow{};
             auto result = [&]() {
-                if (auto valid = Admit(request.notBeforeTick, scope, cancellation, &overflow); valid.HasError())
+                if (auto valid = Admit(request.notBeforeTick, scope, cancellation, &overflow, replica != nullptr); valid.HasError())
                     return Result<PrefabOperation>::Failure(valid.ErrorValue());
                 if (auto valid = ValidateSpawnLineage(request, lineage); valid.HasError())
                     return Result<PrefabOperation>::Failure(valid.ErrorValue());
@@ -393,7 +397,7 @@ namespace Horo::Prefab::Detail {
                     return Result<PrefabOperation>::Failure(valid.ErrorValue());
                 if (auto valid = ValidateSpawnInputs(request); valid.HasError())
                     return Result<PrefabOperation>::Failure(valid.ErrorValue());
-                return QueueSpawn(request, scopeId, scope, cancellation, lineage, creator, attempt);
+                return QueueSpawn(request, scopeId, scope, cancellation, lineage, creator, attempt, std::move(replica));
             }();
             if (result.HasError()) {
                 if (overflow)
@@ -408,7 +412,7 @@ namespace Horo::Prefab::Detail {
          * module scope. */
         [[nodiscard]] Result<PrefabOperation> Despawn(const PrefabInstance &instance, const std::uint64_t due, const std::uint64_t scopeId,
                                                       const CancellationToken &scope, const CancellationToken &cancellation) {
-            if (auto valid = Admit(due, scope, cancellation); valid.HasError())
+            if (auto valid = Admit(due, scope, cancellation, nullptr, scopeId == 0); valid.HasError())
                 return Result<PrefabOperation>::Failure(valid.ErrorValue());
             if (!instance.state_ || instance.state_->identity != identity || instance.state_->scope != scopeId ||
                 instance.state_->entities.empty() || instance.Root().runtime != scene)
@@ -440,7 +444,7 @@ namespace Horo::Prefab::Detail {
         /** @brief Reserves exact durable identity/lease metadata before the canonical
          * structural queue accepts a group. */
         Result<void> StagePersistence(PrefabSpawnOperation &operation, std::span<const Runtime::RuntimeComponentSet> projected) const {
-            if (!persistence)
+            if (!persistence || operation.replicaPublication)
                 return Result<void>::Success();
             auto prepared =
                 persistence->PrepareSpawn(*operation.preparedTemplate, operation.request, projected, operation.lineage, operation.creator);
@@ -455,6 +459,10 @@ namespace Horo::Prefab::Detail {
 
         /** @brief Binds the exact cooked occurrence before handing off to the Scene transaction. */
         Result<void> BindGroupPublication(PrefabSpawnOperation &operation, std::span<const Runtime::RuntimeComponentSet> projected) const {
+            if (operation.replicaPublication) {
+                operation.prepared->publication = std::move(operation.replicaPublication);
+                return Result<void>::Success();
+            }
             if (!groupPublicationOwner)
                 return Result<void>::Success();
             auto bound = groupPublicationOwner->Bind(*operation.preparedTemplate, operation.request, projected, operation.creator);

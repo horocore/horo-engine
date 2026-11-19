@@ -56,6 +56,10 @@ namespace Horo::Network {
         /** @brief Delegates the client Scene safe-point transfer to its exact published world. */
         [[nodiscard]] Result<std::vector<NetworkPrefabLifecycleRecord>> TakePrefab(Runtime::SceneRuntimeId scene,
                                                                                    Runtime::RuntimePhase phase);
+        /** @brief Resolves prepared replica bindings only against the currently admitted client. */
+        [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareClientPrefab(
+            Runtime::SceneRuntimeId scene, const NetworkPrefabLifecycleRecord &spawn, std::span<const Runtime::EntityRef> members,
+            bool creating, const CancellationToken &cancellation) const;
         /** @brief Authorize non-Control dispatch against the same live peer and published local world. */
         [[nodiscard]] Result<void> AdmitWorldDispatch(ConnectionHandle connection, NetworkOperationGeneration generation,
                                                       const PeerSessionLifecycle &peer, std::uint64_t nowTick) const;

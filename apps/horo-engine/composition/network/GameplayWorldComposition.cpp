@@ -274,6 +274,23 @@ namespace Horo::Application::Internal {
         return CreateServiceBacked(scenes, templates, &world, sceneGeneration, selection, nullptr, &character, &prepared);
     }
 
+    /** @copydoc GameplayWorldComposition::SpawnReplicaPrefab */
+    Result<Prefab::PrefabOperation> GameplayWorldComposition::SpawnReplicaPrefab(
+        Prefab::PrefabSpawnRequest request, std::shared_ptr<const Runtime::SceneGroupPublication> publication,
+        const CancellationToken &cancellation) const {
+        if (!prefabs_)
+            return Result<Prefab::PrefabOperation>::Failure(MakeError(Prefab::PrefabErrors::AdmissionRejected));
+        return prefabs_->SpawnReplica(std::move(request), std::move(publication), cancellation);
+    }
+
+    /** @copydoc GameplayWorldComposition::DespawnReplicaPrefab */
+    Result<Prefab::PrefabOperation> GameplayWorldComposition::DespawnReplicaPrefab(const Prefab::PrefabInstance &instance,
+                                                                                   const CancellationToken &cancellation) const {
+        if (!prefabs_)
+            return Result<Prefab::PrefabOperation>::Failure(MakeError(Prefab::PrefabErrors::AdmissionRejected));
+        return prefabs_->DespawnReplica(instance, cancellation);
+    }
+
     /** @copydoc GameplayWorldComposition::BindPrefab */
     Result<void> GameplayWorldComposition::BindPrefab(const GameplayWorldSelection &selection, Runtime::RuntimeSceneService &scenes,
                                                       Runtime::SceneRuntimeId scene, Prefab::PrefabTemplateProvider *templates,

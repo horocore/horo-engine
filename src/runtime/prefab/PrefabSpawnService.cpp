@@ -290,6 +290,26 @@ namespace Horo::Prefab {
         return Result<Context>::Success(std::move(context));
     }
 
+    /** @copydoc PrefabSpawnService::SpawnReplica */
+    Result<PrefabOperation> PrefabSpawnService::SpawnReplica(PrefabSpawnRequest request,
+                                                             std::shared_ptr<const Runtime::SceneGroupPublication> publication,
+                                                             const CancellationToken &cancellation) const {
+        if (auto valid = state_->Check(); valid.HasError())
+            return Result<PrefabOperation>::Failure(valid.ErrorValue());
+        if (!publication)
+            return Result<PrefabOperation>::Failure(MakeError(PrefabErrors::AdmissionRejected));
+        request.notBeforeTick = state_->tick;
+        return state_->Spawn(request, 0, {}, cancellation, {}, {}, std::move(publication));
+    }
+
+    /** @copydoc PrefabSpawnService::DespawnReplica */
+    Result<PrefabOperation> PrefabSpawnService::DespawnReplica(const PrefabInstance &instance,
+                                                               const CancellationToken &cancellation) const {
+        if (auto valid = state_->Check(); valid.HasError())
+            return Result<PrefabOperation>::Failure(valid.ErrorValue());
+        return state_->Despawn(instance, state_->tick, 0, {}, cancellation);
+    }
+
     /** @copydoc PrefabSpawnService::Advance */
     Result<void> PrefabSpawnService::Advance(const std::uint64_t tick) const {
         if (auto valid = state_->Check(); valid.HasError()) {

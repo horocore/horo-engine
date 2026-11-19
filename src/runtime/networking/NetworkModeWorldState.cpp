@@ -300,6 +300,26 @@ namespace Horo::Network::Detail {
         }
     }
 
+    /** @copydoc NetworkModeWorldState::PrepareClientPrefab */
+    Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> NetworkModeWorldState::PrepareClientPrefab(
+        Runtime::SceneRuntimeId scene, const NetworkPrefabLifecycleRecord &spawn, std::span<const Runtime::EntityRef> members,
+        bool creating, const CancellationToken &cancellation) const {
+        using Outcome = Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>;
+        constexpr auto kind = NetworkModeWorldKind::Client;
+        if (!Ready(kind, scene))
+            return Outcome::Failure(MakeError(NetworkErrors::ReplicationWorldUnavailable));
+        if (auto admitted = client_->AdmitGameplay(connection_, peerGeneration_, nowTick_); admitted.HasError())
+            return Outcome::Failure(admitted.ErrorValue());
+        const auto &world = *current_[Index(kind)];
+        if (world.binding.worldSession != spawn.session || world.binding.remoteEpoch != spawn.occurrence.Epoch())
+            return Outcome::Failure(MakeError(NetworkErrors::ReplicationWorldStale));
+        const ReplicationWorldWorkRequest work{.scene = scene,
+                                               .session = spawn.session,
+                                               .phase = Runtime::RuntimePhase::CommitDeferredLifecycleChanges,
+                                               .cancellation = cancellation};
+        return world.lifecycle.PrepareReplicaPrefab(work, spawn, members, creating);
+    }
+
     /** @copydoc NetworkModeWorldState::AcceptTravel */
     Result<void> NetworkModeWorldState::AcceptTravel(const NetworkWorldBindingRecord &record, const InboundMessageContext &context,
                                                      const std::size_t index) {

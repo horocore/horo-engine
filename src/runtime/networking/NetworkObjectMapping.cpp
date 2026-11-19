@@ -89,7 +89,7 @@ namespace Horo::Network {
         return Result<void>::Success();
     }
 
-    Result<void> NetworkObjectMapping::ReconcileSlot(const NetworkObjectMappingEntry &entry) {
+    Result<void> NetworkObjectMapping::ReconcileSlot(const NetworkObjectMappingEntry &entry, RegistrationSequence sequence) {
         const auto found = LowerBound(entry.object.Slot());
         if (found == slots_.end() || found->slot != entry.object.Slot()) {
             if (slots_.size() == maximumSlots_)
@@ -101,18 +101,31 @@ namespace Horo::Network {
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkObjectMappingConflict));
         if (found->generation == std::numeric_limits<std::uint32_t>::max())
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkObjectGenerationExhausted));
-        if (entry.object.Generation() != found->generation + 1)
+        const auto generation = entry.object.Generation();
+        const bool current =
+            sequence == RegistrationSequence::ExactSuccessor ? generation == found->generation + 1 : generation > found->generation;
+        if (!current)
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkObjectMappingUnknown));
-        found->generation = entry.object.Generation();
+        found->generation = generation;
         found->live = entry;
         return Result<void>::Success();
     }
 
     /** @copydoc NetworkObjectMapping::Register */
     Result<void> NetworkObjectMapping::Register(const NetworkObjectMappingEntry &entry) {
+        return RegisterWithSequence(entry, RegistrationSequence::ExactSuccessor);
+    }
+
+    /** @copydoc NetworkObjectMapping::RegisterReplica */
+    Result<void> NetworkObjectMapping::RegisterReplica(const NetworkObjectMappingEntry &entry) {
+        return RegisterWithSequence(entry, RegistrationSequence::NewerReplica);
+    }
+
+    /** @brief Validates and updates both indexes without allocating. */
+    Result<void> NetworkObjectMapping::RegisterWithSequence(const NetworkObjectMappingEntry &entry, RegistrationSequence sequence) {
         if (const auto valid = ValidateRegistration(entry); valid.HasError())
             return valid;
-        if (const auto reconciled = ReconcileSlot(entry); reconciled.HasError())
+        if (const auto reconciled = ReconcileSlot(entry, sequence); reconciled.HasError())
             return reconciled;
         const auto entity = LowerBound(entry.entity);
         entityIndex_.emplace(entity, entry.entity, entry.object);

@@ -215,6 +215,10 @@ namespace Horo::Network {
 
     private:
         friend class ReplicationWorldLifecycle;
+        enum class RegistrationSequence {
+            ExactSuccessor,
+            NewerReplica
+        };
 
         /** @brief Clones live indexes and tombstones into detached capacity for an owner transaction. */
         [[nodiscard]] Result<NetworkObjectMapping> CloneForPublication() const;
@@ -244,7 +248,10 @@ namespace Horo::Network {
         [[nodiscard]] std::vector<EntityRecord>::iterator LowerBound(Runtime::EntityRef entity) noexcept;
         [[nodiscard]] std::vector<EntityRecord>::const_iterator LowerBound(Runtime::EntityRef entity) const noexcept;
         [[nodiscard]] Result<void> ValidateRegistration(const NetworkObjectMappingEntry &entry) const;
-        [[nodiscard]] Result<void> ReconcileSlot(const NetworkObjectMappingEntry &entry);
+        /** @brief Applies the exact authority generation even when unsent intermediate occurrences were skipped. */
+        [[nodiscard]] Result<void> RegisterReplica(const NetworkObjectMappingEntry &entry);
+        [[nodiscard]] Result<void> RegisterWithSequence(const NetworkObjectMappingEntry &entry, RegistrationSequence sequence);
+        [[nodiscard]] Result<void> ReconcileSlot(const NetworkObjectMappingEntry &entry, RegistrationSequence sequence);
         [[nodiscard]] Result<void> RequireActive() const;
 
         ReplicationAuthorityEpoch epoch_;

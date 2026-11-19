@@ -56,6 +56,10 @@ namespace Horo::Network::Detail {
         /** @brief Transfer staged work only to the current client Scene at its structural safe point. */
         [[nodiscard]] Result<std::vector<NetworkPrefabLifecycleRecord>> TakePrefab(Runtime::SceneRuntimeId scene,
                                                                                    Runtime::RuntimePhase phase);
+        /** @brief Prepares the actual client group only while its authenticated world is published. */
+        [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareClientPrefab(
+            Runtime::SceneRuntimeId scene, const NetworkPrefabLifecycleRecord &spawn, std::span<const Runtime::EntityRef> members,
+            bool creating, const CancellationToken &cancellation) const;
         /** @brief Commit detached initial candidates only at the real canonical safe point. */
         [[nodiscard]] Result<void> Commit(Runtime::RuntimePhase phase);
         /** @brief Revoke a terminal client before world dispatch, retaining the server independently. */
