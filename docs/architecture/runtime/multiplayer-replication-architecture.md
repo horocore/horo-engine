@@ -533,7 +533,11 @@ truth. Replace the complete coordinator when schemas, codecs, owner modules or
 the target set change, closing the old generation before admitting the new one.
 
 `SceneReplicationCommitSource` is the concrete typed Scene adapter for declared
-translation fields. The host passes the actual complete Scene command transaction
+translation and rotation fields. A rotation declaration binds all four quaternion
+components. Capture normalizes the committed rotation, and replica application
+validates and normalizes the complete value before staging the Scene command.
+A partial or non-normalizable rotation cannot publish, and a translation-only
+update keeps the current rotation. The host passes the actual complete Scene command transaction
 to `CommitSimulationTick`, then calls `CaptureAfterCommit` at `NetworkFlush`.
 The latter derives its tick from the successful transaction, rather than taking
 an independently supplied tick. Its ordinary RuntimeScene view revision fences
@@ -545,7 +549,7 @@ NetworkApi remains Scene-implementation neutral.
 
 The configured headless authority keeps its existing Scene transaction path.
 Its optional public transform policy names an exact installed schema and version
-and a complete set of floating-point field-to-translation bindings. The host
+and a complete set of floating-point field-to-transform bindings. The host
 admits that policy against the selected gameplay generation and creates the
 read-only Scene source with `CreateObserved`. At successful fixed commit the
 same host observes its current Scene with the scheduler's live committed

@@ -14,10 +14,14 @@ namespace Horo::Network {
     enum class SceneReplicationProperty : std::uint8_t {
         TranslationX,
         TranslationY,
-        TranslationZ
+        TranslationZ,
+        RotationX,
+        RotationY,
+        RotationZ,
+        RotationW
     };
 
-    /** @brief Declared FieldId binding to one Scene-owned canonical transform scalar. */
+    /** @brief Declared FieldId binding to one Scene-owned transform scalar. Rotation requires all four components. */
     struct SceneReplicationFieldBinding final {
         FieldId field;
         SceneReplicationProperty property;

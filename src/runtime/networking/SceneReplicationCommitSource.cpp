@@ -1,5 +1,7 @@
 #include "Horo/Network/SceneReplicationCommitSource.h"
 
+#include "SceneReplicationTransformFields.h"
+
 #include <algorithm>
 #include <bitset>
 #include <limits>
@@ -14,11 +16,15 @@ namespace Horo::Network {
                 return Bindings::Failure(MakeError(ReplicationCaptureErrors::Invalid));
             std::vector<SceneReplicationFieldBinding> bindings{fields.begin(), fields.end()};
             std::ranges::sort(bindings, {}, &SceneReplicationFieldBinding::field);
+            std::uint8_t properties{};
             for (std::size_t index{}; index < bindings.size(); ++index) {
-                if (!bindings[index].field.IsValid() || bindings[index].property > SceneReplicationProperty::TranslationZ ||
+                if (!bindings[index].field.IsValid() || bindings[index].property > SceneReplicationProperty::RotationW ||
                     (index > 0 && bindings[index - 1].field == bindings[index].field))
                     return Bindings::Failure(MakeError(ReplicationCaptureErrors::Invalid));
+                properties |= Detail::TransformPropertyBit(bindings[index].property);
             }
+            if (!Detail::HasCompleteRotation(properties))
+                return Bindings::Failure(MakeError(ReplicationCaptureErrors::Invalid));
             return Bindings::Success(std::move(bindings));
         }
 
@@ -30,7 +36,7 @@ namespace Horo::Network {
 
         /** @brief The explicit observed Scene projection owns one field per supported transform axis. */
         bool UniqueObservedAxes(std::span<const SceneReplicationFieldBinding> validated) {
-            std::bitset<static_cast<std::size_t>(SceneReplicationProperty::TranslationZ) + 1> used;
+            std::bitset<Detail::SceneTransformPropertyCount> used;
             for (const auto &binding : validated) {
                 const auto axis = static_cast<std::size_t>(binding.property);
                 if (used.test(axis))
@@ -178,21 +184,17 @@ namespace Horo::Network {
         const auto entity = committed_.Get(*reading_);
         if (entity.HasError())
             return Result<void>::Failure(entity.ErrorValue());
-        using enum SceneReplicationProperty;
-        const Math::Vec3 translation = entity.Value().localTransform->translation;
+        auto transform = *entity.Value().localTransform;
+        if (std::ranges::any_of(fields_, [](const auto &field) {
+            return field.property >= SceneReplicationProperty::RotationX;
+        })) {
+            const auto rotation = transform.rotation.TryNormalized();
+            if (rotation.HasError())
+                return Result<void>::Failure(rotation.ErrorValue());
+            transform.rotation = rotation.Value();
+        }
         for (const auto &field : fields_) {
-            double value{};
-            switch (field.property) {
-                case TranslationX:
-                    value = translation.x;
-                    break;
-                case TranslationY:
-                    value = translation.y;
-                    break;
-                case TranslationZ:
-                    value = translation.z;
-                    break;
-            }
+            const double value = Detail::TransformScalar(transform, field.property);
             if (const auto written = writer.Write(field.field, value); written.HasError())
                 return written;
         }

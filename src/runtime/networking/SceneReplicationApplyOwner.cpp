@@ -1,5 +1,7 @@
 #include "Horo/Network/SceneReplicationApplyOwner.h"
 
+#include "SceneReplicationTransformFields.h"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -64,19 +66,7 @@ namespace Horo::Network {
             const auto *number = std::get_if<double>(&value);
             if (!number || !std::isfinite(*number) || std::abs(*number) > std::numeric_limits<float>::max())
                 return Result<void>::Failure(MakeError(ReplicationStateErrors::Invalid));
-            const auto scalar = static_cast<float>(*number);
-            using enum SceneReplicationProperty;
-            switch (property) {
-                case TranslationX:
-                    transform.translation.x = scalar;
-                    break;
-                case TranslationY:
-                    transform.translation.y = scalar;
-                    break;
-                case TranslationZ:
-                    transform.translation.z = scalar;
-                    break;
-            }
+            Detail::TransformScalar(transform, property) = static_cast<float>(*number);
             return Result<void>::Success();
         }
 
@@ -99,22 +89,47 @@ namespace Horo::Network {
         Result<std::vector<SceneReplicationFieldBinding>> ValidateBindings(ReplicationSchemaId schema, ReplicationSchemaVersion version,
                                                                            std::span<const SceneReplicationFieldBinding> fields) {
             using Bindings = Result<std::vector<SceneReplicationFieldBinding>>;
-            if (!schema.IsValid() || !version.IsValid() || fields.empty() || fields.size() > 3)
+            if (!schema.IsValid() || !version.IsValid() || fields.empty() || fields.size() > Detail::SceneTransformPropertyCount)
                 return Bindings::Failure(MakeError(ReplicationStateErrors::Invalid));
             std::vector<SceneReplicationFieldBinding> bindings{fields.begin(), fields.end()};
             std::ranges::sort(bindings, {}, &SceneReplicationFieldBinding::field);
-            std::byte properties{};
+            std::uint8_t properties{};
             for (std::size_t index{}; index < bindings.size(); ++index) {
                 const auto &field = bindings[index];
-                if (!field.field.IsValid() || field.property > SceneReplicationProperty::TranslationZ ||
+                if (!field.field.IsValid() || field.property > SceneReplicationProperty::RotationW ||
                     (index > 0 && bindings[index - 1].field == field.field))
                     return Bindings::Failure(MakeError(ReplicationStateErrors::Invalid));
-                const auto bit = std::byte{1} << static_cast<unsigned int>(field.property);
-                if ((properties & bit) != std::byte{})
+                const auto bit = Detail::TransformPropertyBit(field.property);
+                if ((properties & bit) != 0)
                     return Bindings::Failure(MakeError(ReplicationStateErrors::Invalid));
                 properties |= bit;
             }
+            if (!Detail::HasCompleteRotation(properties))
+                return Bindings::Failure(MakeError(ReplicationStateErrors::Invalid));
             return Bindings::Success(std::move(bindings));
+        }
+
+        /** @brief Applies projected fields and validates any complete rotation before staging a Scene command. */
+        Result<void> ProjectFields(Math::Transform &transform, const ReplicationDecodedState &state,
+                                   std::span<const SceneReplicationFieldBinding> bindings) {
+            std::uint8_t properties{};
+            for (const auto &field : state.Fields()) {
+                const auto binding = std::ranges::find(bindings, field.field, &SceneReplicationFieldBinding::field);
+                if (binding == bindings.end())
+                    return Result<void>::Failure(MakeError(ReplicationStateErrors::Invalid));
+                if (const auto set = SetField(transform, binding->property, field.value); set.HasError())
+                    return set;
+                properties |= Detail::TransformPropertyBit(binding->property);
+            }
+            if (!Detail::HasCompleteRotation(properties))
+                return Result<void>::Failure(MakeError(ReplicationStateErrors::Invalid));
+            if ((properties & Detail::SceneRotationProperties) != 0) {
+                const auto rotation = transform.rotation.TryNormalized();
+                if (rotation.HasError())
+                    return Result<void>::Failure(MakeError(ReplicationStateErrors::Invalid));
+                transform.rotation = rotation.Value();
+            }
+            return Result<void>::Success();
         }
     }  // namespace
 
@@ -191,13 +206,8 @@ namespace Horo::Network {
             if (current.HasError())
                 return Result<std::unique_ptr<IReplicationApplyCandidate>>::Failure(current.ErrorValue());
             auto transform = std::move(current).Value();
-            for (const auto &field : update.state.Fields()) {
-                const auto binding = std::ranges::find(fields_, field.field, &SceneReplicationFieldBinding::field);
-                if (binding == fields_.end())
-                    return Result<std::unique_ptr<IReplicationApplyCandidate>>::Failure(MakeError(ReplicationStateErrors::Invalid));
-                if (const auto set = SetField(transform, binding->property, field.value); set.HasError())
-                    return Result<std::unique_ptr<IReplicationApplyCandidate>>::Failure(set.ErrorValue());
-            }
+            if (const auto projected = ProjectFields(transform, update.state, fields_); projected.HasError())
+                return Result<std::unique_ptr<IReplicationApplyCandidate>>::Failure(projected.ErrorValue());
             replacements.emplace_back(update.mapping.entity, transform, update.cancellation, update.worldCancellation);
         }
         return Result<std::unique_ptr<IReplicationApplyCandidate>>::Success(
