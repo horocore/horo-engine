@@ -75,3 +75,22 @@ benchmark validation and fixture setup happen outside the measured intervals.
 Use these measurements for scheduler overhead. Frame impact requires a host
 running streaming in its normal frame loop, including provider and native
 retirement work.
+
+### Qualification sample
+
+On Linux x86-64 in Docker Desktop on a Ryzen 7 9800X3D, GNU 15.2.0 ran
+512 measured quanta per queue depth on revision `5833c4efd`. Each profile
+admitted 448 operations, selected the oldest admissible operation 112 times
+and denied 64 reservations at capacity.
+
+| Queue depth | Debug eligible selection p95 | Release eligible selection p95 | Debug completion p95 | Release completion p95 |
+| --- | ---: | ---: | ---: | ---: |
+| 16 | 3.938 µs | 0.461 µs | 0.641 µs | 0.050 µs |
+| 128 | 105.708 µs | 4.399 µs | 1.062 µs | 0.060 µs |
+
+On the same revision, a separate headless Debug build compiled and linked
+with `-fsanitize=address,undefined` and `-fno-omit-frame-pointer`. All 435
+`HoroWorldStreamingTests` cases passed with leak detection and halt-on-error
+enabled. The scope includes pressured admission, stale worker completions,
+cancellation, reservation release and shutdown. Frame timing with live
+streaming and native retirement requires separate measurement.
