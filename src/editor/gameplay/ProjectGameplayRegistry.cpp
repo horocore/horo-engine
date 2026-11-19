@@ -228,7 +228,7 @@ namespace Horo::Editor {
         auto result = std::make_unique<ProjectGameplayRegistry>(ConstructionToken{}, std::move(retirements));
         result->DiscoverNativeModule(projectRoot);
         result->DiscoverLuaPrograms(projectRoot);
-        if (const auto catalog = result->RefreshDecisionAuthoringCatalog(); catalog.HasError())
+        if (const auto catalog = result->RefreshDecisionAuthoringCatalog({}); catalog.HasError())
             result->diagnostics_.emplace_back(ProjectLayout::ScriptsRoot(projectRoot), catalog.ErrorValue());
         result->CaptureReplicationMetadata(projectRoot);
         return result;
@@ -247,7 +247,7 @@ namespace Horo::Editor {
         }
         result->LoadNativeModule(projectRoot, artifact.path, artifact.moduleId, artifact.descriptorRevision);
         result->InstallLuaGeneration(luaGeneration);
-        if (const auto catalog = result->RefreshDecisionAuthoringCatalog(); catalog.HasError())
+        if (const auto catalog = result->RefreshDecisionAuthoringCatalog({}); catalog.HasError())
             result->diagnostics_.emplace_back(ProjectLayout::ScriptsRoot(projectRoot), catalog.ErrorValue());
         result->CaptureReplicationMetadata(projectRoot);
         return result;
@@ -260,7 +260,7 @@ namespace Horo::Editor {
         auto result = std::make_unique<ProjectGameplayRegistry>(ConstructionToken{}, std::move(retirements));
         result->DiscoverNativeModule(projectRoot);
         result->InstallLuaGeneration(luaGeneration);
-        if (const auto catalog = result->RefreshDecisionAuthoringCatalog(); catalog.HasError())
+        if (const auto catalog = result->RefreshDecisionAuthoringCatalog({}); catalog.HasError())
             result->diagnostics_.emplace_back(ProjectLayout::ScriptsRoot(projectRoot), catalog.ErrorValue());
         result->CaptureReplicationMetadata(projectRoot);
         return result;
@@ -467,11 +467,24 @@ namespace Horo::Editor {
     }
 
     /** @copydoc ProjectGameplayRegistry::BuildDecisionAuthoringGeneration */
-    Result<std::shared_ptr<const AI::DecisionNodeGeneration>> ProjectGameplayRegistry::BuildDecisionAuthoringGeneration() const {
+    Result<std::shared_ptr<const AI::DecisionNodeGeneration>> ProjectGameplayRegistry::BuildDecisionAuthoringGeneration(
+        const ProjectPackageDecisionNodeSource &packages) const {
         using Generation = Result<std::shared_ptr<const AI::DecisionNodeGeneration>>;
         try {
             std::vector<std::shared_ptr<const AI::DecisionNodeGeneration>> parents;
-            parents.reserve(luaDecisionPrograms_.size() + 1);
+            if (packages) {
+                auto acquired = packages();
+                if (acquired.HasError())
+                    return Generation::Failure(acquired.ErrorValue());
+                parents = std::move(acquired).Value();
+                if (parents.size() > AI::DecisionNodeGeneration::MaximumNodes)
+                    return Generation::Failure(MakeError(AI::AIErrors::DecisionAssetLimitExceeded));
+                if (std::ranges::any_of(parents, [](const auto &parent) {
+                    return !parent || !parent->CanAdmit();
+                }))
+                    return Generation::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+            }
+            parents.reserve(parents.size() + luaDecisionPrograms_.size() + static_cast<std::size_t>(nativeDecisionAvailable_));
             if (nativeDecisionAvailable_) {
                 auto native = nativeModule_->AcquireDecisionNodes();
                 if (native.HasError())
@@ -485,7 +498,7 @@ namespace Horo::Editor {
                 parents.push_back(std::move(script).Value());
             }
             if (parents.empty())
-                return Generation::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+                return Generation::Success({});
             if (parents.size() == 1)
                 return Generation::Success(std::move(parents.front()));
             return AI::DecisionNodeGeneration::Compose(parents);
@@ -495,17 +508,28 @@ namespace Horo::Editor {
     }
 
     /** @copydoc ProjectGameplayRegistry::RefreshDecisionAuthoringCatalog */
-    Result<void> ProjectGameplayRegistry::RefreshDecisionAuthoringCatalog() {
-        if (!nativeDecisionAvailable_ && luaDecisionPrograms_.empty())
-            return Result<void>::Success();
-        const auto generation = BuildDecisionAuthoringGeneration();
+    Result<void> ProjectGameplayRegistry::RefreshDecisionAuthoringCatalog(const ProjectPackageDecisionNodeSource &packages) {
+        const auto generation = BuildDecisionAuthoringGeneration(packages);
         if (generation.HasError())
             return Result<void>::Failure(generation.ErrorValue());
+        if (!generation.Value()) {
+            decisionUsageMetadata_.reset();
+            decisionAuthoringGeneration_.reset();
+            return Result<void>::Success();
+        }
         auto metadata = AI::DecisionBlackboardProviderMetadata::Capture(*generation.Value());
         if (metadata.HasError())
             return Result<void>::Failure(metadata.ErrorValue());
         decisionUsageMetadata_ = std::move(metadata).Value();
         decisionAuthoringGeneration_ = generation.Value();
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ProjectGameplayRegistry::ReplacePackageDecisionNodeSource */
+    Result<void> ProjectGameplayRegistry::ReplacePackageDecisionNodeSource(ProjectPackageDecisionNodeSource source) {
+        if (auto refreshed = RefreshDecisionAuthoringCatalog(source); refreshed.HasError())
+            return refreshed;
+        packageDecisionNodes_ = std::move(source);
         return Result<void>::Success();
     }
 
@@ -539,7 +563,7 @@ namespace Horo::Editor {
                 if (ReadLuaSourceStat(entry.source, error) != observed || error)
                     return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
                 auto prior = std::exchange(entry.program, std::move(candidate).Value());
-                if (const auto refreshed = RefreshDecisionAuthoringCatalog(); refreshed.HasError()) {
+                if (const auto refreshed = RefreshDecisionAuthoringCatalog(packageDecisionNodes_); refreshed.HasError()) {
                     entry.program = std::move(prior);
                     return refreshed;
                 }
@@ -645,9 +669,12 @@ namespace Horo::Editor {
             return Result<std::shared_ptr<const AI::DecisionNodeGeneration>>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
         if (auto current = decisionAuthoringGeneration_.lock(); current && current->CanAdmit())
             return Result<std::shared_ptr<const AI::DecisionNodeGeneration>>::Success(std::move(current));
-        auto built = BuildDecisionAuthoringGeneration();
-        if (built.HasValue())
+        auto built = BuildDecisionAuthoringGeneration(packageDecisionNodes_);
+        if (built.HasValue()) {
+            if (!built.Value())
+                return Result<std::shared_ptr<const AI::DecisionNodeGeneration>>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
             decisionAuthoringGeneration_ = built.Value();
+        }
         return built;
     }
 

@@ -77,6 +77,14 @@ namespace Horo::Packages {
          */
         [[nodiscard]] Result<PackageDecisionNodeGeneration> AcquireDecisionNodes(const HoroPackageId &package, std::string_view moduleId,
                                                                                  std::uint64_t generation) const;
+        /** @brief Acquires the Decision contributions of exact current roles published by the supplied lifecycle.
+         * @param lifecycle Same owner-lane lifecycle that published the selected runtime module activations.
+         * @return Bounded contributions with real revocable generation leases, or the original typed read failure.
+         * @details Installs, rejected candidates, unrelated roles and withdrawn activations contribute nothing.
+         * Release returned leases before asking the package lifecycle to finalize retirement.
+         */
+        [[nodiscard]] Result<std::vector<PackageDecisionNodeGeneration>> AcquireActiveDecisionNodes(
+            const PackageLifecycleService &lifecycle) const;
         /** @brief Acquires custom senses from the selected verified native role, retaining actual owner revocation.
          * @param package Exact installed package. @param module Selected gameplay module. @param generation Current role generation.
          * @return Locked package attribution and native sense lease, or typed stale/unavailable failure.

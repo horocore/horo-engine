@@ -1,9 +1,11 @@
 #include "Horo/Packages/GameplayPackageModuleHost.h"
 
+#include "Horo/Packages/PackageLifecycle.h"
 #include "Horo/Packages/PackageLifecycleErrors.h"
 #include "PackageContentStaging.h"
 
 #include <algorithm>
+#include <new>
 #include <thread>
 
 namespace Horo::Packages {
@@ -277,6 +279,44 @@ namespace Horo::Packages {
         const auto &locked = state->verified.Package().lock;
         return Result<PackageDecisionNodeGeneration>::Success(
             {package, locked.version, locked.artifactDigest, generation, std::move(nodes).Value()});
+    }
+
+    /** @copydoc GameplayPackageModuleHost::AcquireActiveDecisionNodes */
+    Result<std::vector<PackageDecisionNodeGeneration>> GameplayPackageModuleHost::AcquireActiveDecisionNodes(
+        const PackageLifecycleService &lifecycle) const {
+        using Contributions = Result<std::vector<PackageDecisionNodeGeneration>>;
+        if (std::this_thread::get_id() != impl_->owner)
+            return Contributions::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+        const auto active = lifecycle.Active();
+        std::vector<PackageDecisionNodeGeneration> contributions;
+        if (!active)
+            return Contributions::Success(std::move(contributions));
+        try {
+            for (const auto &report : active->modules) {
+                if (report.role != Extensions::ExtensionModuleRole::RuntimeParticipant || report.outcome != PackageModuleOutcome::Active ||
+                    report.host != Identity() || report.generation != active->generation)
+                    continue;
+                const auto state = FindRole(impl_->roles, impl_->owner, report.package, report.module, report.generation);
+                if (!state || state->verified.Install() != active->install)
+                    return Contributions::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+                const auto &proof = state->verified.Activation().Activation();
+                if (!std::ranges::any_of(active->activations, [&proof](const auto &lease) {
+                    return lease.IsUsable() && &lease.Activation() == &proof;
+                }))
+                    return Contributions::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+                auto nodes = state->selectedModule->AcquireDecisionNodes();
+                if (nodes.HasError())
+                    return Contributions::Failure(nodes.ErrorValue());
+                if (!nodes.Value()->Contracts().empty()) {
+                    const auto &locked = state->verified.Package().lock;
+                    contributions.emplace_back(report.package, locked.version, locked.artifactDigest, report.generation,
+                                               std::move(nodes).Value());
+                }
+            }
+            return Contributions::Success(std::move(contributions));
+        } catch (const std::bad_alloc &) {
+            return Contributions::Failure(MakeError(PackageLifecycleErrors::StorageFailed));
+        }
     }
 
     /** @copydoc GameplayPackageModuleHost::AcquirePerceptionSenses */

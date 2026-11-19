@@ -190,6 +190,7 @@ namespace Horo::Packages::Tests::Support {
             {Parse<HoroPackageId>("com.example.transaction"), Parse<PackagePath>("extensions/native/extension.json")}};
         std::vector<std::string> loadedIds;
         std::vector<std::string> retiredIds;
+        std::string fixtureLibraryPath;
         unsigned loads{};
         bool failLoad{};
         bool cancelOnLoad{};
@@ -214,7 +215,7 @@ namespace Horo::Packages::Tests::Support {
                     service->Shutdown();
                 if (failLoad)
                     return Result<std::unique_ptr<Platform::DynamicLibrary>>::Failure(MakeError(PackageLifecycleErrors::StorageFailed));
-                auto library = Platform::LoadDynamicLibrary(path);
+                auto library = Platform::LoadDynamicLibrary(fixtureLibraryPath.empty() ? path : fixtureLibraryPath);
                 if (library.HasError())
                     return library;
                 const auto descriptor = nlohmann::json::parse(FileBytes(std::filesystem::path{path}.parent_path() / "extension.json"));

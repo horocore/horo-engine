@@ -139,7 +139,8 @@ namespace Horo::Packages {
          * @param install Expected stable service instance. @return Whether this lifecycle borrows that exact authority. */
         [[nodiscard]] bool UsesInstallService(const PackageInstallService &install) const noexcept;
 
-        /** @brief Returns the last fully published composition. @return Owning immutable snapshot or empty. */
+        /** @brief Returns the last fully published composition on the lifecycle owner lane.
+         * @return Owning immutable snapshot or empty before publication, after withdrawal, or off the owner lane. */
         [[nodiscard]] std::shared_ptr<const PackageActivationSnapshot> Active() const;
         /** @brief Returns the attempt journal and drain state. @return Owner-lane inspection copy. */
         [[nodiscard]] PackageLifecycleState State() const;

@@ -2,6 +2,7 @@
 #include "GameplayRetirementTestSupport.h"
 #include "GameplayRuntimeTestSupport.h"
 #include "Horo/AI/BlackboardUsageInspection.h"
+#include "Horo/AI/DecisionNodeRegistration.h"
 #include "Horo/Application/ProjectSourceDocument.h"
 #include "Horo/Gameplay/BehaviorRuntime.h"
 #include "Horo/Gameplay/GameModuleRetirement.h"
@@ -10,6 +11,8 @@
 #include "editor/gameplay/ProjectGameplayRegistry.h"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
@@ -200,6 +203,62 @@ TEST_CASE("project gameplay registry contributes Lua Decision scripts and safely
         CHECK(registry->DecisionUsageMetadata() == original);
         CHECK(first.Value()->CanUse());
     }
+}
+
+TEST_CASE("project Decision catalog admits and withdraws the exact package leaves at the owner boundary", "[editor][decision][packages]") {
+    TemporaryProject project;
+    PrepareNativeLuaProject(project);
+    auto registry = Editor::ProjectGameplayRegistry::Discover(project.root);
+    RequireValidRegistry(*registry);
+    const auto original = registry->DecisionUsageMetadata();
+    REQUIRE(original);
+
+    const auto type = AI::DecisionNodeTypeId::Create(903).Value();
+    AI::DecisionNodeContract contract;
+    contract.role = AI::DecisionNodeRole::Task;
+    contract.descriptor = {type,
+                           {AI::DecisionDescriptorSourceKind::Package, AI::DecisionProviderId::Create(904).Value(), 1},
+                           {},
+                           {"extensions/native/fixture", 0, 0}};
+    auto granted = std::make_shared<std::atomic_bool>(true);
+    using Leaves = std::vector<std::shared_ptr<const AI::DecisionNodeGeneration>>;
+    const auto source = [node = AI::DecisionNodeRegistration{std::move(contract), {}}, granted] {
+        auto captured = AI::DecisionNodeGeneration::Capture(std::array{node}, granted);
+        if (captured.HasError())
+            return Result<Leaves>::Failure(captured.ErrorValue());
+        return Result<Leaves>::Success({std::move(captured).Value()});
+    };
+    REQUIRE(registry->ReplacePackageDecisionNodeSource(source).HasValue());
+    const auto merged = registry->DecisionUsageMetadata();
+    REQUIRE(merged);
+    CHECK(merged->Descriptors().size() == original->Descriptors().size() + 1);
+    CHECK(std::ranges::find(merged->Descriptors(), type, &AI::DecisionNodeDescriptor::type) != merged->Descriptors().end());
+    const auto generation = registry->AcquireDecisionAuthoringGeneration();
+    REQUIRE(generation.HasValue());
+    CHECK(generation.Value()->CanAdmit());
+
+    const auto conflicting = registry->ReplacePackageDecisionNodeSource([&source] {
+        auto acquired = source();
+        if (acquired.HasError())
+            return acquired;
+        auto leaves = std::move(acquired).Value();
+        const auto duplicate = leaves.front();
+        leaves.push_back(duplicate);
+        return Result<Leaves>::Success(std::move(leaves));
+    });
+    REQUIRE(conflicting.HasError());
+    CHECK(conflicting.ErrorValue().code.Value() == AI::AIErrors::DecisionAssetDescriptorAmbiguous.code.Value());
+    CHECK(registry->DecisionUsageMetadata() == merged);
+
+    granted->store(false);
+    CHECK_FALSE(generation.Value()->CanAdmit());
+    CHECK(registry->AcquireDecisionAuthoringGeneration().HasError());
+    REQUIRE(registry->ReplacePackageDecisionNodeSource({}).HasValue());
+    const auto withdrawn = registry->DecisionUsageMetadata();
+    REQUIRE(withdrawn);
+    CHECK(withdrawn->Descriptors().size() == original->Descriptors().size());
+    CHECK(std::ranges::find(withdrawn->Descriptors(), type, &AI::DecisionNodeDescriptor::type) == withdrawn->Descriptors().end());
+    REQUIRE(registry->AcquireDecisionAuthoringGeneration().HasValue());
 }
 
 TEST_CASE("project gameplay registry merges a fingerprinted native module with Lua behaviors") {

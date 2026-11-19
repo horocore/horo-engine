@@ -205,15 +205,22 @@ TEST_CASE("Optional SDK failure preserves an actual native backend in the same v
     });
     REQUIRE(runtime != active->modules.end());
     CHECK(runtime->diagnostic.has_value());
+    const auto decisionNodes = fixture.gameplay->AcquireActiveDecisionNodes(*fixture.base.service);
+    REQUIRE(decisionNodes.HasValue());
+    CHECK(decisionNodes.Value().empty());
 }
 
 TEST_CASE("Verified package decision nodes retain exact locked version and real generated factories", "[packages][decision-node]") {
     GameplayFixture fixture;
+    const auto installed = fixture.gameplay->AcquireActiveDecisionNodes(*fixture.base.service);
+    REQUIRE(installed.HasValue());
+    CHECK(installed.Value().empty());
     REQUIRE(fixture.Activate().HasValue());
     const auto generation = fixture.base.service->Active()->generation;
-    auto acquired = fixture.gameplay->AcquireDecisionNodes(fixture.enabled.package, "game.tests", generation);
+    auto acquired = fixture.gameplay->AcquireActiveDecisionNodes(*fixture.base.service);
     REQUIRE(acquired.HasValue());
-    auto contribution = std::move(acquired).Value();
+    REQUIRE(acquired.Value().size() == 1);
+    auto contribution = std::move(std::move(acquired).Value().front());
     CHECK(contribution.package == fixture.enabled.package);
     CHECK(contribution.version == fixture.base.install.ActiveGraph()->packages[0].lock.version);
     CHECK(contribution.artifact == fixture.base.install.ActiveGraph()->packages[0].lock.artifactDigest);
@@ -221,8 +228,17 @@ TEST_CASE("Verified package decision nodes retain exact locked version and real 
     REQUIRE(contribution.nodes->Contracts().size() == 1);
     CHECK(contribution.nodes->Contracts()[0].descriptor.type.Value() == 201);
     CHECK(contribution.nodes->Contracts()[0].descriptor.origin.kind == AI::DecisionDescriptorSourceKind::Package);
+    CHECK(contribution.nodes->HasImplementation(contribution.nodes->Contracts()[0].descriptor.type));
     CHECK(fixture.gameplay->AcquireDecisionNodes(fixture.enabled.package, "game.tests", generation + 1).HasError());
-    fixture.base.service->Shutdown();
+    GameplayFixture foreign;
+    REQUIRE(foreign.Activate().HasValue());
+    CHECK(foreign.base.service->Active()->generation == generation);
+    CHECK(fixture.gameplay->AcquireActiveDecisionNodes(*foreign.base.service).HasError());
+
+    REQUIRE(fixture.base.service->ActivateModules({}, PackageActivationBoundary::Quiescent, fixture.base.cancellation.Token()).HasValue());
+    const auto withdrawn = fixture.gameplay->AcquireActiveDecisionNodes(*fixture.base.service);
+    REQUIRE(withdrawn.HasValue());
+    CHECK(withdrawn.Value().empty());
     CHECK_FALSE(contribution.nodes->CanAdmit());
     CHECK(fixture.retirement->Close().HasError());
     contribution.nodes.reset();
