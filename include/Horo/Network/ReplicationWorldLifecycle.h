@@ -292,6 +292,9 @@ namespace Horo::Network {
         [[nodiscard]] bool HasStagedCandidate() const noexcept;
 
     private:
+        /** @brief Checks whether another detached world occurrence may be prepared. */
+        [[nodiscard]] Result<void> ValidateStage(const ReplicationWorldActivationDescriptor &descriptor,
+                                                 const CancellationToken &cancellation) const;
         ReplicationWorldLifecycle(ReplicationWorldLimits limits, std::vector<std::shared_ptr<Detail::ReplicationWorldRecord>> retired,
                                   NetworkMetrics *metrics) noexcept;
         [[nodiscard]] bool CanRetireActive() const noexcept;

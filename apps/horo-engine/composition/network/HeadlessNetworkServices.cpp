@@ -120,6 +120,30 @@ namespace Horo::Application::Internal {
                 return Row::Failure(MakeError(Network::NetworkErrors::ReplicationWorldStale));
             return Row::Success({*entity, binding});
         }
+
+        /** @brief Copies the finite admitted projection without retaining a Scene borrow. */
+        Result<Network::NetworkAuthoredSceneProjection> ProjectAuthoredObjects(const Runtime::RuntimeSceneView &scene,
+                                                                               std::span<const Network::NetworkObjectProvenance> bindings,
+                                                                               std::span<const Network::ReplicationDeclaration> inventory,
+                                                                               const Network::ReplicationDescriptorSnapshot &installed,
+                                                                               const CancellationToken &cancellation) {
+            using Outcome = Result<Network::NetworkAuthoredSceneProjection>;
+            if (bindings.size() > Network::ReplicationWorldLimits{}.maximumObjects)
+                return Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationWorldCapacityExceeded));
+            try {
+                Network::NetworkAuthoredSceneProjection projection{.cancellation = cancellation};
+                projection.objects.reserve(bindings.size());
+                for (const auto &binding : bindings) {
+                    auto row = ResolveAuthoredObject(scene, binding, inventory, installed);
+                    if (row.HasError())
+                        return Outcome::Failure(row.ErrorValue());
+                    projection.objects.push_back(std::move(row).Value());
+                }
+                return Outcome::Success(std::move(projection));
+            } catch (const std::bad_alloc &) {
+                return Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationWorldCapacityExceeded));
+            }
+        }
     }  // namespace
 
     /** @copydoc HeadlessNetworkDetail::WorldService::CaptureAuthoredScene */
@@ -133,26 +157,11 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationWorldUnavailable));
         if (record_->sceneCancellation.IsCancellationRequested())
             return Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationWorldCancelled));
-        const auto &bindings = owners_->configured->replicatedSceneObjects;
-        if (bindings.size() > Network::ReplicationWorldLimits{}.maximumObjects)
-            return Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationWorldCapacityExceeded));
         const auto *installed = record_->activeGameplay ? record_->activeGameplay->ReplicationDescriptors() : nullptr;
         if (!owners_->replicationAdmission || !installed)
             return Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationDescriptorIncompatible));
-        const auto &inventory = owners_->replicationAdmission->inventory.declarations;
-        try {
-            Network::NetworkAuthoredSceneProjection projection{.cancellation = record_->sceneCancellation};
-            projection.objects.reserve(bindings.size());
-            for (const auto &binding : bindings) {
-                auto row = ResolveAuthoredObject(*scene, binding, inventory, *installed);
-                if (row.HasError())
-                    return Outcome::Failure(row.ErrorValue());
-                projection.objects.push_back(std::move(row).Value());
-            }
-            return Outcome::Success(std::move(projection));
-        } catch (const std::bad_alloc &) {
-            return Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationWorldCapacityExceeded));
-        }
+        return ProjectAuthoredObjects(*scene, owners_->configured->replicatedSceneObjects,
+                                      owners_->replicationAdmission->inventory.declarations, *installed, record_->sceneCancellation);
     }
 
     namespace {

@@ -204,18 +204,8 @@ namespace Horo::Network {
     Result<void> ReplicationWorldLifecycle::StageAuthoredScene(const ReplicationWorldActivationDescriptor &descriptor,
                                                                const std::span<const ReplicationAuthoredSceneObject> objects,
                                                                const CancellationToken &cancellation) {
-        using enum ReplicationWorldLifecycleState;
-        if (state_ == ShuttingDown || state_ == Closed)
-            return Failure<void>(NetworkErrors::ReplicationWorldShuttingDown);
-        if (staged_)
-            return Failure<void>(NetworkErrors::ReplicationWorldUnavailable);
-        if (cancellation.IsCancellationRequested())
-            return Failure<void>(NetworkErrors::ReplicationWorldCancelled);
-        if (!descriptor.IsValid())
-            return Failure<void>(NetworkErrors::ReplicationWorldInvalid);
-        if ((active_ && SameWorld(active_->descriptor, descriptor.scene, descriptor.session)) || ContainsWorld(retired_, descriptor))
-            return Failure<void>(NetworkErrors::ReplicationWorldStale);
-
+        if (auto valid = ValidateStage(descriptor, cancellation); valid.HasError())
+            return valid;
         const auto capabilities = CapabilitiesForRole(descriptor.role);
         if (capabilities.HasError())
             return Result<void>::Failure(capabilities.ErrorValue());
@@ -231,6 +221,23 @@ namespace Horo::Network {
         } catch (const std::bad_alloc &) {
             return Failure<void>(NetworkErrors::ReplicationWorldCapacityExceeded);
         }
+    }
+
+    /** @copydoc ReplicationWorldLifecycle::ValidateStage */
+    Result<void> ReplicationWorldLifecycle::ValidateStage(const ReplicationWorldActivationDescriptor &descriptor,
+                                                          const CancellationToken &cancellation) const {
+        using enum ReplicationWorldLifecycleState;
+        if (state_ == ShuttingDown || state_ == Closed)
+            return Failure<void>(NetworkErrors::ReplicationWorldShuttingDown);
+        if (staged_)
+            return Failure<void>(NetworkErrors::ReplicationWorldUnavailable);
+        if (cancellation.IsCancellationRequested())
+            return Failure<void>(NetworkErrors::ReplicationWorldCancelled);
+        if (!descriptor.IsValid())
+            return Failure<void>(NetworkErrors::ReplicationWorldInvalid);
+        if ((active_ && SameWorld(active_->descriptor, descriptor.scene, descriptor.session)) || ContainsWorld(retired_, descriptor))
+            return Failure<void>(NetworkErrors::ReplicationWorldStale);
+        return Result<void>::Success();
     }
 
     /** @copydoc ReplicationWorldLifecycle::CommitAtSafePoint(Runtime::SceneRuntimeId, NetworkSessionGeneration) */
