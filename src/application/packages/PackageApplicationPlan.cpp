@@ -1,3 +1,4 @@
+#include "Horo/Packages/PackageLifecycleErrors.h"
 #include "PackageApplicationInternal.h"
 
 #include <limits>
@@ -40,6 +41,17 @@ namespace Horo::Application {
         if (const auto lane = impl_->CheckLane(); lane.HasError())
             return Result<std::optional<PackageOperationSnapshot>>::Failure(lane.ErrorValue());
         return Result<std::optional<PackageOperationSnapshot>>::Success(impl_->operation);
+    }
+
+    /** @copydoc PackageApplication::ActivationTrustRequired */
+    Result<bool> PackageApplication::ActivationTrustRequired() const {
+        if (const auto lane = impl_->CheckLane(); lane.HasError())
+            return Result<bool>::Failure(lane.ErrorValue());
+        const auto &current = impl_->operation;
+        const auto &required = Packages::PackageLifecycleErrors::TrustRequired;
+        return Result<bool>::Success(!impl_->closing && current && current->kind == PackageOperationKind::Activate &&
+                                     current->outcome == PackageOperationOutcome::Failed && current->diagnostic &&
+                                     ErrorChainContains(*current->diagnostic, required.domain, required.code));
     }
 
     /** @copydoc PackageApplication::Plan */

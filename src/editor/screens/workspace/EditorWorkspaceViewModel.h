@@ -981,6 +981,7 @@ namespace Horo::Editor {
         std::vector<DecisionTaskChoice> decisionTaskPaletteChoices; /**< All observed contracts, including unavailable authoring roles. */
         std::vector<DecisionTaskChoice> behaviorTreeTaskChoices;
         std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> decisionProviderMetadata; /**< Detached current Project catalog. */
+        bool decisionPackageActivationTrustRequired{}; /**< Current package activation failure from the exact Project package owner. */
         std::vector<DecisionGraphWorkspaceDocument> decisionGraphDocuments;
         std::vector<PCGWorkspaceDocument> pcgDocuments;
         std::vector<PCGPaletteEntry> pcgPalette;

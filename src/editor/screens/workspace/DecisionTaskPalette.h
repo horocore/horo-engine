@@ -30,6 +30,9 @@ namespace Horo::Editor {
     [[nodiscard]] const BlackboardSchemaDocumentSnapshot *FindSavedDecisionSchema(const EditorWorkspaceViewModel &model,
                                                                                   const AI::DecisionGraphSource &source);
 
+    /** @brief Shows the host's exact current activation denial without adding a descriptor or granting trust. */
+    void DrawDecisionPackageTrustRequired(bool required, const EditorGuiContext &context);
+
     /** @brief Exact current family choices and optional read-only compatibility evidence. */
     struct DecisionTaskPaletteCatalog final {
         std::span<const DecisionTaskChoice> choices;

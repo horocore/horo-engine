@@ -12,6 +12,7 @@
 #include "editor/screens/NavigationErrors.h"
 #include "editor/screens/workspace/panels/input_mapping/InputGyroscopeEditor.h"
 
+#include <algorithm>
 #include <imgui.h>
 
 namespace Horo::Editor::WorkspaceScreenDetail {
@@ -123,12 +124,20 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                              .stringPayload = std::string{}});
             controller_->ReconcileAudioPreview();
             controller_->UpdatePlayPresentation(dt);
-            if (packages_.pump) {
+            if (packages_.pump || packages_.activationTrustRequired) {
                 const auto &model = controller_->ViewModel();
+                const auto &root = controller_->ProjectRoot();
                 const auto boundary = model.playState == EditorPlayState::Idle || model.playState == EditorPlayState::Failed
                                           ? Packages::PackageActivationBoundary::Quiescent
                                           : Packages::PackageActivationBoundary::Running;
-                static_cast<void>(packages_.pump(controller_->ProjectRoot(), boundary));
+                if (packages_.pump)
+                    static_cast<void>(packages_.pump(root, boundary));
+                const auto active = model.workspacePanelHost.ActiveDocument();
+                const bool decisionActive = std::ranges::any_of(model.decisionGraphDocuments, [active](const auto &document) {
+                    return document.identity.instance == active;
+                });
+                controller_->SetDecisionPackageActivationTrustRequired(decisionActive && packages_.activationTrustRequired &&
+                                                                       packages_.activationTrustRequired(root));
             }
             controller_->UpdateNavigationSettingsProjection();
             controller_->UpdateUiCanvasResources();

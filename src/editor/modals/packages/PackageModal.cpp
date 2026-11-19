@@ -3,6 +3,7 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "Horo/Packages/PackageLifecycleErrors.h"
 
 namespace Horo::Editor {
     /** @copydoc PackageModal::PackageModal */
@@ -158,6 +159,9 @@ namespace Horo::Editor {
     /** @brief Shows bounded machine-readable causes alongside localized guidance, without private paths or error text. */
     void PackageModal::DrawDiagnostic(const Error &error) const {
         Ui::ErrorText(Text("operation_failed").c_str(), context_.theme.fonts);
+        const auto &required = Packages::PackageLifecycleErrors::TrustRequired;
+        if (ErrorChainContains(error, required.domain, required.code))
+            Ui::Hint(Text("execution_trust_required").c_str(), context_.theme.fonts);
         const Error *cause = &error;
         for (unsigned depth = 0; cause && depth < 8; ++depth, cause = cause->cause.Get()) {
             if (cause->code.Value().size() <= 256)

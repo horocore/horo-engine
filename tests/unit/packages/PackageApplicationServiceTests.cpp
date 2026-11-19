@@ -113,6 +113,33 @@ namespace Horo::Tests::PackageApplicationService {
             CHECK(fixture.trust.calls == 0);
         }
 
+        TEST_CASE("Package application exposes only current verified execution trust denial evidence",
+                  "[packages][application][activation]") {
+            Fixture fixture{true};
+            const auto installed = fixture.application->Install();
+            REQUIRE(installed.HasValue());
+            REQUIRE(WaitForTerminal(fixture, installed.Value()).outcome == PackageOperationOutcome::Succeeded);
+            CHECK_FALSE(fixture.application->ActivationTrustRequired().Value());
+            const std::array enabled{
+                EnabledPackageExtension{fixture.graph.package, Parse<PackagePath>("extensions/native/extension.json")}};
+            const auto pending = fixture.application->Activate(enabled);
+            REQUIRE(pending.HasValue());
+            CHECK_FALSE(fixture.application->ActivationTrustRequired().Value());
+            const auto outcome = WaitForTerminal(fixture, pending.Value());
+            REQUIRE(outcome.outcome == PackageOperationOutcome::Failed);
+            REQUIRE(outcome.diagnostic);
+            CHECK(outcome.diagnostic->code.Value() == PackageLifecycleErrors::TrustRequired.code.Value());
+            CHECK(fixture.trust.calls == 1);
+            CHECK(fixture.application->ActivationTrustRequired().Value());
+            CHECK_FALSE(fixture.lifecycle->Active());
+
+            const auto replacement = fixture.application->Restore();
+            REQUIRE(replacement.HasValue());
+            CHECK_FALSE(fixture.application->ActivationTrustRequired().Value());
+            CHECK(WaitForTerminal(fixture, replacement.Value()).outcome == PackageOperationOutcome::Succeeded);
+            CHECK_FALSE(fixture.application->ActivationTrustRequired().Value());
+        }
+
         TEST_CASE("Package application Close retains blocked work and leaves borrowed authorities open after cancellation",
                   "[packages][application][shutdown]") {
             Fixture fixture;

@@ -244,6 +244,7 @@ namespace {
                                          "workspace.packages.running",
                                          "workspace.packages.terminal",
                                          "workspace.packages.operation_failed",
+                                         "workspace.packages.execution_trust_required",
                                          "workspace.packages.close",
                                          "workspace.packages.retry",
                                          "workspace.packages.recovery_hint"};

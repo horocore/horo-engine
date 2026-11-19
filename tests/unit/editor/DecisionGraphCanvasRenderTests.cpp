@@ -273,6 +273,23 @@ namespace Horo::Editor {
         CHECK(provider.probe.factories == 0);
     }
 
+    TEST_CASE("Decision package trust feedback is shown only for the current admitted denial evidence",
+              "[unit][editor][decision][palette]") {
+        CanvasFixture fixture;
+        constexpr auto key = "workspace.packages.execution_trust_required";
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({0, 0});
+        ImGui::SetNextWindowSize({195, 240});
+        ImGui::Begin("Decision package trust test", nullptr, ImGuiWindowFlags_NoSavedSettings);
+        DrawDecisionPackageTrustRequired(false, fixture.context);
+        CHECK_FALSE(fixture.labels.Used(key));
+        DrawDecisionPackageTrustRequired(true, fixture.context);
+        CHECK(fixture.labels.Used(key));
+        ImGui::End();
+        ImGui::Render();
+        REQUIRE(ImGui::GetDrawData()->TotalVtxCount > 0);
+    }
+
     TEST_CASE("Decision provider property inspector renders authored typed values and preserves opaque data",
               "[unit][editor][decision][palette]") {
         using namespace AI;

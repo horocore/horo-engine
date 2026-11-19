@@ -24,6 +24,7 @@ namespace Horo::Editor {
         std::function<Result<std::shared_ptr<Application::PackageApplication>>(const std::filesystem::path &)> acquire;
         std::function<Result<void>(const std::filesystem::path &, Packages::PackageActivationBoundary)> pump;
         std::function<Result<void>(const std::filesystem::path &)> retire;
+        std::function<bool(const std::filesystem::path &)> activationTrustRequired; /**< Read-only evidence for the exact project. */
     };
 
     /** @brief Registers the workspace with explicit optional package access; missing access remains unavailable.

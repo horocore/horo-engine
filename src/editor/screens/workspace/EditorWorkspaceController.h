@@ -498,6 +498,12 @@ namespace Horo::Editor {
 
         void ProcessCommand(const EditorWorkspaceViewCommandData &cmd);
         void UpdateFps(float fps);
+
+        /** @brief Sets only the read-only package execution evidence accompanying the Decision catalog. */
+        void SetDecisionPackageActivationTrustRequired(bool required) noexcept {
+            m_viewModel.decisionPackageActivationTrustRequired = required;
+        }
+
         /** @brief Replaces the Content Browser projection when a newer registry revision is published.
          */
         void RefreshAssets(const Assets::AssetRegistrySnapshot &assetRegistry);

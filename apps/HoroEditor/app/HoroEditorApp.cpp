@@ -3657,6 +3657,8 @@ namespace Horo::Editor {
                 return packages->PumpProject(root, boundary);
             }, .retire = [&packages](const std::filesystem::path &root) {
                 return packages->Retire(root);
+            }, .activationTrustRequired = [&packages](const std::filesystem::path &root) {
+                return packages->ActivationTrustRequired(root);
             }});
             EditorNavigationBakeHost navigationBakes{p.operationServices.operationStore};
             const auto navigationBakeAccess = navigationBakes.Access();

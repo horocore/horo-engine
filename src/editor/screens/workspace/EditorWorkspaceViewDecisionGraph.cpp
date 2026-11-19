@@ -721,6 +721,15 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc DrawDecisionPackageTrustRequired */
+    void DrawDecisionPackageTrustRequired(bool required, const EditorGuiContext &context) {
+        if (required) {
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x,
+                            context.localization.Get("editor", "workspace.packages.execution_trust_required"), Theme::Warn(),
+                            context.theme.fonts);
+        }
+    }
+
     /** @copydoc FindSavedDecisionSchema */
     const BlackboardSchemaDocumentSnapshot *FindSavedDecisionSchema(const EditorWorkspaceViewModel &model,
                                                                     const AI::DecisionGraphSource &source) {
@@ -993,6 +1002,7 @@ namespace Horo::Editor {
             Ui::WrappedText(ImGui::GetContentRegionAvail().x, value, color, m_context.theme.fonts);
         };
         label(text(summary.familyLabel), Theme::Text());
+        DrawDecisionPackageTrustRequired(viewModel.decisionPackageActivationTrustRequired, m_context);
         label(std::format("{} {}", text("workspace.decision_graph.nodes"), summary.nodes), Theme::Text());
         if (summary.unknown)
             label(std::format("{} {}", text("workspace.decision_graph.unknown"), summary.unknown), Theme::Muted());

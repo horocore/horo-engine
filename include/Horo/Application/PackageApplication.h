@@ -148,6 +148,11 @@ namespace Horo::Application {
         /** @brief Returns the current operation projection without inventing an operation or mutating authorities.
          * @return Current retained operation, empty before admission, or typed owner-lane failure. */
         [[nodiscard]] Result<std::optional<PackageOperationSnapshot>> Current() const;
+        /** @brief Observes whether the current package activation attempt was denied execution trust.
+         * @return True only when the terminal activation failure carries the typed package lifecycle trust-required cause,
+         * or an owner-lane failure. Does not copy operation reports or change activation.
+         */
+        [[nodiscard]] Result<bool> ActivationTrustRequired() const;
         /** @brief Returns the immutable precomputed plan, with evidence status separate from actual installed/active state.
          * @return Owning read-only plan or typed missing-evidence/owner-lane failure. */
         [[nodiscard]] Result<std::shared_ptr<const PackagePlanSnapshot>> Plan() const;

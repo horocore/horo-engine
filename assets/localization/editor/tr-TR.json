@@ -4013,6 +4013,9 @@
     "workspace.packages.operation_failed": {
       "text": "İşlem reddedildi veya başarısız oldu. Türlü tanı bilgisi uygulama hizmetinde saklanır."
     },
+    "workspace.packages.execution_trust_required": {
+      "text": "Kurulu paket için geçerli bir çalıştırma onayı bulunmadığından etkinleştirme reddedildi."
+    },
     "workspace.packages.close": {
       "text": "Kapat"
     },

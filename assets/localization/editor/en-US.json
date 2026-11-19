@@ -4013,6 +4013,9 @@
     "workspace.packages.operation_failed": {
       "text": "The operation was rejected or failed. Its typed diagnostic is retained by the application service."
     },
+    "workspace.packages.execution_trust_required": {
+      "text": "Package activation was denied because the installed package has no matching execution approval."
+    },
     "workspace.packages.close": {
       "text": "Close"
     },

@@ -158,6 +158,17 @@ namespace Horo::Application::Internal {
         return impl_->current->InstalledRecord();
     }
 
+    /** @copydoc PackageProjectHost::ActivationTrustRequired */
+    bool PackageProjectHost::ActivationTrustRequired(const std::filesystem::path &root) const {
+        if (Generation() == 0 || root != impl_->policy.projectRoot || !impl_->current || impl_->Admission().HasError())
+            return false;
+        const auto application = impl_->current->Application();
+        if (application.HasError())
+            return false;
+        const auto required = application.Value()->ActivationTrustRequired();
+        return required.HasValue() && required.Value();
+    }
+
     /** @copydoc PackageProjectHost::Close */
     Result<void> PackageProjectHost::Close() {
         if (auto valid = impl_->Lane(); valid.HasError())

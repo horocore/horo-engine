@@ -57,6 +57,11 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<std::shared_ptr<const Packages::VerifiedPackageInstallRecord>> InstalledRecord(
             const std::filesystem::path &root, std::uint64_t generation) const;
+        /** @brief Observes a trust denial only for the exact current admitted project binding.
+         * @param root Exact bound project. @return True for an evidenced denial, false for unavailable or other outcomes.
+         * @details Does not acquire, bind, load, or pump a project session.
+         */
+        [[nodiscard]] bool ActivationTrustRequired(const std::filesystem::path &root) const;
         /** @brief Cancels admission and drains completed callbacks without waiting or destroying borrowed services.
          * @return Success once every owned callback/session is closed, otherwise typed busy. */
         [[nodiscard]] Result<void> Close();
