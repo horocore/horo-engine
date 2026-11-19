@@ -751,9 +751,8 @@ namespace Horo::Render {
                 uiPaintDevice_ = {.device = device_, .incarnation = incarnation, .limits = properties.limits};
                 uiPaintFormats_.fill(0);
                 const bool reconstruction = computeRole && graph_.SupportsNativeReconstruction();
-                for (const auto format :
-                     {Rgba8Unorm, Rgba16Float, Depth24Stencil8, Depth32Float, Depth32FloatStencil8, R16Float, R32Float, Rg16Float,
-                      Rg32Float, Rgba32Float}) {
+                for (const auto format : {Rgba8Unorm, Rgba16Float, Depth24Stencil8, Depth32Float, Depth32FloatStencil8, R16Float, R32Float,
+                                          Rg16Float, Rg32Float, Rgba32Float}) {
                     using enum RenderTextureUsage;
                     VkFormatProperties native{};
                     query(device, Detail::VulkanResourceConversion::TextureFormat(format), &native);

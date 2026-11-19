@@ -193,8 +193,8 @@ namespace Horo::Render::Detail {
 
     /** @copydoc VulkanGraphRuntime::RealizeUiPaintKernel */
     Result<std::shared_ptr<IResidentUiPaintKernel>> VulkanGraphRuntime::RealizeUiPaintKernel(
-        const CookedUiPaintKernel &cooked, const VulkanUiPaintDevice &device,
-        const VulkanUiPaintCommands::FormatFeatures &formats, const VulkanShaderRuntime::Resolver &resolve) {
+        const CookedUiPaintKernel &cooked, const VulkanUiPaintDevice &device, const VulkanUiPaintCommands::FormatFeatures &formats,
+        const VulkanShaderRuntime::Resolver &resolve) {
         using Outcome = Result<std::shared_ptr<IResidentUiPaintKernel>>;
         if (const auto access = impl_->Access(); access.HasError())
             return Outcome::Failure(access.ErrorValue());

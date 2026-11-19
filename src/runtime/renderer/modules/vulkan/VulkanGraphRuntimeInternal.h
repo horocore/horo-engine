@@ -311,7 +311,7 @@ namespace Horo::Render::Detail {
                                                         const RenderGraphMaterialRaster &, VulkanCommandRetention &);
         /** @brief Prepares one exact native UI pass using its real graph-owned white sample and captured release lease. */
         [[nodiscard]] Result<void> PrepareUiPaint(const RenderGraphExecutionRequest &, std::size_t pass, const RenderGraphUiPaint &,
-                                                 VulkanCommandRetention &);
+                                                  VulkanCommandRetention &);
         [[nodiscard]] Result<void> PrepareMaterialDraw(const RenderMaterialDrawInstance &source, MaterialDraw &draw,
                                                        const RenderQueueSubmission &submission, bool depthOnly,
                                                        VulkanCommandRetention &pins);

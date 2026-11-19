@@ -33,10 +33,12 @@ namespace Horo::Render::Detail {
                                                                                  const VulkanShaderRuntime::Resolver &resolve,
                                                                                  const CookedUiPaintKernel &cooked);
         ~VulkanUiPaintKernel() override;
+
         /** @copydoc IResidentUiPaintKernel::RequiresGraphNeutralSample */
         [[nodiscard]] bool RequiresGraphNeutralSample() const noexcept override {
             return true;
         }
+
         VulkanUiPaintKernel(const VulkanUiPaintKernel &) = delete;
         VulkanUiPaintKernel &operator=(const VulkanUiPaintKernel &) = delete;
 

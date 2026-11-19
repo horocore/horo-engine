@@ -43,8 +43,9 @@ namespace Horo::Render {
     }
 
     /** @copydoc UiPaintFrameBufferPool::CreateInternal */
-    Result<std::unique_ptr<UiPaintFrameBufferPool>> UiPaintFrameBufferPool::CreateInternal(
-        RenderFrontend &frontend, UiPaintFrameBudget budget, std::uint32_t slots, const bool exactSceneKernel) {
+    Result<std::unique_ptr<UiPaintFrameBufferPool>> UiPaintFrameBufferPool::CreateInternal(RenderFrontend &frontend,
+                                                                                           UiPaintFrameBudget budget, std::uint32_t slots,
+                                                                                           const bool exactSceneKernel) {
         using Creation = Result<std::unique_ptr<UiPaintFrameBufferPool>>;
         if (const auto admission = frontend.RequireOpenOwner(); admission.HasError())
             return Creation::Failure(admission.ErrorValue());

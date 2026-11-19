@@ -507,7 +507,7 @@ namespace Horo::Render::Test::VfxInstanced {
     private:
         /** @brief Copies exact RGBA8 bytes from their observed native layout and restores that layout. */
         std::vector<std::uint8_t> ReadRgba8Color(const ObservedLoader::Image &image, VkImageLayout layout, VkPipelineStageFlags stage,
-                                                VkAccessFlags access) {
+                                                 VkAccessFlags access) {
             REQUIRE(capture_ == Capture::ViewportColor);
             REQUIRE(image.image);
             REQUIRE(image.format == VK_FORMAT_R8G8B8A8_UNORM);

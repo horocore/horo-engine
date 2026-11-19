@@ -23,17 +23,16 @@ namespace Horo::Render {
         constexpr auto Float = ShaderValueType::Float32;
         constexpr auto Uint = ShaderValueType::Uint32;
         constexpr auto Reserved = offsetof(UiPaintParameters, reserved);
-        constexpr std::array VulkanParameters{
-            ParameterRole{"Extent", Float, 2, offsetof(UiPaintParameters, extent)},
-            ParameterRole{"Opacity", Float, 1, offsetof(UiPaintParameters, opacity)},
-            ParameterRole{"Sampling", Uint, 1, offsetof(UiPaintParameters, sampling)},
-            ParameterRole{"Flags", Uint, 1, offsetof(UiPaintParameters, flags)},
-            ParameterRole{"Reserved0", Uint, 1, Reserved},
-            ParameterRole{"Reserved1", Uint, 1, Reserved + sizeof(std::uint32_t)},
-            ParameterRole{"Reserved2", Uint, 1, Reserved + 2 * sizeof(std::uint32_t)},
-            ParameterRole{"MaskExtent", Float, 2, offsetof(UiPaintParameters, maskExtent)},
-            ParameterRole{"MaskReserved", Uint, 2, offsetof(UiPaintParameters, maskReserved)},
-            ParameterRole{"CornerRadii", Float, 4, offsetof(UiPaintParameters, cornerRadii)}};
+        constexpr std::array VulkanParameters{ParameterRole{"Extent", Float, 2, offsetof(UiPaintParameters, extent)},
+                                              ParameterRole{"Opacity", Float, 1, offsetof(UiPaintParameters, opacity)},
+                                              ParameterRole{"Sampling", Uint, 1, offsetof(UiPaintParameters, sampling)},
+                                              ParameterRole{"Flags", Uint, 1, offsetof(UiPaintParameters, flags)},
+                                              ParameterRole{"Reserved0", Uint, 1, Reserved},
+                                              ParameterRole{"Reserved1", Uint, 1, Reserved + sizeof(std::uint32_t)},
+                                              ParameterRole{"Reserved2", Uint, 1, Reserved + 2 * sizeof(std::uint32_t)},
+                                              ParameterRole{"MaskExtent", Float, 2, offsetof(UiPaintParameters, maskExtent)},
+                                              ParameterRole{"MaskReserved", Uint, 2, offsetof(UiPaintParameters, maskReserved)},
+                                              ParameterRole{"CornerRadii", Float, 4, offsetof(UiPaintParameters, cornerRadii)}};
 
         /** @brief Matches one compiler-reported scalar/vector field with the exact buffered UiPaintParameters ABI. */
         bool VulkanParameterMatches(const ShaderReflectedParameter &actual, const ParameterRole &expected) noexcept {
@@ -47,7 +46,8 @@ namespace Horo::Render {
             if (reflection.parameters.size() != VulkanParameters.size() || reflection.stageInterface.size() != 10)
                 return false;
             for (std::uint32_t index = 0; index < VulkanParameters.size(); ++index) {
-                const auto parameter = std::ranges::find(reflection.parameters, ShaderParameterId{index + 1}, &ShaderReflectedParameter::id);
+                const auto parameter =
+                    std::ranges::find(reflection.parameters, ShaderParameterId{index + 1}, &ShaderReflectedParameter::id);
                 if (parameter == reflection.parameters.end() || !VulkanParameterMatches(*parameter, VulkanParameters[index]))
                     return false;
             }

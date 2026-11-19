@@ -291,7 +291,7 @@ namespace Horo::Render::Detail {
 
     /** @copydoc VulkanGraphRuntime::Impl::PrepareUiPaint */
     Result<void> VulkanGraphRuntime::Impl::PrepareUiPaint(const RenderGraphExecutionRequest &request, const std::size_t index,
-                                                        const RenderGraphUiPaint &paint, VulkanCommandRetention &pins) {
+                                                          const RenderGraphUiPaint &paint, VulkanCommandRetention &pins) {
         const auto *queue = Queue(request.graph.Passes()[index].queue);
         if (!queue || !queue->supportsGraphics || paint.neutralSample != uiPaintNeutral)
             return Result<void>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));

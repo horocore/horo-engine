@@ -364,7 +364,7 @@ namespace {
 
 #include "VulkanReconstructionNativeSmoke.inl"
 #include "VulkanReconstructionSceneHistorySmoke.inl"
+#include "VulkanUiPaintNativeSmoke.inl"
 #include "VulkanVfxGpuNativeSmoke.inl"
 #include "VulkanVfxInstancedNativeSmoke.inl"
-#include "VulkanUiPaintNativeSmoke.inl"
 }  // namespace

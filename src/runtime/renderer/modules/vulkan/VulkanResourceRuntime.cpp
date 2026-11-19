@@ -731,12 +731,12 @@ namespace Horo::Render::Detail {
         if (descriptor.dimension == RenderTextureDimension::TwoD && descriptor.depth == 1 && descriptor.mipCount == 1 &&
             descriptor.sampleCount == 1 && attachment) {
             VkImageViewCreateInfo view{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                                             .image = texture->handle,
-                                             .viewType = descriptor.layerCount == 1 ? VK_IMAGE_VIEW_TYPE_2D : VK_IMAGE_VIEW_TYPE_2D_ARRAY,
-                                             .format = VulkanResourceConversion::TextureFormat(descriptor.format),
-                                             .subresourceRange = {VulkanResourceConversion::Aspect(depth ? RenderTextureAspect::Depth
-                                                                                                          : RenderTextureAspect::Color),
-                                                                  0, 1, 0, descriptor.layerCount}};
+                                       .image = texture->handle,
+                                       .viewType = descriptor.layerCount == 1 ? VK_IMAGE_VIEW_TYPE_2D : VK_IMAGE_VIEW_TYPE_2D_ARRAY,
+                                       .format = VulkanResourceConversion::TextureFormat(descriptor.format),
+                                       .subresourceRange = {VulkanResourceConversion::Aspect(depth ? RenderTextureAspect::Depth
+                                                                                                   : RenderTextureAspect::Color),
+                                                            0, 1, 0, descriptor.layerCount}};
             if (impl_->dispatch.createImageView(impl_->device, &view, nullptr, &texture->colorView) != VK_SUCCESS)
                 return Result<std::uint64_t>::Failure(
                     ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Preparing the native whole graph texture view failed."));

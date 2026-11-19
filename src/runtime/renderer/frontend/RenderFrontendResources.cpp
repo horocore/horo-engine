@@ -130,7 +130,7 @@ namespace Horo::Render {
 
         /** @brief Accepts exact device-proven stencil attachments independently of a primary UI composition capability. */
         [[nodiscard]] constexpr bool AdmitStencilAttachment(const RenderTextureDescriptor &descriptor,
-                                                              const RenderCapabilitySnapshot &support) noexcept {
+                                                            const RenderCapabilitySnapshot &support) noexcept {
             return descriptor.format == RenderTextureFormat::Depth32FloatStencil8 && IsSingleColorTexture(descriptor) &&
                    descriptor.usage == RenderTextureUsage::RenderAttachment && support.IsValid() && support.Supports(descriptor);
         }

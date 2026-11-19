@@ -73,8 +73,8 @@ namespace Horo::Render {
                 const auto pass = builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics);
                 if (pass.HasError())
                     return pass;
-                if (const auto used = builder.AddUsage({pass.Value(), neutralSample_, RenderGraphAccess::Write,
-                                                        RenderGraphUsageKind::ColorAttachment});
+                if (const auto used =
+                        builder.AddUsage({pass.Value(), neutralSample_, RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment});
                     used.HasError())
                     return Result<RenderGraphPassRef>::Failure(used.ErrorValue());
                 slot_.workloads.front() = {pass.Value(), RenderGraphColorAttachment{neutralSample_, {.clearColor = {1, 1, 1, 1}}}};
