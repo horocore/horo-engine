@@ -188,10 +188,18 @@ namespace Horo::Network {
         [[nodiscard]] const ReplicationWorldCapabilities &Capabilities() const noexcept;
         /** @brief Returns the immutable object/entity mapping snapshot. @pre IsValid() is true. */
         [[nodiscard]] const NetworkObjectMappingSnapshot &Mapping() const noexcept;
+
+        /** @brief Returns the structural revision captured with this mapping. @pre IsValid() is true. */
+        [[nodiscard]] std::uint64_t MappingRevision() const noexcept {
+            return mappingRevision_;
+        }
+
         /** @brief Returns the world-revocation cancellation token. */
         [[nodiscard]] CancellationToken Cancellation() const noexcept;
         /** @brief Reports logical revocation; paused worlds remain valid and uncancelled. */
         [[nodiscard]] bool IsRevoked() const noexcept;
+        /** @brief Reports whether the captured mapping revision still describes the live world. */
+        [[nodiscard]] bool HasCurrentMapping() const noexcept;
 
     private:
         friend class ReplicationWorldLifecycle;
@@ -200,6 +208,7 @@ namespace Horo::Network {
 
         std::shared_ptr<const Detail::ReplicationWorldRecord> record_;
         std::optional<NetworkObjectMappingSnapshot> mapping_;
+        std::uint64_t mappingRevision_{};
     };
 
     /**

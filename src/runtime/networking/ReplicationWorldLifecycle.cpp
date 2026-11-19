@@ -242,7 +242,7 @@ namespace Horo::Network {
      * NetworkObjectMappingSnapshot) */
     ReplicationWorldReadLease::ReplicationWorldReadLease(std::shared_ptr<const Detail::ReplicationWorldRecord> record,
                                                          NetworkObjectMappingSnapshot mapping) noexcept
-        : record_(std::move(record)), mapping_(std::move(mapping)) {}
+        : record_(std::move(record)), mapping_(std::move(mapping)), mappingRevision_(record_->mappingRevision.load()) {}
 
     /** @copydoc ReplicationWorldReadLease::~ReplicationWorldReadLease */
     ReplicationWorldReadLease::~ReplicationWorldReadLease() = default;
@@ -275,6 +275,11 @@ namespace Horo::Network {
     /** @copydoc ReplicationWorldReadLease::IsRevoked */
     bool ReplicationWorldReadLease::IsRevoked() const noexcept {
         return !record_ || record_->revoked.load();
+    }
+
+    /** @copydoc ReplicationWorldReadLease::HasCurrentMapping */
+    bool ReplicationWorldReadLease::HasCurrentMapping() const noexcept {
+        return !IsRevoked() && mappingRevision_ == record_->mappingRevision.load();
     }
 
     namespace {

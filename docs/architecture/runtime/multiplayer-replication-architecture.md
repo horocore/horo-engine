@@ -103,6 +103,21 @@ publishing the network world at the structural safe point. During travel,
 provisional pages follow PREPARE and remain private until COMMIT. Cancellation
 or expiry drops the detached candidate and retains the published world.
 
+An embedding host can create `ReplicationInboundApply` in
+`InitialSnapshot` mode after reconstructing the exact authored and dynamic
+inventory. On the authority, `EncodeReplicationInitialState` uses one
+committed mapping and capture tick to encode a complete recipient-specific
+inventory of full records within a total byte budget. The receiving route
+pins its mapping revision and admits reliable full
+records with the initial field projection. Every object must contribute a
+record from the same authority tick. The receiver applies the entire inventory
+through one owner transaction at the structural safe point. An incomplete
+inventory reports pending. A failed transaction discards staged values. The
+successful report includes `initialPublished`, including for an explicitly
+empty inventory. The host can use that receipt to gate gameplay publication.
+Existing callers keep the incremental default. Rebuild native consumers
+against the extended apply report and world lease layouts.
+
 Existing mode services have an empty authored projection by default. A service
 wrapper around an opted-in authority Scene forwards the projection method to
 retain the same declarations. Existing world staging without authored objects

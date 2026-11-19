@@ -55,7 +55,8 @@ namespace Horo::Network {
         std::shared_ptr<const ReplicationSerializerRegistry> serializers, const ReplicationRoleBinding &recipient,
         const ReplicationRecordKind record, const std::uint64_t descriptorGeneration,
         const std::span<const ReplicationStateCustomVisibility> custom, const ReplicationStateCodecLimits &limits) {
-        if (!serializers || !recipient.IsValid() || descriptorGeneration == 0 || !ValidLimits(limits) ||
+        if (!serializers || !recipient.IsValid() || record >= ReplicationRecordKind::Count || descriptorGeneration == 0 ||
+            !ValidLimits(limits) ||
             (recipient.role != ReplicationExecutionRole::AutonomousClient && recipient.role != ReplicationExecutionRole::SimulatedClient))
             return Fail<std::unique_ptr<ReplicationStateCodec>>(ReplicationStateErrors::Invalid);
         const auto schema = serializers->Schemas()->Find(recipient.schema);
@@ -94,8 +95,8 @@ namespace Horo::Network {
             }
             const auto fingerprint = ComputeSha256(identity);
             return Result<std::unique_ptr<ReplicationStateCodec>>::Success(
-                std::make_unique<ReplicationStateCodec>(ConstructionKey{}, std::move(serializers), recipient, descriptorGeneration, limits,
-                                                        std::move(projection), fingerprint));
+                std::make_unique<ReplicationStateCodec>(ConstructionKey{}, std::move(serializers), recipient, record, descriptorGeneration,
+                                                        limits, std::move(projection), fingerprint));
         } catch (const std::bad_alloc &) {
             return Fail<std::unique_ptr<ReplicationStateCodec>>(ReplicationStateErrors::Capacity);
         }
@@ -103,10 +104,10 @@ namespace Horo::Network {
 
     /** @copydoc ReplicationStateCodec::ReplicationStateCodec */
     ReplicationStateCodec::ReplicationStateCodec(ConstructionKey, std::shared_ptr<const ReplicationSerializerRegistry> serializers,
-                                                 ReplicationRoleBinding recipient, const std::uint64_t generation,
-                                                 const ReplicationStateCodecLimits limits, std::vector<FieldId> projection,
-                                                 const Sha256Digest &fingerprint)
-        : serializers_(std::move(serializers)), recipient_(std::move(recipient)), generation_(generation), limits_(limits),
+                                                 ReplicationRoleBinding recipient, const ReplicationRecordKind record,
+                                                 const std::uint64_t generation, const ReplicationStateCodecLimits limits,
+                                                 std::vector<FieldId> projection, const Sha256Digest &fingerprint)
+        : serializers_(std::move(serializers)), recipient_(std::move(recipient)), record_(record), generation_(generation), limits_(limits),
           admission_(std::make_shared<std::atomic_bool>(true)), owner_(std::this_thread::get_id()), projection_(std::move(projection)),
           fingerprint_(fingerprint) {
         wireCapacity_ = HeaderBytes;

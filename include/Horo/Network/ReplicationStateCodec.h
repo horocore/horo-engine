@@ -108,14 +108,15 @@ namespace Horo::Network {
          * @param key Private admission created after validating the complete projection.
          * @param serializers Exact immutable serializer generation.
          * @param recipient Admitted client role and object occurrence.
+         * @param record Initial or incremental visibility contract.
          * @param generation Positive negotiated descriptor generation.
          * @param limits Validated finite work and storage limits.
          * @param projection Complete canonical field visibility projection.
          * @param fingerprint Prepared projection identity.
          */
         ReplicationStateCodec(ConstructionKey key, std::shared_ptr<const ReplicationSerializerRegistry> serializers,
-                              ReplicationRoleBinding recipient, std::uint64_t generation, ReplicationStateCodecLimits limits,
-                              std::vector<FieldId> projection, const Sha256Digest &fingerprint);
+                              ReplicationRoleBinding recipient, ReplicationRecordKind record, std::uint64_t generation,
+                              ReplicationStateCodecLimits limits, std::vector<FieldId> projection, const Sha256Digest &fingerprint);
         /** @brief Validates finite limits and pins the complete serializer generation.
          * @param serializers Exact negotiated schema projection and codecs.
          * @param recipient Exact host-admitted client object role and ownership publication.
@@ -169,6 +170,11 @@ namespace Horo::Network {
             return recipient_;
         }
 
+        /** @brief Returns the initial or incremental visibility contract fixed at creation. */
+        [[nodiscard]] ReplicationRecordKind RecordKind() const noexcept {
+            return record_;
+        }
+
         /** @brief Returns the negotiated generation for validated acknowledgements. @return Positive descriptor generation. */
         [[nodiscard]] std::uint64_t DescriptorGeneration() const noexcept {
             return generation_;
@@ -210,6 +216,7 @@ namespace Horo::Network {
                                                                                 const CancellationToken &cancellation) const;
         std::shared_ptr<const ReplicationSerializerRegistry> serializers_;
         ReplicationRoleBinding recipient_;
+        const ReplicationRecordKind record_;
         std::uint64_t generation_{};
         ReplicationStateCodecLimits limits_;
         std::size_t wireCapacity_{};
@@ -219,4 +226,33 @@ namespace Horo::Network {
         std::vector<FieldId> projection_;
         Sha256Digest fingerprint_;
     };
+
+    /** @brief One full initial field record encoded for the exact admitted client projection. */
+    struct ReplicationInitialStateRecord final {
+        NetworkObjectId object;
+        std::vector<std::byte> wire;
+    };
+
+    /** @brief Complete initial field state from one committed authority tick. */
+    struct ReplicationInitialStateSnapshot final {
+        NetworkSessionGeneration session;
+        ReplicationAuthorityEpoch authority;
+        std::uint64_t tick{};
+        std::vector<ReplicationInitialStateRecord> records;
+    };
+
+    /**
+     * @brief Encodes the complete current authority inventory using pinned full captures.
+     * @param world Exact committed authority mapping for this snapshot.
+     * @param capture Owner-thread coordinator that captured every object for the supplied tick.
+     * @param tick Exact committed authority tick shared by every source capture.
+     * @param codecs One initial projection per mapped object for the same recipient and descriptor generation.
+     * @param maximumWireBytes Finite total budget for the owned encoded records.
+     * @param cancellation Checked before publishing the encoded snapshot and during each codec call.
+     * @return Ordered complete owned initial records, or a typed rejection without a partial result.
+     */
+    [[nodiscard]] Result<ReplicationInitialStateSnapshot> EncodeReplicationInitialState(
+        ReplicationWorldReadLease world, const ReplicationStateCapture &capture, std::uint64_t tick,
+        std::span<const std::shared_ptr<ReplicationStateCodec>> codecs, std::size_t maximumWireBytes,
+        const CancellationToken &cancellation = {});
 }  // namespace Horo::Network

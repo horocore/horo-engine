@@ -68,6 +68,13 @@ namespace Horo::Network {
     /** @brief Complete-batch terminal result, distinct from decoding and queue acceptance. */
     struct ReplicationApplyReport final {
         std::size_t applied{};
+        bool initialPublished{}; /**< True only when a complete initial inventory has been applied. */
+    };
+
+    /** @brief Selects steady-state record handling or a complete one-shot initial snapshot. */
+    enum class ReplicationInboundApplyMode : std::uint8_t {
+        Incremental,
+        InitialSnapshot
     };
 
     /** @brief One trusted authority channel's owner-thread receive and safe-point transaction boundary.
@@ -97,13 +104,13 @@ namespace Horo::Network {
          * @param owner Transaction owner retained weakly outside each safe-point call.
          * @param now Current monotonic admission-clock tick.
          * @param limits Explicit bounded storage and work ceilings.
+         * @param mode Complete initial publication or ordinary incremental records.
          * @return Prepared route or typed validation/admission/capacity failure.
          */
-        [[nodiscard]] static Result<std::shared_ptr<ReplicationInboundApply>> Create(const ReplicationInboundAuthority &authority,
-                                                                                     ReplicationWorldLifecycle &world,
-                                                                                     const std::shared_ptr<IReplicationApplyOwner> &owner,
-                                                                                     std::uint64_t now,
-                                                                                     const ReplicationInboundLimits &limits = {});
+        [[nodiscard]] static Result<std::shared_ptr<ReplicationInboundApply>> Create(
+            const ReplicationInboundAuthority &authority, ReplicationWorldLifecycle &world,
+            const std::shared_ptr<IReplicationApplyOwner> &owner, std::uint64_t now, const ReplicationInboundLimits &limits = {},
+            ReplicationInboundApplyMode mode = ReplicationInboundApplyMode::Incremental);
         /** @brief Binds one host-resolved exact object, live role publication and codec generation.
          * @param mapping Exact Scene/entity and schema occurrence.
          * @param role Owner-published local client role.
@@ -159,6 +166,12 @@ namespace Horo::Network {
         [[nodiscard]] Result<ReplicationWorldReadLease> Admit(Runtime::RuntimePhase phase, std::uint64_t now,
                                                               const CancellationToken &cancellation) const;
         [[nodiscard]] Result<void> ValidateObject(const Object &object, const ReplicationWorldReadLease &world) const;
+        /** @brief Selects an incremental decode baseline when the route permits one. */
+        [[nodiscard]] const ReplicationDecodedState *DecodeBaseline(const Object &object, std::span<const std::byte> wire) const noexcept;
+        /** @brief Checks decoded tick and revision against the selected publication policy. */
+        [[nodiscard]] Result<void> ValidateNextRecord(const Object &object, const ReplicationDecodedState &record) const;
+        /** @brief Tests complete coverage of the entire frozen inventory at one authority tick. */
+        [[nodiscard]] bool InitialInventoryComplete() const noexcept;
         [[nodiscard]] Result<void> ValidatePending(const ReplicationWorldWorkRequest &request, std::uint64_t now) const;
         [[nodiscard]] Result<void> AdmitRetainedState(std::size_t index, const ReplicationDecodedState &state) const;
         [[nodiscard]] Result<std::size_t> ResolveRecord(std::span<const std::byte> wire, const ReplicationWorldReadLease &world) const;
@@ -189,6 +202,9 @@ namespace Horo::Network {
         /** @brief Runs the guarded owner transaction; committed roots advance only after complete publication. */
         [[nodiscard]] Result<ReplicationApplyReport> ApplyPending(IReplicationApplyOwner &owner, const ReplicationWorldReadLease &world,
                                                                   const ReplicationWorldWorkRequest &request, std::uint64_t now);
+        /** @brief Publishes prepared owner updates after rechecking all exact admission fences. */
+        [[nodiscard]] Result<void> CommitUpdates(IReplicationApplyOwner &owner, std::span<const ReplicationApplyUpdate> updates,
+                                                 const ReplicationWorldWorkRequest &request, std::uint64_t now);
         void DiscardPending() noexcept;
         ReplicationInboundAuthority authority_;
         ReplicationWorldLifecycle &world_;
@@ -196,8 +212,17 @@ namespace Horo::Network {
         ReplicationInboundLimits limits_;
         std::thread::id thread_{std::this_thread::get_id()};
         std::vector<Object> objects_;
+
+        struct InitialInventory final {
+            std::uint64_t mappingRevision;
+            std::size_t objects;
+            std::optional<std::uint64_t> tick;
+        };
+
+        std::optional<InitialInventory> initial_; /**< Frozen mapping evidence, including the explicit empty case. */
         std::uint64_t revision_{};
         bool busy_{};
         bool stopped_{};
+        bool initialPublished_{};
     };
 }  // namespace Horo::Network
