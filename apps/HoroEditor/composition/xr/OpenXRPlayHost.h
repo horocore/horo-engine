@@ -4,6 +4,7 @@
  * @brief Concrete app-owned selected XR Play/Input/event composition over the canonical existing owners.
  */
 #include "EditorPlayXrHost.h"
+#include "EditorVulkanXrViewportAccess.h"
 #include "EditorXrSceneGeometry.h"
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
@@ -355,6 +356,7 @@ namespace Horo::Application::Internal {
             Runtime::SceneRuntimeId scene;
             std::optional<SceneGeometry> geometry;
             std::optional<OpenXRApplicationProjection> projection;
+            std::optional<Editor::EditorVulkanXrViewportAccess::PreparedTargets> prewarmedRenderer;
             XR::XRReferenceSpaceSnapshot references; /**< Same cold native preparation as this Scene candidate. */
             XR::XRCoordinateSpace worldReference;    /**< Exact calibrated native World child from the same candidate. */
             std::optional<XR::OpenXRInternal::NativeReferenceCalibrationObservation> mountedCalibration;
@@ -371,6 +373,10 @@ namespace Horo::Application::Internal {
              */
             [[nodiscard]] Result<void> PrepareResources(OpenXRPlayHost &host,
                                                         const XR::OpenXRInternal::NativeTrackingSpaceRequest &tracking);
+            /** @brief Warms the exact staged reducer and paired graph while the Scene and native session are still private. */
+            [[nodiscard]] Result<void> PrewarmRenderer(OpenXRPlayHost &host);
+            /** @brief Prepares the existing normal graph, or checks the already warmed graph in the canonical stage. */
+            [[nodiscard]] Result<void> PrepareRenderer(OpenXRPlayHost &host, const XR::XRFeaturePlan &plan);
             /** @brief Seals mounted placement only after the exact native relation and origin lease agree. */
             [[nodiscard]] Result<void> CalibrateMounted(const OpenXRPlayHost &host, const Math::Transform &placement);
             /** @brief Revalidates this exact current state without issuing a replacement identity.

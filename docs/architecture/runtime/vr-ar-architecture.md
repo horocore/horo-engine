@@ -731,6 +731,13 @@ auxiliary image references. Incomplete or absent tallies leave ordinary
 projection available. Provider-specific compositor encoding and its native
 acquisition contract remain separate prerequisites for admission.
 
+For an eligible D32 writer, the selected viewport prepares both paired history
+slots before the Play Scene activates its canonical session. The canonical
+renderer stage revalidates the same graph and device capability generation.
+The receipt distinguishes an ordinary paired writer from a graph with a fully
+prepared reducer. Early cancellation and failed activation retire the viewport
+through the owning Scene even if native frame resources were never created.
+
 See the [Khronos space-warp layer contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrCompositionLayerSpaceWarpInfoFB.html)
 for the distinction between runtime motion inputs and internal Renderer UV history.
 The [EXT per-view](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrFrameSynthesisConfigViewEXT.html)

@@ -13,6 +13,31 @@ namespace Horo::Application::Internal {
     using namespace XR;
     using namespace XR::OpenXRInternal;
 
+    namespace {
+        /** @brief Describes the exact selected queue's acquired/released color tuple from existing renderer policy. */
+        Render::RenderGraphLogicalState ProjectionAcquired(const Render::RenderQueueId queue) noexcept {
+            return {Render::RenderGraphSynchronizationAccess::ReadWrite, Render::RenderGraphSynchronizationOperation::ColorAttachment,
+                    Render::RenderGraphPipelineScope::Graphics, Render::RenderGraphTextureLayout::ColorAttachment, queue};
+        }
+
+        /** @brief Keeps the existing layout and access state while returning authority to the external image owner. */
+        Render::RenderGraphLogicalState NativeRelease(Render::RenderGraphLogicalState acquired) noexcept {
+            acquired.scope = Render::RenderGraphPipelineScope::External;
+            return acquired;
+        }
+
+        /** @brief Projects the actual selected writer into the viewport's cold motion/depth graph tuple. */
+        Editor::EditorVulkanXrViewportAccess::AuxiliaryPlan PairedTargets(const OpenXRProjectionWriter &writer,
+                                                                          const Render::RenderGraphLogicalState acquired) noexcept {
+            auto depth = acquired;
+            depth.operation = Render::RenderGraphSynchronizationOperation::DepthStencilAttachment;
+            depth.layout = Render::RenderGraphTextureLayout::DepthStencilAttachment;
+            return {{writer.motion, acquired, NativeRelease(acquired)},
+                    {writer.depth, depth, NativeRelease(depth)},
+                    writer.selection.eyeExtents};
+        }
+    }  // namespace
+
     class OpenXRPlayHost::SceneCandidate final : public Runtime::SceneActivationCandidate {
     public:
         SceneCandidate(OpenXRPlayHost &host, std::shared_ptr<SceneState> state, const bool retirement = false)
@@ -202,40 +227,8 @@ namespace Horo::Application::Internal {
                     return activated;
                 return PrepareFrameResources(candidate, scene_->projection->color);
             }
-            case RendererTargets: {
-                auto device = Editor::EditorVulkanXrViewportAccess::Device(composition_.viewport);
-                if (device.HasError())
-                    return Result<void>::Failure(device.ErrorValue());
-                const Render::RenderGraphLogicalState acquired{Render::RenderGraphSynchronizationAccess::ReadWrite,
-                                                               Render::RenderGraphSynchronizationOperation::ColorAttachment,
-                                                               Render::RenderGraphPipelineScope::Graphics,
-                                                               Render::RenderGraphTextureLayout::ColorAttachment,
-                                                               device.Value().graphicsIdentity};
-                auto requiredFinal = acquired;
-                requiredFinal.scope = Render::RenderGraphPipelineScope::External;
-                using Viewport = Editor::EditorVulkanXrViewportAccess;
-                const auto prepare = [&](const Viewport::AuxiliaryPlan *auxiliary) {
-                    return Viewport::Prepare(composition_.viewport, scene_->geometry->Resources(), scene_->projection->color, acquired,
-                                             requiredFinal, WantsMotionHistory(plan), auxiliary, scene_->geometry->Instances().size());
-                };
-                if (const auto &writer = scene_->projection->writer) {
-                    auto depthAcquired = acquired;
-                    depthAcquired.operation = Render::RenderGraphSynchronizationOperation::DepthStencilAttachment;
-                    depthAcquired.layout = Render::RenderGraphTextureLayout::DepthStencilAttachment;
-                    auto depthFinal = depthAcquired;
-                    depthFinal.scope = Render::RenderGraphPipelineScope::External;
-                    const Viewport::AuxiliaryPlan auxiliary{{writer->motion, acquired, requiredFinal},
-                                                            {writer->depth, depthAcquired, depthFinal},
-                                                            writer->selection.eyeExtents};
-                    if (prepare(&auxiliary).HasValue())
-                        return Result<void>::Success();
-                    // Retain native children on this candidate, but fall back to the ordinary graph.
-                    scene_->projection->writer.reset();
-                    if (auto retired = Viewport::Retire(composition_.viewport); retired.HasError())
-                        return retired;
-                }
-                return prepare(nullptr);
-            }
+            case RendererTargets:
+                return scene_->PrepareRenderer(*this, plan);
             case InputAndUi: {
                 input_.coordinator = std::make_unique<XRActionBindingCoordinator>(candidate, static_cast<IXRBindingNeutralizer &>(*this));
                 if (auto bound = composition_.session.BindInput(candidate, *input_.coordinator, *input_.router, *composition_.bindings);
@@ -258,6 +251,57 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
         }
         return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
+    }
+
+    /** @copydoc OpenXRPlayHost::SceneState::PrewarmRenderer */
+    Result<void> OpenXRPlayHost::SceneState::PrewarmRenderer(OpenXRPlayHost &host) {
+        using Viewport = Editor::EditorVulkanXrViewportAccess;
+        auto &viewport = host.composition_.viewport;
+        const auto &writer = projection->writer;
+        if (!writer || !Viewport::CanPrepareReduction(viewport, writer->depth.format))
+            return Result<void>::Success();
+        if (auto source = geometry->ValidateSource(); source.HasError())
+            return source;
+        const auto device = Viewport::Device(viewport);
+        if (device.HasError())
+            return Result<void>::Failure(device.ErrorValue());
+        const auto acquired = ProjectionAcquired(device.Value().graphicsIdentity);
+        auto ready = Viewport::PreparePairedTargets(viewport, geometry->Resources(), projection->color, acquired, NativeRelease(acquired),
+                                                    PairedTargets(*writer, acquired), geometry->Instances().size());
+        if (ready.HasValue()) {
+            prewarmedRenderer.emplace(std::move(ready).Value());
+            return Result<void>::Success();
+        }
+        // A failed paired allocation uses ordinary preparation; this private owner still retires every partial allocation.
+        projection->writer.reset();
+        return Viewport::Retire(viewport);
+    }
+
+    /** @copydoc OpenXRPlayHost::SceneState::PrepareRenderer */
+    Result<void> OpenXRPlayHost::SceneState::PrepareRenderer(OpenXRPlayHost &host, const XRFeaturePlan &plan) {
+        using Viewport = Editor::EditorVulkanXrViewportAccess;
+        auto &viewport = host.composition_.viewport;
+        if (prewarmedRenderer)
+            return Viewport::IsPrepared(viewport, *prewarmedRenderer) ? Result<void>::Success()
+                                                                      : Result<void>::Failure(MakeError(XRErrors::CapabilityStale));
+        const auto device = Viewport::Device(viewport);
+        if (device.HasError())
+            return Result<void>::Failure(device.ErrorValue());
+        const auto acquired = ProjectionAcquired(device.Value().graphicsIdentity);
+        const auto prepare = [&](const Viewport::AuxiliaryPlan *auxiliary) {
+            return Viewport::Prepare(viewport, geometry->Resources(), projection->color, acquired, NativeRelease(acquired),
+                                     host.WantsMotionHistory(plan), auxiliary, geometry->Instances().size());
+        };
+        if (const auto &writer = projection->writer) {
+            const auto auxiliary = PairedTargets(*writer, acquired);
+            if (prepare(&auxiliary).HasValue())
+                return Result<void>::Success();
+            // The Scene retains the native writer children through normal teardown while using ordinary projection.
+            projection->writer.reset();
+            if (auto retired = Viewport::Retire(viewport); retired.HasError())
+                return retired;
+        }
+        return prepare(nullptr);
     }
 
     /** @copydoc OpenXRPlayHost::Release */
@@ -398,6 +442,10 @@ namespace Horo::Application::Internal {
         projection.emplace(std::move(preparedProjection).Value());
         if (geometry->mounted)
             projection->writer.reset();  // Mounted geometry has no issued per-draw history identity.
+        if (cancellation.IsCancellationRequested())
+            return Result<void>::Failure(MakeError(XRSessionErrors::ActivationCancelled));
+        if (auto warmed = PrewarmRenderer(host); warmed.HasError())
+            return warmed;
         const auto &facts = *projection;
         auto activatedSession = host.sessions_.Activate(facts.capabilities, facts.capabilities.System(), facts.capabilities.Revision(),
                                                         facts.plan, cancellation);

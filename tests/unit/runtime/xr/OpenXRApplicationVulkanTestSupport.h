@@ -7,6 +7,7 @@
 #include "support/OpenXRApplicationNativeTestSupport.h"
 #include "support/ShaderReflectionCookTestSupport.h"
 
+#include <functional>
 #include <utility>
 
 namespace Horo::Tests::OpenXRApplication {
@@ -35,6 +36,9 @@ namespace Horo::Tests::OpenXRApplication {
     public:
         std::size_t multiviewUniformWrites{};
         std::size_t motionUniformWrites{};
+        std::function<Result<std::shared_ptr<Render::IResidentStereoCoverageReducer>>(
+            const RenderNative::VulkanStereoCoveragePreparation &)>
+            prepareColdReduction;
 
         explicit GraphGraphicsPort(Render::VulkanGraphTest::NativeGraphFixture &native) : native_(native) {}
 
@@ -62,6 +66,15 @@ namespace Horo::Tests::OpenXRApplication {
         Result<bool> ReadCompletedStereoCoverage(const std::uint64_t instance, const Render::RenderTimelinePoint completion,
                                                  const std::span<std::byte> bytes) override {
             return native_.graph.ReadCompletedStereoCoverage(instance, completion, bytes);
+        }
+
+        bool SupportsStereoCoverageReduction(const Render::RenderQueueId queue) const noexcept override {
+            return prepareColdReduction && queue == native_.commandState.queues[0].identity;
+        }
+
+        Result<std::shared_ptr<Render::IResidentStereoCoverageReducer>> PrepareStereoCoverageReduction(
+            const RenderNative::VulkanStereoCoveragePreparation &request) override {
+            return prepareColdReduction ? prepareColdReduction(request) : PreparedGraphicsPort::PrepareStereoCoverageReduction(request);
         }
 
         Result<void> WriteFrameBuffer(const Render::FrameToken frame, const std::uint64_t instance,

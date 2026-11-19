@@ -696,9 +696,10 @@ namespace Horo::Application::Internal {
                 return closed;
             // Native Close observed actual canonical image retirement and destroyed native views. No submitted
             // signal, CPU handle drop, Scene callback or desktop Present substitutes for this evidence.
-            if (auto retired = Editor::EditorVulkanXrViewportAccess::Retire(host.composition_.viewport); retired.HasError())
-                return Output::Failure(retired.ErrorValue());
         }
+        // Cold renderer preparation can precede the canonical session ID and its native frame owner.
+        if (auto retired = Editor::EditorVulkanXrViewportAccess::Retire(host.composition_.viewport); retired.HasError())
+            return Output::Failure(retired.ErrorValue());
         return Output::Success(true);
     }
 

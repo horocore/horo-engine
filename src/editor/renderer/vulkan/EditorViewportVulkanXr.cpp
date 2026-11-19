@@ -24,6 +24,34 @@ namespace Horo::Editor {
             xrCoverageReductionArtifact_ = std::move(cooked.payload);
     }
 
+    /** @copydoc EditorVulkanXrViewportAccess::CanPrepareReduction */
+    bool EditorVulkanXrViewportAccess::CanPrepareReduction(const EditorViewportRendererVulkan &viewport,
+                                                           const RenderTextureFormat depth) noexcept {
+        if (viewport.owner_ != std::this_thread::get_id() || !viewport.initialized_ || viewport.xrGraph_ ||
+            depth != RenderTextureFormat::Depth32Float || !viewport.xrCoverageCook_ || viewport.xrCoverageReductionArtifact_.empty())
+            return false;
+        const auto *port = viewport.bridge_.Port();
+        return port && port->SupportsStereoCoverageReduction(viewport.device_.graphicsIdentity);
+    }
+
+    /** @copydoc EditorVulkanXrViewportAccess::PreparedTargets::PreparedTargets */
+    EditorVulkanXrViewportAccess::PreparedTargets::PreparedTargets(std::weak_ptr<const void> graph, const std::uint64_t device,
+                                                                   const std::uint64_t capabilities) noexcept
+        : graph_(std::move(graph)), device_(device), capabilities_(capabilities) {}
+
+    /** @copydoc EditorVulkanXrViewportAccess::PreparePairedTargets */
+    Result<EditorVulkanXrViewportAccess::PreparedTargets> EditorVulkanXrViewportAccess::PreparePairedTargets(
+        EditorViewportRendererVulkan &viewport, const std::span<const RenderMeshResourceView> meshes, const RenderTextureDescriptor &color,
+        const RenderGraphLogicalState &acquired, const RenderGraphLogicalState &requiredFinal, const AuxiliaryPlan &auxiliary,
+        const std::size_t coverageDrawCapacity) {
+        using Outcome = Result<PreparedTargets>;
+        const auto prepared = Prepare(viewport, meshes, color, acquired, requiredFinal, true, &auxiliary, coverageDrawCapacity);
+        if (prepared.HasError())
+            return Outcome::Failure(prepared.ErrorValue());
+        const auto &support = viewport.frontend_.Capabilities().support;
+        return Outcome::Success(PreparedTargets{viewport.xrGraph_, support.deviceIncarnation, support.capabilityRevision});
+    }
+
     /** @copydoc EditorVulkanXrViewportAccess::Device */
     Result<Detail::VulkanEditorDevice> EditorVulkanXrViewportAccess::Device(const EditorViewportRendererVulkan &viewport) {
         return viewport.BorrowXrDevice();
@@ -919,6 +947,7 @@ namespace Horo::Editor {
 
         std::optional<Auxiliary> auxiliary;
         std::optional<Coverage> coverage;
+        bool retiring{};
         const CompiledRenderGraphExecution *bound{};
         EditorVulkanXrMirrorProjection mirror;
         EditorVulkanXrProjectionAlphaState alpha;
@@ -1029,6 +1058,27 @@ namespace Horo::Editor {
                                  view};
         }
     };
+
+    /** @copydoc EditorVulkanXrViewportAccess::IsPrepared */
+    bool EditorVulkanXrViewportAccess::IsPrepared(const EditorViewportRendererVulkan &viewport, const PreparedTargets &receipt) noexcept {
+        if (viewport.owner_ != std::this_thread::get_id() || !viewport.initialized_ || !viewport.xrGraph_ || viewport.xrGraph_->retiring)
+            return false;
+        const auto &support = viewport.frontend_.Capabilities().support;
+        return receipt.graph_.lock() == viewport.xrGraph_ && receipt.device_ == support.deviceIncarnation &&
+               receipt.capabilities_ == support.capabilityRevision;
+    }
+
+    /** @copydoc EditorVulkanXrViewportAccess::HasPreparedReduction */
+    bool EditorVulkanXrViewportAccess::HasPreparedReduction(const EditorViewportRendererVulkan &viewport,
+                                                            const PreparedTargets &receipt) noexcept {
+        if (!IsPrepared(viewport, receipt))
+            return false;
+        const auto &graph = *viewport.xrGraph_;
+        return graph.historyEnabled && graph.auxiliary && graph.coverage && graph.coverage->ready && graph.coverage->paired.reducer &&
+               std::ranges::all_of(graph.history, [](const auto &slot) {
+            return slot.pairedReduced && slot.pairedReduced->topology;
+        });
+    }
 
     /** @copydoc EditorVulkanXrViewportAccess::PreviousDepth */
     std::optional<EditorVulkanXrViewportAccess::PreviousEyeDepth> EditorVulkanXrViewportAccess::PreviousDepth(
@@ -1587,6 +1637,7 @@ namespace Horo::Editor {
             return Result<void>::Failure(MakeError(RendererErrors::ViewportNotInitialized));
         if (!xrGraph_)
             return Result<void>::Success();
+        xrGraph_->retiring = true;
         if (auto retired = RetireXrCoverage(); retired.HasError())
             return retired;
         for (auto *projection : {&xrGraph_->baseline, &xrGraph_->history.front(), &xrGraph_->history.back()})
@@ -1605,6 +1656,7 @@ namespace Horo::Editor {
             for (auto &history : xrGraph_->history) {
                 history.covered.reset();
                 history.pairedCovered.reset();
+                history.pairedReduced.reset();
             }
             for (auto &slots : coverage->slots)
                 for (auto &draw : slots) {

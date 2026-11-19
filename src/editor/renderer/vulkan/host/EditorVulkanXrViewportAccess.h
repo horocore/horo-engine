@@ -10,6 +10,8 @@
 #include "Horo/Runtime/Render/RenderScene.h"
 #include "VulkanEditorGraphicsBridge.h"
 
+#include <memory>
+
 namespace Horo::Render {
     class RenderFrameScope;
     struct PrimaryOutputAttachment;
@@ -43,6 +45,42 @@ namespace Horo::Editor {
             AuxiliaryTexture depth;
             std::array<Render::FramebufferExtent, 2> viewExtents;
         };
+
+        /** @brief Non-owning receipt for one successfully prepared private viewport graph. */
+        class PreparedTargets final {
+        public:
+            PreparedTargets(const PreparedTargets &) noexcept = default;
+            PreparedTargets(PreparedTargets &&) noexcept = default;
+            PreparedTargets &operator=(const PreparedTargets &) noexcept = default;
+            PreparedTargets &operator=(PreparedTargets &&) noexcept = default;
+
+        private:
+            friend class EditorVulkanXrViewportAccess;
+            /** @brief Binds an actually prepared graph and its selected capability incarnation. */
+            PreparedTargets(std::weak_ptr<const void> graph, std::uint64_t device, std::uint64_t capabilities) noexcept;
+
+            std::weak_ptr<const void> graph_;
+            std::uint64_t device_{}, capabilities_{};
+        };
+
+        /** @brief Checks whether the selected viewport can attempt cold D32 paired reduction preparation. */
+        [[nodiscard]] static bool CanPrepareReduction(const EditorViewportRendererVulkan &viewport,
+                                                      Render::RenderTextureFormat depth) noexcept;
+
+        /** @brief Prepares a real paired graph before native activation and captures its exact private owner. */
+        [[nodiscard]] static Result<PreparedTargets> PreparePairedTargets(EditorViewportRendererVulkan &viewport,
+                                                                          std::span<const Render::RenderMeshResourceView> meshes,
+                                                                          const Render::RenderTextureDescriptor &color,
+                                                                          const Render::RenderGraphLogicalState &acquired,
+                                                                          const Render::RenderGraphLogicalState &requiredFinal,
+                                                                          const AuxiliaryPlan &auxiliary, std::size_t coverageDrawCapacity);
+
+        /** @brief Revalidates the exact graph and selected capability incarnation without acquiring native images. */
+        [[nodiscard]] static bool IsPrepared(const EditorViewportRendererVulkan &viewport, const PreparedTargets &receipt) noexcept;
+
+        /** @brief Reports a complete sealed paired reducer in both retained history slots of this exact graph. */
+        [[nodiscard]] static bool HasPreparedReduction(const EditorViewportRendererVulkan &viewport,
+                                                       const PreparedTargets &receipt) noexcept;
 
         /** @brief Fresh exact imports, with one single-layer view for each eye on both images. */
         struct AuxiliaryImages final {

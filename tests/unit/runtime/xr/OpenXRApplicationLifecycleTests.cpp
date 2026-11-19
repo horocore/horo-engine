@@ -2573,6 +2573,64 @@ namespace Horo::Tests::OpenXRApplication {
         }
     }  // namespace
 
+    TEST_CASE("Selected Play stages the loaded paired reducer before native swapchains and preserves projection fallback",
+              "[xr][application][play][reprojection][preactivation]") {
+        using namespace Render;
+        using enum XR::XRProjectFeaturePolicy;
+        using Reduction = std::shared_ptr<IResidentStereoCoverageReducer>;
+
+        struct ScriptedColdKernel final : IResidentStereoCoverageReducer {};
+
+        const bool reject = GENERATE(false, true);
+        ApplicationFixture fixture{true, 5, Unrequested, Unrequested, Unrequested, true};
+        constexpr std::array<std::int64_t, 3> formats{VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT};
+        fixture.script.census.formats = formats.size();
+        fixture.script.census.formatPublication = formats;
+        const auto motion = ApplicationVulkanFixture::CookMotion();
+        const auto coverage = ApplicationVulkanFixture::CookCoverage();
+        fixture.viewport->StageXrMotionProgram(
+            RequireValue(Editor::LoadEditorVulkanMultiviewMotionCook(motion.compiled.payload,
+                                                                     RequireValue(EncodeReflectedShaderArtifact(motion.reflected)))));
+        fixture.viewport->StageXrCoverageProgram(
+            RequireValue(Editor::LoadEditorVulkanMultiviewCoverageCook(coverage.compiled.payload,
+                                                                       RequireValue(EncodeReflectedShaderArtifact(coverage.reflected)))));
+        // The injected adapter exercises cold ownership and ordering only. Native shader/dispatch qualification is separate.
+        fixture.viewport->StageXrCoverageReductionProgram({{1}});
+        std::size_t coldPreparations{};
+        std::weak_ptr<IResidentStereoCoverageReducer> reducer;
+        fixture.vulkan->port.prepareColdReduction = [&](const auto &request) -> Result<Reduction> {
+            ++coldPreparations;
+            CHECK(fixture.script.swapchain.creates == 0);
+            CHECK(request.eyes.front() != request.eyes.back());
+            CHECK(request.result != request.reset);
+            if (reject)
+                return Result<Reduction>::Failure(MakeError(XR::XRErrors::OperationUnavailable));
+            auto compiled = std::make_shared<ScriptedColdKernel>();
+            reducer = compiled;
+            return Result<Reduction>::Success(std::move(compiled));
+        };
+        auto scene = PublishPlay(fixture);
+        REQUIRE(coldPreparations == 1);
+        CHECK(reducer.expired() == reject);
+        REQUIRE(fixture.script.swapchain.creates == 3);
+        fixture.script.clock.sample = 1;
+        REQUIRE(RequireValue(fixture.play->PrepareRenderFrame(1)));
+        auto frame = RequireValue(fixture.frontend->BeginFrame({1, {8, 8}}));
+        RequireValue(fixture.play->ExecuteRenderFrame(frame, {}));
+        RequireValue(frame.Present());
+        RequireValue(fixture.play->FinishGui(true));
+        fixture.vulkan->native.commandState.state.Complete();
+        RequireValue(fixture.play->ProgressRenderTail());
+        CHECK(fixture.script.frames.ends == 1);
+        CHECK(fixture.script.frames.layers == 1);
+        CHECK(std::ranges::none_of(fixture.script.frames.ext, [](const auto &view) {
+            return view.type == XR_TYPE_FRAME_SYNTHESIS_INFO_EXT;
+        }));
+        scene->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+        CHECK(reducer.expired());
+    }
+
     TEST_CASE("Selected Vulkan viewport records asymmetric motion depth only after completed projection history",
               "[xr][application][play][reprojection][renderer]") {
         using namespace Render;
@@ -2640,8 +2698,11 @@ namespace Horo::Tests::OpenXRApplication {
                                            {{{4, 5}, {6, 3}}}};
         if (expectProbe)
             vulkan.resourceState.state.rejectedImage = VulkanResourceTest::NativeResourceState::RejectedImage{VK_FORMAT_R32_SFLOAT, {6, 5}};
-        RequireValue(Viewport::Prepare(viewport, geometry->Resources(), firstSource->allocation, firstSource->AcquiredState(),
-                                       firstSource->RequiredFinalState(), true, &plan, initialInstances.size()));
+        const auto prepared = RequireValue(Viewport::PreparePairedTargets(viewport, geometry->Resources(), firstSource->allocation,
+                                                                          firstSource->AcquiredState(), firstSource->RequiredFinalState(),
+                                                                          plan, initialInstances.size()));
+        CHECK(Viewport::IsPrepared(viewport, prepared));
+        CHECK_FALSE(Viewport::HasPreparedReduction(viewport, prepared));
         const auto first = ImportWriterImage(frontend, firstSource);
         const auto second = ImportWriterImage(frontend, secondSource);
         const auto motion = ImportWriterImage(frontend, motionSource);
@@ -2737,6 +2798,7 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(vulkan.commandState.state.accepted.size() == 2);
         CHECK(vulkan.commandState.state.waitCalls == 0);
         RequireValue(Viewport::Retire(viewport));
+        CHECK_FALSE(Viewport::IsPrepared(viewport, prepared));
         for (const auto &image : {first, second, motion, depth}) {
             for (const auto view : image.views)
                 RequireValue(frontend.ReleaseTextureView(view));
