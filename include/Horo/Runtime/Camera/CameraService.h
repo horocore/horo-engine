@@ -35,6 +35,7 @@ namespace Horo::Runtime {
     enum class CameraTransitionResolution : std::uint8_t {
         Requested,
         HardCutFallback,
+        LinearFallback, /**< The producer selected the admitted single-view linear fallback. */
         Count
     };
 

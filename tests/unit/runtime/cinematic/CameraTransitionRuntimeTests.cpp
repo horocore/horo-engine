@@ -184,6 +184,47 @@ namespace Horo::Cinematic {
         CHECK(destination.selectionEpoch > advanced.selectionEpoch);
     }
 
+    TEST_CASE("Authored smooth camera transitions degrade through linear blending and then hard cuts",
+              "[unit][cinematic][camera][cross-fade]") {
+        const auto availableViews = GENERATE(0, 1, 2);
+        Fixture fixture;
+        const auto scene = fixture.scene->View();
+        const auto context = fixture.camera.Context();
+        const auto viewSupport = availableViews > 0 ? CameraTransitionSupport::SingleViewBlend : CameraTransitionSupport::HardCutOnly;
+        auto camera = Take(
+            CameraService::Create(context, viewSupport, CameraCrossFadeAdmission{context, 13, static_cast<std::uint8_t>(availableViews)}));
+        auto activation = TransitionActivation(CameraTransitionTier::DualViewCrossFade, CameraBlendCurve::SmoothStep,
+                                               CameraTransitionFallback::LinearThenHardCut, 3);
+        auto playback = Take(CinematicCameraPlayback::Activate(fixture.runtime, camera, std::move(activation), fixture.Settings(), scene));
+        REQUIRE(fixture.runtime.Play(playback.Player()).HasValue());
+        const auto sample = [&](SequenceTime time, std::uint64_t frame) {
+            REQUIRE(fixture.runtime.Seek(playback.Player(), time).HasValue());
+            REQUIRE(playback.Publish(scene).HasValue());
+            return Take(camera.Commit(frame, scene, std::nullopt));
+        };
+        const auto first = sample(6, 1);
+        CHECK(sample(8, 2).selected.values.position.x == 20.0F);
+        const auto repeated = sample(6, 3);
+        CHECK(repeated.selected.values.position == first.selected.values.position);
+        CHECK(repeated.selected.transitionResolution == first.selected.transitionResolution);
+        using enum CameraTransitionResolution;
+        if (availableViews == 2) {
+            REQUIRE(first.crossFade);
+            REQUIRE(repeated.crossFade);
+            CHECK(first.crossFade->destinationWeight == Catch::Approx(7.0F / 27.0F));
+            CHECK(repeated.crossFade->destinationWeight == first.crossFade->destinationWeight);
+            CHECK(first.selected.transitionResolution == Requested);
+        } else if (availableViews == 1) {
+            CHECK_FALSE(first.crossFade);
+            CHECK(first.selected.values.position.x == Catch::Approx(40.0F / 3.0F));
+            CHECK(first.selected.transitionResolution == LinearFallback);
+        } else {
+            CHECK_FALSE(first.crossFade);
+            CHECK(first.selected.values.position.x == 20.0F);
+            CHECK(first.selected.transitionResolution == HardCutFallback);
+        }
+    }
+
     TEST_CASE("Dual view pressure refuses required playback and admits only the authored hard cut",
               "[unit][cinematic][camera][cross-fade]") {
         Fixture fixture;

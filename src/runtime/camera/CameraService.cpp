@@ -148,7 +148,8 @@ namespace Horo::Runtime {
         if (rotation.HasError())
             return Result<void>::Failure(WithCause(MakeError(CameraErrors::IncompatibleTransition), rotation.ErrorValue()));
         auto blended = to;
-        blended.transitionResolution = CameraTransitionResolution::Requested;
+        if (blended.transitionResolution != CameraTransitionResolution::LinearFallback)
+            blended.transitionResolution = CameraTransitionResolution::Requested;
         auto &values = blended.values;
         values.position = from.values.position * (1.0F - weight) + to.values.position * weight;
         values.target = values.position + rotation.Value().Rotate({0.0F, 0.0F, -1.0F});

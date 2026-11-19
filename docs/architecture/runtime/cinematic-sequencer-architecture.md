@@ -420,8 +420,11 @@ The Camera owner commits one immutable selection after `VariableUpdate` and befo
 `RenderExtraction`; late changes apply to the next rendered frame. The baseline is a
 one-view `HardCut`. `SingleViewBlend` is a Camera-owned backend-neutral pose/
 projection interpolation, while `DualViewCrossFade` requires an explicitly admitted
-two-view frontend capability and budget. Fallback to a hard cut must be authored;
-transition modes are never silently substituted. Rendering consumes the resulting
+two-view frontend capability and budget. An authored `LinearThenHardCut` policy
+preserves the window and uses linear single-view interpolation when two views
+are denied and the single-view owner and projection pair can support it. It uses
+a hard cut when that intermediate mode is unavailable. The existing direct
+`HardCut` and `Fail` choices keep their meaning. Rendering consumes the resulting
 camera snapshot, selection epoch and generic discontinuity evidence without choosing
 camera authority or exposing backend APIs to Cinematic Runtime. ADR-119 owns the
 complete contract.

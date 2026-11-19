@@ -84,10 +84,11 @@ namespace Horo::Cinematic {
         DualViewCrossFade,
         Count
     };
-    /** @brief Only an explicitly authored hard cut may replace a denied transition. */
+    /** @brief Explicit degradation policy for a denied camera transition. */
     enum class CameraTransitionFallback : std::uint8_t {
         Fail,
         HardCut,
+        LinearThenHardCut, /**< Replaces an unavailable dual view with compatible single-view linear blending, then hard cut. */
         Count
     };
     /** @brief Bounded deterministic camera transition curves. */

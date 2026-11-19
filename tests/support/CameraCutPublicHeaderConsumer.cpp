@@ -9,6 +9,8 @@ static_assert(Horo::Cinematic::SequenceFrameCameraCutKey{}.transitionTier == Hor
 static_assert(Horo::Cinematic::SequenceFrameCameraCutKey{}.fallback == Horo::Cinematic::CameraTransitionFallback::Fail);
 static_assert(Horo::Cinematic::SequenceFrameCameraCutRequest{}.transitionTier == Horo::Cinematic::CameraTransitionTier::HardCut);
 static_assert(Horo::Runtime::CameraProposal{}.transitionResolution == Horo::Runtime::CameraTransitionResolution::Requested);
+static_assert(static_cast<unsigned>(Horo::Cinematic::CameraTransitionFallback::HardCut) == 1);
+static_assert(static_cast<unsigned>(Horo::Runtime::CameraTransitionResolution::HardCutFallback) == 1);
 static_assert(std::is_same_v<decltype(&Horo::Runtime::CameraService::Commit),
                              Horo::Result<Horo::Runtime::CameraSelectionSnapshot> (Horo::Runtime::CameraService::*)(
                                  std::uint64_t, Horo::Runtime::RuntimeSceneView, const std::optional<Horo::Runtime::CameraProposal> &)>);

@@ -89,13 +89,14 @@ interpolation to the camera owner. Both endpoints are resolved from the same
 current scene borrow on every publication, including seeks, reverse playback and
 origin changes. Published frames retain copied values.
 
-The current one-view composition returns `UnsupportedCameraTransition` for a
-required `DualViewCrossFade`. An explicitly authored `HardCut` fallback admits the
-destination cut. A denied one-view capability follows the same rule.
-Perspective/orthographic mixing returns `IncompatibleCameraTransition` unless
-that key explicitly permits a hard cut. The frontend currently has no admitted
-dual-view camera compositor or two-view budget contract. Enabling real cross-fade
-requires that frontend contract and native qualification before exposing support.
+The one-view composition returns `UnsupportedCameraTransition` for a
+required `DualViewCrossFade`. `HardCut` admits the destination cut directly.
+`LinearThenHardCut` preserves the authored window with a linear single-view
+blend when compatible cameras and admitted one-view interpolation allow it.
+A denied one-view capability or incompatible projection pair then selects the
+permitted hard cut. Dual-view hosts must supply a current two-view compositor
+reservation. The additive fallback and resolution enumerators preserve the
+existing values and require no change to persisted sequence assets.
 
 Global playback blend windows remain scalar playback settings. A camera-only plan clears scalar blend windows
 before session admission, including looping playback. Mixed scalar plans retain
@@ -108,8 +109,8 @@ scene borrows and callback lifetimes follow the existing runtime plan contract.
 Exceptional interpolation/fallback diagnostics use the existing owned error
 representation. A finite camera pair whose intermediate pose cannot be represented
 returns `IncompatibleCameraTransition` and uses its authored fallback.
-`CameraProposal::transitionResolution` records the requested transition or its
-admitted hard-cut fallback. Changing the selected outcome increments the final owner's
+`CameraProposal::transitionResolution` records the requested transition, linear
+fallback or hard-cut fallback. Changing the selected outcome increments the final owner's
 selection epoch, including a fallback inside one camera key. Repeated publication
 of the same outcome retains that epoch and the committed frame stays immutable.
 
