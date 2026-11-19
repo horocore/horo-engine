@@ -28,6 +28,13 @@ namespace Horo::Render::VulkanResourceTest {
     }
 
     struct NativeResourceState {
+        /** @brief Rejects only image requests with this exact native format and extent. */
+        struct RejectedImage {
+            VkFormat format;
+            VkExtent2D extent;
+        };
+
+        std::optional<RejectedImage> rejectedImage;
         VkMemoryRequirements bufferRequirements{.size = 64, .alignment = 16, .memoryTypeBits = 1};
         VkMemoryRequirements imageRequirements{.size = 256, .alignment = 16, .memoryTypeBits = 1};
         std::array<std::byte, 4096> mapped{};
@@ -118,6 +125,10 @@ namespace Horo::Render::VulkanResourceTest {
         ++nativeResources->createImageCount;
         if (nativeResources->createImageResult != VK_SUCCESS)
             return nativeResources->createImageResult;
+        if (const auto &rejected = nativeResources->rejectedImage; info && rejected && info->format == rejected->format &&
+                                                                   info->extent.width == rejected->extent.width &&
+                                                                   info->extent.height == rejected->extent.height)
+            return VK_ERROR_OUT_OF_DEVICE_MEMORY;
         if (nativeResources->sizedAllocations) {
             const auto bytes = info != nullptr ? CapturedImageBytes(*info) : std::nullopt;
             if (!bytes.has_value())

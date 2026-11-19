@@ -143,7 +143,9 @@ namespace Horo::Editor {
             Render::RenderTextureHandle texture;
             std::array<Render::RenderTextureViewHandle, 2> eyes;
             Render::FramebufferExtent extent;
+            std::array<Render::MultiviewRenderRectangle, 2> rectangles; /**< Exact written area in each mask layer. */
             Render::RenderTimelinePoint completion;
+            std::optional<AuxiliaryImages> auxiliary; /**< Current paired acquisitions when coverage replayed the auxiliary raster. */
             std::optional<CoveragePixels> pixels;
         };
 

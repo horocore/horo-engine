@@ -615,30 +615,20 @@ namespace Horo::Editor {
             }
         };
 
-        struct Coverage final : ReprojectionDraws {
+        /** @brief One cold mask allocation and its matching scratch depth. */
+        struct CoverageTargets final {
+            FramebufferExtent extent;
             ResourceCreation<RenderTextureHandle> color;
             ResourceCreation<RenderBufferHandle> readback;
             std::optional<std::array<MultiviewRenderRectangle, 2>> probe;
             std::uint64_t readbackInstance{};
             std::array<ResourceCreation<RenderTextureViewHandle>, 2> colorViews;
             Projection scratchDepth;
-            std::array<std::array<DrawSlot, RenderMaterialPass::MaximumDraws>, 2> slots;
-            std::optional<MultiviewMotionFrame> frame, predecessor;
-            RenderTimelinePoint submission;
-            std::size_t drawCapacity{};
-            bool ready{};
-
-            /** @brief Discards any unconsumed live observation on rebind, completion or invalidation. */
-            void ResetObservation() noexcept {
-                frame.reset();
-                predecessor.reset();
-                submission = {};
-            }
 
             /** @brief Retires exact scratch allocations after sampled descriptors and graph queue leases drain. */
             Result<void> RetireTargets(RenderFrontend &frontend) {
                 if (readback.handle.IsValid()) {
-                    if (auto result = frontend.ReleaseBuffer(readback.handle); result.HasError())
+                    if (auto result = Detail::RenderFrontendResourceAccess::RetireCreation(frontend, readback); result.HasError())
                         return result;
                     readback = {};
                     readbackInstance = 0;
@@ -678,10 +668,14 @@ namespace Horo::Editor {
             }
 
             /** @brief Cold allocates owned scalar color plus a separate stereo hardware-depth target. */
-            Result<void> PrepareTargets(RenderFrontend &frontend, RenderTextureDescriptor output) {
+            Result<void> PrepareTargets(RenderFrontend &frontend, const FramebufferExtent allocation) {
+                extent = allocation;
+                RenderTextureDescriptor output{.extent = allocation,
+                                               .format = RenderTextureFormat::R32Float,
+                                               .layerCount = static_cast<std::uint32_t>(colorViews.size()),
+                                               .usage = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment};
                 if (auto depth = scratchDepth.PrepareDepth(frontend, output, false); depth.HasError())
                     return depth;
-                output.format = RenderTextureFormat::R32Float;
                 if (probe) {
                     auto copySource = output;
                     copySource.usage = copySource.usage | RenderTextureUsage::CopySource;
@@ -714,7 +708,8 @@ namespace Horo::Editor {
             }
 
             /** @brief Returns only known GPU codes from the exact completed staging generation. */
-            std::optional<EditorVulkanXrViewportAccess::CoveragePixels> ReadPixels(Detail::IVulkanEditorGraphicsPort *port) const {
+            std::optional<EditorVulkanXrViewportAccess::CoveragePixels> ReadPixels(Detail::IVulkanEditorGraphicsPort *port,
+                                                                                   const RenderTimelinePoint submission) const {
                 if (!probe || !port || readbackInstance == 0)
                     return std::nullopt;
                 EditorVulkanXrViewportAccess::CoveragePixels output{.tiles = *probe};
@@ -728,20 +723,58 @@ namespace Horo::Editor {
                     return std::nullopt;
                 return output;
             }
+        };
 
-            /** @brief Selects exact prior eyes and full projection extent for renderer-owned coverage. */
-            void PublishTargets(const Projection::Topology::Coverage &topology, const Projection &prior, FramebufferExtent extent) {
-                for (std::uint32_t eye = 0; eye < targets.size(); ++eye)
+        /** @brief Shared draw bindings sample the same opposite history slot in both mask layouts. */
+        struct Coverage final : ReprojectionDraws {
+            CoverageTargets ordinary, paired;
+            std::array<std::array<DrawSlot, RenderMaterialPass::MaximumDraws>, 2> slots;
+            std::optional<MultiviewMotionFrame> frame, predecessor;
+            std::optional<EditorVulkanXrViewportAccess::AuxiliaryImages> pairedImages;
+            RenderTimelinePoint submission;
+            std::size_t drawCapacity{};
+            bool ready{};
+
+            /** @brief Discards any unconsumed live observation on rebind, completion or invalidation. */
+            void ResetObservation() noexcept {
+                frame.reset();
+                predecessor.reset();
+                pairedImages.reset();
+                submission = {};
+            }
+
+            /** @brief Returns the exact scratch storage selected by the live coverage binding. */
+            [[nodiscard]] const CoverageTargets &CurrentTargets() const noexcept {
+                return pairedImages ? paired : ordinary;
+            }
+
+            /** @brief Retires each independently owned mask and its partial creation debt. */
+            Result<void> RetireTargets(RenderFrontend &frontend) {
+                if (auto retired = paired.RetireTargets(frontend); retired.HasError())
+                    return retired;
+                return ordinary.RetireTargets(frontend);
+            }
+
+            /** @brief Maps coverage to the current auxiliary raster when paired, or the full projection for diagnostics. */
+            void PublishTargets(const Projection::Topology::Coverage &topology, const Projection &prior, const Auxiliary *auxiliary,
+                                const EditorVulkanXrViewportAccess::AuxiliaryImages *images) {
+                if (images)
+                    pairedImages = *images;
+                const auto &surface = CurrentTargets();
+                for (std::uint32_t eye = 0; eye < targets.size(); ++eye) {
+                    const auto rectangle = images ? auxiliary->targets[eye].rectangle
+                                                  : MultiviewRenderRectangle{0, 0, surface.extent.width, surface.extent.height};
                     targets[eye] = {topology.color,
                                     topology.depth,
-                                    colorViews[eye].handle,
-                                    scratchDepth.depthViews[eye].handle,
-                                    {0, 0, extent.width, extent.height},
+                                    surface.colorViews[eye].handle,
+                                    surface.scratchDepth.depthViews[eye].handle,
+                                    rectangle,
                                     eye,
                                     eye,
                                     topology.predecessor,
                                     prior.depthViews[eye].handle,
                                     eye};
+                }
             }
         };
 
@@ -768,11 +801,22 @@ namespace Horo::Editor {
             auto &work = coverage.emplace();
             work.drawCapacity = drawCapacity;
             if (const auto *port = viewport.bridge_.Port(); port && port->SupportsStereoCoverageReadback())
-                work.probe = viewport.xrCoverageProbe_;
-            if (auto targets = work.PrepareTargets(viewport.frontend_, color); targets.HasError())
+                work.ordinary.probe = viewport.xrCoverageProbe_;
+            if (auto targets = work.ordinary.PrepareTargets(viewport.frontend_, color.extent); targets.HasError())
                 return targets;
-            for (std::size_t index = 0; index < history.size(); ++index) {
+            const auto prepare = [&](const std::size_t index, const CoverageTargets &targets,
+                                     const EditorVulkanXrViewportAccess::AuxiliaryPlan *aux) {
                 auto &output = history[index];
+                const auto &prior = history[1 - index];
+                auto &topology = aux ? output.pairedCovered : output.covered;
+                const Projection::CoveragePlan plan{targets.color.handle, targets.scratchDepth.depthTexture.handle,
+                                                    prior.depthTexture.handle, std::span{work.slots[index]}.first(drawCapacity),
+                                                    targets.readback.handle};
+                return topology.emplace().Prepare(viewport.frontend_, meshes, viewport.resources_, viewport.xrDrawSlots_[0], color,
+                                                  acquired, requiredFinal, output.depthTexture.handle, aux, viewport.xrMotionDrawSlots_,
+                                                  &plan);
+            };
+            for (std::size_t index = 0; index < history.size(); ++index) {
                 const auto &prior = history[1 - index];
                 const auto &bindings = MultiviewShaderParameterIds::PreviousEyeDepthBindings;
                 const std::array sampled{MaterialResourceBinding{bindings.front(), 0, prior.depthViews.front().handle},
@@ -786,19 +830,23 @@ namespace Horo::Editor {
                         prepared.HasError())
                         return prepared;
                 }
-                const Projection::CoveragePlan plan{work.color.handle, work.scratchDepth.depthTexture.handle, prior.depthTexture.handle,
-                                                    slots, work.readback.handle};
-                const auto prepare = [&](Projection::Topology &topology, const EditorVulkanXrViewportAccess::AuxiliaryPlan *aux) {
-                    return topology.Prepare(viewport.frontend_, meshes, viewport.resources_, viewport.xrDrawSlots_[0], color, acquired,
-                                            requiredFinal, output.depthTexture.handle, aux, viewport.xrMotionDrawSlots_, &plan);
-                };
-                if (auto result = prepare(output.covered.emplace(), nullptr); result.HasError())
+                if (auto result = prepare(index, work.ordinary, nullptr); result.HasError())
                     return result;
-                if (auxiliary)
-                    if (auto result = prepare(output.pairedCovered.emplace(), &auxiliary->plan); result.HasError())
-                        return result;
             }
             work.ready = true;
+            // D16 quantization can give the motion pass a different visible surface than our D32 mask.
+            if (!auxiliary || auxiliary->plan.depth.allocation.format != RenderTextureFormat::Depth32Float)
+                return Result<void>::Success();
+
+            auto paired = work.paired.PrepareTargets(viewport.frontend_, auxiliary->plan.motion.allocation.extent);
+            for (std::size_t index = 0; index < history.size() && paired.HasValue(); ++index)
+                paired = prepare(index, work.paired, &auxiliary->plan);
+            if (paired.HasError()) {
+                for (auto &output : history)
+                    output.pairedCovered.reset();
+                // If retiring a partial allocation fails, the same owner will retry at Scene teardown.
+                (void)work.paired.RetireTargets(viewport.frontend_);
+            }
             return Result<void>::Success();
         }
 
@@ -874,14 +922,17 @@ namespace Horo::Editor {
             frame.publication.capabilityRevision != support.capabilityRevision)
             return std::nullopt;
         auto &coverage = *graph.coverage;
-        CoverageObservation observation{frame,
-                                        *coverage.predecessor,
-                                        coverage.color.handle,
-                                        {coverage.colorViews.front().handle, coverage.colorViews.back().handle},
-                                        graph.extent,
-                                        coverage.submission};
+        const auto &targets = coverage.CurrentTargets();
+        CoverageObservation observation{.frame = frame,
+                                        .predecessor = *coverage.predecessor,
+                                        .texture = targets.color.handle,
+                                        .eyes = {targets.colorViews.front().handle, targets.colorViews.back().handle},
+                                        .extent = targets.extent,
+                                        .rectangles = {coverage.targets.front().rectangle, coverage.targets.back().rectangle},
+                                        .completion = coverage.submission,
+                                        .auxiliary = coverage.pairedImages};
         try {
-            observation.pixels = coverage.ReadPixels(viewport.bridge_.Port());
+            observation.pixels = targets.ReadPixels(viewport.bridge_.Port(), coverage.submission);
         } catch (const std::bad_alloc &) {
             // Preserve the already proven completion fact when optional diagnostic error reporting exhausts host memory.
         }
@@ -1094,7 +1145,7 @@ namespace Horo::Editor {
             auto &coverage = *storage.coverage;
             const auto &prior = *storage.previousDepth;
             coverage.Publish(std::move(*coverageScene), topology->coverage->parameters, draws, coverage.slots[storage.activeHistorySlot]);
-            coverage.PublishTargets(*topology->coverage, storage.history[prior.slot], storage.extent);
+            coverage.PublishTargets(*topology->coverage, storage.history[prior.slot], auxiliary ? &*storage.auxiliary : nullptr, auxiliary);
             coverage.frame = *motion;
             coverage.predecessor = prior.frame;
         }
@@ -1243,7 +1294,7 @@ namespace Horo::Editor {
                                                                     .output = MultiviewOutput::ReprojectionCoverage}};
             if (topology.copyPass.IsValid())
                 workloads[index + 1] = {topology.copyPass,
-                                        RenderGraphStereoCoverageCopy{topology.color, topology.readback, *coverage.probe}};
+                                        RenderGraphStereoCoverageCopy{topology.color, topology.readback, *coverage.CurrentTargets().probe}};
         }
         recordedEver_ = true;
         auto executed = frame.ExecuteSubmittedGraph(*bound, std::span{workloads}.first(bound->Passes().size()), std::span{&submission, 1});

@@ -2308,24 +2308,40 @@ namespace Horo::Tests::OpenXRApplication {
         using enum XR::XRProjectFeaturePolicy;
         using namespace Render;
         bool delayAuxiliary = false;
+        bool rejectPairedMask = false;
+        bool useDepth16 = false;
         SECTION("asymmetric writer with an adjacent predecessor") {}
         SECTION("zero-time auxiliary wait defers release but leaves ordinary projection usable") {
             delayAuxiliary = true;
         }
+        SECTION("paired mask allocation failure preserves the motion writer and ordinary projection") {
+            rejectPairedMask = true;
+        }
+        SECTION("D16 eye-view admission falls back to ordinary projection without a paired mask") {
+            useDepth16 = true;
+        }
         ApplicationFixture fixture{true, 5, Unrequested, Unrequested, Unrequested, true};
-        constexpr std::array<std::int64_t, 3> formats{VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT};
+        const std::array<std::int64_t, 3> formats{VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                  useDepth16 ? VK_FORMAT_D16_UNORM : VK_FORMAT_D32_SFLOAT};
         fixture.script.census.formats = formats.size();
         fixture.script.census.formatPublication = formats;
         const auto motion = ApplicationVulkanFixture::CookMotion();
         fixture.viewport->StageXrMotionProgram(RequireValue(
             Editor::LoadEditorVulkanMultiviewMotionCook(motion.compiled.payload,
                                                         RequireValue(Render::EncodeReflectedShaderArtifact(motion.reflected)))));
+        const auto coverage = ApplicationVulkanFixture::CookCoverage();
+        fixture.viewport->StageXrCoverageProgram(RequireValue(
+            Editor::LoadEditorVulkanMultiviewCoverageCook(coverage.compiled.payload,
+                                                          RequireValue(Render::EncodeReflectedShaderArtifact(coverage.reflected)))));
+        auto &vulkan = fixture.vulkan->native;
+        if (rejectPairedMask)
+            vulkan.resourceState.state.rejectedImage =
+                VulkanResourceTest::NativeResourceState::RejectedImage{VK_FORMAT_R32_SFLOAT, {800, 512}};
         auto scene = PublishPlay(fixture);
         fixture.script.clock.sample = 1;
         const auto previous = [&] {
             return Editor::EditorVulkanXrViewportAccess::PreviousDepth(*fixture.viewport);
         };
-        auto &vulkan = fixture.vulkan->native;
         const auto submit = [&](std::uint64_t number) {
             auto frame = RequireValue(fixture.frontend->BeginFrame({number, {8, 8}}));
             REQUIRE(fixture.play->ExecuteRenderFrame(frame, {}).HasValue());
@@ -2387,29 +2403,47 @@ namespace Horo::Tests::OpenXRApplication {
 
         submit(2);
         const auto commands = std::span{vulkan.encoded.renderingCalls}.subspan(priorCalls);
-        REQUIRE(commands.size() == (delayAuxiliary ? 2 : 4));
+        const bool wroteAuxiliary = !delayAuxiliary && !useDepth16;
+        const bool pairedCoverage = wroteAuxiliary && !rejectPairedMask;
+        REQUIRE(commands.size() == (pairedCoverage ? 6 : 4));
         CHECK(depthImage(priorBarriers) != firstDepth);
         CHECK_FALSE(previous());
-        if (!delayAuxiliary) {
+        if (wroteAuxiliary) {
             CHECK(commands[2].extent.width == 640);
             CHECK(commands[3].extent.width == 800);
             CHECK(commands[2].extent.height == 512);
             CHECK(commands[3].extent.height == 512);
             CHECK(commands[2].depth);
             CHECK(commands[3].depth);
+            if (pairedCoverage) {
+                for (std::size_t eye = 0; eye < 2; ++eye) {
+                    const auto &motionRaster = commands[2 + eye];
+                    const auto &mask = commands[4 + eye];
+                    CHECK(mask.extent.width == motionRaster.extent.width);
+                    CHECK(mask.extent.height == motionRaster.extent.height);
+                    CHECK(mask.colorView != motionRaster.colorView);
+                    CHECK(mask.depth);
+                }
+            }
+            CHECK(fixture.vulkan->port.motionUniformWrites == (pairedCoverage ? 2U : 1U));
+        } else {
+            for (std::size_t eye = 0; eye < 2; ++eye) {
+                CHECK(commands[2 + eye].extent.width == commands[eye].extent.width);
+                CHECK(commands[2 + eye].extent.height == commands[eye].extent.height);
+            }
             CHECK(fixture.vulkan->port.motionUniformWrites == 1);
         }
         REQUIRE(fixture.play->ProgressRenderTail().HasValue());
         CHECK(fixture.script.frames.ends == 1);
         if (!delayAuxiliary)
-            CHECK(fixture.script.swapchain.releases == 1);
+            CHECK(fixture.script.swapchain.releases == (useDepth16 ? 3 : 1));
         complete();
         if (delayAuxiliary) {
             CHECK(fixture.script.frames.ends == 1);
             fixture.script.swapchain.timeoutSwapchain = XR_NULL_HANDLE;
             REQUIRE(fixture.play->ProgressRenderTail().HasValue());
             fixture.script.frames.prediction += 1'000'000;
-            CHECK(fixture.vulkan->port.motionUniformWrites == 0);
+            CHECK(fixture.vulkan->port.motionUniformWrites == 1);
         }
         CHECK(fixture.script.swapchain.releases == 4);
         CHECK(fixture.script.frames.ends == 2);
@@ -2572,11 +2606,13 @@ namespace Horo::Tests::OpenXRApplication {
         };
         const auto firstSource = makeImage(900, {8, 8}, RenderTextureFormat::Rgba8Unorm, false);
         const auto secondSource = makeImage(901, {8, 8}, RenderTextureFormat::Rgba8Unorm, false);
-        const auto motionSource = makeImage(902, {8, 8}, RenderTextureFormat::Rgba16Float, false);
-        const auto depthSource = makeImage(903, {8, 8}, RenderTextureFormat::Depth32Float, true);
+        const auto motionSource = makeImage(902, {6, 5}, RenderTextureFormat::Rgba16Float, false);
+        const auto depthSource = makeImage(903, {6, 5}, RenderTextureFormat::Depth32Float, true);
         const Viewport::AuxiliaryPlan plan{{motionSource->allocation, motionSource->AcquiredState(), motionSource->RequiredFinalState()},
                                            {depthSource->allocation, depthSource->AcquiredState(), depthSource->RequiredFinalState()},
-                                           {{{6, 8}, {8, 5}}}};
+                                           {{{4, 5}, {6, 3}}}};
+        if (expectProbe)
+            vulkan.resourceState.state.rejectedImage = VulkanResourceTest::NativeResourceState::RejectedImage{VK_FORMAT_R32_SFLOAT, {6, 5}};
         RequireValue(Viewport::Prepare(viewport, geometry->Resources(), firstSource->allocation, firstSource->AcquiredState(),
                                        firstSource->RequiredFinalState(), true, &plan, initialInstances.size()));
         const auto first = ImportWriterImage(frontend, firstSource);
@@ -2613,13 +2649,23 @@ namespace Horo::Tests::OpenXRApplication {
                 CHECK(coverage->predecessor == predecessor);
                 CHECK(coverage->texture.IsValid());
                 CHECK(coverage->eyes.front() != coverage->eyes.back());
-                CHECK(coverage->extent == FramebufferExtent{8, 8});
+                const std::array expectedRectangles{MultiviewRenderRectangle{0, 0, expectProbe ? 8U : 4U, expectProbe ? 8U : 5U},
+                                                    MultiviewRenderRectangle{0, 0, expectProbe ? 8U : 6U, expectProbe ? 8U : 3U}};
+                CHECK(coverage->rectangles == expectedRectangles);
+                CHECK(coverage->extent == (expectProbe ? firstSource->allocation.extent : motionSource->allocation.extent));
                 CHECK(coverage->completion.IsValid());
                 CHECK(coverage->pixels.has_value() == expectProbe);
+                CHECK(coverage->auxiliary.has_value() == !expectProbe);
                 if (expectProbe) {
                     REQUIRE(coverage->pixels);
                     CHECK(coverage->pixels->tiles == probe);
                     CHECK(coverage->pixels->count == 20);
+                } else {
+                    REQUIRE(coverage->auxiliary);
+                    CHECK(coverage->auxiliary->motion == pair.motion);
+                    CHECK(coverage->auxiliary->depth == pair.depth);
+                    CHECK(coverage->auxiliary->motionViews == pair.motionViews);
+                    CHECK(coverage->auxiliary->depthViews == pair.depthViews);
                 }
             }
             CHECK_FALSE(Viewport::TakeCoverage(viewport, motionFrame.frame));
@@ -2637,7 +2683,7 @@ namespace Horo::Tests::OpenXRApplication {
         motionFrame.frame.publication = publication;
         eyes.back().worldToClip.values[12] += 0.125F;
         RequireValue(Viewport::Bind(viewport, second.texture, second.views, publication, eyes, instances, &motionFrame,
-                                    Editor::EditorXrProjectionAlpha::Opaque, &pair));
+                                    Editor::EditorXrProjectionAlpha::Opaque, expectProbe ? nullptr : &pair));
         submit(2);
         REQUIRE(vulkan.encoded.coverageCopies.size() == (expectProbe ? 2 : 0));
         if (expectProbe) {
@@ -2648,19 +2694,19 @@ namespace Horo::Tests::OpenXRApplication {
             CHECK(copy[1].imageOffset.x == 2);
             CHECK(copy[1].bufferOffset == 12 * sizeof(float));
         }
-        const auto expected = expectCoverage ? 6U : 4U;
+        const auto expected = coverageMode == CoverageMode::Fits ? 6U : 4U;
         CHECK(vulkan.encoded.drawCalls.size() == previousDraws + expected * instances.size());
         REQUIRE(vulkan.encoded.renderingCalls.size() == begins + expected);
         const auto commands = std::span{vulkan.encoded.renderingCalls}.subspan(begins);
-        CHECK(commands[2].extent.width == 6);
-        CHECK(commands[2].extent.height == 8);
-        CHECK(commands[3].extent.width == 8);
-        CHECK(commands[3].extent.height == 5);
+        CHECK(commands[2].extent.width == (expectProbe ? 8U : 4U));
+        CHECK(commands[2].extent.height == (expectProbe ? 8U : 5U));
+        CHECK(commands[3].extent.width == (expectProbe ? 8U : 6U));
+        CHECK(commands[3].extent.height == (expectProbe ? 8U : 3U));
         CHECK(commands[2].depth);
         CHECK(commands[3].depth);
         CHECK(commands[2].colorClear.color.float32[3] == 0.0F);
         CHECK(commands[3].colorClear.color.float32[3] == 0.0F);
-        CHECK(fixture.vulkan->port.motionUniformWrites == (expectCoverage ? 2 : 1) * instances.size());
+        CHECK(fixture.vulkan->port.motionUniformWrites == (coverageMode == CoverageMode::Fits ? 2 : 1) * instances.size());
         CHECK(vulkan.commandState.state.accepted.size() == 2);
         CHECK(vulkan.commandState.state.waitCalls == 0);
         RequireValue(Viewport::Retire(viewport));

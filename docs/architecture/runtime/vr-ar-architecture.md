@@ -712,9 +712,18 @@ predecessor, coverage images and completion point. The renderer's private
 diagnostic hook can request one bounded tile per eye before graph preparation.
 The same graphics submission copies those tiles into a small coherent buffer.
 The viewport reads it only after the exact submission completes and returns
-the classified samples with that observation. Normal Play leaves the
-diagnostic hook inactive. Full-frame reduction and provider-specific encoding
-remain prerequisites for compositor admission.
+the classified samples with that observation. The projection diagnostic and
+the paired motion/depth raster use separate owned masks. The paired mask uses
+the negotiated auxiliary allocation and the exact per-eye output rectangles,
+including asymmetric layouts, with the same predecessor depth and geometry.
+The paired raster requires the same D32 depth test as the motion output.
+The current frontend cannot realize the per-eye D16 views, so Play retires
+that incomplete auxiliary acquisition and submits ordinary projection.
+Its observation also identifies the exact auxiliary acquisitions. The tile
+diagnostic uses the full projection mask. Padded areas outside the paired
+rectangles carry no coverage evidence. Normal Play leaves the diagnostic hook
+inactive. Full-frame reduction and provider-specific encoding remain
+prerequisites for compositor admission.
 
 See the [Khronos space-warp layer contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrCompositionLayerSpaceWarpInfoFB.html)
 for the distinction between runtime motion inputs and internal Renderer UV history.

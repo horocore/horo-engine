@@ -391,6 +391,15 @@ namespace Horo::Render {
             return std::ranges::equal(projection.scene->Draws(), coverage.scene->Draws(), equivalent);
         }
 
+        /** @brief Requires coverage of the same samples and ordered layers as the auxiliary producer. */
+        bool SameCoverageRaster(const RenderGraphMultiview &motion, const RenderGraphMultiview &coverage) {
+            const auto sameEye = [](const MultiviewGraphTarget &output, const MultiviewGraphTarget &mask) {
+                return std::tie(output.rectangle, output.arrayLayer, output.depthArrayLayer) ==
+                       std::tie(mask.rectangle, mask.arrayLayer, mask.depthArrayLayer);
+            };
+            return SameCoverageGeometry(motion, coverage) && std::ranges::equal(motion.targets, coverage.targets, sameEye);
+        }
+
         /** @brief Enforces producer and consumer order within one validated submission range. */
         bool SharesOrderedSubmission(const RenderGraphExecutionRequest &request, const std::size_t producer, const std::size_t consumer) {
             if (producer >= consumer)
@@ -468,6 +477,9 @@ namespace Horo::Render {
                              !DisjointMultiviewTargets(*color, *coverage) || (motion && !DisjointMultiviewTargets(*motion, *coverage))))
                 return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph,
                                                        "Coverage requires the exact current projection geometry and disjoint outputs."));
+            if (coverage && motion && !SameCoverageRaster(*motion, *coverage))
+                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph,
+                                                       "Paired coverage requires the exact motion raster and ordered eye layers."));
             if (readback && (!coverage || !CoverageCopyProven(request, *coverage, *readback, coverageIndex, readbackIndex)))
                 return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph,
                                                        "Coverage readback requires exact owned eye tiles and its producer submission."));
