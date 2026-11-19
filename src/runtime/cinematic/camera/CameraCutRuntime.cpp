@@ -68,18 +68,28 @@ namespace Horo::Cinematic {
             return Result<Runtime::EntityRef>::Success(*entity);
         }
 
-        /** @brief Applies the authored fallback before retaining any player or camera state. */
-        Result<CameraTransitionTier> AdmitFallback(const SequenceFrameCameraCutKey &key, const ErrorCodeDescriptor &reason) {
-            if (key.fallback == CameraTransitionFallback::HardCut)
-                return Result<CameraTransitionTier>::Success(CameraTransitionTier::HardCut);
-            return Result<CameraTransitionTier>::Failure(MakeError(reason));
-        }
-
         /** @brief Restricts authored fallback to transition capability or representation failures. */
         bool CanUseAuthoredFallback(const CameraTransitionFallback fallback, const Error &error) noexcept {
             return fallback == CameraTransitionFallback::HardCut &&
                    (error.code.Value() == Runtime::CameraErrors::IncompatibleTransition.code.Value() ||
-                    error.code.Value() == Runtime::CameraErrors::UnsupportedTransition.code.Value());
+                    error.code.Value() == Runtime::CameraErrors::UnsupportedTransition.code.Value() ||
+                    error.code.Value() == Runtime::CameraErrors::TransitionBudgetExceeded.code.Value());
+        }
+
+        /** @brief Applies the authored fallback before retaining any player or camera state. */
+        Result<CameraTransitionTier> AdmitFallback(const SequenceFrameCameraCutKey &key, Error reason) {
+            if (CanUseAuthoredFallback(key.fallback, reason))
+                return Result<CameraTransitionTier>::Success(CameraTransitionTier::HardCut);
+            return Result<CameraTransitionTier>::Failure(std::move(reason));
+        }
+
+        /** @brief Checks only the requested mode against the actual camera/frontend owner. */
+        Result<void> CheckTransitionSupport(const CameraTransitionTier tier, const Runtime::CameraService &camera) {
+            if (tier == CameraTransitionTier::DualViewCrossFade)
+                return camera.CheckCrossFadeAdmission();
+            if (camera.TransitionSupport() != Runtime::CameraTransitionSupport::SingleViewBlend)
+                return Result<void>::Failure(MakeError(Runtime::CameraErrors::UnsupportedTransition));
+            return Result<void>::Success();
         }
 
         /** @brief Admits an effective mode and compatible endpoints before acquiring player or camera state. */
@@ -88,13 +98,12 @@ namespace Horo::Cinematic {
                                                      const Runtime::EntityRef current, const SequenceTime windowEnd) {
             if (key.transitionTier == CameraTransitionTier::HardCut)
                 return Result<CameraTransitionTier>::Success(CameraTransitionTier::HardCut);
-            if (key.transitionTier == CameraTransitionTier::DualViewCrossFade ||
-                camera.TransitionSupport() != Runtime::CameraTransitionSupport::SingleViewBlend)
-                return AdmitFallback(key, Runtime::CameraErrors::UnsupportedTransition);
+            if (auto supported = CheckTransitionSupport(key.transitionTier, camera); supported.HasError())
+                return AdmitFallback(key, std::move(supported).ErrorValue());
             if (!previous.IsValid() || key.transitionDuration > windowEnd - key.time)
-                return AdmitFallback(key, Runtime::CameraErrors::IncompatibleTransition);
-            if (key.fallback == CameraTransitionFallback::HardCut)
-                return Result<CameraTransitionTier>::Success(CameraTransitionTier::SingleViewBlend);
+                return AdmitFallback(key, MakeError(Runtime::CameraErrors::IncompatibleTransition));
+            if (key.transitionTier == CameraTransitionTier::DualViewCrossFade || key.fallback == CameraTransitionFallback::HardCut)
+                return Result<CameraTransitionTier>::Success(key.transitionTier);
             const auto source = Runtime::ResolveSceneCamera(scene, previous);
             const auto destination = Runtime::ResolveSceneCamera(scene, current);
             if (source.HasError())
@@ -286,18 +295,20 @@ namespace Horo::Cinematic {
                                                          const SequenceTime position, const Runtime::CameraProposal &destination) {
         const auto &cut = cuts_[key];
         const auto elapsed = position - cut.time;
-        if (cut.tier != CameraTransitionTier::SingleViewBlend || elapsed >= cut.duration)
+        if (cut.tier == CameraTransitionTier::HardCut || elapsed >= cut.duration)
             return camera_->Submit(*lease_, destination);
         const auto source = Runtime::ResolveSceneCamera(scene, cuts_[key - 1].camera);
         if (source.HasError())
             return Result<void>::Failure(source.ErrorValue());
-        if (cut.fallback == CameraTransitionFallback::HardCut &&
+        if (cut.tier == CameraTransitionTier::SingleViewBlend && cut.fallback == CameraTransitionFallback::HardCut &&
             source.Value().values.projection.kind != destination.values.projection.kind)
             return SubmitFallback(destination);
         auto weight = static_cast<double>(elapsed) / static_cast<double>(cut.duration);
         if (cut.curve == CameraBlendCurve::SmoothStep)
             weight = weight * weight * (3.0 - 2.0 * weight);
-        const auto blended = camera_->SubmitBlend(*lease_, source.Value(), destination, static_cast<float>(weight));
+        const auto blended = cut.tier == CameraTransitionTier::DualViewCrossFade
+                                 ? camera_->SubmitCrossFade(*lease_, source.Value(), destination, static_cast<float>(weight))
+                                 : camera_->SubmitBlend(*lease_, source.Value(), destination, static_cast<float>(weight));
         if (blended.HasError() && CanUseAuthoredFallback(cut.fallback, blended.ErrorValue()))
             return SubmitFallback(destination);
         return blended;

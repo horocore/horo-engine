@@ -71,6 +71,12 @@ namespace Horo::Editor {
          * @param spatial Whether to include the exact same-extent native spatial output in that generation.
          * @return Typed invalid lifecycle failure if resources already exist. */
         [[nodiscard]] Result<void> EnableColorPipeline(bool spatial = false);
+        /** @brief Reserves the paired legacy viewport target policy before the first allocation. */
+        [[nodiscard]] Result<void> EnableCameraCrossFade();
+        /** @brief Returns the source attachment from the same ready generation as Target(). */
+        [[nodiscard]] Render::RenderTargetHandle CameraCrossFadeTarget() const noexcept;
+        /** @brief Returns the sampled color view of the Ready cross-fade source target. */
+        [[nodiscard]] Render::RenderTextureViewHandle CameraCrossFadeColorView() const noexcept;
         /** @brief Returns the exact descriptor used to allocate the resident scene color for this generation. */
         [[nodiscard]] Render::RenderTextureDescriptor SceneColorDescriptor() const noexcept;
         /** @brief Borrows the separate same-extent spatial output owned by the viewport generation. */
@@ -92,6 +98,19 @@ namespace Horo::Editor {
         [[nodiscard]] bool IsReady() const noexcept;
 
     private:
+        struct CameraCrossFadeSource final {
+            Render::RenderTextureHandle color;
+            Render::RenderTextureHandle depth;
+            Render::RenderTextureViewHandle colorView;
+            Render::RenderTextureViewHandle depthView;
+            Render::RenderTargetHandle target;
+            Render::ResourceOperationId colorOperation;
+            Render::ResourceOperationId depthOperation;
+            Render::ResourceOperationId colorViewOperation;
+            Render::ResourceOperationId depthViewOperation;
+            Render::ResourceOperationId targetOperation;
+        };
+
         struct ResidentMesh {
             Render::RenderBufferHandle vertexBuffer;
             Render::RenderBufferHandle indexBuffer;
@@ -129,6 +148,8 @@ namespace Horo::Editor {
             Render::ResourceOperationId targetOperation;
             EditorViewportExtent extent;
             std::uintptr_t imageIdentity{0};
+            CameraCrossFadeSource crossFade;
+            bool crossFadeDeclined{};
         };
 
         [[nodiscard]] Result<void> SynchronizeMeshes(std::span<const EditorViewportMeshResourceView> resources);
@@ -143,6 +164,9 @@ namespace Horo::Editor {
         void RetireMissingMeshes(std::span<const EditorViewportMeshResourceView> resources) noexcept;
         [[nodiscard]] Result<void> SynchronizeTarget(EditorViewportExtent extent);
         [[nodiscard]] Result<bool> AdvanceViewportTarget(ViewportTargetResources &resources);
+        [[nodiscard]] Result<bool> AdvanceCameraCrossFadeSource(CameraCrossFadeSource &source, Render::FramebufferExtent extent);
+        [[nodiscard]] bool PrepareCameraCrossFadeSource(EditorViewportExtent extent);
+        void ReleaseCameraCrossFadeSource(CameraCrossFadeSource &source) noexcept;
         [[nodiscard]] Render::RenderTextureDescriptor SceneColorDescriptor(Render::FramebufferExtent extent) const noexcept;
         [[nodiscard]] static Render::RenderTextureDescriptor SpatialColorDescriptor(Render::FramebufferExtent extent) noexcept;
         [[nodiscard]] Result<bool> AdvanceViewportTextures(ViewportTargetResources &resources);
@@ -178,8 +202,10 @@ namespace Horo::Editor {
         Render::DirectionalShadowProfile requestedShadowProfile_;
         std::uint64_t shadowGeneration_{};
         EditorViewportExtent allocatedExtent_;
+        EditorViewportExtent declinedCameraCrossFadeExtent_;
         bool meshesReady_{false};
         bool colorPipeline_{};
         bool spatialColor_{};
+        bool cameraCrossFade_{};
     };
 }  // namespace Horo::Editor

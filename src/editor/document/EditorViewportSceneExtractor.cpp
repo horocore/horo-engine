@@ -265,8 +265,9 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportSceneSnapshot::View */
     EditorViewportSceneView EditorViewportSceneSnapshot::View() const noexcept {
-        return EditorViewportSceneView{camera, meshResources,        instances,
-                                       lights, runtimeSceneId.value, ComputeEditorViewportLightRevision(lights)};
+        return EditorViewportSceneView{camera,         meshResources,        instances,
+                                       lights,         runtimeSceneId.value, ComputeEditorViewportLightRevision(lights),
+                                       cameraCrossFade};
     }
 
     /** @copydoc EditorViewportSceneState::Replace */

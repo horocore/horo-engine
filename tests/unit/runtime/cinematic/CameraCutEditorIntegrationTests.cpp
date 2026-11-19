@@ -136,6 +136,29 @@ namespace Horo::Editor {
         CHECK(fixture.controller.ViewportScene().camera.position.x == 20.0F);
     }
 
+    TEST_CASE("Editor preview copies the cross-fade pair through the viewport scene and clears it on handoff",
+              "[unit][cinematic][camera][editor][cross-fade]") {
+        PreviewFixture fixture;
+        const auto scene = *fixture.scene.ActiveScene();
+        const Runtime::CameraViewContext context{{1, 1}, scene.RuntimeId(), Runtime::CameraViewDomain::EditorPreview};
+        const Runtime::CameraCrossFadeAdmission admission{context, 9, 2};
+        auto activation = TransitionActivation(Cinematic::CameraTransitionTier::DualViewCrossFade);
+        REQUIRE(fixture.controller.StartCameraCutPreview(std::move(activation), fixture.Settings(), context.view,
+                                                         Runtime::CameraTransitionSupport::SingleViewBlend, admission).HasValue());
+        REQUIRE(fixture.controller.SeekCameraCutPreview(6).HasValue());
+        EditorViewportSceneState presentation;
+        presentation.Replace(fixture.controller.ViewportScene());
+        const auto retained = presentation.View();
+        REQUIRE(retained.cameraCrossFade);
+        CHECK(retained.cameraCrossFade->source.position.x == 10.0F);
+        CHECK(retained.camera.position.x == 20.0F);
+        CHECK(retained.cameraCrossFade->destinationWeight == 0.5F);
+        CHECK(retained.cameraCrossFade->admissionGeneration == admission.generation);
+        fixture.controller.StopCameraCutPreview();
+        CHECK_FALSE(fixture.controller.ViewportScene().View().cameraCrossFade);
+        CHECK(retained.cameraCrossFade->source.position.x == 10.0F);
+    }
+
     TEST_CASE("Controller extraction uses runtime hard cuts and hands off to the current authoring owner",
               "[unit][cinematic][camera][editor]") {
         PreviewFixture fixture;

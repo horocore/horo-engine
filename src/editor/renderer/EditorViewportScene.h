@@ -21,6 +21,13 @@ namespace Horo::Editor {
     /** @brief One backend-neutral renderable instance in the editor viewport scene. */
     using EditorViewportInstance = Render::RenderStaticMeshInstance;
 
+    /** @brief Additional source of an admitted viewport camera transition. */
+    struct EditorViewportCameraCrossFade final {
+        Render::RenderCameraView source;
+        float destinationWeight{};
+        std::uint64_t admissionGeneration{};
+    };
+
     /** @brief Non-owning immutable editor scene view consumed synchronously by Render. */
     struct EditorViewportSceneView {
         EditorViewportCamera camera{};
@@ -29,6 +36,7 @@ namespace Horo::Editor {
         std::span<const Render::RenderLight> lights{};
         std::uint64_t lightSceneDomain{};
         std::uint64_t lightSnapshotRevision{};
+        std::optional<EditorViewportCameraCrossFade> cameraCrossFade;
 
         /** @brief Reports whether the camera and every instance contain supported finite values. */
         [[nodiscard]] bool IsValid() const noexcept;

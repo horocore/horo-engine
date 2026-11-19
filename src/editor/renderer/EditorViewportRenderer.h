@@ -47,6 +47,12 @@ namespace Horo::Editor {
         std::optional<Render::RenderLight> selectedLight;
     };
 
+    /** @brief Observable reserved-view capacity from the selected private viewport owner. */
+    struct EditorViewportCrossFadeCapacity final {
+        std::uint64_t generation{};
+        std::uint8_t availableViews{};
+    };
+
     /**
      * @brief Editor-private adapter that renders one viewport image with the selected graphics backend.
      *
@@ -57,6 +63,21 @@ namespace Horo::Editor {
     class IEditorViewportRenderer : public Render::IStaticMeshPassExecutor {
     public:
         virtual ~IEditorViewportRenderer() = default;
+
+        /** @brief Opts in to a cross-fade compositor before viewport textures are first allocated. */
+        [[nodiscard]] virtual Result<void> EnableCameraCrossFade() {
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportCrossFadeUnsupported));
+        }
+
+        /** @brief Reports the live reservation and its currently available views. */
+        [[nodiscard]] virtual EditorViewportCrossFadeCapacity CameraCrossFadeCapacity() const noexcept {
+            return {};
+        }
+
+        /** @brief Prepares the optional pair from the same frozen viewport snapshot as the upcoming mesh pass. */
+        [[nodiscard]] virtual Result<void> PrepareCameraCrossFadeFrame(const std::optional<EditorViewportCameraCrossFade> &crossFade) {
+            return crossFade ? Result<void>::Failure(MakeError(RendererErrors::ViewportCrossFadeUnsupported)) : Result<void>::Success();
+        }
 
         /** @brief Activates only explicit genuine cooked color inputs at cold startup. @param inputs Exact decoded generation.
          * @return Typed unsupported on implementations without the actual complete color executor. */

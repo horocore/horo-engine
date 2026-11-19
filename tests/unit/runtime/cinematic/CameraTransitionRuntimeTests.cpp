@@ -139,6 +139,103 @@ namespace Horo::Cinematic {
         CHECK(selected.selected.transitionResolution == CameraTransitionResolution::HardCutFallback);
     }
 
+    TEST_CASE("Dual view camera publication preserves both frame-owned cameras and the authored weight",
+              "[unit][cinematic][camera][cross-fade]") {
+        Fixture fixture;
+        const auto scene = fixture.scene->View();
+        const auto context = fixture.camera.Context();
+        auto owner =
+            Take(CameraService::Create(context, CameraTransitionSupport::SingleViewBlend, CameraCrossFadeAdmission{context, 13, 2}));
+        auto activation = TransitionActivation(CameraTransitionTier::DualViewCrossFade, CameraBlendCurve::SmoothStep);
+        auto keys = std::vector<SequenceFrameCameraCutKey>(activation.plan.CameraKeys().begin(), activation.plan.CameraKeys().end());
+        keys.back().transitionDuration = 3;
+        activation.plan = Take(SequenceFrameEvaluationPlan::Create(10, SequenceLoopMode::Once, 4, {}, {}, keys));
+        auto playback = Take(CinematicCameraPlayback::Activate(fixture.runtime, owner, std::move(activation), fixture.Settings(), scene));
+        REQUIRE(fixture.runtime.Play(playback.Player()).HasValue());
+        REQUIRE(fixture.runtime.Seek(playback.Player(), 6).HasValue());
+        const auto before = Tests::AllocationProbe::Count();
+        const auto published = playback.Publish(scene);
+        const auto committed = owner.Commit(1, scene, std::nullopt);
+        const auto after = Tests::AllocationProbe::Count();
+        REQUIRE(published.HasValue());
+        REQUIRE(committed.HasValue());
+        CHECK(before == after);
+        const auto &first = committed.Value();
+        REQUIRE(first.crossFade);
+        CHECK(first.crossFade->sourceCamera == *scene.Find({1}));
+        CHECK(first.crossFade->source.position.x == 10.0F);
+        CHECK(first.selected.camera == *scene.Find({2}));
+        CHECK(first.selected.values.position.x == 20.0F);
+        CHECK(first.crossFade->admissionGeneration == 13);
+        CHECK(first.crossFade->destinationWeight == Catch::Approx(7.0F / 27.0F));
+        REQUIRE(playback.Evaluate(1, scene, {{}, {}, fixture.crossings}, {}).HasValue());
+        const auto repeated = Take(owner.Commit(1, scene, std::nullopt));
+        REQUIRE(repeated.crossFade);
+        CHECK(repeated.crossFade->destinationWeight == first.crossFade->destinationWeight);
+        const auto advanced = Take(owner.Commit(2, scene, std::nullopt));
+        REQUIRE(advanced.crossFade);
+        CHECK(advanced.crossFade->destinationWeight == Catch::Approx(20.0F / 27.0F));
+        CHECK(advanced.selectionEpoch == first.selectionEpoch);
+        REQUIRE(playback.Evaluate(1, scene, {{}, {}, fixture.crossings}, {}).HasValue());
+        const auto destination = Take(owner.Commit(3, scene, std::nullopt));
+        CHECK_FALSE(destination.crossFade);
+        CHECK(destination.discontinuity);
+        CHECK(destination.selected.camera == first.selected.camera);
+        CHECK(destination.selectionEpoch > advanced.selectionEpoch);
+    }
+
+    TEST_CASE("Dual view pressure refuses required playback and admits only the authored hard cut",
+              "[unit][cinematic][camera][cross-fade]") {
+        Fixture fixture;
+        const auto scene = fixture.scene->View();
+        const auto context = fixture.camera.Context();
+        const CameraCrossFadeAdmission foreign{{{2, 1}, context.scene, context.domain}, 1, 2};
+        CHECK(CameraService::Create(context, CameraTransitionSupport::SingleViewBlend, foreign).HasError());
+        auto owner =
+            Take(CameraService::Create(context, CameraTransitionSupport::SingleViewBlend, CameraCrossFadeAdmission{context, 1, 1}));
+        const auto denied =
+            CinematicCameraPlayback::Activate(fixture.runtime, owner, TransitionActivation(CameraTransitionTier::DualViewCrossFade),
+                                              fixture.Settings(), scene);
+        REQUIRE(denied.HasError());
+        CHECK(denied.ErrorValue().code.Value() == CameraErrors::TransitionBudgetExceeded.code.Value());
+        CHECK(fixture.runtime.ServiceSnapshot().usage.activePlayers == 0);
+        auto playback =
+            Take(CinematicCameraPlayback::Activate(fixture.runtime, owner,
+                                                   TransitionActivation(CameraTransitionTier::DualViewCrossFade, CameraBlendCurve::Linear,
+                                                                        CameraTransitionFallback::HardCut),
+                                                   fixture.Settings(), scene));
+        REQUIRE(fixture.runtime.Play(playback.Player()).HasValue());
+        REQUIRE(fixture.runtime.Seek(playback.Player(), 5).HasValue());
+        REQUIRE(playback.Publish(scene).HasValue());
+        const auto committed = Take(owner.Commit(1, scene, std::nullopt));
+        CHECK_FALSE(committed.crossFade);
+        CHECK(committed.selected.transitionResolution == CameraTransitionResolution::HardCutFallback);
+        CHECK(committed.selected.camera == *scene.Find({2}));
+    }
+
+    TEST_CASE("Cross-fade accepts distinct projections and rejects stale endpoints without replacing the pair",
+              "[unit][cinematic][camera][cross-fade]") {
+        Fixture fixture;
+        const auto scene = fixture.scene->View();
+        const auto context = fixture.camera.Context();
+        auto owner = Take(CameraService::Create(context, CameraTransitionSupport::HardCutOnly, CameraCrossFadeAdmission{context, 1, 2}));
+        const auto lease = Take(owner.Acquire({context, {1, 1}, 1}));
+        const auto from = Take(ResolveSceneCamera(scene, *scene.Find({1})));
+        auto to = Take(ResolveSceneCamera(scene, *scene.Find({2})));
+        to.values.projection.kind = Render::RenderProjectionKind::Orthographic;
+        REQUIRE(owner.SubmitCrossFade(lease, from, to, 0.25F).HasValue());
+        CHECK(owner.SubmitCrossFade(lease, from, to, std::numeric_limits<float>::quiet_NaN()).HasError());
+        ++to.sceneRevision;
+        const auto stale = owner.SubmitCrossFade(lease, from, to, 0.5F);
+        REQUIRE(stale.HasError());
+        CHECK(stale.ErrorValue().code.Value() == CameraErrors::StaleFrame.code.Value());
+        const auto retained = Take(owner.Commit(1, scene, std::nullopt));
+        REQUIRE(retained.crossFade);
+        CHECK(retained.crossFade->source.projection.kind == Render::RenderProjectionKind::Perspective);
+        CHECK(retained.selected.values.projection.kind == Render::RenderProjectionKind::Orthographic);
+        CHECK(retained.crossFade->destinationWeight == 0.25F);
+    }
+
     TEST_CASE("The camera owner interpolates rotation and lens and rejects incompatible projection atomically",
               "[unit][cinematic][camera]") {
         Fixture fixture;
@@ -168,6 +265,8 @@ namespace Horo::Cinematic {
         auto orthographic = from;
         orthographic.values.projection.kind = Render::RenderProjectionKind::Orthographic;
         orthographic.values.projection.orthographicHeight = 2.0F;
+        orthographic.values.projection.nearPlane = 0.1F;
+        orthographic.values.projection.farPlane = 100.0F;
         to.values.projection.orthographicHeight = 10.0F;
         to.values.projection.nearPlane = 0.5F;
         to.values.projection.farPlane = 200.0F;

@@ -83,11 +83,13 @@ namespace Horo::Editor {
     Result<void> EditorWorkspaceController::StartCameraCutPreview(Cinematic::SequencePlaybackActivation activation,
                                                                   const Cinematic::CameraCutActivation &cuts,
                                                                   const Runtime::CameraViewContextId view,
-                                                                  const Runtime::CameraTransitionSupport transitions) {
+                                                                  const Runtime::CameraTransitionSupport transitions,
+                                                                  const std::optional<Runtime::CameraCrossFadeAdmission> crossFade) {
         const auto scene = m_runtimeScene.ActiveScene();
         if (!scene || !EligiblePreview(activation, m_playSession.IsActive()))
             return Result<void>::Failure(MakeError(Runtime::CameraErrors::InvalidContext));
-        auto camera = Runtime::CameraService::Create({view, scene->RuntimeId(), Runtime::CameraViewDomain::EditorPreview}, transitions);
+        auto camera =
+            Runtime::CameraService::Create({view, scene->RuntimeId(), Runtime::CameraViewDomain::EditorPreview}, transitions, crossFade);
         if (camera.HasError())
             return Result<void>::Failure(camera.ErrorValue());
         auto runtime = Cinematic::CinematicRuntimeService::Create({activation.player.handle.session});
@@ -154,25 +156,29 @@ namespace Horo::Editor {
         SynchronizeRuntimeScenePreview();
     }
 
-    Result<EditorViewportCamera> EditorWorkspaceController::ResolveCameraCutPreview(const Runtime::RuntimeSceneView scene) {
+    Result<EditorWorkspaceController::CameraPreviewFrame> EditorWorkspaceController::ResolveCameraCutPreview(
+        const Runtime::RuntimeSceneView scene) {
         const auto &base = m_viewport.Current().camera;
         if (!m_cameraPreview)
-            return Result<EditorViewportCamera>::Success(base);
+            return Result<CameraPreviewFrame>::Success({base, std::nullopt});
         if (scene.RuntimeId() != m_cameraPreview->camera.Context().scene) {
             m_cameraPreview.reset();
-            return Result<EditorViewportCamera>::Success(base);
+            return Result<CameraPreviewFrame>::Success({base, std::nullopt});
         }
         if (const auto published = m_cameraPreview->playback->Publish(scene); published.HasError()) {
             LOG_ERROR("editor.viewport", "Camera preview released after binding loss: %s", published.ErrorValue().message.c_str());
             m_cameraPreview.reset();
-            return Result<EditorViewportCamera>::Success(base);
+            return Result<CameraPreviewFrame>::Success({base, std::nullopt});
         }
         if (m_cameraPreview->frame == std::numeric_limits<std::uint64_t>::max())
-            return Result<EditorViewportCamera>::Failure(MakeError(Runtime::CameraErrors::InvalidFrame));
+            return Result<CameraPreviewFrame>::Failure(MakeError(Runtime::CameraErrors::InvalidFrame));
         const auto selection =
             m_cameraPreview->camera.Commit(++m_cameraPreview->frame, scene, AuthoringProposal(base, scene.StructuralRevision()));
         if (selection.HasError())
-            return Result<EditorViewportCamera>::Failure(selection.ErrorValue());
-        return Result<EditorViewportCamera>::Success(ViewportCamera(selection.Value().selected.values));
+            return Result<CameraPreviewFrame>::Failure(selection.ErrorValue());
+        CameraPreviewFrame frame{ViewportCamera(selection.Value().selected.values), std::nullopt};
+        if (const auto &source = selection.Value().crossFade)
+            frame.crossFade.emplace(source->source, source->destinationWeight, source->admissionGeneration);
+        return Result<CameraPreviewFrame>::Success(frame);
     }
 }  // namespace Horo::Editor

@@ -138,14 +138,16 @@ namespace Horo::Editor {
             LOG_ERROR("editor.viewport", "Camera authority commit failed: %s", camera.ErrorValue().message.c_str());
             return;
         }
-        Result<EditorViewportSceneSnapshot> extracted = ExtractEditorViewportScene(*active, m_queuedRuntimeRevision, camera.Value(),
-                                                                                   m_primitiveMeshCache, &document, &m_assetMeshCache);
+        Result<EditorViewportSceneSnapshot> extracted =
+            ExtractEditorViewportScene(*active, m_queuedRuntimeRevision, camera.Value().destination, m_primitiveMeshCache, &document,
+                                       &m_assetMeshCache);
         if (extracted.HasError()) {
             LOG_ERROR("editor.viewport", "Runtime scene extraction failed: %s", extracted.ErrorValue().message.c_str());
             return;
         }
         m_viewportScene = std::move(extracted).Value();
-        m_viewModel.viewportCamera = camera.Value();
+        m_viewportScene.cameraCrossFade = camera.Value().crossFade;
+        m_viewModel.viewportCamera = camera.Value().destination;
         ++m_viewportSceneRevision;
         if (!m_viewport.Current().transformPreviews.empty()) {
             const Result<void> reapplied =

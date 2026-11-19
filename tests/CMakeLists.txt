@@ -3924,7 +3924,8 @@ if (HORO_BUILD_EDITOR_GUI)
     add_executable(HoroCameraCutEditorIntegrationTests unit/runtime/cinematic/CameraCutEditorIntegrationTests.cpp)
     target_compile_features(HoroCameraCutEditorIntegrationTests PRIVATE cxx_std_20)
     target_include_directories(HoroCameraCutEditorIntegrationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(HoroCameraCutEditorIntegrationTests PRIVATE HoroEngine::Gui)
+    target_link_libraries(HoroCameraCutEditorIntegrationTests PRIVATE
+        HoroEngine::Gui HoroEngine::AISceneIntegration HoroEngine::DecisionCookHost)
     horo_register_catch_test(HoroCameraCutEditorIntegrationTests LABELS "unit;cinematic;camera;editor;headless")
 endif ()
 

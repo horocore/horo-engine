@@ -69,6 +69,7 @@ namespace Horo::Editor {
         Runtime::SceneRuntimeId runtimeSceneId;
         Render::SceneColorSourcePolicy lightColorSourcePolicy; /**< Explicit Editor interpretation retained for all light previews. */
         EditorViewportCamera camera;
+        std::optional<EditorViewportCameraCrossFade> cameraCrossFade;
         std::vector<Runtime::PrimitiveMeshLease> meshLeases;
         std::vector<EditorAssetMeshLease> importedMeshLeases;
         std::vector<EditorViewportMeshResourceView> meshResources;

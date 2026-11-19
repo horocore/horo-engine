@@ -19,6 +19,8 @@ namespace Horo::Runtime::CameraErrors {
     const ErrorCodeDescriptor InvalidFrame = Describe("CameraInvalidFrame", "Camera frame or selection epoch cannot advance.");
     const ErrorCodeDescriptor UnsupportedTransition =
         Describe("UnsupportedCameraTransition", "Requested camera transition is unavailable.");
+    const ErrorCodeDescriptor TransitionBudgetExceeded =
+        Describe("CameraTransitionBudgetExceeded", "Camera transition exceeds the frontend view reservation.");
     const ErrorCodeDescriptor IncompatibleTransition =
         Describe("IncompatibleCameraTransition", "Camera transition cannot produce a valid compatible view.");
     const ErrorCodeDescriptor StaleFrame = Describe("CameraStaleFrame", "Camera selection does not match the current scene revision.");

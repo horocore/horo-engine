@@ -48,6 +48,21 @@ namespace Horo::Editor::RendererErrors {
                                   false,
                                   false};
 
+    inline const ErrorCodeDescriptor ViewportCrossFadeUnsupported{ViewportDomain,
+                                                                  ErrorCode{"editor.viewport.cross_fade_unsupported"},
+                                                                  ErrorSeverity::Error,
+                                                                  "The selected viewport has no camera cross-fade compositor.",
+                                                                  {},
+                                                                  false,
+                                                                  false};
+    inline const ErrorCodeDescriptor ViewportCrossFadeStale{ViewportDomain,
+                                                            ErrorCode{"editor.viewport.cross_fade_stale"},
+                                                            ErrorSeverity::Error,
+                                                            "The viewport camera cross-fade does not match its reserved views.",
+                                                            {},
+                                                            true,
+                                                            false};
+
     inline const ErrorCodeDescriptor GuiInvalidState{GuiOpenGLDomain,
                                                      ErrorCode{"editor.gui.opengl.invalid_state"},
                                                      ErrorSeverity::Error,

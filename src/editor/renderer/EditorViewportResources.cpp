@@ -201,7 +201,9 @@ namespace Horo::Editor {
         meshes_.clear();
         pendingMeshes_.clear();
         allocatedExtent_ = {};
+        declinedCameraCrossFadeExtent_ = {};
         meshesReady_ = false;
+        cameraCrossFade_ = false;
     }
 
     std::optional<EditorViewportResources::MeshBinding> EditorViewportResources::FindMesh(const std::uint64_t sourceId) const noexcept {
@@ -387,6 +389,9 @@ namespace Horo::Editor {
     }
 
     Result<void> EditorViewportResources::SynchronizeTarget(const EditorViewportExtent extent) {
+        if (declinedCameraCrossFadeExtent_ == extent)
+            return Result<void>::Success();
+        declinedCameraCrossFadeExtent_ = {};
         if (allocatedExtent_ == extent) {
             if (pendingViewportTarget_.extent.IsValid())
                 ReleaseViewportTarget(pendingViewportTarget_);
@@ -398,6 +403,8 @@ namespace Horo::Editor {
         const auto targetReady = AdvanceViewportTarget(pendingViewportTarget_);
         if (targetReady.HasError())
             return Result<void>::Failure(targetReady.ErrorValue());
+        if (cameraCrossFade_ && !pendingViewportTarget_.crossFadeDeclined && !PrepareCameraCrossFadeSource(extent))
+            return Result<void>::Success();
         if (!targetReady.Value())
             return Result<void>::Success();
         if (config_.resolveImage == nullptr) {
@@ -413,6 +420,21 @@ namespace Horo::Editor {
         viewportTarget_ = std::exchange(pendingViewportTarget_, {});
         allocatedExtent_ = extent;
         return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportResources::PrepareCameraCrossFadeSource */
+    bool EditorViewportResources::PrepareCameraCrossFadeSource(const EditorViewportExtent extent) {
+        const auto source = AdvanceCameraCrossFadeSource(pendingViewportTarget_.crossFade, {extent.width, extent.height});
+        if (source.HasValue())
+            return source.Value();
+        ReleaseCameraCrossFadeSource(pendingViewportTarget_.crossFade);
+        if (!viewportTarget_.crossFade.target.IsValid()) {
+            pendingViewportTarget_.crossFadeDeclined = true;
+            return true;  // The first ordinary output remains usable without the optional reservation.
+        }
+        ReleaseViewportTarget(pendingViewportTarget_);
+        declinedCameraCrossFadeExtent_ = extent;
+        return false;  // Preserve the existing complete pair and any admitted camera transitions.
     }
 
     Result<bool> EditorViewportResources::AdvanceViewportTarget(ViewportTargetResources &resources) {
@@ -466,11 +488,62 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportResources::EnableColorPipeline */
     Result<void> EditorViewportResources::EnableColorPipeline(bool spatial) {
-        if (viewportTarget_.colorTexture.IsValid() || pendingViewportTarget_.colorTexture.IsValid())
+        if (cameraCrossFade_ || viewportTarget_.colorTexture.IsValid() || pendingViewportTarget_.colorTexture.IsValid())
             return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
         colorPipeline_ = true;
         spatialColor_ = spatial;
         return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportResources::EnableCameraCrossFade */
+    Result<void> EditorViewportResources::EnableCameraCrossFade() {
+        if (colorPipeline_ || viewportTarget_.colorTexture.IsValid() || pendingViewportTarget_.colorTexture.IsValid())
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
+        cameraCrossFade_ = true;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportResources::CameraCrossFadeTarget */
+    Render::RenderTargetHandle EditorViewportResources::CameraCrossFadeTarget() const noexcept {
+        return viewportTarget_.crossFade.target;
+    }
+
+    /** @copydoc EditorViewportResources::CameraCrossFadeColorView */
+    Render::RenderTextureViewHandle EditorViewportResources::CameraCrossFadeColorView() const noexcept {
+        return viewportTarget_.crossFade.colorView;
+    }
+
+    /** @copydoc EditorViewportResources::AdvanceCameraCrossFadeSource */
+    Result<bool> EditorViewportResources::AdvanceCameraCrossFadeSource(CameraCrossFadeSource &source,
+                                                                       const Render::FramebufferExtent extent) {
+        const auto color =
+            AdvanceTexture(*frontend_, config_.memoryScope, SceneColorDescriptor(extent), source.color, source.colorOperation);
+        if (color.HasError())
+            return color;
+        const auto depth =
+            AdvanceTexture(*frontend_, config_.memoryScope,
+                           {.extent = extent, .format = config_.depthFormat, .usage = Render::RenderTextureUsage::RenderAttachment},
+                           source.depth, source.depthOperation);
+        if (depth.HasError())
+            return depth;
+        if (!color.Value() || !depth.Value())
+            return Result<bool>::Success(false);
+        const auto colorView = AdvanceTextureView(*frontend_,
+                                                  {.texture = source.color,
+                                                   .format = Render::RenderTextureFormat::Rgba8Unorm,
+                                                   .aspect = Render::RenderTextureAspect::Color},
+                                                  source.colorView, source.colorViewOperation);
+        if (colorView.HasError())
+            return colorView;
+        const auto depthView =
+            AdvanceTextureView(*frontend_, {.texture = source.depth, .format = config_.depthFormat, .aspect = config_.depthAspect},
+                               source.depthView, source.depthViewOperation);
+        if (depthView.HasError())
+            return depthView;
+        if (!colorView.Value() || !depthView.Value())
+            return Result<bool>::Success(false);
+        return AdvanceRenderTarget(*frontend_, {.colorAttachment = source.colorView, .depthAttachment = source.depthView, .extent = extent},
+                                   source.target, source.targetOperation);
     }
 
     /** @copydoc EditorViewportResources::SceneColorDescriptor */
@@ -675,6 +748,7 @@ namespace Horo::Editor {
     }
 
     void EditorViewportResources::ReleaseViewportTarget(ViewportTargetResources &resources) noexcept {
+        ReleaseCameraCrossFadeSource(resources.crossFade);
         if (resources.target.IsValid())
             static_cast<void>(frontend_->ReleaseRenderTarget(resources.target));
         if (resources.depthView.IsValid())
@@ -692,5 +766,18 @@ namespace Horo::Editor {
             if (texture.IsValid())
                 static_cast<void>(frontend_->ReleaseTexture(texture));
         resources = {};
+    }
+
+    /** @copydoc EditorViewportResources::ReleaseCameraCrossFadeSource */
+    void EditorViewportResources::ReleaseCameraCrossFadeSource(CameraCrossFadeSource &source) noexcept {
+        if (source.target.IsValid())
+            static_cast<void>(frontend_->ReleaseRenderTarget(source.target));
+        for (const auto view : {source.depthView, source.colorView})
+            if (view.IsValid())
+                static_cast<void>(frontend_->ReleaseTextureView(view));
+        for (const auto texture : {source.depth, source.color})
+            if (texture.IsValid())
+                static_cast<void>(frontend_->ReleaseTexture(texture));
+        source = {};
     }
 }  // namespace Horo::Editor

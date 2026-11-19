@@ -33,15 +33,16 @@ namespace Horo::Cinematic {
      * @brief Production adapter that proposes final-position camera transitions through the final camera owner.
      * @details Both borrowed services must outlive this adapter and remain at stable addresses. Camera keys/bindings
      * are copied at activation; scene views are borrowed only within each call. No backend or source pointer is retained.
-     * Hard cuts and compatible single-view selection are bounded by MaximumFrameCameraCuts and perform no allocation. Baseline camera cuts
+     * Camera transition selection is bounded by MaximumFrameCameraCuts and performs no allocation. Baseline camera cuts
      * ignore activation blend durations. Camera-only plans clear scalar blend windows before session admission;
      * mixed scalar plans retain their blend windows, and every plan retains its explicit restore policy.
      * Authored key transition durations use exact final player time with Linear or SmoothStep weight. SingleViewBlend
      * samples both current scene cameras and delegates pose/lens interpolation to CameraService. Required blends need an earlier
      * camera key and completion by the next key/track end. Unsupported layouts use only an authored hard-cut fallback.
-     * DualViewCrossFade has no admitted compositor in this composition;
-     * it returns UnsupportedTransition unless the key explicitly permits a HardCut fallback. Projection incompatibility
-     * similarly uses only the key's declared fallback. Failed publication cancels the player and releases its lease.
+     * DualViewCrossFade requires a two-view frontend reservation on the CameraService and publishes both exact
+     * cameras into the same immutable frame. Its projections are independent. Missing capability or budget,
+     * and incompatible one-view projections, use only the key's declared fallback. Failed publication cancels
+     * the player and releases its lease.
      * Hosts call Publish after commands/ticks and before CameraService::Commit, then
      * extract only that committed camera. Destruction closes playback and releases its lease at this same owner safe point.
      * The session retains terminal players until its host performs the existing restore/release protocol.

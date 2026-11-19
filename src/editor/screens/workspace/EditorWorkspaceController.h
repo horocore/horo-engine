@@ -229,10 +229,12 @@ namespace Horo::Editor {
         /** @brief Starts a camera-only authored preview using the runtime camera admission policy.
          * @param activation Owned camera-only plan and player descriptor. @param cuts Required camera bindings/end policy.
          * @param view Host-issued generation-safe preview view. @param transitions Camera transitions admitted by the host.
+         * @param crossFade Optional exact reservation from the selected viewport frontend.
          * @return Success or typed admission failure. */
         [[nodiscard]] Result<void> StartCameraCutPreview(
             Cinematic::SequencePlaybackActivation activation, const Cinematic::CameraCutActivation &cuts, Runtime::CameraViewContextId view,
-            Runtime::CameraTransitionSupport transitions = Runtime::CameraTransitionSupport::SingleViewBlend);
+            Runtime::CameraTransitionSupport transitions = Runtime::CameraTransitionSupport::SingleViewBlend,
+            std::optional<Runtime::CameraCrossFadeAdmission> crossFade = std::nullopt);
         /** @brief Advances the preview with exact owner-clock ticks before viewport extraction.
          * @param delta Non-negative exact timeline delta. @return Success or typed runtime/binding failure. */
         [[nodiscard]] Result<void> AdvanceCameraCutPreview(Cinematic::SequenceTime delta);
@@ -1227,7 +1229,13 @@ namespace Horo::Editor {
         void ClearSimulatorViewport();
         /** @brief Extract the exact current Play Scene with an explicitly admitted camera. */
         void ExtractPlayViewportWithCamera(const Runtime::RuntimeSceneView &runtimeView, const EditorViewportCamera &camera);
-        [[nodiscard]] Result<EditorViewportCamera> ResolveCameraCutPreview(Runtime::RuntimeSceneView scene);
+
+        struct CameraPreviewFrame final {
+            EditorViewportCamera destination;
+            std::optional<EditorViewportCameraCrossFade> crossFade;
+        };
+
+        [[nodiscard]] Result<CameraPreviewFrame> ResolveCameraCutPreview(Runtime::RuntimeSceneView scene);
         void HandleCreatePrimitive(Runtime::PrimitiveId primitive, std::optional<SceneObjectId> parent);
         [[nodiscard]] bool ApplyAssetViewportPlacement(const AssetSceneDropRequest &request, const Math::Aabb &localBounds,
                                                        Math::Transform &localTransform, bool publishFailure = true) const;

@@ -529,4 +529,73 @@ namespace Horo::Render::OpenGLSmokeTests {
         SDL_Quit();
     }
 
+    /** @brief Verifies the output is a weighted composition where two real camera silhouettes differ. */
+    void CheckCrossFadePixels(const std::vector<std::uint8_t> &source, const std::vector<std::uint8_t> &destination,
+                              const std::vector<std::uint8_t> &mixed) {
+        REQUIRE(source.size() == destination.size());
+        REQUIRE(source.size() == mixed.size());
+        std::size_t informativeChannels{};
+        int maximumDifference{};
+        for (std::size_t index = 0; index < source.size(); ++index) {
+            if (std::abs(int{source[index]} - int{destination[index]}) < 16)
+                continue;
+            ++informativeChannels;
+            maximumDifference = std::max(maximumDifference, std::abs(int{mixed[index]} * 2 - int{source[index]} - int{destination[index]}));
+        }
+        CHECK(informativeChannels > 100);
+        CHECK(maximumDifference <= 2);
+    }
+
+    TEST_CASE("OpenGL viewport composites two independent camera rasters in the sampled editor output",
+              "[integration][renderer][gpu][cross-fade]") {
+        constexpr EditorViewportExtent extent{256, 192};
+        auto window = CreateNativeViewportWindow(NativeOutputChange::None);
+        HeadlessOpenGLPresentationPort presentationPort{*window};
+        auto frontend = CreateViewportFrontend(presentationPort);
+        REQUIRE(gladLoadGL(SDL_GL_GetProcAddress) != 0);
+        EditorViewportRendererOpenGL viewport{*frontend};
+        Horo::Editor::EditorViewportLightingProfile lighting;
+        lighting.requested = LightPreparationMode::BaselineForwardCpu;
+        REQUIRE(viewport.RequestLightingProfile(lighting, {}).HasValue());
+        REQUIRE(viewport.Initialize().HasValue());
+        const auto fixture = CreateViewportScene();
+        const auto scene = fixture.View();
+        const auto destination = ToSceneView(scene);
+        auto source = destination;
+        source.camera.position.z = 3.0F;
+        REQUIRE(viewport.PrepareCameraCrossFadeFrame(Editor::EditorViewportCameraCrossFade{source.camera, 0.5F, 1}).HasError());
+        REQUIRE(viewport.EnableCameraCrossFade().HasValue());
+        CHECK(viewport.CameraCrossFadeCapacity().availableViews == 0);
+        REQUIRE(frontend->AttachStaticMeshPassExecutor(viewport).HasValue());
+        const auto target = PrepareViewportTarget(viewport, *frontend, scene, extent);
+        const auto capacity = viewport.CameraCrossFadeCapacity();
+        REQUIRE(capacity.availableViews == 2);
+        viewport.RequestExtent(extent);
+        viewport.RequestGrid({.visible = false});
+        constexpr FramebufferExtent output{640, 480};
+        auto pass = StaticMeshPassDescriptor{.target = target,
+                                             .extent = {extent.width, extent.height},
+                                             .scene = source,
+                                             .clearColor = {0.0F, 0.0F, 0.0F, 1.0F}};
+        PresentTransitionFrame(*frontend, pass, 1, output);
+        const auto sourcePixels = ReadViewportPixels(viewport.TextureView(), extent.width, extent.height);
+        pass.scene = destination;
+        PresentTransitionFrame(*frontend, pass, 2, output);
+        const auto destinationPixels = ReadViewportPixels(viewport.TextureView(), extent.width, extent.height);
+        REQUIRE(viewport.PrepareCameraCrossFadeFrame(Editor::EditorViewportCameraCrossFade{source.camera, 0.5F, capacity.generation})
+                    .HasValue());
+        PresentTransitionFrame(*frontend, pass, 3, output);
+        CheckCrossFadePixels(sourcePixels, destinationPixels, ReadViewportPixels(viewport.TextureView(), extent.width, extent.height));
+        REQUIRE(viewport.PrepareCameraCrossFadeFrame(Editor::EditorViewportCameraCrossFade{source.camera, 0.5F, capacity.generation + 1})
+                    .HasError());
+        PresentTransitionFrame(*frontend, pass, 4, output);
+        CHECK(ReadViewportPixels(viewport.TextureView(), extent.width, extent.height) == destinationPixels);
+        frontend->DetachStaticMeshPassExecutor(viewport);
+        Horo::Render::Test::RequireDrainedOwner(*frontend);
+        viewport.Shutdown();
+        frontend.reset();
+        window.reset();
+        SDL_Quit();
+    }
+
 }  // namespace Horo::Render::OpenGLSmokeTests
