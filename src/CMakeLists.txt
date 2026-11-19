@@ -1096,10 +1096,12 @@ add_library(HoroNetworkRuntime STATIC
         runtime/networking/NetworkAuthoredScenePage.cpp
         runtime/networking/NetworkWorldBindingController.cpp
         runtime/networking/NetworkWorldBindingPeer.cpp
+        runtime/networking/NetworkWorldBindingAuthored.cpp
         runtime/networking/NetworkWorldBindingPrefab.cpp
         runtime/networking/NetworkWorldBindingTravel.cpp
         runtime/networking/NetworkWorldOccurrenceIssuer.cpp
         runtime/networking/NetworkModeWorldState.cpp
+        runtime/networking/NetworkModeWorldAuthored.cpp
         runtime/networking/TransportBackendComposition.cpp
         runtime/networking/TransportTargetComposition.cpp
         runtime/networking/NetworkDiagnostics.cpp

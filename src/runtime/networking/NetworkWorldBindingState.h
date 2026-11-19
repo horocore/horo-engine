@@ -6,6 +6,8 @@
 namespace Horo::Network {
     /** @brief Verifies the optional route is distinct and registered with an appropriate bounded payload. */
     [[nodiscard]] bool ValidPrefabLifecycleRoute(const NetworkWorldBindingPolicy &policy, const MessageCodecRegistry &codecs);
+    /** @brief Verifies the authored lane's identity and finite page budget against the registry. */
+    [[nodiscard]] bool ValidAuthoredSceneRoute(const NetworkWorldBindingPolicy &policy, const MessageCodecRegistry &codecs);
 
     struct NetworkWorldBindingController::Impl final {
         struct BusyScope final {
@@ -28,6 +30,12 @@ namespace Horo::Network {
                 bool spawn;
             };
 
+            struct AuthoredProgress final {
+                NetworkSessionGeneration session;
+                std::size_t next{};
+                bool complete{};
+            };
+
             std::shared_ptr<PeerSessionLifecycle> lifecycle;
             ConnectionHandle connection;
             NetworkOperationGeneration generation;
@@ -37,8 +45,11 @@ namespace Horo::Network {
             std::optional<NetworkWorldBindingRecord> pending;
             NetworkSessionGeneration establishedWorld; /**< Last native-accepted Initial or Commit session. */
             std::array<std::byte, 256> frame{};
-            std::vector<std::byte> prefabFrame;
+            std::vector<std::byte> extendedFrame;
             std::optional<PrefabChange> prefabPending;
+            AuthoredProgress authoredSent;
+            NetworkSessionGeneration authoredPublished; /**< Last complete inventory for an established world. */
+            std::optional<AuthoredProgress> authoredPending;
             std::vector<NetworkObjectId> knownPrefabs;
             NetworkSessionGeneration prefabSession;
             std::uint64_t prefabRevision{};
@@ -49,8 +60,8 @@ namespace Horo::Network {
         };
 
         Impl(const NetworkModePlan &plan, NetworkWorldBindingSetup setup)
-            : worlds(plan, setup.policy, setup.schemaFingerprint), setup(std::move(setup)), version(plan.protocolVersion), role(plan.mode) {
-        }
+            : worlds(plan, setup.policy, setup.schemaFingerprint, setup.maximumPendingTicks), setup(std::move(setup)),
+              version(plan.protocolVersion), role(plan.mode) {}
 
         [[nodiscard]] Result<void> CheckOwner() const;
         /** @brief Registers both selected routes atomically and revokes the first on a partially failed attach. */
@@ -60,10 +71,16 @@ namespace Horo::Network {
                                                 std::uint64_t nowTick) const;
         [[nodiscard]] Result<void> Queue(Peer &peer, const NetworkWorldBindingRecord &record, std::uint64_t nowTick) const;
         [[nodiscard]] Result<void> QueueFrame(Peer &peer, MessageEnvelopePayloadView message, std::uint64_t nowTick,
-                                              std::span<std::byte> prefabStorage = {}) const;
+                                              std::span<std::byte> extendedStorage = {}) const;
         /** @brief Queue only an advancing server publication, preserving pending traffic and late-join initial identity. */
         [[nodiscard]] Result<void> QueueWorldUpdate(Peer &peer, const NetworkWorldBindingRecord *prepared,
                                                     const NetworkWorldBindingRecord *current, std::uint64_t nowTick) const;
+        /** @brief Whether this peer has no remaining authored page debt on the specified world. */
+        [[nodiscard]] bool AuthoredSent(const Peer &peer, NetworkSessionGeneration session) const noexcept;
+        /** @brief Queues the next authored page for the binding already sent to this peer. */
+        [[nodiscard]] Result<void> QueueAuthoredUpdate(Peer &peer, std::uint64_t nowTick) const;
+        /** @brief Writes one page into the same bounded reliable sequence as world and Prefab control. */
+        [[nodiscard]] Result<void> QueueAuthoredPage(Peer &peer, const NetworkAuthoredScenePage &page, std::uint64_t nowTick) const;
         /** @brief Queues the next structural delta after the exact world binding was accepted by native send. */
         [[nodiscard]] Result<void> QueuePrefabUpdate(Peer &peer, const NetworkWorldBindingRecord *prepared,
                                                      const NetworkWorldBindingRecord *current, std::uint64_t nowTick);

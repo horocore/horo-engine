@@ -15,7 +15,7 @@ namespace Horo::Network {
             !setup.policy.authorityPublisher.IsValid() || setup.maximumPeers == 0 || setup.maximumPeers > 64 ||
             setup.maximumPendingTicks == 0 || plan.mode == NetworkProjectRole::Standalone)
             return Result<std::shared_ptr<NetworkWorldBindingController>>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
-        if (!ValidPrefabLifecycleRoute(setup.policy, *setup.codecs))
+        if (!ValidPrefabLifecycleRoute(setup.policy, *setup.codecs) || !ValidAuthoredSceneRoute(setup.policy, *setup.codecs))
             return Result<std::shared_ptr<NetworkWorldBindingController>>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
         try {
             auto implementation = std::make_unique<Impl>(std::move(plan), std::move(setup));
@@ -42,11 +42,12 @@ namespace Horo::Network {
     }
 
     /** @copydoc NetworkWorldBindingController::Prepare */
-    Result<void> NetworkWorldBindingController::Prepare(const NetworkAuthoredSceneProjection &authored) {
+    Result<void> NetworkWorldBindingController::Prepare(const NetworkAuthoredSceneProjection &authored,
+                                                        NetworkAuthoredSceneProjection client) {
         if (auto checked = impl_->CheckOwner(); checked.HasError())
             return checked;
         const Impl::BusyScope busy{impl_->busy};
-        return impl_->worlds.Prepare(authored);
+        return impl_->worlds.Prepare(authored, std::move(client));
     }
 
     /** @copydoc NetworkWorldBindingController::Attach */
@@ -84,6 +85,14 @@ namespace Horo::Network {
                 return registered;
             }
         }
+        if (setup.policy.authoredScene) {
+            if (auto registered = bind(setup.policy.authoredScene->control, 16); registered.HasError()) {
+                if (const auto &route = setup.policy.prefabLifecycle)
+                    router.RevokeHandler(route->control.protocol, route->control.id);
+                router.RevokeHandler(control.protocol, control.id);
+                return registered;
+            }
+        }
         return Result<void>::Success();
     }
 
@@ -94,6 +103,8 @@ namespace Horo::Network {
         if (impl_->dispatcher) {
             impl_->dispatcher->RevokeHandler(impl_->setup.policy.control.protocol, impl_->setup.policy.control.id);
             if (const auto &route = impl_->setup.policy.prefabLifecycle)
+                impl_->dispatcher->RevokeHandler(route->control.protocol, route->control.id);
+            if (const auto &route = impl_->setup.policy.authoredScene)
                 impl_->dispatcher->RevokeHandler(route->control.protocol, route->control.id);
         }
         impl_->dispatcher = nullptr;
@@ -129,6 +140,8 @@ namespace Horo::Network {
         const auto &policy = impl_->setup.policy;
         if (policy.prefabLifecycle && matches(policy.prefabLifecycle->control))
             return impl_->worlds.AcceptPrefab(message.payload, context);
+        if (policy.authoredScene && matches(policy.authoredScene->control))
+            return impl_->worlds.AcceptAuthored(message.payload, context);
         if (!matches(policy.control))
             return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
         const auto decoded = DecodeNetworkWorldBinding(message.payload);
@@ -140,6 +153,11 @@ namespace Horo::Network {
     /** @copydoc NetworkWorldBindingController::HasPrefabLifecycle */
     bool NetworkWorldBindingController::HasPrefabLifecycle() const noexcept {
         return impl_->setup.policy.prefabLifecycle.has_value();
+    }
+
+    /** @copydoc NetworkWorldBindingController::HasAuthoredScene */
+    bool NetworkWorldBindingController::HasAuthoredScene() const noexcept {
+        return impl_->setup.policy.authoredScene.has_value();
     }
 
     /** @copydoc NetworkWorldBindingController::TakePrefab */
@@ -194,6 +212,7 @@ namespace Horo::Network {
         for (auto &peer : peers) {
             peer.pending.reset();
             peer.prefabPending.reset();
+            peer.authoredPending.reset();
             peer.knownPrefabs.clear();
             peer.frameBytes = 0;
         }

@@ -297,7 +297,10 @@ namespace Horo::Network {
                                                         const NetworkModeWorld *world = nullptr) const noexcept;
         [[nodiscard]] Result<void> BuildEntries();
         /** @brief Selects the exact authority Scene service from a complete, activated set. */
-        [[nodiscard]] static Result<NetworkAuthoredSceneProjection> CaptureAuthorityScene(std::span<const Entry> entries);
+        [[nodiscard]] static Result<NetworkAuthoredSceneProjection> CaptureAuthoredScene(std::span<const Entry> entries,
+                                                                                         NetworkModeWorldKind kind);
+        /** @brief Captures both admitted projections before staging the associated local world or travel candidates. */
+        [[nodiscard]] Result<void> StageBoundWorlds(std::span<const Entry> entries, std::span<const NetworkModeWorld> replacements = {});
         void ReleaseEntries() noexcept;
         [[nodiscard]] std::size_t WorldIndex(NetworkModeWorldKind kind) const noexcept;
         [[nodiscard]] Result<void> AppendTravelEntry(std::array<Entry, 5> &prepared, std::size_t &count,

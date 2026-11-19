@@ -83,7 +83,7 @@ namespace Horo::Network {
                                                                         const NetworkWorldBindingRecord *current,
                                                                         const std::uint64_t tick) {
         if (!setup.policy.prefabLifecycle || !peer.sendsWorld || peer.frameBytes != 0 || prepared || !current ||
-            peer.establishedWorld != current->worldSession)
+            peer.establishedWorld != current->worldSession || !AuthoredSent(peer, current->worldSession))
             return Result<void>::Success();
         const auto features = peer.lifecycle->Negotiation()->features.Values();
         if (std::ranges::find(features, setup.policy.prefabLifecycle->feature) == features.end())
@@ -121,7 +121,7 @@ namespace Horo::Network {
             return Result<void>::Failure(payload.ErrorValue());
         try {
             // The fixed control slot budget covers the envelope overhead; actual bytes are still bounded by negotiated limits.
-            peer.prefabFrame.resize(payload.Value().size() + peer.frame.size());
+            peer.extendedFrame.resize(payload.Value().size() + peer.frame.size());
             if (record.spawn)
                 peer.knownPrefabs.reserve(expectedGroups);
         } catch (const std::bad_alloc &) {
@@ -130,7 +130,7 @@ namespace Horo::Network {
         const auto &identity = setup.policy.prefabLifecycle->control;
         const MessageEnvelopePayloadView message{identity.protocol, identity.id, identity.schema, identity.version, {}, {}, 0,
                                                  payload.Value()};
-        if (auto queued = QueueFrame(peer, message, tick, peer.prefabFrame); queued.HasError())
+        if (auto queued = QueueFrame(peer, message, tick, peer.extendedFrame); queued.HasError())
             return queued;
         peer.prefabPending = Peer::PrefabChange{record.occurrence, record.spawn.has_value()};
         return Result<void>::Success();

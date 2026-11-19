@@ -121,9 +121,7 @@ namespace Horo::Network {
         if (ready.HasError())
             return Result<void>::Failure(ready.ErrorValue());
         if (binding_) {
-            auto authored = CaptureAuthorityScene({prepared.data(), ready.Value()});
-            auto staged = authored.HasError() ? Result<void>::Failure(authored.ErrorValue())
-                                              : binding_->PrepareTravel(replacements, authored.Value());
+            auto staged = StageBoundWorlds({prepared.data(), ready.Value()}, replacements);
             if (staged.HasError()) {
                 DiscardTravelEntries(prepared, ready.Value());
                 return staged;

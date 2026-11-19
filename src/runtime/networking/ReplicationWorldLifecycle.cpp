@@ -277,32 +277,51 @@ namespace Horo::Network {
         return !record_ || record_->revoked.load();
     }
 
+    namespace {
+        /** @brief Copies the canonical authored rows from detached or published mapping storage. */
+        Result<ReplicationAuthoredSceneInventory> CopyAuthoredInventory(const ReplicationWorldActivationDescriptor &descriptor,
+                                                                        std::span<const NetworkObjectMappingEntry> entries) {
+            using Outcome = Result<ReplicationAuthoredSceneInventory>;
+            ReplicationAuthoredSceneInventory inventory{descriptor.session, descriptor.authority};
+            try {
+                std::optional<Runtime::SceneObjectId> previous;
+                for (const auto &entry : entries) {
+                    if (!entry.provenance.authoredObject)
+                        continue;
+                    const ReplicationAuthoredObjectBinding binding{entry.object, entry.provenance};
+                    if (!Detail::ValidAuthoredBinding(binding, inventory.authority, inventory.objects.size() + 1, previous))
+                        return Failure<ReplicationAuthoredSceneInventory>(NetworkErrors::NetworkObjectMappingInvalid);
+                    inventory.objects.push_back(binding);
+                    previous = binding.provenance.authoredObject;
+                }
+                return Outcome::Success(std::move(inventory));
+            } catch (const std::bad_alloc &) {
+                return Failure<ReplicationAuthoredSceneInventory>(NetworkErrors::ReplicationWorldCapacityExceeded);
+            }
+        }
+    }  // namespace
+
     /** @copydoc CaptureReplicationAuthoredScene */
     Result<ReplicationAuthoredSceneInventory> CaptureReplicationAuthoredScene(const ReplicationWorldReadLease &world) {
-        using Outcome = Result<ReplicationAuthoredSceneInventory>;
         if (!world.IsValid() || world.IsRevoked())
             return Failure<ReplicationAuthoredSceneInventory>(NetworkErrors::ReplicationWorldUnavailable);
         if (!world.Capabilities().publishAuthority)
             return Failure<ReplicationAuthoredSceneInventory>(NetworkErrors::ReplicationAuthorityDenied);
-        const auto &descriptor = world.Descriptor();
-        ReplicationAuthoredSceneInventory inventory{descriptor.session, descriptor.authority};
-        try {
-            std::optional<Runtime::SceneObjectId> previous;
-            for (const auto &entry : world.Mapping().Entries()) {
-                if (!entry.provenance.authoredObject)
-                    continue;
-                const ReplicationAuthoredObjectBinding binding{entry.object, entry.provenance};
-                if (!Detail::ValidAuthoredBinding(binding, inventory.authority, inventory.objects.size() + 1, previous))
-                    return Failure<ReplicationAuthoredSceneInventory>(NetworkErrors::NetworkObjectMappingInvalid);
-                inventory.objects.push_back(binding);
-                previous = binding.provenance.authoredObject;
-            }
-            if (world.IsRevoked())
-                return Failure<ReplicationAuthoredSceneInventory>(NetworkErrors::ReplicationWorldStale);
-            return Outcome::Success(std::move(inventory));
-        } catch (const std::bad_alloc &) {
-            return Failure<ReplicationAuthoredSceneInventory>(NetworkErrors::ReplicationWorldCapacityExceeded);
-        }
+        auto captured = CopyAuthoredInventory(world.Descriptor(), world.Mapping().Entries());
+        if (world.IsRevoked())
+            return Failure<ReplicationAuthoredSceneInventory>(NetworkErrors::ReplicationWorldStale);
+        return captured;
+    }
+
+    /** @copydoc ReplicationWorldLifecycle::CaptureStagedAuthoredScene */
+    Result<ReplicationAuthoredSceneInventory> ReplicationWorldLifecycle::CaptureStagedAuthoredScene() const {
+        using Outcome = Result<ReplicationAuthoredSceneInventory>;
+        if (!staged_ || !staged_->capabilities.publishAuthority)
+            return Failure<ReplicationAuthoredSceneInventory>(NetworkErrors::ReplicationAuthorityDenied);
+        auto mapping = staged_->mapping.Snapshot();
+        if (mapping.HasError())
+            return Outcome::Failure(mapping.ErrorValue());
+        return CopyAuthoredInventory(staged_->descriptor, mapping.Value().Entries());
     }
 
     ReplicationWorldLifecycle::ReplicationWorldLifecycle(const ReplicationWorldLimits limits,

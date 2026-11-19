@@ -14,7 +14,7 @@ namespace Horo::Network {
         using AdmissionWire::Reader;
         using AdmissionWire::Writer;
         constexpr std::uint16_t Version = 1;
-        constexpr std::size_t RowBytes = 20;
+        constexpr std::size_t RowBytes = NetworkAuthoredSceneRowBytes;
         static_assert(MaximumNetworkAuthoredSceneObjects <= std::numeric_limits<std::uint16_t>::max());
         static_assert(MaximumNetworkAuthoredScenePageBytes ==
                       MinimumNetworkAuthoredScenePageBytes + MaximumNetworkAuthoredScenePageObjects * RowBytes);

@@ -1,5 +1,6 @@
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Foundation/Platform.h"
+#include "Horo/Network/NetworkAuthoredScenePage.h"
 #include "NetworkModeHostTestSupport.h"
 
 namespace Horo::Network {
@@ -7,10 +8,11 @@ namespace Horo::Network {
         constexpr auto CommitPhase = Runtime::RuntimePhase::CommitDeferredLifecycleChanges;
 
         struct BindingService final : INetworkModeService {
-            BindingService(NetworkModeServiceKind kind, const bool *failScene) : kind(kind), failScene(failScene) {}
+            BindingService(NetworkModeServiceRequest request, const bool *failScene, std::size_t authoredCount)
+                : request(request), failScene(failScene), authoredCount(authoredCount) {}
 
             Result<void> Prepare() override {
-                if (kind == NetworkModeServiceKind::Scene && failScene && *failScene)
+                if (request.service == NetworkModeServiceKind::Scene && failScene && *failScene)
                     return Result<void>::Failure(MakeError(NetworkErrors::NetworkModeUnavailable));
                 return Result<void>::Success();
             }
@@ -29,13 +31,24 @@ namespace Horo::Network {
 
             void Shutdown() noexcept override {}
 
-            NetworkModeServiceKind kind;
+            Result<NetworkAuthoredSceneProjection> CaptureAuthoredScene() const override {
+                NetworkAuthoredSceneProjection projection;
+                const auto schema = ReplicationSchemaId::Create(9).Value();
+                const auto generation = request.world == NetworkModeWorldKind::AuthorityServer ? 1U : 2U;
+                for (std::uint32_t index = 0; index < authoredCount; ++index)
+                    projection.objects.push_back(
+                        {{request.scene, {index + 1, generation}}, {schema, {1, 0}, Runtime::SceneObjectId{10 + index}}});
+                return Result<NetworkAuthoredSceneProjection>::Success(std::move(projection));
+            }
+
+            NetworkModeServiceRequest request;
             const bool *failScene;
+            std::size_t authoredCount;
         };
 
         NetworkModeComposition ListenMode(const NetworkWorldBindingSetup &setup, const bool *failScene = nullptr,
                                           NetworkClientPrefabInbox *clientInbox = nullptr,
-                                          NetworkAuthorityObjectPublication *authorityObjects = nullptr) {
+                                          NetworkAuthorityObjectPublication *authorityObjects = nullptr, std::size_t authoredCount = 0) {
             NetworkModePlan plan;
             plan.mode = NetworkProjectRole::ListenServer;
             plan.hostGeneration = 1;
@@ -51,8 +64,8 @@ namespace Horo::Network {
             plan.worldCount = 2;
             NetworkModeFactories factories;
             for (auto &factory : factories.services)
-                factory = [failScene, clientInbox,
-                           authorityObjects](NetworkModeServiceRequest request) -> Result<std::unique_ptr<INetworkModeService>> {
+                factory = [failScene, clientInbox, authorityObjects,
+                           authoredCount](NetworkModeServiceRequest request) -> Result<std::unique_ptr<INetworkModeService>> {
                     if (clientInbox && request.prefabInbox.IsBound()) {
                         CHECK(request.service == NetworkModeServiceKind::Scene);
                         CHECK(request.world == NetworkModeWorldKind::Client);
@@ -61,7 +74,7 @@ namespace Horo::Network {
                     if (authorityObjects && request.authorityObjects.IsBound())
                         *authorityObjects = request.authorityObjects;
                     return Result<std::unique_ptr<INetworkModeService>>::Success(
-                        std::make_unique<BindingService>(request.service, failScene));
+                        std::make_unique<BindingService>(request, failScene, authoredCount));
                 };
             auto created = NetworkModeComposition::Create(plan, std::move(factories), NetworkWorldCompositionPurpose::Gameplay, setup);
             REQUIRE(created.HasValue());
@@ -241,6 +254,96 @@ namespace Horo::Network {
         }
         mode.Shutdown();
         CHECK(inbox.Take(CommitPhase).HasError());
+    }
+
+    TEST_CASE("Authenticated authored pages fence initial publication and listen-server travel",
+              "[integration][network][mode][binding][authored]") {
+        auto setup = ModeBindingTests::Setup(MinimumNetworkAuthoredScenePageBytes + NetworkAuthoredSceneRowBytes);
+        setup.policy.authoredScene = NetworkAuthoredScenePolicy{{setup.policy.control.protocol,
+                                                                 WireIdentity<MessageTypeId>(12),
+                                                                 WireIdentity<MessageSchemaId>(13),
+                                                                 {1, 0},
+                                                                 false},
+                                                                setup.policy.feature};
+        constexpr auto kind = NetworkModeWorldKind::Client;
+        const Runtime::SceneRuntimeId original{2};
+        ModeBindingTests::BindingFixture fixture{setup};
+        auto mode = ListenMode(setup, nullptr, nullptr, nullptr, 2);
+        fixture.Attach(mode);
+        REQUIRE(mode.Start().HasValue());
+        auto client = ModeBindingTests::Active(Connection(), Session());
+        REQUIRE(mode.AdmitClientSession(kind, client, Connection(), Session(), 22).HasValue());
+        fixture.StageInitial(mode, client);
+        REQUIRE(mode.RunPhase(CommitPhase).HasValue());
+        CHECK_FALSE(mode.Role(kind, original).HasValue());
+
+        const auto page = [&fixture, &setup] {
+            const auto bytes = std::span{fixture.transport.sent}.first(fixture.transport.size);
+            const auto message = DecodeMessageEnvelope(bytes, *setup.codecs).Value();
+            CHECK(message.message == setup.policy.authoredScene->control.id);
+            return DecodeNetworkAuthoredScenePage(message.payload).Value();
+        };
+        auto owner = fixture.binding.lock();
+        REQUIRE(owner);
+        CHECK_FALSE(owner->AdmitWorldDispatch(fixture.server->Connection(), Session(8), *fixture.server, 22).HasValue());
+        fixture.transport.backpressure = true;
+        REQUIRE(owner->Flush(22).HasValue());
+        REQUIRE(mode.RunPhase(CommitPhase).HasValue());
+        CHECK_FALSE(mode.Role(kind, original).HasValue());
+        fixture.transport.backpressure = false;
+        fixture.Deliver();
+        const auto first = page();
+        CHECK(first.firstIndex == 0);
+        REQUIRE(mode.RunPhase(CommitPhase).HasValue());
+        CHECK_FALSE(mode.Role(kind, original).HasValue());
+        fixture.Deliver();
+        CHECK(page().firstIndex == 1);
+        CHECK_FALSE(mode.Role(kind, original).HasValue());
+        REQUIRE(mode.RunPhase(CommitPhase).HasValue());
+        CHECK(owner->AdmitWorldDispatch(fixture.server->Connection(), Session(8), *fixture.server, 22).HasValue());
+        const auto before = mode.AcquireReplication(kind, {original, first.session, Runtime::RuntimePhase::NetworkPoll},
+                                                    ReplicationWorldCapability::ApplyAuthoritativeState)
+                                .Value();
+        REQUIRE(before.Mapping().Entries().size() == 2);
+        CHECK(before.Mapping().Entries().front().object == first.objects.front().object);
+        CHECK(before.Mapping().Entries().front().entity == Runtime::EntityRef{original, {1, 2}});
+
+        SECTION("the old world stays active until the replacement inventory and commit") {
+            const std::array next{World(NetworkModeWorldKind::AuthorityServer, 3), World(kind, 4)};
+            REQUIRE(mode.Travel(next, CommitPhase, Session()).HasValue());
+            fixture.Deliver();  // PREPARE travels on the same protected sequence.
+            REQUIRE(mode.RunPhase(CommitPhase).HasValue());
+            fixture.Deliver();
+            const auto prepared = page();
+            CHECK(prepared.firstIndex == 0);
+            CHECK(prepared.session != first.session);
+            REQUIRE(mode.RunPhase(CommitPhase).HasValue());
+            CHECK(mode.Role(kind, original).HasValue());
+            CHECK_FALSE(mode.Role(kind, next[1].scene).HasValue());
+            fixture.Deliver();
+            CHECK(page().firstIndex == 1);
+            REQUIRE(mode.RunPhase(CommitPhase).HasValue());
+            fixture.Deliver();  // Reserved COMMIT is idempotent after the local pair swaps.
+            CHECK(before.IsRevoked());
+            const auto after = mode.AcquireReplication(kind, {next[1].scene, prepared.session, Runtime::RuntimePhase::NetworkPoll},
+                                                       ReplicationWorldCapability::ApplyAuthoritativeState)
+                                   .Value();
+            REQUIRE(after.Mapping().Entries().size() == 2);
+            CHECK(after.Mapping().Entries().front().object == prepared.objects.front().object);
+            CHECK(after.Mapping().Entries().front().entity.runtime == next[1].scene);
+        }
+        SECTION("cancellation after the first replacement page revokes the candidate only") {
+            const std::array next{World(NetworkModeWorldKind::AuthorityServer, 3), World(kind, 4)};
+            REQUIRE(mode.Travel(next, CommitPhase, Session()).HasValue());
+            fixture.Deliver();
+            fixture.Deliver();
+            CHECK(page().firstIndex == 0);
+            REQUIRE(owner->CancelTravel().HasValue());
+            REQUIRE(mode.RunPhase(CommitPhase).HasValue());
+            CHECK_FALSE(before.IsRevoked());
+            CHECK(mode.Role(kind, original).HasValue());
+            CHECK_FALSE(mode.Role(kind, next[1].scene).HasValue());
+        }
     }
 
     TEST_CASE("Authority flush automatically sends committed Prefab deltas after reliable retry",

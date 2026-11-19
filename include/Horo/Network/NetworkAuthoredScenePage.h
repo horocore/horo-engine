@@ -8,8 +8,9 @@ namespace Horo::Network {
     inline constexpr std::size_t MaximumNetworkAuthoredSceneObjects = ReplicationWorldLimits{}.maximumObjects;
     inline constexpr std::size_t MaximumNetworkAuthoredScenePageObjects = 32;
     inline constexpr std::size_t MinimumNetworkAuthoredScenePageBytes = 26;
+    inline constexpr std::size_t NetworkAuthoredSceneRowBytes = 20;
     inline constexpr std::size_t MaximumNetworkAuthoredScenePageBytes =
-        MinimumNetworkAuthoredScenePageBytes + 20 * MaximumNetworkAuthoredScenePageObjects;
+        MinimumNetworkAuthoredScenePageBytes + NetworkAuthoredSceneRowBytes * MaximumNetworkAuthoredScenePageObjects;
 
     /** @brief One contiguous portion of the authority's canonical authored inventory. */
     struct NetworkAuthoredScenePage final {

@@ -93,6 +93,16 @@ uses at most 666 payload bytes. Send one empty page for an empty inventory.
 contiguous page has arrived. Existing world binding and Prefab messages retain
 their wire formats. Consumers of the new page API link `NetworkRuntime`.
 
+Configure `NetworkWorldBindingPolicy::authoredScene` with a distinct Control
+message and a required handshake feature to enable this path. Rebuild native
+hosts against the extended policy layout. The existing reliable Control owner
+sends the world binding, then the authored pages, then dynamic Prefab records.
+Native backpressure retains the exact frame and sequence. The client matches
+the complete inventory against its committed local Scene projection before
+publishing the network world at the structural safe point. During travel,
+provisional pages follow PREPARE and remain private until COMMIT. Cancellation
+or expiry drops the detached candidate and retains the published world.
+
 Existing mode services have an empty authored projection by default. A service
 wrapper around an opted-in authority Scene forwards the projection method to
 retain the same declarations. Existing world staging without authored objects

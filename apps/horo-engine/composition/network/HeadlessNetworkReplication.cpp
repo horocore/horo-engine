@@ -281,7 +281,7 @@ namespace Horo::Application::Internal {
             return Outcome::Success({});
         const auto scene = ActiveScene();
         if (!scene || request_.service != Network::NetworkModeServiceKind::Scene ||
-            request_.world != Network::NetworkModeWorldKind::AuthorityServer)
+            (request_.world != Network::NetworkModeWorldKind::AuthorityServer && request_.world != Network::NetworkModeWorldKind::Client))
             return Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationWorldUnavailable));
         if (record_->sceneCancellation.IsCancellationRequested())
             return Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationWorldCancelled));

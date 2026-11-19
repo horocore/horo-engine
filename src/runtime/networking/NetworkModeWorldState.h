@@ -3,6 +3,7 @@
 /** @file NetworkModeWorldState.h @brief Stable NetworkRuntime-owned canonical mode-world publication state. */
 
 #include "Horo/Network/InboundMessageDispatcher.h"
+#include "Horo/Network/NetworkAuthoredScenePage.h"
 #include "Horo/Network/NetworkModeComposition.h"
 #include "Horo/Network/NetworkPrefabLifecycle.h"
 #include "Horo/Network/NetworkWorldBinding.h"
@@ -21,16 +22,18 @@ namespace Horo::Network::Detail {
      */
     class NetworkModeWorldState final {
     public:
-        NetworkModeWorldState(NetworkModePlan plan, NetworkWorldBindingPolicy policy, std::uint64_t schemaFingerprint);
+        NetworkModeWorldState(NetworkModePlan plan, NetworkWorldBindingPolicy policy, std::uint64_t schemaFingerprint,
+                              std::uint64_t maximumPendingTicks);
         ~NetworkModeWorldState() noexcept;
         NetworkModeWorldState(const NetworkModeWorldState &) = delete;
         NetworkModeWorldState &operator=(const NetworkModeWorldState &) = delete;
 
         /** @brief Stage the selected server occurrence without publishing a role. */
-        [[nodiscard]] Result<void> Prepare(const NetworkAuthoredSceneProjection &authored);
+        [[nodiscard]] Result<void> Prepare(const NetworkAuthoredSceneProjection &authored, NetworkAuthoredSceneProjection client);
         /** @brief Prepare only host-selected local travel Scenes; old publication remains unchanged. */
         [[nodiscard]] Result<void> PrepareTravel(std::span<const NetworkModeWorld> worlds, std::uint64_t nowTick,
-                                                 std::uint64_t maximumPendingTicks, const NetworkAuthoredSceneProjection &authored);
+                                                 std::uint64_t maximumPendingTicks, const NetworkAuthoredSceneProjection &authored,
+                                                 NetworkAuthoredSceneProjection client);
 
         [[nodiscard]] bool TravelPending() const noexcept {
             return !stopped_ && travelPending_;
@@ -53,6 +56,10 @@ namespace Horo::Network::Detail {
         [[nodiscard]] Result<void> Accept(const NetworkWorldBindingRecord &record, const InboundMessageContext &context);
         /** @brief Admit protected Prefab data into the currently published client's bounded inbox. */
         [[nodiscard]] Result<void> AcceptPrefab(std::span<const std::byte> payload, const InboundMessageContext &context);
+        /** @brief Stages authored rows from an authenticated candidate only. */
+        [[nodiscard]] Result<void> AcceptAuthored(std::span<const std::byte> payload, const InboundMessageContext &context);
+        /** @brief Borrows the immutable inventory for the authority's exact current or provisional world. */
+        [[nodiscard]] const ReplicationAuthoredSceneInventory *AuthorityAuthored(NetworkSessionGeneration session) const noexcept;
         /** @brief Transfer staged work only to the current client Scene at its structural safe point. */
         [[nodiscard]] Result<std::vector<NetworkPrefabLifecycleRecord>> TakePrefab(Runtime::SceneRuntimeId scene,
                                                                                    Runtime::RuntimePhase phase);
@@ -104,6 +111,10 @@ namespace Horo::Network::Detail {
             std::vector<PendingPrefab> prefabInbox;
             std::vector<NetworkPrefabLifecycleRecord> authorityPrefabs;
             std::uint64_t prefabRevision{};
+            std::optional<ReplicationAuthoredSceneInventory> authored;
+            std::optional<NetworkAuthoredSceneAssembly> authoredAssembly;
+            CancellationToken authoredDelivery;
+            std::uint64_t authoredDeadline{};
         };
 
         [[nodiscard]] Result<void> CheckOwner() const;
@@ -116,6 +127,12 @@ namespace Horo::Network::Detail {
                                                 std::size_t index);
         /** @brief Stage only the host-selected local Scene, checking a listen server's exact occurrence first. */
         [[nodiscard]] Result<void> StageClient(const NetworkWorldBindingRecord &record, std::size_t index, std::uint64_t nowTick);
+        [[nodiscard]] Result<std::unique_ptr<World>> PrepareClientWorld(Runtime::SceneRuntimeId scene,
+                                                                        const NetworkWorldBindingRecord &record,
+                                                                        std::uint64_t nowTick) const;
+        /** @brief Transfers a complete assembly into a detached client mapping candidate. */
+        [[nodiscard]] Result<void> AppendAuthored(World &world, std::size_t index, const NetworkAuthoredScenePage &page,
+                                                  const CancellationToken &cancellation);
         [[nodiscard]] Result<std::unique_ptr<World>> Stage(Runtime::SceneRuntimeId scene, ReplicationExecutionRole role,
                                                            const NetworkWorldBindingRecord &record,
                                                            const NetworkAuthoredSceneProjection &authored = {}) const;
@@ -123,10 +140,13 @@ namespace Horo::Network::Detail {
         NetworkModePlan plan_;
         const NetworkWorldBindingPolicy policy_;
         const std::uint64_t schemaFingerprint_;
+        const std::uint64_t maximumPendingTicks_;
         NetworkWorldOccurrenceIssuer issuer_;
         std::array<std::unique_ptr<World>, 2> current_;
         std::array<std::unique_ptr<World>, 2> candidate_;
         std::array<NetworkModeWorld, 2> travelWorlds_{};
+        NetworkAuthoredSceneProjection clientAuthored_;
+        NetworkAuthoredSceneProjection travelClientAuthored_;
         std::shared_ptr<PeerSessionLifecycle> client_;
         ConnectionHandle connection_;
         NetworkOperationGeneration peerGeneration_;

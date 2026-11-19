@@ -25,8 +25,9 @@ namespace Horo::Network {
     struct NetworkPrefabLifecycleRecord;
 
     namespace Detail {
+        class NetworkModeWorldState;
         struct ReplicationWorldRecord;
-    }
+    }  // namespace Detail
 
     /** @brief Owner-thread lifecycle state of one staged or published replication world. */
     enum class ReplicationWorldLifecycleState : std::uint8_t {
@@ -388,6 +389,9 @@ namespace Horo::Network {
         [[nodiscard]] bool HasStagedCandidate() const noexcept;
 
     private:
+        friend class Detail::NetworkModeWorldState;
+        /** @brief Copies prepared authored IDs for a provisional control publication. */
+        [[nodiscard]] Result<ReplicationAuthoredSceneInventory> CaptureStagedAuthoredScene() const;
         /** @brief Checks whether another detached world occurrence may be prepared. */
         [[nodiscard]] Result<void> ValidateStage(const ReplicationWorldActivationDescriptor &descriptor,
                                                  const CancellationToken &cancellation) const;

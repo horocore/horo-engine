@@ -35,6 +35,23 @@ namespace Horo::Network {
                codec->maximumPayloadBytes <= MaximumNetworkPrefabLifecycleBytes;
     }
 
+    /** @copydoc ValidAuthoredSceneRoute */
+    bool ValidAuthoredSceneRoute(const NetworkWorldBindingPolicy &policy, const MessageCodecRegistry &codecs) {
+        if (!policy.authoredScene)
+            return true;
+        const auto &route = *policy.authoredScene;
+        const auto &identity = route.control;
+        if (identity.protocol != policy.control.protocol || identity.id == policy.control.id || identity.optional ||
+            !route.feature.IsValid())
+            return false;
+        if (policy.prefabLifecycle && identity.id == policy.prefabLifecycle->control.id)
+            return false;
+        const auto codec = codecs.FindCodec(identity.protocol, identity.id);
+        return codec && codec->schema == identity.schema && codec->supportedVersions.Contains(identity.version) &&
+               codec->maximumPayloadBytes >= MinimumNetworkAuthoredScenePageBytes + NetworkAuthoredSceneRowBytes &&
+               codec->maximumPayloadBytes <= MaximumNetworkAuthoredScenePageBytes;
+    }
+
     /** @copydoc ValidateNetworkWorldBindingPolicy */
     Result<void> ValidateNetworkWorldBindingPolicy(const NetworkWorldBindingPolicy &policy, const HandshakeLocalDescriptor &local,
                                                    const MessageCodecRegistry &codecs) {
@@ -47,10 +64,13 @@ namespace Horo::Network {
             !codec || codec->schema != identity.schema || !codec->supportedVersions.Contains(identity.version) ||
             codec->maximumPayloadBytes != NetworkWorldBindingWireBytes)
             return Result<void>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
-        if (!ValidPrefabLifecycleRoute(policy, codecs))
+        if (!ValidPrefabLifecycleRoute(policy, codecs) || !ValidAuthoredSceneRoute(policy, codecs))
             return Result<void>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
         if (policy.prefabLifecycle && std::ranges::find(local.compatibility.features.required, policy.prefabLifecycle->feature) ==
                                           local.compatibility.features.required.end())
+            return Result<void>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
+        if (policy.authoredScene && std::ranges::find(local.compatibility.features.required, policy.authoredScene->feature) ==
+                                        local.compatibility.features.required.end())
             return Result<void>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
         return Result<void>::Success();
     }

@@ -46,6 +46,12 @@ namespace Horo::Network {
         ProtocolFeatureId feature;
     };
 
+    /** @brief Explicit negotiated route for the complete authored Scene baseline. */
+    struct NetworkAuthoredScenePolicy final {
+        MessageIdentityDescriptor control;
+        ProtocolFeatureId feature;
+    };
+
     /** @brief Host-selected immutable authorization and registry identities, captured before listening. */
     struct NetworkWorldBindingPolicy final {
         MessageIdentityDescriptor control;
@@ -54,6 +60,7 @@ namespace Horo::Network {
         CredentialProvenanceId expectedProvenance;
         NetworkCapabilityId authorityPublisher;
         std::optional<NetworkPrefabLifecyclePolicy> prefabLifecycle; /**< Opt-in protected lifecycle messages. */
+        std::optional<NetworkAuthoredScenePolicy> authoredScene;     /**< Required baseline on configured peers. */
     };
 
     /** @brief Deep-owned values and the same immutable codec snapshot, captured by the actual host admission composition.

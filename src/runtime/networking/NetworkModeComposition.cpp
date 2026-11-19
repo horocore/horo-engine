@@ -289,8 +289,7 @@ namespace Horo::Network {
             }
         }
         if (binding_) {
-            auto authored = CaptureAuthorityScene({entries_.data(), entryCount_});
-            auto staged = authored.HasError() ? Result<void>::Failure(authored.ErrorValue()) : binding_->Prepare(authored.Value());
+            auto staged = StageBoundWorlds({entries_.data(), entryCount_});
             if (staged.HasError()) {
                 Shutdown();
                 return staged;
@@ -300,12 +299,26 @@ namespace Horo::Network {
         return Result<void>::Success();
     }
 
-    /** @copydoc NetworkModeComposition::CaptureAuthorityScene */
-    Result<NetworkAuthoredSceneProjection> NetworkModeComposition::CaptureAuthorityScene(std::span<const Entry> entries) {
-        const auto scene = std::ranges::find_if(entries, [](const Entry &entry) {
-            return entry.request.service == NetworkModeServiceKind::Scene && entry.request.world == NetworkModeWorldKind::AuthorityServer;
+    /** @copydoc NetworkModeComposition::CaptureAuthoredScene */
+    Result<NetworkAuthoredSceneProjection> NetworkModeComposition::CaptureAuthoredScene(std::span<const Entry> entries,
+                                                                                        NetworkModeWorldKind kind) {
+        const auto scene = std::ranges::find_if(entries, [kind](const Entry &entry) {
+            return entry.request.service == NetworkModeServiceKind::Scene && entry.request.world == kind;
         });
         return scene != entries.end() ? scene->service->CaptureAuthoredScene() : Result<NetworkAuthoredSceneProjection>::Success({});
+    }
+
+    /** @copydoc NetworkModeComposition::StageBoundWorlds */
+    Result<void> NetworkModeComposition::StageBoundWorlds(std::span<const Entry> entries, std::span<const NetworkModeWorld> replacements) {
+        const auto authority = CaptureAuthoredScene(entries, NetworkModeWorldKind::AuthorityServer);
+        if (authority.HasError())
+            return Result<void>::Failure(authority.ErrorValue());
+        auto client = binding_->HasAuthoredScene() ? CaptureAuthoredScene(entries, NetworkModeWorldKind::Client)
+                                                   : Result<NetworkAuthoredSceneProjection>::Success({});
+        if (client.HasError())
+            return Result<void>::Failure(client.ErrorValue());
+        return replacements.empty() ? binding_->Prepare(authority.Value(), std::move(client).Value())
+                                    : binding_->PrepareTravel(replacements, authority.Value(), std::move(client).Value());
     }
 
     /** @copydoc NetworkModeComposition::RunPhase */

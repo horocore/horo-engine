@@ -51,7 +51,8 @@ namespace Horo::Application::Internal {
                     return identity.protocol == message.protocol && identity.id == message.id;
                 };
                 return reserves(worldBinding->control) ||
-                       (worldBinding->prefabLifecycle && reserves(worldBinding->prefabLifecycle->control));
+                       (worldBinding->prefabLifecycle && reserves(worldBinding->prefabLifecycle->control)) ||
+                       (worldBinding->authoredScene && reserves(worldBinding->authoredScene->control));
             }))
                 return Result<std::shared_ptr<const NetworkProductAdmission>>::Failure(
                     MakeError(Network::NetworkErrors::AdmissionPolicyInvalid));

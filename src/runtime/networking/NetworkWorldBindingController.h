@@ -36,7 +36,7 @@ namespace Horo::Network {
         NetworkWorldBindingController &operator=(const NetworkWorldBindingController &) = delete;
 
         /** @brief Stage the selected local server occurrence before any role publication. */
-        [[nodiscard]] Result<void> Prepare(const NetworkAuthoredSceneProjection &authored = {});
+        [[nodiscard]] Result<void> Prepare(const NetworkAuthoredSceneProjection &authored = {}, NetworkAuthoredSceneProjection client = {});
         /** @brief Install the exact weak admitted handler before native listeners; caller detaches before transport destruction. */
         [[nodiscard]] Result<void> Attach(INetworkTransport &transport, InboundMessageDispatcher &dispatcher,
                                           const std::shared_ptr<NetworkWorldBindingController> &owner);
@@ -53,6 +53,8 @@ namespace Horo::Network {
         [[nodiscard]] Result<void> HandleAdmitted(const InboundMessageContext &context, const MessageEnvelope &message) override;
         /** @brief Reports whether the immutable setup selected the protected Prefab route. */
         [[nodiscard]] bool HasPrefabLifecycle() const noexcept;
+        /** @brief Reports whether the exact client Scene must provide an authored projection. */
+        [[nodiscard]] bool HasAuthoredScene() const noexcept;
         /** @brief Delegates the client Scene safe-point transfer to its exact published world. */
         [[nodiscard]] Result<std::vector<NetworkPrefabLifecycleRecord>> TakePrefab(Runtime::SceneRuntimeId scene,
                                                                                    Runtime::RuntimePhase phase);
@@ -83,7 +85,8 @@ namespace Horo::Network {
         [[nodiscard]] Result<void> Flush(std::uint64_t nowTick);
         /** @brief Prepare host-selected local travel candidates; never read a local Scene/path from a packet. */
         [[nodiscard]] Result<void> PrepareTravel(std::span<const NetworkModeWorld> worlds,
-                                                 const NetworkAuthoredSceneProjection &authored = {});
+                                                 const NetworkAuthoredSceneProjection &authored = {},
+                                                 NetworkAuthoredSceneProjection client = {});
         /** @brief Whether one finite local travel candidate still exists; false after expiry/cancel/teardown. */
         [[nodiscard]] bool TravelPending() const noexcept;
         /** @brief Query pending status or its original canonical retirement reason. */
