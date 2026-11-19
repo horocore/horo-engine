@@ -315,12 +315,34 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> AbortRenderFrame();
         [[nodiscard]] Result<void> BindRenderFrame(std::uint64_t frameNumber);
 
+        /** @brief Holds one selected geometry authority and never switches basis after preparation. */
+        struct SceneGeometry final {
+            std::unique_ptr<Editor::PreparedEditorXrGeometry> authored;
+            std::shared_ptr<const Render::RenderOriginLocalScene> mounted;
+            Runtime::RuntimeSceneView mountedScene; /**< Captured structural occurrence, checked while borrowing mounted geometry. */
+            bool revoked{};
+
+            /** @brief Checks the selected source and its retained structural and origin lifetimes. */
+            [[nodiscard]] Result<void> ValidateSource() const;
+            /** @brief Updates authored draws or checks the exact immutable mounted Scene occurrence. */
+            [[nodiscard]] Result<void> Update(const Runtime::RuntimeSceneView &scene);
+            /** @brief Borrows leased mesh resources during cold renderer preparation. */
+            [[nodiscard]] std::span<const Render::RenderMeshResourceView> Resources() const noexcept;
+            /** @brief Borrows geometry in the selected source's admitted coordinate basis. */
+            [[nodiscard]] std::span<const Render::RenderStaticMeshInstance> Instances() const noexcept;
+            /** @brief Borrows only issued canonical per-draw motion identities. */
+            [[nodiscard]] std::span<const Render::RenderMotionObjectId> MotionObjects() const noexcept;
+            /** @brief Closes admission without dropping resources retained for native retirement. */
+            void Revoke() noexcept;
+        };
+
         struct SceneState final {
             Runtime::SceneRuntimeId scene;
-            std::unique_ptr<Editor::PreparedEditorXrGeometry> geometry;
+            std::optional<SceneGeometry> geometry;
             std::optional<OpenXRApplicationProjection> projection;
             XR::XRReferenceSpaceSnapshot references; /**< Same cold native preparation as this Scene candidate. */
             XR::XRCoordinateSpace worldReference;    /**< Exact calibrated native World child from the same candidate. */
+            std::optional<XR::OpenXRInternal::NativeReferenceCalibrationObservation> mountedCalibration;
             XR::XRSessionId session;
             std::optional<XR::XRPassthroughGrant> passthroughGrant;
             CancellationSource preparationCancellation; /**< Exact unpublished attempt; revocation cannot affect a replacement. */
@@ -334,6 +356,8 @@ namespace Horo::Application::Internal {
              */
             [[nodiscard]] Result<void> PrepareResources(OpenXRPlayHost &host,
                                                         const XR::OpenXRInternal::NativeTrackingSpaceRequest &tracking);
+            /** @brief Seals mounted placement only after the exact native relation and origin lease agree. */
+            [[nodiscard]] Result<void> CalibrateMounted(const OpenXRPlayHost &host, const Math::Transform &placement);
             /** @brief Revalidates this exact current state without issuing a replacement identity.
              * @param host Same retained owner. @return Source/native/currentness failure or success.
              */
@@ -359,7 +383,7 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> FinishFrameRetirement(const XR::XRSessionId &candidate);
 
         /** @brief Checks whether the exact optional provider policy needs the current projection's history. */
-        [[nodiscard]] static bool WantsMotionHistory(const XR::XRFeaturePlan &plan) noexcept;
+        [[nodiscard]] bool WantsMotionHistory(const XR::XRFeaturePlan &plan) const noexcept;
 
         /** @brief Creates the SAME native color owner/views after the canonical candidate activates that session.
          * @param candidate Actual issued candidate. @param color Exact previously observed sampled UNORM tuple.

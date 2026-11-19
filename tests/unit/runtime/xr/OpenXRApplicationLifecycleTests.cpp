@@ -390,27 +390,24 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(fixture.play->PresentationState() == Host::OpenXRPlayPresentation::Pending);
     }
 
-    TEST_CASE("Selected OpenXR Play consumes mounted origin geometry before requiring reference calibration",
-              "[xr][application][play][mounted_origin]") {
+    TEST_CASE("Selected OpenXR Play calibrates mounted origin before structural publication", "[xr][application][play][mounted_origin]") {
         namespace WS = WorldStreaming;
-        ApplicationFixture fixture;
+        ApplicationFixture fixture{true};
         fixture.CreatePlay();
         REQUIRE(fixture.play->SetPlayState(Editor::EditorPlayState::Playing).HasValue());
         REQUIRE(fixture.play->AttachInput(fixture.InputPort(), fixture.source.Port()).HasValue());
-        const auto preparedCalls = fixture.script.native.calls.size();
-        const auto retainedSessions = fixture.script.native.liveSessions;
-        const auto actionSets = fixture.script.actions.liveSets;
-        const auto originPosition = Math::WorldCoordinate64::FromMillimeters(9'007'199'254'740'993, 0, 0);
+        constexpr std::int64_t globalX = 9'007'199'254'740'993;
+        const auto originPosition = Math::WorldCoordinate64::FromMillimeters(globalX, 0, 0);
+        const auto anchor = Math::WorldCoordinate64::FromMillimeters(globalX + 1000, 2000, 3000);
         const auto origin = RequireValue(
-            WS::OriginFrame::Create({RequireValue(WS::OriginFrameId::Create(7)), RequireValue(WS::OriginFrameRevision::Create(1)),
+            WS::OriginFrame::Create({RequireValue(WS::OriginFrameId::Create(7)), RequireValue(WS::OriginFrameRevision::Create(3)),
                                      RequireValue(WS::OriginGeneration::Create(1))},
                                     originPosition));
         auto owner = RequireValue(WS::OriginFrameOwner::Create(origin));
         const auto view = RequireValue(fixture.frontend->CreateRenderViewIdentity());
-        auto adapter = RequireValue(Render::RenderOriginSceneAdapter::Create(*owner, view,
-                                                                             {RequireValue(WS::OriginRebaseParticipantId::Create(7)),
-                                                                              RequireValue(WS::OriginRebaseParticipantRevision::Create(1))},
-                                                                             {1, 0, 0}));
+        const WS::OriginRebaseParticipantRequirement requirement{RequireValue(WS::OriginRebaseParticipantId::Create(7)),
+                                                                 RequireValue(WS::OriginRebaseParticipantRevision::Create(1))};
+        auto adapter = RequireValue(Render::RenderOriginSceneAdapter::Create(*owner, view, requirement, {2, 0, 0}));
         const auto runtime = fixture.scene->View().RuntimeId();
         const Render::RenderOriginSceneSource source{{originPosition,
                                                       Math::WorldCoordinate64::FromMillimeters(9'007'199'254'740'993, 0, -1000)},
@@ -421,26 +418,164 @@ namespace Horo::Tests::OpenXRApplication {
         std::shared_ptr<const Render::RenderOriginLocalScene> packet =
             std::make_shared<Render::RenderOriginLocalScene>(RequireValue(frame.OriginScene({})));
         bool read{};
+        Math::Transform placement{.translation = RequireValue(origin.ToLocal(anchor)).Value()};
         auto participant = fixture.play->MakeSceneParticipant([&](const Runtime::RuntimeSceneView &candidate, Runtime::SceneObjectId root) {
             CHECK(candidate.SameIncarnation(fixture.scene->View()));
             CHECK(root.IsValid());
             read = true;
-            return Result<Editor::EditorMountedXrScene>::Success({packet, root, {.translation = {1.25F, 0, 0}}});
+            return Result<Editor::EditorMountedXrScene>::Success({packet, root, placement});
         });
-        const auto prepared = participant->Prepare(fixture.definition, fixture.scene->View());
-        REQUIRE(prepared.HasError());
-        CHECK(read);
-        CHECK(prepared.ErrorValue().code.Value() == XR::XRErrors::OperationIncompatible.code.Value());
-        CHECK(fixture.script.native.calls.size() == preparedCalls);
-        CHECK(fixture.script.native.liveSessions == retainedSessions);
-        CHECK(fixture.script.actions.liveSets == actionSets);
-        CHECK_FALSE(fixture.play->UsesXrScene());
+        SECTION("exact relation is observed at the same native clock before publication") {
+            auto prepared = participant->Prepare(fixture.definition, fixture.scene->View());
+            REQUIRE(prepared.HasValue());
+            CHECK(read);
+            CHECK_FALSE(fixture.play->UsesXrScene());
+            CHECK(fixture.script.actions.tracking.locatedTime == fixture.script.clock.sample);
+            REQUIRE(prepared.Value()->ValidatePublication().HasValue());
+            prepared.Value()->Publish();
+            CHECK(fixture.play->UsesXrScene());
+            const auto retained = fixture.session->RetainedSession();
+            REQUIRE(retained.has_value());
+            const auto session = fixture.play->ReadReferences(*retained);
+            REQUIRE(session.HasValue());
+            CHECK(session.Value().local.worldOriginRevision.Value() == 3);
+            owner->Shutdown();
+            CHECK(fixture.play->UpdateScene(fixture.scene->View()).HasError());
+            CHECK_FALSE(fixture.play->UsesXrScene());
+        }
+        SECTION("mismatched authored placement cannot publish the candidate") {
+            placement.translation.x = 1.25F;
+            const auto rejected = participant->Prepare(fixture.definition, fixture.scene->View());
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == XR::XRErrors::PoseInvalid.code.Value());
+            CHECK(fixture.script.actions.tracking.locatedTime == fixture.script.clock.sample);
+            CHECK_FALSE(fixture.play->UsesXrScene());
+        }
+        SECTION("inferred location cannot publish the candidate") {
+            fixture.script.actions.tracking.flags &= ~XR_SPACE_LOCATION_POSITION_TRACKED_BIT;
+            const auto rejected = participant->Prepare(fixture.definition, fixture.scene->View());
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == XR::XRErrors::OperationUnavailable.code.Value());
+            CHECK_FALSE(fixture.play->UsesXrScene());
+        }
+        SECTION("the retained origin must remain current through the publication gate") {
+            auto prepared = participant->Prepare(fixture.definition, fixture.scene->View());
+            REQUIRE(prepared.HasValue());
+            owner->Shutdown();
+            const auto stale = prepared.Value()->ValidatePublication();
+            REQUIRE(stale.HasError());
+            CHECK(stale.ErrorValue().code.Value() == WS::WorldStreamingErrors::OriginFrameStale.code.Value());
+            CHECK_FALSE(fixture.play->UsesXrScene());
+            prepared.Value()->Shutdown();
+        }
+        SECTION("a published rebase retires the old XR session and calibrates the unchanged global anchor again") {
+            auto first = RequireValue(participant->Prepare(fixture.definition, fixture.scene->View()));
+            REQUIRE(first->ValidatePublication().HasValue());
+            first->Publish();
+            const auto initialSession = fixture.session->RetainedSession();
+            REQUIRE(initialSession.has_value());
+            const auto firstSession = *initialSession;
+            const auto firstReferences = RequireValue(fixture.play->ReadReferences(firstSession));
+            const auto firstWorld = RequireValue(fixture.session->WorldSpace(firstSession));
+            CHECK(firstReferences.local.worldOriginRevision.Value() == 3);
+            REQUIRE(fixture.session->HasInputProjection());
+            fixture.script.events.session = fixture.script.native.lastSession;
+            fixture.script.events.Push(XR_SESSION_STATE_READY);
+            fixture.script.events.Push(XR_SESSION_STATE_SYNCHRONIZED);
+            fixture.script.events.Push(XR_SESSION_STATE_VISIBLE);
+            fixture.script.events.Push(XR_SESSION_STATE_FOCUSED);
+            REQUIRE(fixture.play->PollEvents().HasValue());
+            REQUIRE(fixture.script.events.begins == 1);
+            REQUIRE(fixture.play->PresentationState() == Host::OpenXRPlayPresentation::FrameAdmitted);
 
-        owner->Shutdown();
-        const auto stale = participant->Prepare(fixture.definition, fixture.scene->View());
-        REQUIRE(stale.HasError());
-        CHECK(stale.ErrorValue().code.Value() == WS::WorldStreamingErrors::OriginFrameStale.code.Value());
-        CHECK(fixture.script.native.calls.size() == preparedCalls);
+            const auto policy =
+                RequireValue(WS::OriginShiftPolicy::Create({.id = RequireValue(WS::OriginShiftPolicyId::Create(1)),
+                                                            .revision = RequireValue(WS::OriginShiftPolicyRevision::Create(1)),
+                                                            .frame = origin.Binding().identity,
+                                                            .mode = WS::OriginShiftRuntimeMode::EditorPreview}));
+            const auto focus = Math::WorldCoordinate64::FromMillimeters(globalX + 2'000'000, 0, 0);
+            const auto shift = RequireValue(
+                WS::EvaluateOriginShift(policy, {policy.Id(), policy.Revision(), origin, WS::OriginShiftPolicyState::Active},
+                                        {RequireValue(WS::OriginShiftRequestId::Create(1)), WS::OriginShiftRequester::Editor, focus}));
+            REQUIRE(shift.kind == WS::OriginShiftDecisionKind::RequestShift);
+            const std::array required{requirement};
+            const std::array participants{static_cast<WS::IOriginRebaseParticipant *>(adapter.get())};
+            auto rebase = RequireValue(WS::OriginRebaseTransaction::Prepare({RequireValue(WS::OriginRebaseTransactionId::Create(1)), shift,
+                                                                             origin, 1, WS::OriginRebaseLifecycle::Active},
+                                                                            required, participants));
+            REQUIRE(rebase.Commit(*owner, WS::OriginRebaseCommitPoint::PostSimulation, WS::OriginRebaseLifecycle::Active).HasValue());
+            CHECK(packet->origin.Get().HasError());
+            CHECK(first->ValidatePublication().HasError());
+            const auto previousWaits = fixture.script.frames.waits;
+            const auto staleFrame = fixture.play->PrepareRenderFrame(1);
+            REQUIRE(staleFrame.HasError());
+            CHECK(staleFrame.ErrorValue().code.Value() == WS::WorldStreamingErrors::OriginFrameStale.code.Value());
+            CHECK(fixture.script.frames.waits == previousWaits);
+            const CancellationSource cancellation;
+            const auto staleInput = fixture.play->BuildInputSnapshot({.frameNumber = 1, .cancellation = cancellation.Token()}, {});
+            REQUIRE(staleInput.HasError());
+            CHECK(staleInput.ErrorValue().code.Value() == WS::WorldStreamingErrors::OriginFrameStale.code.Value());
+            CHECK_FALSE(fixture.play->UsesXrScene());
+            CHECK_FALSE(fixture.session->HasInputProjection());
+            REQUIRE(fixture.play->PollEvents().HasValue());
+            REQUIRE(fixture.script.events.exits == 1);
+            fixture.script.events.Push(XR_SESSION_STATE_STOPPING);
+            fixture.script.events.Push(XR_SESSION_STATE_IDLE);
+            REQUIRE(fixture.play->PollEvents().HasValue());
+            CHECK_FALSE(fixture.session->RetainedSession());
+            REQUIRE(fixture.play->BuildInputSnapshot({.frameNumber = 2, .cancellation = cancellation.Token()}, {}).HasValue());
+
+            fixture.scene = RequireValue(Runtime::RuntimeScene::Create(fixture.definition, {2}));
+            auto rebasedSource = source;
+            rebasedSource.sceneDomain = fixture.scene->View().RuntimeId().value;
+            const auto rebasedFrame = RequireValue(adapter->Capture(rebasedSource, Render::RenderOriginCoordinateBasis::OriginRelative));
+            packet = std::make_shared<Render::RenderOriginLocalScene>(RequireValue(rebasedFrame.OriginScene({})));
+            const auto rebased = RequireValue(packet->origin.Get());
+            REQUIRE(rebased.Origin() == focus);
+            const auto projectedAnchor = RequireValue(rebased.ToLocal(anchor));
+            CHECK(projectedAnchor.Generation().Value() == 2);
+            CHECK(RequireValue(rebased.ToGlobal(projectedAnchor)) == anchor);
+            placement.translation = projectedAnchor.Value();
+            REQUIRE(placement.translation == Math::Vec3{-1999.0F, 2.0F, 3.0F});
+            auto &tracking = fixture.script.actions.tracking;
+            tracking.locatedPosition = {placement.translation.x, placement.translation.y, placement.translation.z};
+            ++fixture.script.clock.sample;
+            auto second = RequireValue(participant->Prepare(fixture.definition, fixture.scene->View()));
+            CHECK(tracking.locatedTime == fixture.script.clock.sample);
+            REQUIRE_FALSE(tracking.references.empty());
+            CHECK(tracking.references.back().poseInReferenceSpace.position.x == -placement.translation.x);
+            REQUIRE(second->ValidatePublication().HasValue());
+            second->Publish();
+            first->Shutdown();
+            CHECK(fixture.play->UsesXrScene());
+            REQUIRE(fixture.session->HasInputProjection());
+            const auto replacementSession = fixture.session->RetainedSession();
+            REQUIRE(replacementSession.has_value());
+            const auto secondSession = *replacementSession;
+            CHECK(secondSession != firstSession);
+            const auto secondReferences = RequireValue(fixture.play->ReadReferences(secondSession));
+            CHECK(secondReferences.local.worldOriginRevision.Value() == 4);
+            CHECK(secondReferences.local.id != firstReferences.local.id);
+            CHECK(RequireValue(fixture.session->WorldSpace(secondSession)) != firstWorld);
+            CHECK(fixture.play->ReadReferences(firstSession).HasError());
+            CHECK(fixture.session->BorrowWorldSpace(firstWorld).HasError());
+            fixture.script.events.session = fixture.script.native.lastSession;
+            fixture.script.events.Push(XR_SESSION_STATE_READY);
+            fixture.script.events.Push(XR_SESSION_STATE_SYNCHRONIZED);
+            fixture.script.events.Push(XR_SESSION_STATE_VISIBLE);
+            fixture.script.events.Push(XR_SESSION_STATE_FOCUSED);
+            REQUIRE(fixture.play->PollEvents().HasValue());
+            CHECK(fixture.script.events.begins == 2);
+            CHECK(fixture.play->PresentationState() == Host::OpenXRPlayPresentation::FrameAdmitted);
+        }
+        SECTION("expired origin never prepares native tracking") {
+            const auto preparedCalls = fixture.script.native.calls.size();
+            owner->Shutdown();
+            const auto stale = participant->Prepare(fixture.definition, fixture.scene->View());
+            REQUIRE(stale.HasError());
+            CHECK(stale.ErrorValue().code.Value() == WS::WorldStreamingErrors::OriginFrameStale.code.Value());
+            CHECK(fixture.script.native.calls.size() == preparedCalls);
+        }
     }
 
     TEST_CASE("Input revocation cancels the exact unpublished application Play attempt", "[xr][application][play]") {

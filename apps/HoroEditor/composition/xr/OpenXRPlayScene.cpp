@@ -5,6 +5,10 @@
 #include "Horo/XR/XRSessionErrors.h"
 #include "OpenXRPlayFrameState.h"
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
 namespace Horo::Application::Internal {
     using namespace XR;
     using namespace XR::OpenXRInternal;
@@ -111,11 +115,59 @@ namespace Horo::Application::Internal {
         /** @brief Prepares the exact Scene/native candidate under the existing host rollback scope. */
         [[nodiscard]] Result<std::shared_ptr<SceneState>> PrepareCurrent(const Runtime::RuntimeSceneDefinition &definition,
                                                                          const Runtime::RuntimeSceneView &candidate);
-        /** @brief Validates the mounted World geometry before the native reference-calibration gate. */
+        /** @brief Prepares geometry and calibration from the same mounted World occurrence. */
         [[nodiscard]] Result<std::shared_ptr<SceneState>> PrepareMounted(const Runtime::RuntimeSceneView &candidate) const;
+        /** @brief Runs the common unpublished native preparation under the existing rollback owner. */
+        [[nodiscard]] Result<std::shared_ptr<SceneState>> PrepareState(std::shared_ptr<SceneState> state,
+                                                                       const NativeTrackingSpaceRequest &tracking) const;
         OpenXRPlayHost *host_;
         Editor::EditorMountedXrGeometryCapture mounted_;
     };
+
+    /** @copydoc OpenXRPlayHost::SceneGeometry::ValidateSource */
+    Result<void> OpenXRPlayHost::SceneGeometry::ValidateSource() const {
+        if (revoked)
+            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        if (authored)
+            return authored->ValidateSource();
+        if (!mounted || !mountedScene.IsCurrent())
+            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        const auto origin = mounted->origin.Get();
+        return origin.HasError() ? Result<void>::Failure(origin.ErrorValue()) : Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRPlayHost::SceneGeometry::Update */
+    Result<void> OpenXRPlayHost::SceneGeometry::Update(const Runtime::RuntimeSceneView &scene) {
+        if (authored) {
+            const auto updated = authored->Update(scene);
+            return updated.HasError() ? Result<void>::Failure(updated.ErrorValue()) : Result<void>::Success();
+        }
+        if (!scene.IsCurrent() || !mountedScene.SameIncarnation(scene))
+            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        return ValidateSource();
+    }
+
+    /** @copydoc OpenXRPlayHost::SceneGeometry::Resources */
+    std::span<const Render::RenderMeshResourceView> OpenXRPlayHost::SceneGeometry::Resources() const noexcept {
+        return authored ? authored->Resources() : mounted->scene.meshResources;
+    }
+
+    /** @copydoc OpenXRPlayHost::SceneGeometry::Instances */
+    std::span<const Render::RenderStaticMeshInstance> OpenXRPlayHost::SceneGeometry::Instances() const noexcept {
+        return authored ? authored->Instances() : mounted->scene.instances;
+    }
+
+    /** @copydoc OpenXRPlayHost::SceneGeometry::MotionObjects */
+    std::span<const Render::RenderMotionObjectId> OpenXRPlayHost::SceneGeometry::MotionObjects() const noexcept {
+        return authored ? authored->MotionObjects() : std::span<const Render::RenderMotionObjectId>{};
+    }
+
+    /** @copydoc OpenXRPlayHost::SceneGeometry::Revoke */
+    void OpenXRPlayHost::SceneGeometry::Revoke() noexcept {
+        revoked = true;
+        if (authored)
+            authored->Revoke();
+    }
 
     /** @copydoc OpenXRPlayHost::MakeSceneParticipant */
     std::unique_ptr<Runtime::SceneActivationParticipant> OpenXRPlayHost::MakeSceneParticipant(
@@ -251,13 +303,13 @@ namespace Horo::Application::Internal {
             return Output::Failure(MakeError(XRSessionErrors::SetupCleanupPending));
         if (owner.scene_ || !owner.input_.port || !owner.input_.router || candidate.DefinitionRevision() != definition.Revision())
             return Output::Failure(MakeError(XRErrors::OperationIncompatible));
+        const Operation operation{owner};
+        if (auto ready = owner.AdmitReferenceReplacement(); ready.HasError())
+            return Output::Failure(ready.ErrorValue());
         if (mounted_)
             return PrepareMounted(candidate);
         if (!owner.input_.geometry)
             return Output::Failure(MakeError(XRErrors::OperationIncompatible));
-        const Operation operation{owner};
-        if (auto ready = owner.AdmitReferenceReplacement(); ready.HasError())
-            return Output::Failure(ready.ErrorValue());
         auto geometry = owner.input_.geometry->Capture(definition.Revision(), candidate);
         if (geometry.HasError())
             return Output::Failure(geometry.ErrorValue());
@@ -272,16 +324,8 @@ namespace Horo::Application::Internal {
 
         auto state = std::make_shared<SceneState>();
         state->scene = sceneIdentity;
-        state->geometry = std::move(geometry).Value();
-        owner.input_.origin = origin.Value();
-        owner.scene_ = state;
-
-        PreparationScope rollback{owner, state};
-        // All Scene/view reads and geometry leases are captured before native/host preparation can call foreign code.
-        if (auto prepared = state->PrepareResources(owner, {origin.Value(), XRSpaceKind::Local, root.Value()}); prepared.HasError())
-            return Output::Failure(prepared.ErrorValue());
-        rollback.Accept();
-        return Output::Success(std::move(state));
+        state->geometry.emplace(SceneGeometry{.authored = std::move(geometry).Value()});
+        return PrepareState(std::move(state), {origin.Value(), XRSpaceKind::Local, root.Value()});
     }
 
     /** @copydoc OpenXRPlayHost::SceneParticipant::PrepareMounted */
@@ -294,15 +338,42 @@ namespace Horo::Application::Internal {
             return Output::Failure(captured.ErrorValue());
         const auto &[geometry, trackingRoot, originFromLocal] = captured.Value();
         if (trackingRoot != root || !geometry || !candidate.IsCurrent() ||
-            geometry->scene.lightSceneDomain != candidate.RuntimeId().value || !geometry->view.IsValid() || !geometry->scene.IsValid())
+            geometry->scene.lightSceneDomain != candidate.RuntimeId().value || !geometry->view.IsValid())
             return Output::Failure(MakeError(XRErrors::IdentityStale));
-        if (const auto origin = geometry->origin.Get(); origin.HasError())
+        constexpr auto maximum = Editor::PreparedEditorXrGeometry::MaximumInstances;
+        if (geometry->scene.instances.size() > maximum || geometry->scene.meshResources.size() > maximum)
+            return Output::Failure(MakeError(XRErrors::CapacityExceeded));
+        if (!geometry->scene.IsValid())
+            return Output::Failure(MakeError(XRErrors::OperationInvalid));
+        const auto origin = geometry->origin.Get();
+        if (origin.HasError())
             return Output::Failure(origin.ErrorValue());
-        if (originFromLocal.scale != Math::Vec3{1, 1, 1} || originFromLocal.TryToMatrix().HasError())
+        const auto revision = XRWorldOriginRevision::Create(origin.Value().Binding().revision.Value());
+        if (revision.HasError())
+            return Output::Failure(revision.ErrorValue());
+        constexpr float localExtent = static_cast<float>(WorldStreaming::OriginFrame::MaximumLocalHalfExtentMillimeters) / 1000.0F;
+        const auto &offset = originFromLocal.translation;
+        if (originFromLocal.scale != Math::Vec3{1, 1, 1} || originFromLocal.TryToMatrix().HasError() ||
+            std::max({std::abs(offset.x), std::abs(offset.y), std::abs(offset.z)}) > localExtent)
             return Output::Failure(MakeError(XRErrors::PoseInvalid, "Mounted World tracking placement must be finite and rigid."));
-        return Output::Failure(
-            MakeError(XRErrors::OperationIncompatible,
-                      "Mounted World XR requires a calibrated native reference-space pose in this exact World origin generation."));
+        auto state = std::make_shared<SceneState>();
+        state->scene = candidate.RuntimeId();
+        state->geometry.emplace(SceneGeometry{.mounted = geometry, .mountedScene = candidate});
+        return PrepareState(std::move(state), {revision.Value(), XRSpaceKind::Local, originFromLocal});
+    }
+
+    /** @copydoc OpenXRPlayHost::SceneParticipant::PrepareState */
+    Result<std::shared_ptr<OpenXRPlayHost::SceneState>> OpenXRPlayHost::SceneParticipant::PrepareState(
+        std::shared_ptr<SceneState> state, const NativeTrackingSpaceRequest &tracking) const {
+        using Output = Result<std::shared_ptr<SceneState>>;
+        auto &owner = *host_;
+        owner.input_.origin = tracking.origin;
+        owner.scene_ = state;
+        PreparationScope rollback{owner, state};
+        if (auto prepared = state->PrepareResources(owner, tracking); prepared.HasError())
+            return Output::Failure(prepared.ErrorValue());
+        rollback.Accept();
+        return Output::Success(std::move(state));
     }
 
     /** @copydoc OpenXRPlayHost::SceneState::PrepareResources */
@@ -325,6 +396,8 @@ namespace Horo::Application::Internal {
         if (preparedProjection.HasError())
             return Result<void>::Failure(preparedProjection.ErrorValue());
         projection.emplace(std::move(preparedProjection).Value());
+        if (geometry->mounted)
+            projection->writer.reset();  // Mounted geometry has no issued per-draw history identity.
         const auto &facts = *projection;
         auto activatedSession = host.sessions_.Activate(facts.capabilities, facts.capabilities.System(), facts.capabilities.Revision(),
                                                         facts.plan, cancellation);
@@ -343,19 +416,65 @@ namespace Horo::Application::Internal {
         if (observedWorld.HasError())
             return Result<void>::Failure(observedWorld.ErrorValue());
         worldReference = std::move(observedWorld).Value();
+        if (geometry->mounted) {
+            if (!tracking.worldFromBase)
+                return Result<void>::Failure(MakeError(XRErrors::PoseInvalid));
+            if (auto calibrated = CalibrateMounted(host, *tracking.worldFromBase); calibrated.HasError())
+                return calibrated;
+        }
         if (auto valid = Validate(host); valid.HasError())
             return Result<void>::Failure(valid.ErrorValue());
+        return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRPlayHost::SceneState::CalibrateMounted */
+    Result<void> OpenXRPlayHost::SceneState::CalibrateMounted(const OpenXRPlayHost &host, const Math::Transform &placement) {
+        if (auto current = geometry->ValidateSource(); current.HasError())
+            return current;
+        const auto now = host.clock_.ReferenceCalibrationNow();
+        if (now.HasError())
+            return Result<void>::Failure(now.ErrorValue());
+        const auto sample = host.composition_.session.ObserveReferenceCalibration(references.local, worldReference, now.Value());
+        if (sample.HasError())
+            return Result<void>::Failure(sample.ErrorValue());
+        const auto &observed = sample.Value().worldFromReference;
+        const auto expectedRotation = placement.rotation.TryNormalized();
+        const auto observedRotation = observed.rotation.TryNormalized();
+        if (expectedRotation.HasError() || observedRotation.HasError())
+            return Result<void>::Failure(MakeError(XRErrors::PoseInvalid));
+        const auto &a = expectedRotation.Value();
+        const auto &b = observedRotation.Value();
+        const Math::Vec4 expected{a.x, a.y, a.z, a.w};
+        const Math::Vec4 actual{b.x, b.y, b.z, b.w};
+        const float hemisphere = Math::Dot(expected, actual) < 0.0F ? -1.0F : 1.0F;
+        // Allow fixed-point millimeter resolution and fp32 error in the native rigid inverse at large local offsets.
+        const auto translationTolerance =
+            std::max(0.001F, Math::Length(placement.translation) * 8.0F * std::numeric_limits<float>::epsilon());
+        if (Math::LengthSquared(observed.translation - placement.translation) > translationTolerance * translationTolerance ||
+            Math::LengthSquared(expected - actual * hemisphere) > 1.0e-8F)
+            return Result<void>::Failure(
+                MakeError(XRErrors::PoseInvalid, "Native reference relation disagrees with mounted World placement."));
+        if (auto current = geometry->ValidateSource(); current.HasError())
+            return current;
+        mountedCalibration = sample.Value();
         return Result<void>::Success();
     }
 
     /** @copydoc OpenXRPlayHost::SceneState::Validate */
     Result<void> OpenXRPlayHost::SceneState::Validate(const OpenXRPlayHost &host) const {
         if (std::this_thread::get_id() != host.lane_ || host.pendingRevoke_ || host.pendingDetach_ || host.scene_.get() != this ||
-            retiring || !geometry || !projection || !session.IsValid() || !host.input_.port || !host.input_.geometry ||
+            retiring || !geometry || !projection || !session.IsValid() || !host.input_.port ||
             host.sessions_.Snapshot().session != session || !host.input_.coordinator || !host.input_.coordinator->Current())
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         if (auto source = geometry->ValidateSource(); source.HasError())
             return source;
+        if (geometry->mounted) {
+            if (!mountedCalibration || mountedCalibration->reference != references.local || mountedCalibration->world != worldReference ||
+                mountedCalibration->world.worldOriginRevision != host.input_.origin)
+                return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        } else if (!host.input_.geometry) {
+            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        }
         return host.native_.Validate(session);
     }
 

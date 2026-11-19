@@ -576,13 +576,15 @@ capture retains the renderer view, primitive resources and exact origin lease.
 The selected authored tracking root uses its own anchored World position and
 rigid orientation in that same origin. This defines the intended Local
 placement for reference calibration. It carries no measured physical alignment.
-OpenXR currently rejects the uncalibrated startup before allocating Play
-tracking resources. The native calibration owner must bind an observed
-reference-space identity and generation to the exact canonical origin before
-publishing Play input or projection. Reference-space changes and origin
-replacements must invalidate the correspondence before another frame.
-The existing desktop World projection continues through its live viewport
-owner.
+OpenXR prepares the native spaces privately and observes the Local-to-World
+relation at a fresh sample from the admitted instance clock. The Scene
+candidate compares the observed rigid transform with the authored placement
+before publishing Play input or projection. A failed comparison retires the
+unpublished candidate through the existing owner. Mounted projection uses the
+retained origin-relative geometry and its original structural Scene and origin
+leases. Retirement, reference-space changes and origin replacements invalidate
+the correspondence. The existing desktop World projection continues through
+its live viewport owner.
 
 For an already prepared session, the OpenXR host can observe the exact native
 reference-to-created-World location from the current bound frame. The read

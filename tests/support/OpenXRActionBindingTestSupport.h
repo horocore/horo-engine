@@ -63,6 +63,7 @@ namespace Horo::Tests::OpenXRAction {
             std::optional<XrBool32> poseActive;
             XrTime locatedTime{};
             XrSpace locatedBase{XR_NULL_HANDLE};
+            XrVector3f locatedPosition{1.0F, 2.0F, 3.0F};
             XrSpaceLocationFlags flags{XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT |
                                        XR_SPACE_LOCATION_POSITION_TRACKED_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT};
             XrSpaceVelocityFlags velocityFlags{XR_SPACE_VELOCITY_LINEAR_VALID_BIT | XR_SPACE_VELOCITY_ANGULAR_VALID_BIT};
@@ -356,7 +357,7 @@ namespace Horo::Tests::OpenXRAction {
             location->pose.position = {invalid, invalid, invalid};
             location->pose.orientation = {invalid, invalid, invalid, invalid};
             if ((location->locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0)
-                location->pose.position = {1.0F, 2.0F, 3.0F};
+                location->pose.position = active->tracking.locatedPosition;
             if ((location->locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0)
                 location->pose.orientation = {0.0F, 0.0F, 0.0F, 1.0F};
             if (source == active->gaze.space) {

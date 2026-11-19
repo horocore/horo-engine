@@ -199,6 +199,11 @@ namespace Horo::Application::Internal {
         return XR::XRRenderPredictionTime::Create(sample.Value().Nanoseconds());
     }
 
+    /** @copydoc OpenXRInputClock::ReferenceCalibrationNow */
+    Result<XR::XRRuntimeTime> OpenXRInputClock::ReferenceCalibrationNow() const {
+        return PresentationSample();
+    }
+
     /** @copydoc OpenXRInputClock::ReadRetiredSessionTime */
     Result<XR::XRRuntimeTime> OpenXRInputClock::ReadRetiredSessionTime(const XR::XRLoaderPreflightAttempt attempt) const {
         using Outcome = Result<XR::XRRuntimeTime>;

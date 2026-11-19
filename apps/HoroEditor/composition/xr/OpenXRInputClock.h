@@ -71,6 +71,11 @@ namespace Horo::Application::Internal {
          * No tick, offset, guessed refresh interval, wait or Input publication is introduced.
          */
         [[nodiscard]] Result<XR::XRRenderPredictionTime> PresentationNow() const;
+        /** @brief Samples the exact admitted instance clock for cold reference calibration.
+         * @return Native runtime time or the original lane, provider or conversion failure.
+         * @post No simulation cutoff, display prediction, frame wait or pose publication is created.
+         */
+        [[nodiscard]] Result<XR::XRRuntimeTime> ReferenceCalibrationNow() const;
         /** @brief Reads the same native runtime time after the prior session has physically retired.
          * @param attempt Exact still-prepared loader instance and system.
          * @return Current runtime time or original lane, route, dispatch, conversion or lifetime failure.

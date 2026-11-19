@@ -389,6 +389,13 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         const Operation operation{*this};
         const bool neutral = std::exchange(input_.neutralPending, false);
+        if (input_.admitted && scene_ && scene_->geometry && scene_->geometry->mounted) {
+            if (const auto current = scene_->geometry->ValidateSource(); current.HasError()) {
+                scene_->Retire(*this);
+                input_.router->BeginFrame(raw);
+                return current;
+            }
+        }
         if (input_.port && !eventsPending_) {
             const auto refreshed = input_.router->RefreshPlayerActionCollection(*input_.port);
             if (refreshed.HasError()) {

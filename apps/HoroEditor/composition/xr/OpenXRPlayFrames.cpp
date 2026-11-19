@@ -408,7 +408,9 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc OpenXRPlayHost::WantsMotionHistory */
-    bool OpenXRPlayHost::WantsMotionHistory(const XRFeaturePlan &plan) noexcept {
+    bool OpenXRPlayHost::WantsMotionHistory(const XRFeaturePlan &plan) const noexcept {
+        if (scene_ && scene_->geometry && scene_->geometry->mounted)
+            return false;
         const auto decision = plan.Decision(XRCapability::SpaceWarp);
         return decision.state == XRFeatureDecisionState::OptionalEnabled ||
                (decision.state == XRFeatureDecisionState::BaselineProjection && decision.observed == XRCapabilityState::DependencyMissing);

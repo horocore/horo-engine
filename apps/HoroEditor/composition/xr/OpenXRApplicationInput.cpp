@@ -479,6 +479,18 @@ namespace Horo::Application::Internal {
         return input_.native->WorldSpace(candidate);
     }
 
+    /** @copydoc OpenXRApplicationSession::ObserveReferenceCalibration */
+    Result<NativeReferenceCalibrationObservation> OpenXRApplicationSession::ObserveReferenceCalibration(const XRCoordinateSpace reference,
+                                                                                                        const XRCoordinateSpace world,
+                                                                                                        const XRRuntimeTime now) const {
+        using Outcome = Result<NativeReferenceCalibrationObservation>;
+        if (auto current = Current(); current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        if (!input_.native)
+            return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
+        return input_.native->ObserveReferenceCalibration(reference, world, now);
+    }
+
     /** @copydoc OpenXRApplicationSession::BorrowWorldSpace */
     Result<XrSpace> OpenXRApplicationSession::BorrowWorldSpace(const XRCoordinateSpace &space) const {
         if (auto current = Current(); current.HasError())

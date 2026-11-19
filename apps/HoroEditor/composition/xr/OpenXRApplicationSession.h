@@ -335,6 +335,13 @@ namespace Horo::Application::Internal {
          * @param candidate Current lifecycle-issued session. @return Owned typed identity or original stale/unavailable error.
          */
         [[nodiscard]] Result<XR::XRCoordinateSpace> WorldSpace(const XR::XRSessionId &candidate) const;
+        /** @brief Samples the exact retained Local-to-World spaces for cold mounted startup calibration.
+         * @param reference Bound native Local identity. @param world Bound native-created World identity.
+         * @param now Same retained instance's admitted runtime clock sample.
+         * @return Native relation or the original ownership, time, tracking or provider failure.
+         */
+        [[nodiscard]] Result<XR::OpenXRInternal::NativeReferenceCalibrationObservation> ObserveReferenceCalibration(
+            XR::XRCoordinateSpace reference, XR::XRCoordinateSpace world, XR::XRRuntimeTime now) const;
         /** @brief Copies the current native reference snapshot.
          * @param candidate Exact active XR session.
          * @return Bounded value evidence or a currentness/availability error.
