@@ -168,6 +168,15 @@ submission uses the structural safe point before the first fixed tick and
 shares verified loading, member projection and rollback with ordinary Prefab
 work.
 
+The configured headless client owns one bounded reconstruction queue per
+Scene generation. It resolves placement and relationships against the local
+Scene, checks member schemas against the admitted client module, and queues one
+structural transaction at a time. A later spawn can satisfy an unresolved
+relationship in the same publication window. Unknown templates, duplicate
+occurrences, stale retirements and exhausted recovery budgets return typed
+errors to the host, which retires the failed world. Client Gameplay receives
+no Prefab spawn capability when the protected lane owns replica reconstruction.
+
 ```cpp
 enum class ReplicationExecutionRole : std::uint8_t {
     Standalone,

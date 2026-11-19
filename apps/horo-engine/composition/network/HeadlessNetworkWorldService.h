@@ -176,6 +176,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return lane;
             if (owners_->gameplay && owners_->gameplay->moduleRetirements)
                 (void)owners_->gameplay->moduleRetirements->Drain();
+            if (phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges && IsSceneOwner() && record_->prefabReplica)
+                return AdvanceReplicaPrefabs();
             if (owners_->configured && request_.service == Network::NetworkModeServiceKind::Physics && configuredActivated_) {
                 const auto previous = record_->perception.Current();
                 if (gameplay_) {
@@ -238,6 +240,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         }
 
         void RetireGameplay() noexcept {
+            if (record_ && record_->prefabReplica)
+                record_->prefabReplica->Cancel();
             if (IsSceneOwner() && record_->activeGameplay) {
                 record_->activeGameplay->Shutdown();
                 record_->activeGameplay = nullptr;
@@ -319,6 +323,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return Result<void>::Failure(prepared.ErrorValue());
             if (auto templates = PrepareConfiguredTemplates(); templates.HasError())
                 return templates;
+            if (auto replica = BindReplicaPrefabs(); replica.HasError())
+                return replica;
             return PrepareConfiguredWorldMount();
         }
 
@@ -584,6 +590,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return Result<void>::Success();
             auto selected = *selectedGameplay_;
             selected.vfxScene = record_->vfxScene;
+            if (record_->prefabReplica)
+                selected.prefabPermission = GameplayPrefabPermission::ReplicaOnly;
             if (auto bound = BindAuthorityPrefabs(selected); bound.HasError())
                 return bound;
             if (auto bound = BindNavigationPath(selected); bound.HasError())
@@ -599,6 +607,12 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
 
         /** @brief Installs the cooked Prefab mapping adapter for this exact authority Scene only. */
         [[nodiscard]] Result<void> BindAuthorityPrefabs(GameplayWorldSelection &selected) const;
+
+        /** @brief Installs protected Prefab consumption on the exact client Scene, with explicit cooked asset authority. */
+        [[nodiscard]] Result<void> BindReplicaPrefabs();
+
+        /** @brief Submits only fully reconstructed records before the paired Gameplay structural phase. */
+        [[nodiscard]] Result<void> AdvanceReplicaPrefabs();
 
         /** @brief Binds only the module's selected registered path scope to the already activated immutable provider. */
         Result<void> BindNavigationPath(GameplayWorldSelection &selected) {

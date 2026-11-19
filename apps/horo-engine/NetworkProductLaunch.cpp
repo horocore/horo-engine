@@ -348,6 +348,7 @@ namespace Horo::Application::Internal {
                                                .prefabLoads = resources->prefabLoads.get(),
                                                .prefabMetrics = resources->prefabMetrics,
                                                .prefabPolicy = resources->prefabPolicy,
+                                               .prefabTarget = animationTarget,
                                                .animationTarget = animationTarget,
                                                .animationIdentities = animationTarget.IsValid() ? std::move(animationIdentities) : nullptr,
                                                .navigation = resources->navigation,

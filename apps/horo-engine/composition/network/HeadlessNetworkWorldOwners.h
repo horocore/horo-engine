@@ -4,6 +4,7 @@
  */
 #include "HeadlessNavigationPathScope.h"
 #include "HeadlessNetworkServices.h"
+#include "HeadlessPrefabReplica.h"
 #include "Horo/AI/PerceptionSpatialBroadphase.h"
 #include "Horo/Gameplay/GameplayVfxScene.h"
 #include "Horo/Network/NetworkErrors.h"
@@ -58,6 +59,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         std::unique_ptr<Runtime::RuntimeSceneService> scenes;
         std::unique_ptr<MountedWorld> mountedWorld;                /**< Retires before the Scene service it binds. */
         std::unique_ptr<Prefab::PrefabTemplateProvider> templates; /**< Retired before Scene, borrowing its real loader. */
+        std::optional<HeadlessPrefabReplica> prefabReplica;        /**< Scene-side network operations for this generation only. */
     };
 
     struct WorldOwners final {

@@ -295,10 +295,12 @@ namespace Horo::Application::Internal {
     Result<void> GameplayWorldComposition::BindPrefab(const GameplayWorldSelection &selection, Runtime::RuntimeSceneService &scenes,
                                                       Runtime::SceneRuntimeId scene, Prefab::PrefabTemplateProvider *templates,
                                                       const Gameplay::ComponentRegistry *components) {
-        if (selection.prefabPermission != GameplayPrefabPermission::Granted)
+        if (selection.prefabPermission == GameplayPrefabPermission::Denied)
             return Result<void>::Success();
         prefabs_ = std::make_unique<Prefab::PrefabSpawnService>(*templates, scenes, components ? components : &prefabComponents_,
                                                                 &builtinProjector_);
+        if (selection.prefabPermission == GameplayPrefabPermission::ReplicaOnly)
+            return Result<void>::Success();
         if (selection.prefabGroupPublication) {
             if (auto installed = prefabs_->InstallGroupPublicationOwner(selection.prefabGroupPublication); installed.HasError())
                 return installed;
@@ -315,7 +317,7 @@ namespace Horo::Application::Internal {
         Runtime::RuntimeSceneService &scenes, Prefab::PrefabTemplateProvider *templates, Physics::PhysicsWorld *world,
         const std::uint64_t sceneGeneration, const GameplayWorldSelection &selection, const Gameplay::ComponentRegistry *components,
         Character::CharacterWorld *character, const GameplayPreparedDecisions *prepared) {
-        if (selection.prefabPermission == GameplayPrefabPermission::Granted && templates == nullptr)
+        if (selection.prefabPermission != GameplayPrefabPermission::Denied && templates == nullptr)
             return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(
                 MakeError(Prefab::PrefabErrors::AdmissionRejected,
                           "This host selected no cooked prefab provider; a prefab grant cannot be activated."));

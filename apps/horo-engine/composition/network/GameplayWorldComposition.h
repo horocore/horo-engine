@@ -33,7 +33,8 @@ namespace Horo::Application::Internal {
     /** @brief Trusted explicit permission for cooked prefab creation and group retirement. */
     enum class GameplayPrefabPermission {
         Denied,
-        Granted
+        Granted,
+        ReplicaOnly
     };
 
     /** @brief Explicit permission to the already selected Character world; never constructs a consumer. */

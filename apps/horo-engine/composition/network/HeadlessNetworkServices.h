@@ -85,6 +85,7 @@ namespace Horo::Application::Internal {
         Assets::AssetLoadService *prefabLoads{};   /**< Optional exact-envelope loader; outlives all granted prefab services. */
         Prefab::PrefabMetricHandles prefabMetrics; /**< Explicit process-prebound observation configuration. */
         Prefab::PrefabProjectPolicy prefabPolicy;  /**< Explicit host-admitted policy. */
+        AssetCookTargetId prefabTarget;            /**< Exact selected local cook target for replica loading. */
         AssetCookTargetId animationTarget;         /**< Exact selected committed target, never inferred from runtime source. */
         std::shared_ptr<AnimationRuntimeIdentitySource> animationIdentities; /**< One cold host issuer shared by all records/travel. */
         std::shared_ptr<const Runtime::SceneAnimationInputSource>
