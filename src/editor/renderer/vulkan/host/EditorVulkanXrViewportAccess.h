@@ -212,12 +212,31 @@ namespace Horo::Editor {
         /** @brief Records the exact projection or zero-layer completion after successful native end only. */
         static void CompleteMotion(EditorViewportRendererVulkan &viewport, const std::optional<Render::MultiviewMotionFrame> &frame,
                                    bool projected) noexcept;
+
+        /** @brief Exact viewport recording receipt until the selected host submits or cancels its frame. */
+        struct ProjectionSubmission final {
+            Render::FrameToken frame;
+            Render::MultiviewPublication publication;
+            Render::RenderTextureHandle color;
+            Render::RenderTimelinePoint signal;
+
+            bool operator==(const ProjectionSubmission &) const noexcept = default;
+        };
+        enum class SubmissionState {
+            Pending,
+            Accepted,
+            Rejected
+        };
+
         /** @brief Execute through the SAME actual App frame before its existing UI/GUI tail.
          * @param viewport Existing owner. @param frame Existing canonical frame scope. @param output Existing primary output.
-         * @return Original admission/encoding outcome; no compositor success is inferred.
+         * @return Exact encoded graphics work awaiting native queue admission, or the original error.
          */
-        [[nodiscard]] static Result<void> Execute(EditorViewportRendererVulkan &viewport, Render::RenderFrameScope &frame,
-                                                  const Render::PrimaryOutputAttachment &output);
+        [[nodiscard]] static Result<ProjectionSubmission> Execute(EditorViewportRendererVulkan &viewport, Render::RenderFrameScope &frame,
+                                                                  const Render::PrimaryOutputAttachment &output);
+        /** @brief Resolves native acceptance for this exact recording and discards a closed unissued signal. */
+        [[nodiscard]] static Result<SubmissionState> ResolveSubmission(EditorViewportRendererVulkan &viewport,
+                                                                       const ProjectionSubmission &submission);
         /** @brief Borrow only the current admitted sampled left-eye view, never a desktop-camera fallback.
          * @param viewport Exact selected owner. @param frame Same successfully bound App frame.
          * @param expected Exact retained acquired first-eye generation. @return Full matching GUI binding or empty.

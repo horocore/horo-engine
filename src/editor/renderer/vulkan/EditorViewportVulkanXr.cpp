@@ -95,8 +95,8 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorVulkanXrViewportAccess::Execute */
-    Result<void> EditorVulkanXrViewportAccess::Execute(EditorViewportRendererVulkan &viewport, RenderFrameScope &frame,
-                                                       const PrimaryOutputAttachment &output) {
+    Result<EditorVulkanXrViewportAccess::ProjectionSubmission> EditorVulkanXrViewportAccess::Execute(
+        EditorViewportRendererVulkan &viewport, RenderFrameScope &frame, const PrimaryOutputAttachment &output) {
         return viewport.ExecuteXrFrame(frame, output);
     }
 
@@ -951,6 +951,8 @@ namespace Horo::Editor {
         const CompiledRenderGraphExecution *bound{};
         EditorVulkanXrMirrorProjection mirror;
         EditorVulkanXrProjectionAlphaState alpha;
+        RenderTextureHandle projectionColor;
+        std::optional<EditorVulkanXrViewportAccess::ProjectionSubmission> encoded;
         RenderTimelinePoint submitted;
         MultiviewMotionHistory motion;
         std::optional<MultiviewMotionFrame> motionFrame;
@@ -1309,6 +1311,7 @@ namespace Horo::Editor {
             xrGraph_->active = nullptr;
             xrGraph_->mirror.ClearAcquisition();
             xrGraph_->alpha.Reset();
+            xrGraph_->encoded.reset();
             xrGraph_->motionFrame.reset();
             xrGraph_->motionSubmitted = false;
             if (auto &coverage = xrGraph_->coverage) {
@@ -1403,6 +1406,7 @@ namespace Horo::Editor {
             coverage.predecessor = prior.frame;
         }
         storage.bound = bound.Value();
+        storage.projectionColor = color;
         storage.alpha.Bind(alpha, storage.scene->Publication(), color);
         if (staged)
             storage.motionFrame = *motion;
@@ -1482,10 +1486,12 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorViewportRendererVulkan::ExecuteXrFrame */
-    Result<void> EditorViewportRendererVulkan::ExecuteXrFrame(RenderFrameScope &frame, const PrimaryOutputAttachment &output) {
+    Result<EditorVulkanXrViewportAccess::ProjectionSubmission> EditorViewportRendererVulkan::ExecuteXrFrame(
+        RenderFrameScope &frame, const PrimaryOutputAttachment &output) {
+        using Outcome = Result<EditorVulkanXrViewportAccess::ProjectionSubmission>;
         const auto fail = [&frame](const Error &error) {
             frame.Cancel();
-            return Result<void>::Failure(error);
+            return Outcome::Failure(error);
         };
         if (owner_ != std::this_thread::get_id() || !initialized_ || !xrGraph_ || !xrGraph_->bound || !bridge_.Port())
             return fail(MakeError(RendererErrors::ViewportNotInitialized));
@@ -1573,15 +1579,38 @@ namespace Horo::Editor {
         recordedEver_ = true;
         auto executed = frame.ExecuteSubmittedGraph(*bound, std::span{workloads}.first(bound->Passes().size()), std::span{&submission, 1});
         if (executed.HasError())
-            frame.Cancel();
-        else {
-            storage.submitted = reserved.Value().signal;
-            storage.alpha.Submit(storage.submitted);
-            storage.motionSubmitted = storage.motionFrame.has_value();
-            if (covered)
-                storage.coverage->submission = storage.submitted;
-        }
-        return executed;
+            return fail(executed.ErrorValue());
+        storage.submitted = reserved.Value().signal;
+        storage.alpha.Submit(storage.submitted);
+        storage.motionSubmitted = storage.motionFrame.has_value();
+        if (covered)
+            storage.coverage->submission = storage.submitted;
+        storage.encoded.emplace(EditorVulkanXrViewportAccess::ProjectionSubmission{frame.Token(), storage.scene->Publication(),
+                                                                                   storage.projectionColor, storage.submitted});
+        return Outcome::Success(*storage.encoded);
+    }
+
+    /** @copydoc EditorVulkanXrViewportAccess::ResolveSubmission */
+    Result<EditorVulkanXrViewportAccess::SubmissionState> EditorVulkanXrViewportAccess::ResolveSubmission(
+        EditorViewportRendererVulkan &viewport, const ProjectionSubmission &submission) {
+        using Outcome = Result<SubmissionState>;
+        if (viewport.owner_ != std::this_thread::get_id())
+            return Outcome::Failure(MakeError(RendererErrors::ViewportStaleTarget));
+        auto *port = viewport.bridge_.Port();
+        if (!viewport.initialized_ || !viewport.xrGraph_ || !port || viewport.xrGraph_->encoded != submission)
+            return Outcome::Failure(MakeError(RendererErrors::ViewportStaleTarget));
+        const auto accepted = port->WasSubmissionAccepted(submission.signal, submission.publication.deviceIncarnation);
+        if (accepted.HasError())
+            return Outcome::Failure(accepted.ErrorValue());
+        if (accepted.Value())
+            return Outcome::Success(SubmissionState::Accepted);
+        if (port->FrameSlot(submission.frame).HasValue())
+            return Outcome::Success(SubmissionState::Pending);
+
+        auto &graph = *viewport.xrGraph_;
+        graph.encoded.reset();
+        graph.submitted = {};
+        return Outcome::Success(SubmissionState::Rejected);
     }
 
     /** @copydoc EditorViewportRendererVulkan::CompleteXrMotion */
@@ -1590,6 +1619,7 @@ namespace Horo::Editor {
             return;
         auto &storage = *xrGraph_;
         storage.alpha.Reset();
+        storage.encoded.reset();
         if (storage.coverage && (!frame || storage.motionFrame == frame))
             storage.coverage->ResetObservation();
         if (!frame) {

@@ -83,9 +83,9 @@ namespace Horo::Application::Internal {
         std::optional<XR::XRFrameId> coverageFrame;
         OpenXRPlayCoverageStatus coverageStatus{OpenXRPlayCoverageStatus::Unobserved};
         std::optional<XR::OpenXRInternal::NativePresentationViews> views;
+        std::optional<Editor::EditorVulkanXrViewportAccess::ProjectionSubmission> encoded;
         std::uint64_t hostFrameNumber{}; /**< Exact successful bind receipt, not another frame issuer. */
         bool guiFinished{};
-        bool submitted{};
         bool acquisitionRecorded{};
         bool rendered{};
         bool clockBound{};
@@ -113,7 +113,7 @@ namespace Horo::Application::Internal {
             if (!host.sessions_.Snapshot().admitsFrames)
                 return Output::Success(false);  // Real native Ready/Running events, never Scene publication, admit waits.
             rendered = false;
-            submitted = false;
+            encoded.reset();
             acquisitionRecorded = false;
             guiFinished = false;
             views.reset();
@@ -262,6 +262,9 @@ namespace Horo::Application::Internal {
         /** @brief Ends a fully released projection, adding the underlay only for the exact live alpha proof. */
         [[nodiscard]] Result<void> EndRenderedProjection(const XR::XRFrameId &frame);
 
+        /** @brief Converts the same encoded projection into a canonical submission only after native queue acceptance. */
+        [[nodiscard]] Result<bool> AdmitRecordedProjection(const XR::XRFrameId &frame);
+
         /** @brief Consumes exact queue-observed coverage before this frame's paired writer releases its image references. */
         void ObserveCoverage(const XR::XRFrameId &frame) noexcept;
 
@@ -276,9 +279,9 @@ namespace Horo::Application::Internal {
         /** @brief Retires graphics after native stopping or the exact captured Lost state permits recovery. */
         [[nodiscard]] static Result<bool> RetireGraphics(OpenXRPlayHost &host, bool lost);
         /** @brief Polls the same submitted queue debt and releases exact eye views during explicit Lost recovery.
-         * @return Original poll/view-release error, retaining every unreleased view for retry. No completion is manufactured.
+         * @return False while recording remains open, original poll/release error or successful view revocation.
          */
-        [[nodiscard]] Result<void> RetireViewsAfterLoss();
+        [[nodiscard]] Result<bool> RetireViewsAfterLoss();
     };
 
 }  // namespace Horo::Application::Internal

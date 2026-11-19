@@ -119,7 +119,8 @@ namespace Horo::Editor {
          * @return Original admission/encoding error, preserving actual external acquisition retirement obligations.
          * @post Consumes this binding once. Desktop presentation never proves native compositor submission.
          */
-        [[nodiscard]] Result<void> ExecuteXrFrame(Render::RenderFrameScope &frame, const Render::PrimaryOutputAttachment &output);
+        [[nodiscard]] Result<EditorVulkanXrViewportAccess::ProjectionSubmission> ExecuteXrFrame(
+            Render::RenderFrameScope &frame, const Render::PrimaryOutputAttachment &output);
         /** @brief Returns only the exact admitted current first-eye sample, never a desktop-camera fallback.
          * @param frame Exact App bind frame. @param expected Exact retained acquired first-eye generation.
          * @return Typed GUI binding or empty when no fresh XR frame is bound/retained by its native owner.

@@ -749,6 +749,11 @@ stages both writers before issuing the canonical session. The active frame owner
 then takes the same pair after ordinary color preparation. If staging fails,
 Play continues with ordinary projection and the Scene retains any unfinished
 cleanup ahead of native session retirement.
+Play holds the exact projected texture, publication and reserved graphics signal
+through GUI recording. The native backend must accept that signal before Play
+records canonical submission. A closed unissued recording drains as a
+zero-layer frame. Only the same accepted signal can qualify its paired GPU
+coverage counters.
 
 See the [Khronos space-warp layer contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrCompositionLayerSpaceWarpInfoFB.html)
 for the distinction between runtime motion inputs and internal Renderer UV history.

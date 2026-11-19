@@ -59,6 +59,10 @@ namespace Horo::Tests::OpenXRApplication {
             return native_.graph.FrameSlot(frame);
         }
 
+        Result<bool> WasSubmissionAccepted(const Render::RenderTimelinePoint signal, const std::uint64_t deviceIncarnation) const override {
+            return native_.graph.WasSubmissionAccepted(signal, deviceIncarnation);
+        }
+
         bool SupportsStereoCoverageReadback() const noexcept override {
             return native_.graph.SupportsStereoCoverageReadback();
         }

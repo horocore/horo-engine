@@ -2736,8 +2736,13 @@ namespace Horo::Tests::OpenXRApplication {
         const auto submit = [&](const std::uint64_t sequence) {
             CHECK_FALSE(Viewport::TakeCoverage(viewport, motionFrame.frame));
             auto frame = RequireValue(frontend.BeginFrame({sequence, {8, 8}}));
-            RequireValue(Viewport::Execute(viewport, frame, {}));
+            const auto encoded = RequireValue(Viewport::Execute(viewport, frame, {}));
+            CHECK(RequireValue(Viewport::ResolveSubmission(viewport, encoded)) == Viewport::SubmissionState::Pending);
             RequireValue(frame.Present());
+            CHECK(RequireValue(Viewport::ResolveSubmission(viewport, encoded)) == Viewport::SubmissionState::Accepted);
+            auto other = encoded;
+            ++other.signal.value;
+            CHECK(Viewport::ResolveSubmission(viewport, other).HasError());
             CHECK_FALSE(Viewport::TakeCoverage(viewport, motionFrame.frame));
             vulkan.commandState.state.Complete();
             RequireValue(Viewport::Poll(viewport));
@@ -2753,7 +2758,7 @@ namespace Horo::Tests::OpenXRApplication {
                                                     MultiviewRenderRectangle{0, 0, expectProbe ? 8U : 6U, expectProbe ? 8U : 3U}};
                 CHECK(coverage->rectangles == expectedRectangles);
                 CHECK(coverage->extent == (expectProbe ? firstSource->allocation.extent : motionSource->allocation.extent));
-                CHECK(coverage->completion.IsValid());
+                CHECK(coverage->completion == encoded.signal);
                 CHECK(coverage->pixels.has_value() == expectProbe);
                 CHECK(coverage->auxiliary.has_value() == !expectProbe);
                 if (expectProbe) {
@@ -3020,6 +3025,52 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(fixture.script.events.exits == 1);
         CHECK(fixture.script.events.ends == 1);
         CHECK(fixture.script.native.liveSessions == 0);
+    }
+
+    TEST_CASE("Real installed Play admits only the exact native queue-accepted projection", "[xr][application][play][frame][submission]") {
+        ApplicationFixture fixture{true};
+        auto scene = PublishPlay(fixture);
+        auto &graphics = fixture.vulkan->native.commandState.state;
+        fixture.script.clock.sample = 1;
+        enum class NativeOutcome {
+            Cancel,
+            Accept,
+            Reject
+        };
+        std::uint64_t number{};
+        for (const auto outcome : {NativeOutcome::Cancel, NativeOutcome::Accept, NativeOutcome::Reject}) {
+            ++number;
+            CAPTURE(number);
+            REQUIRE(RequireValue(fixture.play->PrepareRenderFrame(number)));
+            auto frame = RequireValue(fixture.frontend->BeginFrame({number, {8, 8}}));
+            RequireValue(fixture.play->ExecuteRenderFrame(frame, {}));
+            // Sealing GUI precedes the product host's native Present.
+            RequireValue(fixture.play->FinishGui(true));
+            RequireValue(fixture.play->ProgressRenderTail());
+            CHECK(fixture.script.frames.ends == number - 1);
+            CHECK(fixture.script.swapchain.releases == number - 1);
+            switch (outcome) {
+                case NativeOutcome::Cancel:
+                    frame.Cancel();
+                    break;
+                case NativeOutcome::Accept:
+                    RequireValue(frame.Present());
+                    graphics.Complete();
+                    break;
+                case NativeOutcome::Reject:
+                    // A real native submit failure closes this Vulkan graph owner to further submissions.
+                    graphics.submitResult = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+                    REQUIRE(frame.Present().HasError());
+                    break;
+            }
+            RequireValue(fixture.play->ProgressRenderTail());
+            CHECK(fixture.script.frames.ends == number);
+            CHECK(fixture.script.swapchain.releases == number);
+            CHECK(fixture.script.frames.layers == (outcome == NativeOutcome::Accept ? 1 : 0));
+            fixture.script.frames.prediction += 1'000'000;
+        }
+        scene->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
     }
 }  // namespace Horo::Tests::OpenXRApplication
 
