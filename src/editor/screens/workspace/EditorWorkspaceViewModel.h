@@ -1,7 +1,9 @@
 #pragma once
 
 #include "EditorPlayState.h"
+#include "Horo/AI/AISceneComponents.h"
 #include "Horo/AI/DecisionControl.h"
+#include "Horo/AI/DecisionNodeRegistration.h"
 #include "Horo/AI/EnvironmentQueryAuthoring.h"
 #include "Horo/Editor/ActivityBarLayout.h"
 #include "Horo/Editor/AudioComponentPreview.h"
@@ -546,13 +548,28 @@ namespace Horo::Editor {
         AI::DecisionStateTerminal outcome{AI::DecisionStateTerminal::Succeeded};
     };
 
-    /** @brief Label and exact identity of a starter-compatible registered task. */
+    /** @brief Authoring restrictions derived from the current provider catalog. */
+    enum class DecisionPaletteAdmission : std::uint8_t {
+        Allowed,
+        UnsupportedRole,
+        CapabilitiesUnavailable,
+        PortWiringRequired,
+        UnsupportedProperties,
+        ImplementationUnavailable
+    };
+
+    /** @brief Inert label, exact identity and authoring status of a registered provider. */
     struct DecisionTaskChoice final {
         AI::DecisionNodeTypeId type;
         AI::DecisionProviderId provider;
         std::uint32_t version{};
         std::string label;
         bool queryOutput{};
+        AI::AiCapabilitySet capabilities{};
+        AI::DecisionDescriptorSourceKind source{AI::DecisionDescriptorSourceKind::Native};
+        AI::DecisionNodeRole role{AI::DecisionNodeRole::Task};
+        DecisionPaletteAdmission admission{DecisionPaletteAdmission::Allowed};
+        std::vector<AI::BehaviorTreeProperty> editableProperties{};
     };
 
     /** @brief Explicit first Utility score input from a saved scalar key. */
@@ -949,6 +966,7 @@ namespace Horo::Editor {
         std::vector<DecisionSchemaChoice> behaviorTreeSubtreeChoices;
         std::vector<DecisionSchemaChoice> behaviorTreeQueryChoices;
         std::vector<DecisionTaskChoice> decisionTaskChoices;
+        std::vector<DecisionTaskChoice> decisionTaskPaletteChoices; /**< All observed contracts, including unavailable authoring roles. */
         std::vector<DecisionTaskChoice> behaviorTreeTaskChoices;
         std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> decisionProviderMetadata; /**< Detached current Project catalog. */
         std::vector<DecisionGraphWorkspaceDocument> decisionGraphDocuments;

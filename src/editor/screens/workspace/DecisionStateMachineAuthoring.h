@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Horo/AI/BehaviorTree.h"
 #include "Horo/AI/DecisionControl.h"
 #include "Horo/AI/UtilitySelector.h"
 #include "Horo/Assets/AssetId.h"
@@ -41,6 +42,7 @@ namespace Horo::Editor {
         RetargetSubtree,
         ReviewQueryOutput,
         SetQueryOutput,
+        SetTaskProperty,
         MoveEarlier,
         MoveLater,
         DeleteTask,
@@ -55,6 +57,18 @@ namespace Horo::Editor {
         AI::BlackboardKeyId key;
         std::uint32_t timeoutTicks{};
     };
+
+    /** @brief Sets a scalar override using a stable property declared by the installed provider. */
+    struct BehaviorTreePropertyEdit final {
+        AI::BehaviorTreePropertyId property;
+        AI::BehaviorTreePropertyValue value;
+    };
+
+    /** @brief Identifies properties whose scalar values can use the shared Decision inspector edit path. */
+    [[nodiscard]] constexpr bool CanEditDecisionTaskProperty(AI::BehaviorTreePropertyKind kind) noexcept {
+        using enum AI::BehaviorTreePropertyKind;
+        return kind == Boolean || kind == SignedInteger || kind == Scalar || kind == String;
+    }
 
     /** @brief Exact installed descriptor selected by the workspace Task picker. */
     struct DecisionTaskSelection final {
@@ -88,6 +102,7 @@ namespace Horo::Editor {
         std::optional<Assets::AssetId> subtreeTarget;
         std::optional<BehaviorTreeSubtreeReview> subtree;
         std::optional<BehaviorTreeQueryOutputEdit> queryOutput;
+        std::optional<BehaviorTreePropertyEdit> property;
     };
 
     /** @brief Typed operations for the authored option and its complete scoring policy. */

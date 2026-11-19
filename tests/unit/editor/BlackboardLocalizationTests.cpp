@@ -295,6 +295,29 @@ TEST_CASE("Decision graph workspace and initial state machine labels resolve in 
         CHECK_FALSE(service.Get("editor", "workspace.decision_graph.task_key_presence").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_graph.task_key_default").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_graph.task_properties").starts_with("[missing:"));
+        constexpr std::array PaletteLabels{"task_filter_all",
+                                           "task_filter_capability",
+                                           "task_filter_origin",
+                                           "task_filter_behavior",
+                                           "task_filter_navigation",
+                                           "task_filter_perception",
+                                           "task_filter_native",
+                                           "task_filter_package",
+                                           "task_filter_script",
+                                           "task_filter_role",
+                                           "task_filter_role_task",
+                                           "task_filter_role_condition",
+                                           "task_filter_role_service",
+                                           "palette_registered_nodes",
+                                           "palette_role_unavailable",
+                                           "palette_capability_unavailable",
+                                           "palette_ports_required",
+                                           "palette_properties_unavailable",
+                                           "palette_implementation_unavailable",
+                                           "palette_query_requires_tree"};
+        constexpr GuiLocalizationScope paletteText{"workspace.decision_graph"};
+        for (const auto label : PaletteLabels)
+            CHECK_FALSE(paletteText.Text(service, label).starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_graph.task_properties_entry").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_graph.task_properties_update").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_graph.task_properties_exit").starts_with("[missing:"));
@@ -303,6 +326,12 @@ TEST_CASE("Decision graph workspace and initial state machine labels resolve in 
         CHECK_FALSE(service.Get("editor", "workspace.decision_graph.task_property_version").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_graph.task_property_result").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_graph.task_property_item").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_graph.edit_property").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_graph.edit_property_select").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_graph.edit_property_enabled").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_graph.edit_property_invalid_number").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_graph.edit_property_text_too_long").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_graph.edit_property_apply").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_canvas.layout_unavailable").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_canvas.auto_layout").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_canvas.subtree").starts_with("[missing:"));

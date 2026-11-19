@@ -313,6 +313,9 @@ namespace Horo::Editor {
         m_nativeGameplayReloadPending = false;
         m_pendingGameplayRegistry.reset();
         m_viewModel.decisionProviderMetadata.reset();
+        m_viewModel.decisionTaskChoices.clear();
+        m_viewModel.behaviorTreeTaskChoices.clear();
+        m_viewModel.decisionTaskPaletteChoices.clear();
         if (m_playSession.State() == EditorPlaySessionState::Reloading)
             m_playSession.DegradeAfterReload(std::move(error));
     }

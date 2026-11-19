@@ -233,6 +233,29 @@ namespace Horo::Editor {
 
         mutable BehaviorTreeSelection m_behaviorTreeSelection;
 
+        /** @brief Text and checkbox drafts stay scoped to one native property on an exact document and catalog revision. */
+        struct BehaviorTreeTaskPropertyDraft final {
+            DocumentInstanceId instance;
+            AI::BehaviorTreeNodeId node;
+            std::uint64_t revision{};
+            std::uint64_t catalogRevision{};
+            AI::BehaviorTreePropertyId property;
+            bool checked{};
+            std::array<char, AI::BehaviorTreeAssetHardLimits::PropertyBytes + 1> text{};
+            std::string fieldScope;
+
+            /** @brief Initializes widget state from the effective value of a newly selected property. */
+            void Select(const AI::BehaviorTreeProperty &effective);
+        };
+
+        mutable BehaviorTreeTaskPropertyDraft m_behaviorTreeTaskPropertyDraft;
+        /** @brief Offer one installed Task's supported scalar overrides through the fenced Decision source route. */
+        void DrawBehaviorTreeTaskPropertyEditor(const EditorWorkspaceViewModel &viewModel, const DecisionGraphWorkspaceDocument &document,
+                                                const AI::BehaviorTreeNode &node, EditorWorkspaceViewCommandData &outCommand) const;
+        /** @brief Draws the selected typed field and returns only an explicitly applied value. */
+        [[nodiscard]] std::optional<AI::BehaviorTreePropertyValue> DrawBehaviorTreeTaskPropertyValue(
+            const AI::BehaviorTreeProperty &effective, std::string_view label, EditorWorkspaceViewCommandData &outCommand) const;
+
         /** @brief Widget selections for one exact task and graph revision. */
         struct BehaviorTreeQuerySelection final {
             DocumentInstanceId instance;

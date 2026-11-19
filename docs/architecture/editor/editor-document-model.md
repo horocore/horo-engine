@@ -675,6 +675,10 @@ revision, semantic history, dirty/save/recovery/conflict state and subsystem
 validator. Shared graph widgets emit commands but own no semantic storage.
 
 Cross-schema/reference edits use the staged multi-document transaction contract.
+The task palette projects roles, capabilities and source origin from the
+admitted provider catalog. Family-specific authoring restrictions disable the
+affected rows with a reason. The catalog supplies inert data for the inspector,
+while shared editor controls and validated document commands own any edit.
 Compilation is revision-correlated derived work and does not clear dirty state.
 Live PIE blackboards, nodes, tasks and query results never enter document history;
 importing reviewed runtime data requires a separate typed editor command.

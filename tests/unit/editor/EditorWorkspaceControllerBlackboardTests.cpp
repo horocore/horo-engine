@@ -1566,6 +1566,88 @@ TEST_CASE("Behavior Tree and Utility New use the current registered native task 
         }
         CHECK_FALSE(FindAiAssetPresentation("game.custom_source"));
     }
+    SECTION("Behavior Tree applies an exact registered property override with durable undo and redo") {
+        controller.ProcessCommand(make(AI::DecisionPlanKind::BehaviorTree, "Editable task properties"));
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        const auto &model = controller.ViewModel();
+        REQUIRE(model.decisionGraphDocuments.size() == 1);
+        const auto &document = model.decisionGraphDocuments.front();
+        const auto initial = document.graph;
+        const auto &tree = *std::get<std::shared_ptr<const AI::BehaviorTreeAsset>>(initial->body);
+        const auto leaf = tree.Edges().front().targetNode;
+        const auto node = AI::DecisionNodeId::Create(leaf.Value()).Value();
+        REQUIRE(tree.FindNode(leaf));
+        CHECK(tree.FindNode(leaf)->properties.empty());
+        const auto task = std::ranges::find(model.behaviorTreeTaskChoices, providerType, &DecisionTaskChoice::type);
+        REQUIRE(task != model.behaviorTreeTaskChoices.end());
+        REQUIRE(task->editableProperties.size() == 1);
+        const auto declared = task->editableProperties.front();
+        CHECK(declared.value == AI::BehaviorTreePropertyValue{false});
+        const DecisionTaskSelection selected{task->type, task->provider, task->version, model.availableBehaviorsRevision};
+        const auto initialRevision = document.revision;
+        const auto edit = [&](AI::BehaviorTreePropertyId property, AI::BehaviorTreePropertyValue value, DecisionTaskSelection exact,
+                              std::uint64_t revision) {
+            controller.ProcessCommand(
+                {.command = EditorWorkspaceViewCommand::EditDecisionBehaviorTree,
+                 .behaviorTreeEdit = BehaviorTreeEditRequest{.instance = document.identity.instance,
+                                                             .revision = revision,
+                                                             .operation = BehaviorTreeEditOperation::SetTaskProperty,
+                                                             .node = node,
+                                                             .task = exact,
+                                                             .property = BehaviorTreePropertyEdit{property, std::move(value)}}});
+        };
+        edit(declared.id, false, selected, document.revision);
+        CHECK(document.graph == initial);
+        CHECK(document.revision == initialRevision);
+        CHECK_FALSE(document.canUndo);
+
+        auto stale = selected;
+        ++stale.catalogRevision;
+        edit(declared.id, true, stale, document.revision);
+        REQUIRE(document.diagnostic);
+        edit(AI::BehaviorTreePropertyId::Create(1001).Value(), true, selected, document.revision);
+        REQUIRE(document.diagnostic);
+        edit(declared.id, std::int64_t{14}, selected, document.revision);
+        REQUIRE(document.diagnostic);
+        CHECK(document.graph == initial);
+        CHECK_FALSE(document.canUndo);
+
+        // This fixture's boolean makes its factory throw. Compilation and authoring consume inert metadata.
+        edit(declared.id, true, selected, document.revision);
+        REQUIRE_FALSE(document.diagnostic);
+        REQUIRE(document.dirty);
+        const auto edited = document.graph;
+        const auto checkOverride = [&](const DecisionGraphWorkspaceDocument &current) {
+            const auto &body = *std::get<std::shared_ptr<const AI::BehaviorTreeAsset>>(current.graph->body);
+            const auto *bound = body.FindNode(leaf);
+            REQUIRE(bound);
+            REQUIRE(bound->properties.size() == 1);
+            CHECK(bound->properties.front().id == declared.id);
+            CHECK(bound->properties.front().value == AI::BehaviorTreePropertyValue{true});
+        };
+        checkOverride(document);
+        edit(declared.id, false, selected, initialRevision);
+        REQUIRE(document.diagnostic);
+        CHECK(document.graph == edited);
+        controller.ProcessCommand(MakeDecisionHistoryCommand(document, DecisionHistoryAction::Undo));
+        REQUIRE_FALSE(document.diagnostic);
+        CHECK(document.graph == initial);
+        CHECK_FALSE(document.dirty);
+        controller.ProcessCommand(MakeDecisionHistoryCommand(document, DecisionHistoryAction::Redo));
+        REQUIRE_FALSE(document.diagnostic);
+        checkOverride(document);
+        controller.ProcessCommand(MakeDecisionHistoryCommand(document, DecisionHistoryAction::Save));
+        REQUIRE_FALSE(document.diagnostic);
+        CHECK_FALSE(document.dirty);
+        const auto path = document.graph->location.source;
+        controller.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = document.identity.instance});
+        REQUIRE(model.decisionGraphDocuments.empty());
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::OpenSourceFile,
+                                   .sourceOpenRequest = SourceOpenRequest{.path = path, .origin = SourceOpenOrigin::AssetActivation}});
+        REQUIRE(model.decisionGraphDocuments.size() == 1);
+        checkOverride(model.decisionGraphDocuments.front());
+    }
     SECTION("Behavior Tree edits preserve reachability, installed identity, sibling order and durable history") {
         controller.ProcessCommand(make(AI::DecisionPlanKind::BehaviorTree, "Working tree"));
         REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());

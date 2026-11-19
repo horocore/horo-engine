@@ -331,8 +331,8 @@ namespace Horo::Editor {
             submit(AddConsideration, score);
         }
 
-        const auto *task = DrawDecisionTaskPalette({viewModel.decisionTaskChoices, viewModel.availableBehaviorsRevision,
-                                                    viewModel.decisionProviderMetadata.get(), schema->schema.get()},
+        const auto *task = DrawDecisionTaskPalette({viewModel.decisionTaskPaletteChoices, viewModel.availableBehaviorsRevision,
+                                                    viewModel.decisionProviderMetadata.get(), schema->schema.get(), false},
                                                    draft.palette, m_context, outCommand);
         if (button("workspace.decision_graph.edit_utility_add_option",
                    task && score && priority && compensation && source.options.size() < AI::UtilitySelector::MaximumOptions)) {

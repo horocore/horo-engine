@@ -4,9 +4,12 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <span>
 
 namespace Horo::AI {
+    enum class AiCapability : std::uint8_t;
+    enum class DecisionNodeRole : std::uint8_t;
     class BlackboardSchema;
     class DecisionBlackboardProviderMetadata;
     struct DecisionGraphSource;
@@ -33,6 +36,7 @@ namespace Horo::Editor {
         std::uint64_t revision{};
         const AI::DecisionBlackboardProviderMetadata *providers{};
         const AI::BlackboardSchema *schema{};
+        bool allowQueryOutput{true};
     };
 
     /** @brief Owns the search and selection for one Decision document's task picker. */
@@ -40,6 +44,9 @@ namespace Horo::Editor {
         std::array<char, 128> search{};
         AI::DecisionNodeTypeId selected;
         std::uint64_t catalogRevision{};
+        std::optional<AI::AiCapability> capability;
+        std::optional<AI::DecisionDescriptorSourceKind> origin;
+        std::optional<AI::DecisionNodeRole> role;
     };
 
     /** @brief Draws the themed search and picker for the current model's registered task choices.

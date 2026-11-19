@@ -559,13 +559,24 @@ namespace Horo::Editor {
             return Edit::Success(true);
         }
 
-        /** @brief Identifies native Tasks that can be authored without granting missing capabilities or inventing port wiring. */
+        /** @brief Evaluates the exact same authoring limits for palette presentation and executable commands. */
+        DecisionPaletteAdmission EvaluateDecisionPaletteAdmission(const AI::DecisionNodeContract &contract,
+                                                                  const AI::DecisionNodeGeneration &generation) {
+            using enum DecisionPaletteAdmission;
+            if (contract.role != AI::DecisionNodeRole::Task)
+                return UnsupportedRole;
+            if (contract.capabilities.bits != 0)
+                return CapabilitiesUnavailable;
+            if (std::ranges::any_of(contract.ports, &AI::DecisionNodePort::required))
+                return PortWiringRequired;
+            if (std::ranges::count(contract.properties, AI::BehaviorTreePropertyKind::QueryOutput, &AI::BehaviorTreeProperty::kind) > 1)
+                return UnsupportedProperties;
+            return generation.HasImplementation(contract.descriptor.type) ? Allowed : ImplementationUnavailable;
+        }
+
+        /** @brief Identifies Tasks the editor can author with the current host capabilities and port wiring. */
         bool SupportsAuthorableTask(const AI::DecisionNodeContract &contract, const AI::DecisionNodeGeneration &generation) {
-            return contract.role == AI::DecisionNodeRole::Task && contract.capabilities.bits == 0 &&
-                   std::ranges::none_of(contract.ports, &AI::DecisionNodePort::required) &&
-                   std::ranges::count(contract.properties, AI::BehaviorTreePropertyKind::QueryOutput, &AI::BehaviorTreeProperty::kind) <=
-                       1 &&
-                   generation.HasImplementation(contract.descriptor.type);
+            return EvaluateDecisionPaletteAdmission(contract, generation) == DecisionPaletteAdmission::Allowed;
         }
 
         /** @brief Finds precisely the installed Task contract selected by the author. */
@@ -577,6 +588,35 @@ namespace Horo::Editor {
                        descriptor.origin.version == task.version;
             });
             return provider != contracts.end() && SupportsAuthorableTask(*provider, generation) ? &*provider : nullptr;
+        }
+
+        /** @brief Writes one explicit scalar override under the exact installed and previously offered contract. */
+        Result<bool> SetAuthoredTreeTaskProperty(AI::BehaviorTreeNode &node, const BehaviorTreeEditRequest &request,
+                                                 const AI::DecisionNodeGeneration &providers, std::uint64_t catalogRevision) {
+            using Edit = Result<bool>;
+            if (!request.task || !request.property)
+                return Edit::Failure(MakeError(Application::DecisionCookErrors::Invalid));
+            if (request.task->catalogRevision != catalogRevision)
+                return Edit::Failure(MakeError(Application::DecisionCookErrors::Stale));
+            const auto *contract = FindStarterTask(providers, *request.task);
+            if (!contract || node.control.kind != AI::DecisionControlKind::Task || node.type.Value() != contract->descriptor.type.Value() ||
+                node.typeVersion.major != contract->descriptor.origin.version)
+                return Edit::Failure(MakeError(AI::AIErrors::DecisionAssetDescriptorIncompatible));
+
+            const auto id = request.property->property;
+            const auto declared = std::ranges::find(contract->properties, id, &AI::BehaviorTreeProperty::id);
+            const auto authored = std::ranges::find(node.properties, id, &AI::BehaviorTreeProperty::id);
+            if (declared == contract->properties.end() || !CanEditDecisionTaskProperty(declared->kind) ||
+                (authored != node.properties.end() && authored->kind != declared->kind))
+                return Edit::Failure(MakeError(AI::AIErrors::DecisionAssetDescriptorIncompatible));
+            const auto &current = authored != node.properties.end() ? *authored : *declared;
+            if (current.value == request.property->value)
+                return Edit::Success(false);
+            if (authored == node.properties.end())
+                node.properties.emplace_back(current.id, current.displayName, current.kind, request.property->value);
+            else
+                authored->value = request.property->value;
+            return Edit::Success(true);
         }
 
         /** @brief Issues a stable identity from the canonical node, edge or pin namespace. */
@@ -746,6 +786,12 @@ namespace Horo::Editor {
 
             using enum BehaviorTreeEditOperation;
             switch (request.operation) {
+                case SetTaskProperty: {
+                    const auto updated = SetAuthoredTreeTaskProperty(*node, request, providers, catalogRevision);
+                    if (updated.HasError() || !updated.Value())
+                        return updated;
+                    break;
+                }
                 case SetQueryOutput: {
                     if (!output)
                         return invalid();
@@ -1029,23 +1075,34 @@ namespace Horo::Editor {
     void EditorWorkspaceController::RefreshDecisionTaskChoices() {
         auto &choices = m_viewModel.decisionTaskChoices;
         auto &treeChoices = m_viewModel.behaviorTreeTaskChoices;
+        auto &palette = m_viewModel.decisionTaskPaletteChoices;
         choices.clear();
         treeChoices.clear();
+        palette.clear();
         m_viewModel.decisionProviderMetadata = m_gameplayRegistry ? m_gameplayRegistry->DecisionUsageMetadata() : nullptr;
         if (!m_gameplayRegistry)
             return;
         const auto generation = m_gameplayRegistry->AcquireDecisionAuthoringGeneration();
         if (generation.HasError())
             return;
-        for (const auto &contract : generation.Value()->Contracts()) {
-            if (!SupportsAuthorableTask(contract, *generation.Value()))
-                continue;
+        const auto contracts = generation.Value()->Contracts();
+        palette.reserve(contracts.size());
+        for (const auto &contract : contracts) {
             const auto &descriptor = contract.descriptor;
             const auto label = std::format("{} ({})", descriptor.source.source, descriptor.type.Value());
             const bool queryOutput = QueryOutputProperty(contract) != nullptr;
-            DecisionTaskChoice choice{descriptor.type, descriptor.origin.provider, descriptor.origin.version, label, queryOutput};
+            const auto admission = EvaluateDecisionPaletteAdmission(contract, *generation.Value());
+            DecisionTaskChoice choice{descriptor.type, descriptor.origin.provider, descriptor.origin.version, label,
+                                      queryOutput,     contract.capabilities,      descriptor.origin.kind,    contract.role,
+                                      admission};
+            palette.push_back(choice);
+            if (admission != DecisionPaletteAdmission::Allowed)
+                continue;
             if (!queryOutput)
                 choices.push_back(choice);
+            for (const auto &property : contract.properties)
+                if (CanEditDecisionTaskProperty(property.kind))
+                    choice.editableProperties.push_back(property);
             treeChoices.push_back(std::move(choice));
         }
     }

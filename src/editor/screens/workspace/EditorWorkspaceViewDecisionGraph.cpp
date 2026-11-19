@@ -1,3 +1,4 @@
+#include "BlackboardScalarInput.h"
 #include "DecisionGraphCanvasModel.h"
 #include "DecisionProblemsView.h"
 #include "DecisionTaskPalette.h"
@@ -159,11 +160,29 @@ namespace Horo::Editor {
 
         /** @brief Uses exact provider and schema evidence without calling a provider or weakening final compiler validation. */
         TaskAvailability InspectPaletteTask(const DecisionTaskPaletteCatalog &catalog, const DecisionTaskChoice &choice) {
+            using enum DecisionPaletteAdmission;
+            switch (choice.admission) {
+                case Allowed:
+                    break;
+                case UnsupportedRole:
+                    return {"workspace.decision_graph.palette_role_unavailable", true};
+                case CapabilitiesUnavailable:
+                    return {"workspace.decision_graph.palette_capability_unavailable", true};
+                case PortWiringRequired:
+                    return {"workspace.decision_graph.palette_ports_required", true};
+                case UnsupportedProperties:
+                    return {"workspace.decision_graph.palette_properties_unavailable", true};
+                case ImplementationUnavailable:
+                    return {"workspace.decision_graph.palette_implementation_unavailable", true};
+            }
+            if (!catalog.allowQueryOutput && choice.queryOutput)
+                return {"workspace.decision_graph.palette_query_requires_tree", true};
             if (!catalog.providers)
                 return {"workspace.decision_canvas.provider_catalog_unavailable"};
             const auto descriptors = catalog.providers->Descriptors();
             const auto descriptor = std::ranges::lower_bound(descriptors, choice.type, {}, &AI::DecisionNodeDescriptor::type);
-            if (descriptor == descriptors.end() || descriptor->type != choice.type || descriptor->origin.provider != choice.provider)
+            if (descriptor == descriptors.end() || descriptor->type != choice.type || descriptor->origin.provider != choice.provider ||
+                descriptor->origin.kind != choice.source)
                 return {"workspace.decision_canvas.provider_missing", true};
             if (descriptor->origin.version != choice.version)
                 return {"workspace.decision_canvas.provider_version_mismatch", true};
@@ -381,6 +400,131 @@ namespace Horo::Editor {
         return std::nullopt;
     }
 
+    /** @copydoc EditorWorkspaceView::BehaviorTreeTaskPropertyDraft::Select */
+    void EditorWorkspaceView::BehaviorTreeTaskPropertyDraft::Select(const AI::BehaviorTreeProperty &effective) {
+        property = effective.id;
+        fieldScope = std::format("{}/{}/{}/{}/{}", instance.Value(), node.Value(), revision, catalogRevision, property.Value());
+        text.fill('\0');
+        if (const auto *string = std::get_if<std::string>(&effective.value)) {
+            std::ranges::copy(*string, text.begin());
+        } else if (const auto *boolean = std::get_if<bool>(&effective.value)) {
+            checked = *boolean;
+        } else if (const auto *integer = std::get_if<std::int64_t>(&effective.value)) {
+            static_cast<void>(std::to_chars(text.data(), text.data() + text.size() - 1, *integer));
+        } else if (const auto *number = std::get_if<double>(&effective.value)) {
+            static_cast<void>(std::to_chars(text.data(), text.data() + text.size() - 1, *number));
+        }
+    }
+
+    /** @copydoc EditorWorkspaceView::DrawBehaviorTreeTaskPropertyValue */
+    std::optional<AI::BehaviorTreePropertyValue> EditorWorkspaceView::DrawBehaviorTreeTaskPropertyValue(
+        const AI::BehaviorTreeProperty &effective, std::string_view label, EditorWorkspaceViewCommandData &outCommand) const {
+        auto &draft = m_behaviorTreeTaskPropertyDraft;
+        const auto &fonts = m_context.theme.fonts;
+        const auto text = [&](const char *key) -> const std::string & {
+            return m_context.localization.Get("editor", key);
+        };
+        ImGui::PushID(draft.fieldScope.c_str());
+        Ui::WrappedText(ImGui::GetContentRegionAvail().x, label, Theme::Text(), fonts);
+        std::optional<AI::BehaviorTreePropertyValue> value;
+        bool changed = false;
+        if (const auto *original = std::get_if<bool>(&effective.value)) {
+            static_cast<void>(Ui::CheckboxControl(text("workspace.decision_graph.edit_property_enabled").c_str(), &draft.checked, fonts));
+            value = draft.checked;
+            changed = draft.checked != *original;
+        } else {
+            static_cast<void>(Ui::InputTextControl("##DecisionTaskPropertyValue", draft.text.data(), draft.text.size(), fonts));
+            outCommand.sourceTextInputOwned = outCommand.sourceTextInputOwned || ImGui::IsItemActive();
+            if (const auto *original = std::get_if<std::string>(&effective.value)) {
+                const std::string_view edited{draft.text.data()};
+                if (edited.size() <= AI::BehaviorTreeAssetHardLimits::DisplayNameBytes) {
+                    changed = edited != *original;
+                } else {
+                    Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("workspace.decision_graph.edit_property_text_too_long"),
+                                    Theme::Warn(), fonts);
+                }
+            } else {
+                const auto kind = effective.kind == AI::BehaviorTreePropertyKind::SignedInteger ? AI::BlackboardValueKind::SignedInteger
+                                                                                                : AI::BlackboardValueKind::Scalar;
+                const auto number = ReadBlackboardNumericDefault(kind, draft.text.data());
+                if (number) {
+                    value = kind == AI::BlackboardValueKind::SignedInteger ? AI::BehaviorTreePropertyValue{std::get<std::int64_t>(*number)}
+                                                                           : AI::BehaviorTreePropertyValue{std::get<double>(*number)};
+                    changed = *value != effective.value;
+                } else {
+                    Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("workspace.decision_graph.edit_property_invalid_number"),
+                                    Theme::Warn(), fonts);
+                }
+            }
+        }
+        const bool apply =
+            Ui::Button({.label = text("workspace.decision_graph.edit_property_apply").c_str(), .enabled = changed, .font = fonts.sans});
+        ImGui::PopID();
+        if (!apply)
+            return std::nullopt;
+        if (!value)
+            value = std::string{draft.text.data()};
+        return value;
+    }
+
+    /** @copydoc EditorWorkspaceView::DrawBehaviorTreeTaskPropertyEditor */
+    void EditorWorkspaceView::DrawBehaviorTreeTaskPropertyEditor(const EditorWorkspaceViewModel &viewModel,
+                                                                 const DecisionGraphWorkspaceDocument &document,
+                                                                 const AI::BehaviorTreeNode &node,
+                                                                 EditorWorkspaceViewCommandData &outCommand) const {
+        if (node.control.kind != AI::DecisionControlKind::Task)
+            return;
+        const auto &choices = viewModel.behaviorTreeTaskChoices;
+        const auto contract = std::ranges::find_if(choices, [&](const DecisionTaskChoice &choice) {
+            return choice.type.Value() == node.type.Value() && choice.version == node.typeVersion.major;
+        });
+        if (contract == choices.end() || contract->editableProperties.empty())
+            return;
+
+        auto &draft = m_behaviorTreeTaskPropertyDraft;
+        const auto instance = document.identity.instance;
+        const auto catalogRevision = viewModel.availableBehaviorsRevision;
+        if (draft.instance != instance || draft.node != node.id || draft.revision != document.revision ||
+            draft.catalogRevision != catalogRevision) {
+            draft = {.instance = instance, .node = node.id, .revision = document.revision, .catalogRevision = catalogRevision};
+        }
+        const auto &fonts = m_context.theme.fonts;
+        const auto text = [&](const char *key) -> const std::string & {
+            return m_context.localization.Get("editor", key);
+        };
+        const auto &fields = contract->editableProperties;
+        const auto picked = std::ranges::find(fields, draft.property, &AI::BehaviorTreeProperty::id);
+        int row = picked == fields.end() ? 0 : static_cast<int>(picked - fields.begin()) + 1;
+        const auto &placeholder = text("workspace.decision_graph.edit_property_select");
+        const Ui::ComboItemSource items{.label = [&](int index) {
+            return index == 0 ? placeholder.c_str() : fields[static_cast<std::size_t>(index - 1)].displayName.c_str();
+        }};
+        Ui::FieldLabel(text("workspace.decision_graph.edit_property").c_str(), fonts);
+        static_cast<void>(Ui::ComboControl("##DecisionTaskProperty", &row, static_cast<int>(fields.size()) + 1, items, fonts));
+        if (row == 0) {
+            draft.property = {};
+            return;
+        }
+        const auto &declaration = fields[static_cast<std::size_t>(row - 1)];
+        const auto authored = std::ranges::find(node.properties, declaration.id, &AI::BehaviorTreeProperty::id);
+        if (authored != node.properties.end() && authored->kind != declaration.kind)
+            return;
+        const auto &property = authored != node.properties.end() ? *authored : declaration;
+        if (draft.property != property.id)
+            draft.Select(property);
+        if (auto value = DrawBehaviorTreeTaskPropertyValue(property, declaration.displayName, outCommand)) {
+            outCommand = {.command = EditorWorkspaceViewCommand::EditDecisionBehaviorTree,
+                          .behaviorTreeEdit = BehaviorTreeEditRequest{
+                              .instance = instance,
+                              .revision = document.revision,
+                              .operation = BehaviorTreeEditOperation::SetTaskProperty,
+                              .node = AI::DecisionNodeId::Create(node.id.Value()).Value(),
+                              .task = DecisionTaskSelection{contract->type, contract->provider, contract->version, catalogRevision},
+                              .property = BehaviorTreePropertyEdit{property.id, std::move(*value)},
+                          }};
+        }
+    }
+
     /** @copydoc EditorWorkspaceView::DrawBehaviorTreeTopology */
     void EditorWorkspaceView::DrawBehaviorTreeTopology(const EditorWorkspaceViewModel &viewModel,
                                                        const DecisionGraphWorkspaceDocument &document,
@@ -497,6 +641,7 @@ namespace Horo::Editor {
             }
         }
         if (node.kind == AI::BehaviorTreeNodeKind::Task) {
+            DrawBehaviorTreeTaskPropertyEditor(viewModel, document, node, outCommand);
             DrawBehaviorTreeQueryOutput(viewModel, document, node, outCommand);
             const auto *parent = tree.FindNode(incoming->sourceNode);
             const auto siblings = std::ranges::count(edges, incoming->sourceNode, &AI::BehaviorTreeEdge::sourceNode);
@@ -507,7 +652,7 @@ namespace Horo::Editor {
         if (button("workspace.decision_graph.edit_tree_unwrap", children == 1))
             emit(BehaviorTreeEditOperation::UnwrapComposite);
         const auto *schema = FindSavedDecisionSchema(viewModel, *document.graph);
-        const auto *task = DrawDecisionTaskPalette({viewModel.behaviorTreeTaskChoices, viewModel.availableBehaviorsRevision,
+        const auto *task = DrawDecisionTaskPalette({viewModel.decisionTaskPaletteChoices, viewModel.availableBehaviorsRevision,
                                                     viewModel.decisionProviderMetadata.get(), schema ? schema->schema.get() : nullptr},
                                                    selection.palette, m_context, outCommand);
         if (!task)
@@ -556,6 +701,85 @@ namespace Horo::Editor {
         return matched;
     }
 
+    namespace {
+        /** @brief Shows only filter values contributed by this family and keeps selection in typed state. */
+        template <typename Kind, std::size_t Size>
+        void DrawTaskFilter(const EditorGuiContext &context, const char *id, const char *label, const std::array<bool, Size> &present,
+                            const std::array<const char *, Size> &names, std::optional<Kind> &filter) {
+            std::array<std::size_t, Size> choices;
+            int count{};
+            int selected{};
+            for (std::size_t index = 0; index < Size; ++index) {
+                if (present[index]) {
+                    choices[static_cast<std::size_t>(count++)] = index;
+                    if (filter == static_cast<Kind>(index))
+                        selected = count;
+                }
+            }
+            if (selected == 0)
+                filter.reset();
+            if (count == 0)
+                return;
+            const auto &fonts = context.theme.fonts;
+            const auto &localization = context.localization;
+            Ui::FieldLabel(localization.Get("editor", label).c_str(), fonts);
+            const Ui::ComboItemSource items{.label = [&](int row) {
+                const auto *key = row == 0 ? "workspace.decision_graph.task_filter_all" : names[choices[static_cast<std::size_t>(row - 1)]];
+                return localization.Get("editor", key).c_str();
+            }};
+            if (Ui::ComboControl(id, &selected, count + 1, items, fonts))
+                filter = selected == 0 ? std::nullopt : std::optional{static_cast<Kind>(choices[static_cast<std::size_t>(selected - 1)])};
+        }
+
+        /** @brief Projects capability and provider origin values from the existing admitted task choices. */
+        void DrawTaskMetadataFilters(const EditorGuiContext &context, std::span<const DecisionTaskChoice> choices,
+                                     DecisionTaskPaletteDraft &draft) {
+            constexpr auto CapabilityCount = static_cast<std::size_t>(AI::AiCapability::Count);
+            constexpr auto OriginCount = static_cast<std::size_t>(AI::DecisionDescriptorSourceKind::Count);
+            constexpr auto RoleCount = static_cast<std::size_t>(AI::DecisionNodeRole::Count);
+            constexpr std::array CapabilityLabels{"workspace.decision_graph.task_filter_behavior",
+                                                  "workspace.decision_graph.task_filter_navigation",
+                                                  "workspace.decision_graph.task_filter_perception"};
+            constexpr std::array OriginLabels{"workspace.decision_graph.task_filter_native", "workspace.decision_graph.task_filter_package",
+                                              "workspace.decision_graph.task_filter_script"};
+            constexpr std::array RoleLabels{"workspace.decision_graph.task_filter_role_task",
+                                            "workspace.decision_graph.task_filter_role_condition",
+                                            "workspace.decision_graph.task_filter_role_service"};
+            AI::AiCapabilitySet capabilities;
+            std::array<bool, OriginCount> origins{};
+            std::array<bool, RoleCount> roles{};
+            for (const auto &choice : choices) {
+                capabilities = capabilities.Union(choice.capabilities);
+                const auto origin = static_cast<std::size_t>(choice.source);
+                if (origin < origins.size())
+                    origins[origin] = true;
+                const auto role = static_cast<std::size_t>(choice.role);
+                if (role < roles.size())
+                    roles[role] = true;
+            }
+            std::array<bool, CapabilityCount> present{};
+            for (std::size_t index = 0; index < present.size(); ++index)
+                present[index] = capabilities.Contains(static_cast<AI::AiCapability>(index));
+            DrawTaskFilter(context, "##DecisionTaskCapability", "workspace.decision_graph.task_filter_capability", present,
+                           CapabilityLabels, draft.capability);
+            if (std::ranges::count(origins, true) > 1)
+                DrawTaskFilter(context, "##DecisionTaskOrigin", "workspace.decision_graph.task_filter_origin", origins, OriginLabels,
+                               draft.origin);
+            else
+                draft.origin.reset();
+            if (std::ranges::count(roles, true) > 1)
+                DrawTaskFilter(context, "##DecisionTaskRole", "workspace.decision_graph.task_filter_role", roles, RoleLabels, draft.role);
+            else
+                draft.role.reset();
+        }
+
+        /** @brief Applies exact descriptor filters without changing the catalog or the current selected type. */
+        bool MatchesTaskMetadata(const DecisionTaskChoice &choice, const DecisionTaskPaletteDraft &draft) noexcept {
+            return (!draft.capability || choice.capabilities.Contains(*draft.capability)) &&
+                   (!draft.origin || choice.source == *draft.origin) && (!draft.role || choice.role == *draft.role);
+        }
+    }  // namespace
+
     /** @copydoc DrawDecisionTaskPalette */
     const DecisionTaskChoice *DrawDecisionTaskPalette(const DecisionTaskPaletteCatalog &catalog, DecisionTaskPaletteDraft &draft,
                                                       const EditorGuiContext &context, EditorWorkspaceViewCommandData &command) {
@@ -564,17 +788,22 @@ namespace Horo::Editor {
             draft.selected = {};
         }
         const auto choices = catalog.choices;
-        if (choices.empty())
+        if (choices.empty()) {
+            draft.capability.reset();
+            draft.origin.reset();
+            draft.role.reset();
             return nullptr;
+        }
 
         const auto text = [&](std::string_view key) -> const std::string & {
             return context.localization.Get("editor", key);
         };
         const auto &fonts = context.theme.fonts;
-        Ui::FieldLabel(text("workspace.decision_graph.create_task").c_str(), fonts);
+        Ui::FieldLabel(text("workspace.decision_graph.palette_registered_nodes").c_str(), fonts);
         static_cast<void>(Ui::InputTextControl("##DecisionTaskSearch", draft.search.data(), draft.search.size(), fonts,
                                                {.hint = text("workspace.source_edit.find").c_str()}));
         command.sourceTextInputOwned = command.sourceTextInputOwned || ImGui::IsItemActive();
+        DrawTaskMetadataFilters(context, choices, draft);
 
         constexpr auto Maximum = AI::DecisionNodeGeneration::MaximumNodes;
         std::array<std::size_t, Maximum> visible;
@@ -582,7 +811,7 @@ namespace Horo::Editor {
         int count = 0;
         int selection = 0;
         for (std::size_t index = 0; index < std::min(choices.size(), Maximum); ++index) {
-            if (!MatchesTaskLabel(choices[index].label, search))
+            if (!MatchesTaskMetadata(choices[index], draft) || !MatchesTaskLabel(choices[index].label, search))
                 continue;
             visible[static_cast<std::size_t>(count++)] = index;
             if (choices[index].type == draft.selected)

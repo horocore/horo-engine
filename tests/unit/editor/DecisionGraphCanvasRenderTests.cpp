@@ -192,6 +192,42 @@ namespace Horo::Editor {
         CHECK_FALSE(draft.selected.IsValid());
     }
 
+    TEST_CASE("Decision task palette filters actual capability and provider declarations", "[unit][editor][decision][palette]") {
+        using namespace AI;
+        CanvasFixture fixture;
+        const auto move = DecisionNodeTypeId::Create(101).Value();
+        const auto sense = DecisionNodeTypeId::Create(102).Value();
+        const auto provider = DecisionProviderId::Create(202).Value();
+        const std::array choices{
+            DecisionTaskChoice{move, provider, 1, "Move", false, AiCapabilitySet::Of(AiCapability::Navigation),
+                               DecisionDescriptorSourceKind::Native},
+            DecisionTaskChoice{sense, provider, 1, "Sense", false, AiCapabilitySet::Of(AiCapability::Perception),
+                               DecisionDescriptorSourceKind::Package},
+        };
+        DecisionTaskPaletteDraft draft{.selected = sense, .catalogRevision = 4, .capability = AiCapability::Navigation};
+        CHECK(fixture.DrawPalette({choices, 4}, draft) == nullptr);
+        CHECK(draft.selected == sense);
+        CHECK(fixture.labels.Used("workspace.decision_graph.task_filter_capability"));
+        draft.capability = AiCapability::Perception;
+        draft.origin = DecisionDescriptorSourceKind::Native;
+        CHECK(fixture.DrawPalette({choices, 4}, draft) == nullptr);
+        draft.origin = DecisionDescriptorSourceKind::Package;
+        CHECK(fixture.DrawPalette({choices, 4}, draft) == &choices[1]);
+        CHECK(fixture.labels.Used("workspace.decision_graph.task_filter_origin"));
+        auto declared = choices;
+        declared[1].role = DecisionNodeRole::Condition;
+        declared[1].admission = DecisionPaletteAdmission::UnsupportedRole;
+        draft.role = DecisionNodeRole::Condition;
+        CHECK(fixture.DrawPalette({declared, 4}, draft) == nullptr);
+        CHECK(fixture.labels.Used("workspace.decision_graph.task_filter_role"));
+        CHECK(fixture.labels.Used("workspace.decision_graph.palette_role_unavailable"));
+        CHECK(fixture.DrawPalette({std::span{choices}.first(1), 5}, draft) == nullptr);
+        CHECK_FALSE(draft.capability);
+        CHECK_FALSE(draft.origin);
+        CHECK_FALSE(draft.role);
+        CHECK_FALSE(draft.selected.IsValid());
+    }
+
     TEST_CASE("Decision task palette explains exact saved schema incompatibilities without creating a provider",
               "[unit][editor][decision][palette]") {
         using namespace AI;
