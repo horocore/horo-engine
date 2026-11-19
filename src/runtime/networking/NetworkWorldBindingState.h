@@ -4,6 +4,9 @@
 #include "NetworkWorldBindingController.h"
 
 namespace Horo::Network {
+    /** @brief Verifies the optional route is distinct and registered with an appropriate bounded payload. */
+    [[nodiscard]] bool ValidPrefabLifecycleRoute(const NetworkWorldBindingPolicy &policy, const MessageCodecRegistry &codecs);
+
     struct NetworkWorldBindingController::Impl final {
         struct BusyScope final {
             explicit BusyScope(bool &ownerBusy) noexcept : busy(ownerBusy) {
@@ -39,6 +42,9 @@ namespace Horo::Network {
         }
 
         [[nodiscard]] Result<void> CheckOwner() const;
+        /** @brief Registers both selected routes atomically and revokes the first on a partially failed attach. */
+        [[nodiscard]] Result<void> RegisterRoutes(InboundMessageDispatcher &router,
+                                                  const std::shared_ptr<NetworkWorldBindingController> &owner) const;
         [[nodiscard]] Result<void> ValidatePeer(const PeerSessionLifecycle &peer, NetworkOperationGeneration generation,
                                                 std::uint64_t nowTick) const;
         [[nodiscard]] Result<void> Queue(Peer &peer, const NetworkWorldBindingRecord &record, std::uint64_t nowTick) const;

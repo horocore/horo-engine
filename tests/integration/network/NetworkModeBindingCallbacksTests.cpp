@@ -32,7 +32,8 @@ namespace Horo::Network {
             const bool *failScene;
         };
 
-        NetworkModeComposition ListenMode(const NetworkWorldBindingSetup &setup, const bool *failScene = nullptr) {
+        NetworkModeComposition ListenMode(const NetworkWorldBindingSetup &setup, const bool *failScene = nullptr,
+                                          NetworkClientPrefabInbox *clientInbox = nullptr) {
             NetworkModePlan plan;
             plan.mode = NetworkProjectRole::ListenServer;
             plan.hostGeneration = 1;
@@ -48,7 +49,12 @@ namespace Horo::Network {
             plan.worldCount = 2;
             NetworkModeFactories factories;
             for (auto &factory : factories.services)
-                factory = [failScene](NetworkModeServiceRequest request) -> Result<std::unique_ptr<INetworkModeService>> {
+                factory = [failScene, clientInbox](NetworkModeServiceRequest request) -> Result<std::unique_ptr<INetworkModeService>> {
+                    if (clientInbox && request.prefabInbox.IsBound()) {
+                        CHECK(request.service == NetworkModeServiceKind::Scene);
+                        CHECK(request.world == NetworkModeWorldKind::Client);
+                        *clientInbox = request.prefabInbox;
+                    }
                     return Result<std::unique_ptr<INetworkModeService>>::Success(
                         std::make_unique<BindingService>(request.service, failScene));
                 };
@@ -94,7 +100,102 @@ namespace Horo::Network {
             return owners;
         }
 
+        /** @brief Delivers an exact encoded control frame to the real dispatcher and authenticated session gate. */
+        InboundDispatchReport DeliverPrefabFrame(ModeBindingTests::BindingFixture &fixture, ConnectionHandle connection,
+                                                 std::span<const std::byte> bytes) {
+            fixture.transport.event = {.kind = NetworkTransportEventKind::PacketReceived,
+                                       .connection = connection,
+                                       .channel = {},
+                                       .delivery = DeliveryPolicy::ReliableOrdered,
+                                       .payload = {bytes.begin(), bytes.end()}};
+            fixture.transport.queued = true;
+            return fixture.dispatcher->RunNetworkPoll(22).Value();
+        }
+
     }  // namespace
+
+    TEST_CASE("Prefab ingress transfers only authenticated current-world records to its client Scene",
+              "[integration][network][mode][binding][prefab]") {
+        auto setup = ModeBindingTests::Setup(160);
+        setup.policy.prefabLifecycle = NetworkPrefabLifecyclePolicy{{setup.policy.control.protocol,
+                                                                     WireIdentity<MessageTypeId>(12),
+                                                                     WireIdentity<MessageSchemaId>(13),
+                                                                     {1, 0},
+                                                                     false},
+                                                                    setup.policy.feature};
+        bool missingFeature{};
+        bool wrongWorld{};
+        bool wrongDirection{};
+        bool cancelDelivery{};
+        SECTION("the exact publisher can stage and transfer a Prefab at the safe point") {}
+        SECTION("another world session cannot enqueue work") {
+            wrongWorld = true;
+        }
+        SECTION("a peer without the negotiated feature cannot enqueue work") {
+            missingFeature = true;
+            setup.policy.prefabLifecycle->feature = WireIdentity<ProtocolFeatureId>(2);
+        }
+        SECTION("the inbound server-side peer cannot publish a client Prefab") {
+            wrongDirection = true;
+        }
+        SECTION("revoking delivery cancels already staged records") {
+            cancelDelivery = true;
+        }
+        ModeBindingTests::BindingFixture fixture{setup};
+        NetworkClientPrefabInbox inbox;
+        auto mode = ListenMode(setup, nullptr, &inbox);
+        fixture.Attach(mode);
+        REQUIRE(mode.Start().HasValue());
+        REQUIRE(inbox.IsBound());
+        CHECK(inbox.Take(CommitPhase).HasError());
+        const auto client = ModeBindingTests::Active(Connection(), Session());
+        fixture.PublishInitial(mode, client);
+        const auto authority = mode.Role(NetworkModeWorldKind::AuthorityServer, Runtime::SceneRuntimeId{1}).Value();
+        const auto object = NetworkObjectId::Create(authority.authority, 8, 2).Value();
+        const auto session =
+            wrongWorld ? NetworkSessionGeneration::Create(authority.worldSession->Value() + 1).Value() : *authority.worldSession;
+        const NetworkPrefabLifecycleRecord record{session, object,
+                                                  NetworkPrefabSpawnRecord{{Assets::AssetId::FromBytes({1}), Sha256Digest{{2}}, 1},
+                                                                           {{0, object, ReplicationSchemaId::Create(9).Value(), {1, 0}}}}};
+        const auto payload = EncodeNetworkPrefabLifecycle(record).Value();
+        auto control = ControlPayload(payload);
+        auto owner = fixture.binding.lock();
+        REQUIRE(owner);
+        InboundDispatchReport received;
+        if (wrongDirection) {
+            fixture.RegisterClient(fixture.server);
+            control.sequence = MessageSequenceNumber{1};
+            std::array<std::byte, 256> encoded{};
+            const auto size = EncodeMessageEnvelopePayloadInto(control, *setup.codecs, encoded).Value();
+            received = DeliverPrefabFrame(fixture, fixture.server->Connection(), std::span(encoded).first(size));
+        } else {
+            REQUIRE(owner->QueueControl(fixture.server->Connection(), Session(8), control, Runtime::RuntimePhase::NetworkFlush).HasValue());
+            REQUIRE(owner->Flush(22).HasValue());
+            received = DeliverPrefabFrame(fixture, client->Connection(), std::span(fixture.transport.sent).first(fixture.transport.size));
+        }
+        CHECK(inbox.Take(Runtime::RuntimePhase::NetworkPoll).HasError());
+        if (cancelDelivery)
+            fixture.dispatcher->RevokeSession(client->Connection());
+        auto staged = inbox.Take(CommitPhase).Value();
+        if (missingFeature || wrongWorld || wrongDirection) {
+            CHECK(received.rejectedPackets == 1);
+            CHECK(staged.empty());
+            REQUIRE(received.lastPacketRejection);
+            const auto &expected = wrongWorld       ? NetworkErrors::ReplicationWorldStale
+                                   : wrongDirection ? NetworkErrors::NetworkModeStale
+                                                    : NetworkErrors::GameplayDispatchRejected;
+            CHECK(received.lastPacketRejection->code.Value() == expected.code.Value());
+        } else if (cancelDelivery) {
+            CHECK(received.rejectedPackets == 0);
+            CHECK(staged.empty());
+        } else {
+            CHECK(received.rejectedPackets == 0);
+            CHECK(staged == std::vector{record});
+            CHECK(inbox.Take(CommitPhase).Value().empty());
+        }
+        mode.Shutdown();
+        CHECK(inbox.Take(CommitPhase).HasError());
+    }
 
     TEST_CASE("Actual product session callbacks admit before canonical worlds are ready", "[integration][network][mode][binding]") {
         if constexpr (!HORO_TEST_PHYSICS_NATIVE)

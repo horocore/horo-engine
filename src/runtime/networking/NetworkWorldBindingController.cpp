@@ -15,6 +15,8 @@ namespace Horo::Network {
             !setup.policy.authorityPublisher.IsValid() || setup.maximumPeers == 0 || setup.maximumPeers > 64 ||
             setup.maximumPendingTicks == 0 || plan.mode == NetworkProjectRole::Standalone)
             return Result<std::shared_ptr<NetworkWorldBindingController>>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
+        if (!ValidPrefabLifecycleRoute(setup.policy, *setup.codecs))
+            return Result<std::shared_ptr<NetworkWorldBindingController>>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
         try {
             auto implementation = std::make_unique<Impl>(std::move(plan), std::move(setup));
             return Result<std::shared_ptr<NetworkWorldBindingController>>::Success(
@@ -56,11 +58,7 @@ namespace Horo::Network {
         if (owner.get() != this || impl_->transport || impl_->detached || !dispatcher.UsesCodecRegistry(*impl_->setup.codecs) ||
             !impl_->setup.controlChannel.IsWithin(transport.Capabilities().maximumChannels))
             return Result<void>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
-        const auto &control = impl_->setup.policy.control;
-        if (auto registered = dispatcher.RegisterHandler({control.protocol, control.id, MessageTrafficClass::Control,
-                                                          Runtime::RuntimePhase::NetworkPoll, 4},
-                                                         owner);
-            registered.HasError())
+        if (auto registered = impl_->RegisterRoutes(dispatcher, owner); registered.HasError())
             return registered;
         dispatcher.worldBinding_ = owner;
         dispatcher.requiresWorldBinding_ = true;
@@ -69,12 +67,35 @@ namespace Horo::Network {
         return Result<void>::Success();
     }
 
+    /** @copydoc NetworkWorldBindingController::Impl::RegisterRoutes */
+    Result<void> NetworkWorldBindingController::Impl::RegisterRoutes(InboundMessageDispatcher &router,
+                                                                     const std::shared_ptr<NetworkWorldBindingController> &owner) const {
+        const auto &control = setup.policy.control;
+        const auto bind = [&](const MessageIdentityDescriptor &identity, std::uint32_t rate) {
+            return router.RegisterHandler({identity.protocol, identity.id, MessageTrafficClass::Control, Runtime::RuntimePhase::NetworkPoll,
+                                           rate},
+                                          owner);
+        };
+        if (auto registered = bind(control, 4); registered.HasError())
+            return registered;
+        if (setup.policy.prefabLifecycle) {
+            if (auto registered = bind(setup.policy.prefabLifecycle->control, 16); registered.HasError()) {
+                router.RevokeHandler(control.protocol, control.id);
+                return registered;
+            }
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc NetworkWorldBindingController::Detach */
     void NetworkWorldBindingController::Detach(const INetworkTransport &transport) noexcept {
         if (impl_->transport != &transport)
             return;
-        if (impl_->dispatcher)
+        if (impl_->dispatcher) {
             impl_->dispatcher->RevokeHandler(impl_->setup.policy.control.protocol, impl_->setup.policy.control.id);
+            if (const auto &route = impl_->setup.policy.prefabLifecycle)
+                impl_->dispatcher->RevokeHandler(route->control.protocol, route->control.id);
+        }
         impl_->dispatcher = nullptr;
         impl_->transport = nullptr;
         impl_->detached = true;
@@ -99,14 +120,37 @@ namespace Horo::Network {
         if (auto checked = impl_->CheckOwner(); checked.HasError())
             return checked;
         const Impl::BusyScope busy{impl_->busy};
-        if (const auto &control = impl_->setup.policy.control; !impl_->transport || message.protocol != control.protocol ||
-                                                               message.message != control.id || message.schema != control.schema ||
-                                                               message.schemaVersion != control.version || !message.fields.empty())
+        if (!impl_->transport || !message.fields.empty())
+            return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
+        const auto matches = [&message](const MessageIdentityDescriptor &identity) {
+            return message.protocol == identity.protocol && message.message == identity.id && message.schema == identity.schema &&
+                   message.schemaVersion == identity.version;
+        };
+        const auto &policy = impl_->setup.policy;
+        if (policy.prefabLifecycle && matches(policy.prefabLifecycle->control))
+            return impl_->worlds.AcceptPrefab(message.payload, context);
+        if (!matches(policy.control))
             return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
         const auto decoded = DecodeNetworkWorldBinding(message.payload);
         if (decoded.HasError())
             return Result<void>::Failure(decoded.ErrorValue());
         return impl_->worlds.Accept(decoded.Value(), context);
+    }
+
+    /** @copydoc NetworkWorldBindingController::HasPrefabLifecycle */
+    bool NetworkWorldBindingController::HasPrefabLifecycle() const noexcept {
+        return impl_->setup.policy.prefabLifecycle.has_value();
+    }
+
+    /** @copydoc NetworkWorldBindingController::TakePrefab */
+    Result<std::vector<NetworkPrefabLifecycleRecord>> NetworkWorldBindingController::TakePrefab(Runtime::SceneRuntimeId scene,
+                                                                                                Runtime::RuntimePhase phase) {
+        if (auto checked = impl_->CheckOwner(); checked.HasError())
+            return Result<std::vector<NetworkPrefabLifecycleRecord>>::Failure(checked.ErrorValue());
+        if (!impl_->transport)
+            return Result<std::vector<NetworkPrefabLifecycleRecord>>::Failure(MakeError(NetworkErrors::NetworkModeUnavailable));
+        const Impl::BusyScope busy{impl_->busy};
+        return impl_->worlds.TakePrefab(scene, phase);
     }
 
     /** @copydoc NetworkWorldBindingController::Ready */

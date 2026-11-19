@@ -47,7 +47,11 @@ namespace Horo::Application::Internal {
                 control->channel == command->channel || control->delivery != Network::DeliveryPolicy::ReliableOrdered ||
                 !control->channel.IsWithin(policy.local.transport.maximumChannels) || policy.maximumPeers > 64 ||
                 std::ranges::any_of(policy.controls, [&worldBinding](const auto &identity) {
-                return identity.protocol == worldBinding->control.protocol && identity.id == worldBinding->control.id;
+                const auto reserves = [&identity](const auto &message) {
+                    return identity.protocol == message.protocol && identity.id == message.id;
+                };
+                return reserves(worldBinding->control) ||
+                       (worldBinding->prefabLifecycle && reserves(worldBinding->prefabLifecycle->control));
             }))
                 return Result<std::shared_ptr<const NetworkProductAdmission>>::Failure(
                     MakeError(Network::NetworkErrors::AdmissionPolicyInvalid));

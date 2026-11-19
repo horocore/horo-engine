@@ -51,6 +51,11 @@ namespace Horo::Network {
         [[nodiscard]] Result<void> Handle(const MessageEnvelope &message) override;
         /** @brief Validate exact authenticated direction/principal/feature/schema before staging public metadata. */
         [[nodiscard]] Result<void> HandleAdmitted(const InboundMessageContext &context, const MessageEnvelope &message) override;
+        /** @brief Reports whether the immutable setup selected the protected Prefab route. */
+        [[nodiscard]] bool HasPrefabLifecycle() const noexcept;
+        /** @brief Delegates the client Scene safe-point transfer to its exact published world. */
+        [[nodiscard]] Result<std::vector<NetworkPrefabLifecycleRecord>> TakePrefab(Runtime::SceneRuntimeId scene,
+                                                                                   Runtime::RuntimePhase phase);
         /** @brief Authorize non-Control dispatch against the same live peer and published local world. */
         [[nodiscard]] Result<void> AdmitWorldDispatch(ConnectionHandle connection, NetworkOperationGeneration generation,
                                                       const PeerSessionLifecycle &peer, std::uint64_t nowTick) const;

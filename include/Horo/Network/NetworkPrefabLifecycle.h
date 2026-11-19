@@ -11,6 +11,7 @@
 
 namespace Horo::Network {
     inline constexpr std::size_t MaximumNetworkPrefabEntities = 256;
+    inline constexpr std::size_t MinimumNetworkPrefabSpawnBytes = 114;
     inline constexpr std::size_t MaximumNetworkPrefabLifecycleBytes = 7254;
 
     /** @brief Exact mapping for a replicated member in prepared cooked entity order. */

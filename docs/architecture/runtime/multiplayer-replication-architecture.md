@@ -132,6 +132,13 @@ lengths, repeated object slots and ambiguous member order before data reaches
 Scene admission. Dispatch must still check the authenticated server direction,
 the current world and the selected cooked catalog.
 
+A host can register a dedicated Prefab lifecycle control message and require
+its negotiated feature. The existing dispatcher admits the protected reliable
+lane, and the world owner verifies the exact authenticated server, published
+session, and authority epoch. Each client world has a bounded inbox that only
+its Scene factory receives. The owner transfers records at the structural
+safe point. Travel, disconnect and shutdown fence out the previous inbox.
+
 ```cpp
 enum class ReplicationExecutionRole : std::uint8_t {
     Standalone,

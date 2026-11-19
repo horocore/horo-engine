@@ -5,6 +5,7 @@
  * @brief Host-owned, generation-fenced composition of the four runtime network modes.
  */
 
+#include "Horo/Network/NetworkPrefabLifecycle.h"
 #include "Horo/Network/NetworkTargetCapabilities.h"
 #include "Horo/Network/NetworkWorldBinding.h"
 #include "Horo/Network/PeerSessionLifecycle.h"
@@ -124,6 +125,33 @@ namespace Horo::Network {
         Runtime::SceneRuntimeId scene_;
     };
 
+    /** @brief Weak transfer grant for the exact client Scene that receives authenticated Prefab messages. */
+    class NetworkClientPrefabInbox final {
+    public:
+        NetworkClientPrefabInbox() = default;
+
+        /** @brief Checks for a configured grant. @return True while the issuing composition exists. */
+        [[nodiscard]] bool IsBound() const noexcept {
+            return !binding_.expired();
+        }
+
+        /**
+         * @brief Transfers the current Scene's admitted messages at its structural safe point.
+         * @param phase The actual host lifecycle phase.
+         * @return Ordered owned messages, or the typed stale, unavailable or wrong-phase error.
+         */
+        [[nodiscard]] Result<std::vector<NetworkPrefabLifecycleRecord>> Take(Runtime::RuntimePhase phase) const;
+
+    private:
+        friend class NetworkModeComposition;
+
+        NetworkClientPrefabInbox(std::weak_ptr<NetworkWorldBindingController> binding, Runtime::SceneRuntimeId scene) noexcept
+            : binding_(std::move(binding)), scene_(scene) {}
+
+        std::weak_ptr<NetworkWorldBindingController> binding_;
+        Runtime::SceneRuntimeId scene_;
+    };
+
     /** @brief Factory request, with Count world kind for process-scoped services. */
     struct NetworkModeServiceRequest final {
         NetworkModeServiceKind service{NetworkModeServiceKind::Count};
@@ -132,6 +160,7 @@ namespace Horo::Network {
         NetworkModeWorldKind world{NetworkModeWorldKind::Count};
         Runtime::SceneRuntimeId scene{};
         NetworkAuthorityObjectPublication authorityObjects; /**< Grant for the exact authority Gameplay owner only. */
+        NetworkClientPrefabInbox prefabInbox;               /**< Grant for the exact configured client Scene owner only. */
     };
 
     /** @brief Copy of the declared authored mappings from a committed authority Scene. */

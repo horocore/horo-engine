@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <limits>
 #include <new>
+#include <utility>
 
 namespace Horo::Network::Detail {
     NetworkModeWorldState::NetworkModeWorldState(NetworkModePlan plan, NetworkWorldBindingPolicy policy,
@@ -230,6 +231,62 @@ namespace Horo::Network::Detail {
                        ? Result<void>::Success()
                        : Result<void>::Failure(MakeError(NetworkErrors::NetworkModeStale));
         return StageClient(record, index, context.ownerTick);
+    }
+
+    /** @copydoc NetworkModeWorldState::AcceptPrefab */
+    Result<void> NetworkModeWorldState::AcceptPrefab(std::span<const std::byte> payload, const InboundMessageContext &context) {
+        if (auto owner = CheckOwner(); owner.HasError())
+            return owner;
+        if (auto authorized = AuthorizeClient(context); authorized.HasError())
+            return authorized;
+        const auto features = client_->Negotiation()->features.Values();
+        if (!policy_.prefabLifecycle || std::ranges::find(features, policy_.prefabLifecycle->feature) == features.end())
+            return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
+        constexpr auto client = NetworkModeWorldKind::Client;
+        const auto index = Index(client);
+        if (index == plan_.worldCount || !Ready(client, plan_.worlds[index].scene))
+            return Result<void>::Failure(MakeError(NetworkErrors::NetworkModeUnavailable));
+        auto &world = *current_[index];
+        auto decoded = DecodeNetworkPrefabLifecycle(payload);
+        if (decoded.HasError())
+            return Result<void>::Failure(decoded.ErrorValue());
+        const auto &record = decoded.Value();
+        if (record.session != world.binding.worldSession || record.occurrence.Epoch() != world.binding.remoteEpoch)
+            return Result<void>::Failure(MakeError(NetworkErrors::ReplicationWorldStale));
+        constexpr std::size_t maximumPending = 16;
+        if (world.prefabInbox.size() == maximumPending)
+            return Result<void>::Failure(MakeError(NetworkErrors::TransportReliableBackpressure));
+        try {
+            world.prefabInbox.push_back({std::move(decoded).Value(), context.cancellation});
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(NetworkErrors::ReplicationWorldCapacityExceeded));
+        }
+    }
+
+    /** @copydoc NetworkModeWorldState::TakePrefab */
+    Result<std::vector<NetworkPrefabLifecycleRecord>> NetworkModeWorldState::TakePrefab(Runtime::SceneRuntimeId scene,
+                                                                                        Runtime::RuntimePhase phase) {
+        using Outcome = Result<std::vector<NetworkPrefabLifecycleRecord>>;
+        if (phase != Runtime::RuntimePhase::CommitDeferredLifecycleChanges)
+            return Outcome::Failure(MakeError(NetworkErrors::ReplicationWorldPhaseInvalid));
+        constexpr auto client = NetworkModeWorldKind::Client;
+        if (!Ready(client, scene))
+            return Outcome::Failure(MakeError(NetworkErrors::NetworkModeUnavailable));
+        if (auto admitted = client_->AdmitGameplay(connection_, peerGeneration_, nowTick_); admitted.HasError())
+            return Outcome::Failure(admitted.ErrorValue());
+        auto &pending = current_[Index(client)]->prefabInbox;
+        try {
+            std::vector<NetworkPrefabLifecycleRecord> records;
+            records.reserve(pending.size());
+            for (auto &entry : pending)
+                if (!entry.cancellation.IsCancellationRequested())
+                    records.push_back(std::move(entry.record));
+            pending.clear();
+            return Outcome::Success(std::move(records));
+        } catch (const std::bad_alloc &) {
+            return Outcome::Failure(MakeError(NetworkErrors::ReplicationWorldCapacityExceeded));
+        }
     }
 
     /** @copydoc NetworkModeWorldState::AcceptTravel */

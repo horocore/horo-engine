@@ -73,5 +73,6 @@ int main() {
     static_assert(Horo::Network::NetworkPrefabMemberSource{prefabRecipe, 2}.IsValid());
     static_assert(!Horo::Network::NetworkPrefabMemberSource{prefabRecipe, 3}.IsValid());
     static_assert(Horo::Network::MaximumNetworkPrefabLifecycleBytes == 7254);
+    static_assert(std::is_default_constructible_v<Horo::Network::NetworkClientPrefabInbox>);
     return Horo::Network::NetworkProjectRole::Standalone == Horo::Network::NetworkProjectRole::Count ? 1 : 0;
 }

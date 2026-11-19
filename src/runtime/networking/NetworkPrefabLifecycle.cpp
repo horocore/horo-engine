@@ -14,6 +14,7 @@ namespace Horo::Network {
         constexpr std::size_t HeaderBytes = 32;
         constexpr std::size_t RecipeBytes = 54;
         constexpr std::size_t MemberBytes = 28;
+        static_assert(HeaderBytes + RecipeBytes + MemberBytes == MinimumNetworkPrefabSpawnBytes);
         static_assert(HeaderBytes + RecipeBytes + MaximumNetworkPrefabEntities * MemberBytes == MaximumNetworkPrefabLifecycleBytes);
 
         enum class RecordKind : std::uint16_t {

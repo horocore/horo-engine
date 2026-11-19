@@ -125,7 +125,17 @@ namespace Horo::Network {
         auto request = Horo::Network::Request(plan, service, world);
         if (binding_ && request.world == NetworkModeWorldKind::AuthorityServer && service == NetworkModeServiceKind::Physics)
             request.authorityObjects = NetworkAuthorityObjectPublication{binding_, request.scene};
+        if (binding_ && request.world == NetworkModeWorldKind::Client && service == NetworkModeServiceKind::Scene &&
+            binding_->HasPrefabLifecycle())
+            request.prefabInbox = NetworkClientPrefabInbox{binding_, request.scene};
         return request;
+    }
+
+    /** @copydoc NetworkClientPrefabInbox::Take */
+    Result<std::vector<NetworkPrefabLifecycleRecord>> NetworkClientPrefabInbox::Take(Runtime::RuntimePhase phase) const {
+        if (const auto binding = binding_.lock())
+            return binding->TakePrefab(scene_, phase);
+        return Result<std::vector<NetworkPrefabLifecycleRecord>>::Failure(MakeError(NetworkErrors::NetworkModeUnavailable));
     }
 
     /** @copydoc NetworkAuthorityObjectPublication::Prepare */

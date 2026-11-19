@@ -10,6 +10,7 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 #include <span>
 
 namespace Horo::Network {
@@ -39,6 +40,12 @@ namespace Horo::Network {
         auto operator<=>(const NetworkWorldBindingRecord &) const noexcept = default;
     };
 
+    /** @brief Explicit registered Prefab lifecycle lane and its required negotiated feature. */
+    struct NetworkPrefabLifecyclePolicy final {
+        MessageIdentityDescriptor control;
+        ProtocolFeatureId feature;
+    };
+
     /** @brief Host-selected immutable authorization and registry identities, captured before listening. */
     struct NetworkWorldBindingPolicy final {
         MessageIdentityDescriptor control;
@@ -46,6 +53,7 @@ namespace Horo::Network {
         NetworkPrincipalId expectedServer;
         CredentialProvenanceId expectedProvenance;
         NetworkCapabilityId authorityPublisher;
+        std::optional<NetworkPrefabLifecyclePolicy> prefabLifecycle; /**< Opt-in protected lifecycle messages. */
     };
 
     /** @brief Deep-owned values and the same immutable codec snapshot, captured by the actual host admission composition.

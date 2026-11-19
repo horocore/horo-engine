@@ -4,6 +4,7 @@
 
 #include "Horo/Network/InboundMessageDispatcher.h"
 #include "Horo/Network/NetworkModeComposition.h"
+#include "Horo/Network/NetworkPrefabLifecycle.h"
 #include "Horo/Network/NetworkWorldBinding.h"
 #include "NetworkWorldOccurrenceIssuer.h"
 
@@ -44,6 +45,11 @@ namespace Horo::Network::Detail {
         [[nodiscard]] Result<void> UnbindClient(NetworkOperationGeneration generation);
         /** @brief Authorize received binding using the current exact peer and host-selected server capability. */
         [[nodiscard]] Result<void> Accept(const NetworkWorldBindingRecord &record, const InboundMessageContext &context);
+        /** @brief Admit protected Prefab data into the currently published client's bounded inbox. */
+        [[nodiscard]] Result<void> AcceptPrefab(std::span<const std::byte> payload, const InboundMessageContext &context);
+        /** @brief Transfer staged work only to the current client Scene at its structural safe point. */
+        [[nodiscard]] Result<std::vector<NetworkPrefabLifecycleRecord>> TakePrefab(Runtime::SceneRuntimeId scene,
+                                                                                   Runtime::RuntimePhase phase);
         /** @brief Commit detached initial candidates only at the real canonical safe point. */
         [[nodiscard]] Result<void> Commit(Runtime::RuntimePhase phase);
         /** @brief Revoke a terminal client before world dispatch, retaining the server independently. */
@@ -67,12 +73,18 @@ namespace Horo::Network::Detail {
         void Shutdown() noexcept;
 
     private:
+        struct PendingPrefab final {
+            NetworkPrefabLifecycleRecord record;
+            CancellationToken cancellation;
+        };
+
         struct World final {
             World(ReplicationWorldLifecycle lifecycle, NetworkWorldBindingRecord binding)
                 : lifecycle(std::move(lifecycle)), binding(std::move(binding)) {}
 
             ReplicationWorldLifecycle lifecycle;
             NetworkWorldBindingRecord binding;
+            std::vector<PendingPrefab> prefabInbox;
         };
 
         [[nodiscard]] Result<void> CheckOwner() const;
