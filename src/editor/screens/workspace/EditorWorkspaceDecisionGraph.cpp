@@ -6,6 +6,7 @@
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Application/ProjectAssetImportCommitter.h"
+#include "Horo/Foundation/BuildOutputStore.h"
 #include "Horo/Foundation/PathUtils.h"
 #include "UtilityGraphAuthoring.h"
 #include "WorkspacePathText.h"
@@ -27,6 +28,25 @@ namespace Horo::Editor {
     namespace {
         constexpr std::array DecisionTypes{Application::DecisionBehaviorTreeSourceType, Application::DecisionStateMachineSourceType,
                                            Application::DecisionUtilitySourceType};
+
+        /** @brief Preserves the compiler's stable identities and locations alongside the primary edit error. */
+        Error MakeDecisionValidationError(const AI::DecisionAssetValidationReport &report) {
+            auto error = MakeError(Application::DecisionCookErrors::Invalid);
+            const auto diagnostics = report.Diagnostics();
+            if (diagnostics.empty())
+                return error;
+
+            error.code = diagnostics.front().code;
+            error.message = diagnostics.front().message;
+            error.diagnostics.reserve(diagnostics.size());
+            for (const auto &finding : diagnostics)
+                error.diagnostics.push_back({.code = DiagnosticCode{finding.code.Value()},
+                                             .severity = finding.severity,
+                                             .message = finding.message,
+                                             .location = finding.source,
+                                             .path = finding.path});
+            return error;
+        }
 
         /** @brief Pins one registered source and its identity sidecar at its existing codec bound. */
         Result<Assets::AssetCookInputSnapshot> CaptureGraphInput(const std::filesystem::path &root,
@@ -417,15 +437,8 @@ namespace Horo::Editor {
                                                                      {.nodes = providers, .schemas = {schema.Value().schema}});
             if (compiled.HasError())
                 return ResultType::Failure(compiled.ErrorValue());
-            if (!compiled.Value().validation.Empty() || !compiled.Value().plan) {
-                auto error = MakeError(Application::DecisionCookErrors::Invalid);
-                const auto diagnostics = compiled.Value().validation.Diagnostics();
-                if (!diagnostics.empty()) {
-                    error.code = diagnostics.front().code;
-                    error.message = diagnostics.front().message;
-                }
-                return ResultType::Failure(std::move(error));
-            }
+            if (!compiled.Value().validation.Empty() || !compiled.Value().plan)
+                return ResultType::Failure(MakeDecisionValidationError(compiled.Value().validation));
             if (auto verified = schema.Value().inputs.VerifyUnchanged(); verified.HasError())
                 return verified;
             if (closure.Value().inputs) {
@@ -1148,7 +1161,7 @@ namespace Horo::Editor {
                                   : providers.HasValue()
                                       ? ValidateDecisionDraft(ProjectRoot(), m_assetRegistry, *candidate.graph, providers.Value())
                                       : Result<void>::Failure(providers.ErrorValue());
-            if (admitted.HasError() && HasDecisionTreeCalls(*candidate.graph))
+            if (admitted.HasError() && (HasDecisionTreeCalls(*candidate.graph) || !admitted.ErrorValue().diagnostics.empty()))
                 candidate.diagnostic = admitted.ErrorValue();
             const auto encoded = AI::DecisionPlanCodec::EncodeSource(std::span{candidate.graph.get(), 1}, candidate.graph->asset);
             if (admitted.HasValue() && encoded.HasValue()) {
@@ -1169,6 +1182,8 @@ namespace Horo::Editor {
             fail("workspace.source_open.unavailable");
             return;
         }
+        if (candidate.diagnostic)
+            PublishDecisionGraphDiagnostics(*candidate.diagnostic);
         if (existing != documents.end())
             m_decisionGraphDrafts.erase(existing->identity.instance);
         m_decisionGraphDrafts.merge(prepared);
@@ -1217,6 +1232,7 @@ namespace Horo::Editor {
             const auto saved = SaveDecisionGraphDraft(*document, draft->second);
             if (saved.HasError()) {
                 document->diagnostic = saved.ErrorValue();
+                PublishDecisionGraphDiagnostics(*document->diagnostic);
                 return Closed::Failure(saved.ErrorValue());
             }
         }
@@ -1575,6 +1591,8 @@ namespace Horo::Editor {
                         return ApplyDecisionGraphEdit(*document, draft->second, *request);
                 }();
                 document->diagnostic = result.HasError() ? std::optional{result.ErrorValue()} : std::nullopt;
+                if (document->diagnostic)
+                    PublishDecisionGraphDiagnostics(*document->diagnostic);
             } catch (const std::bad_alloc &) {
                 document->diagnostic = MakeError(Assets::AssetSourceErrors::Limit);
             }
@@ -1614,9 +1632,32 @@ namespace Horo::Editor {
             auto &draft = m_decisionGraphDrafts.at(document.identity.instance);
             auto saved = SaveDecisionGraphDraft(document, draft);
             document.diagnostic = saved.HasError() ? std::optional{saved.ErrorValue()} : std::nullopt;
-            if (saved.HasError())
+            if (saved.HasError()) {
+                PublishDecisionGraphDiagnostics(saved.ErrorValue());
                 return saved;
+            }
         }
         return Result<void>::Success();
+    }
+
+    /** @copydoc EditorWorkspaceController::PublishDecisionGraphDiagnostics */
+    void EditorWorkspaceController::PublishDecisionGraphDiagnostics(const Error &error) const {
+        if (!m_diagnosticOutput || error.diagnostics.empty())
+            return;
+        const auto registry = m_mutableAssetRegistry ? m_mutableAssetRegistry->Snapshot() : m_assetRegistry;
+        for (const auto &finding : error.diagnostics) {
+            const auto &location = finding.location;
+            const auto *asset = registry.FindByPath(location.source);
+            std::optional<DiagnosticSourceLocation> source;
+            if (asset && std::ranges::find(DecisionTypes, asset->type.Value()) != DecisionTypes.end()) {
+                source = DiagnosticSourceLocation{WorkspacePathText(Foundation::Paths::Resolve(ProjectRoot(), asset->sourcePath)),
+                                                  location.line, location.column};
+            }
+            m_diagnosticOutput->Append({.severity = finding.severity,
+                                        .stage = "ai.decision_validation",
+                                        .code = finding.code,
+                                        .message = finding.message,
+                                        .source = std::move(source)});
+        }
     }
 }  // namespace Horo::Editor

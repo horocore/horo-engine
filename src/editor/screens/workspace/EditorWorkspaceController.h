@@ -52,6 +52,10 @@
 #include <utility>
 #include <vector>
 
+namespace Horo {
+    class BuildOutputStore;
+}
+
 namespace Horo::Extensions {
     class EditorInspectorHost;
 }
@@ -101,6 +105,7 @@ namespace Horo::Editor {
     struct EditorWorkspaceSourceNavigation {
         SourceOpenNavigator sourceOpenNavigator{};
         DiagnosticSourceNavigator diagnosticSourceNavigator{};
+        BuildOutputStore *diagnosticOutput{}; /**< Borrowed process output store, outliving the workspace. */
     };
 
     /** @brief Explicit procedural source catalog, optional migrator and detached preview inputs. */
@@ -586,6 +591,8 @@ namespace Horo::Editor {
         std::map<DocumentInstanceId, DecisionGraphDraft> m_decisionGraphDrafts;
         /** @brief Validates the latest schema and publishes the canonical registered source under its native lease. */
         Result<void> SaveDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft);
+        /** @brief Projects structured Decision findings into the workspace's Build Output. */
+        void PublishDecisionGraphDiagnostics(const Error &error) const;
         /** @brief Obtains the project metadata generation for the supported authoring family. */
         [[nodiscard]] Result<std::shared_ptr<const AI::DecisionNodeGeneration>> AcquireDecisionDraftProviders(
             const AI::DecisionGraphSource &source) const;
@@ -778,6 +785,7 @@ namespace Horo::Editor {
         std::unique_ptr<Assets::AssetPreviewService> m_assetPreviews;
         SourceOpenNavigator m_sourceOpenNavigator;
         DiagnosticSourceNavigator m_diagnosticSourceNavigator;
+        BuildOutputStore *m_diagnosticOutput{};
         Application::GameplayBuildService *m_gameplayBuilds{};
         Application::GameplayBuildEnvironment m_gameplayBuildEnvironment;
         const ILocalizationService *m_localization{};

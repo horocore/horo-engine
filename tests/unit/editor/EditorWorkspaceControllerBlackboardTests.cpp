@@ -9,6 +9,7 @@
 #include "Horo/Assets/AssetRegistry.h"
 #include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Editor/ProjectMutation.h"
+#include "Horo/Foundation/BuildOutputStore.h"
 #include "Horo/Gameplay/GameModule.h"
 #include "NativePublicationFiles.h"
 #include "ProjectReplicationTestSupport.h"
@@ -1342,10 +1343,12 @@ TEST_CASE("Behavior Tree and Utility New use the current registered native task 
                                                                    Gameplay::CurrentGameplayBuildFingerprint(),
                                                                    Horo::Tests::ReadDescriptorRevision(HORO_TEST_AI_MODULE_REVISION_PATH));
     REQUIRE(std::filesystem::is_regular_file(manifest));
+    BuildOutputStore diagnosticOutput{32};
     EditorWorkspaceController controller(project.root, project.runtime, project.registry.Snapshot(),
                                          {.assets = {.mutableAssetRegistry = &project.registry},
                                           .mutations = &project.mutations,
-                                          .durableFiles = &project.files});
+                                          .durableFiles = &project.files,
+                                          .sourceNavigation = {.diagnosticOutput = &diagnosticOutput}});
     controller.ProcessCommand(BlackboardWorkspaceFixture::Open());
     const auto &choices = controller.ViewModel().decisionTaskChoices;
     const auto providerType = AI::DecisionNodeTypeId::Create(101).Value();
@@ -1771,6 +1774,24 @@ TEST_CASE("Behavior Tree and Utility New use the current registered native task 
         REQUIRE(active().diagnostic.has_value());
         CHECK(active().diagnostic->code.Value() == AI::AIErrors::DecisionAssetDependencyCycle.code.Value());
         CHECK(active().graph == noCycle);
+        const auto &findings = active().diagnostic->diagnostics;
+        REQUIRE_FALSE(findings.empty());
+        const auto output = diagnosticOutput.SnapshotIfChanged(0);
+        REQUIRE(output);
+        const auto record = std::ranges::find_if(output->records, [](const BuildOutputRecord &entry) {
+            return entry.code.Value() == AI::AIErrors::DecisionAssetDependencyCycle.code.Value() && entry.source.has_value();
+        });
+        REQUIRE(record != output->records.end());
+        CHECK(record->stage == "ai.decision_validation");
+        CHECK(record->severity == DiagnosticSeverity::Error);
+        const auto finding = std::ranges::find_if(findings, [&](const Diagnostic &entry) {
+            return entry.code.Value() == record->code.Value() &&
+                   WorkspacePathText(project.root / WorkspaceNativePath(entry.location.source)) == record->source->absolutePath;
+        });
+        REQUIRE(finding != findings.end());
+        CHECK(record->message == finding->message);
+        CHECK(record->source->line == finding->location.line);
+        CHECK(record->source->column == finding->location.column);
 
         open("assets/Subtree caller.horo_bt");
         const auto callerInstance = active().identity.instance;

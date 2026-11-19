@@ -224,6 +224,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                            .mutations = projectServices_.mutations,
                                            .durableFiles = projectServices_.durableFiles,
                                            .jobs = &services_.Get<JobSystem>(),
+                                           .sourceNavigation = {.diagnosticOutput = services_.TryGet<BuildOutputStore>()},
                                            .gameplay = BindGameplayServices(services_, host_, BindPlayFactory(projectRoot)),
                                            .localization = &context_.localization,
                                            .engineEvents = &context_.engineEvents,

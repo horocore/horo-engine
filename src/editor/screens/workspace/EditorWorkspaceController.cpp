@@ -111,8 +111,8 @@ namespace Horo::Editor {
           m_assetPreviews(dependencies.jobs != nullptr ? std::make_unique<Assets::AssetPreviewService>(*dependencies.jobs) : nullptr),
           m_sourceOpenNavigator(dependencies.sourceNavigation.sourceOpenNavigator),
           m_diagnosticSourceNavigator(ComposeDiagnosticNavigator(dependencies.sourceNavigation.diagnosticSourceNavigator)),
-          m_gameplayBuilds(dependencies.gameplay.builds), m_gameplayBuildEnvironment(dependencies.gameplay.environment),
-          m_localization(dependencies.localization),
+          m_diagnosticOutput(dependencies.sourceNavigation.diagnosticOutput), m_gameplayBuilds(dependencies.gameplay.builds),
+          m_gameplayBuildEnvironment(dependencies.gameplay.environment), m_localization(dependencies.localization),
           m_sceneFileWatch(dependencies.jobs != nullptr ? std::make_unique<SceneFileWatchService>(*dependencies.jobs) : nullptr),
           m_worldDocuments(dependencies.world.documentSessionOwner), m_playSession(dependencies.networkDebugger),
           m_audioPreview(dependencies.audioPreview), m_audioPreviewWorkspace(dependencies.world.documentSessionOwner) {

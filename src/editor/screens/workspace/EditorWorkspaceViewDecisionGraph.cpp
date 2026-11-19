@@ -349,6 +349,10 @@ namespace Horo::Editor {
                      code == Application::DecisionCookErrors::Stale.code.Value())
                 key = "workspace.decision_graph.subtree_stale";
             label(text(key), Theme::Warn());
+            if (!opened->diagnostic->diagnostics.empty()) {
+                const auto &finding = opened->diagnostic->diagnostics.front();
+                label(std::format("{} · {}", finding.code.Value(), finding.message), Theme::Text());
+            }
         }
 
         const auto drawTransitionOrder = [&](const AI::StateMachineAssetDescriptor &machine, const AI::StateMachineTransition &transition) {
