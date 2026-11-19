@@ -104,6 +104,37 @@ namespace Horo::Application::Internal {
             return ReceiptKind::Success;
         }
 
+        /** @brief Retains at most one well-formed receipt from the supervised child's standard output. */
+        struct ProbeReceipt final {
+            /** @brief Ignores ordinary output and records malformed or repeated receipts as a permanent failure. */
+            void Observe(const ProcessOutputLine &line, std::string_view digest, std::string_view host, std::string_view target) noexcept {
+                if (line.stream != ProcessOutputStream::StandardOutput ||
+                    (!line.text.starts_with(OpenXRProbeWire::Record) && !line.text.starts_with(OpenXRProbeWire::FailureRecord)))
+                    return;
+                if (size || line.truncated || line.text.size() > bytes.size()) {
+                    rejected = true;
+                    return;
+                }
+                kind = ReadReceipt(line.text, digest, host, target);
+                if (kind == ReceiptKind::Invalid) {
+                    rejected = true;
+                    return;
+                }
+                std::ranges::copy(line.text, bytes.begin());
+                size = line.text.size();
+            }
+
+            /** @brief Borrows the exact accepted output line while the receipt is alive. */
+            [[nodiscard]] std::string_view Text() const noexcept {
+                return {bytes.data(), size};
+            }
+
+            std::array<char, MaximumReceiptBytes> bytes{};
+            std::size_t size{};
+            bool rejected{};
+            ReceiptKind kind{};
+        };
+
         /** @brief Converts the terminal host's UTF-8 argv to a native path without losing non-ASCII bytes. */
         std::filesystem::path NativePath(std::string_view utf8) {
             return std::filesystem::path{std::u8string{utf8.begin(), utf8.end()}};
@@ -164,25 +195,9 @@ namespace Horo::Application::Internal {
             auto request = MakeRequest(arguments, installation);
             request.forceCancellation = stop.ForceToken();
             const auto target = FormatSha256(OpenXRProbeWire::TargetDigest(arguments[Runtime], arguments[System]));
-            std::array<char, MaximumReceiptBytes> receipt{};
-            std::size_t received{};
-            bool rejected{};
-            ReceiptKind kind{};
+            ProbeReceipt receipt;
             request.onOutput = [&](const ProcessOutputLine &line) noexcept {
-                if (line.stream != ProcessOutputStream::StandardOutput ||
-                    (!line.text.starts_with(OpenXRProbeWire::Record) && !line.text.starts_with(OpenXRProbeWire::FailureRecord)))
-                    return;
-                if (received || line.truncated || line.text.size() > receipt.size()) {
-                    rejected = true;
-                    return;
-                }
-                kind = ReadReceipt(line.text, digest, host, target);
-                if (kind == ReceiptKind::Invalid) {
-                    rejected = true;
-                    return;
-                }
-                std::ranges::copy(line.text, receipt.begin());
-                received = line.text.size();
+                receipt.Observe(line, digest, host, target);
             };
             NativeExternalProcessRunner runner;
             const auto terminal = runner.Run(request, stop.Token());
@@ -199,18 +214,18 @@ namespace Horo::Application::Internal {
                 errors << "XR probe was interrupted or required process cleanup.\n";
                 return 1;
             }
-            const bool finishedSuccess = kind == ReceiptKind::Success && terminal.Value().exitCode == 0;
-            const bool finishedFailure = kind == ReceiptKind::Failure && terminal.Value().exitCode == 1;
-            if (rejected || (!finishedSuccess && !finishedFailure) || !MatchesExecutable(executable, executableDigest)) {
+            const bool finishedSuccess = receipt.kind == ReceiptKind::Success && terminal.Value().exitCode == 0;
+            const bool finishedFailure = receipt.kind == ReceiptKind::Failure && terminal.Value().exitCode == 1;
+            if (receipt.rejected || (!finishedSuccess && !finishedFailure) || !MatchesExecutable(executable, executableDigest)) {
                 errors << "XR probe reported no current installed runtime/device receipt. Check the requested default runtime, HMD and "
                           "package.\n";
                 return 1;
             }
             if (finishedFailure) {
-                errors << std::string_view{receipt.data(), received} << '\n';
+                errors << receipt.Text() << '\n';
                 return 1;
             }
-            output << std::string_view{receipt.data(), received} << '\n';
+            output << receipt.Text() << '\n';
             return output ? 0 : 1;
         }
 
