@@ -658,6 +658,7 @@ set_tests_properties(HoroNetworkModePublicHeaderConsumer PROPERTIES LABELS "unit
 add_executable(HoroNetworkModeHostIntegrationTests
     integration/network/NetworkModeBindingCallbacksTests.cpp
         integration/network/NetworkModeHostIntegrationTests.cpp
+        integration/network/NetworkProductPrefabTests.cpp
         integration/network/NetworkProductSessionTests.cpp
         integration/network/NetworkPendingConnectionTests.cpp
         integration/network/NetworkProductAdmissionTests.cpp

@@ -112,6 +112,18 @@ used for authored discovery. Members without an admitted owner stay local.
 Scene travel and shutdown revoke the old grant, and the client factory receives
 no authority grant.
 
+Each published Prefab mapping carries the cooked asset ID and verified
+envelope digest, the complete prepared entity count, and the member's
+position in that order. Local-only members still occupy their prepared slots.
+The first mapped member's generation-qualified network object ID identifies
+the whole occurrence. Every member in a batch must describe the same recipe
+and occupy a distinct slot in increasing order. Invalid evidence discards the
+entire detached mapping and preserves the previous capture revision.
+Source consumers of the mapping may continue using the existing authored
+provenance initializer. Rebuild native consumers against the updated mapping
+value layout. The existing NetworkRuntime target supplies the Assets identity
+header through its public usage requirements.
+
 ```cpp
 enum class ReplicationExecutionRole : std::uint8_t {
     Standalone,

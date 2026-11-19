@@ -2,6 +2,7 @@
 #include "Horo/Network/InboundMessageDispatcher.h"
 #include "Horo/Network/NetworkAdmissionController.h"
 #include "Horo/Network/NetworkModeComposition.h"
+#include "Horo/Network/NetworkObjectMapping.h"
 #include "Horo/Network/NetworkWorldBinding.h"
 #include "Horo/Network/ReplicationInboundApply.h"
 #include "Horo/Network/ReplicationSnapshotHistory.h"
@@ -66,5 +67,9 @@ int main() {
                                  bool (Horo::Network::NetworkModeComposition::*)() const noexcept>);
     static_assert(Horo::Network::NetworkWorldBindingWireBytes == 60);
     static_assert(std::is_trivially_copyable_v<Horo::Network::NetworkWorldBindingRecord>);
+    constexpr auto prefabAsset = Horo::Assets::AssetId::FromBytes({1});
+    constexpr Horo::Network::NetworkPrefabTemplateIdentity prefabRecipe{prefabAsset, Horo::Sha256Digest{{2}}, 3};
+    static_assert(Horo::Network::NetworkPrefabMemberSource{prefabRecipe, 2}.IsValid());
+    static_assert(!Horo::Network::NetworkPrefabMemberSource{prefabRecipe, 3}.IsValid());
     return Horo::Network::NetworkProjectRole::Standalone == Horo::Network::NetworkProjectRole::Count ? 1 : 0;
 }

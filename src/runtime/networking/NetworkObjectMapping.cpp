@@ -82,6 +82,8 @@ namespace Horo::Network {
         if (!entry.object.IsValid() || entry.object.Epoch() != epoch_ || !entry.entity.IsValid() || entry.entity.runtime != scene_ ||
             !entry.provenance.IsValid())
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkObjectMappingInvalid));
+        if (entry.provenance.prefab && entry.provenance.prefab->occurrence.Epoch() != epoch_)
+            return Result<void>::Failure(MakeError(NetworkErrors::NetworkObjectMappingInvalid));
         if (const auto entity = LowerBound(entry.entity); entity != entityIndex_.end() && entity->entity == entry.entity)
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkObjectMappingConflict));
         return Result<void>::Success();
@@ -141,12 +143,11 @@ namespace Horo::Network {
     }
 
     /** @copydoc NetworkObjectMapping::RegisterDynamic */
-    Result<void> NetworkObjectMapping::RegisterDynamic(Runtime::EntityRef entity, ReplicationSchemaId schema,
-                                                       ReplicationSchemaVersion version) {
+    Result<void> NetworkObjectMapping::RegisterDynamic(Runtime::EntityRef entity, const NetworkObjectProvenance &provenance) {
         auto object = NextDynamicObject();
         if (object.HasError())
             return Result<void>::Failure(object.ErrorValue());
-        return Register({object.Value(), entity, {schema, version, std::nullopt}});
+        return Register({object.Value(), entity, provenance});
     }
 
     /** @copydoc NetworkObjectMapping::RetireDynamic */

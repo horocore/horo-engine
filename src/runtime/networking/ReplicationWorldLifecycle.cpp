@@ -481,6 +481,37 @@ namespace Horo::Network {
         }
     }
 
+    /** @copydoc ReplicationWorldLifecycle::AddDynamicObjects */
+    Result<void> ReplicationWorldLifecycle::AddDynamicObjects(NetworkObjectMapping &mapping,
+                                                              std::span<const ReplicationDynamicSceneObject> added) {
+        if (added.empty())
+            return Result<void>::Success();
+        const auto &first = added.front().prefab;
+        NetworkObjectId occurrence;
+        if (first) {
+            auto identified = mapping.NextDynamicObject();
+            if (identified.HasError())
+                return Result<void>::Failure(identified.ErrorValue());
+            occurrence = identified.Value();
+        }
+        std::optional<std::uint32_t> previousSlot;
+        for (const auto &entry : added) {
+            NetworkObjectProvenance provenance{.schema = entry.schema, .schemaVersion = entry.version};
+            if (entry.prefab.has_value() != first.has_value())
+                return Failure<void>(NetworkErrors::NetworkObjectMappingInvalid);
+            if (entry.prefab) {
+                const auto slot = entry.prefab->entitySlot;
+                if (entry.prefab->recipe != first->recipe || (previousSlot && slot <= *previousSlot))
+                    return Failure<void>(NetworkErrors::NetworkObjectMappingInvalid);
+                previousSlot = slot;
+                provenance.prefab.emplace(*entry.prefab, occurrence);
+            }
+            if (auto inserted = mapping.RegisterDynamic(entry.entity, provenance); inserted.HasError())
+                return inserted;
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc ReplicationWorldLifecycle::PrepareDynamicObjectBatch */
     Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> ReplicationWorldLifecycle::PrepareDynamicObjectBatch(
         const ReplicationWorldWorkRequest &request, const std::span<const ReplicationDynamicSceneObject> added,
@@ -494,9 +525,8 @@ namespace Horo::Network {
             for (const auto entity : retired)
                 if (auto removed = replacement.RetireDynamic(entity); removed.HasError())
                     return Prepared::Failure(removed.ErrorValue());
-            for (const auto &entry : added)
-                if (auto inserted = replacement.RegisterDynamic(entry.entity, entry.schema, entry.version); inserted.HasError())
-                    return Prepared::Failure(inserted.ErrorValue());
+            if (auto inserted = AddDynamicObjects(replacement, added); inserted.HasError())
+                return Prepared::Failure(inserted.ErrorValue());
             return FinishObjectBatch(std::move(replacement), request.cancellation, added.size(), retired.size());
         } catch (const std::bad_alloc &) {
             return Failure<std::unique_ptr<Runtime::SceneStructuralCandidate>>(NetworkErrors::ReplicationWorldCapacityExceeded);

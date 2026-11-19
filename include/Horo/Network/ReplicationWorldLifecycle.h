@@ -137,6 +137,7 @@ namespace Horo::Network {
         Runtime::EntityRef entity;
         ReplicationSchemaId schema;
         ReplicationSchemaVersion version;
+        std::optional<NetworkPrefabMemberSource> prefab;
     };
 
     /** @brief Exact Scene/session/phase identity supplied by a caller requesting replication work. */
@@ -291,7 +292,8 @@ namespace Horo::Network {
          * @param retired Exact Scene entity generations whose dynamic associations should retire.
          * @return The unpublished candidate or a typed error leaving the live mapping unchanged.
          * @details Slot selection and generation reuse are private to the candidate. Already authored
-         * mappings cannot be retired through this API.
+         * mappings cannot be retired through this API. A Prefab spawn supplies one recipe with
+         * strictly increasing prepared entity slots. The authority issues its common occurrence.
          */
         [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareDynamicObjectBatch(
             const ReplicationWorldWorkRequest &request, std::span<const ReplicationDynamicSceneObject> added,
@@ -341,6 +343,9 @@ namespace Horo::Network {
         /** @brief Captures the exact authority indexes and tombstones after batch admission. */
         [[nodiscard]] Result<NetworkObjectMapping> CopyMappingForBatch(const ReplicationWorldWorkRequest &request, std::size_t added,
                                                                        std::size_t retired) const;
+        /** @brief Assigns dynamic rows and one common identity for a prepared Prefab group. */
+        [[nodiscard]] static Result<void> AddDynamicObjects(NetworkObjectMapping &mapping,
+                                                            std::span<const ReplicationDynamicSceneObject> added);
         /** @brief Wraps prepared indexes with the no-fail publication and rollback fences. */
         [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> FinishObjectBatch(NetworkObjectMapping mapping,
                                                                                                    const CancellationToken &cancellation,

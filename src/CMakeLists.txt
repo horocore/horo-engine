@@ -1123,7 +1123,8 @@ add_library(HoroNetworkRuntime STATIC
 )
 add_library(HoroEngine::NetworkRuntime ALIAS HoroNetworkRuntime)
 target_compile_features(HoroNetworkRuntime PUBLIC cxx_std_20)
-target_link_libraries(HoroNetworkRuntime PUBLIC HoroEngine::NetworkApi HoroEngine::RuntimeScene HoroEngine::Runtime HoroEngine::Security)
+target_link_libraries(HoroNetworkRuntime PUBLIC HoroEngine::NetworkApi HoroEngine::RuntimeScene HoroEngine::Runtime HoroEngine::Security
+    HoroEngine::Assets)
 
 # Host composition sees only these two non-installed headers, never the source root.
 set(HORO_NETWORK_MODE_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/network_mode_host_headers")

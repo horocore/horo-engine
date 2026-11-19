@@ -351,6 +351,53 @@ namespace Horo::Network {
         RequireError(lifecycle.PrepareDynamicObjectBatch(work, {}, retired), NetworkErrors::NetworkObjectMappingUnknown);
     }
 
+    TEST_CASE("Prefab mapping candidates reject inconsistent member evidence without publishing IDs",
+              "[unit][network][replication][lifecycle][prefab]") {
+        const auto world = World();
+        auto lifecycle = ReplicationWorldLifecycle::Create({.maximumObjects = 4}).Value();
+        REQUIRE(lifecycle.Stage(world).HasValue());
+        REQUIRE(lifecycle.CommitAtSafePoint(world.scene, world.session).HasValue());
+        const auto work = StructuralWork(world);
+        const auto first = Object(1, 1);
+        const auto second = Object(1, 2);
+        const NetworkPrefabTemplateIdentity recipe{Assets::AssetId::Parse("12345678-1234-4234-8234-123456789abc").Value(),
+                                                   Sha256Digest{{1}}, 3};
+        std::array rows{ReplicationDynamicSceneObject{first.entity, first.provenance.schema, first.provenance.schemaVersion,
+                                                      NetworkPrefabMemberSource{recipe, 0}},
+                        ReplicationDynamicSceneObject{second.entity, second.provenance.schema, second.provenance.schemaVersion,
+                                                      NetworkPrefabMemberSource{recipe, 2}}};
+        const auto expected = rows.back().prefab;
+        SECTION("duplicate prepared slot") {
+            rows.back().prefab->entitySlot = 0;
+        }
+        SECTION("out-of-range prepared slot") {
+            rows.back().prefab->entitySlot = recipe.entityCount;
+        }
+        SECTION("mixed recipe revisions") {
+            rows.back().prefab->recipe.artifactDigest.bytes.front() = 2;
+        }
+        SECTION("mixed dynamic kinds") {
+            rows.back().prefab.reset();
+        }
+        RequireError(lifecycle.PrepareDynamicObjectBatch(work, rows, {}), NetworkErrors::NetworkObjectMappingInvalid);
+        CHECK(lifecycle.Acquire(FixedWork(world)).Value().Mapping().Entries().empty());
+        rows.back().prefab = expected;
+        auto prepared = lifecycle.PrepareDynamicObjectBatch(work, rows, {}).Value();
+        REQUIRE(prepared->ValidatePublication().HasValue());
+        prepared->Publish();
+        REQUIRE(prepared->AfterPublication().HasValue());
+        const auto lease = lifecycle.Acquire(FixedWork(world)).Value();
+        const auto entries = lease.Mapping().Entries();
+        REQUIRE(entries.size() == 2);
+        REQUIRE(entries[0].provenance.prefab);
+        REQUIRE(entries[1].provenance.prefab);
+        CHECK(entries[0].object == first.object);
+        CHECK(entries[1].object == second.object);
+        CHECK(entries[0].provenance.prefab->occurrence == first.object);
+        CHECK(entries[1].provenance.prefab->occurrence == first.object);
+        CHECK(entries[1].provenance.prefab->source == *expected);
+    }
+
     TEST_CASE("Replication world pause, cancellation, loss, duplication, and stale object identity are bounded",
               "[unit][network][replication][lifecycle]") {
         auto lifecycle = std::move(ReplicationWorldLifecycle::Create({.maximumObjects = 2, .maximumRetiredWorlds = 2})).Value();
