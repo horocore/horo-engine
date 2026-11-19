@@ -1,4 +1,6 @@
+#include "../../helpers/ProjectReplicationTestSupport.h"
 #include "CharacterSceneProductFixture.h"
+#include "GameplayReplicationAdmissionTestSupport.h"
 #include "HeadlessProjectScene.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Physics/PhysicsErrors.h"
@@ -410,6 +412,28 @@ namespace Horo::Application::CharacterSceneProductTest {
         CHECK(gameplay.moduleRetirements->Close().HasValue());
     }
 #endif
+
+    TEST_CASE("Cooked project Scene selection captures the root's explicit network authority", "[scene][network][product]") {
+        Fixture fixture;
+        Internal::TestSupport::ReplicatedScriptFixture script;
+        const auto &inventory = script.selection.replicationAdmission->inventory;
+        Horo::Tests::WriteReplicationProject(fixture.project.project.dir.path, inventory);
+        const Internal::HeadlessProjectSceneOptions options{.projectRoot = fixture.project.project.dir.path,
+                                                            .scene = "cooked:" + fixture.project.sceneId.ToString(),
+                                                            .cookedRoot = fixture.project.cooked.path,
+                                                            .cookTarget = fixture.project.request.assets.target.Value(),
+                                                            .captureNetworkSettings = true};
+        auto prepared = Internal::PrepareHeadlessProjectSceneResources(options);
+        if (prepared.HasError())
+            UNSCOPED_INFO(prepared.ErrorValue().message);
+        REQUIRE(prepared.HasValue());
+        REQUIRE(prepared.Value()->networkSettings);
+        const auto &captured = prepared.Value()->networkSettings->ReplicationInventory();
+        CHECK(captured.completeness == inventory.completeness);
+        REQUIRE(captured.declarations.size() == 1);
+        CHECK(captured.declarations.front().schema == inventory.declarations.front().schema);
+        CHECK(prepared.Value()->sceneAsset == fixture.project.sceneId);
+    }
 
     TEST_CASE("Terminal Scene options reject malformed incomplete and escaping input", "[character][scene][cli][product]") {
         CHECK(RunCli({"--run-network-product", "standalone", "1", "--project", "relative", "--scene", "source:level.scene"}).exitCode == 2);

@@ -2,6 +2,7 @@
 
 #include "Horo/Application/PrefabProjectSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
+#include "Horo/Application/ProjectNetworkSettings.h"
 #include "Horo/Application/ProjectSurfaceSettings.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Network/NetworkErrors.h"
@@ -148,6 +149,28 @@ namespace Horo::Application::Internal {
                 resources.prefabLoads = std::make_unique<Assets::AssetLoadService>(resources.jobs, resources.committed->ArtifactProvider());
         }
 
+        /** @brief Captures the canonical project root and its selected owner policies before opening the Scene. */
+        Result<ProjectMetadata> CaptureProductProject(const HeadlessProjectSceneOptions &launch, HeadlessProjectSceneResources &resources) {
+            using Metadata = Result<ProjectMetadata>;
+            auto root = LoadProjectSourceDocument(launch.projectRoot);
+            if (root.HasError())
+                return Metadata::Failure(root.ErrorValue());
+            if (launch.captureNetworkSettings) {
+                auto settings = ResolveProjectNetworkSettings(root.Value());
+                if (settings.HasError())
+                    return Metadata::Failure(settings.ErrorValue());
+                resources.networkSettings = std::move(settings).Value();
+            }
+            auto metadata = std::move(root).Value().metadata;
+            if (auto sources = CaptureProductSourceIo(launch, resources, metadata); sources.HasError())
+                return Metadata::Failure(sources.ErrorValue());
+            const auto prefabSettings = LoadPrefabProjectSettings(launch.projectRoot);
+            if (prefabSettings.HasError())
+                return Metadata::Failure(prefabSettings.ErrorValue());
+            resources.prefabPolicy = prefabSettings.Value().settings->Limits().Policy();
+            return Metadata::Success(std::move(metadata));
+        }
+
     }  // namespace
 
     /** @copydoc PrepareHeadlessProjectSceneResources */
@@ -156,15 +179,9 @@ namespace Horo::Application::Internal {
         // One absolute budget covers source/cook capture and all roles; no per-record reset.
         resources->deadline = std::chrono::steady_clock::now() + launch.loadTimeout;
         resources->load = {resources->cancellation.Token(), resources->deadline};
-        auto metadata = LoadProjectMetadata(launch.projectRoot);
+        auto metadata = CaptureProductProject(launch, *resources);
         if (metadata.HasError())
             return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(metadata.ErrorValue());
-        if (auto sources = CaptureProductSourceIo(launch, *resources, metadata.Value()); sources.HasError())
-            return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(sources.ErrorValue());
-        const auto prefabSettings = LoadPrefabProjectSettings(launch.projectRoot);
-        if (prefabSettings.HasError())
-            return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(prefabSettings.ErrorValue());
-        resources->prefabPolicy = prefabSettings.Value().settings->Limits().Policy();
         if (const auto assets = CaptureProductAssets(launch, *resources); assets.HasError())
             return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(assets.ErrorValue());
         auto definition =

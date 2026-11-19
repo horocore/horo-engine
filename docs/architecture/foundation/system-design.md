@@ -86,6 +86,8 @@ Executable-specific adapters and composition live with their host:
 - `apps/horo-engine/composition/` owns terminal/headless network and Scene
   composition and module-script package admission. `HoroNetworkProductHost`
   selects the standalone World mount through the shared application adapter.
+  For project-backed network gameplay it uses `HoroProjectSettings` to validate
+  the root's network policy before composing Runtime services.
 - `apps/shared/` contains only composition used by multiple executable hosts:
   module activation, package sessions, host signatures, navigation preparation,
   Scene/Physics lifetime adaptation, animation owner identities and committed

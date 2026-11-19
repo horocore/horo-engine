@@ -235,9 +235,15 @@ namespace Horo::Application::Internal {
             replicationLease_.emplace(std::move(acquired).Value());
         }
         const std::array modules{ModuleId{selection.moduleId}};
-        return selection.replicationAdmission->RequireAdmission(replicationLease_ ? replicationLease_->Descriptors()
-                                                                                  : Network::ReplicationDescriptorSnapshotPtr{},
-                                                                modules);
+        auto assessment = selection.replicationAdmission->Assess(replicationLease_ ? replicationLease_->Descriptors()
+                                                                                   : Network::ReplicationDescriptorSnapshotPtr{},
+                                                                 modules);
+        if (assessment.HasError())
+            return Result<void>::Failure(assessment.ErrorValue());
+        if (auto required = assessment.Value().RequireAdmission(); required.HasError())
+            return required;
+        replicationAssessment_.emplace(std::move(assessment).Value());
+        return Result<void>::Success();
     }
 
     /** @copydoc GameplayWorldComposition::Create */
@@ -580,6 +586,7 @@ namespace Horo::Application::Internal {
         scenes_ = nullptr;
         registry_ = Gameplay::BehaviorRegistry{};
         replicationLease_.reset();
+        replicationAssessment_.reset();
         if (native_ && retirementAdmission_)
             retirementAdmission_->Retain(std::move(native_));
         retirementAdmission_.reset();
@@ -593,9 +600,14 @@ namespace Horo::Application::Internal {
         return physics_;
     }
 
-    /** @copydoc GameplayWorldComposition::ReplicationDescriptors */
-    const Network::ReplicationDescriptorSnapshot *GameplayWorldComposition::ReplicationDescriptors() const noexcept {
-        return replicationLease_ ? replicationLease_->Descriptors().get() : nullptr;
+    /** @copydoc GameplayWorldComposition::Replication */
+    const Gameplay::GameplayReplicationLease *GameplayWorldComposition::Replication() const noexcept {
+        return replicationLease_ ? &*replicationLease_ : nullptr;
+    }
+
+    /** @copydoc GameplayWorldComposition::AdmittedReplicationSchemas */
+    std::span<const Network::ReplicationSchemaId> GameplayWorldComposition::AdmittedReplicationSchemas() const noexcept {
+        return replicationAssessment_ ? replicationAssessment_->AdmittedSchemas() : std::span<const Network::ReplicationSchemaId>{};
     }
 
     /** @copydoc GameplayWorldComposition::CharacterContext */

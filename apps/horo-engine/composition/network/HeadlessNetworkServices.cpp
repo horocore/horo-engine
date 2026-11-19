@@ -104,16 +104,14 @@ namespace Horo::Application::Internal {
         /** @brief Resolves one object against the committed Scene and the admitted live schema registry. */
         Result<Network::ReplicationAuthoredSceneObject> ResolveAuthoredObject(const Runtime::RuntimeSceneView &scene,
                                                                               const Network::NetworkObjectProvenance &binding,
-                                                                              std::span<const Network::ReplicationDeclaration> declarations,
+                                                                              std::span<const Network::ReplicationSchemaId> admitted,
                                                                               const Network::ReplicationDescriptorSnapshot &installed) {
             using Row = Result<Network::ReplicationAuthoredSceneObject>;
             if (!binding.IsValid() || !binding.authoredObject)
                 return Row::Failure(MakeError(Network::NetworkErrors::NetworkObjectMappingInvalid));
             const auto schema = installed.Find(binding.schema);
             if (schema.HasError() || schema.Value()->version != binding.schemaVersion ||
-                std::ranges::none_of(declarations, [&](const auto &declaration) {
-                return declaration.schema.id == binding.schema && declaration.schema.version == binding.schemaVersion;
-            }))
+                std::ranges::find(admitted, binding.schema) == admitted.end())
                 return Row::Failure(MakeError(Network::NetworkErrors::ReplicationDescriptorIncompatible));
             const auto entity = scene.Find(*binding.authoredObject);
             if (!entity)
@@ -124,7 +122,7 @@ namespace Horo::Application::Internal {
         /** @brief Copies the finite admitted projection without retaining a Scene borrow. */
         Result<Network::NetworkAuthoredSceneProjection> ProjectAuthoredObjects(const Runtime::RuntimeSceneView &scene,
                                                                                std::span<const Network::NetworkObjectProvenance> bindings,
-                                                                               std::span<const Network::ReplicationDeclaration> inventory,
+                                                                               std::span<const Network::ReplicationSchemaId> admitted,
                                                                                const Network::ReplicationDescriptorSnapshot &installed,
                                                                                const CancellationToken &cancellation) {
             using Outcome = Result<Network::NetworkAuthoredSceneProjection>;
@@ -134,10 +132,107 @@ namespace Horo::Application::Internal {
                 Network::NetworkAuthoredSceneProjection projection{.cancellation = cancellation};
                 projection.objects.reserve(bindings.size());
                 for (const auto &binding : bindings) {
-                    auto row = ResolveAuthoredObject(scene, binding, inventory, installed);
+                    auto row = ResolveAuthoredObject(scene, binding, admitted, installed);
                     if (row.HasError())
                         return Outcome::Failure(row.ErrorValue());
                     projection.objects.push_back(std::move(row).Value());
+                }
+                return Outcome::Success(std::move(projection));
+            } catch (const std::bad_alloc &) {
+                return Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationWorldCapacityExceeded));
+            }
+        }
+
+        /** @brief Counts enabled persisted owners on an authored entity. Services have no authored occurrence. */
+        std::size_t CountAuthoredOwners(const Runtime::RuntimeComponentSet &components, const Gameplay::GameplayReplicationOwner &owner) {
+            if (const auto *behavior = std::get_if<Gameplay::BehaviorTypeId>(&owner))
+                return static_cast<std::size_t>(std::ranges::count_if(components.behaviors, [&](const auto &binding) {
+                    return binding.enabled && binding.typeId == *behavior;
+                }));
+            if (const auto *component = std::get_if<Gameplay::ComponentTypeId>(&owner))
+                return static_cast<std::size_t>(
+                    std::ranges::count(components.gameplayComponents, *component, &Gameplay::SerializedComponent::typeId));
+            return 0;
+        }
+
+        struct AuthoredSchemaBinding final {
+            const Gameplay::GameplayReplicationOwner *owner;
+            const Network::ReplicationSchemaDescriptor *schema;
+        };
+
+        /** @brief Pins only registered and project-declared object schemas for this synchronous projection. */
+        Result<std::vector<AuthoredSchemaBinding>> AdmitAuthoredSchemas(const Gameplay::GameplayReplicationLease &installed,
+                                                                        std::span<const Network::ReplicationSchemaId> schemas) {
+            using Bindings = Result<std::vector<AuthoredSchemaBinding>>;
+            std::vector<AuthoredSchemaBinding> admitted;
+            admitted.reserve(schemas.size());
+            for (const auto &registration : installed.Registrations()) {
+                if (std::holds_alternative<Gameplay::GameplayServiceId>(registration.owner))
+                    continue;
+                if (std::ranges::find(schemas, registration.schema) == schemas.end())
+                    continue;
+                auto schema = installed.Descriptors()->Find(registration.schema);
+                if (schema.HasError())
+                    return Bindings::Failure(schema.ErrorValue());
+                // The registry was already checked by the role-specific project admission.
+                admitted.push_back({&registration.owner, schema.Value()});
+            }
+            return Bindings::Success(std::move(admitted));
+        }
+
+        /** @brief Locates the sole admitted replication owner for one committed authored entity. */
+        Result<const Network::ReplicationSchemaDescriptor *> SelectAuthoredSchema(const Runtime::RuntimeComponentSet &components,
+                                                                                  std::span<const AuthoredSchemaBinding> bindings) {
+            using Schema = Result<const Network::ReplicationSchemaDescriptor *>;
+            const Network::ReplicationSchemaDescriptor *selected{};
+            for (const auto &binding : bindings) {
+                const auto count = CountAuthoredOwners(components, *binding.owner);
+                if (count == 0)
+                    continue;
+                if (selected || count > 1)
+                    return Schema::Failure(MakeError(Network::NetworkErrors::NetworkObjectMappingConflict,
+                                                     "An authored network object must have one declared replication owner."));
+                selected = binding.schema;
+            }
+            return Schema::Success(selected);
+        }
+
+        /** @brief Copies only authored Scene entities with a unique admitted replication owner. */
+        Result<void> ProjectDiscoveredObjects(const Runtime::RuntimeSceneView &scene, std::span<const AuthoredSchemaBinding> bindings,
+                                              Network::NetworkAuthoredSceneProjection &projection) {
+            const auto slots = scene.SlotCount();
+            for (std::size_t slot = 0; slot < slots; ++slot) {
+                if (projection.cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(Network::NetworkErrors::ReplicationWorldCancelled));
+                const auto entity = scene.EntityAt(slot);
+                if (!entity || !entity->authoredObject)
+                    continue;
+                auto schema = SelectAuthoredSchema(*entity->components, bindings);
+                if (schema.HasError())
+                    return Result<void>::Failure(schema.ErrorValue());
+                if (const auto *selected = schema.Value()) {
+                    if (projection.objects.size() == Network::ReplicationWorldLimits{}.maximumObjects)
+                        return Result<void>::Failure(MakeError(Network::NetworkErrors::ReplicationWorldCapacityExceeded));
+                    projection.objects.push_back({entity->entity, {selected->id, selected->version, entity->authoredObject}});
+                }
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Resolves the admitted schema set before walking the committed Scene. */
+        Result<Network::NetworkAuthoredSceneProjection> DiscoverAuthoredObjects(const Runtime::RuntimeSceneView &scene,
+                                                                                const Gameplay::GameplayReplicationLease &installed,
+                                                                                std::span<const Network::ReplicationSchemaId> schemas,
+                                                                                const CancellationToken &cancellation) {
+            using Outcome = Result<Network::NetworkAuthoredSceneProjection>;
+            try {
+                auto admitted = AdmitAuthoredSchemas(installed, schemas);
+                if (admitted.HasError())
+                    return Outcome::Failure(admitted.ErrorValue());
+                Network::NetworkAuthoredSceneProjection projection{.cancellation = cancellation};
+                if (!admitted.Value().empty()) {
+                    if (auto copied = ProjectDiscoveredObjects(scene, admitted.Value(), projection); copied.HasError())
+                        return Outcome::Failure(copied.ErrorValue());
                 }
                 return Outcome::Success(std::move(projection));
             } catch (const std::bad_alloc &) {
@@ -149,7 +244,7 @@ namespace Horo::Application::Internal {
     /** @copydoc HeadlessNetworkDetail::WorldService::CaptureAuthoredScene */
     Result<Network::NetworkAuthoredSceneProjection> WorldService::CaptureAuthoredScene() const {
         using Outcome = Result<Network::NetworkAuthoredSceneProjection>;
-        if (!owners_->configured || owners_->configured->replicatedSceneObjects.empty())
+        if (!owners_->configured)
             return Outcome::Success({});
         const auto scene = ActiveScene();
         if (!scene || request_.service != Network::NetworkModeServiceKind::Scene ||
@@ -157,11 +252,15 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationWorldUnavailable));
         if (record_->sceneCancellation.IsCancellationRequested())
             return Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationWorldCancelled));
-        const auto *installed = record_->activeGameplay ? record_->activeGameplay->ReplicationDescriptors() : nullptr;
-        if (!owners_->replicationAdmission || !installed)
-            return Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationDescriptorIncompatible));
-        return ProjectAuthoredObjects(*scene, owners_->configured->replicatedSceneObjects,
-                                      owners_->replicationAdmission->inventory.declarations, *installed, record_->sceneCancellation);
+        const auto &explicitBindings = owners_->configured->replicatedSceneObjects;
+        const auto *installed = record_->activeGameplay ? record_->activeGameplay->Replication() : nullptr;
+        if (!installed)
+            return explicitBindings.empty() ? Outcome::Success({})
+                                            : Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationDescriptorIncompatible));
+        const auto schemas = record_->activeGameplay->AdmittedReplicationSchemas();
+        if (explicitBindings.empty())
+            return DiscoverAuthoredObjects(*scene, *installed, schemas, record_->sceneCancellation);
+        return ProjectAuthoredObjects(*scene, explicitBindings, schemas, *installed->Descriptors(), record_->sceneCancellation);
     }
 
     namespace {

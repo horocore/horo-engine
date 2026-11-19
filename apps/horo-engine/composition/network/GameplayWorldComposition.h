@@ -208,9 +208,11 @@ namespace Horo::Application::Internal {
         /** @brief Borrow the immutable Physics execution context for integrated host diagnostics. */
         [[nodiscard]] std::shared_ptr<const Gameplay::GameplayPhysicsContext> PhysicsContext() const noexcept;
 
-        /** @brief Borrows the installed immutable replication descriptors on the world owner lane.
-         * @return Snapshot pinned by the active module lease, or null when unavailable. */
-        [[nodiscard]] const Network::ReplicationDescriptorSnapshot *ReplicationDescriptors() const noexcept;
+        /** @brief Borrows the installed immutable replication generation on the world owner lane.
+         * @return Active module lease, or null when unavailable. */
+        [[nodiscard]] const Gameplay::GameplayReplicationLease *Replication() const noexcept;
+        /** @brief Returns the exact admitted schema subset. @return Borrowed IDs valid for the active module generation. */
+        [[nodiscard]] std::span<const Network::ReplicationSchemaId> AdmittedReplicationSchemas() const noexcept;
         /** @brief Reads the selected module Character scope, including typed unavailable diagnostics. @return Owned holder. */
         [[nodiscard]] std::shared_ptr<const Gameplay::GameplayCharacterContext> CharacterContext() const noexcept;
         /** @brief Borrows this active runner for an aggregate Scene group transaction.
@@ -281,6 +283,7 @@ namespace Horo::Application::Internal {
         std::optional<Gameplay::GameModuleRetirementQueue::Reservation> retirementAdmission_;
         std::unique_ptr<Gameplay::LuaBehaviorProgram> script_;
         std::optional<Gameplay::GameplayReplicationLease> replicationLease_; /**< Released after callbacks and before native retirement. */
+        std::optional<Network::ReplicationDeclarationAssessment> replicationAssessment_;
         Gameplay::BehaviorRegistry registry_;
         std::unique_ptr<Gameplay::BehaviorRuntime> behaviors_;
         std::unique_ptr<Prefab::PrefabTemplateProvider> ownedTemplates_;

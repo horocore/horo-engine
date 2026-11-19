@@ -16,10 +16,11 @@ namespace Horo::Application::Internal::TestSupport {
                                          .scriptSource = directory.Path() / "behavior.horo_script",
                                          .scriptSidecar = directory.Path() / "behavior.horo_script.meta"};
 
-        explicit ReplicatedScriptFixture(const bool failOnCreate = false) {
+        explicit ReplicatedScriptFixture(const bool failOnCreate = false, const bool allowMultiple = false) {
             {
                 std::ofstream source{selection.scriptSource};
-                source << R"(return horo.behavior { display_name="Replicated", fields={},
+                source << "return horo.behavior { display_name=\"Replicated\", allow_multiple=" << (allowMultiple ? "true" : "false")
+                       << R"(, fields={},
                     replication={major=1,minor=0,minimum_minor=0,maximum_minor=0,
                     capture_phase="gameplay",apply_phase="pre_physics",fields={
                     {id=7,value_type=1,codec=2,kind="number",introduced_major=1,introduced_minor=0,

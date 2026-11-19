@@ -55,9 +55,15 @@ On authenticated mode startup and travel, the composition asks the selected
 authority Scene service for its declared authored object and schema bindings
 after Scene, Physics, and Gameplay activation. The configured headless adapter
 resolves those stable Scene object identities against the exact committed Scene
-and checks each schema against both the admitted inventory and the installed
-module's immutable descriptor snapshot. Declarations are explicit host inputs.
-The adapter does not infer replication from component presence.
+and checks each schema against the installed module's immutable descriptor
+snapshot and the role-specific admitted schema subset. The project host uses
+the network policy captured with the selected Scene's project root. It discovers
+an authored object through an enabled behavior or serialized component whose
+typed owner registered an admitted schema. Disabled behaviors, unregistered
+components, service schemas, and dynamic Prefab members do not declare an
+authored network object. An entity with multiple matching owner occurrences
+is rejected because a mapping currently carries one schema. An embedding
+host can supply an explicit binding list through the same transaction.
 
 The authority world assigns the initial slots in stable authored object order
 and stages the complete mapping privately. The normal lifecycle safe point

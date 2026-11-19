@@ -31,6 +31,7 @@ namespace Horo::Application::Internal {
         HeadlessNavigationMode navigationMode{HeadlessNavigationMode::Disabled};
         std::optional<CommittedWorldSelection> world; /**< Explicit independent committed World selection. */
         std::string perceptionPolicyPath;             /**< Explicit project-relative source for one selected committed Scene. */
+        bool captureNetworkSettings{};                /**< Authenticated network gameplay selects the existing project settings. */
     };
 
     /** @brief Owns all borrowed assets/jobs/project captures until every world service has retired.
@@ -51,6 +52,7 @@ namespace Horo::Application::Internal {
         std::shared_ptr<DurableFileSystem> publication;
         Platform::ProjectReadContext sourceContext;
         std::optional<SceneSource::SceneSourceDocument> authoredSource; /**< Exact decoded admitted source, never a second parse. */
+        std::optional<Network::NetworkProjectSettings> networkSettings; /**< Owner-validated snapshot captured from the same root. */
         std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition;
         Assets::AssetId sceneAsset; /**< Exact selected cooked Scene identity, including the full UUID. */
         std::shared_ptr<const ProjectSceneNavigationSelection> navigation;

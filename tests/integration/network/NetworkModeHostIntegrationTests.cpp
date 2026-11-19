@@ -1,5 +1,6 @@
 #include "../../unit/runtime/physics/PhysicsSceneActivationTestSupport.h"
 #include "Horo/Assets/AssetProvider.h"
+#include "Horo/Scene/CookedSceneDefinition.h"
 #include "NetworkModeHostTestSupport.h"
 
 #include <chrono>
@@ -10,14 +11,40 @@ namespace Horo::Network {
         if constexpr (!HORO_TEST_PHYSICS_NATIVE)
             SKIP("Canonical Physics is required for actual product world activation.");
         using namespace Application::Internal;
-        Application::Internal::TestSupport::ReplicatedScriptFixture script;
+        Application::Internal::TestSupport::ReplicatedScriptFixture script{false, true};
         const auto &admission = *script.selection.replicationAdmission;
         const auto &schema = admission.inventory.declarations.front().schema;
+        const auto behavior = Gameplay::BehaviorTypeId::Parse("game.tests.replicated").Value();
+        bool duplicateOwners{};
+        bool discover{};
+        SECTION("explicit host bindings publish at the actual world safe point and travel replaces them") {}
+        SECTION("cooked enabled behavior owners supply the root and child mappings") {
+            discover = true;
+        }
+        SECTION("ambiguous cooked behavior occurrences fail startup without publishing a role") {
+            discover = true;
+            duplicateOwners = true;
+        }
         Runtime::SceneDefinitionBuilder builder{{19}, {1}};
-        builder.Add({.object = {10}});
-        builder.Add({.object = {20}, .parent = Runtime::SceneObjectId{10}});
-        builder.Add({.object = {30}});
-        auto definition = std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(builder).Build().Value());
+        const auto components = [&](const bool enabled) {
+            Runtime::RuntimeComponentSet result;
+            result.behaviors.push_back({Gameplay::BehaviorInstanceId{1}, behavior, 1, enabled, {}});
+            return result;
+        };
+        auto root = components(true);
+        if (duplicateOwners)
+            root.behaviors.push_back({Gameplay::BehaviorInstanceId{2}, behavior, 1, true, {}});
+        builder.Add({.object = {10}, .components = std::move(root)});
+        builder.Add({.object = {20}, .parent = Runtime::SceneObjectId{10}, .components = components(true)});
+        builder.Add({.object = {30}, .components = components(false)});
+        builder.Add({.object = {40}});
+        auto authored = std::move(builder).Build();
+        REQUIRE(authored.HasValue());
+        const auto cooked = SceneCook::EncodeCookedSceneDefinition(authored.Value());
+        REQUIRE(cooked.HasValue());
+        auto decoded = SceneCook::DecodeCookedSceneDefinition(cooked.Value(), authored.Value().Id(), authored.Value().Revision());
+        REQUIRE(decoded.HasValue());
+        auto definition = std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(decoded).Value());
 
         JobSystem jobs{{1, 8}};
         Assets::AssetRegistry registry;
@@ -31,12 +58,8 @@ namespace Horo::Network {
                                                .load = load,
                                                .replicatedSceneObjects = {{schema.id, schema.version, Runtime::SceneObjectId{20}},
                                                                           {schema.id, schema.version, Runtime::SceneObjectId{10}}}};
-        bool duplicate{};
-        SECTION("the authored hierarchy publishes at the actual world safe point and travel replaces it") {}
-        SECTION("duplicate object declarations fail startup without a published role") {
-            selection.replicatedSceneObjects.back() = selection.replicatedSceneObjects.front();
-            duplicate = true;
-        }
+        if (discover)
+            selection.replicatedSceneObjects.clear();
         auto projectInput = DefaultNetworkProjectSettings(Id<NetworkProjectSettingsId>(10)).Value();
         projectInput.supportedRoles = NetworkProjectRoleSet::Standalone | NetworkProjectRoleSet::DedicatedServer;
         projectInput.transport.requirement = NetworkProjectTransportRequirement::Required;
@@ -74,7 +97,7 @@ namespace Horo::Network {
         if (started.HasError())
             UNSCOPED_INFO(started.ErrorValue().message);
         CHECK(host->Role(kind, worlds.front().scene).HasError());
-        if (duplicate) {
+        if (duplicateOwners) {
             REQUIRE(started.HasError());
             CHECK(started.ErrorValue().code.Value() == NetworkErrors::NetworkObjectMappingConflict.code.Value());
             return;

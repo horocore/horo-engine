@@ -17,6 +17,7 @@
 #include "NetworkProductGnsSelection.h"
 #endif
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <chrono>
@@ -276,7 +277,10 @@ namespace Horo::Application::Internal {
             const ProductLaunch &launch, std::unique_ptr<HeadlessProjectSceneResources> &resources) {
             if (launch.sceneInput.scene.empty())
                 return ProductScene(launch.gameplay);
-            auto prepared = PrepareHeadlessProjectSceneResources(launch.sceneInput);
+            auto selection = launch.sceneInput;
+            selection.captureNetworkSettings =
+                launch.role != Net::NetworkProjectRole::Standalone && launch.purpose == Net::NetworkWorldCompositionPurpose::Gameplay;
+            auto prepared = PrepareHeadlessProjectSceneResources(selection);
             if (prepared.HasError())
                 return Result<std::shared_ptr<const Runtime::RuntimeSceneDefinition>>::Failure(prepared.ErrorValue());
             resources = std::move(prepared).Value();
@@ -416,6 +420,21 @@ namespace Horo::Application::Internal {
                     .requiredProvider = role == Net::NetworkProjectRole::Standalone ? EmptyProvider() : GnsProvider()};
         }
 
+        /** @brief Chooses an admitted project version without changing the injected handshake and schema policy. */
+        [[nodiscard]] Result<Net::ProtocolVersion> SelectProductProtocol(const Net::NetworkProjectProtocolPolicy &project,
+                                                                         const NetworkProductAdmission *admission) {
+            using Version = Result<Net::ProtocolVersion>;
+            if (!admission)
+                return Version::Success(project.supportedVersions.minimum);
+            const auto &local = admission->Policy().local.compatibility;
+            const auto selected = std::min(project.supportedVersions.maximum, local.versions.maximum);
+            if (local.protocol != project.protocol || local.schemaFingerprint != project.schemaFingerprint ||
+                !local.versions.Contains(selected) || !project.supportedVersions.Contains(selected))
+                return Version::Failure(MakeError(Net::NetworkErrors::AdmissionPolicyInvalid,
+                                                  "The project protocol does not match the admitted handshake policy."));
+            return Version::Success(selected);
+        }
+
         [[nodiscard]] Result<std::unique_ptr<NetworkProductHost>> ComposeProduct(
             std::shared_ptr<Clock> clock, const ProductLaunch &launch, const Net::NetworkProjectSettings &project,
             std::shared_ptr<const Runtime::RuntimeSceneDefinition> scene, const ProductWorlds &worlds,
@@ -433,8 +452,13 @@ namespace Horo::Application::Internal {
                                                   .expectedHostRevision = hostFacts.revision,
                                                   .expectedProjectRevision = project.Revision()};
             if (launch.role != Net::NetworkProjectRole::Standalone) {
+                const auto *admission =
+                    capabilities.resources && capabilities.resources->networkSettings ? capabilities.admission.get() : nullptr;
+                auto version = SelectProductProtocol(project.Protocol(), admission);
+                if (version.HasError())
+                    return Result<std::unique_ptr<NetworkProductHost>>::Failure(version.ErrorValue());
                 selection.provider = GnsProvider();
-                selection.protocolVersion = {1, 0};
+                selection.protocolVersion = version.Value();
             }
             const Net::NetworkModePresentation presentation{.localPlayer = launch.role == Net::NetworkProjectRole::Client ||
                                                                            launch.role == Net::NetworkProjectRole::ListenServer};
@@ -565,9 +589,11 @@ namespace Horo::Application::Internal {
             std::cerr << "horo-engine: native security requires an explicit network role\n";
             return 2;
         }
-        auto project = ProjectSettings();
         std::unique_ptr<HeadlessProjectSceneResources> resources;
         auto scene = ResolveProductScene(launch.Value(), resources);
+        auto project = resources && resources->networkSettings
+                           ? Result<Net::NetworkProjectSettings>::Success(std::move(*resources->networkSettings))
+                           : ProjectSettings();
         if (project.HasError() || scene.HasError()) {
             const auto &failure = project.HasError() ? project.ErrorValue() : scene.ErrorValue();
             std::cerr << "horo-engine: product metadata/Scene failed (" << failure.code.Value() << "): " << failure.message << '\n';

@@ -669,7 +669,7 @@ target_link_libraries(HoroNetworkModeHostIntegrationTests PRIVATE HoroNetworkMod
 target_compile_definitions(HoroNetworkModeHostIntegrationTests PRIVATE HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>)
 target_include_directories(HoroNetworkModeHostIntegrationTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/unit/runtime/networking)
 target_link_libraries(HoroNetworkModeHostIntegrationTests PRIVATE HoroNetworkProductHost HoroEngine::NetworkTransportNull
-    HoroEngine::Platform MbedTLS::mbedcrypto)
+    HoroEngine::Platform HoroEngine::SceneCook MbedTLS::mbedcrypto)
 if(HORO_BUILD_NETWORK_GNS)
     target_sources(HoroNetworkModeHostIntegrationTests PRIVATE integration/network/NetworkGnsProductProvisioningTests.cpp)
     target_link_libraries(HoroNetworkModeHostIntegrationTests PRIVATE HoroEngine::NetworkTransportGNS HoroNetworkTransportGNSFactoryInternal)
