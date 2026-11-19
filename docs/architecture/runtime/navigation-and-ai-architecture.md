@@ -3218,6 +3218,12 @@ The execution of AI simulation phases is strictly governed by the host process's
 ### Authority, Privacy, And Security Boundaries
 
 - **Clients Never Run Authoritative AI**: Connected clients NEVER run `PerceptionSensePoll`, `BlackboardSync`, `AiDecisionEvaluate`, or `NavIntentCommit` for server-owned AI agents. Clients receive replicated transform, velocity, and state tags from the server.
+- The configured headless host selects the AI owner policy from the individual
+  world in the validated network mode plan. Its listen-server client world
+  keeps authored AI bindings inactive for Scene identity and structural
+  lifetime. It receives an empty controller catalog and no execution
+  capabilities. Controller admission, Blackboard instances, and Perception
+  providers belong to the authority world.
 - **Server State Privacy**: Agent perception memories (e.g. sight awareness meters, target tracking scores) and `BlackboardState` internal representations (behavior tree execution nodes, patrol indices, threat scoring matrices) are **server-private**.
 - **No Private State Serialization**: Network replication protocols MUST NOT synchronize private perception data or blackboard state to clients. Only publicly observable gameplay attributes (positions, rotations, locomotion speeds, equip states, public audio cues) are sent over the wire. This prevents client-side wallhacks, radar exploits, and unnecessary bandwidth consumption.
 

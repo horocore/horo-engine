@@ -573,6 +573,8 @@ namespace Horo::Application::PrefabAtomicTest {
             using namespace Network;
             NativePerceptionFixture native;
             auto controller = AI::TestSupport::MakeFixture(1, 11, 1, 0);
+            const auto observerId = controller.agent.agent.agent;
+            const auto privateKey = controller.schema->Keys().front().key;
             controller.agent.controller->requiredCapabilities = AI::AiCapabilitySet::Of(AI::AiCapability::Perception);
             controller.descriptor.perceptionEndpoints = native.endpoints;
             Runtime::SceneDefinitionBuilder builder{{7}, {1}};
@@ -655,8 +657,12 @@ namespace Horo::Application::PrefabAtomicTest {
             if (world == NetworkModeWorldKind::Client) {
                 CHECK(native.probe.module[0] == 0);
                 CHECK(Internal::InspectHeadlessPerceptionMemory(*sceneService.Value(), *observer).HasError());
+                const auto denied = Internal::InspectHeadlessDecisionValue(*sceneService.Value(), observerId, privateKey);
+                REQUIRE(denied.HasError());
+                CHECK(denied.ErrorValue().code.Value() == AI::AIErrors::HandleInvalid.code.Value());
                 return;
             }
+            CHECK(Internal::InspectHeadlessDecisionValue(*sceneService.Value(), observerId, privateKey).HasValue());
             CHECK(native.probe.module[0] == 2);
             auto physics = service(NetworkModeServiceKind::Physics);
             REQUIRE(physics.HasValue());

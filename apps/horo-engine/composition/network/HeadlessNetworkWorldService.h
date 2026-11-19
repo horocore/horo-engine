@@ -363,16 +363,21 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             return Result<void>::Success();
         }
 
+        /** @brief Reserves only inert Scene identity on a client, even inside a listen-server process. */
         Result<void> PrepareConfiguredAi() const {
             const auto &input = *owners_->configured;
             auto settings = input.aiSettings;
-            if (IsAuthoritativeWorld()) {
-                settings.requirePerceptionEndpoints = true;
-                if (!OwnsPerception())
-                    settings.availableCapabilities.bits &= ~AI::AiCapabilitySet::Of(AI::AiCapability::Perception).bits;
+            if (!IsAuthoritativeWorld()) {
+                settings.availableCapabilities = {};
+                settings.missingController = AI::AiMissingControllerPolicy::PreserveInactive;
+                return InstallAiSceneOwner(settings, {});
             }
+            settings.requirePerceptionEndpoints = true;
+            if (!OwnsPerception())
+                settings.availableCapabilities.bits &= ~AI::AiCapabilitySet::Of(AI::AiCapability::Perception).bits;
+
             std::span<const AI::AiControllerDescriptor> catalog = input.aiControllers;
-            if (IsAuthoritativeWorld() && input.cookedDecisions) {
+            if (input.cookedDecisions) {
                 HeadlessQueryPlanCatalog queries;
                 auto prepared = PrepareCookedControllers(catalog, *input.cookedDecisions, queries);
                 if (prepared.HasError())
@@ -394,6 +399,13 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 record_->admittedControllers = std::move(prepared).Value();
                 catalog = record_->admittedControllers;
             }
+            return InstallAiSceneOwner(settings, catalog);
+        }
+
+        /** @brief Shares Scene lifecycle ownership without constructing any client controller or Blackboard. */
+        Result<void> InstallAiSceneOwner(const AI::AiSceneRuntimeSettings settings,
+                                         const std::span<const AI::AiControllerDescriptor> catalog) const {
+            const auto &input = *owners_->configured;
             auto ai = OwnsCookedDecisionExecution() && !record_->preparedGameplay
                           ? AI::AiSceneRuntime::Create(settings, ConfiguredDecisionExecution())
                           : AI::AiSceneRuntime::Create(settings);
