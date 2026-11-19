@@ -2,6 +2,7 @@
 #include "DecisionProblemsView.h"
 #include "DecisionTaskPalette.h"
 #include "EditorWorkspaceView.h"
+#include "Horo/AI/BlackboardUsageInspection.h"
 #include "Horo/AI/DecisionAssetValidation.h"
 #include "Horo/AI/DecisionNodeRegistration.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
@@ -24,6 +25,51 @@ namespace Horo::Editor {
                 return value >= 'A' && value <= 'Z' ? static_cast<char>(value + ('a' - 'A')) : value;
             };
             return search.empty() || !std::ranges::search(label, search, {}, fold, fold).empty();
+        }
+
+        /** @brief Distinguishes a disabled task from one awaiting authoritative compatibility checks. */
+        struct TaskAvailability final {
+            const char *diagnostic{};
+            bool blocked{};
+        };
+
+        /** @brief Displays the first exact compiler incompatibility for a declared Blackboard requirement. */
+        const char *BindingDiagnostic(const AI::DecisionBlackboardBindingIssues &issues) {
+            if (issues.missingKey)
+                return "workspace.decision_graph.task_missing_key";
+            if (issues.typeMismatch)
+                return "workspace.decision_graph.task_key_type";
+            if (issues.accessMismatch)
+                return "workspace.decision_graph.task_key_access";
+            if (issues.presenceMismatch)
+                return "workspace.decision_graph.task_key_presence";
+            if (issues.missingDefault)
+                return "workspace.decision_graph.task_key_default";
+            return nullptr;
+        }
+
+        /** @brief Uses exact provider and schema evidence without calling a provider or weakening final compiler validation. */
+        TaskAvailability InspectPaletteTask(const DecisionTaskPaletteCatalog &catalog, const DecisionTaskChoice &choice) {
+            if (!catalog.providers)
+                return {"workspace.decision_canvas.provider_catalog_unavailable"};
+            const auto descriptors = catalog.providers->Descriptors();
+            const auto descriptor = std::ranges::lower_bound(descriptors, choice.type, {}, &AI::DecisionNodeDescriptor::type);
+            if (descriptor == descriptors.end() || descriptor->type != choice.type || descriptor->origin.provider != choice.provider)
+                return {"workspace.decision_canvas.provider_missing", true};
+            if (descriptor->origin.version != choice.version)
+                return {"workspace.decision_canvas.provider_version_mismatch", true};
+            if (descriptor->requirements.empty())
+                return {};
+            if (!catalog.schema)
+                return {"workspace.decision_graph.task_schema_unverified"};
+            const auto keys = catalog.schema->Keys();
+            for (const auto &requirement : descriptor->requirements) {
+                const auto key = std::ranges::lower_bound(keys, requirement.key, {}, &AI::BlackboardKeyDescriptor::key);
+                const auto issues = AI::InspectDecisionBlackboardBinding(requirement, key == keys.end() ? nullptr : &*key);
+                if (const auto *reason = BindingDiagnostic(issues))
+                    return {reason, true};
+            }
+            return {};
         }
 
         /** @brief Resolves a persisted node identity against the authored family currently shown by the canvas. */
@@ -350,7 +396,9 @@ namespace Horo::Editor {
         }
         if (button("workspace.decision_graph.edit_tree_unwrap", children == 1))
             emit(BehaviorTreeEditOperation::UnwrapComposite);
-        const auto *task = DrawDecisionTaskPalette(viewModel.behaviorTreeTaskChoices, viewModel.availableBehaviorsRevision,
+        const auto *schema = FindSavedDecisionSchema(viewModel, *document.graph);
+        const auto *task = DrawDecisionTaskPalette({viewModel.behaviorTreeTaskChoices, viewModel.availableBehaviorsRevision,
+                                                    viewModel.decisionProviderMetadata.get(), schema ? schema->schema.get() : nullptr},
                                                    selection.palette, m_context, outCommand);
         if (!task)
             return;
@@ -364,14 +412,31 @@ namespace Horo::Editor {
             emit(BehaviorTreeEditOperation::AppendTask, selected);
     }
 
+    /** @copydoc FindSavedDecisionSchema */
+    const BlackboardSchemaDocumentSnapshot *FindSavedDecisionSchema(const EditorWorkspaceViewModel &model,
+                                                                    const AI::DecisionGraphSource &source) {
+        const BlackboardSchemaDocumentSnapshot *matched{};
+        for (const auto &document : model.blackboardDocuments) {
+            const auto &snapshot = document.snapshot;
+            if (!snapshot.source || !snapshot.schema || !snapshot.sourceDigest || snapshot.dirty || snapshot.conflict)
+                continue;
+            if (snapshot.schema->Identity() != source.blackboard || !source.blackboardVersion.Contains(snapshot.schema->Version()))
+                continue;
+            if (matched)
+                return nullptr;
+            matched = &snapshot;
+        }
+        return matched;
+    }
+
     /** @copydoc DrawDecisionTaskPalette */
-    const DecisionTaskChoice *DrawDecisionTaskPalette(std::span<const DecisionTaskChoice> choices, std::uint64_t catalogRevision,
-                                                      DecisionTaskPaletteDraft &draft, const EditorGuiContext &context,
-                                                      EditorWorkspaceViewCommandData &command) {
-        if (draft.catalogRevision != catalogRevision) {
-            draft.catalogRevision = catalogRevision;
+    const DecisionTaskChoice *DrawDecisionTaskPalette(const DecisionTaskPaletteCatalog &catalog, DecisionTaskPaletteDraft &draft,
+                                                      const EditorGuiContext &context, EditorWorkspaceViewCommandData &command) {
+        if (draft.catalogRevision != catalog.revision) {
+            draft.catalogRevision = catalog.revision;
             draft.selected = {};
         }
+        const auto choices = catalog.choices;
         if (choices.empty())
             return nullptr;
 
@@ -404,11 +469,32 @@ namespace Horo::Editor {
         const auto choice = [&](int row) -> const DecisionTaskChoice & {
             return choices[visible[static_cast<std::size_t>(row - 1)]];
         };
-        const Ui::ComboItemSource items{.label = [&](int row) {
+        const auto availability = [&](int row) {
+            return row == 0 ? TaskAvailability{} : InspectPaletteTask(catalog, choice(row));
+        };
+        auto selectedAvailability = availability(selection);
+        if (selectedAvailability.blocked)
+            selection = 0;
+        const Ui::ComboItemSource items{
+            .label =
+                [&](int row) {
             return row == 0 ? placeholder.c_str() : choice(row).label.c_str();
-        }};
-        if (Ui::ComboControl("##DecisionTaskChoice", &selection, count + 1, items, fonts))
+        },
+            .enabled =
+                [&](int row) {
+            return !availability(row).blocked;
+        },
+            .disabledTooltip = [&](int row) -> const char * {
+            const auto *diagnostic = availability(row).diagnostic;
+            return diagnostic ? text(diagnostic).c_str() : nullptr;
+        },
+        };
+        if (Ui::ComboControl("##DecisionTaskChoice", &selection, count + 1, items, fonts)) {
             draft.selected = selection == 0 ? AI::DecisionNodeTypeId{} : choice(selection).type;
+            selectedAvailability = availability(selection);
+        }
+        if (selectedAvailability.diagnostic)
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, text(selectedAvailability.diagnostic), Theme::Muted(), fonts);
         return selection == 0 ? nullptr : &choice(selection);
     }
 

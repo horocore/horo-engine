@@ -274,27 +274,20 @@ namespace Horo::AI {
 
                 std::size_t schemaIndex{};
                 const auto *key = FindKey(*schema, requirement.key, schemaIndex);
-                if (key == nullptr) {
+                const auto issues = InspectDecisionBlackboardBinding(requirement, key);
+                if (issues.missingKey) {
                     Add(AIErrors::DecisionAssetBindingMissing, {}, requirement.source, fallback, std::string{path});
                     return false;
                 }
-                bool valid = true;
-                if (key->kind != requirement.kind || key->cardinality != requirement.cardinality) {
+                if (issues.typeMismatch)
                     Add(AIErrors::DecisionAssetBindingTypeMismatch, {}, requirement.source, fallback, std::string{path});
-                    valid = false;
-                }
-                if (requirement.access == BlackboardKeyAccess::ReadWrite && key->access != BlackboardKeyAccess::ReadWrite) {
+                if (issues.accessMismatch)
                     Add(AIErrors::DecisionAssetBindingAccessMismatch, {}, requirement.source, fallback, std::string{path});
-                    valid = false;
-                }
-                if (requirement.presence == BlackboardKeyPresence::Required && key->presence != BlackboardKeyPresence::Required) {
+                if (issues.presenceMismatch)
                     Add(AIErrors::DecisionAssetBindingPresenceMismatch, {}, requirement.source, fallback, std::string{path});
-                    valid = false;
-                }
-                if (requirement.requireDefault && !key->defaultValue.has_value()) {
+                if (issues.missingDefault)
                     Add(AIErrors::DecisionAssetBindingDefaultMissing, {}, requirement.source, fallback, std::string{path});
-                    valid = false;
-                }
+                const bool valid = issues.Matches();
                 if (valid)
                     resolvedBindings.push_back({.key = key->key,
                                                 .schemaIndex = schemaIndex,
@@ -519,6 +512,18 @@ namespace Horo::AI {
             std::vector<DecisionPlanDependency> planDependencies_;
         };
     }  // namespace
+
+    /** @copydoc InspectDecisionBlackboardBinding */
+    DecisionBlackboardBindingIssues InspectDecisionBlackboardBinding(const DecisionBlackboardRequirement &requirement,
+                                                                     const BlackboardKeyDescriptor *key) noexcept {
+        if (!key || key->key != requirement.key)
+            return {.missingKey = true};
+        return {.typeMismatch = key->kind != requirement.kind || key->cardinality != requirement.cardinality,
+                .accessMismatch = requirement.access == BlackboardKeyAccess::ReadWrite && key->access != BlackboardKeyAccess::ReadWrite,
+                .presenceMismatch =
+                    requirement.presence == BlackboardKeyPresence::Required && key->presence != BlackboardKeyPresence::Required,
+                .missingDefault = requirement.requireDefault && !key->defaultValue};
+    }
 
     /** @copydoc DecisionAssetCompiler::Compile */
     Result<DecisionAssetCompilation> DecisionAssetCompiler::Compile(const DecisionAssetDescriptor &asset,

@@ -90,6 +90,19 @@ namespace Horo::Editor {
                     }));
                 return interaction;
             }
+
+            const DecisionTaskChoice *DrawPalette(const DecisionTaskPaletteCatalog &catalog, DecisionTaskPaletteDraft &draft) {
+                EditorWorkspaceViewCommandData command;
+                ImGui::NewFrame();
+                ImGui::SetNextWindowPos({0, 0});
+                ImGui::SetNextWindowSize({220, 210});
+                ImGui::Begin("Decision palette test", nullptr, ImGuiWindowFlags_NoSavedSettings);
+                const auto *choice = DrawDecisionTaskPalette(catalog, draft, context, command);
+                ImGui::End();
+                ImGui::Render();
+                REQUIRE(ImGui::GetDrawData()->TotalVtxCount > 0);
+                return choice;
+            }
         };
 
         /** @brief Captures the native tree limits using one legal root and proportional Sequence fan-out. */
@@ -163,16 +176,7 @@ namespace Horo::Editor {
         const auto draw = [&](std::span<const DecisionTaskChoice> catalog, std::uint64_t revision, std::string_view filter) {
             draft.search.fill('\0');
             std::ranges::copy(filter, draft.search.begin());
-            EditorWorkspaceViewCommandData command;
-            ImGui::NewFrame();
-            ImGui::SetNextWindowPos({0, 0});
-            ImGui::SetNextWindowSize({220, 210});
-            ImGui::Begin("Decision palette test", nullptr, ImGuiWindowFlags_NoSavedSettings);
-            const auto *choice = DrawDecisionTaskPalette(catalog, revision, draft, fixture.context, command);
-            ImGui::End();
-            ImGui::Render();
-            REQUIRE(ImGui::GetDrawData()->TotalVtxCount > 0);
-            return choice;
+            return fixture.DrawPalette({catalog, revision}, draft);
         };
 
         CHECK(draw(choices, 4, "qUeRy") == &choices[1]);
@@ -185,6 +189,51 @@ namespace Horo::Editor {
         CHECK(draw(std::span{choices}.first(1), 4, "") == nullptr);
         CHECK(draw(choices, 5, "query") == nullptr);
         CHECK_FALSE(draft.selected.IsValid());
+    }
+
+    TEST_CASE("Decision task palette explains exact saved schema incompatibilities without creating a provider",
+              "[unit][editor][decision][palette]") {
+        using namespace AI;
+        using namespace AI::DecisionGraphTestSupport;
+        CanvasFixture fixture;
+        Fixture provider;
+        auto registration = Registration(provider.probe);
+        const auto key = MakeIdentity<BlackboardKeyId>(1);
+        registration.contract.descriptor.requirements = {
+            {.key = key, .kind = BlackboardValueKind::Boolean, .access = BlackboardKeyAccess::ReadWrite, .source = Location()},
+        };
+        const auto generation = DecisionNodeGeneration::Capture({&registration, 1}, provider.admission);
+        REQUIRE(generation.HasValue());
+        const auto metadata = DecisionBlackboardProviderMetadata::Capture(*generation.Value());
+        REQUIRE(metadata.HasValue());
+        const auto &descriptor = registration.contract.descriptor;
+        const std::array choices{DecisionTaskChoice{descriptor.type, descriptor.origin.provider, descriptor.origin.version, "Task", false}};
+        DecisionTaskPaletteDraft draft{.selected = descriptor.type, .catalogRevision = 1};
+        DecisionTaskPaletteCatalog catalog{choices, 1, metadata.Value().get()};
+        CHECK(fixture.DrawPalette(catalog, draft) == &choices[0]);
+        CHECK(fixture.labels.Used("workspace.decision_graph.task_schema_unverified"));
+
+        const std::array readOnly{
+            BlackboardKeyDescriptor{.key = key, .kind = BlackboardValueKind::Boolean, .access = BlackboardKeyAccess::ReadOnly}};
+        const auto incompatible = BlackboardSchema::Capture({SchemaId(), 1, BlackboardUnknownValuePolicy::Reject, readOnly});
+        REQUIRE(incompatible.HasValue());
+        catalog.schema = &incompatible.Value();
+        CHECK(fixture.DrawPalette(catalog, draft) == nullptr);
+        CHECK(fixture.labels.Used("workspace.decision_graph.task_key_access"));
+
+        const std::array writable{
+            BlackboardKeyDescriptor{.key = key, .kind = BlackboardValueKind::Boolean, .access = BlackboardKeyAccess::ReadWrite}};
+        const auto compatible = BlackboardSchema::Capture({SchemaId(), 2, BlackboardUnknownValuePolicy::Reject, writable});
+        REQUIRE(compatible.HasValue());
+        catalog.schema = &compatible.Value();
+        CHECK(fixture.DrawPalette(catalog, draft) == &choices[0]);
+
+        auto stale = choices;
+        ++stale[0].version;
+        catalog.choices = stale;
+        CHECK(fixture.DrawPalette(catalog, draft) == nullptr);
+        CHECK(fixture.labels.Used("workspace.decision_canvas.provider_version_mismatch"));
+        CHECK(provider.probe.factories == 0);
     }
 
     TEST_CASE("Decision canvas validation resolves only exact visible nodes and clears replaced findings",

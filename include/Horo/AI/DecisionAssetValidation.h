@@ -42,6 +42,28 @@ namespace Horo::AI {
         }
     };
 
+    /** @brief Independent incompatibilities between one admitted requirement and its Blackboard key. */
+    struct DecisionBlackboardBindingIssues final {
+        bool missingKey{};
+        bool typeMismatch{};
+        bool accessMismatch{};
+        bool presenceMismatch{};
+        bool missingDefault{};
+
+        /** @brief Reports requirement compatibility. @return True only when all constraints are satisfied. */
+        [[nodiscard]] bool Matches() const noexcept {
+            return !(missingKey || typeMismatch || accessMismatch || presenceMismatch || missingDefault);
+        }
+    };
+
+    /** @brief Compares a validated requirement against one key from an admitted Blackboard schema.
+     * @param requirement Validated requirement from an admitted asset or provider declaration.
+     * @param key Candidate for the required identity, or null if the schema lacks the key.
+     * @return Missing key alone for absent or different identities, otherwise all independent mismatches.
+     */
+    [[nodiscard]] DecisionBlackboardBindingIssues InspectDecisionBlackboardBinding(const DecisionBlackboardRequirement &requirement,
+                                                                                   const BlackboardKeyDescriptor *key) noexcept;
+
     /**
      * @brief Descriptor contract supplied by native, package, or script node discovery.
      * @details A descriptor is inert metadata. Registering or validating it never starts provider code.

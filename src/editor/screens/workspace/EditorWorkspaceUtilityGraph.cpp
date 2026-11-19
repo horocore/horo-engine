@@ -112,23 +112,6 @@ namespace Horo::Editor {
             return parsed ? std::optional{std::get<double>(*parsed)} : std::nullopt;
         }
 
-        /** @brief Projects only scalar keys from one clean opened instance of the source's saved schema. */
-        const BlackboardSchemaDocumentSnapshot *FindUtilityScoreSchema(const EditorWorkspaceViewModel &model,
-                                                                       const AI::DecisionGraphSource &source) {
-            const BlackboardSchemaDocumentSnapshot *matched{};
-            for (const auto &document : model.blackboardDocuments) {
-                const auto &snapshot = document.snapshot;
-                if (!snapshot.source || snapshot.source->schema != source.blackboard ||
-                    !source.blackboardVersion.Contains(snapshot.source->version) || !snapshot.sourceDigest || snapshot.dirty ||
-                    snapshot.conflict)
-                    continue;
-                if (matched)
-                    return nullptr;
-                matched = &snapshot;
-            }
-            return matched;
-        }
-
         /** @brief Projects a saved schema's bounded scalar key choices and returns the explicit selected identity. */
         AI::BlackboardKeyId DrawUtilityScoreKey(const BlackboardSchemaDocumentSnapshot &schema, AI::BlackboardKeyId selected,
                                                 const EditorGuiContext &context) {
@@ -308,7 +291,7 @@ namespace Horo::Editor {
         if (button("workspace.decision_graph.edit_utility_delete_score", draft.row.has_value() && option.considerations.size() > 1))
             submit(DeleteConsideration);
 
-        const auto *schema = FindUtilityScoreSchema(viewModel, *document.graph);
+        const auto *schema = FindSavedDecisionSchema(viewModel, *document.graph);
         if (!schema) {
             Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("workspace.decision_graph.open_scoring_schema"), Theme::Muted(), fonts);
             return;
@@ -345,8 +328,9 @@ namespace Horo::Editor {
             submit(AddConsideration, score);
         }
 
-        const auto *task = DrawDecisionTaskPalette(viewModel.decisionTaskChoices, viewModel.availableBehaviorsRevision, draft.palette,
-                                                   m_context, outCommand);
+        const auto *task = DrawDecisionTaskPalette({viewModel.decisionTaskChoices, viewModel.availableBehaviorsRevision,
+                                                    viewModel.decisionProviderMetadata.get(), schema->schema.get()},
+                                                   draft.palette, m_context, outCommand);
         if (button("workspace.decision_graph.edit_utility_add_option",
                    task && score && priority && compensation && source.options.size() < AI::UtilitySelector::MaximumOptions)) {
             submit(AddOption, score,
