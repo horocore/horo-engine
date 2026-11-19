@@ -96,4 +96,25 @@ namespace Horo::Editor {
      */
     [[nodiscard]] Result<EditorVulkanMultiviewCook> LoadEditorVulkanMultiviewMotionCook(std::span<const std::uint8_t> payload,
                                                                                         std::span<const std::uint8_t> metadata);
+
+    /** @brief Per-fragment predecessor depth observations encoded exactly in a renderer-owned R32Float attachment. */
+    enum class EditorVulkanReprojectionCoverage : std::uint8_t {
+        Unwritten = 0,
+        ProjectionRejected = 1,
+        PreviousDepthUnavailable = 2,
+        Occluded = 3,
+        DepthMismatch = 4,
+        DepthConsistent = 5,
+    };
+
+    /** @brief Returns the per-eye coverage recipe sharing the exact current and predecessor clip transforms. */
+    [[nodiscard]] Render::ShaderManifest EditorVulkanMultiviewCoverageShaderManifest();
+    /** @brief Names the transform block and unfiltered previous single-eye depth image. */
+    [[nodiscard]] std::vector<Render::ShaderReflectionBindingName> EditorVulkanMultiviewCoverageReflectionNames();
+    /** @brief Checks the exact compiled coverage stages, sampled depth binding and scalar float color output.
+     * @param payload Same-operation SPIR-V package. @param metadata Exact reflected sidecar bytes.
+     * @return Owned coverage cook or a typed interface/packing error. Performs no device work.
+     */
+    [[nodiscard]] Result<EditorVulkanMultiviewCook> LoadEditorVulkanMultiviewCoverageCook(std::span<const std::uint8_t> payload,
+                                                                                          std::span<const std::uint8_t> metadata);
 }  // namespace Horo::Editor

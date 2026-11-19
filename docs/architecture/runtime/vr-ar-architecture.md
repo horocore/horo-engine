@@ -684,6 +684,20 @@ pass in the same graphics submission. It validates the shared publication and
 ordered view transforms before either pass records commands. Each pass owns
 distinct attachments, and the auxiliary pass uses each eye's rectangle.
 
+The Vulkan viewport shader cooker can also admit the separate
+`--multiview-coverage` program. It reprojects the same local point with the
+exact predecessor clip transform, then reads a two-by-two footprint from the
+full-resolution predecessor eye's forward D32 depth. The Vulkan image Y
+orientation is applied before the unfiltered loads. Border footprints and
+missing or cleared depth remain unknown. A nearer depth rejects the sample
+as occluded, and a farther depth rejects depth consistency. The R32Float
+attachment records distinct per-fragment observations, with zero reserved
+for an unwritten pixel. Agreement within the small device-depth comparison
+tolerance establishes depth consistency only. The owning graph still needs
+to bind the exact retained predecessor view, verify current visible coverage
+and retire completed GPU evidence for the requested frame before any
+compositor reprojection is admitted.
+
 See the [Khronos space-warp layer contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrCompositionLayerSpaceWarpInfoFB.html)
 for the distinction between runtime motion inputs and internal Renderer UV history.
 The [EXT per-view](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrFrameSynthesisConfigViewEXT.html)

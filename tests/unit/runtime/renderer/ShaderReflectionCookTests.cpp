@@ -206,3 +206,55 @@ TEST_CASE("Motion shader cooking requires signed XYZ transport and both exact pr
     CHECK(LoadEditorVulkanMultiviewMotionCook(carrier.compiled.payload, encoded.Value()).HasError() == wrongOutput);
     CHECK(LoadEditorVulkanMultiviewCook(carrier.compiled.payload, encoded.Value()).HasError());
 }
+
+TEST_CASE("XR coverage cook admits only the exact predecessor sampled depth and scalar output", "[renderer][shader-cook][xr]") {
+    auto evidence = MultiviewMotionEvidence();
+    evidence[1].entryPoint = "PSCoverage";
+    evidence[1].json = R"({"entryPoints":[{"name":"PSCoverage","mode":"frag"}],
+      "inputs":[{"name":"currentClip","type":"vec4","location":0},{"name":"previousClip","type":"vec4","location":1}],
+      "outputs":[{"name":"coverage","type":"float","location":0}],
+      "separate_images":[{"name":"PreviousEyeDepth","type":"texture2D","set":0,"binding":1}]})";
+    const auto manifest = EditorVulkanMultiviewCoverageShaderManifest();
+    const auto names = EditorVulkanMultiviewCoverageReflectionNames();
+    const auto target = EditorVulkanViewportShaderTarget();
+    {
+        auto foreignDepth = evidence;
+        ReplaceEvidence(foreignDepth[1].json, "texture2D", "texture2DArray");
+        CHECK(NormalizeVulkanReflection(manifest, target, foreignDepth, names).HasError());
+    }
+    enum class Evidence {
+        Exact,
+        DepthOptimizedOut,
+        ForeignOutput,
+        ForeignStage,
+    };
+    const auto variant = GENERATE(Evidence::Exact, Evidence::DepthOptimizedOut, Evidence::ForeignOutput, Evidence::ForeignStage);
+    if (variant == Evidence::DepthOptimizedOut)
+        ReplaceEvidence(evidence[1].json, R"([{"name":"PreviousEyeDepth","type":"texture2D","set":0,"binding":1}])", "[]");
+    if (variant == Evidence::ForeignOutput)
+        ReplaceEvidence(evidence[1].json, R"("coverage","type":"float")", R"("coverage","type":"vec4")");
+    const auto reflected = NormalizeVulkanReflection(manifest, target, evidence, names);
+    REQUIRE(reflected.HasValue());
+    const std::array stages{ShaderArtifactStage{ShaderStage::Vertex, "VSMain", {1}},
+                            ShaderArtifactStage{ShaderStage::Fragment, variant == Evidence::ForeignStage ? "PSMain" : "PSCoverage", {2}}};
+    const auto payload = PackageShaderArtifactStages(target.backend, target.payloadFormat, stages, 1024);
+    REQUIRE(payload.HasValue());
+    const CompiledShaderArtifact compiled{.backend = target.backend,
+                                          .payloadFormat = target.payloadFormat,
+                                          .artifactKey = ComputeSha256(std::as_bytes(std::span{payload.Value()})),
+                                          .payload = payload.Value()};
+    const auto cooked =
+        CookReflectedShaderArtifact(compiled, {ShaderCompilerTool::SpirvCross, "scripted-official-schema", compiled.artifactKey},
+                                    reflected.Value());
+    REQUIRE(cooked.HasValue());
+    const auto metadata = EncodeReflectedShaderArtifact(cooked.Value());
+    REQUIRE(metadata.HasValue());
+    const auto loaded = LoadEditorVulkanMultiviewCoverageCook(compiled.payload, metadata.Value());
+    if (loaded.HasError()) {
+        INFO(loaded.ErrorValue().message);
+        CHECK(variant != Evidence::Exact);
+    } else {
+        CHECK(variant == Evidence::Exact);
+    }
+    CHECK(LoadEditorVulkanMultiviewMotionCook(compiled.payload, metadata.Value()).HasError());
+}

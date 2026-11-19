@@ -26,6 +26,7 @@ namespace {
         Multiview,
         Shadow,
         MultiviewMotion,
+        MultiviewCoverage,
         TemporalLinearDepth,
         TemporalMotion
     };
@@ -52,6 +53,8 @@ namespace {
                 return Editor::EditorVulkanShadowShaderManifest();
             case MultiviewMotion:
                 return Editor::EditorVulkanMultiviewMotionShaderManifest();
+            case MultiviewCoverage:
+                return Editor::EditorVulkanMultiviewCoverageShaderManifest();
             case TemporalLinearDepth:
             case TemporalMotion:
                 return Editor::EditorVulkanTemporalInputShaderManifest(*TemporalInput(mode));
@@ -72,6 +75,8 @@ namespace {
                 return Editor::EditorVulkanShadowReflectionNames();
             case MultiviewMotion:
                 return Editor::EditorVulkanMultiviewMotionReflectionNames();
+            case MultiviewCoverage:
+                return Editor::EditorVulkanMultiviewCoverageReflectionNames();
             case TemporalLinearDepth:
             case TemporalMotion:
                 return Editor::EditorVulkanTemporalInputReflectionNames(*TemporalInput(mode));
@@ -92,6 +97,8 @@ namespace {
                 return "shadow";
             case MultiviewMotion:
                 return "multiview-motion";
+            case MultiviewCoverage:
+                return "multiview-coverage";
             case TemporalLinearDepth:
                 return "temporal-linear-depth";
             case TemporalMotion:
@@ -186,6 +193,8 @@ namespace {
                 return Admit(Editor::LoadEditorVulkanShadowCook(artifact.payload, metadata));
             case MultiviewMotion:
                 return Admit(Editor::LoadEditorVulkanMultiviewMotionCook(artifact.payload, metadata));
+            case MultiviewCoverage:
+                return Admit(Editor::LoadEditorVulkanMultiviewCoverageCook(artifact.payload, metadata));
             case TemporalLinearDepth:
             case TemporalMotion:
                 return Admit(Editor::ValidateEditorVulkanTemporalInputCook(*TemporalInput(mode), artifact.payload, metadata));
@@ -337,6 +346,8 @@ namespace {
             return Shadow;
         if (std::string_view{argv[7]} == "--multiview-motion")
             return MultiviewMotion;
+        if (std::string_view{argv[7]} == "--multiview-coverage")
+            return MultiviewCoverage;
         if (std::string_view{argv[7]} == "--temporal-linear-depth")
             return TemporalLinearDepth;
         if (std::string_view{argv[7]} == "--temporal-motion")
@@ -355,7 +366,8 @@ int main(int argc, char **argv) {
     const bool manualColorOutput = argc == 9 && std::string_view{argv[7]} == "--color-output-manual";
     if (!mode && !reconstruction && !manualColorOutput) {
         std::cerr << "Usage: HoroEditorVulkanShaderCook source.hlsl output-prefix scratch-root dxc spirv-val spirv-cross "
-                     "[--scene-linear|--multiview|--multiview-motion|--shadow|--temporal-linear-depth|--temporal-motion]\n"
+                     "[--scene-linear|--multiview|--multiview-motion|--multiview-coverage|--shadow|--temporal-linear-depth|"
+                     "--temporal-motion]\n"
                      "       HoroEditorVulkanShaderCook source.hlsl absolute-new-stage scratch-root dxc spirv-val spirv-cross "
                      "--native-reconstruction candidate-id [--scene-linear-source viewport.hlsl]\n"
                      "       HoroEditorVulkanShaderCook repository absolute-new-stage scratch-root dxc spirv-val spirv-cross "
