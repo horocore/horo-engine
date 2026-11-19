@@ -47,6 +47,25 @@ namespace Horo::Application::Internal {
             ++out.confidence[static_cast<std::size_t>(components.confidence)];
         }
 
+        /** @brief Projects finite capability states from the accepted inspection plan. */
+        void CopyInspectionCapabilities(Editor::EditorXrInspectionSnapshot &report, const XR::XRCapabilitySnapshot &capabilities,
+                                        const XR::XRFeaturePlan &plan, XR::XRCapabilityState eyeGaze) noexcept {
+            using enum XR::XRCapability;
+            constexpr std::array kinds{Projection, ViewSpace, LocalSpace, StageSpace, CanonicalInputProjection, HandTracking, EyeGaze};
+            static_assert(kinds.size() == Editor::EditorXrInspectionSnapshot::CapabilityCount);
+            for (std::size_t index = 0; index < kinds.size(); ++index) {
+                const auto kind = kinds[index];
+                const auto observed = kind == EyeGaze ? eyeGaze : capabilities.State(kind);
+                report.capabilities[index] = {kind, observed, plan.Decision(kind).state};
+            }
+        }
+
+        /** @brief Classifies a native activation failure without exposing its platform message. */
+        XR::XRCapabilityState PassthroughStartFailure(const Error &error) noexcept {
+            const auto &denied = XR::XRErrors::PermissionDenied;
+            return ErrorChainContains(error, denied.domain, denied.code) ? XR::XRCapabilityState::Denied
+                                                                         : XR::XRCapabilityState::Unavailable;
+        }
     }  // namespace
 
     /** @copydoc CopyOpenXRInspectionTracking */
@@ -144,15 +163,7 @@ namespace Horo::Application::Internal {
         report.sessionGeneration = state.session.slot.generation;
         report.capabilityRevision = state.capabilityRevision.Value();
         report.focused = state.admitsActions && !eventsPending_;
-        using enum XR::XRCapability;
-        constexpr std::array kinds{Projection, ViewSpace, LocalSpace, StageSpace, CanonicalInputProjection, HandTracking, EyeGaze};
-        static_assert(kinds.size() == Editor::EditorXrInspectionSnapshot::CapabilityCount);
-        for (std::size_t index = 0; index < kinds.size(); ++index) {
-            const auto kind = kinds[index];
-            const auto observed =
-                kind == EyeGaze ? composition_.session.EyeGazeAvailability() : scene_->projection->capabilities.State(kind);
-            report.capabilities[index] = {kind, observed, plan->Decision(kind).state};
-        }
+        CopyInspectionCapabilities(report, scene_->projection->capabilities, *plan, composition_.session.EyeGazeAvailability());
 
         if (eventsPending_)
             report.status = EventsPending;
@@ -163,7 +174,8 @@ namespace Horo::Application::Internal {
                                                              input_.play == Editor::EditorPlayState::Playing) {
             CopyOpenXRInspectionTracking(report, *tracking);
             if (const auto availability = composition_.session.ReadHandAvailability(*tracking)) {
-                const auto hand = std::ranges::find(report.capabilities, HandTracking, &Editor::EditorXrInspectionCapability::kind);
+                const auto hand =
+                    std::ranges::find(report.capabilities, XR::XRCapability::HandTracking, &Editor::EditorXrInspectionCapability::kind);
                 if (hand != report.capabilities.end())
                     hand->observed = *availability;
             }
@@ -428,20 +440,20 @@ namespace Horo::Application::Internal {
                 if (!permitted)
                     passthroughState_ = XR::XRCapabilityState::Denied;
             }
-            if (!idle)
-                return;
-            if (native_.ReadPassthrough(scope) == XR::OpenXRInternal::NativePassthroughState::Absent ||
-                native_.StopPassthrough(scope).HasValue())
+            if (idle && (native_.ReadPassthrough(scope) == XR::OpenXRInternal::NativePassthroughState::Absent ||
+                         native_.StopPassthrough(scope).HasValue()))
                 passthroughScope_.reset();
             return;
         }
-        if (!idle || !scene_ || !scene_->published || scene_->retiring || !scene_->passthroughGrant || !input_.admitted ||
+        const auto scene = scene_;
+        if (!idle || !scene || !scene->published || scene->retiring || !scene->passthroughGrant || !input_.admitted ||
             input_.play != Editor::EditorPlayState::Playing || !sessions_.Snapshot().admitsActions)
             return;
-        const auto session = scene_->session;
-        const auto grant = *scene_->passthroughGrant;
+        const auto session = scene->session;
+        const auto grant = *scene->passthroughGrant;
         const auto world = composition_.session.WorldSpace(session);
-        if (world.HasError() || !scene_ || scene_->session != session || scene_->retiring || scene_->passthroughGrant != grant) {
+        // Host admission during World lookup can revoke this exact published Scene.
+        if (world.HasError() || scene_ != scene || scene->session != session || scene->retiring || scene->passthroughGrant != grant) {
             RevokePassthrough();
             return;
         }
@@ -459,10 +471,7 @@ namespace Horo::Application::Internal {
         const auto started = native_.StartPassthrough(scope);
         if (started.HasError()) {
             RevokePassthrough();
-            passthroughState_ =
-                ErrorChainContains(started.ErrorValue(), XR::XRErrors::PermissionDenied.domain, XR::XRErrors::PermissionDenied.code)
-                    ? XR::XRCapabilityState::Denied
-                    : XR::XRCapabilityState::Unavailable;
+            passthroughState_ = PassthroughStartFailure(started.ErrorValue());
             return;
         }
         if (!HasPassthrough(scope)) {
