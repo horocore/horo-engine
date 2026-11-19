@@ -251,14 +251,15 @@ namespace Horo::Network {
     Result<void> NetworkWorldBindingController::Impl::ApplyClientInitial(Peer &peer, std::uint64_t localSimulationTick,
                                                                          const CancellationToken &cancellation) {
         auto &stream = peer.initial;
-        if (!stream.inbox || !stream.inbox->Ready())
-            return Result<void>::Success();
-        auto *world = worlds.InitialReceiver(stream.stamp.session);
-        if (!world)
+        const auto count = stream.inbox ? stream.inbox->ReadyRecordCount() : std::nullopt;
+        if (!count)
             return Result<void>::Success();
         const auto tick = std::max(nowTick, stream.receivedTick);
         if (tick >= stream.deadline)
             return RejectInitial(NetworkErrors::SessionTimedOut);
+        auto *world = worlds.InitialReceiver(stream.stamp.session, *count);
+        if (!world)
+            return Result<void>::Success();
         const auto authority = InitialAuthority(peer);
         auto target = PrepareInitialTarget(authority, *world, tick);
         if (target.HasError())

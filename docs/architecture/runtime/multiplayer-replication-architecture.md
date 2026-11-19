@@ -89,8 +89,10 @@ distinct required handshake feature and Control message, and a live
 `INetworkInitialStateHost` adapter. The configured lane shares the world,
 authored inventory, and Prefab outbox. It starts a field snapshot only after
 the matching structural inventory is sent and defers subsequent Prefab
-changes while that snapshot is in flight. The receiving owner applies the
-snapshot after its structural safe point. Only a successful apply issues a
+changes while that snapshot is in flight. The receiving owner waits for
+the complete committed object count, including Prefab reconstruction that
+can outlive receipt of its lifecycle message. At the structural safe point
+the apply transaction still verifies every exact object identity. Only a successful apply issues a
 receipt for that world session, authority epoch, and tick. Normal traffic
 is admitted after the matching receipt. A valid early packet consumes its
 lane sequence without invoking gameplay or extending the peer lifetime.

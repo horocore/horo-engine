@@ -23,12 +23,14 @@ namespace Horo::Network::Detail {
     }
 
     /** @copydoc NetworkModeWorldState::InitialReceiver */
-    ReplicationWorldLifecycle *NetworkModeWorldState::InitialReceiver(NetworkSessionGeneration session) noexcept {
+    ReplicationWorldLifecycle *NetworkModeWorldState::InitialReceiver(NetworkSessionGeneration session,
+                                                                      std::size_t minimumObjects) noexcept {
         const auto index = Index(NetworkModeWorldKind::Client);
         const auto *binding = ClientBinding();
         if (!binding || binding->worldSession != session || !current_[index]->prefabInbox.empty())
             return nullptr;
-        return &current_[index]->lifecycle;
+        auto &lifecycle = current_[index]->lifecycle;
+        return lifecycle.CommittedObjectCount() >= minimumObjects ? &lifecycle : nullptr;
     }
 
     /** @copydoc NetworkModeWorldState::ClientBinding */

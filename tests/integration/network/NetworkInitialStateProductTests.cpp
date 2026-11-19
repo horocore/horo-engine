@@ -1,5 +1,4 @@
-#include "Horo/Network/NetworkAuthoredScenePage.h"
-#include "Horo/Network/NetworkInitialStateStream.h"
+#include "NetworkInitialStateProductTestSupport.h"
 #include "NetworkModeHostTestSupport.h"
 
 namespace Horo::Network {
@@ -55,37 +54,6 @@ namespace Horo::Network {
             std::size_t accepted{};
         };
 
-        /** @brief Explicit immutable route registrations for a configured product instance. */
-        NetworkWorldBindingSetup InitialSetup(const std::shared_ptr<EmptyInitialStateOwner> &owner) {
-            auto setup = ModeBindingTests::Setup();
-            const auto protocol = setup.policy.control.protocol;
-            const auto worldFeature = setup.policy.feature;
-            const auto initialFeature = WireIdentity<ProtocolFeatureId>(2);
-            const auto route = [protocol](std::uint16_t id) {
-                return MessageIdentityDescriptor{protocol,
-                                                 WireIdentity<MessageTypeId>(id),
-                                                 WireIdentity<MessageSchemaId>(id),
-                                                 {1, 0},
-                                                 false};
-            };
-            const std::array messages{setup.policy.control, route(12), route(14), route(16), route(18)};
-            setup.policy.authoredScene = NetworkAuthoredScenePolicy{messages[2], worldFeature};
-            setup.policy.prefabLifecycle = NetworkPrefabLifecyclePolicy{messages[3], worldFeature};
-            setup.policy.initialState = NetworkInitialStatePolicy{messages[4], initialFeature, 4096};
-            setup.initialStateHost = owner;
-            const ProtocolIdentityDescriptor identity{protocol, {{1, 0}, {1, 0}}};
-            const std::array features{FeatureIdentityDescriptor{protocol, worldFeature, {1, 0}},
-                                      FeatureIdentityDescriptor{protocol, initialFeature, {1, 0}}};
-            const auto identities = ProtocolIdentityRegistry::Create({std::span{&identity, 1}, messages, features, {}}).Value();
-            const std::array capacities{NetworkWorldBindingWireBytes, std::size_t{8}, MaximumNetworkAuthoredScenePageBytes,
-                                        MaximumNetworkPrefabLifecycleBytes, MaximumNetworkInitialStateFrameBytes};
-            std::array<MessageCodecDescriptor, messages.size()> codecs;
-            for (std::size_t i{}; i < messages.size(); ++i)
-                codecs[i] = {protocol, messages[i].id, messages[i].schema, {{1, 0}, {1, 0}}, capacities[i]};
-            setup.codecs = std::make_shared<const MessageCodecRegistry>(MessageCodecRegistry::Create({codecs, {}}, identities).Value());
-            return setup;
-        }
-
         /** @brief Real scheduler, mode controller, authenticated peers and packet dispatcher with a captured native outbox. */
         struct InitialProduct final {
             std::shared_ptr<EmptyInitialStateOwner> fields{std::make_shared<EmptyInitialStateOwner>()};
@@ -97,7 +65,7 @@ namespace Horo::Network {
             std::shared_ptr<ObservedCommand> command{std::make_shared<ObservedCommand>()};
 
             InitialProduct() {
-                owners->worldSetup = InitialSetup(fields);
+                owners->worldSetup = InitialProductTestSupport::InitialSetup(fields);
                 const std::array worlds{World(NetworkModeWorldKind::AuthorityServer, 1), World(NetworkModeWorldKind::Client, 2)};
                 host = Product(clock, NetworkProjectRole::ListenServer, worlds, {.localPlayer = true}, owners).Value();
                 Wire().setup = owners->worldSetup;

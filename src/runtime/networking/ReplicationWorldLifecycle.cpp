@@ -786,6 +786,11 @@ namespace Horo::Network {
         return state_ == ReplicationWorldLifecycleState::Active && active_ ? active_->mappingRevision.load() : 0;
     }
 
+    /** @copydoc ReplicationWorldLifecycle::CommittedObjectCount */
+    std::size_t ReplicationWorldLifecycle::CommittedObjectCount() const noexcept {
+        return state_ == ReplicationWorldLifecycleState::Active && active_ ? active_->mapping.Size() : 0;
+    }
+
     /** @copydoc ReplicationWorldLifecycle::FindAuthorityObject */
     Result<NetworkObjectId> ReplicationWorldLifecycle::FindAuthorityObject(Runtime::EntityRef entity,
                                                                            NetworkSessionGeneration session) const {

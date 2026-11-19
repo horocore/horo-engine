@@ -365,6 +365,11 @@ namespace Horo::Network {
         return std::this_thread::get_id() == owner_ && !transferred_ && Complete();
     }
 
+    /** @copydoc NetworkInitialStateInbox::ReadyRecordCount */
+    std::optional<std::size_t> NetworkInitialStateInbox::ReadyRecordCount() const noexcept {
+        return Ready() ? std::optional{expectedRecords_} : std::nullopt;
+    }
+
     /** @copydoc NetworkInitialStateInbox::Take */
     Result<ReplicationInitialStateSnapshot> NetworkInitialStateInbox::Take(std::uint64_t now) {
         if (std::this_thread::get_id() != owner_ || transferred_ || !authority_.session)

@@ -121,6 +121,9 @@ namespace Horo::Network {
                                                                     const ReplicationWorldWorkRequest &request, std::uint64_t now);
         /** @brief Reports that all declared bytes have arrived. @return True only before the snapshot is transferred. */
         [[nodiscard]] bool Ready() const noexcept;
+        /** @brief Reports the required committed object count after all wire bytes have arrived.
+         * @return Exact declared record count, or no count while receipt is pending or retired. */
+        [[nodiscard]] std::optional<std::size_t> ReadyRecordCount() const noexcept;
 
     private:
         /** @brief Verifies the authenticated connection and exact reserved Control route. */

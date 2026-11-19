@@ -381,6 +381,9 @@ namespace Horo::Network {
          * @pre Caller is the world owner and serializes structural mutation.
          * @return Active revision or zero when no mapping is active. */
         [[nodiscard]] std::uint64_t ObjectMappingRevision() const noexcept;
+        /** @brief Counts the currently committed mappings on the lifecycle owner thread.
+         * @return Live associations, or zero before publication and after retirement. */
+        [[nodiscard]] std::size_t CommittedObjectCount() const noexcept;
         /** @brief Reverse-resolves an exact live authority object without snapshot allocation.
          * @param entity Existing exact Scene entity. @param session Exact current world session.
          * @return The mapped network occurrence or a typed world or mapping error. */

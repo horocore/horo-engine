@@ -97,7 +97,7 @@ namespace Horo::Network::Detail {
                                                                        ReplicationAuthorityEpoch authority,
                                                                        const InboundMessageContext &context) const;
         /** @brief Borrows the exact published receiving lifecycle after structural receipt is drained. */
-        [[nodiscard]] ReplicationWorldLifecycle *InitialReceiver(NetworkSessionGeneration session) noexcept;
+        [[nodiscard]] ReplicationWorldLifecycle *InitialReceiver(NetworkSessionGeneration session, std::size_t minimumObjects) noexcept;
         /** @brief Selects the exact published client binding for traffic admission. */
         [[nodiscard]] const NetworkWorldBindingRecord *ClientBinding() const noexcept;
         /** @brief Acquires a pinned authority mapping at NetworkFlush for the selected published world. */
