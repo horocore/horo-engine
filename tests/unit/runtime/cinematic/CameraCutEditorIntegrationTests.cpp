@@ -143,8 +143,10 @@ namespace Horo::Editor {
         const Runtime::CameraViewContext context{{1, 1}, scene.RuntimeId(), Runtime::CameraViewDomain::EditorPreview};
         const Runtime::CameraCrossFadeAdmission admission{context, 9, 2};
         auto activation = TransitionActivation(Cinematic::CameraTransitionTier::DualViewCrossFade);
-        REQUIRE(fixture.controller.StartCameraCutPreview(std::move(activation), fixture.Settings(), context.view,
-                                                         Runtime::CameraTransitionSupport::SingleViewBlend, admission).HasValue());
+        REQUIRE(fixture.controller
+                    .StartCameraCutPreview(std::move(activation), fixture.Settings(), context.view,
+                                           Runtime::CameraTransitionSupport::SingleViewBlend, admission)
+                    .HasValue());
         REQUIRE(fixture.controller.SeekCameraCutPreview(6).HasValue());
         EditorViewportSceneState presentation;
         presentation.Replace(fixture.controller.ViewportScene());
