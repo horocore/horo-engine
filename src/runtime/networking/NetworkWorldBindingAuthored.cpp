@@ -20,6 +20,13 @@ namespace Horo::Network {
         if (!inventory || AuthoredSent(peer, session))
             return Result<void>::Success();
         const std::size_t first = peer.authoredSent.session == session ? peer.authoredSent.next : 0;
+        return QueueFittedAuthoredPage(peer, *inventory, first, tick);
+    }
+
+    /** @copydoc NetworkWorldBindingController::Impl::QueueFittedAuthoredPage */
+    Result<void> NetworkWorldBindingController::Impl::QueueFittedAuthoredPage(Peer &peer,
+                                                                              const ReplicationAuthoredSceneInventory &inventory,
+                                                                              std::size_t first, std::uint64_t tick) const {
         const auto &identity = setup.policy.authoredScene->control;
         const auto codec = setup.codecs->FindCodec(identity.protocol, identity.id);
         if (!codec)
@@ -28,7 +35,7 @@ namespace Horo::Network {
         // The codec limits payload bytes. The transport also counts the enclosing Control header.
         // Try progressively smaller pages against the same encoder used by the authenticated lane.
         for (std::size_t capacity = available; capacity != 0; capacity /= 2) {
-            auto page = MakeNetworkAuthoredScenePage(*inventory, first, capacity);
+            auto page = MakeNetworkAuthoredScenePage(inventory, first, capacity);
             if (page.HasError())
                 return Result<void>::Failure(page.ErrorValue());
             auto queued = QueueAuthoredPage(peer, page.Value(), tick);
@@ -59,5 +66,13 @@ namespace Horo::Network {
         const auto next = page.firstIndex + page.objects.size();
         peer.authoredPending = Peer::AuthoredProgress{page.session, next, next == page.totalObjects};
         return Result<void>::Success();
+    }
+
+    /** @copydoc NetworkWorldBindingController::Impl::CompleteAuthoredSend */
+    void NetworkWorldBindingController::Impl::CompleteAuthoredSend(Peer &peer) noexcept {
+        peer.authoredSent = *peer.authoredPending;
+        peer.authoredPending.reset();
+        if (peer.authoredSent.complete && peer.authoredSent.session == peer.establishedWorld)
+            peer.authoredPublished = peer.establishedWorld;
     }
 }  // namespace Horo::Network

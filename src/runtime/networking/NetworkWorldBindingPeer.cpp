@@ -176,25 +176,27 @@ namespace Horo::Network {
         ++peer.sequence;
         if (peer.prefabPending)
             CompletePrefabSend(peer);
-        if (peer.authoredPending) {
-            peer.authoredSent = *peer.authoredPending;
-            peer.authoredPending.reset();
+        if (peer.authoredPending)
+            CompleteAuthoredSend(peer);
+        if (peer.pending)
+            CompleteBindingSend(peer);
+        peer.frameBytes = 0;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc NetworkWorldBindingController::Impl::CompleteBindingSend */
+    void NetworkWorldBindingController::Impl::CompleteBindingSend(Peer &peer) noexcept {
+        const auto &binding = *peer.pending;
+        if (binding.kind == NetworkWorldBindingKind::PrepareTravel) {
+            if (peer.sent != peer.pending)
+                peer.preparedDeadline = peer.deadline;
+        } else {
+            peer.establishedWorld = binding.worldSession;
             if (peer.authoredSent.complete && peer.authoredSent.session == peer.establishedWorld)
                 peer.authoredPublished = peer.establishedWorld;
         }
-        if (peer.pending) {
-            if (peer.pending->kind == NetworkWorldBindingKind::PrepareTravel && peer.sent != peer.pending)
-                peer.preparedDeadline = peer.deadline;
-            if (peer.pending->kind != NetworkWorldBindingKind::PrepareTravel) {
-                peer.establishedWorld = peer.pending->worldSession;
-                if (peer.authoredSent.complete && peer.authoredSent.session == peer.establishedWorld)
-                    peer.authoredPublished = peer.establishedWorld;
-            }
-            peer.sent = peer.pending;
-        }
+        peer.sent = binding;
         peer.pending.reset();
-        peer.frameBytes = 0;
-        return Result<void>::Success();
     }
 
     void NetworkWorldBindingController::Impl::Retire(Peer &peer, const std::uint64_t tick) noexcept {

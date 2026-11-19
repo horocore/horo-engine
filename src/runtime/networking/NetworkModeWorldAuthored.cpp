@@ -80,4 +80,15 @@ namespace Horo::Network::Detail {
             return published;
         return travelPending_ ? find(candidate_[index]) : nullptr;
     }
+
+    /** @copydoc NetworkModeWorldState::DiscardExpiredAuthored */
+    void NetworkModeWorldState::DiscardExpiredAuthored(std::uint64_t nowTick) noexcept {
+        const auto index = Index(NetworkModeWorldKind::Client);
+        if (travelPending_ || index == plan_.worldCount)
+            return;
+        auto &candidate = candidate_[index];
+        if (candidate && candidate->authoredAssembly &&
+            (nowTick >= candidate->authoredDeadline || candidate->authoredDelivery.IsCancellationRequested()))
+            candidate.reset();
+    }
 }  // namespace Horo::Network::Detail

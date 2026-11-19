@@ -391,20 +391,9 @@ namespace Horo::Network::Detail {
         if (travelPending_ && !TravelReady())
             return Result<void>::Success();
         // These lifecycles are detached: every fallible commit completes before any role can see a replacement.
-        for (std::size_t index = 0; index < plan_.worldCount; ++index) {
-            if (!candidate_[index] || !candidate_[index]->lifecycle.HasStagedCandidate())
-                continue;
-            if (candidate_[index]->authoredDelivery.IsCancellationRequested()) {
-                candidate_[index].reset();
-                return Result<void>::Failure(MakeError(NetworkErrors::ReplicationWorldCancelled));
-            }
-            const auto &record = candidate_[index]->binding;
-            if (auto committed =
-                    candidate_[index]->lifecycle.CommitAtSafePoint(travelPending_ ? travelWorlds_[index].scene : plan_.worlds[index].scene,
-                                                                   record.worldSession, phase);
-                committed.HasError())
+        for (std::size_t index = 0; index < plan_.worldCount; ++index)
+            if (auto committed = CommitCandidate(index, phase); committed.HasError())
                 return committed;
-        }
         for (std::size_t index = 0; index < plan_.worldCount; ++index) {
             if (!candidate_[index] || candidate_[index]->lifecycle.State() != ReplicationWorldLifecycleState::Active)
                 continue;
@@ -427,17 +416,25 @@ namespace Horo::Network::Detail {
         return Result<void>::Success();
     }
 
+    /** @copydoc NetworkModeWorldState::CommitCandidate */
+    Result<void> NetworkModeWorldState::CommitCandidate(std::size_t index, Runtime::RuntimePhase phase) {
+        auto &candidate = candidate_[index];
+        if (!candidate || !candidate->lifecycle.HasStagedCandidate())
+            return Result<void>::Success();
+        if (candidate->authoredDelivery.IsCancellationRequested()) {
+            candidate.reset();
+            return Result<void>::Failure(MakeError(NetworkErrors::ReplicationWorldCancelled));
+        }
+        const auto scene = travelPending_ ? travelWorlds_[index].scene : plan_.worlds[index].scene;
+        return candidate->lifecycle.CommitAtSafePoint(scene, candidate->binding.worldSession, phase);
+    }
+
     void NetworkModeWorldState::Reconcile(const std::uint64_t nowTick) noexcept {
         if (travelPending_ && (nowTick < nowTick_ || nowTick >= travelDeadline_))
             CancelTravel(nowTick < nowTick_ ? &NetworkErrors::NetworkModeStale : &NetworkErrors::SessionTimedOut);
         if (!client_)
             return;
-        if (!travelPending_) {
-            const auto index = Index(NetworkModeWorldKind::Client);
-            if (index != plan_.worldCount && candidate_[index] && candidate_[index]->authoredAssembly &&
-                nowTick >= candidate_[index]->authoredDeadline)
-                candidate_[index].reset();
-        }
+        DiscardExpiredAuthored(nowTick);
         if (nowTick >= nowTick_ && client_->State() == PeerSessionState::Active) {
             nowTick_ = nowTick;
             return;

@@ -133,6 +133,10 @@ namespace Horo::Network::Detail {
         /** @brief Transfers a complete assembly into a detached client mapping candidate. */
         [[nodiscard]] Result<void> AppendAuthored(World &world, std::size_t index, const NetworkAuthoredScenePage &page,
                                                   const CancellationToken &cancellation);
+        /** @brief Commits a complete eligible candidate without publishing its role. */
+        [[nodiscard]] Result<void> CommitCandidate(std::size_t index, Runtime::RuntimePhase phase);
+        /** @brief Releases an incomplete initial authored acquisition when its control scope retires. */
+        void DiscardExpiredAuthored(std::uint64_t nowTick) noexcept;
         [[nodiscard]] Result<std::unique_ptr<World>> Stage(Runtime::SceneRuntimeId scene, ReplicationExecutionRole role,
                                                            const NetworkWorldBindingRecord &record,
                                                            const NetworkAuthoredSceneProjection &authored = {}) const;

@@ -79,6 +79,9 @@ namespace Horo::Network {
         [[nodiscard]] bool AuthoredSent(const Peer &peer, NetworkSessionGeneration session) const noexcept;
         /** @brief Queues the next authored page for the binding already sent to this peer. */
         [[nodiscard]] Result<void> QueueAuthoredUpdate(Peer &peer, std::uint64_t nowTick) const;
+        /** @brief Fits the next page to both the codec budget and negotiated enclosing frame. */
+        [[nodiscard]] Result<void> QueueFittedAuthoredPage(Peer &peer, const ReplicationAuthoredSceneInventory &inventory,
+                                                           std::size_t first, std::uint64_t nowTick) const;
         /** @brief Writes one page into the same bounded reliable sequence as world and Prefab control. */
         [[nodiscard]] Result<void> QueueAuthoredPage(Peer &peer, const NetworkAuthoredScenePage &page, std::uint64_t nowTick) const;
         /** @brief Queues the next structural delta after the exact world binding was accepted by native send. */
@@ -89,6 +92,10 @@ namespace Horo::Network {
                                                      std::uint64_t nowTick) const;
         /** @brief Advances the known inventory only after the original frame is accepted. */
         static void CompletePrefabSend(Peer &peer) noexcept;
+        /** @brief Advances authored inventory progress only after native delivery accepts its exact frame. */
+        static void CompleteAuthoredSend(Peer &peer) noexcept;
+        /** @brief Advances the world handoff and its established authored generation. */
+        static void CompleteBindingSend(Peer &peer) noexcept;
         [[nodiscard]] Result<void> Send(Peer &peer, std::uint64_t nowTick);
         void Retire(Peer &peer, std::uint64_t nowTick) noexcept;
         void ClearPending() noexcept;

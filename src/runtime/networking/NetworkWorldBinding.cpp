@@ -18,6 +18,16 @@ namespace Horo::Network {
             return record.kind < NetworkWorldBindingKind::Count && record.worldSession.IsValid() && record.remoteEpoch.IsValid() &&
                    record.schemaFingerprint != 0 && (record.kind == NetworkWorldBindingKind::Initial) == emptyPrior;
         }
+
+        /** @brief Checks an extension Control identity and its bounded codec contract. */
+        bool ValidExtensionRoute(const NetworkWorldBindingPolicy &policy, const MessageIdentityDescriptor &identity,
+                                 ProtocolFeatureId feature, const MessageCodecRegistry &codecs, std::size_t minimum, std::size_t maximum) {
+            if (identity.protocol != policy.control.protocol || identity.id == policy.control.id || identity.optional || !feature.IsValid())
+                return false;
+            const auto codec = codecs.FindCodec(identity.protocol, identity.id);
+            return codec && codec->schema == identity.schema && codec->supportedVersions.Contains(identity.version) &&
+                   codec->maximumPayloadBytes >= minimum && codec->maximumPayloadBytes <= maximum;
+        }
     }  // namespace
 
     /** @copydoc ValidPrefabLifecycleRoute */
@@ -25,14 +35,8 @@ namespace Horo::Network {
         if (!policy.prefabLifecycle)
             return true;
         const auto &route = *policy.prefabLifecycle;
-        const auto &identity = route.control;
-        if (identity.protocol != policy.control.protocol || identity.id == policy.control.id || identity.optional ||
-            !route.feature.IsValid())
-            return false;
-        const auto codec = codecs.FindCodec(identity.protocol, identity.id);
-        return codec && codec->schema == identity.schema && codec->supportedVersions.Contains(identity.version) &&
-               codec->maximumPayloadBytes >= MinimumNetworkPrefabSpawnBytes &&
-               codec->maximumPayloadBytes <= MaximumNetworkPrefabLifecycleBytes;
+        return ValidExtensionRoute(policy, route.control, route.feature, codecs, MinimumNetworkPrefabSpawnBytes,
+                                   MaximumNetworkPrefabLifecycleBytes);
     }
 
     /** @copydoc ValidAuthoredSceneRoute */
@@ -40,16 +44,11 @@ namespace Horo::Network {
         if (!policy.authoredScene)
             return true;
         const auto &route = *policy.authoredScene;
-        const auto &identity = route.control;
-        if (identity.protocol != policy.control.protocol || identity.id == policy.control.id || identity.optional ||
-            !route.feature.IsValid())
+        if (policy.prefabLifecycle && route.control.id == policy.prefabLifecycle->control.id)
             return false;
-        if (policy.prefabLifecycle && identity.id == policy.prefabLifecycle->control.id)
-            return false;
-        const auto codec = codecs.FindCodec(identity.protocol, identity.id);
-        return codec && codec->schema == identity.schema && codec->supportedVersions.Contains(identity.version) &&
-               codec->maximumPayloadBytes >= MinimumNetworkAuthoredScenePageBytes + NetworkAuthoredSceneRowBytes &&
-               codec->maximumPayloadBytes <= MaximumNetworkAuthoredScenePageBytes;
+        return ValidExtensionRoute(policy, route.control, route.feature, codecs,
+                                   MinimumNetworkAuthoredScenePageBytes + NetworkAuthoredSceneRowBytes,
+                                   MaximumNetworkAuthoredScenePageBytes);
     }
 
     /** @copydoc ValidateNetworkWorldBindingPolicy */
