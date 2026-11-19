@@ -166,6 +166,10 @@ namespace Horo::Network {
             }
         };
 
+        friend class NetworkWorldBindingController;
+
+        /** @brief Checks the actual owner-thread queue before opening a structural apply transaction. */
+        [[nodiscard]] bool HasPendingUpdates() const noexcept;
         [[nodiscard]] Result<void> CheckOwner() const;
         [[nodiscard]] Result<ReplicationWorldReadLease> Admit(Runtime::RuntimePhase phase, std::uint64_t now,
                                                               const CancellationToken &cancellation) const;

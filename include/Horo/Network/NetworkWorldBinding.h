@@ -15,6 +15,7 @@
 
 namespace Horo::Network {
     class INetworkInitialStateHost;
+    class INetworkStateUpdateHost;
     /** @brief Explicit invocation intent; transport qualification never publishes a gameplay world. */
     enum class NetworkWorldCompositionPurpose : std::uint8_t {
         Gameplay,
@@ -60,6 +61,15 @@ namespace Horo::Network {
         std::size_t maximumWireBytes{};
     };
 
+    /** @brief Explicit negotiated lane for bounded full Update records after initial publication. */
+    struct NetworkStateUpdatePolicy final {
+        MessageIdentityDescriptor snapshot;
+        ProtocolFeatureId feature;
+        ChannelId channel;
+        std::uint32_t maximumMessagesPerTick{};
+        std::size_t maximumBytesPerTick{};
+    };
+
     /** @brief Host-selected immutable authorization and registry identities, captured before listening. */
     struct NetworkWorldBindingPolicy final {
         MessageIdentityDescriptor control;
@@ -70,6 +80,7 @@ namespace Horo::Network {
         std::optional<NetworkPrefabLifecyclePolicy> prefabLifecycle; /**< Opt-in protected lifecycle messages. */
         std::optional<NetworkAuthoredScenePolicy> authoredScene;     /**< Required baseline on configured peers. */
         std::optional<NetworkInitialStatePolicy> initialState;       /**< Require confirmed initial fields before gameplay traffic. */
+        std::optional<NetworkStateUpdatePolicy> stateUpdates;        /**< Bounded post-initial full projected records. */
     };
 
     /** @brief Deep-owned values and the same immutable codec snapshot, captured by the actual host admission composition.
@@ -84,6 +95,7 @@ namespace Horo::Network {
         std::uint32_t maximumPeers{64};
         std::uint64_t maximumPendingTicks{5000};
         std::shared_ptr<INetworkInitialStateHost> initialStateHost; /**< Host-owned live capture and apply adapters. */
+        std::shared_ptr<INetworkStateUpdateHost> stateUpdateHost;   /**< Separate owner for the optional Snapshot lane. */
     };
 
     inline constexpr std::size_t NetworkWorldBindingWireBytes = 60;

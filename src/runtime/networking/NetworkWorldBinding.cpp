@@ -3,6 +3,7 @@
 #include "Horo/Network/NetworkPrefabLifecycle.h"
 #include "NetworkAdmissionWire.h"
 #include "NetworkWorldBindingState.h"
+#include "ReplicationStateCodecInternal.h"
 
 #include <algorithm>
 
@@ -29,10 +30,10 @@ namespace Horo::Network {
                    codec->maximumPayloadBytes >= minimum && codec->maximumPayloadBytes <= maximum;
         }
 
-        /** @brief Initial fields require their own negotiated feature and message identity. */
-        bool DistinctInitialRoute(const NetworkInitialStatePolicy &initial, const MessageIdentityDescriptor &control,
-                                  ProtocolFeatureId feature) {
-            return initial.control.id != control.id && initial.feature != feature;
+        /** @brief Dedicated field routes require their own negotiated feature and message identity. */
+        bool DistinctFieldRoute(const MessageIdentityDescriptor &route, ProtocolFeatureId feature, const MessageIdentityDescriptor &other,
+                                ProtocolFeatureId otherFeature) {
+            return route.id != other.id && feature != otherFeature;
         }
     }  // namespace
 
@@ -64,9 +65,9 @@ namespace Horo::Network {
         if (!policy.authoredScene || !policy.prefabLifecycle)
             return false;
         const auto &route = *policy.initialState;
-        if (!DistinctInitialRoute(route, policy.control, policy.feature) ||
-            !DistinctInitialRoute(route, policy.authoredScene->control, policy.authoredScene->feature) ||
-            !DistinctInitialRoute(route, policy.prefabLifecycle->control, policy.prefabLifecycle->feature))
+        if (!DistinctFieldRoute(route.control, route.feature, policy.control, policy.feature) ||
+            !DistinctFieldRoute(route.control, route.feature, policy.authoredScene->control, policy.authoredScene->feature) ||
+            !DistinctFieldRoute(route.control, route.feature, policy.prefabLifecycle->control, policy.prefabLifecycle->feature))
             return false;
         if (route.maximumWireBytes == 0 || route.maximumWireBytes > MaximumNetworkInitialStateWireBytes)
             return false;
@@ -74,12 +75,32 @@ namespace Horo::Network {
                                    MaximumNetworkInitialStateFrameBytes);
     }
 
+    /** @copydoc ValidStateUpdateRoute */
+    bool ValidStateUpdateRoute(const NetworkWorldBindingPolicy &policy, const MessageCodecRegistry &codecs) {
+        if (!policy.stateUpdates)
+            return true;
+        if (!policy.initialState || !policy.authoredScene || !policy.prefabLifecycle)
+            return false;
+        const auto &update = *policy.stateUpdates;
+        if (!DistinctFieldRoute(update.snapshot, update.feature, policy.control, policy.feature) ||
+            !DistinctFieldRoute(update.snapshot, update.feature, policy.initialState->control, policy.initialState->feature) ||
+            !DistinctFieldRoute(update.snapshot, update.feature, policy.authoredScene->control, policy.authoredScene->feature) ||
+            !DistinctFieldRoute(update.snapshot, update.feature, policy.prefabLifecycle->control, policy.prefabLifecycle->feature))
+            return false;
+        constexpr auto minimum = StateCodecDetail::HeaderBytes;
+        return update.maximumMessagesPerTick > 0 && update.maximumMessagesPerTick <= InboundDispatchLimits{}.maximumQueuedPackets &&
+               update.maximumBytesPerTick >= minimum + MessageEnvelopeFixedHeaderBytes &&
+               update.maximumBytesPerTick <= MaximumNetworkInitialStateWireBytes &&
+               ValidExtensionRoute(policy, update.snapshot, update.feature, codecs, minimum, update.maximumBytesPerTick);
+    }
+
     /** @copydoc WorldBindingFeaturesSupported */
     bool WorldBindingFeaturesSupported(const NetworkWorldBindingPolicy &policy, std::span<const ProtocolFeatureId> features) {
         const auto supports = [features](ProtocolFeatureId feature) {
             return std::ranges::find(features, feature) != features.end();
         };
-        if (!supports(policy.feature) || (policy.authoredScene && !supports(policy.authoredScene->feature)))
+        if (!supports(policy.feature) || (policy.authoredScene && !supports(policy.authoredScene->feature)) ||
+            (policy.stateUpdates && !supports(policy.stateUpdates->feature)))
             return false;
         return !policy.initialState ||
                (policy.prefabLifecycle && supports(policy.prefabLifecycle->feature) && supports(policy.initialState->feature));
@@ -97,7 +118,11 @@ namespace Horo::Network {
             codec->maximumPayloadBytes != NetworkWorldBindingWireBytes)
             return Result<void>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
         if (!ValidPrefabLifecycleRoute(policy, codecs) || !ValidAuthoredSceneRoute(policy, codecs) ||
-            !ValidInitialStateRoute(policy, codecs))
+            !ValidInitialStateRoute(policy, codecs) || !ValidStateUpdateRoute(policy, codecs))
+            return Result<void>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
+        if (policy.stateUpdates &&
+            (!policy.stateUpdates->channel.IsWithin(local.transport.maximumChannels) ||
+             local.transport.delivery[static_cast<std::size_t>(DeliveryPolicy::UnreliableUnordered)] != TransportSupport::Available))
             return Result<void>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
         if (!WorldBindingFeaturesSupported(policy, local.compatibility.features.required) ||
             (policy.prefabLifecycle && std::ranges::find(local.compatibility.features.required, policy.prefabLifecycle->feature) ==

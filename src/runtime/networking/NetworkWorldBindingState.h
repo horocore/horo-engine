@@ -11,8 +11,17 @@ namespace Horo::Network {
     [[nodiscard]] bool ValidAuthoredSceneRoute(const NetworkWorldBindingPolicy &policy, const MessageCodecRegistry &codecs);
     /** @brief Verifies the selected field synchronization route and its structural prerequisites. */
     [[nodiscard]] bool ValidInitialStateRoute(const NetworkWorldBindingPolicy &policy, const MessageCodecRegistry &codecs);
+    /** @brief Checks negotiated post-initial full-state framing and explicit bounded allowance. */
+    [[nodiscard]] bool ValidStateUpdateRoute(const NetworkWorldBindingPolicy &policy, const MessageCodecRegistry &codecs);
     /** @brief Checks that the world and selected required features are present in either negotiated or required features. */
     [[nodiscard]] bool WorldBindingFeaturesSupported(const NetworkWorldBindingPolicy &policy, std::span<const ProtocolFeatureId> features);
+
+    /** @brief Recipient and object grants pinned by the exact reliable initial snapshot. */
+    struct NetworkInitialUpdateCohort final {
+        std::vector<ReplicationInitialOwnership> ownership;
+        NetworkPeerId recipient;
+        std::uint64_t descriptorGeneration{};
+    };
 
     struct NetworkWorldBindingController::Impl final {
         struct BusyScope final {
@@ -85,6 +94,10 @@ namespace Horo::Network {
             NetworkSessionGeneration prefabSession;
             std::uint64_t prefabRevision{};
             Peer::InitialTransfer initial;
+            std::shared_ptr<const NetworkInitialUpdateCohort> initialUpdateCohort;
+            std::uint32_t updateSequence{};
+            std::uint64_t lastUpdateTick{};
+            std::uint64_t lastUpdateFlush{};
             bool initialFramePending{};
             std::size_t frameBytes{};
             std::uint64_t deadline{};          // Current queued frame's bounded send deadline.
@@ -131,6 +144,14 @@ namespace Horo::Network {
         void CompleteBindingSend(Peer &peer, std::uint64_t tick) const noexcept;
         /** @brief Guards normal traffic until the exact current occurrence is confirmed. */
         [[nodiscard]] bool InitialConfirmed(const Peer &peer) const noexcept;
+        [[nodiscard]] Result<void> AcceptStateUpdate(const MessageEnvelope &message, const InboundMessageContext &context);
+        [[nodiscard]] Result<void> FlushStateUpdates(Peer &peer, std::uint64_t now);
+        void ApplyStateUpdates(std::uint64_t localSimulationTick, const CancellationToken &cancellation);
+        [[nodiscard]] Result<NetworkInitialStateTarget> PrepareStateUpdates(const ReplicationInboundAuthority &authority,
+                                                                            ReplicationWorldLifecycle &world,
+                                                                            std::span<const ReplicationInitialOwnership> ownership,
+                                                                            std::uint64_t now);
+        [[nodiscard]] Result<void> RetainUpdateCohort(Peer &peer, const ReplicationInitialStateSnapshot &snapshot);
         /** @brief Accepts a frame from the authority or an exact publication receipt from its client. */
         [[nodiscard]] Result<void> AcceptInitial(const MessageEnvelope &message, const InboundMessageContext &context);
         /** @brief Confirms only a receipt for a fully sent snapshot on its bound client peer. */

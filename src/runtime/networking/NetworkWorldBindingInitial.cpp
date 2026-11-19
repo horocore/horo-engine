@@ -169,6 +169,8 @@ namespace Horo::Network {
         auto &snapshot = *capture->Value();
         if (!MatchesCapture(snapshot, world.Value().mapping, budget))
             return RejectInitial(NetworkErrors::ReplicationDescriptorIncompatible);
+        if (auto cohort = RetainUpdateCohort(peer, snapshot); cohort.HasError())
+            return cohort;
         peer.initial.stamp.tick = snapshot.tick;
         peer.initial.snapshot.emplace(std::move(snapshot));
         return Result<void>::Success();
@@ -289,12 +291,15 @@ namespace Horo::Network {
         auto target = PrepareInitialTarget(authority, world, ownership.Value(), tick);
         if (target.HasError())
             return Result<void>::Failure(target.ErrorValue());
+        auto updates = PrepareStateUpdates(authority, world, ownership.Value(), tick);
+        if (updates.HasError())
+            return Result<void>::Failure(updates.ErrorValue());
         auto applied = stream.inbox->ApplyCompleted(*target.Value().receiver, request, tick);
         if (applied.HasError())
             return Result<void>::Failure(applied.ErrorValue());
         if (!applied.Value().initialPublished)
             return Result<void>::Success();
-        if (!worlds.PublishInitialOwnership(stream.stamp.session, std::move(ownership).Value()))
+        if (!worlds.PublishInitialOwnership(stream.stamp.session, std::move(ownership).Value(), std::move(updates).Value()))
             return RejectInitial(NetworkErrors::ReplicationWorldStale);
         stream.published = true;
         stream.inbox.reset();

@@ -1099,6 +1099,7 @@ add_library(HoroNetworkRuntime STATIC
         runtime/networking/NetworkWorldBindingPeer.cpp
         runtime/networking/NetworkWorldBindingAuthored.cpp
         runtime/networking/NetworkWorldBindingInitial.cpp
+        runtime/networking/NetworkWorldBindingStateUpdate.cpp
         runtime/networking/NetworkWorldBindingPrefab.cpp
         runtime/networking/NetworkWorldBindingTravel.cpp
         runtime/networking/NetworkWorldOccurrenceIssuer.cpp

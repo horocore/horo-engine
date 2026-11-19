@@ -16,6 +16,10 @@ namespace Horo::Network {
             return Result<void>::Failure(MakeError(NetworkErrors::ReplicationDescriptorIncompatible));
         if (!WorldBindingFeaturesSupported(setup.policy, selection->features.Values()))
             return Result<void>::Failure(MakeError(NetworkErrors::ReplicationDescriptorIncompatible));
+        if (const auto &updates = setup.policy.stateUpdates;
+            updates && (!updates->channel.IsWithin(selection->transport.channelCount) ||
+                        !selection->transport.admittedDelivery[static_cast<std::size_t>(DeliveryPolicy::UnreliableUnordered)]))
+            return Result<void>::Failure(MakeError(NetworkErrors::ReplicationDescriptorIncompatible));
         return Result<void>::Success();
     }
 
@@ -196,6 +200,8 @@ namespace Horo::Network {
             peer.establishedWorld = binding.worldSession;
             if (setup.policy.initialState) {
                 peer.initial = {};
+                peer.initialUpdateCohort.reset();
+                peer.lastUpdateTick = 0;
                 peer.initial.stamp = {binding.worldSession, binding.remoteEpoch, 0};
                 const auto remaining = std::numeric_limits<std::uint64_t>::max() - tick;
                 peer.initial.deadline = tick + std::min(setup.maximumPendingTicks, remaining);
@@ -223,6 +229,7 @@ namespace Horo::Network {
         peer.prefabPending.reset();
         peer.authoredPending.reset();
         peer.initial = {};
+        peer.initialUpdateCohort.reset();
         peer.initialFramePending = false;
         peer.knownPrefabs.clear();
         peer.frameBytes = 0;
@@ -317,6 +324,14 @@ namespace Horo::Network {
                     return sent;
                 peer.failure = sent.ErrorValue();
                 impl_->Retire(peer, nowTick);  // One failed peer never retires another world or peer.
+                continue;
+            }
+            if (!prepared && peer.frameBytes == 0) {
+                if (auto updates = impl_->FlushStateUpdates(peer, nowTick); updates.HasError()) {
+                    if (impl_->stopped)
+                        return updates;
+                    peer.failure = updates.ErrorValue();
+                }
             }
         }
         return Result<void>::Success();

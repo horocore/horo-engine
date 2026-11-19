@@ -48,7 +48,8 @@ namespace Horo::Application::Internal {
             const Network::NetworkAdmissionPolicy &policy, Network::NetworkAdmissionProviders providers,
             std::shared_ptr<const Network::MessageCodecRegistry> codecs, std::span<const NetworkProductInboundHandler> handlers = {},
             std::optional<Network::NetworkWorldBindingPolicy> worldBinding = std::nullopt,
-            std::shared_ptr<Network::INetworkInitialStateHost> initialStateHost = {});
+            std::shared_ptr<Network::INetworkInitialStateHost> initialStateHost = {},
+            std::shared_ptr<Network::INetworkStateUpdateHost> stateUpdateHost = {});
         NetworkProductAdmission(const NetworkProductAdmission &) = delete;
         NetworkProductAdmission &operator=(const NetworkProductAdmission &) = delete;
 

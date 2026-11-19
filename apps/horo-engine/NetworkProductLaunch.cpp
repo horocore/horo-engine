@@ -432,8 +432,9 @@ namespace Horo::Application::Internal {
                 return Outcome::Failure(valid.ErrorValue());
             try {
                 auto adapter = std::make_shared<HeadlessInitialStateHost>(scene.authority, binding->initialStateHost, scene.replica);
-                auto configured = NetworkProductAdmission::Capture(admission->Policy(), admission->Providers(), admission->Codecs(),
-                                                                   admission->Handlers(), binding->policy, adapter);
+                auto configured =
+                    NetworkProductAdmission::Capture(admission->Policy(), admission->Providers(), admission->Codecs(),
+                                                     admission->Handlers(), binding->policy, adapter, binding->stateUpdateHost);
                 if (configured.HasError())
                     return Outcome::Failure(std::move(configured).ErrorValue());
                 capabilities.admission = std::move(configured).Value();

@@ -37,12 +37,24 @@ namespace Horo::Network::Detail {
 
     /** @copydoc NetworkModeWorldState::PublishInitialOwnership */
     bool NetworkModeWorldState::PublishInitialOwnership(NetworkSessionGeneration session,
-                                                        std::vector<ReplicationInitialOwnership> ownership) noexcept {
+                                                        std::vector<ReplicationInitialOwnership> ownership,
+                                                        NetworkInitialStateTarget updates) noexcept {
         const auto *binding = ClientBinding();
         if (!binding || binding->worldSession != session)
             return false;
-        current_[Index(NetworkModeWorldKind::Client)]->initialOwnership.emplace(std::move(ownership));
+        auto &world = *current_[Index(NetworkModeWorldKind::Client)];
+        world.initialOwnership.emplace(std::move(ownership));
+        world.stateUpdates = std::move(updates);
         return true;
+    }
+
+    /** @copydoc NetworkModeWorldState::ClientStateUpdates */
+    const NetworkInitialStateTarget *NetworkModeWorldState::ClientStateUpdates(NetworkSessionGeneration session) const noexcept {
+        const auto *binding = ClientBinding();
+        if (!binding || binding->worldSession != session)
+            return nullptr;
+        const auto &target = current_[Index(NetworkModeWorldKind::Client)]->stateUpdates;
+        return target.receiver ? &target : nullptr;
     }
 
     /** @copydoc NetworkModeWorldState::InitialOwnership */

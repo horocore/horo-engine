@@ -5,6 +5,7 @@
 #include "Horo/Network/ReplicationInboundApply.h"
 
 namespace Horo::Network {
+    struct NetworkStateUpdatePolicy;
     inline constexpr std::size_t MaximumNetworkInitialStateFrameBytes = 1024;
     inline constexpr std::size_t NetworkInitialStateSegmentHeaderBytes = 64;
     inline constexpr std::size_t MaximumNetworkInitialStateWireBytes = 64 * 1024 * 1024;
@@ -25,7 +26,7 @@ namespace Horo::Network {
     /** @brief Decodes a receipt with an exact fixed representation. @return Its stamp or a typed framing error. */
     [[nodiscard]] Result<NetworkInitialStateStamp> DecodeNetworkInitialStateReceipt(std::span<const std::byte> payload);
 
-    /** @brief Strongly retains the local Scene transaction owner through initial field publication. */
+    /** @brief Retains the local Scene transaction owner for the exact receive route. */
     struct NetworkInitialStateTarget final {
         std::shared_ptr<IReplicationApplyOwner> owner;
         std::shared_ptr<ReplicationInboundApply> receiver;
@@ -71,6 +72,39 @@ namespace Horo::Network {
                                                                                 ReplicationWorldLifecycle &world,
                                                                                 std::span<const ReplicationInitialOwnership> ownership,
                                                                                 std::uint64_t now) = 0;
+    };
+
+    /** @brief Bounded recipient-specific full Update frames from one committed simulation observation. */
+    struct NetworkStateUpdateBatch final {
+        std::uint64_t simulationTick{};
+        std::vector<std::vector<std::byte>> records;
+    };
+
+    /** @brief Composition for the explicitly negotiated post-initial state lane. */
+    class INetworkStateUpdateHost {
+    public:
+        virtual ~INetworkStateUpdateHost() = default;
+        /** @brief Projects already-committed public state for the exact acknowledged cohort.
+         * @param world Current authority mapping.
+         * @param lifecycle Borrowed read-only world lifecycle.
+         * @param peer Exact authenticated recipient.
+         * @param ownership Exact ordered cohort from the recipient's confirmed initial snapshot.
+         * @param now Current owner clock.
+         * @param policy Exact negotiated lane and this connection's finite per-tick allowance.
+         * @return Full HRS1 Update payloads at one committed tick, pending, or typed rejection. */
+        [[nodiscard]] virtual Result<std::optional<NetworkStateUpdateBatch>> CaptureUpdates(
+            const ReplicationWorldReadLease &world, const ReplicationWorldLifecycle &lifecycle, const PeerSessionLifecycle &peer,
+            std::span<const ReplicationInitialOwnership> ownership, std::uint64_t now, const NetworkStateUpdatePolicy &policy) = 0;
+        /** @brief Prepares an incremental receiver detached from Scene and network publication.
+         * @param authority Exact accepted authority and registered Snapshot identity.
+         * @param world Borrowed lifecycle retained before this receiver is retired.
+         * @param ownership Exact initial cohort to admit with the first Scene publication.
+         * @param now Current owner clock.
+         * @return Detached route and its owner or typed rejection. */
+        [[nodiscard]] virtual Result<NetworkInitialStateTarget> PrepareUpdates(const ReplicationInboundAuthority &authority,
+                                                                               ReplicationWorldLifecycle &world,
+                                                                               std::span<const ReplicationInitialOwnership> ownership,
+                                                                               std::uint64_t now) = 0;
     };
 
     /**

@@ -4,6 +4,7 @@
 
 #include "Horo/Network/InboundMessageDispatcher.h"
 #include "Horo/Network/NetworkAuthoredScenePage.h"
+#include "Horo/Network/NetworkInitialStateStream.h"
 #include "Horo/Network/NetworkModeComposition.h"
 #include "Horo/Network/NetworkPrefabLifecycle.h"
 #include "Horo/Network/NetworkWorldBinding.h"
@@ -99,8 +100,10 @@ namespace Horo::Network::Detail {
         /** @brief Borrows the exact published receiving lifecycle after structural receipt is drained. */
         [[nodiscard]] ReplicationWorldLifecycle *InitialReceiver(NetworkSessionGeneration session, std::size_t minimumObjects) noexcept;
         /** @brief Installs the validated owner facts after the same initial field transaction succeeds. */
-        [[nodiscard]] bool PublishInitialOwnership(NetworkSessionGeneration session,
-                                                   std::vector<ReplicationInitialOwnership> ownership) noexcept;
+        [[nodiscard]] bool PublishInitialOwnership(NetworkSessionGeneration session, std::vector<ReplicationInitialOwnership> ownership,
+                                                   NetworkInitialStateTarget updates = {}) noexcept;
+        /** @brief Borrows the incremental receiver only in the exact published client world. */
+        [[nodiscard]] const NetworkInitialStateTarget *ClientStateUpdates(NetworkSessionGeneration session) const noexcept;
         /** @brief Looks up a published initial grant only while its exact Scene, session and object remain live. */
         [[nodiscard]] Result<ReplicationInitialOwnership> InitialOwnership(Runtime::SceneRuntimeId scene, NetworkSessionGeneration session,
                                                                            NetworkObjectId object) const;
@@ -128,6 +131,13 @@ namespace Horo::Network::Detail {
             World(ReplicationWorldLifecycle lifecycle, NetworkWorldBindingRecord binding)
                 : lifecycle(std::move(lifecycle)), binding(std::move(binding)) {}
 
+            void BeginShutdown() noexcept {
+                if (stateUpdates.receiver)
+                    static_cast<void>(stateUpdates.receiver->Shutdown());
+                stateUpdates = {};
+                lifecycle.BeginShutdown();
+            }
+
             ReplicationWorldLifecycle lifecycle;
             NetworkWorldBindingRecord binding;
             std::vector<PendingPrefab> prefabInbox;
@@ -138,6 +148,7 @@ namespace Horo::Network::Detail {
             CancellationToken authoredDelivery;
             std::uint64_t authoredDeadline{};
             std::optional<std::vector<ReplicationInitialOwnership>> initialOwnership;
+            NetworkInitialStateTarget stateUpdates;
         };
 
         [[nodiscard]] Result<void> CheckOwner() const;

@@ -203,6 +203,17 @@ namespace Horo::Application::Internal {
             return Network::ResolveNetworkModePlan(assessment, inputs.selection, inputs.hostGeneration, inputs.worlds, inputs.presentation);
         }
 
+        /** @brief Check that the selected per-peer Snapshot allowance fits the authored project profile. */
+        bool FitsSnapshotBudget(const NetworkProductHostInputs &inputs) {
+            if (!inputs.worldBinding || !inputs.worldBinding->policy.stateUpdates)
+                return true;
+            const auto &route = *inputs.worldBinding->policy.stateUpdates;
+            const auto &profile = inputs.project.Profile();
+            return route.maximumMessagesPerTick <= profile.maxMessagesPerConnectionPerTick.value &&
+                   route.maximumBytesPerTick <= profile.burstBytesPerConnection.value &&
+                   route.maximumBytesPerTick <= profile.maxUnreliableQueuedBytesPerConnection.value;
+        }
+
         Result<std::unique_ptr<Runtime::RuntimeLifecycleParticipant>> PrepareFixedParticipant(const NetworkProductHostInputs &inputs,
                                                                                               Runtime::RuntimeDispatchSource source) {
             using Return = Result<std::unique_ptr<Runtime::RuntimeLifecycleParticipant>>;
@@ -264,6 +275,8 @@ namespace Horo::Application::Internal {
                                                                            Network::NetworkModeFactories factories,
                                                                            Network::NetworkTargetDiagnostic *diagnostic,
                                                                            std::shared_ptr<NetworkDebuggerService> debugger) {
+        if (!FitsSnapshotBudget(inputs))
+            return Result<std::unique_ptr<NetworkProductHost>>::Failure(MakeError(Network::NetworkErrors::AdmissionPolicyInvalid));
         auto plan = PrepareProductPlan(inputs, diagnostic);
         if (plan.HasError())
             return Result<std::unique_ptr<NetworkProductHost>>::Failure(plan.ErrorValue());

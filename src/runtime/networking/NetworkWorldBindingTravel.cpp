@@ -76,6 +76,7 @@ namespace Horo::Network {
             impl_->worlds.CancelTravel();
         } else if (impl_->setup.policy.initialState) {
             impl_->ApplyInitial(localSimulationTick, cancellation);
+            impl_->ApplyStateUpdates(localSimulationTick, cancellation);
         }
         // No network send occurs here. After local publication each exact reserved
         // sequence remains owned until accepted, deadline, or typed peer failure.

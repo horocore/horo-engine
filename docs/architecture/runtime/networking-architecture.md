@@ -1194,6 +1194,27 @@ The new observer parameters on existing network factories default to null;
 existing callers keep their behavior and need no migration. Hosts opting in
 must enforce the documented owner and shutdown order.
 
+### Full updates after confirmed initial state
+
+Hosts using world binding may opt in to `NetworkStateUpdatePolicy` and supply
+an `INetworkStateUpdateHost` in the same composition. Existing world bindings
+keep their current behavior without those additions. Opted-in hosts register a
+distinct required feature and codec on the exact configured
+`UnreliableUnordered` Snapshot channel. The per-connection message and wire
+allowances must fit the project profile. The route's sequence and burst
+accounting are independent of reliable Control. Excess Snapshot packets are
+dropped for that tick without retiring the admitted session.
+
+The authority only sends full Update records after receiving the exact initial
+receipt for that session and world. Updates retain the initial recipient,
+descriptor generation and object ownership, and resolve the exact current
+object generation and schema before sending. The client prepares its
+incremental receiver before initial publication and retains it only if initial
+application succeeds. Snapshot decoding only stages state. The structural
+commit phase applies it through the selected owner, and world retirement
+revokes the receiver before mapping teardown. This route does not grant a
+baseline or send state for occurrences absent from the confirmed initial cohort.
+
 ### Per-connection acknowledgement and snapshot history
 
 `ReplicationSnapshotHistory` is an opt-in `HoroNetworkRuntime` owner composed

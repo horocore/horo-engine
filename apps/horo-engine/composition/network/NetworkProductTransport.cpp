@@ -7,6 +7,16 @@
 #include <new>
 
 namespace Horo::Application::Internal {
+    namespace {
+        /** @brief Confirms the selected post-initial route owns a distinct admitted Snapshot lane. */
+        bool ValidSnapshotChannel(const Network::NetworkAdmissionPolicy &policy, const Network::NetworkStateUpdatePolicy &updates) {
+            const auto lanes = policy.gameplayChannels;
+            const auto selected = std::ranges::find(lanes, updates.channel, &Network::MessageDeliveryChannel::channel);
+            return selected != lanes.end() && selected->traffic == Network::MessageTrafficClass::Snapshot &&
+                   selected->delivery == Network::DeliveryPolicy::UnreliableUnordered;
+        }
+    }  // namespace
+
     /** @copydoc NetworkProductAdmission::NetworkProductAdmission */
     NetworkProductAdmission::NetworkProductAdmission(ConstructionKey, const Network::NetworkAdmissionPolicy &policy,
                                                      Network::NetworkAdmissionProviders providers,
@@ -27,8 +37,8 @@ namespace Horo::Application::Internal {
     Result<std::shared_ptr<const NetworkProductAdmission>> NetworkProductAdmission::Capture(
         const Network::NetworkAdmissionPolicy &policy, Network::NetworkAdmissionProviders providers,
         std::shared_ptr<const Network::MessageCodecRegistry> codecs, const std::span<const NetworkProductInboundHandler> handlers,
-        std::optional<Network::NetworkWorldBindingPolicy> worldBinding,
-        std::shared_ptr<Network::INetworkInitialStateHost> initialStateHost) {
+        std::optional<Network::NetworkWorldBindingPolicy> worldBinding, std::shared_ptr<Network::INetworkInitialStateHost> initialStateHost,
+        std::shared_ptr<Network::INetworkStateUpdateHost> stateUpdateHost) {
         if (!codecs || policy.local.compatibility.features.supported.size() > Network::MaximumHandshakeFeatures ||
             policy.local.compatibility.features.required.size() > Network::MaximumHandshakeFeatures || policy.gameplayChannels.empty() ||
             policy.gameplayChannels.size() > 64 || handlers.size() > 128)
@@ -38,9 +48,15 @@ namespace Horo::Application::Internal {
         if (bool(initialStateHost) != (worldBinding && worldBinding->initialState.has_value()))
             return Result<std::shared_ptr<const NetworkProductAdmission>>::Failure(
                 MakeError(Network::NetworkErrors::AdmissionPolicyInvalid));
+        if (bool(stateUpdateHost) != (worldBinding && worldBinding->stateUpdates.has_value()))
+            return Result<std::shared_ptr<const NetworkProductAdmission>>::Failure(
+                MakeError(Network::NetworkErrors::AdmissionPolicyInvalid));
         if (worldBinding) {
             if (auto valid = Network::ValidateNetworkWorldBindingPolicy(*worldBinding, policy.local, *codecs); valid.HasError())
                 return Result<std::shared_ptr<const NetworkProductAdmission>>::Failure(valid.ErrorValue());
+            if (worldBinding->stateUpdates && !ValidSnapshotChannel(policy, *worldBinding->stateUpdates))
+                return Result<std::shared_ptr<const NetworkProductAdmission>>::Failure(
+                    MakeError(Network::NetworkErrors::AdmissionPolicyInvalid));
             const auto control = std::ranges::find(policy.gameplayChannels, Network::MessageTrafficClass::Control,
                                                    &Network::MessageDeliveryChannel::traffic);
             if (const auto command = std::ranges::find(policy.gameplayChannels, Network::MessageTrafficClass::Command,
@@ -57,13 +73,15 @@ namespace Horo::Application::Internal {
                 return reserves(worldBinding->control) ||
                        (worldBinding->prefabLifecycle && reserves(worldBinding->prefabLifecycle->control)) ||
                        (worldBinding->authoredScene && reserves(worldBinding->authoredScene->control)) ||
-                       (worldBinding->initialState && reserves(worldBinding->initialState->control));
+                       (worldBinding->initialState && reserves(worldBinding->initialState->control)) ||
+                       (worldBinding->stateUpdates && reserves(worldBinding->stateUpdates->snapshot));
             }))
                 return Result<std::shared_ptr<const NetworkProductAdmission>>::Failure(
                     MakeError(Network::NetworkErrors::AdmissionPolicyInvalid));
             binding = Network::NetworkWorldBindingSetup{*worldBinding, codecs, policy.local.compatibility.schemaFingerprint,
                                                         control->channel, static_cast<std::uint32_t>(policy.maximumPeers)};
             binding->initialStateHost = std::move(initialStateHost);
+            binding->stateUpdateHost = std::move(stateUpdateHost);
         }
         try {
             return Result<std::shared_ptr<const NetworkProductAdmission>>::Success(

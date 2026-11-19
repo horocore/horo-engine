@@ -30,7 +30,8 @@ namespace Horo::Application::Internal {
         const Network::NetworkAdmissionPolicy &policy, Network::NetworkAdmissionProviders providers,
         std::shared_ptr<const Network::MessageCodecRegistry> codecs, std::span<const NetworkProductInboundHandler> handlers,
         const Network::GnsNativeSecurityOptions &options, std::optional<Network::NetworkWorldBindingPolicy> worldBinding = std::nullopt,
-        std::shared_ptr<Network::INetworkInitialStateHost> initialStateHost = {});
+        std::shared_ptr<Network::INetworkInitialStateHost> initialStateHost = {},
+        std::shared_ptr<Network::INetworkStateUpdateHost> stateUpdateHost = {});
 
     /** @brief Creates the normal secure product transport service from one complete host admission.
      * @param role Product network role. @param bind Local listener address. @param connect Remote client address.

@@ -137,7 +137,7 @@ namespace Horo::Network::Detail {
             travelFailure_ = reason ? reason : &NetworkErrors::SessionCancelled;
         for (auto &candidate : candidate_) {
             if (candidate)
-                candidate->lifecycle.BeginShutdown();
+                candidate->BeginShutdown();
             candidate.reset();
         }
         travelPending_ = false;
@@ -172,7 +172,7 @@ namespace Horo::Network::Detail {
         if (client_ && client_ != peer) {
             const auto index = Index(NetworkModeWorldKind::Client);
             if (current_[index])
-                current_[index]->lifecycle.BeginShutdown();
+                current_[index]->BeginShutdown();
             current_[index].reset();
             candidate_[index].reset();
             CancelTravel();
@@ -193,7 +193,7 @@ namespace Horo::Network::Detail {
             return Result<void>::Success();  // The same terminal was reconciled before the host projection.
         const auto index = Index(NetworkModeWorldKind::Client);
         if (current_[index])
-            current_[index]->lifecycle.BeginShutdown();
+            current_[index]->BeginShutdown();
         current_[index].reset();
         candidate_[index].reset();
         const auto *terminal = client_->Terminal();
@@ -398,7 +398,7 @@ namespace Horo::Network::Detail {
             if (!candidate_[index] || candidate_[index]->lifecycle.State() != ReplicationWorldLifecycleState::Active)
                 continue;
             if (current_[index])
-                current_[index]->lifecycle.BeginShutdown();
+                current_[index]->BeginShutdown();
             current_[index] = std::move(candidate_[index]);
         }
         bool complete = true;
@@ -441,7 +441,7 @@ namespace Horo::Network::Detail {
         }
         if (const auto index = Index(NetworkModeWorldKind::Client); index != plan_.worldCount) {
             if (current_[index])
-                current_[index]->lifecycle.BeginShutdown();
+                current_[index]->BeginShutdown();
             current_[index].reset();
             candidate_[index].reset();
         }
@@ -578,10 +578,10 @@ namespace Horo::Network::Detail {
         stopped_ = true;
         for (const auto &world : current_)
             if (world)
-                world->lifecycle.BeginShutdown();
+                world->BeginShutdown();
         for (const auto &world : candidate_)
             if (world)
-                world->lifecycle.BeginShutdown();
+                world->BeginShutdown();
         client_.reset();
     }
 }  // namespace Horo::Network::Detail

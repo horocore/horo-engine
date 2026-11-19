@@ -116,6 +116,13 @@ namespace Horo::Network {
         }
     }
 
+    /** @copydoc ReplicationInboundApply::HasPendingUpdates */
+    bool ReplicationInboundApply::HasPendingUpdates() const noexcept {
+        return std::ranges::any_of(objects_, [](const Object &object) {
+            return object.pending.has_value();
+        });
+    }
+
     /** @copydoc ReplicationInboundApply::CheckOwner */
     Result<void> ReplicationInboundApply::CheckOwner() const {
         if (thread_ != std::this_thread::get_id())
