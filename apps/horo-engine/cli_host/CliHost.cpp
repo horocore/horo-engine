@@ -149,12 +149,14 @@ namespace Horo::Application::Internal {
             if (composed.HasError())
                 return Result<void>::Failure(composed.ErrorValue());
             session.modules = std::move(composed).Value();
-            session.observability = HostObservabilitySession::Start({.logging = {.logDirectory = "~/.horo/logs",
-                                                                                 .baseName = "horo-engine",
-                                                                                 .hostName = "horo-engine",
-                                                                                 .hostVersion = identity.engineVersion},
-                                                                     .identity = std::move(identity),
-                                                                     .summaries = {&Runtime::SummarizeSaveTelemetry}});
+            session.observability =
+                HostObservabilitySession::Start({.logging = {.logDirectory = "~/.horo/logs",
+                                                             .baseName = "horo-engine",
+                                                             .hostName = "horo-engine",
+                                                             .hostVersion = identity.engineVersion},
+                                                 .identity = std::move(identity),
+                                                 .summaries = {&Runtime::SummarizeSaveTelemetry},
+                                                 .summaryOnlyNamespaces = {std::string{Runtime::SaveTelemetryDiagnosticNamespace}}});
             if (!session.observability)
                 return Result<void>::Failure(MakeError(CliErrors::HostFailure));
             auto saveTelemetry = Runtime::SaveTelemetryRegistration::Create();

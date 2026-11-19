@@ -121,23 +121,52 @@ namespace Horo::Diagnostics {
             return output;
         }
 
-        void RedactJson(Json &value, const std::string_view key = {}) {
+        /** @brief Reports whether the record belongs to a host-owned summary rather than the raw export. */
+        [[nodiscard]] bool SummaryOnlyRecord(const Json &value, const std::span<const std::string> namespaces) {
+            if (namespaces.empty() || !value.is_object())
+                return false;
+            for (const auto key : {"category", "subsystem"}) {
+                const auto field = value.find(key);
+                if (field == value.end() || !field->is_string())
+                    continue;
+                const std::string_view name = field->get_ref<const std::string &>();
+                if (std::ranges::any_of(namespaces, [name](const std::string_view root) {
+                    return name == root || (name.starts_with(root) && name[root.size()] == '.');
+                }))
+                    return true;
+            }
+            return false;
+        }
+
+        /** @brief Validates a bounded source namespace without permitting wildcard export rules. */
+        [[nodiscard]] bool ValidSummaryNamespace(const std::string_view name) {
+            if (name.empty() || name.size() > 64 || name.front() == '.' || name.back() == '.' || name.find("..") != std::string_view::npos)
+                return false;
+            return std::ranges::all_of(name, [](const char character) {
+                return (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || character == '.' ||
+                       character == '-' || character == '_';
+            });
+        }
+
+        void RedactJson(Json &value, const std::span<const std::string> namespaces, const std::string_view key = {}) {
             if (!key.empty() && IsSensitiveMetadataKey(std::string{key})) {
                 value = "[REDACTED]";
                 return;
             }
-            if (value.is_object()) {
+            if (SummaryOnlyRecord(value, namespaces)) {
+                value = nullptr;
+            } else if (value.is_object()) {
                 for (auto &[childKey, child] : value.items())
-                    RedactJson(child, childKey);
+                    RedactJson(child, namespaces, childKey);
             } else if (value.is_array()) {
                 for (Json &child : value)
-                    RedactJson(child);
+                    RedactJson(child, namespaces);
             } else if (value.is_string()) {
                 value = RedactAbsolutePaths(value.get_ref<const std::string &>());
             }
         }
 
-        [[nodiscard]] std::optional<std::string> RedactJsonlLines(const std::string &text) {
+        [[nodiscard]] std::optional<std::string> RedactJsonlLines(const std::string &text, const std::span<const std::string> namespaces) {
             std::istringstream lines{text};
             std::string line;
             std::string sanitized;
@@ -150,7 +179,9 @@ namespace Horo::Diagnostics {
                         break;
                     return std::nullopt;
                 }
-                RedactJson(record);
+                if (SummaryOnlyRecord(record, namespaces))
+                    continue;
+                RedactJson(record, namespaces);
                 sanitized += record.dump();
                 sanitized += '\n';
             }
@@ -158,12 +189,13 @@ namespace Horo::Diagnostics {
         }
 
         [[nodiscard]] std::optional<std::vector<std::byte>> RedactDiagnosticText(const std::filesystem::path &archivePath,
-                                                                                 const std::vector<std::byte> &bytes) {
+                                                                                 const std::vector<std::byte> &bytes,
+                                                                                 const std::span<const std::string> namespaces) {
             const std::string text(reinterpret_cast<const char *>(bytes.data()), bytes.size());  // NOSONAR(cpp:S6022)
             std::string sanitized;
 
             if (archivePath.generic_string().find(".jsonl") != std::string::npos) {
-                auto result = RedactJsonlLines(text);
+                auto result = RedactJsonlLines(text, namespaces);
                 if (!result)
                     return std::nullopt;
                 sanitized = std::move(*result);
@@ -173,7 +205,7 @@ namespace Horo::Diagnostics {
                 Json document = Json::parse(text, nullptr, false, true);
                 if (document.is_discarded())
                     return std::nullopt;
-                RedactJson(document);
+                RedactJson(document, namespaces);
                 sanitized = document.dump();
                 sanitized += '\n';
             } else {
@@ -350,7 +382,7 @@ namespace Horo::Diagnostics {
                     return Result<PreparedBundleData>::Failure(
                         MakeBundleError(ObservabilityErrors::BundleReadFailed, "Unable to read an allowlisted diagnostic file."));
                 if (entry.redactSensitiveText) {
-                    auto redacted = RedactDiagnosticText(entry.archivePath, bytes);
+                    auto redacted = RedactDiagnosticText(entry.archivePath, bytes, request.summaryOnlyNamespaces);
                     if (!redacted.has_value())
                         return Result<PreparedBundleData>::Failure(
                             MakeBundleError(ObservabilityErrors::BundleReadFailed,
@@ -462,6 +494,10 @@ namespace Horo::Diagnostics {
                 MakeBundleError(ObservabilityErrors::InvalidBundleRequest,
                                 "Diagnostic bundle output must be absolute and the byte limit must be non-zero."));
 
+        if (request.summaryOnlyNamespaces.size() > 8 || !std::ranges::all_of(request.summaryOnlyNamespaces, ValidSummaryNamespace))
+            return Result<DiagnosticBundleSummary>::Failure(
+                MakeBundleError(ObservabilityErrors::InvalidBundleRequest,
+                                "Diagnostic summary namespaces must be bounded canonical names."));
         if (const auto destination = ValidateDiagnosticBundleDestination(request.outputPath); destination.HasError())
             return Result<DiagnosticBundleSummary>::Failure(destination.ErrorValue());
 

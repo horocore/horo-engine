@@ -63,7 +63,8 @@ namespace {
                              .metricCollectionLevel =
                                  includeSave ? Telemetry::MetricCollectionLevel::Core : Telemetry::MetricCollectionLevel::Off,
                              .echoToStderr = false},
-                 .summaries = {&SummarizeSaveTelemetry}});
+                 .summaries = {&SummarizeSaveTelemetry},
+                 .summaryOnlyNamespaces = {std::string{SaveTelemetryDiagnosticNamespace}}});
         }
 
         ~Session() {
@@ -284,6 +285,71 @@ TEST_CASE("Save telemetry production storage jobs isolate private ambient contex
     CHECK(emergency.ReadOutput().find("private-provider-") == std::string::npos);
     for (const auto secret : {"private-display", "private-account", "/private/save/path", "private-payload", "private-secret"})
         REQUIRE(archive.find(secret) == std::string::npos);
+}
+
+TEST_CASE("Support bundles keep only summarized Save records across logs, history and crash breadcrumbs",
+          "[save][telemetry][privacy][bundle]") {
+    Session session;
+    REQUIRE(session.host);
+    REQUIRE(session.Register());
+    const auto publish = [](std::string_view category, std::string_view message) {
+        // Queue contention is allowed to drop a single log. Seed this fixture only after admission succeeds.
+        for (std::size_t attempt = 0; attempt < 1000; ++attempt) {
+            if (Telemetry::Runtime::EmitRecord({.subsystem = std::string{category},
+                                                .payload = Telemetry::LogRecord{.severity = Log::Level::Error,
+                                                                                .category = std::string{category},
+                                                                                .message = std::string{message}}}))
+                return true;
+            std::this_thread::yield();
+        }
+        return false;
+    };
+    REQUIRE(publish("runtime.save.legacy", "private-current-row-payload"));
+    REQUIRE(publish("runtime.saver.control", "control-unrelated-log"));
+    REQUIRE(Log::Logger::Flush());
+    REQUIRE(Read(session.directory / "save.jsonl").find("private-current-row-payload") != std::string::npos);
+
+    const auto write = [](const std::filesystem::path &path, const std::string_view contents) {
+        CAPTURE(path);
+        std::ofstream output{path, std::ios::binary};
+        REQUIRE(output.is_open());
+        output << contents;
+        output.close();
+        REQUIRE(output.good());
+    };
+    const auto rolledLog = session.directory / "save.jsonl.1";
+    write(rolledLog, R"({"category":"runtime.save.stage","message":"private-rolled-row-display",)"
+                     R"("fields":{"stage":"capture","outcome":"succeeded","duration_ns":9,"bytes":8,"retries":0,)"
+                     R"("dropped_work":0,"queue_depth":1,"note":"private-unknown-field","slot":"private-slot"}})"
+                     "\n"
+                     R"({"category":"runtime.scene","message":"control-unrelated-rolled-log"})"
+                     "\n");
+    write(session.directory / "operations/save.jsonl.1",
+          R"({"subsystem":"runtime.save","name":"private-history-name","fields":{"note":"private-history-field"}})"
+          "\n"
+          R"({"subsystem":"runtime.scene","name":"control-unrelated-history"})"
+          "\n");
+    const auto crash = session.directory / "crash.json";
+    write(crash, R"({"breadcrumbs":[{"category":"runtime.save.restore","message":"private-crash-breadcrumb"},)"
+                 R"({"category":"editor.scene","message":"control-unrelated-crash"}]})");
+    const auto bundled = session.host->GenerateDiagnosticBundle(
+        {.outputPath = session.directory / "bundle.zip",
+         .crashMetadata = Application::HostDiagnosticFile{.sourcePath = crash, .archivePath = "crash/report.json"}});
+    REQUIRE(bundled.HasValue());
+    const auto archive = Read(bundled.Value().outputPath);
+    // Diagnostic bundles use ZIP32 stored entries, so the payload sentinels remain literal archive bytes.
+    for (const auto control :
+         {"logs/save.1.jsonl", "history/save.1.operations.jsonl", "control-unrelated-log", "control-unrelated-rolled-log",
+          "control-unrelated-history", "control-unrelated-crash", "data_categories", "save.summary", R"("observations\":1)"}) {
+        CAPTURE(control);
+        CHECK(archive.find(control) != std::string::npos);
+    }
+    for (const auto secret : {"private-current-row-payload", "private-rolled-row-display", "private-unknown-field", "private-slot",
+                              "private-history-name", "private-history-field", "private-crash-breadcrumb"}) {
+        CAPTURE(secret);
+        CHECK(archive.find(secret) == std::string::npos);
+    }
+    CHECK(Read(rolledLog).find("private-rolled-row-display") != std::string::npos);
 }
 
 TEST_CASE("Save telemetry preserves production failure results and discards private error text", "[save][telemetry][failure]") {

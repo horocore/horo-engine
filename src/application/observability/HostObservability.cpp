@@ -164,6 +164,7 @@ namespace Horo::Application {
         bundle.outputPath = request.outputPath;
         bundle.maxInputBytes = request.maxInputBytes;
         bundle.metadata = request.metadata;
+        bundle.summaryOnlyNamespaces = configuration_.summaryOnlyNamespaces;
         AppendHostIdentity(bundle.metadata, configuration_);
 
         const std::filesystem::path &directory = configuration_.logging.logDirectory;
@@ -178,11 +179,12 @@ namespace Horo::Application {
                                   .redactSensitiveText = true});
         for (std::size_t index = 1; index <= configuration_.logging.maxRolledFiles; ++index) {
             const std::string suffix = std::format(".{}", index);
-            bundle.entries.push_back({.sourcePath = directory / std::format("{}{}.jsonl", baseName, suffix),
+            const auto rolledSource = std::format("{}.jsonl{}", baseName, suffix);
+            bundle.entries.push_back({.sourcePath = directory / rolledSource,
                                       .archivePath = std::format("logs/{}{}.jsonl", baseName, suffix),
                                       .optional = true,
                                       .redactSensitiveText = true});
-            bundle.entries.push_back({.sourcePath = directory / "operations" / std::format("{}{}.jsonl", baseName, suffix),
+            bundle.entries.push_back({.sourcePath = directory / "operations" / rolledSource,
                                       .archivePath = std::format("history/{}{}.operations.jsonl", baseName, suffix),
                                       .optional = true,
                                       .redactSensitiveText = true});

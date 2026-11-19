@@ -12,9 +12,13 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <utility>
 
 namespace Horo::Runtime {
+    /** @brief Diagnostic root exported as bounded Save summary data by normal host compositions. */
+    inline constexpr std::string_view SaveTelemetryDiagnosticNamespace{"runtime.save"};
+
     /** @brief Closed production Save stage taxonomy; identities never become metric dimensions. */
     enum class SaveTelemetryStage : std::uint8_t {
         Capture,
