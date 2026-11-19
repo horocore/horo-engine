@@ -112,6 +112,36 @@ namespace Horo::Application::Internal {
             return Result<ProjectionTargets>::Success({color, stereo, exactImages});
         }
 
+        /** @brief Warms the optional Vulkan motion path while reporting native availability independently of producer admission. */
+        Result<XRCapabilityState> PrepareOptionalReprojection(const OpenXRNativeSession &native, XRLoaderPreflightAttempt attempt,
+                                                              std::span<const XRFeatureRequest> features,
+                                                              const Render::RenderFrontend &frontend,
+                                                              Editor::EditorViewportRendererVulkan &viewport,
+                                                              const NativeSessionCensus &session, Render::FramebufferExtent colorExtent) {
+            using Evidence = Result<XRCapabilityState>;
+            const bool requested = std::ranges::any_of(features, [](const XRFeatureRequest &feature) {
+                return feature.capability == XRCapability::SpaceWarp && feature.kind == XRFeatureRequirementKind::Optional;
+            });
+            if (!requested)
+                return Evidence::Success(XRCapabilityState::Unsupported);
+            const auto result = native.DiscoverReprojection(attempt);
+            if (result.HasError())
+                return Evidence::Failure(result.ErrorValue());
+            const auto &offer = result.Value();
+            if (offer.route != NativeReprojectionRoute::None && offer.availabilityWithoutProducer == XRCapabilityState::DependencyMissing) {
+                const auto &left = offer.extents.front();
+                const auto &right = offer.extents.back();
+                const auto extent = left.IsValid() && right.IsValid()
+                                        ? Render::FramebufferExtent{std::max(left.width, right.width), std::max(left.height, right.height)}
+                                        : colorExtent;
+                const auto formats = SelectOpenXRVulkanReprojectionFormats(frontend.Capabilities().support,
+                                                                           std::span{session.formats}.first(session.formatCount), extent);
+                if (formats)
+                    (void)Editor::EditorVulkanXrViewportAccess::PrepareMotionPipeline(viewport, formats->motion, formats->depth);
+            }
+            return Evidence::Success(offer.availabilityWithoutProducer);
+        }
+
         struct OptionalProjectionEvidence final {
             XRCapabilityState hands;
             XRCapabilityState stage;
@@ -240,28 +270,11 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(revision.ErrorValue());
         OptionalProjectionEvidence optional{input_.handAvailability, input_.stageAvailability, XRCapabilityState::Unsupported,
                                             EyeGazeAvailability()};
-        if (std::ranges::any_of(settings_.Features(), [](const XRFeatureRequest &feature) {
-            return feature.capability == XRCapability::SpaceWarp && feature.kind == XRFeatureRequirementKind::Optional;
-        })) {
-            const auto offer = native_->DiscoverReprojection(selection_.attempt);
-            if (offer.HasError())
-                return Outcome::Failure(offer.ErrorValue());
-            optional.reprojection = offer.Value().availabilityWithoutProducer;
-            if (offer.Value().route != NativeReprojectionRoute::None && optional.reprojection == XRCapabilityState::DependencyMissing) {
-                auto extent = targets.Value().color.extent;
-                if (std::ranges::all_of(offer.Value().extents, [](const auto &eye) {
-                    return eye.IsValid();
-                })) {
-                    const auto &left = offer.Value().extents.front();
-                    const auto &right = offer.Value().extents.back();
-                    extent = {std::max(left.width, right.width), std::max(left.height, right.height)};
-                }
-                const auto formats = SelectOpenXRVulkanReprojectionFormats(frontend.Capabilities().support,
-                                                                           std::span{session.formats}.first(session.formatCount), extent);
-                if (formats)
-                    (void)Editor::EditorVulkanXrViewportAccess::PrepareMotionPipeline(viewport, formats->motion, formats->depth);
-            }
-        }
+        const auto reprojection = PrepareOptionalReprojection(*native_, selection_.attempt, settings_.Features(), frontend, viewport,
+                                                              session, targets.Value().color.extent);
+        if (reprojection.HasError())
+            return Outcome::Failure(reprojection.ErrorValue());
+        optional.reprojection = reprojection.Value();
         auto capabilities =
             ProjectionCapabilities(observed, session, targets.Value(), observedSystem.Value(), revision.Value(), budget, optional);
         if (capabilities.HasError())

@@ -948,6 +948,7 @@ namespace Horo::Tests::OpenXRApplication {
         bool installAuthority = true;
         bool arm = true;
         bool revokeInFlight = false;
+        bool revokeDuringBind = false;
         bool revokeBeforeCreate = false;
         bool denyNative = false;
         std::uint32_t layerLimit = 2;
@@ -971,6 +972,9 @@ namespace Horo::Tests::OpenXRApplication {
         }
         SECTION("operator revocation during platform admission prevents native activation") {
             revokeBeforeCreate = true;
+        }
+        SECTION("operator revocation inside frame permission keeps the projection opaque") {
+            revokeDuringBind = true;
         }
         SECTION("platform revocation prevents an already rendered alpha frame from submitting underlay") {
             revokeInFlight = true;
@@ -1025,7 +1029,14 @@ namespace Horo::Tests::OpenXRApplication {
             CHECK(permission->observed->world == RequireValue(fixture.session->WorldSpace(permission->observed->session)));
         }
         fixture.script.clock.sample = 1;
+        if (revokeDuringBind)
+            permission->revokeOnRead = fixture.play.get();
         REQUIRE(RequireValue(fixture.play->PrepareRenderFrame(1)));
+        if (revokeDuringBind) {
+            CHECK(permission->revokeOnRead == nullptr);
+            CHECK_FALSE(native.running);
+            CHECK(fixture.play->ReadPassthroughState() == XR::XRCapabilityState::Unavailable);
+        }
         auto frame = RequireValue(fixture.frontend->BeginFrame({1, {8, 8}}));
         RequireValue(fixture.play->ExecuteRenderFrame(frame, {}));
         RequireValue(frame.Present());
@@ -1041,7 +1052,7 @@ namespace Horo::Tests::OpenXRApplication {
         fixture.vulkan->native.commandState.state.Complete();
         RequireValue(fixture.play->ProgressRenderTail());
         CHECK(fixture.script.frames.ends == 1);
-        const bool composed = active && !revokeInFlight;
+        const bool composed = active && !revokeInFlight && !revokeDuringBind;
         CHECK(fixture.script.frames.layers == (composed ? 2U : 1U));
         CHECK(fixture.script.frames.projectionFlags ==
               (composed ? std::uint64_t{XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT} : 0U));

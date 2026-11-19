@@ -74,43 +74,57 @@ namespace Horo::Application::Internal {
         return DiscoverRuntime();
     }
 
+    namespace {
+        /** @brief Prepares exactly the installed extension routes usable by this editor composition. */
+        Result<void> PrepareNativeDiscovery(OpenXRNativeSession &native, const XRLoaderPreflightRequest &selection, bool handsRequested,
+                                            bool planePreview, const std::optional<NativeExtensionRequest> &passthrough) {
+            const XRLoaderApiVersion compiled{XR_VERSION_MAJOR(XR_CURRENT_API_VERSION), XR_VERSION_MINOR(XR_CURRENT_API_VERSION),
+                                              XR_VERSION_PATCH(XR_CURRENT_API_VERSION)};
+            // The editor composition owns a time provider and color projection; its renderer has no native depth provider.
+            constexpr std::array<std::string_view, 1> spatialDependencies{XR_EXT_FUTURE_EXTENSION_NAME};
+            constexpr std::array<std::string_view, 2> planeDependencies{XR_EXT_FUTURE_EXTENSION_NAME, XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME};
+
+            struct Selection final {
+                NativeExtensionRequest request;
+                bool selected;
+            };
+
+            const std::array routes{
+                Selection{{OpenXRPlatformTimeRoute().extension, true}, true},
+                Selection{{XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME}, true},
+                Selection{{XR_EXT_HAND_TRACKING_EXTENSION_NAME}, handsRequested},
+                Selection{{XR_EXT_FUTURE_EXTENSION_NAME}, planePreview},
+                Selection{{.name = XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME, .dependencies = spatialDependencies}, planePreview},
+                Selection{{.name = XR_EXT_SPATIAL_PLANE_TRACKING_EXTENSION_NAME, .dependencies = planeDependencies}, planePreview},
+            };
+            std::array<NativeExtensionRequest, routes.size() + 1> extensions{};
+            std::size_t count{};
+            for (const auto &route : routes)
+                if (route.selected)
+                    extensions[count++] = route.request;
+            if (passthrough)
+                extensions[count++] = *passthrough;
+            const auto requested = std::span{extensions}.first(count);
+            const NativeDiscoveryRequest request{selection,
+                                                 std::min(compiled, selection.admittedLoaderVersions.maximum),
+                                                 requested,
+                                                 {},
+                                                 false};
+            return native.PrepareDiscovery(request);
+        }
+    }  // namespace
+
     /** @copydoc OpenXRApplicationSession::DiscoverRuntime */
     Result<void> OpenXRApplicationSession::DiscoverRuntime() {
-        const XRLoaderApiVersion compiled{XR_VERSION_MAJOR(XR_CURRENT_API_VERSION), XR_VERSION_MINOR(XR_CURRENT_API_VERSION),
-                                          XR_VERSION_PATCH(XR_CURRENT_API_VERSION)};
-        // The editor composition owns a time provider and color projection; its renderer has no native depth provider.
-        constexpr std::array<std::string_view, 1> spatialDependencies{XR_EXT_FUTURE_EXTENSION_NAME};
-        constexpr std::array<std::string_view, 2> planeDependencies{XR_EXT_FUTURE_EXTENSION_NAME, XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME};
-        const bool planePreview = settings_.AllowsPlaneCapturePreview();
-
-        struct Selection final {
-            NativeExtensionRequest request;
-            bool selected;
-        };
-
-        const std::array routes{
-            Selection{{OpenXRPlatformTimeRoute().extension, true}, true},
-            Selection{{XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME}, true},
-            Selection{{XR_EXT_HAND_TRACKING_EXTENSION_NAME}, WantsHands()},
-            Selection{{XR_EXT_FUTURE_EXTENSION_NAME}, planePreview},
-            Selection{{.name = XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME, .dependencies = spatialDependencies}, planePreview},
-            Selection{{.name = XR_EXT_SPATIAL_PLANE_TRACKING_EXTENSION_NAME, .dependencies = planeDependencies}, planePreview},
-        };
-        std::array<NativeExtensionRequest, routes.size() + 1> extensions{};
-        std::size_t count{};
-        for (const auto &route : routes)
-            if (route.selected)
-                extensions[count++] = route.request;
-        if (const auto provider = NativePassthroughExtensionRequest();
-            provider && policy_.passthroughPermission && policy_.passthroughPermission->SupportsReconstruction())
-            extensions[count++] = *provider;
-        const auto requested = std::span{extensions}.first(count);
-        const NativeDiscoveryRequest request{selection_,
-                                             std::min(compiled, selection_.admittedLoaderVersions.maximum),
-                                             requested,
-                                             {},
-                                             false};
-        if (auto prepared = native_->PrepareDiscovery(request); prepared.HasError())
+        const bool hands = WantsHands();
+        const bool planes = settings_.AllowsPlaneCapturePreview();
+        const auto *owner = native_.get();
+        auto passthrough = NativePassthroughExtensionRequest();
+        if (passthrough && (!policy_.passthroughPermission || !policy_.passthroughPermission->SupportsReconstruction()))
+            passthrough.reset();
+        if (!native_ || native_.get() != owner)
+            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        if (auto prepared = PrepareNativeDiscovery(*native_, selection_, hands, planes, passthrough); prepared.HasError())
             return prepared;
         auto actual = native_->DiscoverSystem(selection_.attempt);
         if (actual.HasError())

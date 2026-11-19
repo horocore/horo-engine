@@ -75,6 +75,32 @@ namespace Horo::Application::Internal {
                     2,
                     1};
         }
+
+        /** @brief Assembles the complete frame-scoped stereo plan from the same acquired color image and native ordered views. */
+        Result<XRViewRenderPlan> PlanStereoProjection(const XRViewConfigurationId &id, XRViewConfigurationRevision revision,
+                                                      XRRenderPredictionTime displayTime, XRWorldOriginRevision origin,
+                                                      const NativePresentationViews &observed,
+                                                      const OpenXRApplicationProjection &projection,
+                                                      const NativeSwapchainAcquisition &acquisition,
+                                                      const Render::RenderTextureDescriptor &allocation) {
+            constexpr std::uint32_t viewCount = 2;
+            const XRViewConfigurationDescriptor configuration{CurrentXRContractVersion,
+                                                              id.session,
+                                                              id,
+                                                              revision,
+                                                              XRViewConfigurationType::PrimaryStereo,
+                                                              XREnvironmentBlendMode::Opaque,
+                                                              viewCount};
+            std::array<XRViewDescriptor, viewCount> views{};
+            std::array<XRExternalRenderTargetDescriptor, viewCount> targets{};
+            for (std::uint32_t eye = 0; eye < views.size(); ++eye) {
+                views[eye] = DescribeEye(observed, configuration.session, eye, projection);
+                targets[eye] = DescribeEyeTarget(views[eye], acquisition, allocation, eye);
+            }
+            const std::array images{acquisition.image};
+            return XRViewRenderPlan::Create({configuration, displayTime, views, targets, images}, configuration.session, configuration.id,
+                                            configuration.revision, origin, viewCount, {});
+        }
     }  // namespace
 
     /** @copydoc OpenXRPlayHost::PrepareFrameResources */
@@ -212,29 +238,13 @@ namespace Horo::Application::Internal {
         if (!scene_ || !scene_->projection || !render_->views || !render_->acquisition)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         const auto frame = frames_.Snapshot();
-        const auto &observed = *render_->views;
         const auto &support = composition_.frontend.Capabilities().support;
         const auto revision = XRViewConfigurationRevision::Create(scene_->projection->capabilities.Revision().Value());
         if (revision.HasError())
             return Result<void>::Failure(revision.ErrorValue());
         const XRViewConfigurationId configuration{render_->session, {.index = 0, .generation = 1}};
-        std::array<XRViewDescriptor, 2> views{};
-        std::array<XRExternalRenderTargetDescriptor, 2> targets{};
-        for (std::uint32_t eye = 0; eye < views.size(); ++eye) {
-            views[eye] = DescribeEye(observed, render_->session, eye, *scene_->projection);
-            const auto &view = views[eye];
-            targets[eye] = DescribeEyeTarget(view, *render_->acquisition, render_->allocation, eye);
-        }
-        const std::array images{render_->acquisition->image};
-        const XRViewConfigurationDescriptor config{CurrentXRContractVersion,
-                                                   render_->session,
-                                                   configuration,
-                                                   revision.Value(),
-                                                   XRViewConfigurationType::PrimaryStereo,
-                                                   XREnvironmentBlendMode::Opaque,
-                                                   2};
-        auto plan = XRViewRenderPlan::Create({config, frame.predictedDisplayTime, views, targets, images}, render_->session, configuration,
-                                             revision.Value(), input_.origin, 2, {});
+        auto plan = PlanStereoProjection(configuration, revision.Value(), frame.predictedDisplayTime, input_.origin, *render_->views,
+                                         *scene_->projection, *render_->acquisition, render_->allocation);
         if (plan.HasError())
             return Result<void>::Failure(plan.ErrorValue());
         const Render::MultiviewPublication publication{scene_->scene.value,       frameNumber,
@@ -252,8 +262,9 @@ namespace Horo::Application::Internal {
                                                                         frame.predictedDisplayTime.Nanoseconds()},
                                                                        scene_->geometry->MotionObjects()};
         render_->passthrough.reset();
-        if (passthroughScope_ && HasPassthrough(*passthroughScope_) && reference.Value().Target() == passthroughScope_->world)
-            render_->passthrough.emplace(*passthroughScope_, publication, reference.Value());
+        if (const auto scope = passthroughScope_;
+            scope && HasPassthrough(*scope) && passthroughScope_ == scope && reference.Value().Target() == scope->world)
+            render_->passthrough.emplace(*scope, publication, reference.Value());
         const auto alpha = render_->passthrough ? Editor::EditorXrProjectionAlpha::Premultiplied : Editor::EditorXrProjectionAlpha::Opaque;
         if (auto bound =
                 Editor::EditorVulkanXrViewportAccess::Bind(composition_.viewport, render_->acquisition->texture, render_->eyeViews,
