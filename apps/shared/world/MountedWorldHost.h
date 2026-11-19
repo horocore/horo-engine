@@ -12,6 +12,8 @@
 #include "Horo/WorldStreaming/WorldStreamingIdentity.h"
 
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <span>
@@ -19,7 +21,13 @@
 
 namespace Horo::Runtime {
     struct SceneCellWorldAnchor;
+    class RuntimeDispatchEvidence;
+    class RuntimeDispatchSource;
 }  // namespace Horo::Runtime
+
+namespace Horo {
+    class JobSystem;
+}
 
 namespace Horo::Application::Internal {
     /** @brief Explicit owner-lane cancellation and absolute deadline for one mounted cell activation. */
@@ -39,6 +47,24 @@ namespace Horo::Application::Internal {
         Runtime::SceneInstanceId occurrence;
         Runtime::SceneDefinitionId definition;
         Runtime::SceneDefinitionRevision revision;
+    };
+
+    /** @brief Observable single-cell mounted streaming lifecycle for the existing application owner. */
+    enum class MountedWorldLiveCellState : std::uint8_t {
+        Idle,
+        Requested,
+        Loading,
+        Prepared,
+        Attaching,
+        Active,
+        Retiring
+    };
+
+    /** @brief Explicit per-unit owner timing and complete CoreEcs frame-work bounds. */
+    struct MountedWorldLiveLimits final {
+        std::uint64_t maximumFrameNanoseconds{};
+        std::uint64_t maximumUnitNanoseconds{};
+        std::size_t maximumCellEntities{};
     };
 
     /** @brief Explicit authored native Local placement projected through one exact mounted World origin. */
@@ -144,6 +170,35 @@ namespace Horo::Application::Internal {
          * @pre Call on the bound Scene owner lane after each startup cutoff until completion.
          */
         [[nodiscard]] Result<bool> ReconcileInitialCell();
+
+        /** @brief Opt in to one live, explicitly selected CoreEcs cell on a mount with no startup cell.
+         * @param dispatch Exact canonical RuntimeHost dispatcher for this Scene owner.
+         * @param jobs Existing bounded worker owner, which must outlive this mount's retirement.
+         * @param limits Complete explicit preparation and owner-frame work limits.
+         * @return Success, or typed denial without accessing Scene or starting work.
+         * @pre Bind and advance on the Scene owner lane. Withdraw and drain at the ordinary structural cutoff before
+         * replacing the Scene. Destroy an undrained mount only at the cold owner boundary, outside worker callbacks.
+         */
+        [[nodiscard]] Result<void> BindLiveCell(const Runtime::RuntimeDispatchSource &dispatch, const JobSystem &jobs,
+                                                const MountedWorldLiveLimits &limits);
+
+        /** @brief Admit an exact selected cell as demand; the structural frame owns worker submission.
+         * @param selected Exact validated mount cell, independent authored occurrence, definition and revision.
+         * @param cancellation Parent operation cancellation retained through the activation receipt.
+         * @return Success or typed stale, conflicting or unsupported demand.
+         */
+        [[nodiscard]] Result<void> RequestLiveCell(const CommittedWorldInitialCell &selected, const CancellationToken &cancellation = {});
+
+        /** @brief Withdraw one live demand, cancelling pending preparation or retiring its committed occurrence.
+         * @return Success only while this mount still owns a live demand or exact cell.
+         */
+        [[nodiscard]] Result<void> WithdrawLiveCell();
+
+        /** @brief Advances at most one bounded unit during an exact, previously unused structural dispatch.
+         * @param evidence Live CommitDeferredLifecycleChanges evidence from the bound scheduler.
+         * @return Current state or preserved typed error. The caller still owns the ordinary Scene phase cutoff.
+         */
+        [[nodiscard]] Result<MountedWorldLiveCellState> AdvanceLiveCell(const Runtime::RuntimeDispatchEvidence &evidence);
 
         /** @brief Observe authored global anchors for the exact current parent and mounted Scene occurrence.
          * @param parent Active Scene borrow on the owning lane.

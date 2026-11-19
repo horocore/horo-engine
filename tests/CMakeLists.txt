@@ -2517,7 +2517,11 @@ target_compile_features(HoroTerrainAsyncJobsTests PRIVATE cxx_std_20)
 target_link_libraries(HoroTerrainAsyncJobsTests PRIVATE HoroEngine::TerrainRuntime Threads::Threads)
 horo_register_catch_test(HoroTerrainAsyncJobsTests LABELS "unit;terrain;headless")
 
-add_executable(HoroWorldCookIntegrationTests unit/world_cook/WorldCookPublicationTests.cpp support/AllocationProbe.cpp)
+add_executable(HoroWorldCookIntegrationTests
+    unit/world_cook/WorldCookPublicationTests.cpp
+    unit/world_cook/MountedWorldLiveCellTests.cpp
+    support/AllocationProbe.cpp
+)
 target_compile_features(HoroWorldCookIntegrationTests PRIVATE cxx_std_20)
 target_link_libraries(HoroWorldCookIntegrationTests PRIVATE HoroEngine::WorldCookIntegration HoroEngine::Platform
     HoroNetworkProductHost HoroEditorSceneProductHost)
