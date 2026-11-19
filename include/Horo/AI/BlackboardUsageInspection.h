@@ -80,4 +80,16 @@ namespace Horo::AI {
     [[nodiscard]] Result<DecisionBlackboardSourceUses> InspectDecisionBlackboardUses(const DecisionGraphSource &source, BlackboardKeyId key,
                                                                                      const DecisionBlackboardProviderMetadata *providers);
 
+    /** @brief Retargets typed Blackboard references in one detached Decision source.
+     * @param source Authored graph using the exact schema and an admitted version range.
+     * @param schema Current immutable Blackboard schema containing both keys.
+     * @param from Key being retired. @param to Compatible key selected as its replacement.
+     * @param providers Detached declarations from the observed provider catalog.
+     * @return True when a source changed, false when no typed reference matches, or a typed failure for an unsafe replacement.
+     * @post A failure preserves the original source. The caller validates the entire changed closure before publishing it.
+     */
+    [[nodiscard]] Result<bool> RetargetDecisionBlackboardKey(DecisionGraphSource &source, const BlackboardSchema &schema,
+                                                             BlackboardKeyId from, BlackboardKeyId to,
+                                                             const DecisionBlackboardProviderMetadata *providers);
+
 }  // namespace Horo::AI

@@ -773,6 +773,10 @@ variants, overrides and Perception also limit coverage. The workspace can valida
 a proposed replacement or removal against the current schema and display its
 candidate together with the reference review. Applying that candidate requires a
 separate multi-document reference-resolution transaction.
+Its Decision source preparation can retarget authored requirements, query outputs,
+state guards and Utility considerations to a compatible key. Provider declarations
+and opaque properties require their owning provider to resolve the reference.
+The transaction must validate the entire modified Decision closure before publication.
 
 ## Cinematic Sequence Asset Documents
 

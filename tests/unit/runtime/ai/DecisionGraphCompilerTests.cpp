@@ -1,10 +1,152 @@
 #include "DecisionGraphCompilerTestSupport.h"
+#include "Horo/AI/AIErrors.h"
+#include "Horo/AI/BlackboardUsageInspection.h"
 
 #include <algorithm>
 
 namespace Horo::AI {
     namespace {
         using namespace DecisionGraphTestSupport;
+
+        std::shared_ptr<const BlackboardSchema> RetargetSchema(BlackboardValueKind kind) {
+            const std::array keys{BlackboardKeyDescriptor{.key = MakeIdentity<BlackboardKeyId>(1),
+                                                          .kind = kind,
+                                                          .presence = BlackboardKeyPresence::Optional},
+                                  BlackboardKeyDescriptor{.key = MakeIdentity<BlackboardKeyId>(2),
+                                                          .kind = kind,
+                                                          .presence = BlackboardKeyPresence::Optional},
+                                  BlackboardKeyDescriptor{.key = MakeIdentity<BlackboardKeyId>(3),
+                                                          .kind = kind,
+                                                          .presence = BlackboardKeyPresence::Optional,
+                                                          .access = BlackboardKeyAccess::ReadOnly}};
+            auto captured = BlackboardSchema::Capture({.identity = SchemaId(), .keys = keys});
+            REQUIRE(captured.HasValue());
+            return std::make_shared<const BlackboardSchema>(std::move(captured).Value());
+        }
+
+        TEST_CASE("Decision key retarget preserves authored Behavior Tree query identity and topology", "[ai][decision-compiler]") {
+            Fixture fixture;
+            fixture.schema = RetargetSchema(BlackboardValueKind::WorldCoordinate);
+            const auto from = MakeIdentity<BlackboardKeyId>(1);
+            const auto to = MakeIdentity<BlackboardKeyId>(2);
+            const BehaviorTreeQueryOutput output{MakeIdentity<QueryId>(41),
+                                                 MakeIdentity<QueryResultSchemaId>(42),
+                                                 1,
+                                                 MakeIdentity<QueryItemTypeId>(43),
+                                                 from,
+                                                 18};
+            auto task = TreeNode(2, DecisionControlKind::Task);
+            task.requirements.push_back(
+                {.key = from, .kind = BlackboardValueKind::WorldCoordinate, .access = BlackboardKeyAccess::ReadWrite});
+            task.properties.emplace_back(MakeIdentity<BehaviorTreePropertyId>(44), "query output", BehaviorTreePropertyKind::QueryOutput,
+                                         output);
+            auto source = Tree(1, {TreeNode(1, DecisionControlKind::Root), task}, {Edge(1, 1, 2)});
+            const auto original = std::get<std::shared_ptr<const BehaviorTreeAsset>>(source.body);
+            const auto providers = DecisionBlackboardProviderMetadata::Capture(*fixture.providers);
+            REQUIRE(providers.HasValue());
+            const auto result = RetargetDecisionBlackboardKey(source, *fixture.schema, from, to, providers.Value().get());
+            REQUIRE(result.HasValue());
+            CHECK(result.Value());
+            const auto &tree = *std::get<std::shared_ptr<const BehaviorTreeAsset>>(source.body);
+            CHECK(tree.Root() == original->Root());
+            CHECK(std::ranges::equal(tree.Edges(), original->Edges()));
+            const auto &replacement = tree.Nodes().back();
+            CHECK(replacement.requirements.front().key == to);
+            auto expected = output;
+            expected.key = to;
+            CHECK(std::get<BehaviorTreeQueryOutput>(replacement.properties.front().value) == expected);
+            CHECK(original->Nodes().back() == task);
+            const auto duplicate = RetargetDecisionBlackboardKey(source, *fixture.schema, from, to, providers.Value().get());
+            REQUIRE(duplicate.HasValue());
+            CHECK_FALSE(duplicate.Value());
+            CHECK(fixture.probe.factories == 0);
+        }
+
+        TEST_CASE("Decision key retarget preserves State Machine guards and Utility scoring", "[ai][decision-compiler]") {
+            Fixture fixture;
+            fixture.schema = RetargetSchema(BlackboardValueKind::Scalar);
+            const auto from = MakeIdentity<BlackboardKeyId>(1);
+            const auto to = MakeIdentity<BlackboardKeyId>(2);
+            const auto providers = DecisionBlackboardProviderMetadata::Capture(*fixture.providers);
+            REQUIRE(providers.HasValue());
+            DecisionBlackboardRequirement requirement{.key = from, .kind = BlackboardValueKind::Scalar, .source = Location()};
+            SECTION("guard carries its exact scalar operator and operand") {
+                auto source = CallingMachine(1, 2, DecisionPlanKind::BehaviorTree);
+                auto &transition = std::get<StateMachineAssetDescriptor>(source.body).transitions.front();
+                transition.requirements = {requirement};
+                transition.guards = {{.key = from, .operation = StateMachineGuardOperator::Greater, .operand = 0.25}};
+                const auto result = RetargetDecisionBlackboardKey(source, *fixture.schema, from, to, providers.Value().get());
+                REQUIRE(result.HasValue());
+                CHECK(result.Value());
+                const auto &changed = std::get<StateMachineAssetDescriptor>(source.body).transitions.front();
+                CHECK(changed.requirements.front().key == to);
+                CHECK(changed.guards.front().key == to);
+                CHECK(changed.guards.front().operation == StateMachineGuardOperator::Greater);
+                CHECK(std::get<double>(changed.guards.front().operand) == 0.25);
+                const std::array sources{source, TaskTree(2)};
+                CHECK(fixture.Compile(sources, 1)->Graphs().size() == 2);
+            }
+            SECTION("consideration retains its normalization and weight") {
+                UtilityDecisionSource body{.root = Node(1), .requirements = {requirement}};
+                body.options.push_back({.option = {Node(2), MakeIdentity<TaskId>(5002), 1, 0, {{.key = from, .weight = 0.5}}},
+                                        .provider = {.id = Node(2), .type = Type(501), .descriptorVersion = {1, 1}}});
+                DecisionGraphSource source{Graph(1), 1, SchemaId(), {1, 1}, Location(), {}, std::move(body)};
+                const auto result = RetargetDecisionBlackboardKey(source, *fixture.schema, from, to, providers.Value().get());
+                REQUIRE(result.HasValue());
+                CHECK(result.Value());
+                const auto &changed = std::get<UtilityDecisionSource>(source.body);
+                CHECK(changed.requirements.front().key == to);
+                CHECK(changed.options.front().option.considerations.front().key == to);
+                CHECK(changed.options.front().option.considerations.front().weight == 0.5);
+                CHECK(fixture.Compile(std::span{&source, 1}, 1)->Graphs().size() == 1);
+            }
+            CHECK(fixture.probe.factories == 0);
+        }
+
+        TEST_CASE("Decision key retarget refuses unresolved or conflicting references atomically", "[ai][decision-compiler]") {
+            Fixture fixture;
+            fixture.schema = RetargetSchema(BlackboardValueKind::Boolean);
+            const auto from = MakeIdentity<BlackboardKeyId>(1);
+            auto to = MakeIdentity<BlackboardKeyId>(2);
+            auto task = TreeNode(2, DecisionControlKind::Task);
+            const DecisionBlackboardRequirement authored{.key = from, .kind = BlackboardValueKind::Boolean, .source = Location()};
+            task.requirements = {authored};
+            auto registration = Registration(fixture.probe);
+            bool needCatalog = true;
+            const ErrorCodeDescriptor *expectedError = &AIErrors::DecisionAssetDescriptorIncompatible;
+            SECTION("provider's declared key requires provider ownership") {
+                registration.contract.descriptor.requirements = {authored};
+            }
+            SECTION("provider catalog cannot be inferred from registered graph") {
+                needCatalog = false;
+                expectedError = &AIErrors::DecisionAssetDescriptorMissing;
+            }
+            SECTION("authored destination already has a requirement") {
+                task.requirements.push_back({.key = to, .kind = BlackboardValueKind::Boolean});
+                expectedError = &AIErrors::DecisionAssetBindingAmbiguous;
+            }
+            SECTION("opaque property may have undisclosed key semantics") {
+                task.properties.emplace_back(MakeIdentity<BehaviorTreePropertyId>(44), "opaque", BehaviorTreePropertyKind::Opaque,
+                                             BehaviorTreeOpaqueProperty{1, {42}});
+            }
+            SECTION("destination changes the key contract") {
+                to = MakeIdentity<BlackboardKeyId>(3);
+                expectedError = &AIErrors::BlackboardValueTypeMismatch;
+            }
+            const auto generation = DecisionNodeGeneration::Capture({&registration, 1}, fixture.admission);
+            REQUIRE(generation.HasValue());
+            const auto providers = DecisionBlackboardProviderMetadata::Capture(*generation.Value());
+            REQUIRE(providers.HasValue());
+            auto source = Tree(1, {TreeNode(1, DecisionControlKind::Root), task}, {Edge(1, 1, 2)});
+            const auto original = std::get<std::shared_ptr<const BehaviorTreeAsset>>(source.body);
+            const auto result =
+                RetargetDecisionBlackboardKey(source, *fixture.schema, from, to, needCatalog ? providers.Value().get() : nullptr);
+            REQUIRE(result.HasError());
+            CHECK(result.ErrorValue().code.Value() == expectedError->code.Value());
+            CHECK(std::get<std::shared_ptr<const BehaviorTreeAsset>>(source.body) == original);
+            CHECK(original->Nodes().back().requirements.front().key == from);
+            CHECK(fixture.probe.factories == 0);
+        }
 
         TEST_CASE("Decision graph compiler admits canonical typed controls without synthetic provider descriptors",
                   "[ai][decision-compiler]") {

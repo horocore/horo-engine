@@ -1765,6 +1765,7 @@ target_link_libraries(HoroCharacterInput PUBLIC HoroEngine::Input HoroEngine::Ph
 
 add_library(HoroAI STATIC
         runtime/ai/compile/DecisionActionAdapter.cpp
+        runtime/ai/compile/DecisionBlackboardRetarget.cpp
         runtime/ai/compile/DecisionCallAdapter.cpp
         runtime/ai/compile/DecisionClosureLayout.cpp
         runtime/ai/compile/DecisionCompilationBuilder.cpp
