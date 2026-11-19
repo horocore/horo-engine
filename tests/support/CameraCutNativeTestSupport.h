@@ -11,6 +11,7 @@ namespace Horo::Tests::CameraCuts {
     /** @brief Native presentation observations applied before cinematic camera publication. */
     enum class NativeOutputChange {
         None,
+        Resize,
         Fullscreen,
         SecondDisplay
     };
@@ -35,7 +36,10 @@ namespace Horo::Tests::CameraCuts {
             return {640, 480};
         REQUIRE(SDL_ShowWindow(&window));
         REQUIRE(SDL_SyncWindow(&window));
-        if (change == NativeOutputChange::Fullscreen) {
+        if (change == NativeOutputChange::Resize) {
+            REQUIRE(SDL_SetWindowSize(&window, 512, 384));
+            REQUIRE(SDL_SyncWindow(&window));
+        } else if (change == NativeOutputChange::Fullscreen) {
             REQUIRE(SDL_SetWindowFullscreen(&window, true));
             REQUIRE(SDL_SyncWindow(&window));
             CHECK((SDL_GetWindowFlags(&window) & SDL_WINDOW_FULLSCREEN) != 0);
@@ -59,6 +63,8 @@ namespace Horo::Tests::CameraCuts {
         REQUIRE(width > 0);
         REQUIRE(height > 0);
         const Render::FramebufferExtent extent{static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)};
+        if (change == NativeOutputChange::Resize)
+            CHECK(extent != Render::FramebufferExtent{640, 480});
         REQUIRE(frontend.Resize(extent).HasValue());
         std::cout << "Cinematic native output change " << static_cast<int>(change) << ", display " << SDL_GetDisplayForWindow(&window)
                   << ", pixels " << extent.width << 'x' << extent.height << '\n';

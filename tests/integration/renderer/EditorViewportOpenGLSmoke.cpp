@@ -475,9 +475,8 @@ namespace Horo::Render::OpenGLSmokeTests {
         return textureView;
     }
 
-    TEST_CASE("Editor Viewport Open GL Smoke", "[integration][renderer][gpu]") {
-        const auto curve = GENERATE(Cinematic::CameraBlendCurve::Linear, Cinematic::CameraBlendCurve::SmoothStep);
-        const auto outputChange = GENERATE(NativeOutputChange::None, NativeOutputChange::Fullscreen, NativeOutputChange::SecondDisplay);
+    /** @brief Verifies one complete cinematic camera transition across the requested native presentation change. */
+    void QualifyCameraPresentation(const Cinematic::CameraBlendCurve curve, const NativeOutputChange outputChange) {
         constexpr EditorViewportExtent extent{512, 384};
         auto window = CreateNativeViewportWindow(outputChange);
 
@@ -527,6 +526,21 @@ namespace Horo::Render::OpenGLSmokeTests {
         frontend.reset();
         window.reset();
         SDL_Quit();
+    }
+
+    TEST_CASE("Editor Viewport Open GL Smoke", "[integration][renderer][gpu][cinematic][resize]") {
+        const auto curve = GENERATE(Cinematic::CameraBlendCurve::Linear, Cinematic::CameraBlendCurve::SmoothStep);
+        QualifyCameraPresentation(curve, NativeOutputChange::Resize);
+    }
+
+    TEST_CASE("OpenGL cinematic camera follows the native fullscreen output", "[integration][renderer][gpu][cinematic][fullscreen]") {
+        const auto curve = GENERATE(Cinematic::CameraBlendCurve::Linear, Cinematic::CameraBlendCurve::SmoothStep);
+        QualifyCameraPresentation(curve, NativeOutputChange::Fullscreen);
+    }
+
+    TEST_CASE("OpenGL cinematic camera follows a second native display", "[integration][renderer][gpu][cinematic][display]") {
+        const auto curve = GENERATE(Cinematic::CameraBlendCurve::Linear, Cinematic::CameraBlendCurve::SmoothStep);
+        QualifyCameraPresentation(curve, NativeOutputChange::SecondDisplay);
     }
 
     /** @brief Verifies the output is a weighted composition where two real camera silhouettes differ. */

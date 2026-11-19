@@ -278,11 +278,12 @@ namespace Horo::Tests::VulkanEditor {
 
     /** @brief Uses the ordinary scene and GUI tail, then reads the exact production color attachment. */
     std::vector<std::uint8_t> PresentCameraColor(Host &host, const RenderSceneView &scene, const std::uint64_t frameId,
-                                                 const RenderSamplerHandle readbackSampler) {
+                                                 const RenderSamplerHandle readbackSampler,
+                                                 const std::optional<FramebufferExtent> output = std::nullopt) {
         REQUIRE(host.viewportObservation);
         host.viewportObservation->ResetDraws();
         host.PrepareScene(scene);
-        auto frame = host.Frame(frameId);
+        auto frame = host.Frame(frameId, output.value_or(host.extent));
         host.ExecuteSceneAndGui(frame, scene);
         Check(frame.Present());
         using ResourceAccess = Render::Detail::RenderFrontendResourceAccess;
@@ -313,6 +314,37 @@ namespace Horo::Tests::VulkanEditor {
             builder.Add(entity);
         }
         return CameraCuts::Take(Runtime::RuntimeScene::Create(CameraCuts::Take(std::move(builder).Build()), {1}));
+    }
+
+    /** @brief Owns the illuminated triangle and exact orthographic endpoints used by native camera pixel cases. */
+    struct CameraViewportFixture final {
+        std::array<MeshVertex, 3> vertices{MeshVertex{{-1, -1, 0}, {0, 0, 1}, {}}, MeshVertex{{1, -1, 0}, {0, 0, 1}, {}},
+                                           MeshVertex{{0, 1, 0}, {0, 0, 1}, {}}};
+        std::array<std::uint32_t, 3> indices{0, 1, 2};
+        RenderMeshSourceHandle mesh{{1}, 1};
+        std::array<RenderMeshResourceView, 1> meshes{RenderMeshResourceView{mesh, vertices, indices, {{-1, -1, 0}, {1, 1, 0}}}};
+        std::array<RenderStaticMeshInstance, 1> instances{
+            RenderStaticMeshInstance{.mesh = mesh, .presentation = {.tint = {1, 0, 1}, .tintStrength = 1}}};
+        std::array<RenderLight, 1> lights{RenderLight{.direction = {0, 0, -1}, .stableIdentity = 1}};
+
+        [[nodiscard]] RenderSceneView View(const float x) const noexcept {
+            return {.camera = {.position = {x, 0, 5},
+                               .target = {x, 0, 0},
+                               .projection = {.kind = RenderProjectionKind::Orthographic, .orthographicHeight = 4}},
+                    .meshResources = meshes,
+                    .instances = instances,
+                    .lights = lights,
+                    .lightSceneDomain = 1,
+                    .lightSnapshotRevision = 1};
+        }
+    };
+
+    /** @brief Counts the fixture's opaque magenta pixels independently of the clear color and destination alpha. */
+    std::size_t CountCameraTint(const std::span<const std::uint8_t> pixels) {
+        std::size_t count{};
+        for (std::size_t index = 0; index + 3 < pixels.size(); index += 4)
+            count += pixels[index] >= 240 && pixels[index + 1] <= 8 && pixels[index + 2] >= 240;
+        return count;
     }
 
     /** @brief Uses the current renderer budget to publish and present a live fallback at the original sequence position. */
@@ -352,10 +384,7 @@ namespace Horo::Tests::VulkanEditor {
         pressure.camera = after.selected.values;
         Check(host.viewport->PrepareCameraCrossFadeFrame(std::nullopt));
         const auto pixels = PresentCameraColor(host, pressure, 4, sampler);
-        std::size_t visiblePixels{};
-        for (std::size_t index = 0; index < pixels.size(); index += 4)
-            visiblePixels += pixels[index] >= 240 && pixels[index + 1] <= 8 && pixels[index + 2] >= 240;
-        CHECK(visiblePixels > 16);
+        CHECK(CountCameraTint(pixels) > 16);
     }
 
     TEST_CASE("Native Vulkan camera cross-fade composes both real viewport rasters before GUI sampling",
@@ -363,28 +392,13 @@ namespace Horo::Tests::VulkanEditor {
         const auto *root = std::getenv("HORO_EDITOR_VULKAN_ASSET_ROOT");
         if (!root || !std::filesystem::exists(std::filesystem::path{root} / "shaders/editor/viewport-cross-fade-vulkan.horoshdr"))
             SKIP("Supply the locked viewport and camera cross-fade shader packages.");
-        const std::array vertices{MeshVertex{{-1, -1, 0}, {0, 0, 1}, {}}, MeshVertex{{1, -1, 0}, {0, 0, 1}, {}},
-                                  MeshVertex{{0, 1, 0}, {0, 0, 1}, {}}};
-        const std::array<std::uint32_t, 3> indices{0, 1, 2};
-        const RenderMeshSourceHandle mesh{{1}, 1};
-        const std::array meshes{RenderMeshResourceView{mesh, vertices, indices, {{-1, -1, 0}, {1, 1, 0}}}};
-        const std::array instances{RenderStaticMeshInstance{.mesh = mesh, .presentation = {.tint = {1, 0, 1}, .tintStrength = 1}}};
-        const std::array lights{RenderLight{.direction = {0, 0, -1}, .stableIdentity = 1}};
-        RenderSceneView destination{.camera = {.position = {1, 0, 5},
-                                               .target = {1, 0, 0},
-                                               .projection = {.kind = RenderProjectionKind::Orthographic, .orthographicHeight = 4}},
-                                    .meshResources = meshes,
-                                    .instances = instances,
-                                    .lights = lights,
-                                    .lightSceneDomain = 1,
-                                    .lightSnapshotRevision = 1};
-        auto source = destination;
-        source.camera.position.x = -1;
-        source.camera.target.x = -1;
+        const CameraViewportFixture scene;
+        const auto source = scene.View(-1.0F);
+        const auto destination = scene.View(1.0F);
         Host host{false, true};
         host.CreateViewport(destination, nullptr, nullptr, true);
         auto pressure = destination;
-        const std::vector<RenderStaticMeshInstance> pressureInstances(RenderMaterialPass::MaximumDraws - 8, instances.front());
+        const std::vector<RenderStaticMeshInstance> pressureInstances(RenderMaterialPass::MaximumDraws - 8, scene.instances.front());
         pressure.instances = pressureInstances;
         host.SynchronizeViewport(pressure, Host::CameraQualificationExtent);
         CHECK(host.viewport->CameraCrossFadeCapacity().availableViews == 1);
@@ -400,13 +414,10 @@ namespace Horo::Tests::VulkanEditor {
         const auto blend = PresentCameraColor(host, destination, 3, sampler.Value().handle);
         REQUIRE(a.size() == b.size());
         REQUIRE(a.size() == blend.size());
-        std::size_t sourceTint{}, destinationTint{};
+        const auto sourceTint = CountCameraTint(a);
+        const auto destinationTint = CountCameraTint(b);
         std::size_t distinguishable{};
         int maximumError{};
-        for (std::size_t index = 0; index < blend.size(); index += 4) {
-            sourceTint += a[index] >= 240 && a[index + 1] <= 8 && a[index + 2] >= 240;
-            destinationTint += b[index] >= 240 && b[index + 1] <= 8 && b[index + 2] >= 240;
-        }
         for (std::size_t index = 0; index < blend.size(); ++index) {
             distinguishable += std::abs(int{a[index]} - int{b[index]}) >= 16;
             maximumError = std::max(maximumError, std::abs(int{blend[index]} * 2 - int{a[index]} - int{b[index]}));
@@ -431,6 +442,93 @@ namespace Horo::Tests::VulkanEditor {
         host.gui.reset();
         CHECK(ImGui::GetIO().BackendPlatformUserData == nullptr);
         CHECK(SDL_GetWindowID(host.window.get()) != 0);
+    }
+
+    /** @brief Waits only in qualification for the actual SDL extent and the native surface that admits it. */
+    FramebufferExtent ResizeNativePresentation(Host &host, const FramebufferExtent logical) {
+        INFO("Vulkan / SDL window / resize requested logical extent to " << logical.width << "x" << logical.height);
+        REQUIRE(SDL_SetWindowSize(host.window.get(), static_cast<int>(logical.width), static_cast<int>(logical.height)));
+        FramebufferExtent output;
+        const auto pollWindow = [&] {
+            int width{}, height{};
+            INFO(SDL_GetError());
+            REQUIRE(SDL_GetWindowSizeInPixels(host.window.get(), &width, &height));
+            if (width > 0 && height > 0)
+                output = {static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)};
+            return output.IsValid() && output != host.extent;
+        };
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while (!pollWindow()) {
+            REQUIRE(std::chrono::steady_clock::now() < deadline);
+            SDL_PumpEvents();
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+        for (;;) {
+            const auto resized = host.frontend->Resize(output);
+            if (resized.HasValue())
+                return output;
+            const auto &error = resized.ErrorValue();
+            INFO("Vulkan / swapchain / realize resized output: " << error.domain.Value() << "/" << error.code.Value() << ": "
+                                                                 << error.message);
+            REQUIRE(error.code.Value() == RenderPresentationErrors::DrawableUnavailable.code.Value());
+            REQUIRE(std::chrono::steady_clock::now() < deadline);
+            SDL_PumpEvents();
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+    }
+
+    TEST_CASE("Native Vulkan presents the active cinematic camera at a new SDL pixel extent",
+              "[native-smoke][vulkan][gui][cinematic][resize]") {
+        const auto *root = std::getenv("HORO_EDITOR_VULKAN_ASSET_ROOT");
+        if (!root || !std::filesystem::exists(std::filesystem::path{root} / "shaders/editor/viewport-cross-fade-vulkan.horoshdr"))
+            SKIP("Supply the locked viewport and camera cross-fade shader packages.");
+        using namespace Cinematic;
+        const CameraViewportFixture fixture;
+        auto scene = fixture.View(1.0F);
+        auto authored = CapacityCameraScene(fixture.View(-1.0F).camera, scene.camera);
+        const Runtime::CameraViewContext context{{1, 1}, authored->View().RuntimeId(), Runtime::CameraViewDomain::Runtime};
+        auto camera = CameraCuts::Take(Runtime::CameraService::Create(context));
+        auto runtime = CameraCuts::Take(CinematicRuntimeService::Create({{1, 1}}));
+        const std::array bindings{CameraCutBinding{{1, 1}, {1}}, CameraCutBinding{{2, 1}, {2}}};
+        auto playback = CameraCuts::Take(
+            CinematicCameraPlayback::Activate(runtime, camera,
+                                              CameraCuts::TransitionActivation(CameraTransitionTier::SingleViewBlend,
+                                                                               CameraBlendCurve::Linear, CameraTransitionFallback::Fail, 3),
+                                              {bindings, 8, CameraCutEndPolicy::HoldLastUntilPlayerEnd, 0, {1, 1}}, authored->View()));
+        Check(runtime.Play(playback.Player()));
+        const auto publishCamera = [&](const SequenceTime time, const std::uint64_t frame) {
+            Check(runtime.Seek(playback.Player(), time));
+            Check(playback.Publish(authored->View()));
+            return CameraCuts::Take(camera.Commit(frame, authored->View(), std::nullopt)).selected.values;
+        };
+
+        Host host{false, true};
+        scene.camera = publishCamera(6, 1);
+        CHECK(scene.camera.position.x == Catch::Approx(-1.0F / 3.0F));
+        host.CreateViewport(scene, nullptr, nullptr, true);
+        auto sampler = host.frontend->CreateSampler({});
+        Check(sampler, "create native readback sampler");
+        Check(host.frontend->ProcessResourceRequests(), "prepare native readback sampler");
+        const auto before = PresentCameraColor(host, scene, 1, sampler.Value().handle);
+        const auto initial = host.frontend->PresentationOutput();
+        const auto output = ResizeNativePresentation(host, {512, 384});
+        const auto retired = host.frontend->PollPresentationAvailability(host.extent);
+        Check(retired, "reject the retired SDL extent");
+        CHECK_FALSE(retired.Value());
+        if (initial.HasValue()) {
+            const auto replacement = host.frontend->PresentationOutput();
+            Check(replacement, "observe the replacement presentation output");
+            CHECK(replacement.Value().revision > initial.Value().revision);
+        }
+        scene.camera = publishCamera(8, 2);
+        CHECK(scene.camera.position.x == 1.0F);
+        const auto after = PresentCameraColor(host, scene, 2, sampler.Value().handle, output);
+        CHECK(before.size() == after.size());
+        CHECK(before != after);
+        CHECK(CountCameraTint(before) > 16);
+        CHECK(CountCameraTint(after) > 16);
+        Check(host.frontend->ReleaseSampler(sampler.Value().handle), "release readback sampler");
+        CHECK(host.Drain());
     }
 
     TEST_CASE("Native Vulkan keeps frame ownership and resumes presentation after an observed SDL pixel resize",
@@ -467,35 +565,7 @@ namespace Horo::Tests::VulkanEditor {
         Check(suspended, "poll without a drawable extent");
         CHECK_FALSE(suspended.Value());
         {
-            INFO("Vulkan / SDL window / resize requested logical extent to " << logical.width << "x" << logical.height);
-            REQUIRE(SDL_SetWindowSize(host.window.get(), static_cast<int>(logical.width), static_cast<int>(logical.height)));
-            FramebufferExtent output;
-            const auto pollWindow = [&] {
-                int width{}, height{};
-                INFO(SDL_GetError());
-                REQUIRE(SDL_GetWindowSizeInPixels(host.window.get(), &width, &height));
-                if (width > 0 && height > 0)
-                    output = {static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)};
-                return output.IsValid() && output != host.extent;
-            };
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
-            while (!pollWindow()) {
-                REQUIRE(std::chrono::steady_clock::now() < deadline);
-                SDL_PumpEvents();
-                std::this_thread::sleep_for(std::chrono::milliseconds{1});
-            }
-            for (;;) {
-                const auto resized = host.frontend->Resize(output);
-                if (resized.HasValue())
-                    break;
-                const auto &error = resized.ErrorValue();
-                INFO("Vulkan / swapchain / realize resized output: " << error.domain.Value() << "/" << error.code.Value() << ": "
-                                                                     << error.message);
-                REQUIRE(error.code.Value() == RenderPresentationErrors::DrawableUnavailable.code.Value());
-                REQUIRE(std::chrono::steady_clock::now() < deadline);
-                SDL_PumpEvents();
-                std::this_thread::sleep_for(std::chrono::milliseconds{1});
-            }
+            const auto output = ResizeNativePresentation(host, logical);
             if (initialOutput.HasValue()) {
                 const auto resizedOutput = host.frontend->PresentationOutput();
                 Check(resizedOutput, "observe replacement SDR attachment");
