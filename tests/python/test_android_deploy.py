@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 import project
 
 PROFILE = "qualification-debug"
+VULKAN_PROFILE = "qualification-vulkan-development"
 APPLICATION = "org.horocore.packagequalification"
 SERIAL = "emulator-5554"
 TRANSPORT = "37"
@@ -29,6 +30,7 @@ LIFECYCLE = ("host-state lifecycleRevision=3 activity=1 state=2 process=1 window
 FRAME = ("host-frame stage=present outcome=accepted attempts=2 presentAccepted=1 beginPending=0 "
          "executePending=0 presentPending=0 completion=unobserved")
 OPENXR = "host-openxr abi=arm64-v8a stage=discovered result=0 runtimeMajor=1 runtimeMinor=1 runtimePatch=63"
+ENTRY = project.DEPLOY_ENTRY_MARKER
 OPENXR_OPTIONS = ("--host", "linux-x64", "--connection", "emulator", "--runtime", "openxr")
 LAUNCH_NONCE = "d" * 32
 LAUNCH_MARKER = project.DEPLOY_LAUNCH_MARKER + LAUNCH_NONCE
@@ -67,7 +69,7 @@ class AndroidDeployTests(unittest.TestCase):
             ("devices", "-l"): f"List of devices attached\n{SERIAL} device product:probe transport_id:{TRANSPORT}",
             ("get-serialno",): SERIAL,
             ("get-state",): "device",
-            DEVICE_CLOCK: [START, END],
+            DEVICE_CLOCK: [START] + [END] * 12,
             ("shell", "am", "get-current-user"): "10",
             ("shell", "getprop", "ro.build.version.sdk"): "36",
             ("shell", "getprop", "ro.product.cpu.abi"): "arm64-v8a",
@@ -80,12 +82,18 @@ class AndroidDeployTests(unittest.TestCase):
             ("shell", "pidof", application): "123",
             UID_QUERY: "UID\n1010200",
             STAT_QUERY: proc_stat(),
-            LOGCAT: (log_line(LIFECYCLE) + log_line(FRAME) + log_line("ignored secret=/sdcard/personal")
+            LOGCAT: ((log_line(ENTRY) if profile["renderer"] == "none" else log_line(LIFECYCLE) + log_line(FRAME))
+                     + log_line("ignored secret=/sdcard/personal")
                      + log_line("FATAL EXCEPTION: unrelated-thread", pid=999, tag="E/AndroidRuntime")),
         }
         replies.update(override or {})
         commands = []
         running = False
+        now = 0.0
+
+        def sleep(seconds):
+            nonlocal now
+            now += seconds
 
         def run(command, deadline):
             nonlocal running
@@ -119,14 +127,16 @@ class AndroidDeployTests(unittest.TestCase):
                 patch.object(project, "android_deploy_host", return_value="linux-x64"), \
                 patch.object(project, "deploy_process", side_effect=run), \
                 patch.object(project.secrets, "token_hex", return_value=LAUNCH_NONCE), \
-                patch.object(project.time, "monotonic_ns", side_effect=[100_000_000, 101_000_000, 109_000_000, 111_000_000]), \
+                patch.object(project.time, "monotonic", side_effect=lambda: now), \
+                patch.object(project.time, "sleep", side_effect=sleep), \
+                patch.object(project.time, "monotonic_ns", side_effect=[100_000_000, 101_000_000] + [109_000_000, 111_000_000] * 12), \
                 contextlib.redirect_stdout(stdout):
             status = project.main(["android-deploy", "--artifact", ".", "--profile", profile_name, "--sdk", ".",
-                                   "--device", SERIAL, "--timeout", "30", *options])
+                                   "--device", SERIAL, "--timeout", "1", *options])
         return status, json.loads(stdout.getvalue()), commands
 
     def test_scopes_install_launch_process_and_reports_only_typed_facts(self):
-        status, report, commands = self.execute()
+        status, report, commands = self.execute(profile_name=VULKAN_PROFILE)
         self.assertEqual(status, 0)
         self.assertEqual(report["status"], "complete")
         self.assertEqual(report["artifact"]["apkSha256"], DIGEST)
@@ -146,6 +156,74 @@ class AndroidDeployTests(unittest.TestCase):
                         next(i for i, cmd in enumerate(commands) if "start" in cmd))
         for denied in (SERIAL, PACKAGE, "personal", "unrelated-thread", "1010200", START, LOG_TIME, END):
             self.assertNotIn(denied, json.dumps(report))
+
+    def test_waits_for_evidence_from_the_selected_native_profile(self):
+        for profile, markers, expected in (
+            (PROFILE, (LIFECYCLE, ENTRY), {"entry"}),
+            (VULKAN_PROFILE, (ENTRY, LIFECYCLE, FRAME), {"lifecycle", "renderer"}),
+        ):
+            with self.subTest(profile=profile):
+                status, report, commands = self.execute(
+                    {LOGCAT: [log_line(marker) for marker in markers]}, profile_name=profile)
+                self.assertEqual((status, report["status"], commands.count(LOGCAT)), (0, "complete", len(markers)))
+                self.assertEqual(set(report["observed"]), {"crashObserved"} | expected)
+                self.assertFalse(any("force-stop" in cmd for cmd in commands))
+
+    def test_vulkan_lifecycle_without_renderer_remains_partial_at_the_deadline(self):
+        status, report, commands = self.execute({LOGCAT: log_line(LIFECYCLE)}, profile_name=VULKAN_PROFILE)
+        self.assertEqual((status, report["status"], report["error"]), (1, "partial", "application_evidence_unavailable"))
+        self.assertEqual(set(report["observed"]), {"crashObserved", "lifecycle"})
+        self.assertGreater(commands.count(LOGCAT), 1)
+
+    def test_pending_capture_can_cancel_without_accepting_unrelated_evidence(self):
+        status, report, commands = self.execute({LOGCAT: [log_line(LIFECYCLE), KeyboardInterrupt()]})
+        self.assertEqual((status, report["error"], report["cleanup"]), (130, "cancelled", {"status": "stopped"}))
+        self.assertEqual(commands.count(LOGCAT), 2)
+
+    def test_requested_zip_contains_exact_projected_report_and_its_digest(self):
+        for result, expected in ((log_line(ENTRY), 0),
+                                 (log_line("FATAL EXCEPTION: private-thread", tag="E/AndroidRuntime"), 1)):
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory).resolve() / "qualification evidence ü.zip"
+                log = result + log_line("private location /sdcard/user") + log_line(LAUNCH_MARKER)
+                status, report, _ = self.execute({LOGCAT: log}, ("--diagnostic-bundle", str(path)))
+                self.assertEqual(status, expected)
+                with zipfile.ZipFile(path) as bundle:
+                    self.assertEqual(bundle.namelist(), ["manifest.json", project.DEPLOY_REPORT_ENTRY])
+                    data = bundle.read(project.DEPLOY_REPORT_ENTRY)
+                    manifest = json.loads(bundle.read("manifest.json"))
+                self.assertEqual(data, project.canonical_json(report))
+                self.assertEqual(manifest["files"], [{"path": project.DEPLOY_REPORT_ENTRY, "bytes": len(data),
+                                                      "sha256": hashlib.sha256(data).hexdigest()}])
+                for denied in ("private-thread", "private location", LAUNCH_NONCE, SERIAL, PACKAGE):
+                    self.assertNotIn(denied, data.decode())
+                self.assertEqual(list(path.parent.iterdir()), [path])
+
+    def test_occupied_diagnostic_destination_is_rejected_before_device_commands(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory).resolve() / "Existing.ZIP"
+            path.write_bytes(b"previous archive")
+            destination = path.with_name("existing.zip") if project.os.name == "nt" else path
+            status, report, commands = self.execute(options=("--diagnostic-bundle", str(destination)))
+            self.assertEqual((status, report["error"], commands), (1, "diagnostic_bundle_destination_invalid", []))
+            self.assertEqual(path.read_bytes(), b"previous archive")
+
+    def test_diagnostic_publication_collision_preserves_new_owner_and_device_outcome(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory).resolve() / "race.zip"
+            publish = project.os.link
+
+            def compete(staged, destination):
+                self.assertEqual(destination, path)
+                destination.write_bytes(b"other owner")
+                publish(staged, destination)
+
+            with patch.object(project.os, "link", side_effect=compete):
+                status, report, commands = self.execute(options=("--diagnostic-bundle", str(path)))
+            self.assertEqual((status, report["status"], report["bundleError"]), (1, "complete", "diagnostic_bundle_write_failed"))
+            self.assertFalse(any("force-stop" in cmd for cmd in commands))
+            self.assertEqual(path.read_bytes(), b"other owner")
+            self.assertEqual(list(path.parent.iterdir()), [path])
 
     def test_explicit_host_and_connection_match_the_selected_target(self):
         status, report, _ = self.execute(options=("--host", "linux-x64", "--connection", "emulator", "--runtime", "none"))
@@ -296,10 +374,11 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual(commands.count(("devices", "-l")), 1)
 
     def test_buffered_records_with_reused_pid_or_foreign_uid_cannot_supply_evidence(self):
-        stale = log_line(LIFECYCLE, stamp=START)
+        stale = log_line(ENTRY, stamp=START)
         stale += log_line("FATAL EXCEPTION: old process", stamp="1795000000.099999999", tag="E/AndroidRuntime")
-        stale += log_line(FRAME, uid="10200")
-        stale += log_line(FRAME, stamp="1795000000.110000001")
+        stale += log_line(ENTRY, uid="10200")
+        stale += log_line(ENTRY, stamp="1795000000.110000001")
+        stale += log_line(ENTRY, tag="W/HoroPackageQualification")
         status, report, _ = self.execute({LOGCAT: stale})
         self.assertEqual((status, report["error"]), (1, "application_evidence_unavailable"))
         self.assertEqual(report["observed"], {"crashObserved": False})
@@ -307,7 +386,8 @@ class AndroidDeployTests(unittest.TestCase):
     def test_latest_matching_marker_survives_out_of_order_buffer_records(self):
         log = log_line(LIFECYCLE, stamp=END, uid="u10_a200")
         log += log_line(LIFECYCLE.replace("lifecycleRevision=3", "lifecycleRevision=2"))
-        status, report, _ = self.execute({LOGCAT: log})
+        log += log_line(FRAME)
+        status, report, _ = self.execute({LOGCAT: log}, profile_name=VULKAN_PROFILE)
         self.assertEqual(status, 0)
         self.assertEqual(report["observed"]["lifecycle"]["lifecycleRevision"], 3)
         self.assertNotIn("u10_a200", json.dumps(report))

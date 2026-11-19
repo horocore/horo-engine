@@ -355,9 +355,13 @@ entries timestamped after the device clock sample immediately before launch and
 through the sample after capture. The host's monotonic interval bounds both
 samples. Unavailable timestamps or a detected clock discontinuity yield a
 partial result. The process identity is rechecked before accepting the capture.
-Only Horo lifecycle and renderer counters and a crash marker leave the tool.
-Cancellation, unverifiable
-installation, missing evidence and crashes retain a partial result. Before
+Only closed, profile-specific facts leave the tool. The input-only package
+records entry after the GameActivity callback and input bridge are ready.
+The Vulkan qualification package must report both lifecycle and renderer
+counters before the host marks the deployment complete.
+The host waits for the applicable evidence or a crash marker within the same
+deadline. Cancellation, unverifiable installation, missing evidence and
+crashes retain a partial result. Before
 replacing an APK, the command checks whether its package already has a process.
 After an attributed launch, failure gives cleanup its own five-second deadline.
 Cleanup checks the selected transport, installed digest and process identity
@@ -374,6 +378,17 @@ A successful operation leaves the app running. The renderer declaration
 comes from the package. Renderer counters describe
 observed acceptance, with GPU and physical presentation completion outside
 this diagnostic contract.
+
+Pass `--diagnostic-bundle` with a new absolute `.zip` path in an existing
+ordinary directory to retain the same portable report, including partial
+outcomes. The ZIP contains `android/deployment.json` and a digest manifest
+with the report's exact byte count and SHA-256. Publication uses the same
+filesystem and refuses to replace an existing destination. The filesystem
+must support hard links. The report and archive exclude raw logcat output,
+device serials, UIDs, PIDs, launch receipts and installed paths. An archive
+write failure leaves the recorded deployment outcome intact and returns a
+portable `bundleError` alongside it. A successful ordinary deployment keeps
+its app running even if the later archive write fails.
 
 ## Diagnostics And Crash Evidence
 

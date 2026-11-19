@@ -38,6 +38,7 @@ OPENXR_LOADER_LICENSE = "licenses/openxr-loader.txt"
 OPENXR_PERMISSIONS = ("org.khronos.openxr.permission.OPENXR", "org.khronos.openxr.permission.OPENXR_SYSTEM")
 DEPLOY_LAUNCH_EXTRA = "org.horocore.qualification.LAUNCH"
 DEPLOY_LAUNCH_MARKER = "host-launch nonce="
+DEPLOY_ENTRY_MARKER = "host-entry input=accepted"
 
 
 # D203 and D211 conflict; retain the PEP-257 no-blank class docstring style.
@@ -913,7 +914,9 @@ def apk_main(argv=None) -> int:
 
 PACKAGE_ACTIVITY = "PackageActivity"
 DEPLOY_CAPTURE_BYTES = 256 * 1024
+DEPLOY_REPORT_BYTES = 16 * 1024
 DEPLOY_CLEANUP_SECONDS = 5
+DEPLOY_REPORT_ENTRY = "android/deployment.json"
 ADB_CONNECTION_MODES = ("usb", "emulator", "tcpip")
 
 
@@ -1231,7 +1234,7 @@ def process_log_entries(log: str, process: DeployedProcess, after: int, through:
             yield logged, priority, tag, message
 
 
-def package_log_evidence(log: str, process: DeployedProcess, after: int, through: int, *, openxr: bool = False) -> dict:
+def package_log_evidence(log: str, process: DeployedProcess, after: int, through: int, categories: tuple[str, ...]) -> dict:
     """Project named telemetry only from the exact UID, PID and admitted time interval."""
     evidence = {"crashObserved": False}
     latest = {}
@@ -1239,13 +1242,18 @@ def package_log_evidence(log: str, process: DeployedProcess, after: int, through
         if tag == "AndroidRuntime":
             evidence["crashObserved"] |= priority in ("E", "F") and message.startswith("FATAL EXCEPTION:")
             continue
-        if openxr and message.startswith("host-openxr "):
+        if tag != "HoroPackageQualification" or priority != "I":
+            continue
+        if "entry" in categories and message == DEPLOY_ENTRY_MARKER:
+            evidence["entry"] = {"input": "accepted"}
+            continue
+        if "openxr" in categories and message.startswith("host-openxr "):
             if "openxr" in evidence:
                 raise AndroidDeployError("openxr_diagnostic_ambiguous")
             evidence["openxr"] = openxr_log_evidence(message)
             continue
         for category, pattern in (("lifecycle", STATE_LINE), ("renderer", FRAME_LINE)):
-            if logged >= latest.get(category, 0) and (match := pattern.fullmatch(message)):
+            if category in categories and logged >= latest.get(category, 0) and (match := pattern.fullmatch(message)):
                 fields = {name: (int(value) if value.isdecimal() else value) for name, value in match.groupdict().items()}
                 if all(not isinstance(value, int) or value < 2**64 for value in fields.values()):
                     evidence[category] = fields
@@ -1298,10 +1306,10 @@ def read_deployed_process_log(device: AdmittedAdbDevice, process: DeployedProces
 
 
 def deploy_diagnostics(device: AdmittedAdbDevice, application: str, process: DeployedProcess, start: AndroidLogClock,
-                       *, openxr: bool = False) -> dict:
+                       categories: tuple[str, ...]) -> dict:
     """Collect bounded markers from the exact process captured by this launch."""
     raw, through = read_deployed_process_log(device, process, start)
-    facts = package_log_evidence(raw, process, start.nanoseconds, through, openxr=openxr)
+    facts = package_log_evidence(raw, process, start.nanoseconds, through, categories)
     if facts["crashObserved"] and device.process_id(application) is None:
         return facts
     if deployed_process(device, application, process.uid) != process:
@@ -1309,15 +1317,26 @@ def deploy_diagnostics(device: AdmittedAdbDevice, application: str, process: Dep
     return facts
 
 
-def await_openxr_diagnostics(device: AdmittedAdbDevice, application: str, process: DeployedProcess,
-                             start: AndroidLogClock) -> dict:
-    """Wait for one terminal diagnostic through the same verified ADB transport and PID."""
+def await_deploy_diagnostics(device: AdmittedAdbDevice, application: str, process: DeployedProcess,
+                             start: AndroidLogClock, profile: dict) -> tuple[dict, bool]:
+    """Wait for actual evidence from the selected profile on the verified ADB transport and process."""
+    openxr = "openxrProfile" in profile
+    if openxr:
+        required = ("openxr",)
+    elif profile["renderer"] == "none":
+        required = ("entry",)
+    else:
+        required = ("lifecycle", "renderer")
+    facts = {"crashObserved": False}
     while time.monotonic() < device.deadline:
-        facts = deploy_diagnostics(device, application, process, start, openxr=True)
-        if facts["crashObserved"] or "openxr" in facts:
-            return facts
+        facts.update(deploy_diagnostics(device, application, process, start, required))
+        applicable = all(key in facts for key in required)
+        if facts["crashObserved"] or applicable:
+            return facts, applicable
         time.sleep(min(0.1, max(0, device.deadline - time.monotonic())))
-    raise AndroidDeployError("openxr_diagnostic_timeout")
+    if openxr:
+        raise AndroidDeployError("openxr_diagnostic_timeout")
+    return facts, False
 
 
 @dataclass(frozen=True)
@@ -1412,6 +1431,39 @@ def android_deploy_host() -> str:
                  if os_name == system and machine in {value.lower() for value in machines}), "unknown")
 
 
+def validate_deploy_bundle(path: Path) -> None:
+    """Require an absent absolute ZIP output under a stable existing directory."""
+    try:
+        valid = (path.is_absolute() and path.suffix.lower() == ".zip" and not os.path.lexists(path)
+                 and path.parent.is_dir() and path.parent.resolve(strict=True) == path.parent)
+    except (OSError, RuntimeError, ValueError):
+        raise AndroidDeployError("diagnostic_bundle_destination_invalid") from None
+    if not valid:
+        raise AndroidDeployError("diagnostic_bundle_destination_invalid")
+
+
+def write_deploy_bundle(path: Path, report: dict) -> None:
+    """Publish a complete report and digest manifest atomically without replacing anything."""
+    data = canonical_json(report)
+    if len(data) > DEPLOY_REPORT_BYTES:
+        raise AndroidDeployError("diagnostic_bundle_report_limit")
+    manifest = canonical_json({"schemaVersion": 1, "metadata": {"kind": "android-deployment"}, "missingOptional": [],
+                               "files": [{"path": DEPLOY_REPORT_ENTRY, "bytes": len(data),
+                                          "sha256": hashlib.sha256(data).hexdigest()}]})
+    try:
+        with tempfile.TemporaryDirectory(prefix=".horo-android-diagnostics-", dir=path.parent) as scratch:
+            staged = Path(scratch) / "bundle.zip"
+            with staged.open("xb") as output:
+                with zipfile.ZipFile(output, "w") as bundle:
+                    bundle.writestr(zipfile.ZipInfo("manifest.json"), manifest)
+                    bundle.writestr(zipfile.ZipInfo(DEPLOY_REPORT_ENTRY), data)
+                output.flush()
+                os.fsync(output.fileno())
+            os.link(staged, path)
+    except OSError:
+        raise AndroidDeployError("diagnostic_bundle_write_failed") from None
+
+
 def android_deploy_main(argv=None) -> int:
     """Install and launch one declared signed Android artifact, then emit a redacted JSON result."""
     parser = argparse.ArgumentParser(description=android_deploy_main.__doc__)
@@ -1425,6 +1477,7 @@ def android_deploy_main(argv=None) -> int:
                         help="Explicit runtime intent. OpenXR requires host and connection selections.")
     parser.add_argument("--java", default="java", help="Native Java executable for the locked signature verifier.")
     parser.add_argument("--timeout", type=int, default=120, help="Total host command deadline in seconds (1-300).")
+    parser.add_argument("--diagnostic-bundle", type=Path, help="New absolute ZIP path for redacted deployment evidence.")
     arguments = parser.parse_args(argv)
     if not re.fullmatch(r"[A-Za-z0-9\[][A-Za-z0-9_.:@%+\[\]-]{0,127}", arguments.device) or not 1 <= arguments.timeout <= 300:
         parser.error("Supply a valid explicit ADB serial and a deadline of 1-300 seconds.")
@@ -1437,7 +1490,11 @@ def android_deploy_main(argv=None) -> int:
                                 "connection": connection, "runtime": runtime, "physicalXrQualification": "not_run"}}
     exit_code = 1
     launch = None
+    bundle_admitted = False
     try:
+        if arguments.diagnostic_bundle is not None:
+            validate_deploy_bundle(arguments.diagnostic_bundle)
+            bundle_admitted = True
         if arguments.host and arguments.host != host:
             raise AndroidDeployError("deployment_host_mismatch")
         if arguments.runtime == "openxr":
@@ -1489,10 +1546,7 @@ def android_deploy_main(argv=None) -> int:
             launch = AndroidPackageLaunch(device, application, user, artifact.apk_sha256)
             process, launch_time = launch.start()
             report["stage"] = "diagnostics"
-            if openxr:
-                observed = await_openxr_diagnostics(device, application, process, launch_time)
-            else:
-                observed = deploy_diagnostics(device, application, process, launch_time)
+            observed, applicable = await_deploy_diagnostics(device, application, process, launch_time, profile)
             report["observed"] = observed
             if observed["crashObserved"]:
                 raise AndroidDeployError("application_crashed")
@@ -1506,7 +1560,7 @@ def android_deploy_main(argv=None) -> int:
                 if report["cleanup"]["status"] not in ("stopped", "already_exited"):
                     raise AndroidDeployError("application_stop_unconfirmed")
                 report["status"] = "diagnostic_complete"
-            elif "lifecycle" not in observed and "renderer" not in observed:
+            elif not applicable:
                 raise AndroidDeployError("application_evidence_unavailable")
             else:
                 report["status"] = "complete"
@@ -1523,6 +1577,16 @@ def android_deploy_main(argv=None) -> int:
             report["cleanup"] = {"status": "unconfirmed", "reason": "device_transport_changed"}
         else:
             report["cleanup"] = launch.rollback()
+    if bundle_admitted:
+        try:
+            write_deploy_bundle(arguments.diagnostic_bundle, report)
+        except KeyboardInterrupt:
+            report["bundleError"] = "cancelled"
+            exit_code = 130
+        except AndroidDeployError as error:
+            report["bundleError"] = error.code
+            if exit_code == 0:
+                exit_code = 1
     print(canonical_json(report).decode("utf-8"), end="")
     return exit_code
 

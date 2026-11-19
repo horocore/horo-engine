@@ -116,6 +116,10 @@ namespace {
         app.onAppCmd = [](android_app *source, std::int32_t command) {
             static_cast<CallbackOwner *>(source->userData)->Command(*source, command);
         };
+#if !defined(HORO_ANDROID_QUALIFICATION_VULKAN) && !defined(HORO_ANDROID_QUALIFICATION_OPENXR_DISCOVERY)
+        if (owner.input.Status() == Horo::Platform::Android::InputAdmission::Accepted)
+            __android_log_write(ANDROID_LOG_INFO, "HoroPackageQualification", "host-entry input=accepted");
+#endif
         std::uint64_t frame{};
         while (app.destroyRequested == 0 && !owner.failed) {
             collector.BeginFrame(++frame);
