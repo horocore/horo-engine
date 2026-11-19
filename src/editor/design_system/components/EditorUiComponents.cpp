@@ -198,7 +198,7 @@ namespace Horo::Editor::Ui {
         };
 
         /** @brief Resolves editable-title geometry from the current content region and theme scale. */
-        [[nodiscard]] EditableTitleLayout ResolveEditableTitleLayout(const EditableTitleProps &props, const Theme::Fonts &fonts) {
+        [[nodiscard]] EditableTitleLayout ResolveEditableTitleLayout(const EditableTitleProps &props) {
             const ImVec2 position = ImGui::GetCursorScreenPos();
             const float width = ImGui::GetContentRegionAvail().x;
             const float uiScale = Theme::GetActiveTokens().sizes.uiScale;
@@ -206,10 +206,7 @@ namespace Horo::Editor::Ui {
             const float iconSize = 22.0F * uiScale;
             const float controlX = position.x + iconSize + 7.0F * uiScale;
             const float controlWidth = std::max(1.0F, position.x + width - props.trailingWidth - 6.0F * uiScale - controlX);
-            const float titleFontSize = InspectorTypography::ObjectTitle();
-            const float effectiveFontHeight = fonts.sansEmphasis != nullptr
-                                                  ? fonts.sansEmphasis->FontSize * Theme::Scale(titleFontSize, Theme::FontPx::SansEmphasis)
-                                                  : titleFontSize;
+            const float effectiveFontHeight = InspectorTypography::ObjectTitle();
             const float controlHeight = 30.0F * uiScale;
             return {
                 .position = position,
@@ -267,9 +264,8 @@ namespace Horo::Editor::Ui {
             float controlWidth{0.0F};
         };
 
-        [[nodiscard]] float InspectorControlHeight(const Theme::Fonts &fonts) {
-            const float baseFontSize = fonts.sans != nullptr ? fonts.sans->FontSize : ImGui::GetFontSize();
-            const float renderedFontSize = baseFontSize * Theme::Scale(InspectorTypography::Field(), Theme::FontPx::Sans);
+        [[nodiscard]] float InspectorControlHeight() {
+            const float renderedFontSize = InspectorTypography::Field();
             const float verticalPadding = ScaledLayoutValue(7.0F);
             return renderedFontSize + verticalPadding * 2.0F;
         }
@@ -278,7 +274,7 @@ namespace Horo::Editor::Ui {
             const ImVec2 position = ImGui::GetCursorScreenPos();
             const float width = ImGui::GetContentRegionAvail().x;
             const auto &tokens = Theme::GetActiveTokens();
-            const float controlHeight = InspectorControlHeight(fonts);
+            const float controlHeight = InspectorControlHeight();
             const float height = controlHeight + tokens.spacing.propertyRowGap;
             if (label[0] == '\0') {
                 return {.position = position,
@@ -519,22 +515,17 @@ namespace Horo::Editor::Ui {
         ImGui::PushStyleColor(ImGuiCol_Text, Theme::Text());
         ImGui::BeginTooltip();
 
-        if (fonts != nullptr) {
-            if (fonts->sansCompact != nullptr) {
-                font_ = fonts->sansCompact;
-                fontScale_ = Theme::Scale(Theme::TextPx::Label(), Theme::FontPx::SansCompact);
-            } else if (fonts->sans != nullptr) {
-                font_ = fonts->sans;
-                fontScale_ = Theme::Scale(Theme::TextPx::Label(), Theme::FontPx::Sans);
-            }
-        }
+        if (fonts)
+            font_ = fonts->sansCompact ? fonts->sansCompact : fonts->sans;
         Theme::PushFont(font_);
-        ImGui::SetWindowFontScale(fontScale_);
+        fontScale_ = ImGui::GetCurrentWindowRead()->FontWindowScale;
+        if (font_)
+            ImGui::SetWindowFontScale(fontScale_ * Theme::Scale(Theme::TextPx::Label(), ImGui::GetFontSize()));
     }
 
     /** @copydoc ScopedTooltip::~ScopedTooltip */
     ScopedTooltip::~ScopedTooltip() {
-        ImGui::SetWindowFontScale(1.0F);
+        ImGui::SetWindowFontScale(fontScale_);
         Theme::PopFont(font_);
         ImGui::EndTooltip();
         ImGui::PopStyleColor(3);
@@ -1388,8 +1379,7 @@ namespace Horo::Editor::Ui {
                           const InputTextOptions &options) {
         const auto &tokens = Theme::GetActiveTokens();
         const auto &metrics = DesignSystem::MetricsFor(tokens, options.componentSize);
-        const float renderedTextHeight =
-            fonts.sansCompact != nullptr ? fonts.sansCompact->FontSize * metrics.fontSize / Theme::FontPx::SansCompact : metrics.fontSize;
+        const float renderedTextHeight = metrics.fontSize;
         ImVec2 framePadding = DefaultFramePadding(metrics, renderedTextHeight);
         if (options.height > 0.0F)
             framePadding.y = std::max(framePadding.y, (ScaledLayoutValue(options.height) - renderedTextHeight) * 0.5F);
@@ -1813,8 +1803,7 @@ namespace Horo::Editor::Ui {
 
         const auto &tokens = Theme::GetActiveTokens();
         const auto &metrics = DesignSystem::MetricsFor(tokens, componentSize);
-        const float renderedTextHeight =
-            fonts.sansCompact != nullptr ? fonts.sansCompact->FontSize * metrics.fontSize / Theme::FontPx::SansCompact : metrics.fontSize;
+        const float renderedTextHeight = metrics.fontSize;
         const ImVec2 framePadding = DefaultFramePadding(metrics, renderedTextHeight);
         const float labelWidth = ImGui::CalcTextSize(label).x + framePadding.x * 2.0F + metrics.iconSize;
         const float resolvedWidth = width > 0.0F ? ScaledLayoutValue(width) : labelWidth;
@@ -2462,7 +2451,7 @@ namespace Horo::Editor::Ui {
         if (maximumBytes == 0)
             return {};
 
-        const EditableTitleLayout layout = ResolveEditableTitleLayout(props, fonts);
+        const EditableTitleLayout layout = ResolveEditableTitleLayout(props);
         DrawEditorIcon(ImGui::GetWindowDrawList(), props.leadingIcon,
                        {layout.position.x, layout.position.y + (layout.height - layout.iconSize) * 0.5F},
                        {layout.iconSize, layout.iconSize}, Theme::U32(Theme::Accent()), fonts.icon);

@@ -677,9 +677,10 @@ TEST_CASE("Component metrics use theme overrides while global scaling is disable
     std::filesystem::remove(path, removeError);
 
     Theme::SetUiScalePercent(120);
-    REQUIRE(MetricsFor(Theme::GetActiveTokens(), ComponentSize::XS).minimumHeight == Catch::Approx(24.0F));
+    REQUIRE(MetricsFor(Theme::GetActiveTokens(), ComponentSize::XS).minimumHeight == Catch::Approx(28.8F));
     Theme::SetUiScalePercent(130);
-    REQUIRE(MetricsFor(Theme::GetActiveTokens(), ComponentSize::XS).minimumHeight == Catch::Approx(24.0F));
+    REQUIRE(MetricsFor(Theme::GetActiveTokens(), ComponentSize::XS).minimumHeight == Catch::Approx(31.2F));
+    Theme::SetUiScalePercent(100);
 }
 
 TEST_CASE("Small toolbar primitives share height and fixed action width", "[unit][editor][gui][design-system]") {

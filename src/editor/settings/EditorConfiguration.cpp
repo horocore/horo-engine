@@ -167,6 +167,20 @@ namespace Horo::Editor {
         return draft;
     }
 
+    namespace {
+        /** @brief Looks up an integer in the resolved configuration snapshot. */
+        const std::int64_t *FindEditorInteger(const ConfigurationSnapshot &snapshot, const char *key) {
+            const auto *resolved = snapshot.FindResolved(SettingKey{key});
+            return resolved ? std::get_if<std::int64_t>(&resolved->value) : nullptr;
+        }
+    }  // namespace
+
+    /** @copydoc ResolveEditorUiScalePercent */
+    int ResolveEditorUiScalePercent(const ConfigurationSnapshot &snapshot, const int fallback) {
+        const auto *percent = FindEditorInteger(snapshot, kUiScaleKey);
+        return static_cast<int>(std::clamp(percent ? *percent : static_cast<std::int64_t>(fallback), std::int64_t{75}, std::int64_t{200}));
+    }
+
     /** @copydoc ApplyEditorConfigurationSnapshot */
     void ApplyEditorConfigurationSnapshot(const ConfigurationSnapshot &snapshot, EditorSettings &settings) {
         const auto text = [&](const char *key, std::string &target) {
@@ -177,19 +191,16 @@ namespace Horo::Editor {
             }
         };
         const auto integer = [&](const char *key, int &target) {
-            const auto *resolved = snapshot.FindResolved(SettingKey{key});
-            if (resolved) {
-                if (const auto *value = std::get_if<std::int64_t>(&resolved->value))
-                    target = static_cast<int>(
-                        std::clamp(*value, std::int64_t{std::numeric_limits<int>::min()}, std::int64_t{std::numeric_limits<int>::max()}));
-            }
+            if (const auto *value = FindEditorInteger(snapshot, key))
+                target = static_cast<int>(
+                    std::clamp(*value, std::int64_t{std::numeric_limits<int>::min()}, std::int64_t{std::numeric_limits<int>::max()}));
         };
         if (const auto theme = snapshot.Find(SettingKey{kThemeKey}); theme && std::holds_alternative<std::string>(*theme))
             settings.themePreset = ThemePresetFromConfigurationValue(std::get<std::string>(*theme));
         text(kPackageThemeKey, settings.themeId);
         text(kAccentColorKey, settings.accentColorHex);
         text("editor.appearance.code_font_family", settings.codeFontFamily);
-        integer(kUiScaleKey, settings.uiScalePercent);
+        settings.uiScalePercent = ResolveEditorUiScalePercent(snapshot, settings.uiScalePercent);
         integer(kCodeFontSizeKey, settings.codeFontSizePx);
         for (const auto &entry : CodeEditorBooleanSettings()) {
             const auto *resolved = snapshot.FindResolved(SettingKey{std::string{"editor.code."} + entry.key});

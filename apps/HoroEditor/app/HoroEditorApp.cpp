@@ -1739,17 +1739,37 @@ namespace Horo::Editor {
             return update;
         }
 
-        /** @brief Applies a new captured preference before the editor starts rendering the frame. */
-        Result<void> RefreshEditorThemeAccessibility(const ConfigurationService &configuration, ConfigurationRevision &applied) {
+        struct EditorThemeAccessibilityState final {
+            ConfigurationRevision revision{};
+            int scalePercent{100};
+            float displayToWindowScale{1.0F};
+        };
+
+        /** @brief Retains the last admitted content scale if the window system has no current report. */
+        float RefreshDisplayToWindowScale(SDL_Window &window, const float previous) noexcept {
+            const float density = SDL_GetWindowPixelDensity(&window);
+            const float scale = SDL_GetWindowDisplayScale(&window);
+            if (!(density > 0.0F && scale > 0.0F))
+                return previous;
+            const float logical = scale / density;
+            return std::isfinite(logical) && logical > 0.0F ? logical : previous;
+        }
+
+        /** @brief Updates the logical GUI size independently of the renderer's framebuffer projection. */
+        Result<void> RefreshEditorThemeAccessibility(const ConfigurationService &configuration, SDL_Window &window,
+                                                     EditorThemeAccessibilityState &applied) {
             const auto config = configuration.Snapshot();
-            if (config.Revision() == applied)
-                return Result<void>::Success();
-            const auto visual = CaptureEditorVisualSettings(config);
-            if (visual.HasError())
-                return Result<void>::Failure(visual.ErrorValue());
-            const auto &preferences = visual.Value();
-            Theme::ApplyVisualPreferences({preferences.ui.highContrast, preferences.ui.reduceMotion, preferences.suppressFlash});
-            applied = config.Revision();
+            if (config.Revision() != applied.revision) {
+                const auto visual = CaptureEditorVisualSettings(config);
+                if (visual.HasError())
+                    return Result<void>::Failure(visual.ErrorValue());
+                const auto &preferences = visual.Value();
+                applied.scalePercent = ResolveEditorUiScalePercent(config);
+                Theme::ApplyVisualPreferences({preferences.ui.highContrast, preferences.ui.reduceMotion, preferences.suppressFlash});
+                applied.revision = config.Revision();
+            }
+            applied.displayToWindowScale = RefreshDisplayToWindowScale(window, applied.displayToWindowScale);
+            Theme::ApplyUiScale(applied.scalePercent, applied.displayToWindowScale);
             return Result<void>::Success();
         }
 
@@ -2414,7 +2434,8 @@ namespace Horo::Editor {
             }
 
             Result<void> UpdatePresentation(const Runtime::FrameContext &context) {
-                if (auto refreshed = RefreshEditorThemeAccessibility(p_->configuration, themeAccessibilityRevision_); refreshed.HasError())
+                if (auto refreshed = RefreshEditorThemeAccessibility(p_->configuration, *p_->presentation.window, themeAccessibility_);
+                    refreshed.HasError())
                     return refreshed;
                 const auto surface = Theme::Bg0();
                 const auto text = Theme::Text();
@@ -2957,7 +2978,7 @@ namespace Horo::Editor {
             EditorRuntimeAuthorities authorities_;
             EditorPacingState pacing_;
             ConfigurationRevision uiAccessibilityRevision_{};
-            ConfigurationRevision themeAccessibilityRevision_{};
+            EditorThemeAccessibilityState themeAccessibility_;
             std::unique_ptr<Application::Internal::EditorConsoleExecution> console_;
             std::unique_ptr<RuntimeConsoleView> consoleView_;
             std::string consoleActivationErrorCode_;

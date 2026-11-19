@@ -395,9 +395,18 @@ Custom themes discovered under `~/.horo/themes/` may override them with:
 }
 ```
 
-Global display scaling is temporarily disabled. The persisted setting remains
-in the settings document for compatibility, but the editor renders at 100%
-until font, layout, native DPI, and viewport scaling share one coherent policy.
+The desktop editor applies the persisted appearance scale before drawing each
+frame. Logical layout uses the user percentage times the display content scale
+divided by framebuffer pixel density. SDL and the renderer retain ownership of
+framebuffer conversion. The theme starts from its unscaled metrics on each
+change, projects the same scale into native controls and design tokens, and
+keeps visible text at or above 16 logical pixels. Existing glyph resources stay
+valid while the logical scale changes. Rebuilding the atlas at a new DPI bucket
+requires a separate renderer-owned resource replacement boundary.
+
+Shared text scopes still take resolved logical sizes. Desktop editor and native
+GUI consumers must rebuild with the updated theme header because font scopes
+now store the enclosing window's multiplier for restoration.
 
 Not every primitive exposes every option. A control only exposes properties
 that have a defined behavior and token mapping. Feature code composes or wraps a

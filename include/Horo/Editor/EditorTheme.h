@@ -344,23 +344,28 @@ namespace Horo::Editor::Theme {
     };
 
     struct ScopedFontScale {
-        explicit ScopedFontScale(float scale) {
-            ImGui::SetWindowFontScale(scale);
-        }
-
-        ~ScopedFontScale() {
-            ImGui::SetWindowFontScale(1.0F);
-        }
+        /** @brief Applies a native window font multiplier for this draw scope. @param scale Relative multiplier. */
+        explicit ScopedFontScale(float scale);
+        /** @brief Restores the containing draw scope's window multiplier. */
+        ~ScopedFontScale();
 
         ScopedFontScale(const ScopedFontScale &) = delete;
         ScopedFontScale &operator=(const ScopedFontScale &) = delete;
+
+    private:
+        float previous_{1.0F};
     };
 
     struct ScopedTextStyle {
         [[no_unique_address]] ScopedFont font;
         [[no_unique_address]] ScopedFontScale scale;
 
-        ScopedTextStyle(ImFont *f, float targetPx, float basePx) : font(f), scale(Scale(targetPx, basePx)) {}
+        ScopedTextStyle(ImFont *f, float targetPx, float basePx)
+            : font(f), scale(Scale(std::max(16.0F, targetPx), NativeFontPixels(basePx))) {}
+
+    private:
+        /** @brief Cancels the global scale for role sizes already resolved by the design system. */
+        [[nodiscard]] static float NativeFontPixels(float fallback) noexcept;
     };
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -508,11 +513,15 @@ namespace Horo::Editor::Theme {
      * @return Last applied preferences, or defaults before the common configuration is available. */
     [[nodiscard]] VisualPreferences GetVisualPreferences() noexcept;
 
-    /**
-     * @brief Compatibility hook for the temporarily disabled global UI scale setting.
-     * @param percent Persisted scale value; currently ignored while UI scaling is disabled.
-     */
+    /** @brief Applies a user scale at the neutral display scale before drawing the next GUI frame.
+     * @param percent Persisted percentage in the editor appearance range. */
     void SetUiScalePercent(int percent);
+
+    /** @brief Resolves native style, token geometry, and font sizing from the unscaled theme.
+     * @param percent Persisted editor appearance percentage.
+     * @param displayToWindowScale Display content scale divided by the framebuffer pixel density.
+     * @pre Called before starting a GUI frame on the owner thread. */
+    void ApplyUiScale(int percent, float displayToWindowScale) noexcept;
 
     /** @brief Returns the currently active theme index. */
     [[nodiscard]] int GetActiveThemeIndex();

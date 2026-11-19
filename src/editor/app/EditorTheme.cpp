@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <initializer_list>
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -40,13 +41,46 @@ namespace Horo::Editor::Theme {
             VisualPreferences preferences;
             ImGuiContext *context{};
             std::optional<std::array<ImVec4, ImGuiCol_COUNT>> nativeBase;
+            std::optional<ImGuiStyle> layoutBase;
+            float layoutScale{1.0F};
         };
+
+        /** @brief Returns persistent editor state that the ImGui shutdown hook can clear without rebinding. */
+        VisualThemeState &StoredVisualState() noexcept {
+            static VisualThemeState state;
+            return state;
+        }
+
+        /** @brief Drops all context-bound preferences before the toolkit can reuse the context's address. */
+        void ReleaseVisualContext(ImGuiContext *context, ImGuiContextHook *) {
+            auto &state = StoredVisualState();
+            if (state.context == context) {
+                state = {};
+                ActiveTokens() = UnscaledTokens();
+            }
+        }
+
+        /** @brief Installs one lifetime hook per GUI context. */
+        void ObserveVisualContext(ImGuiContext &context) {
+            if (const auto attached = [](const ImGuiContextHook &hook) {
+                return hook.Callback == ReleaseVisualContext;
+            }; std::ranges::any_of(context.Hooks, attached))
+                return;
+            ImGuiContextHook hook{};
+            hook.Type = ImGuiContextHookType_Shutdown;
+            hook.Callback = ReleaseVisualContext;
+            ImGui::AddContextHook(&context, &hook);
+        }
 
         /** @brief Keeps the active context's native base palette apart from the derived preference colours. */
         VisualThemeState &VisualState() noexcept {
-            static VisualThemeState state;
-            if (const auto context = ImGui::GetCurrentContext(); state.context != context)
+            auto &state = StoredVisualState();
+            if (const auto context = ImGui::GetCurrentContext(); state.context != context) {
                 state = {.context = context};
+                ActiveTokens() = UnscaledTokens();
+                if (context)
+                    ObserveVisualContext(*context);
+            }
             return state;
         }
 
@@ -76,12 +110,71 @@ namespace Horo::Editor::Theme {
 
         void ResolveActiveTokens() {
             ActiveTokens() = UnscaledTokens();
-            const auto preferences = VisualState().preferences;
+            const auto &state = VisualState();
+            ApplyGlobalUiScale(ActiveTokens(), state.layoutScale);
+            const auto preferences = state.preferences;
             if (preferences.highContrast) {
                 ActiveTokens().colors = HighContrastColors();
                 ActiveTokens().sourceSyntax = {};
             }
             ActiveTokens().motion.reduceMotion |= preferences.reduceMotion;
+        }
+
+        /** @brief Restores exactly the metric members scaled by the pinned ImGui style API and editor border policy. */
+        void CopyNativeMetrics(ImGuiStyle &to, const ImGuiStyle &from) noexcept {
+            constexpr std::array vectors{&ImGuiStyle::WindowPadding,        &ImGuiStyle::WindowMinSize,
+                                         &ImGuiStyle::FramePadding,         &ImGuiStyle::ItemSpacing,
+                                         &ImGuiStyle::ItemInnerSpacing,     &ImGuiStyle::CellPadding,
+                                         &ImGuiStyle::TouchExtraPadding,    &ImGuiStyle::SeparatorTextPadding,
+                                         &ImGuiStyle::DisplayWindowPadding, &ImGuiStyle::DisplaySafeAreaPadding};
+            constexpr std::array scalars{&ImGuiStyle::WindowRounding,
+                                         &ImGuiStyle::ChildRounding,
+                                         &ImGuiStyle::PopupRounding,
+                                         &ImGuiStyle::FrameRounding,
+                                         &ImGuiStyle::IndentSpacing,
+                                         &ImGuiStyle::ColumnsMinSpacing,
+                                         &ImGuiStyle::ScrollbarSize,
+                                         &ImGuiStyle::ScrollbarRounding,
+                                         &ImGuiStyle::GrabMinSize,
+                                         &ImGuiStyle::GrabRounding,
+                                         &ImGuiStyle::LogSliderDeadzone,
+                                         &ImGuiStyle::TabRounding,
+                                         &ImGuiStyle::TabMinWidthForCloseButton,
+                                         &ImGuiStyle::TabBarOverlineSize,
+                                         &ImGuiStyle::MouseCursorScale,
+                                         &ImGuiStyle::FrameBorderSize,
+                                         &ImGuiStyle::ChildBorderSize,
+                                         &ImGuiStyle::WindowBorderSize,
+                                         &ImGuiStyle::PopupBorderSize,
+                                         &ImGuiStyle::TabBorderSize};
+            for (const auto field : vectors)
+                to.*field = from.*field;
+            for (const auto field : scalars)
+                to.*field = from.*field;
+        }
+
+        /** @brief Keeps native control geometry and font scale in the same logical units as the current tokens. */
+        void ApplyNativeLayout(ImGuiStyle &style) noexcept {
+            auto &state = VisualState();
+            if (!state.layoutBase)
+                state.layoutBase = style;
+            CopyNativeMetrics(style, *state.layoutBase);
+            const auto &tokens = GetActiveTokens();
+            const float scale = tokens.sizes.uiScale;
+            if (scale != 1.0F)
+                style.ScaleAllSizes(scale);
+            style.FrameBorderSize *= scale;
+            style.ChildBorderSize *= scale;
+            style.WindowBorderSize *= scale;
+            style.PopupBorderSize *= scale;
+            style.TabBorderSize *= scale;
+            style.FrameRounding = tokens.radii.control;
+            style.GrabRounding = tokens.radii.control;
+            style.ChildRounding = tokens.radii.card;
+            style.PopupRounding = tokens.radii.modal;
+            auto &io = ImGui::GetIO();
+            const float fontPixels = io.FontDefault ? io.FontDefault->FontSize : FontPx::Sans;
+            io.FontGlobalScale = std::max(scale, 16.0F / std::max(1.0F, fontPixels));
         }
 
         /** @brief Restores the exact authored native colours before another theme or preference is selected. */
@@ -614,11 +707,43 @@ namespace Horo::Editor::Theme {
         }
     }
 
+    /** @copydoc ScopedFontScale::ScopedFontScale */
+    ScopedFontScale::ScopedFontScale(const float scale) : previous_(ImGui::GetCurrentWindowRead()->FontWindowScale) {
+        ImGui::SetWindowFontScale(scale);
+    }
+
+    /** @copydoc ScopedFontScale::~ScopedFontScale */
+    ScopedFontScale::~ScopedFontScale() {
+        ImGui::SetWindowFontScale(previous_);
+    }
+
+    /** @copydoc ScopedTextStyle::NativeFontPixels */
+    float ScopedTextStyle::NativeFontPixels(const float fallback) noexcept {
+        const auto *current = ImGui::GetFont();
+        const float pixels = current ? current->FontSize * current->Scale : fallback;
+        const auto *parent = ImGui::GetCurrentWindowRead()->ParentWindow;
+        const float parentScale = parent ? parent->FontWindowScale : 1.0F;
+        return pixels * ImGui::GetIO().FontGlobalScale * parentScale;
+    }
+
+    /** @copydoc SetUiScalePercent */
     void SetUiScalePercent(const int percent) {
-        // UI scaling is intentionally disabled until font, layout, and viewport
-        // scaling can be resolved through one coherent DPI-aware policy.
-        static_cast<void>(percent);
+        ApplyUiScale(percent, 1.0F);
+    }
+
+    /** @copydoc ApplyUiScale */
+    void ApplyUiScale(const int percent, const float displayToWindowScale) noexcept {
+        if (!std::isfinite(displayToWindowScale) || displayToWindowScale <= 0.0F)
+            return;
+        const float userScale = static_cast<float>(std::clamp(percent, 75, 200)) / 100.0F;
+        auto &state = VisualState();
+        const float scale = std::clamp(userScale * displayToWindowScale, 0.5F, 3.0F);
+        if (state.layoutScale == scale && state.layoutBase)
+            return;
+        state.layoutScale = scale;
         ResolveActiveTokens();
+        if (state.context)
+            ApplyNativeLayout(ImGui::GetStyle());
     }
 
     namespace {
@@ -685,11 +810,7 @@ namespace Horo::Editor::Theme {
         else
             InstallUnscaledTokens(CustomThemeTokens(entry, style));
 
-        const auto &tokens = GetActiveTokens();
-        style.FrameRounding = tokens.radii.control;
-        style.GrabRounding = tokens.radii.control;
-        style.ChildRounding = tokens.radii.card;
-        style.PopupRounding = tokens.radii.modal;
+        ApplyNativeLayout(style);
         ApplyNativeContrast(style);
     }
 
@@ -841,6 +962,8 @@ namespace Horo::Editor::Theme {
 
     /** @copydoc Apply */
     void Apply(ImGuiStyle &style, const char *overridePath, const char *userThemesPath) {
+        if (const auto &layout = VisualState().layoutBase)
+            CopyNativeMetrics(style, *layout);
         VisualState() = {.context = ImGui::GetCurrentContext()};
         ImGui::StyleColorsDark();
         style.WindowRounding = 0;
@@ -900,6 +1023,7 @@ namespace Horo::Editor::Theme {
                 InstallUnscaledTokens(DefaultDesignTokens());
                 break;
         }
+        ApplyNativeLayout(ImGui::GetStyle());
         ApplyNativeContrast(ImGui::GetStyle());
     }
 }  // namespace Horo::Editor::Theme

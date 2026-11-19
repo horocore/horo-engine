@@ -112,6 +112,12 @@ namespace Horo::Editor {
      */
     [[nodiscard]] ModuleConfigurationContribution MakeEditorSettingsContribution(const EditorSettings &settings);
 
+    /** @brief Reads the resolved editor appearance scale from an immutable configuration.
+     * @param snapshot Exact editor settings revision.
+     * @param fallback Scale to use if the editor descriptor is absent.
+     * @return Percentage clamped to the editor appearance range. */
+    [[nodiscard]] int ResolveEditorUiScalePercent(const ConfigurationSnapshot &snapshot, int fallback = 100);
+
     /** @brief Completes and seals the editor schema without constructing a configuration authority.
      * @param settings Persisted appearance defaults for descriptors absent from the module schema.
      * @param schema Active module schema; standalone callers may supply an empty schema.

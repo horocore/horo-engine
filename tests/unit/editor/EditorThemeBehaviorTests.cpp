@@ -130,6 +130,46 @@ TEST_CASE("Visual accessibility stays active across theme reload and restores bo
     CHECK(style.Colors[ImGuiCol_Text].x == 170.0F / 255.0F);
 }
 
+TEST_CASE("Editor scale follows logical DPI without rescaling the framebuffer or compounding theme metrics", "[unit][editor][gui][theme]") {
+    using namespace Horo::Editor;
+    Tests::HeadlessEditorGuiFixture imgui;
+    auto &style = ImGui::GetStyle();
+    auto &io = ImGui::GetIO();
+    Theme::Apply(style);
+    io.DisplayFramebufferScale = {2.0F, 2.0F};
+    const float originalPadding = style.FramePadding.x;
+    const float originalLabel = Theme::TextPx::Label();
+    Theme::ApplyUiScale(125, 1.2F);
+    CHECK(Theme::GetActiveTokens().sizes.uiScale == 1.5F);
+    CHECK(Theme::TextPx::Label() == originalLabel * 1.5F);
+    CHECK(style.FramePadding.x == originalPadding * 1.5F);
+    CHECK(io.DisplayFramebufferScale.x == 2.0F);
+    Theme::SelectThemeByIndex(2);
+    CHECK(style.FramePadding.x == originalPadding * 1.5F);
+
+    imgui.BeginFrame();
+    ImGui::Begin("scaled typography", nullptr, ImGuiWindowFlags_NoSavedSettings);
+    {
+        const Theme::ScopedTextStyle text{imgui.Fonts().sans, Theme::TextPx::Label(), Theme::FontPx::Sans};
+        CHECK(ImGui::GetFontSize() == Theme::TextPx::Label());
+        {
+            const Theme::ScopedTextStyle title{imgui.Fonts().sans, Theme::TextPx::Title(), Theme::FontPx::Sans};
+            CHECK(ImGui::GetFontSize() == Theme::TextPx::Title());
+        }
+        CHECK(ImGui::GetFontSize() == Theme::TextPx::Label());
+    }
+    ImGui::End();
+    imgui.EndFrame();
+
+    Theme::ApplyUiScale(75, 1.0F);
+    CHECK(Theme::GetActiveTokens().sizes.uiScale == 0.75F);
+    CHECK(Theme::TextPx::Label() == 16.0F);
+    CHECK(io.FontDefault->FontSize * io.FontGlobalScale == 16.0F);
+    Theme::ApplyUiScale(100, 1.0F);
+    CHECK(style.FramePadding.x == originalPadding);
+    CHECK(Theme::TextPx::Label() == originalLabel);
+}
+
 TEST_CASE("Theme watcher publishes valid replacements and retains the last good theme after invalid saves",
           "[unit][editor][gui][theme][reload]") {
     using namespace Horo;
