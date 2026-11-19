@@ -80,7 +80,7 @@ namespace Horo::Runtime {
         context.clipLimits = config.limits.clip;
         context.actions = config.limits.actions;
         context.cancellation = config.ownerCancellation;
-        context.evaluationDomain = A::AnimationEvaluationDomain::AuthoritativeSimulation;
+        context.evaluationDomain = config.evaluationDomain;
         auto graph = A::AnimationGraphInstance::Create(prepared.Borrow(), context);
         if (graph.HasError())
             return Return::Failure(graph.ErrorValue());

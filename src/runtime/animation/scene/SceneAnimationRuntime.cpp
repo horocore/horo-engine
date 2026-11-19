@@ -43,7 +43,8 @@ namespace Horo::Runtime {
 
     Result<std::unique_ptr<SceneAnimationRuntime>> SceneAnimationRuntime::Create(SceneAnimationRuntimeConfig config) {
         using Return = Result<std::unique_ptr<SceneAnimationRuntime>>;
-        if (!config.runtimeOwner.IsValid() || !config.target.IsValid() || !CanBindSource(config.expectedDispatch))
+        if (!config.runtimeOwner.IsValid() || !config.target.IsValid() || !CanBindSource(config.expectedDispatch) ||
+            config.evaluationDomain >= A::AnimationEvaluationDomain::Count)
             return Return::Failure(MakeError(A::AnimationErrors::GraphAdmissionRejected));
         if (!ValidStoragePolicy(config.limits) || !ValidWorkPolicy(config.limits))
             return Return::Failure(MakeError(A::AnimationAssetErrors::Capacity));
@@ -94,7 +95,7 @@ namespace Horo::Runtime {
                                                                  actor->instance,
                                                                  actor->authoring.skeleton,
                                                                  actor->authoring.source,
-                                                                 A::AnimationEvaluationDomain::AuthoritativeSimulation,
+                                                                 state_->config.evaluationDomain,
                                                                  observation.state,
                                                                  previous,
                                                                  publication.currentPose};

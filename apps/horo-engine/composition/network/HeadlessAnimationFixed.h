@@ -305,8 +305,12 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         config.runtimeOwner = issued.identity;
         config.target = input.animationTarget;
         config.ownerCancellation = record.sceneCancellation;
-        config.inputs =
-            record.request.world == Network::NetworkModeWorldKind::Client ? input.replicaAnimationInputs : input.animationInputs;
+        if (record.request.world == Network::NetworkModeWorldKind::Client) {
+            config.evaluationDomain = Animation::AnimationEvaluationDomain::Presentation;
+            config.inputs = input.replicaAnimationInputs;
+        } else {
+            config.inputs = input.animationInputs;
+        }
         auto adapter = Runtime::SceneAnimationRuntime::Create(config);
         if (adapter.HasError())
             return Result<void>::Failure(std::move(adapter).ErrorValue());

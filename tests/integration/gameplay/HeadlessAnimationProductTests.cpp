@@ -176,6 +176,8 @@ namespace Horo::Network::AnimationProduct {
         REQUIRE(client);
         const auto replica = Take(client->Query(fixture.trace->Entity({72})));
         REQUIRE(replica.component);
+        CHECK(server.component->domain == Animation::AnimationEvaluationDomain::AuthoritativeSimulation);
+        CHECK(replica.component->domain == Animation::AnimationEvaluationDomain::Presentation);
 
         CHECK(fixture.inputs->calls == 2);
         CHECK(fixture.inputs->lastScene == Runtime::SceneRuntimeId{71});

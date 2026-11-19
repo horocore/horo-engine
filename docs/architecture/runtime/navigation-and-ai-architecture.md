@@ -3243,6 +3243,10 @@ The execution of AI simulation phases is strictly governed by the host process's
   selected public presentation source. Without that source, the graph uses its
   authored defaults. The server or standalone gameplay animation source is
   never inherited by a connected client World, including in a listen server.
+  Its graph evaluates and publishes in the Presentation domain, which disables
+  authoritative clip notify workspaces and publications.
+  Existing Scene animation configurations retain the authoritative default.
+  Rebuild native consumers for the appended configuration field.
 - **Server State Privacy**: Agent perception memories (e.g. sight awareness meters, target tracking scores) and `BlackboardState` internal representations (behavior tree execution nodes, patrol indices, threat scoring matrices) are **server-private**.
 - **No Private State Serialization**: Network replication protocols MUST NOT synchronize private perception data or blackboard state to clients. Only publicly observable gameplay attributes (positions, rotations, locomotion speeds, equip states, public audio cues) are sent over the wire. This prevents client-side wallhacks, radar exploits, and unnecessary bandwidth consumption.
 

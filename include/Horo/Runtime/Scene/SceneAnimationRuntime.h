@@ -46,6 +46,8 @@ namespace Horo::Runtime {
         CancellationToken ownerCancellation; /**< Actual host-owned lifetime token, never a retained Startup callback borrow. */
         SceneAnimationLimits limits;
         std::shared_ptr<const SceneAnimationInputSource> inputs;
+        Animation::AnimationEvaluationDomain evaluationDomain{
+            Animation::AnimationEvaluationDomain::AuthoritativeSimulation}; /**< Fixed domain for the admitted graph and pose receipts. */
     };
 
     /** @brief Non-owning immutable observation; no pose is claimed before an actual successful fixed commit. */
@@ -58,7 +60,7 @@ namespace Horo::Runtime {
     };
 
     /**
-     * @brief The one Animation-owned Scene activation, structural and authoritative-tick adapter.
+     * @brief The Animation-owned Scene activation, structural and fixed-tick adapter.
      * @details Creation, all callbacks/control operations and destruction belong to the creating owner lane. Shared private
      * state pins actual cold-prepared graph/assets until canonical Scene retirement. It owns no filesystem, cache, independent
      * scheduler, global clock, source-parser or gameplay state. Host composition evaluates exactly once between the actual

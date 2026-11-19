@@ -106,5 +106,9 @@ namespace Horo::Runtime {
             lifetime.RequestCancellation();
             CHECK(SceneAnimationRuntime::Create(config).HasError());
         }
+        SECTION("unknown evaluation domain") {
+            config.evaluationDomain = Animation::AnimationEvaluationDomain::Count;
+            CHECK(SceneAnimationRuntime::Create(config).HasError());
+        }
     }
 }  // namespace Horo::Runtime
