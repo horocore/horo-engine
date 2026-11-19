@@ -30,6 +30,37 @@ namespace Horo::Network {
         };
     }  // namespace
 
+    /** @copydoc NetworkAuthorityObjectPublication::Find */
+    Result<NetworkObjectId> NetworkAuthorityObjectPublication::Find(Runtime::EntityRef entity) const {
+        const auto binding = binding_.lock();
+        if (!binding || entity.runtime != scene_)
+            return Result<NetworkObjectId>::Failure(MakeError(NetworkErrors::ReplicationWorldUnavailable));
+        return binding->FindAuthorityObject(entity);
+    }
+
+    /** @copydoc NetworkClientPrefabInbox::Resolve */
+    Result<Runtime::EntityRef> NetworkClientPrefabInbox::Resolve(NetworkSessionGeneration session, NetworkObjectId object) const {
+        if (const auto binding = binding_.lock())
+            return binding->ResolveClientObject(scene_, session, object);
+        return Result<Runtime::EntityRef>::Failure(MakeError(NetworkErrors::ReplicationWorldUnavailable));
+    }
+
+    /** @copydoc NetworkWorldBindingController::FindAuthorityObject */
+    Result<NetworkObjectId> NetworkWorldBindingController::FindAuthorityObject(Runtime::EntityRef entity) const {
+        if (auto checked = impl_->CheckOwner(); checked.HasError())
+            return Result<NetworkObjectId>::Failure(checked.ErrorValue());
+        return impl_->worlds.FindAuthorityObject(entity);
+    }
+
+    /** @copydoc NetworkWorldBindingController::ResolveClientObject */
+    Result<Runtime::EntityRef> NetworkWorldBindingController::ResolveClientObject(Runtime::SceneRuntimeId scene,
+                                                                                  NetworkSessionGeneration session,
+                                                                                  NetworkObjectId object) const {
+        if (auto checked = impl_->CheckOwner(); checked.HasError())
+            return Result<Runtime::EntityRef>::Failure(checked.ErrorValue());
+        return impl_->worlds.ResolveClientObject(scene, session, object);
+    }
+
     /** @copydoc NetworkClientPrefabInbox::Bind */
     Result<std::shared_ptr<const Runtime::SceneGroupPublication>> NetworkClientPrefabInbox::Bind(
         NetworkPrefabLifecycleRecord spawn, const CancellationToken &cancellation) const {

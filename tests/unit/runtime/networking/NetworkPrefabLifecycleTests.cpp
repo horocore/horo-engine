@@ -51,7 +51,7 @@ namespace Horo::Network {
         }
         SECTION("unknown version or record kind") {
             auto bytes = EncodeNetworkPrefabLifecycle(record).Value();
-            bytes[1] = std::byte{2};
+            bytes[1] = std::byte{3};
             RequireError(DecodeNetworkPrefabLifecycle(bytes), NetworkErrors::MessageEnvelopeInvalid);
             bytes[1] = std::byte{1};
             bytes[3] = std::byte{3};
@@ -76,8 +76,40 @@ namespace Horo::Network {
         const auto schema = record.spawn->members.front().schema;
         for (std::uint32_t slot = 0; slot < record.spawn->recipe.entityCount; ++slot)
             record.spawn->members[slot] = {slot, NetworkObjectId::Create(record.occurrence.Epoch(), 8 + slot, 2).Value(), schema, {1, 0}};
+        SECTION("legacy framing") {}
+        SECTION("intent uses its entire byte budget") {
+            record.spawn->intent.assign(MaximumNetworkPrefabIntentBytes, std::byte{0x1a});
+        }
         const auto bytes = EncodeNetworkPrefabLifecycle(record).Value();
-        CHECK(bytes.size() == MaximumNetworkPrefabLifecycleBytes);
+        CHECK(bytes.size() == (record.spawn->intent.empty() ? MaximumNetworkPrefabLegacyBytes : MaximumNetworkPrefabLifecycleBytes));
         CHECK(DecodeNetworkPrefabLifecycle(bytes).Value() == record);
+    }
+
+    TEST_CASE("Prefab spawn intent rejects malformed length and version", "[unit][network][replication][prefab]") {
+        auto record = SparseSpawn();
+        const auto legacy = EncodeNetworkPrefabLifecycle(record).Value();
+        record.spawn->intent = {std::byte{1}, std::byte{2}};
+        auto bytes = EncodeNetworkPrefabLifecycle(record).Value();
+        CHECK(bytes[1] == std::byte{2});
+        CHECK(DecodeNetworkPrefabLifecycle(bytes).Value() == record);
+        SECTION("truncated intent") {
+            bytes.pop_back();
+        }
+        SECTION("empty intent in the extended format") {
+            bytes.resize(legacy.size() + 2);
+            bytes.back() = std::byte{};
+        }
+        SECTION("oversized declared intent") {
+            bytes[legacy.size()] = std::byte{0xff};
+        }
+        SECTION("unexpected trailing data") {
+            bytes.push_back(std::byte{});
+        }
+        SECTION("extended despawn") {
+            record.spawn.reset();
+            bytes = EncodeNetworkPrefabLifecycle(record).Value();
+            bytes[1] = std::byte{2};
+        }
+        RequireError(DecodeNetworkPrefabLifecycle(bytes), NetworkErrors::MessageEnvelopeInvalid);
     }
 }  // namespace Horo::Network

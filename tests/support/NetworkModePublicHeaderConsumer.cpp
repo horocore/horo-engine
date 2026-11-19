@@ -72,7 +72,8 @@ int main() {
     constexpr Horo::Network::NetworkPrefabTemplateIdentity prefabRecipe{prefabAsset, Horo::Sha256Digest{{2}}, 3};
     static_assert(Horo::Network::NetworkPrefabMemberSource{prefabRecipe, 2}.IsValid());
     static_assert(!Horo::Network::NetworkPrefabMemberSource{prefabRecipe, 3}.IsValid());
-    static_assert(Horo::Network::MaximumNetworkPrefabLifecycleBytes == 7254);
+    static_assert(Horo::Network::MaximumNetworkPrefabLegacyBytes == 7254);
+    static_assert(Horo::Network::MaximumNetworkPrefabLifecycleBytes == 11352);
     static_assert(std::is_default_constructible_v<Horo::Network::NetworkClientPrefabInbox>);
     return Horo::Network::NetworkProjectRole::Standalone == Horo::Network::NetworkProjectRole::Count ? 1 : 0;
 }

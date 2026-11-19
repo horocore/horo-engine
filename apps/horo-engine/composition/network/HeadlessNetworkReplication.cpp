@@ -1,4 +1,5 @@
 #include "HeadlessNetworkWorldService.h"
+#include "HeadlessPrefabIntent.h"
 #include "Horo/Network/NetworkErrors.h"
 #include "Horo/Prefab/PreparedPrefabSpawn.h"
 
@@ -161,8 +162,10 @@ namespace Horo::Application::Internal {
         class AuthorityPrefabPublication final : public Runtime::SceneGroupPublication {
         public:
             AuthorityPrefabPublication(Network::NetworkAuthorityObjectPublication authority, CancellationToken cancellation,
-                                       Network::NetworkPrefabTemplateIdentity recipe, std::vector<PrefabMemberSchema> schemas)
-                : authority_(std::move(authority)), cancellation_(std::move(cancellation)), recipe_(recipe), schemas_(std::move(schemas)) {}
+                                       Network::NetworkPrefabTemplateIdentity recipe, std::vector<PrefabMemberSchema> schemas,
+                                       std::shared_ptr<const std::vector<std::byte>> intent)
+                : authority_(std::move(authority)), cancellation_(std::move(cancellation)), recipe_(recipe), schemas_(std::move(schemas)),
+                  intent_(std::move(intent)) {}
 
             Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(const Runtime::RuntimeSceneView &,
                                                                                std::span<const Runtime::EntityRef> members,
@@ -180,8 +183,8 @@ namespace Horo::Application::Internal {
                 std::vector<Network::ReplicationDynamicSceneObject> added;
                 added.reserve(schemas_.size());
                 for (const auto &schema : schemas_)
-                    added.push_back(
-                        {members[schema.index], schema.schema, schema.version, Network::NetworkPrefabMemberSource{recipe_, schema.index}});
+                    added.push_back({members[schema.index], schema.schema, schema.version,
+                                     Network::NetworkPrefabMemberSource{recipe_, schema.index}, added.empty() ? intent_ : nullptr});
                 return authority_.Prepare(added, {}, cancellation_);
             }
 
@@ -190,6 +193,7 @@ namespace Horo::Application::Internal {
             CancellationToken cancellation_;
             Network::NetworkPrefabTemplateIdentity recipe_;
             std::vector<PrefabMemberSchema> schemas_;
+            std::shared_ptr<const std::vector<std::byte>> intent_;
         };
 
         /** @brief Captures only schemas admitted by the authority module and project before a cooked group is queued. */
@@ -199,7 +203,7 @@ namespace Horo::Application::Internal {
                 : authority_(std::move(authority)), record_(std::move(record)) {}
 
             Result<std::shared_ptr<const Runtime::SceneGroupPublication>> Bind(const Prefab::PreparedPrefabSpawn &recipe,
-                                                                               const Prefab::PrefabSpawnRequest &,
+                                                                               const Prefab::PrefabSpawnRequest &request,
                                                                                std::span<const Runtime::RuntimeComponentSet> projected,
                                                                                std::string_view) const override {
                 const auto record = record_.lock();
@@ -213,8 +217,7 @@ namespace Horo::Application::Internal {
                 try {
                     const Network::NetworkPrefabTemplateIdentity source{recipe.Data().assetId, recipe.Source().Artifact().Digest(),
                                                                         static_cast<std::uint32_t>(projected.size())};
-                    return BindProjected(source, projected, *installed, record->activeGameplay->AdmittedReplicationSchemas(),
-                                         record->sceneCancellation);
+                    return BindProjected(source, projected, *installed, *record, request);
                 } catch (const std::bad_alloc &) {
                     return Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationWorldCapacityExceeded));
                 }
@@ -225,9 +228,9 @@ namespace Horo::Application::Internal {
 
             /** @brief Resolves each candidate member through the same admission rules used for authored entities. */
             Outcome BindProjected(Network::NetworkPrefabTemplateIdentity recipe, std::span<const Runtime::RuntimeComponentSet> projected,
-                                  const Gameplay::GameplayReplicationLease &installed,
-                                  std::span<const Network::ReplicationSchemaId> schemas, const CancellationToken &cancellation) const {
-                auto admitted = AdmitEntitySchemas(installed, schemas);
+                                  const Gameplay::GameplayReplicationLease &installed, const WorldRecord &record,
+                                  const Prefab::PrefabSpawnRequest &request) const {
+                auto admitted = AdmitEntitySchemas(installed, record.activeGameplay->AdmittedReplicationSchemas());
                 if (admitted.HasError())
                     return Outcome::Failure(admitted.ErrorValue());
                 if (admitted.Value().empty())
@@ -242,8 +245,16 @@ namespace Horo::Application::Internal {
                 }
                 if (members.empty())
                     return Outcome::Success(nullptr);
-                return Outcome::Success(
-                    std::make_shared<const AuthorityPrefabPublication>(authority_, cancellation, recipe, std::move(members)));
+                const auto scene = record.scenes->ActiveScene();
+                if (!record.templates || !scene)
+                    return Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationWorldUnavailable));
+                auto intent = EncodeHeadlessPrefabIntent(request, record.templates->LimitProfile(), *scene, authority_);
+                if (intent.HasError())
+                    return Outcome::Failure(intent.ErrorValue());
+                return Outcome::Success(std::make_shared<const AuthorityPrefabPublication>(authority_, record.sceneCancellation, recipe,
+                                                                                           std::move(members),
+                                                                                           std::make_shared<const std::vector<std::byte>>(
+                                                                                               std::move(intent.Value()))));
             }
 
             Network::NetworkAuthorityObjectPublication authority_;

@@ -12,11 +12,13 @@ namespace Horo::Network {
         using AdmissionWire::Reader;
         using AdmissionWire::Writer;
         constexpr std::uint16_t WireVersion = 1;
+        constexpr std::uint16_t IntentWireVersion = 2;
+        constexpr std::size_t IntentLengthBytes = 2;
         constexpr std::size_t HeaderBytes = 32;
         constexpr std::size_t RecipeBytes = 54;
         constexpr std::size_t MemberBytes = 28;
         static_assert(HeaderBytes + RecipeBytes + MemberBytes == MinimumNetworkPrefabSpawnBytes);
-        static_assert(HeaderBytes + RecipeBytes + MaximumNetworkPrefabEntities * MemberBytes == MaximumNetworkPrefabLifecycleBytes);
+        static_assert(HeaderBytes + RecipeBytes + MaximumNetworkPrefabEntities * MemberBytes == MaximumNetworkPrefabLegacyBytes);
 
         enum class RecordKind : std::uint16_t {
             Spawn = 1,
@@ -102,7 +104,7 @@ namespace Horo::Network {
         }
 
         /** @brief Checks framing and counts before reserving any member storage. */
-        bool ReadSpawn(Reader &reader, NetworkPrefabSpawnRecord &spawn, NetworkObjectId occurrence, std::size_t bytes) {
+        bool ReadSpawn(Reader &reader, NetworkPrefabSpawnRecord &spawn, NetworkObjectId occurrence, std::size_t bytes, bool hasIntent) {
             std::array<std::uint8_t, 16> asset;
             std::uint16_t count{};
             if (!reader.Bytes(std::as_writable_bytes(std::span(asset))) ||
@@ -110,13 +112,31 @@ namespace Horo::Network {
                 !reader.Number(spawn.recipe.entityCount, 4) || !reader.Number(count, 2))
                 return false;
             spawn.recipe.asset = Assets::AssetId::FromBytes(asset);
-            if (!ValidSpawnLayout(spawn.recipe, count) || bytes != HeaderBytes + RecipeBytes + count * MemberBytes)
+            const auto minimum = HeaderBytes + RecipeBytes + count * MemberBytes;
+            if (!ValidSpawnLayout(spawn.recipe, count) || (hasIntent ? bytes <= minimum + IntentLengthBytes : bytes != minimum))
                 return false;
             spawn.members.resize(count);
             for (auto &member : spawn.members)
                 if (!ReadMember(reader, member, occurrence.Epoch()))
                     return false;
             return ValidMembers(spawn, occurrence);
+        }
+
+        /** @brief Reads an explicitly present bounded intent payload without trusting its length. */
+        bool ReadIntent(Reader &reader, NetworkPrefabSpawnRecord &spawn) {
+            std::uint16_t length{};
+            std::span<const std::byte> bytes;
+            if (!reader.Number(length, IntentLengthBytes) || length == 0 || length > MaximumNetworkPrefabIntentBytes ||
+                !reader.Borrow(length, bytes) || !reader.Done())
+                return false;
+            spawn.intent.assign(bytes.begin(), bytes.end());
+            return true;
+        }
+
+        /** @brief Appends the one verified anchor payload to the captured group. */
+        void CaptureIntent(NetworkPrefabSpawnRecord &spawn, const NetworkObjectMappingEntry &entry) {
+            if (entry.prefabIntent)
+                spawn.intent.assign(entry.prefabIntent->begin(), entry.prefabIntent->end());
         }
 
         /** @brief Copies matching committed rows and orders them by cooked member slot. */
@@ -131,6 +151,7 @@ namespace Horo::Network {
                 if (source.recipe != spawn.recipe || spawn.members.size() == MaximumNetworkPrefabEntities)
                     return Invalid<NetworkPrefabSpawnRecord>();
                 spawn.members.push_back({source.entitySlot, entry.object, entry.provenance.schema, entry.provenance.schemaVersion});
+                CaptureIntent(spawn, entry);
             }
             if (spawn.members.empty())
                 return Result<NetworkPrefabSpawnRecord>::Failure(MakeError(NetworkErrors::NetworkObjectMappingUnknown));
@@ -184,6 +205,7 @@ namespace Horo::Network {
                     return Invalid<std::vector<NetworkPrefabLifecycleRecord>>();
                 spawn.members.push_back(
                     {origin.source.entitySlot, entry->object, entry->provenance.schema, entry->provenance.schemaVersion});
+                CaptureIntent(spawn, *entry);
             }
             for (const auto &record : records)
                 if (!ValidMembers(*record.spawn, record.occurrence))
@@ -200,6 +222,8 @@ namespace Horo::Network {
     Result<void> ValidateNetworkPrefabLifecycle(const NetworkPrefabLifecycleRecord &record) {
         if (!record.session.IsValid() || !record.occurrence.IsValid() || (record.spawn && !ValidMembers(*record.spawn, record.occurrence)))
             return Invalid<void>();
+        if (record.spawn && record.spawn->intent.size() > MaximumNetworkPrefabIntentBytes)
+            return Result<void>::Failure(MakeError(NetworkErrors::MessageEnvelopeCapacityExceeded));
         return Result<void>::Success();
     }
 
@@ -211,11 +235,17 @@ namespace Horo::Network {
         try {
             const auto kind = record.spawn ? RecordKind::Spawn : RecordKind::Despawn;
             const auto bodyBytes = record.spawn ? RecipeBytes + record.spawn->members.size() * MemberBytes : 0;
-            std::vector<std::byte> bytes(HeaderBytes + bodyBytes);
+            const std::span<const std::byte> intent =
+                record.spawn ? std::span<const std::byte>{record.spawn->intent} : std::span<const std::byte>{};
+            const auto intentBytes = intent.empty() ? 0 : IntentLengthBytes + intent.size();
+            std::vector<std::byte> bytes(HeaderBytes + bodyBytes + intentBytes);
             Writer writer{bytes};
-            if (!writer.Number(WireVersion, 2) || !writer.Number(static_cast<std::uint16_t>(kind), 2) ||
-                !writer.Number(record.session.Value(), 8) || !writer.Number(record.occurrence.Epoch().Value(), 8) ||
-                !WriteObject(writer, record.occurrence) || (record.spawn && !WriteSpawn(writer, *record.spawn)))
+            if (!writer.Number(intent.empty() ? WireVersion : IntentWireVersion, 2) ||
+                !writer.Number(static_cast<std::uint16_t>(kind), 2) || !writer.Number(record.session.Value(), 8) ||
+                !writer.Number(record.occurrence.Epoch().Value(), 8) || !WriteObject(writer, record.occurrence) ||
+                (record.spawn && !WriteSpawn(writer, *record.spawn)))
+                return Invalid<std::vector<std::byte>>();
+            if (!intent.empty() && (!writer.Number(intent.size(), IntentLengthBytes) || !writer.Bytes(intent)))
                 return Invalid<std::vector<std::byte>>();
             return Outcome::Success(std::move(bytes));
         } catch (const std::bad_alloc &) {
@@ -232,8 +262,8 @@ namespace Horo::Network {
         std::uint16_t version{};
         RecordKind kind{};
         std::uint64_t sessionValue{}, epochValue{};
-        if (!reader.Number(version, 2) || version != WireVersion || !reader.Number(kind, 2) || !reader.Number(sessionValue, 8) ||
-            !reader.Number(epochValue, 8))
+        if (!reader.Number(version, 2) || (version != WireVersion && version != IntentWireVersion) || !reader.Number(kind, 2) ||
+            !reader.Number(sessionValue, 8) || !reader.Number(epochValue, 8))
             return Invalid<NetworkPrefabLifecycleRecord>();
         const auto session = NetworkSessionGeneration::Create(sessionValue);
         const auto epoch = ReplicationAuthorityEpoch::Create(epochValue);
@@ -243,8 +273,11 @@ namespace Horo::Network {
         if (occurrence.HasError())
             return Invalid<NetworkPrefabLifecycleRecord>();
         NetworkPrefabLifecycleRecord record{session.Value(), occurrence.Value(), std::nullopt};
+        const bool hasIntent = version == IntentWireVersion;
         try {
-            if (kind == RecordKind::Spawn && !ReadSpawn(reader, record.spawn.emplace(), record.occurrence, bytes.size()))
+            if (kind == RecordKind::Spawn && !ReadSpawn(reader, record.spawn.emplace(), record.occurrence, bytes.size(), hasIntent))
+                return Invalid<NetworkPrefabLifecycleRecord>();
+            if (hasIntent && (!record.spawn || !ReadIntent(reader, *record.spawn)))
                 return Invalid<NetworkPrefabLifecycleRecord>();
             if ((kind != RecordKind::Spawn && kind != RecordKind::Despawn) || !reader.Done())
                 return Invalid<NetworkPrefabLifecycleRecord>();

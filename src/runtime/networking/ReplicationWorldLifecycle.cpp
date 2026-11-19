@@ -509,7 +509,7 @@ namespace Horo::Network {
                 previousSlot = slot;
                 provenance.prefab.emplace(*entry.prefab, occurrence);
             }
-            if (auto inserted = mapping.RegisterDynamic(entry.entity, provenance); inserted.HasError())
+            if (auto inserted = mapping.RegisterDynamic(entry.entity, provenance, entry.prefabIntent); inserted.HasError())
                 return inserted;
         }
         return Result<void>::Success();
@@ -663,6 +663,27 @@ namespace Horo::Network {
     /** @copydoc ReplicationWorldLifecycle::ObjectMappingRevision */
     std::uint64_t ReplicationWorldLifecycle::ObjectMappingRevision() const noexcept {
         return state_ == ReplicationWorldLifecycleState::Active && active_ ? active_->mappingRevision.load() : 0;
+    }
+
+    /** @copydoc ReplicationWorldLifecycle::FindAuthorityObject */
+    Result<NetworkObjectId> ReplicationWorldLifecycle::FindAuthorityObject(Runtime::EntityRef entity,
+                                                                           NetworkSessionGeneration session) const {
+        if (auto active = RequireActive(entity.runtime, session); active.HasError())
+            return Result<NetworkObjectId>::Failure(active.ErrorValue());
+        if (active_->owner != std::this_thread::get_id() || !active_->capabilities.publishAuthority)
+            return Failure<NetworkObjectId>(NetworkErrors::ReplicationAuthorityDenied);
+        return active_->mapping.Find(entity);
+    }
+
+    /** @copydoc ReplicationWorldLifecycle::ResolveReplicaObject */
+    Result<Runtime::EntityRef> ReplicationWorldLifecycle::ResolveReplicaObject(Runtime::SceneRuntimeId scene,
+                                                                               NetworkSessionGeneration session,
+                                                                               NetworkObjectId object) const {
+        if (auto active = RequireActive(scene, session); active.HasError())
+            return Result<Runtime::EntityRef>::Failure(active.ErrorValue());
+        if (active_->owner != std::this_thread::get_id() || !active_->capabilities.applyAuthoritativeState)
+            return Failure<Runtime::EntityRef>(NetworkErrors::ReplicationAuthorityDenied);
+        return active_->mapping.Resolve(object);
     }
 
     /** @copydoc ReplicationWorldLifecycle::AcquireCaptureRead */

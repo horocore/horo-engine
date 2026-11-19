@@ -15,11 +15,13 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <vector>
 
 namespace Horo::Network {
+    inline constexpr std::size_t MaximumNetworkPrefabIntentBytes = 4096;
     /** @brief Explicit owner-thread lifecycle of one session-owned mapping. */
     enum class NetworkObjectMappingState : std::uint8_t {
         Active,
@@ -93,11 +95,12 @@ namespace Horo::Network {
 
     /** @brief Complete live association copied into immutable diagnostic evidence. */
     struct NetworkObjectMappingEntry final {
-        NetworkObjectId object;             /**< Exact authority-epoch-scoped occurrence. */
-        Runtime::EntityRef entity;          /**< Exact scene and ECS slot generation. */
-        NetworkObjectProvenance provenance; /**< Stable schema/authored origin, never lookup identity. */
+        NetworkObjectId object;                                     /**< Exact authority-epoch-scoped occurrence. */
+        Runtime::EntityRef entity;                                  /**< Exact scene and ECS slot generation. */
+        NetworkObjectProvenance provenance;                         /**< Stable schema/authored origin, never lookup identity. */
+        std::shared_ptr<const std::vector<std::byte>> prefabIntent; /**< Owned serving evidence on the occurrence anchor only. */
 
-        constexpr auto operator<=>(const NetworkObjectMappingEntry &) const noexcept = default;
+        auto operator<=>(const NetworkObjectMappingEntry &) const noexcept = default;
     };
 
     /** @brief Owned immutable diagnostic projection detached from later mapping mutation or destruction. */
@@ -223,7 +226,8 @@ namespace Horo::Network {
         /** @brief Clones live indexes and tombstones into detached capacity for an owner transaction. */
         [[nodiscard]] Result<NetworkObjectMapping> CloneForPublication() const;
         /** @brief Adds one dynamic association using the first available slot and its exact next generation. */
-        [[nodiscard]] Result<void> RegisterDynamic(Runtime::EntityRef entity, const NetworkObjectProvenance &provenance);
+        [[nodiscard]] Result<void> RegisterDynamic(Runtime::EntityRef entity, const NetworkObjectProvenance &provenance,
+                                                   std::shared_ptr<const std::vector<std::byte>> prefabIntent);
         /** @brief Retires only a live dynamic association found through its exact Scene entity. */
         [[nodiscard]] Result<void> RetireDynamic(Runtime::EntityRef entity);
         /** @brief Selects a reusable tombstone or the first unused slot within the mapping budget. */

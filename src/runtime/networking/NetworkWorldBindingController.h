@@ -60,6 +60,11 @@ namespace Horo::Network {
         [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareClientPrefab(
             Runtime::SceneRuntimeId scene, const NetworkPrefabLifecycleRecord &spawn, std::span<const Runtime::EntityRef> members,
             bool creating, const CancellationToken &cancellation) const;
+        /** @brief Reverse-resolves an entity in the current authority world. */
+        [[nodiscard]] Result<NetworkObjectId> FindAuthorityObject(Runtime::EntityRef entity) const;
+        /** @brief Resolves a mapped object in the exact client Scene. */
+        [[nodiscard]] Result<Runtime::EntityRef> ResolveClientObject(Runtime::SceneRuntimeId scene, NetworkSessionGeneration session,
+                                                                     NetworkObjectId object) const;
         /** @brief Authorize non-Control dispatch against the same live peer and published local world. */
         [[nodiscard]] Result<void> AdmitWorldDispatch(ConnectionHandle connection, NetworkOperationGeneration generation,
                                                       const PeerSessionLifecycle &peer, std::uint64_t nowTick) const;

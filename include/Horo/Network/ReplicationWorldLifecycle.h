@@ -139,6 +139,7 @@ namespace Horo::Network {
         ReplicationSchemaId schema;
         ReplicationSchemaVersion version;
         std::optional<NetworkPrefabMemberSource> prefab;
+        std::shared_ptr<const std::vector<std::byte>> prefabIntent; /**< Explicit bytes retained by the first mapped member. */
     };
 
     /** @brief Exact Scene/session/phase identity supplied by a caller requesting replication work. */
@@ -336,6 +337,15 @@ namespace Horo::Network {
          * @pre Caller is the world owner and serializes structural mutation.
          * @return Active revision or zero when no mapping is active. */
         [[nodiscard]] std::uint64_t ObjectMappingRevision() const noexcept;
+        /** @brief Reverse-resolves an exact live authority object without snapshot allocation.
+         * @param entity Existing exact Scene entity. @param session Exact current world session.
+         * @return The mapped network occurrence or a typed world or mapping error. */
+        [[nodiscard]] Result<NetworkObjectId> FindAuthorityObject(Runtime::EntityRef entity, NetworkSessionGeneration session) const;
+        /** @brief Resolves an exact admitted replica identity without snapshot allocation.
+         * @param scene Exact client Scene. @param session Exact current world session.
+         * @param object Existing network occurrence. @return The local entity or a typed world or mapping error. */
+        [[nodiscard]] Result<Runtime::EntityRef> ResolveReplicaObject(Runtime::SceneRuntimeId scene, NetworkSessionGeneration session,
+                                                                      NetworkObjectId object) const;
         /** @brief Returns the owner-thread lifecycle state. */
         [[nodiscard]] ReplicationWorldLifecycleState State() const noexcept;
         /** @brief Returns the number of retained revoked worlds. */

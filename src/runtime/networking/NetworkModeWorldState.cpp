@@ -503,6 +503,24 @@ namespace Horo::Network::Detail {
         return current_[Index(kind)]->lifecycle.PrepareDynamicObjectBatch(work, added, retired);
     }
 
+    /** @copydoc NetworkModeWorldState::FindAuthorityObject */
+    Result<NetworkObjectId> NetworkModeWorldState::FindAuthorityObject(Runtime::EntityRef entity) const {
+        constexpr auto kind = NetworkModeWorldKind::AuthorityServer;
+        if (!Ready(kind, entity.runtime))
+            return Result<NetworkObjectId>::Failure(MakeError(NetworkErrors::ReplicationWorldUnavailable));
+        const auto &world = *current_[Index(kind)];
+        return world.lifecycle.FindAuthorityObject(entity, world.binding.worldSession);
+    }
+
+    /** @copydoc NetworkModeWorldState::ResolveClientObject */
+    Result<Runtime::EntityRef> NetworkModeWorldState::ResolveClientObject(Runtime::SceneRuntimeId scene, NetworkSessionGeneration session,
+                                                                          NetworkObjectId object) const {
+        constexpr auto kind = NetworkModeWorldKind::Client;
+        if (!Ready(kind, scene))
+            return Result<Runtime::EntityRef>::Failure(MakeError(NetworkErrors::ReplicationWorldUnavailable));
+        return current_[Index(kind)]->lifecycle.ResolveReplicaObject(scene, session, object);
+    }
+
     /** @copydoc NetworkModeWorldState::CaptureAuthorityPrefabs */
     Result<AuthorityPrefabView> NetworkModeWorldState::CaptureAuthorityPrefabs() {
         using Outcome = Result<AuthorityPrefabView>;

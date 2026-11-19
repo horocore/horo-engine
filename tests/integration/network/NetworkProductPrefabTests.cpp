@@ -1,8 +1,10 @@
 #include "../../helpers/GameplayModuleTestSupport.h"
 #include "../../unit/runtime/physics/PhysicsSceneActivationTestSupport.h"
+#include "HeadlessPrefabIntent.h"
 #include "Horo/Assets/AssetCook.h"
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Network/NetworkPrefabLifecycle.h"
+#include "Horo/Runtime/Scene/RuntimeScene.h"
 #include "Horo/Scene/CookedSceneDefinition.h"
 #include "NetworkModeHostTestSupport.h"
 
@@ -180,11 +182,66 @@ namespace Horo::Network {
         CHECK(decoded.spawn->recipe == NetworkPrefabTemplateIdentity{prefab, artifact, 3});
         CHECK(decoded.spawn->members[1].entitySlot == 2);
         CHECK(decoded.spawn->members[1].object == mappings[1].object);
+        REQUIRE_FALSE(decoded.spawn->intent.empty());
+        auto replica = Runtime::RuntimeScene::Create(*definition, {52}).Value();
+        const auto reconstructed = DecodeHeadlessPrefabIntent(decoded, AssetCookTargetId::Parse("linux-x64").Value(),
+                                                              Prefab::PrefabLimitProfile::Create({}).Value(), replica->View(), {});
+        REQUIRE(reconstructed.HasValue());
+        CHECK(reconstructed.Value().source.asset == prefab);
+        CHECK(reconstructed.Value().source.artifactDigest == artifact);
         CHECK(awaitMappings(0).Mapping().Entries().empty());
         CHECK(CaptureNetworkPrefabSpawn(snapshot(), decoded.occurrence).HasError());
         host->Shutdown();
         CHECK(spawned.IsRevoked());
         CHECK(CaptureNetworkPrefabSpawn(spawned, decoded.occurrence).HasError());
+    }
+
+    TEST_CASE("Network Prefab intent reconstructs typed inputs and authored references in the local Scene",
+              "[integration][network][mode][replication][prefab]") {
+        using namespace Application::Internal;
+        Runtime::SceneDefinitionBuilder builder{{19}, {1}};
+        builder.Add(Runtime::RuntimeEntityDefinition{.object = {10}});
+        const auto definition = std::move(builder).Build().Value();
+        auto authority = Runtime::RuntimeScene::Create(definition, {51}).Value();
+        auto replica = Runtime::RuntimeScene::Create(definition, {52}).Value();
+        const auto source = authority->View().Find({10}).value();
+        const auto local = replica->View().Find({10}).value();
+        REQUIRE(source != local);
+        const auto binding = Prefab::PrefabPropertyId::Create(21).Value();
+        const Prefab::PrefabSpawnRequest request{
+            .placement = {.translation = {3.0F, 4.0F, 5.0F}, .scale = {2.0F, 3.0F, 4.0F}},
+            .parent = source,
+            .initialization = {{{7}, Math::Quaternion{}},
+                               {{6}, Math::Vec3{1, 2, 3}},
+                               {{5}, Math::Vec2{4, 5}},
+                               {{4}, std::string{"ready"}},
+                               {{3}, 3.5},
+                               {{2}, std::int64_t{-24}},
+                               {{1}, true}},
+            .bindings = {{binding, source}},
+        };
+        const auto limits = Prefab::PrefabLimitProfile::Create({}).Value();
+        auto encoded = EncodeHeadlessPrefabIntent(request, limits, authority->View(), {});
+        REQUIRE(encoded.HasValue());
+        const auto target = AssetCookTargetId::Parse("linux-x64").Value();
+        NetworkPrefabLifecycleRecord record{.spawn = NetworkPrefabSpawnRecord{.intent = std::move(encoded).Value()}};
+        const auto result = DecodeHeadlessPrefabIntent(record, target, limits, replica->View(), {});
+        REQUIRE(result.HasValue());
+        const auto &restored = result.Value();
+        CHECK(restored.placement.translation == request.placement.translation);
+        CHECK(restored.placement.scale == request.placement.scale);
+        CHECK(restored.parent == local);
+        REQUIRE(restored.bindings.size() == 1);
+        CHECK(restored.bindings.front().id == binding);
+        CHECK(restored.bindings.front().target == local);
+        REQUIRE(restored.initialization.size() == request.initialization.size());
+        for (std::size_t index = 0; index < restored.initialization.size(); ++index) {
+            const auto &expected = request.initialization[request.initialization.size() - index - 1];
+            CHECK(restored.initialization[index].id == expected.id);
+            CHECK(restored.initialization[index].value == expected.value);
+        }
+        record.spawn->intent.push_back(std::byte{});
+        CHECK(DecodeHeadlessPrefabIntent(record, target, limits, replica->View(), {}).HasError());
     }
 
 }  // namespace Horo::Network

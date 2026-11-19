@@ -114,6 +114,8 @@ namespace Horo::Network {
         [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(
             std::span<const ReplicationDynamicSceneObject> added, std::span<const Runtime::EntityRef> retired,
             const CancellationToken &cancellation) const;
+        /** @brief Resolves an admitted existing entity to its authority identity without copying the mapping. */
+        [[nodiscard]] Result<NetworkObjectId> Find(Runtime::EntityRef entity) const;
 
     private:
         friend class NetworkModeComposition;
@@ -149,6 +151,8 @@ namespace Horo::Network {
          */
         [[nodiscard]] Result<std::shared_ptr<const Runtime::SceneGroupPublication>> Bind(NetworkPrefabLifecycleRecord spawn,
                                                                                          const CancellationToken &cancellation) const;
+        /** @brief Resolves an exact object in the current client world for reconstruction of a relationship. */
+        [[nodiscard]] Result<Runtime::EntityRef> Resolve(NetworkSessionGeneration session, NetworkObjectId object) const;
 
     private:
         friend class NetworkModeComposition;

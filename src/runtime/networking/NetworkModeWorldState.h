@@ -81,6 +81,11 @@ namespace Horo::Network::Detail {
         [[nodiscard]] const NetworkWorldBindingRecord *ServerBinding() const noexcept;
         /** @brief Refreshes and borrows the authority group inventory at NetworkFlush. */
         [[nodiscard]] Result<AuthorityPrefabView> CaptureAuthorityPrefabs();
+        /** @brief Reverse index lookup for a currently published authority. */
+        [[nodiscard]] Result<NetworkObjectId> FindAuthorityObject(Runtime::EntityRef entity) const;
+        /** @brief Exact client mapping lookup for a currently published session. */
+        [[nodiscard]] Result<Runtime::EntityRef> ResolveClientObject(Runtime::SceneRuntimeId scene, NetworkSessionGeneration session,
+                                                                     NetworkObjectId object) const;
         /** @brief Revoke every published and staged occurrence once before dependent teardown. */
         void Shutdown() noexcept;
 

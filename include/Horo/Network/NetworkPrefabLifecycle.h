@@ -12,7 +12,8 @@
 namespace Horo::Network {
     inline constexpr std::size_t MaximumNetworkPrefabEntities = 256;
     inline constexpr std::size_t MinimumNetworkPrefabSpawnBytes = 114;
-    inline constexpr std::size_t MaximumNetworkPrefabLifecycleBytes = 7254;
+    inline constexpr std::size_t MaximumNetworkPrefabLegacyBytes = 7254;
+    inline constexpr std::size_t MaximumNetworkPrefabLifecycleBytes = MaximumNetworkPrefabLegacyBytes + 2 + MaximumNetworkPrefabIntentBytes;
 
     /** @brief Exact mapping for a replicated member in prepared cooked entity order. */
     struct NetworkPrefabMemberRecord final {
@@ -27,6 +28,7 @@ namespace Horo::Network {
     struct NetworkPrefabSpawnRecord final {
         NetworkPrefabTemplateIdentity recipe;
         std::vector<NetworkPrefabMemberRecord> members;
+        std::vector<std::byte> intent; /**< Owned, bounded Prefab application payload. */
         bool operator==(const NetworkPrefabSpawnRecord &) const noexcept = default;
     };
 
@@ -65,7 +67,7 @@ namespace Horo::Network {
     [[nodiscard]] Result<std::vector<std::byte>> EncodeNetworkPrefabLifecycle(const NetworkPrefabLifecycleRecord &record);
 
     /**
-     * @brief Reads a complete canonical v1 payload, rejecting malformed framing and identities.
+     * @brief Reads a complete canonical payload, rejecting malformed framing and identities.
      * @param bytes Exact envelope payload without trailing storage.
      * @return Owned protocol data or a typed malformed or capacity error.
      * @details The receiver must independently verify authenticated direction, the current world and its cooked catalog.

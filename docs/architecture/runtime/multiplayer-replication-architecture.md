@@ -132,6 +132,16 @@ lengths, repeated object slots and ambiguous member order before data reaches
 Scene admission. Dispatch must still check the authenticated server direction,
 the current world and the selected cooked catalog.
 
+The headless authority stores the admitted spawn inputs on the occurrence's
+anchor alongside its Scene transaction. The extended spawn format appends a
+length-prefixed intent of at most 4,096 bytes. It carries placement, typed
+initialization values, external bindings, and canonical value overrides.
+References name authored Scene objects or exact network object generations.
+The receiver resolves those identities in its active Scene and supplies its
+locally selected cook target. Legacy spawn records without intent and despawn
+records keep their original encoding. Deploy peers with extended spawn support
+together when enabling it on the protected lifecycle lane.
+
 A host can register a dedicated Prefab lifecycle control message and require
 its negotiated feature. The existing dispatcher admits the protected reliable
 lane, and the world owner verifies the exact authenticated server, published

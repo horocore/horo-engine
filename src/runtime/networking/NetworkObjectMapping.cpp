@@ -84,6 +84,9 @@ namespace Horo::Network {
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkObjectMappingInvalid));
         if (entry.provenance.prefab && entry.provenance.prefab->occurrence.Epoch() != epoch_)
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkObjectMappingInvalid));
+        if (entry.prefabIntent && (!entry.provenance.prefab || entry.provenance.prefab->occurrence != entry.object ||
+                                   entry.prefabIntent->empty() || entry.prefabIntent->size() > MaximumNetworkPrefabIntentBytes))
+            return Result<void>::Failure(MakeError(NetworkErrors::NetworkObjectMappingInvalid));
         if (const auto entity = LowerBound(entry.entity); entity != entityIndex_.end() && entity->entity == entry.entity)
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkObjectMappingConflict));
         return Result<void>::Success();
@@ -156,11 +159,12 @@ namespace Horo::Network {
     }
 
     /** @copydoc NetworkObjectMapping::RegisterDynamic */
-    Result<void> NetworkObjectMapping::RegisterDynamic(Runtime::EntityRef entity, const NetworkObjectProvenance &provenance) {
+    Result<void> NetworkObjectMapping::RegisterDynamic(Runtime::EntityRef entity, const NetworkObjectProvenance &provenance,
+                                                       std::shared_ptr<const std::vector<std::byte>> prefabIntent) {
         auto object = NextDynamicObject();
         if (object.HasError())
             return Result<void>::Failure(object.ErrorValue());
-        return Register({object.Value(), entity, provenance});
+        return Register({object.Value(), entity, provenance, std::move(prefabIntent)});
     }
 
     /** @copydoc NetworkObjectMapping::RetireDynamic */
