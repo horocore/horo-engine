@@ -2824,6 +2824,127 @@ TEST_CASE("workspace Decision palette reprojects attached and withdrawn package 
     CHECK(model.decisionTaskPaletteChoices.empty());
 }
 
+TEST_CASE("Behavior Tree provider node references validate the current graph and round-trip through workspace history",
+          "[unit][editor][decision][node-reference]") {
+    using namespace AI::DecisionGraphTestSupport;
+    using AI::BehaviorTreeNodeId;
+    using AI::BehaviorTreePropertyValue;
+    static_assert(!CanEditDecisionTaskProperty(AI::BehaviorTreePropertyKind::NodeReference, AI::DecisionPlanKind::StateMachine));
+    static_assert(!CanEditDecisionTaskProperty(AI::BehaviorTreePropertyKind::NodeReference, AI::DecisionPlanKind::Utility));
+    BlackboardWorkspaceFixture project;
+    project.Write("Unused key", AI::BlackboardKeyPresence::Optional);
+    Horo::Tests::WriteReplicationProject(project.root);
+    constexpr auto path = "assets/node_reference.horo_bt";
+    const auto root = BehaviorTreeNodeId::Create(1).Value();
+    const auto target = BehaviorTreeNodeId::Create(4).Value();
+    const auto property = AI::BehaviorTreePropertyId::Create(10).Value();
+    auto sequence = TreeNode(2, AI::DecisionControlKind::Sequence);
+    sequence.kind = AI::BehaviorTreeNodeKind::Composite;
+    sequence.minimumChildren = 1;
+    sequence.maximumChildren = 2;
+    sequence.pins.back().cardinality = AI::BehaviorTreePinCardinality::Multiple;
+    auto graph = Tree(11,
+                      {TreeNode(1, AI::DecisionControlKind::Root), sequence, TreeNode(3, AI::DecisionControlKind::Task),
+                       TreeNode(4, AI::DecisionControlKind::Task)},
+                      {Edge(1, 1, 2), Edge(2, 2, 3), Edge(3, 2, 4, 1)});
+    graph.blackboard = project.schema;
+    const auto bytes = AI::DecisionPlanCodec::EncodeSource(std::span{&graph, 1}, graph.asset);
+    REQUIRE(bytes.HasValue());
+    {
+        std::ofstream output(project.root / path, std::ios::binary);
+        output.write(reinterpret_cast<const char *>(bytes.Value().data()), static_cast<std::streamsize>(bytes.Value().size()));
+        REQUIRE(static_cast<bool>(output));
+    }
+    project.WriteSidecar(path, Assets::AssetId::FromBytes({0x18}), Application::DecisionBehaviorTreeSourceType);
+    project.RebuildRegistry();
+    EditorWorkspaceController controller(project.root, project.runtime, project.registry.Snapshot(),
+                                         {.assets = {.mutableAssetRegistry = &project.registry},
+                                          .mutations = &project.mutations,
+                                          .durableFiles = &project.files});
+    auto owner = std::make_shared<Fixture::ProviderOwner>();
+    auto registration = Registration(owner->probe);
+    registration.contract.properties.emplace_back(property, "Target node", AI::BehaviorTreePropertyKind::NodeReference, root);
+    controller.SetPackageDecisionNodeSource(std::make_shared<const ProjectPackageDecisionNodeSource>([owner, registration] {
+        using Leaves = std::vector<std::shared_ptr<const AI::DecisionNodeGeneration>>;
+        std::shared_ptr<const std::atomic_bool> admission{owner, &owner->admission};
+        auto generation = AI::DecisionNodeGeneration::Capture(std::span{&registration, 1}, std::move(admission));
+        if (generation.HasError())
+            return Result<Leaves>::Failure(generation.ErrorValue());
+        return Result<Leaves>::Success({std::move(generation).Value()});
+    }));
+    const auto open = [&] {
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::OpenSourceFile,
+                                   .sourceOpenRequest = SourceOpenRequest{.path = path, .origin = SourceOpenOrigin::AssetActivation}});
+    };
+    open();
+    const auto &model = controller.ViewModel();
+    REQUIRE(model.decisionGraphDocuments.size() == 1);
+    const auto &document = model.decisionGraphDocuments.front();
+    REQUIRE(document.editable);
+    REQUIRE(model.behaviorTreeTaskChoices.size() == 1);
+    const auto &choice = model.behaviorTreeTaskChoices.front();
+    REQUIRE(choice.editableProperties.size() == 1);
+    CHECK(choice.editableProperties.front().kind == AI::BehaviorTreePropertyKind::NodeReference);
+    const DecisionTaskSelection task{choice.type, choice.provider, choice.version, model.availableBehaviorsRevision};
+    const auto edit = [&](BehaviorTreePropertyValue value, std::uint64_t revision) {
+        controller.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::EditDecisionBehaviorTree,
+             .behaviorTreeEdit = BehaviorTreeEditRequest{.instance = document.identity.instance,
+                                                         .revision = revision,
+                                                         .operation = BehaviorTreeEditOperation::SetTaskProperty,
+                                                         .node = Node(3),
+                                                         .task = task,
+                                                         .property = DecisionTaskPropertyEdit{property, std::move(value)}}});
+    };
+    const auto original = document.graph;
+    const auto revision = document.revision;
+    edit(root, revision);
+    CHECK(document.graph == original);
+    CHECK_FALSE(document.canUndo);
+    edit(BehaviorTreeNodeId::Create(99).Value(), revision);
+    REQUIRE(document.diagnostic);
+    edit(std::int64_t{4}, revision);
+    REQUIRE(document.diagnostic);
+    CHECK(document.graph == original);
+    CHECK_FALSE(document.canUndo);
+    edit(target, revision);
+    REQUIRE_FALSE(document.diagnostic);
+    REQUIRE(document.dirty);
+    const auto changed = document.graph;
+    edit(root, revision);
+    REQUIRE(document.diagnostic);
+    CHECK(document.graph == changed);
+    controller.ProcessCommand({.command = EditorWorkspaceViewCommand::EditDecisionBehaviorTree,
+                               .behaviorTreeEdit = BehaviorTreeEditRequest{.instance = document.identity.instance,
+                                                                           .revision = document.revision,
+                                                                           .operation = BehaviorTreeEditOperation::DeleteTask,
+                                                                           .node = Node(4)}});
+    REQUIRE(document.diagnostic);
+    CHECK(document.graph == changed);
+    const auto readTarget = [&](const DecisionGraphWorkspaceDocument &opened) {
+        const auto &tree = *std::get<std::shared_ptr<const AI::BehaviorTreeAsset>>(opened.graph->body);
+        const auto *bound = tree.FindNode(BehaviorTreeNodeId::Create(3).Value());
+        REQUIRE(bound);
+        REQUIRE(bound->properties.size() == 1);
+        return std::get<BehaviorTreeNodeId>(bound->properties.front().value);
+    };
+    CHECK(readTarget(document) == target);
+    controller.ProcessCommand(MakeDecisionHistoryCommand(document, DecisionHistoryAction::Undo));
+    CHECK(document.graph == original);
+    controller.ProcessCommand(MakeDecisionHistoryCommand(document, DecisionHistoryAction::Redo));
+    CHECK(readTarget(document) == target);
+    controller.ProcessCommand(MakeDecisionHistoryCommand(document, DecisionHistoryAction::Save));
+    REQUIRE_FALSE(document.diagnostic);
+    REQUIRE_FALSE(document.dirty);
+    controller.ProcessCommand(
+        {.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = document.identity.instance});
+    REQUIRE(model.decisionGraphDocuments.empty());
+    open();
+    REQUIRE(model.decisionGraphDocuments.size() == 1);
+    CHECK(readTarget(model.decisionGraphDocuments.front()) == target);
+    CHECK(owner->probe.factories == 0);
+}
+
 TEST_CASE("registered project Lua tasks can author and reopen a Behavior Tree", "[unit][editor][decision][lua]") {
     BlackboardWorkspaceFixture project;
     project.Write("Unused key", AI::BlackboardKeyPresence::Optional);

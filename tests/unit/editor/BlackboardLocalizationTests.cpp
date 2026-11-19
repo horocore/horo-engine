@@ -328,6 +328,7 @@ TEST_CASE("Decision graph workspace and initial state machine labels resolve in 
         CHECK_FALSE(service.Get("editor", "workspace.decision_graph.task_property_item").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_graph.edit_property").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_graph.edit_property_select").starts_with("[missing:"));
+        CHECK_FALSE(service.Get("editor", "workspace.decision_graph.edit_property_select_node").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_graph.edit_property_enabled").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_graph.edit_property_invalid_number").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_graph.edit_property_text_too_long").starts_with("[missing:"));

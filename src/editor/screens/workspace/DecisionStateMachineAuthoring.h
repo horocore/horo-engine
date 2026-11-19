@@ -60,16 +60,17 @@ namespace Horo::Editor {
         std::uint32_t timeoutTicks{};
     };
 
-    /** @brief Sets a scalar override using a stable property declared by the installed provider. */
+    /** @brief Sets a typed override using a stable property declared by the installed provider. */
     struct DecisionTaskPropertyEdit final {
         AI::BehaviorTreePropertyId property;
         AI::BehaviorTreePropertyValue value;
     };
 
-    /** @brief Identifies properties whose scalar values can use the shared Decision inspector edit path. */
-    [[nodiscard]] constexpr bool CanEditDecisionTaskProperty(AI::BehaviorTreePropertyKind kind) noexcept {
+    /** @brief Identifies properties whose values the selected graph family can validate in the shared inspector. */
+    [[nodiscard]] constexpr bool CanEditDecisionTaskProperty(AI::BehaviorTreePropertyKind kind, AI::DecisionPlanKind family) noexcept {
         using enum AI::BehaviorTreePropertyKind;
-        return kind == Boolean || kind == SignedInteger || kind == Scalar || kind == String;
+        return kind == Boolean || kind == SignedInteger || kind == Scalar || kind == String ||
+               (kind == NodeReference && family == AI::DecisionPlanKind::BehaviorTree);
     }
 
     /** @brief Exact installed descriptor selected by the workspace Task picker. */

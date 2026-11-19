@@ -413,12 +413,40 @@ namespace Horo::Editor {
             static_cast<void>(std::to_chars(text.data(), text.data() + text.size() - 1, *integer));
         } else if (const auto *number = std::get_if<double>(&effective.value)) {
             static_cast<void>(std::to_chars(text.data(), text.data() + text.size() - 1, *number));
+        } else if (const auto *target = std::get_if<AI::BehaviorTreeNodeId>(&effective.value)) {
+            reference = *target;
         }
     }
 
+    namespace {
+        /** @brief Draws stable references from exactly the current tree; an unresolved default remains unselected. */
+        AI::BehaviorTreeNodeId DrawDecisionTreeReference(std::span<const AI::BehaviorTreeNode> nodes, AI::BehaviorTreeNodeId selected,
+                                                         const EditorGuiContext &context) {
+            const auto found = std::ranges::lower_bound(nodes, selected, {}, &AI::BehaviorTreeNode::id);
+            auto row = found == nodes.end() || found->id != selected ? 0 : static_cast<int>(found - nodes.begin()) + 1;
+            const auto &placeholder = context.localization.Get("editor", "workspace.decision_graph.edit_property_select_node");
+            std::array<char, AI::BehaviorTreeAssetHardLimits::DisplayNameBytes + 25> label;
+            const Ui::ComboItemSource options{.label = [&](int index) -> const char * {
+                if (index == 0)
+                    return placeholder.c_str();
+                const auto &node = nodes[static_cast<std::size_t>(index - 1)];
+                auto *end = label.data() + label.size() - 1;
+                if (node.displayName.empty())
+                    *std::to_chars(label.data(), end, node.id.Value()).ptr = '\0';
+                else
+                    *std::format_to_n(label.data(), end - label.data(), "{} ({})", node.displayName, node.id.Value()).out = '\0';
+                return label.data();
+            }};
+            static_cast<void>(
+                Ui::ComboControl("##DecisionTaskReference", &row, static_cast<int>(nodes.size()) + 1, options, context.theme.fonts));
+            return row == 0 ? AI::BehaviorTreeNodeId{} : nodes[static_cast<std::size_t>(row - 1)].id;
+        }
+    }  // namespace
+
     /** @copydoc EditorWorkspaceView::DrawDecisionTaskPropertyValue */
     std::optional<AI::BehaviorTreePropertyValue> EditorWorkspaceView::DrawDecisionTaskPropertyValue(
-        const AI::BehaviorTreeProperty &effective, std::string_view label, std::size_t textLimit, DecisionTaskPropertyDraft &draft,
+        const AI::BehaviorTreeProperty &effective, std::string_view label, std::size_t textLimit,
+        std::span<const AI::BehaviorTreeNode> referenceNodes, DecisionTaskPropertyDraft &draft,
         EditorWorkspaceViewCommandData &outCommand) const {
         const auto &fonts = m_context.theme.fonts;
         const auto text = [&](const char *key) -> const std::string & {
@@ -428,7 +456,11 @@ namespace Horo::Editor {
         Ui::WrappedText(ImGui::GetContentRegionAvail().x, label, Theme::Text(), fonts);
         std::optional<AI::BehaviorTreePropertyValue> value;
         bool changed = false;
-        if (const auto *original = std::get_if<bool>(&effective.value)) {
+        if (const auto *original = std::get_if<AI::BehaviorTreeNodeId>(&effective.value)) {
+            draft.reference = DrawDecisionTreeReference(referenceNodes, draft.reference, m_context);
+            value = draft.reference;
+            changed = draft.reference.IsValid() && draft.reference != *original;
+        } else if (const auto *original = std::get_if<bool>(&effective.value)) {
             static_cast<void>(Ui::CheckboxControl(text("workspace.decision_graph.edit_property_enabled").c_str(), &draft.checked, fonts));
             value = draft.checked;
             changed = draft.checked != *original;
@@ -488,20 +520,29 @@ namespace Horo::Editor {
         const auto text = [&](const char *key) -> const std::string & {
             return m_context.localization.Get("editor", key);
         };
-        const auto &fields = contract->editableProperties;
-        const auto picked = std::ranges::find(fields, draft.property, &AI::BehaviorTreeProperty::id);
-        int row = picked == fields.end() ? 0 : static_cast<int>(picked - fields.begin()) + 1;
+        std::array<const AI::BehaviorTreeProperty *, AI::BehaviorTreeAssetHardLimits::PropertiesPerNode> fields;
+        std::size_t count = 0;
+        int row = 0;
+        for (const auto &property : contract->editableProperties) {
+            if (!CanEditDecisionTaskProperty(property.kind, document.family))
+                continue;
+            fields[count++] = &property;
+            if (property.id == draft.property)
+                row = static_cast<int>(count);
+        }
+        if (count == 0)
+            return std::nullopt;
         const auto &placeholder = text("workspace.decision_graph.edit_property_select");
         const Ui::ComboItemSource items{.label = [&](int index) {
-            return index == 0 ? placeholder.c_str() : fields[static_cast<std::size_t>(index - 1)].displayName.c_str();
+            return index == 0 ? placeholder.c_str() : fields[static_cast<std::size_t>(index - 1)]->displayName.c_str();
         }};
         Ui::FieldLabel(text("workspace.decision_graph.edit_property").c_str(), fonts);
-        static_cast<void>(Ui::ComboControl("##DecisionTaskProperty", &row, static_cast<int>(fields.size()) + 1, items, fonts));
+        static_cast<void>(Ui::ComboControl("##DecisionTaskProperty", &row, static_cast<int>(count) + 1, items, fonts));
         if (row == 0) {
             draft.property = {};
             return std::nullopt;
         }
-        const auto &declaration = fields[static_cast<std::size_t>(row - 1)];
+        const auto &declaration = *fields[static_cast<std::size_t>(row - 1)];
         const auto authored = std::ranges::find(binding.properties, declaration.id, &AI::BehaviorTreeProperty::id);
         if (authored != binding.properties.end() && authored->kind != declaration.kind)
             return std::nullopt;
@@ -510,7 +551,9 @@ namespace Horo::Editor {
             draft.Select(property);
         const auto textLimit = document.family == AI::DecisionPlanKind::BehaviorTree ? AI::BehaviorTreeAssetHardLimits::DisplayNameBytes
                                                                                      : AI::BehaviorTreeAssetHardLimits::PropertyBytes;
-        if (auto value = DrawDecisionTaskPropertyValue(property, declaration.displayName, textLimit, draft, outCommand)) {
+        const auto *tree = std::get_if<std::shared_ptr<const AI::BehaviorTreeAsset>>(&document.graph->body);
+        const auto references = tree && *tree ? (*tree)->Nodes() : std::span<const AI::BehaviorTreeNode>{};
+        if (auto value = DrawDecisionTaskPropertyValue(property, declaration.displayName, textLimit, references, draft, outCommand)) {
             return DecisionTaskPropertyIntent{{contract->type, contract->provider, contract->version, catalogRevision},
                                               {property.id, std::move(*value)}};
         }

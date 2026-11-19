@@ -1018,6 +1018,7 @@
     "workspace.decision_graph.task_property_item": {"text": "Item type ID"},
     "workspace.decision_graph.edit_property": {"text": "Edit provider property"},
     "workspace.decision_graph.edit_property_select": {"text": "Select a property"},
+    "workspace.decision_graph.edit_property_select_node": {"text": "Select a node in this tree"},
     "workspace.decision_graph.edit_property_enabled": {"text": "Enabled"},
     "workspace.decision_graph.edit_property_invalid_number": {"text": "Enter a number within the property's range."},
     "workspace.decision_graph.edit_property_text_too_long": {"text": "The value is too long to save in this graph."},

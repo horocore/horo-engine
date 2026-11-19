@@ -605,12 +605,13 @@ namespace Horo::Editor {
             return provider != contracts.end() && SupportsAuthorableTask(*provider, generation) ? &*provider : nullptr;
         }
 
-        /** @brief Writes one explicit scalar override under the exact installed and previously offered contract. */
+        /** @brief Writes one typed override under the exact installed and previously offered contract. */
         Result<bool> SetAuthoredDecisionTaskProperty(std::vector<AI::BehaviorTreeProperty> &properties, AI::DecisionNodeTypeId type,
                                                      AI::DecisionVersionRange versions,
                                                      const std::optional<DecisionTaskSelection> &selected,
                                                      const std::optional<DecisionTaskPropertyEdit> &edit,
-                                                     const AI::DecisionNodeGeneration &providers, std::uint64_t catalogRevision) {
+                                                     const AI::DecisionNodeGeneration &providers, std::uint64_t catalogRevision,
+                                                     AI::DecisionPlanKind family) {
             using Edit = Result<bool>;
             if (!selected || !edit)
                 return Edit::Failure(MakeError(Application::DecisionCookErrors::Invalid));
@@ -623,7 +624,7 @@ namespace Horo::Editor {
             const auto id = edit->property;
             const auto declared = std::ranges::find(contract->properties, id, &AI::BehaviorTreeProperty::id);
             const auto authored = std::ranges::find(properties, id, &AI::BehaviorTreeProperty::id);
-            if (declared == contract->properties.end() || !CanEditDecisionTaskProperty(declared->kind) ||
+            if (declared == contract->properties.end() || !CanEditDecisionTaskProperty(declared->kind, family) ||
                 (authored != properties.end() && authored->kind != declared->kind))
                 return Edit::Failure(MakeError(AI::AIErrors::DecisionAssetDescriptorIncompatible));
             const auto &current = authored != properties.end() ? *authored : *declared;
@@ -648,7 +649,7 @@ namespace Horo::Editor {
                 return Result<bool>::Failure(MakeError(Application::DecisionCookErrors::Invalid));
             auto &action = *((*state).*slot);
             return SetAuthoredDecisionTaskProperty(action.properties, action.binding.type, action.binding.descriptorVersion, request.task,
-                                                   request.property, providers, catalogRevision);
+                                                   request.property, providers, catalogRevision, AI::DecisionPlanKind::StateMachine);
         }
 
         /** @brief Resolves one existing Utility option and its actual provider binding. */
@@ -663,7 +664,8 @@ namespace Horo::Editor {
             if (option == utility->options.end())
                 return Result<bool>::Failure(MakeError(Application::DecisionCookErrors::Invalid));
             return SetAuthoredDecisionTaskProperty(option->properties, option->provider.type, option->provider.descriptorVersion,
-                                                   request.task, request.property, providers, catalogRevision);
+                                                   request.task, request.property, providers, catalogRevision,
+                                                   AI::DecisionPlanKind::Utility);
         }
 
         /** @brief Issues a stable identity from the canonical node, edge or pin namespace. */
@@ -838,8 +840,9 @@ namespace Horo::Editor {
                     if (node->control.kind != AI::DecisionControlKind::Task || type.HasError())
                         return invalid();
                     const AI::DecisionVersionRange version{node->typeVersion.major, node->typeVersion.major};
-                    const auto updated = SetAuthoredDecisionTaskProperty(node->properties, type.Value(), version, request.task,
-                                                                         request.property, providers, catalogRevision);
+                    const auto updated =
+                        SetAuthoredDecisionTaskProperty(node->properties, type.Value(), version, request.task, request.property, providers,
+                                                        catalogRevision, AI::DecisionPlanKind::BehaviorTree);
                     if (updated.HasError() || !updated.Value())
                         return updated;
                     break;
@@ -1153,7 +1156,7 @@ namespace Horo::Editor {
             if (!queryOutput)
                 choices.push_back(choice);
             for (const auto &property : contract.properties)
-                if (CanEditDecisionTaskProperty(property.kind))
+                if (CanEditDecisionTaskProperty(property.kind, AI::DecisionPlanKind::BehaviorTree))
                     choice.editableProperties.push_back(property);
             treeChoices.push_back(std::move(choice));
         }

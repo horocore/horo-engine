@@ -233,13 +233,14 @@ namespace Horo::Editor {
 
         mutable BehaviorTreeSelection m_behaviorTreeSelection;
 
-        /** @brief Text and checkbox drafts stay scoped to one native property on an exact document and catalog revision. */
+        /** @brief Typed property drafts stay scoped to one exact document and catalog revision. */
         struct DecisionTaskPropertyDraft final {
             DocumentInstanceId instance;
             AI::DecisionNodeId node;
             std::uint64_t revision{};
             std::uint64_t catalogRevision{};
             AI::BehaviorTreePropertyId property;
+            AI::BehaviorTreeNodeId reference;
             bool checked{};
             std::array<char, AI::BehaviorTreeAssetHardLimits::PropertyBytes + 1> text{};
             std::string fieldScope;
@@ -263,13 +264,14 @@ namespace Horo::Editor {
         mutable DecisionTaskPropertyDraft m_behaviorTreeTaskPropertyDraft;
         mutable DecisionTaskPropertyDraft m_utilityTaskPropertyDraft;
         mutable std::array<DecisionTaskPropertyDraft, static_cast<std::size_t>(StateMachineTaskPhase::Count)> m_stateTaskPropertyDrafts;
-        /** @brief Offers one installed Task's supported scalar overrides through shared typed controls. */
+        /** @brief Offers the installed Task's supported overrides through shared typed controls. */
         [[nodiscard]] std::optional<DecisionTaskPropertyIntent> DrawDecisionTaskPropertyEditor(
             const EditorWorkspaceViewModel &viewModel, const DecisionGraphWorkspaceDocument &document,
             const DecisionTaskPropertyBinding &binding, DecisionTaskPropertyDraft &draft, EditorWorkspaceViewCommandData &outCommand) const;
         /** @brief Draws the selected typed field and returns only an explicitly applied value. */
         [[nodiscard]] std::optional<AI::BehaviorTreePropertyValue> DrawDecisionTaskPropertyValue(
-            const AI::BehaviorTreeProperty &effective, std::string_view label, std::size_t textLimit, DecisionTaskPropertyDraft &draft,
+            const AI::BehaviorTreeProperty &effective, std::string_view label, std::size_t textLimit,
+            std::span<const AI::BehaviorTreeNode> referenceNodes, DecisionTaskPropertyDraft &draft,
             EditorWorkspaceViewCommandData &outCommand) const;
         /** @brief Draws the current state's precise typed action phases in the property-only document route. */
         void DrawStateMachineTaskPropertyEditors(const EditorWorkspaceViewModel &viewModel, const DecisionGraphWorkspaceDocument &document,

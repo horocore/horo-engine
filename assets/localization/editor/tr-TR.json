@@ -1018,6 +1018,7 @@
     "workspace.decision_graph.task_property_item": {"text": "Öğe türü kimliği"},
     "workspace.decision_graph.edit_property": {"text": "Sağlayıcı özelliğini düzenle"},
     "workspace.decision_graph.edit_property_select": {"text": "Bir özellik seçin"},
+    "workspace.decision_graph.edit_property_select_node": {"text": "Bu ağaçtan bir düğüm seçin"},
     "workspace.decision_graph.edit_property_enabled": {"text": "Etkin"},
     "workspace.decision_graph.edit_property_invalid_number": {"text": "Özelliğin izin verdiği aralıkta bir sayı girin."},
     "workspace.decision_graph.edit_property_text_too_long": {"text": "Değer bu grafikte kaydedilemeyecek kadar uzun."},
