@@ -80,7 +80,7 @@ fi
 # signature/hash checks, including when completed archives survive a retry.
 # Inherit APT's runner architecture/variant selection: forcing baseline amd64
 # indexes would replace installed amd64v3 packages even at equal versions.
-mirrors=(https://archive.ubuntu.com/ubuntu http://azure.archive.ubuntu.com/ubuntu)
+mirrors=(https://archive.ubuntu.com/ubuntu https://mirrors.edge.kernel.org/ubuntu)
 downloaded=false
 for mirror in "${mirrors[@]}"; do
   cat > "$apt_root/ubuntu.sources" <<EOF

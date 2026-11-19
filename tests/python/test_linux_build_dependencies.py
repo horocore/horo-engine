@@ -146,7 +146,7 @@ def test_failed_acquisition_switches_mirror_before_installing(tmp_path: Path, sc
     apt = [call for call in calls if call["name"] == "apt-get"]
     installs = [call for call in apt if call["phase"] == "install"]
     assert len(installs) == 1 and not installs[0]["primary"]
-    assert "http://azure.archive.ubuntu.com/ubuntu" in installs[0]["sources"]
+    assert "URIs: https://mirrors.edge.kernel.org/ubuntu" in installs[0]["sources"]
     assert [call["phase"] for call in apt if not call["primary"]] == ["update", "download", "install"]
     if scenario == "index_failure":
         assert [call["phase"] for call in apt if call["primary"]] == ["update"]
