@@ -4,6 +4,7 @@
 
 #include <limits>
 #include <new>
+#include <utility>
 
 namespace Horo::AI {
     namespace {
@@ -31,16 +32,23 @@ namespace Horo::AI {
                 : state_(state), decision_(std::move(decision)) {}
 
             Result<AiSliceOutcome> Evaluate(const AiDecisionSliceContext &context, AiWorkBudget &budget) noexcept override {
+                providerFailure_.reset();
+                evaluationTick_ = context.tick;
                 const auto state = state_.lock();
                 if (!state || state->closed || state->owner != std::this_thread::get_id())
                     return Result<AiSliceOutcome>::Failure(MakeError(AIErrors::RuntimeUnavailable));
                 const auto snapshot = CaptureDecisionSnapshot(*state, context.agent);
                 if (snapshot.HasError())
                     return Result<AiSliceOutcome>::Failure(snapshot.ErrorValue());
-                const auto step = decision_->StepBudgeted({context.tick, snapshot.Value().Binding(), snapshot.Value(), {}}, budget);
+                const auto step =
+                    decision_->StepBudgeted({context.tick, snapshot.Value().Binding(), snapshot.Value(), {}}, budget, &providerFailure_);
                 if (step.HasError())
                     return Result<AiSliceOutcome>::Failure(step.ErrorValue());
                 return Result<AiSliceOutcome>::Success(step.Value() ? AiSliceOutcome::Complete : AiSliceOutcome::BudgetExhausted);
+            }
+
+            std::optional<DecisionProviderFailure> TakeProviderFailure(std::uint64_t tick) noexcept override {
+                return tick == evaluationTick_ ? std::exchange(providerFailure_, std::nullopt) : std::nullopt;
             }
 
             Result<bool> Commit(const AiDecisionSliceContext &, AiWorkBudget &) noexcept override {
@@ -49,12 +57,15 @@ namespace Horo::AI {
             }
 
             void Cancel() noexcept override {
+                providerFailure_.reset();
                 static_cast<void>(decision_->Cancel(AiTaskCancellationReason::AgentGenerationRetired));
             }
 
         private:
             std::weak_ptr<Detail::AiSceneRuntimeState> state_;
             std::unique_ptr<DecisionGraphInstance> decision_;
+            std::optional<DecisionProviderFailure> providerFailure_;
+            std::uint64_t evaluationTick_{};
         };
     }  // namespace
 
@@ -81,16 +92,20 @@ namespace Horo::AI {
         if (!scene.IsCurrent() || scene.RuntimeId() != active_->binding.scene)
             return Diagnostic::Failure(MakeError(AIErrors::TaskContextInvalid, "Decision diagnostics require the current AI Scene."));
         const auto *report = scheduler.Value()->CompletedReportAtSafePoint();
-        if (!report || !report->firstFailure || !report->firstFailureOrigin)
+        if (!report)
             return Diagnostic::Success(std::nullopt);
-
-        const auto &origin = *report->firstFailureOrigin;
+        const bool fatal = report->firstFailure && report->firstFailureOrigin;
+        const auto *advisory = report->firstAdvisoryFailure ? &*report->firstAdvisoryFailure : nullptr;
+        if (!fatal && !advisory)
+            return Diagnostic::Success(std::nullopt);
+        const auto &origin = fatal ? *report->firstFailureOrigin : advisory->origin;
+        const auto &error = fatal ? *report->firstFailure : advisory->error;
         const auto *slot = Detail::FindAgent(*active_, origin.agent);
         std::optional<Runtime::EntityRef> entity;
         if (slot && slot->record.state == AiAgentActivationState::Active && slot->record.agent.agent == origin.identity &&
             scene.Get(slot->record.owner).HasValue())
             entity = slot->record.owner;
-        return Diagnostic::Success(AiRuntimeDecisionDiagnostic{report->tick, origin, *report->firstFailure, entity});
+        return Diagnostic::Success(AiRuntimeDecisionDiagnostic{report->tick, origin, error, entity});
     }
 
     /** @copydoc AiSceneRuntime::SyncDecisionQueryAtBlackboardSync */

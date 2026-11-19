@@ -35,12 +35,13 @@ namespace Horo::AI {
     Result<AiTaskState> DecisionGraphInstance::AdvanceUtility(const std::size_t index) {
         auto &state = *occurrences_[index];
         auto &runtime = *state.utility;
+        const auto &input = input_->values;
         const auto &utility =
             *std::get<std::shared_ptr<const CookedUtilityPlan>>(plan_->Graphs()[plan_->Occurrences()[index].plan].execution);
         if (!runtime.selected) {
             const auto evidence = trace_ ? std::span<UtilityScoreRecord>{runtime.evidence} : std::span<UtilityScoreRecord>{};
-            auto evaluated = utility.Selector().Evaluate(input_->blackboard, input_->current.agent, *input_->utilityAgentBudget,
-                                                         *input_->utilityGlobalBudget, evidence);
+            auto evaluated = utility.Selector().Evaluate(input.blackboard, input.current.agent, *input.utilityAgentBudget,
+                                                         *input.utilityGlobalBudget, evidence);
             if (evaluated.HasError())
                 return Result<AiTaskState>::Failure(evaluated.ErrorValue());
             const auto &result = evaluated.Value();
@@ -66,7 +67,7 @@ namespace Horo::AI {
             runtime.selected = static_cast<std::size_t>(selected - options.begin());
         }
         auto &action = *runtime.actions[*runtime.selected];
-        auto stepped = action.Evaluate(input_->tick, input_->blackboard, input_->current.agent);
+        auto stepped = action.Evaluate(input.tick, input.blackboard, input.current.agent);
         if (trace_)
             action.AppendTrace(TraceOccurrence(index), *trace_);
         if (stepped.HasError())

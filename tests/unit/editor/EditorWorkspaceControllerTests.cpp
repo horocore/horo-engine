@@ -455,6 +455,7 @@ namespace {
         navigate.playDecisionNavigation->tick = first.tick;
         workspace.ProcessCommand(navigate);
         CHECK(workspace.ViewModel().primarySelection == original);
+        CHECK(workspace.ViewModel().hierarchyRevealObject == original);
 
         workspace.ProcessCommand(SceneCommand(EditorWorkspaceViewCommand::StopPlay));
         CHECK_FALSE(workspace.ViewModel().playDecisionProblem);

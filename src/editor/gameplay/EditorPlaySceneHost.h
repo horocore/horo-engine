@@ -6,6 +6,7 @@
  */
 #include "EditorPlaySaveSession.h"
 #include "Horo/AI/AIIdentity.h"
+#include "Horo/AI/DecisionIdentity.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Gameplay/BehaviorRuntimeRestore.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
@@ -75,7 +76,8 @@ namespace Horo::Editor {
     /** @brief Runtime stage reported by an exact completed Decision tick. */
     enum class EditorPlayDecisionPhase : std::uint8_t {
         Evaluate,
-        Commit
+        Commit,
+        TaskProvider
     };
 
     /** @brief Detached runtime Problem from the selected Play scene. */
@@ -86,6 +88,8 @@ namespace Horo::Editor {
         EditorPlayDecisionPhase phase{};
         Error error;
         std::optional<Runtime::EntityRef> entity; /**< Available only when the runtime verified the original entity generation. */
+        AI::DecisionGraphAssetId graph;           /**< Cooked graph identity when the failing callback reported a source. */
+        AI::DecisionNodeId node;                  /**< Cooked source node within graph, when available. */
     };
 
     /** @brief Synchronous acquisition from the current Project's existing provider owner. */

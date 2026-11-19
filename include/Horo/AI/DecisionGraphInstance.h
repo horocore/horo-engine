@@ -89,6 +89,14 @@ namespace Horo::AI {
          * unchanged. Already revoked work is retired even when the slice has no allowance.
          */
         [[nodiscard]] Result<std::optional<AiTaskState>> StepBudgeted(const DecisionGraphStepInput &input, AiWorkBudget &budget);
+        /** @brief Advances a budgeted step and optionally reports the first raw task callback error.
+         * @param input Exact committed observation for the requested tick.
+         * @param budget Scheduler-owned allowance for the current slice.
+         * @param providerFailure Caller-owned advisory destination. Cleared for an admitted step without a live callback error.
+         * @return The same scheduler slice outcome as the overload without diagnostics.
+         */
+        [[nodiscard]] Result<std::optional<AiTaskState>> StepBudgeted(const DecisionGraphStepInput &input, AiWorkBudget &budget,
+                                                                      std::optional<DecisionProviderFailure> *providerFailure);
         /** @brief Advances the same runtime with opt-in bounded, redacted decision evidence.
          * @param input The committed tick and immutable blackboard snapshot used by every occurrence.
          * @param trace Caller-owned destination. Invalid, off-owner or reentrant admission leaves it untouched.
@@ -103,6 +111,8 @@ namespace Horo::AI {
         struct CallAdapter;
         struct ActionAdapter;
         struct UtilityAdapter;
+        struct StepObservation;
+        struct StepScope;
         /** @brief Shares non-Scene and reserved Scene construction while retaining the optional query owner. */
         [[nodiscard]] static Result<std::unique_ptr<DecisionGraphInstance>> CreateBound(
             std::shared_ptr<const CookedDecisionPlan> plan, std::shared_ptr<const DecisionNodeGeneration> providers,
@@ -114,7 +124,8 @@ namespace Horo::AI {
         /** @brief Shares the exact evaluation path for traced and untraced steps. */
         [[nodiscard]] Result<AiTaskState> StepImpl(const DecisionGraphStepInput &input, DecisionStepTrace *trace);
         /** @brief Runs one admitted step using the existing evaluation and cancellation boundaries. */
-        [[nodiscard]] Result<AiTaskState> StepValidated(const DecisionGraphStepInput &input, DecisionStepTrace *trace);
+        [[nodiscard]] Result<AiTaskState> StepValidated(const DecisionGraphStepInput &input, DecisionStepTrace *trace,
+                                                        std::optional<DecisionProviderFailure> *providerFailure = nullptr);
         /** @brief Correlates a record to the exact compiled call and its stable caller. */
         [[nodiscard]] DecisionTraceOccurrence TraceOccurrence(std::size_t index) const noexcept;
         /** @brief Copies the state and last transition reported by the actual HSM kernel. */
@@ -153,7 +164,7 @@ namespace Horo::AI {
         bool evaluating_{};
         bool shutdown_{};
         std::uint64_t lastTick_{};
-        const DecisionGraphStepInput *input_{};
+        const StepObservation *input_{};
         DecisionStepTrace *trace_{};
         std::optional<AiDecisionTaskReservation> reservation_;
     };

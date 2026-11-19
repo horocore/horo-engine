@@ -828,7 +828,9 @@ execution also retires Play, since the provider callbacks cannot be replayed as
 the same tick.
 
 The Game panel shows the latest committed scheduler diagnostic for its current
-Play Scene. It uses the typed error code, phase, and tick. Selecting the original
+Play Scene. It uses the typed error code, phase, and tick. Task provider errors
+carry the cooked graph and node identities and preserve the tree's normal
+failure and fallback behavior. Selecting the original
 object requires the same Scene and entity generations and the unchanged authored
 document. If any of those identities is stale or unavailable, the diagnostic
 remains readable and explains why selection is unavailable.

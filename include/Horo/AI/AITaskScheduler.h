@@ -4,6 +4,7 @@
  * @brief Scene-owned fixed-tick admission and cooperative slicing over the Foundation JobSystem.
  */
 #include "Horo/AI/AITaskJobService.h"
+#include "Horo/AI/DecisionControl.h"
 #include "Horo/AI/DecisionWakePolicy.h"
 
 #include <span>
@@ -144,6 +145,15 @@ namespace Horo::AI {
         /** @brief Advances a resumable decision. @param context Frozen owner identity. @param budget Slice allowance.
          * @return Complete, yielded, exhausted, or original typed failure; failures discard this slice's intent batch. */
         [[nodiscard]] virtual Result<AiSliceOutcome> Evaluate(const AiDecisionSliceContext &context, AiWorkBudget &budget) noexcept = 0;
+
+        /** @brief Consumes the first raw provider failure retained by the exact evaluation, if supported.
+         * @param tick Exact evaluated tick. @return Advisory evidence, independent of the slice outcome and intent lifetime.
+         */
+        [[nodiscard]] virtual std::optional<DecisionProviderFailure> TakeProviderFailure(std::uint64_t tick) noexcept {
+            static_cast<void>(tick);
+            return std::nullopt;
+        }
+
         /** @brief Publishes a bounded prefix of evaluated intents. @param context Evaluation identity, revalidated by the scheduler.
          * @param budget Command allowance. @return True when all intents are committed, false to retain the bounded remainder. */
         [[nodiscard]] virtual Result<bool> Commit(const AiDecisionSliceContext &context, AiWorkBudget &budget) noexcept = 0;
@@ -199,6 +209,15 @@ namespace Horo::AI {
         AgentHandle agent;
         AgentId identity;
         AiSchedulingFailurePhase phase{};
+        DecisionGraphAssetId asset; /**< Present only when the failed callback supplied exact cooked source evidence. */
+        DecisionNodeId node;
+        bool advisory{}; /**< Provider error observed without failing the scheduler slice. */
+    };
+
+    /** @brief First non-fatal provider error captured alongside, independently of, any scheduler failure. */
+    struct AiSchedulingAdvisoryFailure final {
+        Error error;
+        AiSchedulingFailureOrigin origin;
     };
 
     /** @brief Observable bounded outcomes for the most recent fixed tick; repeated calls never replenish it. */
@@ -208,6 +227,7 @@ namespace Horo::AI {
         std::size_t deferred{}, starved{}, exhausted{}, yielded{}, failed{}, cancelled{};
         std::optional<Error> firstFailure; /**< Original first callback failure; never replaced by a generic status. */
         std::optional<AiSchedulingFailureOrigin> firstFailureOrigin; /**< Set together with firstFailure. */
+        std::optional<AiSchedulingAdvisoryFailure> firstAdvisoryFailure;
     };
 
     /**

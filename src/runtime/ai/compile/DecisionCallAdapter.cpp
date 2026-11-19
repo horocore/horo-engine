@@ -1,5 +1,7 @@
 #include "DecisionInstanceState.h"
 
+#include <new>
+
 namespace Horo::AI {
     namespace {
         template <typename T> Result<T> Unavailable() {
@@ -14,12 +16,34 @@ namespace Horo::AI {
 
     Result<AiTaskState> DecisionGraphInstance::CallAdapter::Start(const BehaviorTreeEvaluationContext &context,
                                                                   const AiTaskOperationContext &operation) noexcept {
-        return owner.Available() ? provider->Start(context, operation) : Unavailable<AiTaskState>();
+        if (!owner.Available())
+            return Unavailable<AiTaskState>();
+        auto result = provider->Start(context, operation);
+        ObserveTaskFailure(context.node, result);
+        return result;
     }
 
     Result<AiTaskState> DecisionGraphInstance::CallAdapter::Resume(const BehaviorTreeEvaluationContext &context,
                                                                    const AiTaskOperationContext &operation) noexcept {
-        return owner.Available() ? provider->Resume(context, operation) : Unavailable<AiTaskState>();
+        if (!owner.Available())
+            return Unavailable<AiTaskState>();
+        auto result = provider->Resume(context, operation);
+        ObserveTaskFailure(context.node, result);
+        return result;
+    }
+
+    /** @copydoc DecisionGraphInstance::CallAdapter::ObserveTaskFailure */
+    void DecisionGraphInstance::CallAdapter::ObserveTaskFailure(DecisionNodeId node, const Result<AiTaskState> &result) const noexcept {
+        if (!result.HasError() || !owner.input_ || !owner.Available())
+            return;
+        auto *failure = owner.input_->providerFailure;
+        if (!failure || *failure)
+            return;
+        try {
+            failure->emplace(DecisionProviderFailure{owner.TraceOccurrence(index).graph, node, result.ErrorValue()});
+        } catch (const std::bad_alloc &) {
+            // Evidence must not change the task outcome when diagnostic memory is unavailable.
+        }
     }
 
     void DecisionGraphInstance::CallAdapter::Abort(const AiTaskOperationContext &operation, AiTaskCancellationReason reason) noexcept {

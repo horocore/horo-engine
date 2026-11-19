@@ -711,10 +711,17 @@ namespace {
     /** @brief A real registered native executor with a typed failure in the reactive condition callback. */
     class EditorDecisionFixtureExecutor final : public AI::IBehaviorTreeExecutor {
     public:
+        enum class FailedCallback {
+            Condition,
+            Start,
+            Resume
+        };
+
         struct State final {
             std::atomic_bool admitted{true};
-            std::uint64_t startTick{}, checkTick{};
+            std::uint64_t startTick{}, resumeTick{}, checkTick{};
             unsigned factories{};
+            FailedCallback failure{FailedCallback::Condition};
         };
 
         explicit EditorDecisionFixtureExecutor(State &state) : state_(state) {}
@@ -722,10 +729,16 @@ namespace {
         Result<AI::AiTaskState> Start(const AI::BehaviorTreeEvaluationContext &context,
                                       const AI::AiTaskOperationContext &) noexcept override {
             state_.startTick = context.tick;
+            if (state_.failure == FailedCallback::Start)
+                return Result<AI::AiTaskState>::Failure(MakeError(AI::AIErrors::TaskFailureInvalid));
             return Result<AI::AiTaskState>::Success(AI::AiTaskState::Running);
         }
 
-        Result<AI::AiTaskState> Resume(const AI::BehaviorTreeEvaluationContext &, const AI::AiTaskOperationContext &) noexcept override {
+        Result<AI::AiTaskState> Resume(const AI::BehaviorTreeEvaluationContext &context,
+                                       const AI::AiTaskOperationContext &) noexcept override {
+            state_.resumeTick = context.tick;
+            if (state_.failure == FailedCallback::Resume)
+                return Result<AI::AiTaskState>::Failure(MakeError(AI::AIErrors::TaskFailureInvalid));
             return Result<AI::AiTaskState>::Success(AI::AiTaskState::Running);
         }
 
@@ -735,7 +748,7 @@ namespace {
 
         Result<bool> Check(const AI::BehaviorTreeEvaluationContext &context) noexcept override {
             state_.checkTick = context.tick;
-            if (context.tick == 2)
+            if (state_.failure == FailedCallback::Condition && context.tick == 2)
                 return Result<bool>::Failure(MakeError(AI::AIErrors::TaskFailureInvalid));
             return Result<bool>::Success(true);
         }
@@ -835,7 +848,14 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
 
     bool changed = false;
     bool rejectFixed = false;
+    using FailedCallback = EditorDecisionFixtureExecutor::FailedCallback;
     SECTION("Committed pause and step retain a consecutive local Decision clock") {}
+    SECTION("Start errors reach Problems on the first committed tick") {
+        providerState->failure = FailedCallback::Start;
+    }
+    SECTION("Resume errors reach Problems after a paused step") {
+        providerState->failure = FailedCallback::Resume;
+    }
     SECTION("An aborted step retires the evaluated owner before retry") {
         rejectFixed = true;
     }
@@ -900,8 +920,32 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
         clock.Advance(Duration::FromMilliseconds(10));
         return scheduler.Value()->RunFrame(lifecycle, cancellation.Token(), false);
     };
+    const auto verifyProblem = [&](const std::uint64_t expectedTick) {
+        const auto problem = play.ReadDecisionProblem();
+        REQUIRE(problem);
+        CHECK(problem->tick == expectedTick);
+        CHECK(problem->agent == agent);
+        CHECK(problem->entity == entity);
+        const auto &failure = AI::AIErrors::TaskFailureInvalid;
+        CHECK(ErrorChainContains(problem->error, failure.domain, failure.code));
+        if (providerState->failure == FailedCallback::Condition) {
+            CHECK(problem->phase == Editor::EditorPlayDecisionPhase::Evaluate);
+        } else {
+            CHECK(problem->phase == Editor::EditorPlayDecisionPhase::TaskProvider);
+            CHECK(problem->graph == graph.asset);
+            CHECK(problem->node == Decisions::MakeIdentity<AI::DecisionNodeId>(3));
+            CHECK(play.SceneView());
+        }
+    };
     REQUIRE(tick().HasValue());
     CHECK(providerState->startTick == 1);
+    if (providerState->failure == FailedCallback::Start) {
+        verifyProblem(1);
+        play.Stop();
+        CHECK_FALSE(play.ReadDecisionProblem());
+        lifecycle.Shutdown();
+        return;
+    }
     CHECK_FALSE(play.ReadDecisionProblem());
     REQUIRE(play.Pause().HasValue());
     REQUIRE(tick().HasValue());
@@ -917,14 +961,9 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     } else {
         REQUIRE(tick().HasValue());
         CHECK(providerState->checkTick == 2);
-        const auto problem = play.ReadDecisionProblem();
-        REQUIRE(problem);
-        CHECK(problem->tick == 2);
-        CHECK(problem->agent == agent);
-        CHECK(problem->entity == entity);
-        CHECK(problem->phase == Editor::EditorPlayDecisionPhase::Evaluate);
-        const auto &failure = AI::AIErrors::TaskFailureInvalid;
-        CHECK(ErrorChainContains(problem->error, failure.domain, failure.code));
+        if (providerState->failure == FailedCallback::Resume)
+            CHECK(providerState->resumeTick == 2);
+        verifyProblem(2);
     }
     play.Stop();
     CHECK_FALSE(play.ReadDecisionProblem());

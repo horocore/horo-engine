@@ -181,6 +181,98 @@ namespace Horo::AI {
             CHECK(fixture.probe.cleanups == 1);
         }
 
+        TEST_CASE("Cooked Scene reports raw task callback errors without failing a successful Selector fallback",
+                  "[unit][ai][scene][decision_reservation][scheduler]") {
+            Fixture fixture;
+            const auto providerError = MakeError(AIErrors::CapabilityUnavailable, "The registered task failed in its callback.");
+            std::uint64_t failureTick = 1;
+            bool advisory = true;
+            SECTION("Start returns an error") {
+                fixture.probe.startOutcome = Result<AiTaskState>::Failure(providerError);
+            }
+            SECTION("Resume returns an error") {
+                fixture.probe.resumeOutcome = Result<AiTaskState>::Failure(providerError);
+                failureTick = 2;
+            }
+            SECTION("The task deliberately returns Failed") {
+                fixture.probe.startOutcome = Result<AiTaskState>::Success(AiTaskState::Failed);
+                advisory = false;
+            }
+
+            const std::array registrations{Registration(fixture.probe), Registration(fixture.probe, 502, true)};
+            auto generation = DecisionNodeGeneration::Capture(registrations, fixture.admission);
+            REQUIRE(generation.HasValue());
+            fixture.providers = std::move(generation).Value();
+            auto selector = TreeNode(2, DecisionControlKind::Selector);
+            selector.kind = BehaviorTreeNodeKind::Composite;
+            selector.minimumChildren = 2;
+            selector.maximumChildren = 2;
+            selector.pins.back().cardinality = BehaviorTreePinCardinality::Multiple;
+            auto fallback = TreeNode(4, DecisionControlKind::Task);
+            fallback.type = MakeIdentity<BehaviorTreeNodeTypeId>(502);
+            auto source = Tree(11, {TreeNode(1, DecisionControlKind::Root), selector, TreeNode(3, DecisionControlKind::Task), fallback},
+                               {Edge(1, 1, 2), Edge(2, 2, 3), Edge(3, 2, 4, 1)});
+            source.executionTask = MakeIdentity<TaskId>(9000);
+            const auto plan = fixture.Compile(std::span{&source, 1}, 11);
+            auto selected = SceneFixture(fixture, *plan);
+            selected.descriptor.cookedPlan = plan;
+            Runtime::SceneDefinitionBuilder builder{{7}, {1}};
+            builder.Add({.object = {1}, .components = {.aiAgent = selected.agent.agent, .aiController = selected.agent.controller}});
+            const auto definition = std::move(builder).Build();
+            REQUIRE(definition.HasValue());
+            const auto scene = Runtime::RuntimeScene::Create(definition.Value(), {8});
+            REQUIRE(scene.HasValue());
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+            auto runtime = AiSceneRuntime::Create({}, AiSceneCookedDecisionExecution{jobs, {}, {}}).Value();
+            const std::array descriptors{selected.descriptor};
+            AiSceneActivationParticipant participant{runtime, descriptors};
+            auto candidate = participant.Prepare(definition.Value(), scene.Value()->View());
+            REQUIRE(candidate.HasValue());
+            REQUIRE(candidate.Value()->ValidatePublication().HasValue());
+            candidate.Value()->Publish();
+            const auto snapshot = runtime.Snapshot();
+            REQUIRE(snapshot.HasValue());
+            const auto &agent = snapshot.Value().Agents().front();
+            const auto scheduler = runtime.TaskSchedulerAtSafePoint();
+            REQUIRE(scheduler.HasValue());
+
+            if (failureTick == 2) {
+                REQUIRE(scheduler.Value()->EvaluateAtDecision(1).HasValue());
+                REQUIRE(scheduler.Value()->CommitAtIntentDispatch(1).HasValue());
+                CHECK_FALSE(runtime.ReadDecisionFailureAtSafePoint(scene.Value()->View()).Value());
+                CHECK(fixture.probe.starts == 1);
+            }
+            const auto evaluated = scheduler.Value()->EvaluateAtDecision(failureTick);
+            REQUIRE(evaluated.HasValue());
+            CHECK(evaluated.Value().failed == 0);
+            CHECK_FALSE(evaluated.Value().firstFailure);
+            CHECK(evaluated.Value().firstAdvisoryFailure.has_value() == advisory);
+            CHECK_FALSE(runtime.ReadDecisionFailureAtSafePoint(scene.Value()->View()).Value());
+            REQUIRE(scheduler.Value()->CommitAtIntentDispatch(failureTick).HasValue());
+            CHECK(fixture.probe.starts == 2);
+            CHECK(fixture.probe.resumes == failureTick - 1);
+            CHECK(fixture.probe.cleanups == 2);
+            const auto diagnostic = runtime.ReadDecisionFailureAtSafePoint(scene.Value()->View());
+            REQUIRE(diagnostic.HasValue());
+            REQUIRE(diagnostic.Value().has_value() == advisory);
+            if (advisory) {
+                const auto &failure = *diagnostic.Value();
+                CHECK(failure.tick == failureTick);
+                CHECK(failure.origin.agent == agent.handle);
+                CHECK(failure.origin.identity == agent.agent.agent);
+                CHECK(failure.origin.phase == AiSchedulingFailurePhase::Evaluate);
+                CHECK(failure.origin.advisory);
+                CHECK(failure.origin.asset == Graph(11));
+                CHECK(failure.origin.node == Node(3));
+                CHECK(failure.entity == agent.owner);
+                CHECK(failure.error.code.Value() == providerError.code.Value());
+                CHECK(failure.error.message == providerError.message);
+            }
+            REQUIRE(scheduler.Value()->EvaluateAtDecision(failureTick + 1).HasValue());
+            REQUIRE(scheduler.Value()->CommitAtIntentDispatch(failureTick + 1).HasValue());
+            CHECK_FALSE(runtime.ReadDecisionFailureAtSafePoint(scene.Value()->View()).Value());
+        }
+
         TEST_CASE("Restored manual AI receives its saved Blackboard before its cooked scheduler starts",
                   "[unit][ai][scene][scheduler][restore]") {
             Fixture fixture;

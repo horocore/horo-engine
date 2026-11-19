@@ -115,7 +115,7 @@ namespace Horo::AI {
         bool hasRunningTask{};
     };
 
-    /** @brief Most recent first Decision callback failure from an exact Scene publication. */
+    /** @brief First fatal or advisory Decision failure from the last completed tick of an exact Scene publication. */
     struct AiRuntimeDecisionDiagnostic final {
         std::uint64_t tick{};
         AiSchedulingFailureOrigin origin;
@@ -428,7 +428,7 @@ namespace Horo::AI {
          * @details Borrow expires on scene replacement, restore, shutdown or destruction. Workers must never retain it. */
         [[nodiscard]] Result<AiTaskScheduler *> TaskSchedulerAtSafePoint() const;
 
-        /** @brief Copies the last completed Decision failure from the exact current Scene.
+        /** @brief Copies the first fatal failure or, if absent, first provider advisory from the last completed tick.
          * @param scene The current Scene view owned by this AI runtime.
          * @return A copied failure, empty after a clean tick, or a typed error when the Scene or scheduler is unavailable.
          */

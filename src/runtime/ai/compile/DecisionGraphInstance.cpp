@@ -41,30 +41,29 @@ namespace Horo::AI {
                                const std::shared_ptr<const BlackboardSchema> &schema) noexcept {
             return input.current == binding && input.blackboard.Binding() == input.current && schema && input.blackboard.Schema() == schema;
         }
-
-        struct StepScope final {
-            bool &evaluating;
-            const DecisionGraphStepInput *&current;
-            DecisionStepTrace *&trace;
-
-            StepScope(bool &flag, const DecisionGraphStepInput *&slot, DecisionStepTrace *&traceSlot, const DecisionGraphStepInput &input,
-                      DecisionStepTrace *evidence)
-                : evaluating(flag), current(slot), trace(traceSlot) {
-                evaluating = true;
-                current = &input;
-                trace = evidence;
-            }
-
-            StepScope(const StepScope &) = delete;
-            StepScope &operator=(const StepScope &) = delete;
-
-            ~StepScope() {
-                current = nullptr;
-                trace = nullptr;
-                evaluating = false;
-            }
-        };
     }  // namespace
+
+    /** @brief Scopes the graph's borrowed evaluation inputs and evidence to one invocation. */
+    struct DecisionGraphInstance::StepScope final {
+        DecisionGraphInstance &owner;
+        StepObservation observation;
+
+        StepScope(DecisionGraphInstance &instance, StepObservation input, DecisionStepTrace *evidence)
+            : owner(instance), observation(input) {
+            owner.evaluating_ = true;
+            owner.input_ = &observation;
+            owner.trace_ = evidence;
+        }
+
+        StepScope(const StepScope &) = delete;
+        StepScope &operator=(const StepScope &) = delete;
+
+        ~StepScope() {
+            owner.input_ = nullptr;
+            owner.trace_ = nullptr;
+            owner.evaluating_ = false;
+        }
+    };
 
     Result<std::unique_ptr<DecisionGraphInstance>> DecisionGraphInstance::Create(std::shared_ptr<const CookedDecisionPlan> plan,
                                                                                  std::shared_ptr<const DecisionNodeGeneration> providers,
@@ -211,14 +210,15 @@ namespace Horo::AI {
         auto &state = *occurrences_[index];
         if (!Available() || !state.active || !input_)
             return Invalid<AiTaskState>(AIErrors::RuntimeUnavailable);
-        if (Terminal(state.outcome) || state.lastTick == input_->tick)
+        const auto &input = input_->values;
+        if (Terminal(state.outcome) || state.lastTick == input.tick)
             return Result<AiTaskState>::Success(state.outcome);
-        state.lastTick = input_->tick;
+        state.lastTick = input.tick;
         if (state.utility)
             return AdvanceUtility(index);
         if (!state.tree)
             return AdvanceMachine(index);
-        auto stepped = state.tree->Evaluate(input_->tick, input_->blackboard, input_->current.agent);
+        auto stepped = state.tree->Evaluate(input.tick, input.blackboard, input.current.agent);
         if (trace_)
             state.tree->AppendTrace(TraceOccurrence(index), *trace_);
         if (stepped.HasError())
@@ -230,7 +230,8 @@ namespace Horo::AI {
     /** @copydoc DecisionGraphInstance::AdvanceMachine */
     Result<AiTaskState> DecisionGraphInstance::AdvanceMachine(const std::size_t index) {
         auto &state = *occurrences_[index];
-        auto stepped = state.machine->Step(input_->tick, input_->current, input_->blackboard, input_->events, state.actions.get());
+        const auto &input = input_->values;
+        auto stepped = state.machine->Step(input.tick, input.current, input.blackboard, input.events, state.actions.get());
         if (trace_)
             TraceMachineTransitions(index);
         if (stepped.HasError())
@@ -275,15 +276,25 @@ namespace Horo::AI {
 
     /** @copydoc DecisionGraphInstance::StepBudgeted */
     Result<std::optional<AiTaskState>> DecisionGraphInstance::StepBudgeted(const DecisionGraphStepInput &input, AiWorkBudget &budget) {
+        return StepBudgeted(input, budget, nullptr);
+    }
+
+    /** @copydoc DecisionGraphInstance::StepBudgeted */
+    Result<std::optional<AiTaskState>> DecisionGraphInstance::StepBudgeted(const DecisionGraphStepInput &input, AiWorkBudget &budget,
+                                                                           std::optional<DecisionProviderFailure> *providerFailure) {
         using Outcome = Result<std::optional<AiTaskState>>;
         const auto work = plan_->MaximumDecisionWorkUnits();
         if (!work)
             return Outcome::Failure(MakeError(AIErrors::CapabilityUnavailable, "Cooked decision shape does not support scheduler slices."));
         if (auto valid = ValidateStep(input); valid.HasError())
             return Outcome::Failure(valid.ErrorValue());
+        if (providerFailure)
+            providerFailure->reset();
         if (Available() && !budget.Consume(*work))
             return Outcome::Success(std::nullopt);
-        auto evaluated = StepValidated(input, nullptr);
+        auto evaluated = StepValidated(input, nullptr, providerFailure);
+        if (providerFailure && (binding_.operation.IsCancellationRequested() || !providers_->CanAdmit()))
+            providerFailure->reset();
         if (evaluated.HasError())
             return Outcome::Failure(evaluated.ErrorValue());
         return Outcome::Success(evaluated.Value());
@@ -321,13 +332,14 @@ namespace Horo::AI {
     }
 
     /** @copydoc DecisionGraphInstance::StepValidated */
-    Result<AiTaskState> DecisionGraphInstance::StepValidated(const DecisionGraphStepInput &input, DecisionStepTrace *trace) {
+    Result<AiTaskState> DecisionGraphInstance::StepValidated(const DecisionGraphStepInput &input, DecisionStepTrace *trace,
+                                                             std::optional<DecisionProviderFailure> *providerFailure) {
         if (!Available()) {
             const auto previous = occurrences_[0]->outcome;
             static_cast<void>(Cancel(AiTaskCancellationReason::ContextCancelled));
             return Result<AiTaskState>::Success(Terminal(previous) ? previous : AiTaskState::Cancelled);
         }
-        StepScope scope(evaluating_, input_, trace_, input, trace);
+        StepScope scope(*this, {input, providerFailure}, trace);
         lastTick_ = input.tick;
         auto result = Advance(0);
         if (result.HasError() || !Available()) {

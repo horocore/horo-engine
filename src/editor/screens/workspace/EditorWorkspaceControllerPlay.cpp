@@ -309,6 +309,8 @@ namespace Horo::Editor {
             m_viewModel.playDecisionObjectAvailable = false;
             return;
         }
+        m_viewModel.hierarchyRevealObject = object;
+        m_viewModel.hierarchyRevealRevision = m_document.Revision();
         RefreshSelectionProjection();
     }
 

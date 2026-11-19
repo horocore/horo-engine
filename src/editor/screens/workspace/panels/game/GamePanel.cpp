@@ -10,6 +10,19 @@
 
 namespace Horo::Editor {
     namespace {
+        /** @brief Selects a localized label for the typed runtime phase. */
+        std::string_view DecisionProblemPhaseText(EditorPlayDecisionPhase phase) {
+            switch (phase) {
+                case EditorPlayDecisionPhase::TaskProvider:
+                    return "ai_problem_provider";
+                case EditorPlayDecisionPhase::Commit:
+                    return "ai_problem_commit";
+                case EditorPlayDecisionPhase::Evaluate:
+                    return "ai_problem_evaluate";
+            }
+            return "ai_problem_evaluate";
+        }
+
         /** @brief Displays an owner-correlated runtime diagnostic and emits a typed selection intent. */
         void DrawDecisionProblem(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                                  const EditorGuiContext &context) {
@@ -21,11 +34,17 @@ namespace Horo::Editor {
             };
             const auto &fonts = context.theme.fonts;
             const auto color = problem->error.severity >= ErrorSeverity::Error ? Theme::Err() : Theme::Warn();
-            const auto &phase = text(problem->phase == EditorPlayDecisionPhase::Evaluate ? "ai_problem_evaluate" : "ai_problem_commit");
+            const auto &phase = text(DecisionProblemPhaseText(problem->phase));
             Ui::WrappedText(ImGui::GetContentRegionAvail().x,
                             std::format("{} · {} · {} {} · {} · {}", text("ai_problem"), phase, text("ai_problem_tick"), problem->tick,
                                         problem->error.code.Value(), problem->error.message),
                             color, fonts);
+            if (problem->graph.IsValid() && problem->node.IsValid()) {
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x,
+                                std::format("{} {} · {} {}", text("ai_problem_graph"), problem->graph.Value(), text("ai_problem_node"),
+                                            problem->node.Value()),
+                                Theme::Muted(), fonts);
+            }
             if (!problem->entity || !viewModel.playDecisionObjectAvailable) {
                 Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("ai_problem_object_unavailable"), Theme::Muted(), fonts);
                 return;

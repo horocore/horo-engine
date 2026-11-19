@@ -43,6 +43,8 @@ namespace Horo::AI::DecisionGraphTestSupport {
         std::size_t aborts{};
         std::size_t cleanups{};
         std::function<void()> onStart;
+        std::optional<Result<AiTaskState>> startOutcome;
+        std::optional<Result<AiTaskState>> resumeOutcome;
     };
 
     class Provider final : public IBehaviorTreeExecutor {
@@ -55,12 +57,16 @@ namespace Horo::AI::DecisionGraphTestSupport {
             probe_.tasks.push_back(operation.task);
             if (probe_.onStart)
                 probe_.onStart();
+            if (!immediate_ && probe_.startOutcome)
+                return *probe_.startOutcome;
             return Result<AiTaskState>::Success((immediate_ || context.tick >= probe_.succeedTick) ? AiTaskState::Succeeded
                                                                                                    : AiTaskState::Running);
         }
 
         Result<AiTaskState> Resume(const BehaviorTreeEvaluationContext &context, const AiTaskOperationContext &) noexcept override {
             ++probe_.resumes;
+            if (!immediate_ && probe_.resumeOutcome)
+                return *probe_.resumeOutcome;
             return Result<AiTaskState>::Success((immediate_ || context.tick >= probe_.succeedTick) ? AiTaskState::Succeeded
                                                                                                    : AiTaskState::Running);
         }

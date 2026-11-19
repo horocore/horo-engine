@@ -565,6 +565,17 @@ namespace Horo::AI {
         evaluatingBudget_ = nullptr;
         if (closed_ || RetireIfCancelled(entry))
             return;
+        if (!report_.firstAdvisoryFailure) {
+            auto failure = entry.executor->TakeProviderFailure(tick);
+            if (closed_ || RetireIfCancelled(entry))
+                return;
+            if (failure && failure->asset.IsValid() && failure->node.IsValid()) {
+                report_.firstAdvisoryFailure.emplace(
+                    AiSchedulingAdvisoryFailure{std::move(failure->error),
+                                                {entry.agent, entry.identity, AiSchedulingFailurePhase::Evaluate, failure->asset,
+                                                 failure->node, true}});
+            }
+        }
         if (evaluated.HasError() || evaluated.Value() >= AiSliceOutcome::Count) {
             ++report_.failed;
             if (!report_.firstFailure) {

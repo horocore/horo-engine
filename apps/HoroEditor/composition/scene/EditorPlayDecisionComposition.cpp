@@ -4,6 +4,30 @@
 #include <algorithm>
 
 namespace Horo::Application::Internal::EditorProjectSceneDetail {
+    /** @copydoc Editor::EditorPlaySceneHost::ReadDecisionProblem */
+    std::optional<Editor::EditorPlayDecisionProblem> ProjectPlaySceneHost::ReadDecisionProblem() const {
+        const auto scene = scenes_ ? scenes_->ActiveScene() : std::nullopt;
+        if (!scene || !ai_)
+            return std::nullopt;
+        auto captured = ai_->ReadDecisionFailureAtSafePoint(*scene);
+        if (captured.HasError() || !captured.Value() || captured.Value()->tick > committedDecisionTick_)
+            return std::nullopt;
+        auto report = std::move(captured).Value();
+        const auto &origin = report->origin;
+        auto phase = origin.phase == AI::AiSchedulingFailurePhase::Evaluate ? Editor::EditorPlayDecisionPhase::Evaluate
+                                                                            : Editor::EditorPlayDecisionPhase::Commit;
+        if (origin.advisory)
+            phase = Editor::EditorPlayDecisionPhase::TaskProvider;
+        return Editor::EditorPlayDecisionProblem{.scene = scene->RuntimeId(),
+                                                 .tick = report->tick,
+                                                 .agent = origin.identity,
+                                                 .phase = phase,
+                                                 .error = std::move(report->error),
+                                                 .entity = report->entity,
+                                                 .graph = origin.asset,
+                                                 .node = origin.node};
+    }
+
     /** @copydoc ProjectPlaySceneHost::PrepareDecisionSelection */
     Result<void> ProjectPlaySceneHost::PrepareDecisionSelection(const std::filesystem::path &root, JobSystem &jobs,
                                                                 const Runtime::RuntimeSceneDefinition &definition,

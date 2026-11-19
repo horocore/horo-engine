@@ -2,6 +2,12 @@
 #include "Horo/AI/DecisionGraphInstance.h"
 
 namespace Horo::AI {
+    /** @brief Owner-lane borrowed inputs and optional evidence for the active step only. */
+    struct DecisionGraphInstance::StepObservation final {
+        const DecisionGraphStepInput &values;
+        std::optional<DecisionProviderFailure> *providerFailure;
+    };
+
     struct DecisionGraphInstance::OccurrenceState final {
         std::unique_ptr<BehaviorTreeInstance> tree;
         std::unique_ptr<StateMachineInstance> machine;
@@ -32,6 +38,9 @@ namespace Horo::AI {
         Result<void> Service(const BehaviorTreeEvaluationContext &) noexcept override;
         Result<AiTaskState> EvaluateSubplan(const BehaviorTreeEvaluationContext &, bool entering) noexcept override;
         void CancelSubplan(DecisionNodeId, AiTaskCancellationReason) noexcept override;
+
+        /** @brief Retains the first original task callback error without affecting task execution. */
+        void ObserveTaskFailure(DecisionNodeId node, const Result<AiTaskState> &result) const noexcept;
 
         [[nodiscard]] bool SupportsSubplans() const noexcept override {
             return true;
