@@ -51,15 +51,17 @@ class OpenXRCIContractTests(unittest.TestCase):
     def test_android_loader_bootstrap_remains_private_and_precedes_native_discovery(self):
         runtime = ROOT / "src/runtime/xr/openxr"
         bindings = (runtime / "host/OpenXRHostBindings.h").read_text(encoding="utf-8")
-        self.assertRegex(bindings, r"#if defined\(__ANDROID__\)\s*#include <jni.h>")
+        self.assertRegex(bindings, r'#if defined\(__ANDROID__\)\s*#include "OpenXRAndroidDiscovery.h"')
         owner = (runtime / "host/OpenXRNativeSession.h").read_text(encoding="utf-8")
         self.assertLess(owner.index("NativeOpenXRAndroidApplication androidApplication_"),
                         owner.index("std::shared_ptr<const Platform::DynamicLibrary> loader_;"))
         session = (runtime / "OpenXRNativeSession.cpp").read_text(encoding="utf-8")
         initializer = session.split("OpenXRNativeSession::InitializeAndroidLoader(", 1)[1].split("#endif", 1)[0]
-        self.assertIn('Resolve(dispatch_.getProc, XR_NULL_HANDLE, "xrInitializeLoaderKHR"', initializer)
-        self.assertIn("XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR", initializer)
-        self.assertIn("application.applicationContext", initializer)
+        self.assertIn("InitializeAndroidOpenXRLoader(dispatch_.getProc, application)", initializer)
+        bootstrap = (runtime / "OpenXRAndroidDiscovery.cpp").read_text(encoding="utf-8")
+        self.assertIn('Resolve(dispatch, XR_NULL_HANDLE, "xrInitializeLoaderKHR"', bootstrap)
+        self.assertIn("XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR", bootstrap)
+        self.assertIn("application.applicationContext", bootstrap)
         self.assertIn("extension.required && !extension.promotedToCore", initializer)
         global_dispatch = session.split("OpenXRNativeSession::ResolveGlobal(", 1)[1].split("\n    }", 1)[0]
         self.assertLess(global_dispatch.index("InitializeAndroidLoader(request.extensions)"),
@@ -72,10 +74,13 @@ class OpenXRCIContractTests(unittest.TestCase):
         self.assertLess(transaction.index("DiscoverAndNegotiate(request)"), transaction.index("CreateInstance(request)"))
         session = (runtime / "OpenXRNativeSession.cpp").read_text(encoding="utf-8")
         create = session.split("OpenXRNativeSession::CreateInstance(", 1)[1].split("\n    }", 1)[0]
-        self.assertIn("ExtensionSlot(XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME)", create)
-        self.assertIn("androidApplication_.activity", create)
-        self.assertLess(create.index("NativeExtensionState::Enabled"), create.index("info.next = &androidInfo"))
-        self.assertLess(create.index("info.next = &androidInfo"), create.index("dispatch_.createInstance"))
+        self.assertIn("ExtensionSlot(AndroidOpenXRInstanceExtension)", create)
+        self.assertLess(create.index("NativeExtensionState::Enabled"),
+                        create.index("CreateAndroidOpenXRInstance(dispatch_.createInstance, info, androidApplication_, candidate)"))
+        bootstrap = (runtime / "OpenXRAndroidDiscovery.cpp").read_text(encoding="utf-8")
+        self.assertIn("XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR, info.next, application.vm", bootstrap)
+        self.assertIn("application.activity", bootstrap)
+        self.assertLess(bootstrap.index("request.next = &activity"), bootstrap.index("return create(&request, &instance)"))
 
     def test_game_activity_jni_owner_is_built_and_used_by_the_existing_android_host(self):
         platform = ROOT / "src/platform/android"
@@ -102,6 +107,59 @@ class OpenXRCIContractTests(unittest.TestCase):
                         acquire.index("PromoteReference(*env, vm, activity)"))
         self.assertIn("env.NewGlobalRef(reference)", source)
         self.assertIn("env->DeleteGlobalRef(reference)", source)
+
+    def test_android_loader_maps_same_apk_descriptor_after_exact_image_admission(self):
+        path = ROOT / "src/platform/android/AndroidApkOpenXRLoader.cpp"
+        source = path.read_text(encoding="utf-8")
+        owner = source.split("class AndroidApkDynamicLibrary", 1)[1].split("}  // namespace", 1)[0]
+        self.assertLess(owner.index("GameActivityGlobalRef context_;"), owner.index("LibraryHandle handle_;"))
+        self.assertIn('GetMethodID(type, "getPackageCodePath", "()Ljava/lang/String;")', source)
+        self.assertIn("mz_zip_validate_file(&archive, *found, MZ_ZIP_FLAG_VALIDATE_HEADERS_ONLY)", source)
+        load = source.split("LoadBundledOpenXRLoader(const GameActivityJniApplication &application,", 1)[1]
+        self.assertLess(load.index("MatchesDigest(apk, *offset, entry->m_uncomp_size, imageDigest)"),
+                        load.index("android_dlopen_ext"))
+        self.assertLess(load.index("options.library_fd = apk.descriptor"), load.index("android_dlopen_ext"))
+        self.assertLess(load.index("options.library_fd_offset"), load.index("android_dlopen_ext"))
+        self.assertIn("ANDROID_DLEXT_USE_LIBRARY_FD | ANDROID_DLEXT_USE_LIBRARY_FD_OFFSET", load)
+
+    def test_android_cold_discovery_keeps_activity_through_instance_retirement(self):
+        runtime = ROOT / "src/runtime/xr/openxr"
+        source = (runtime / "OpenXRAndroidDiscovery.cpp").read_text(encoding="utf-8")
+        constructor = (runtime / "host/OpenXRAndroidDiscovery.h").read_text(encoding="utf-8")
+        self.assertLess(constructor.index("application_;"), constructor.index("loader_;"))
+        self.assertIn("XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY", source)
+        self.assertNotIn("xrCreateSession", source)
+        discover = source.split("AndroidOpenXRColdDiscovery::Discover(", 1)[1]
+        self.assertLess(discover.index('loader_->GetSymbol("xrDestroyInstance")'),
+                        discover.index("CreateAndroidOpenXRInstance(create"))
+        self.assertLess(discover.index("InitializeAndroidOpenXRLoader(dispatch, application_)"),
+                        discover.index("AdmitAndroidInstanceExtension(dispatch)"))
+        self.assertLess(discover.index("AdmitAndroidInstanceExtension(dispatch)"),
+                        discover.index("CreateAndroidOpenXRInstance(create"))
+        probe, retirement = source.split("AndroidOpenXRColdDiscovery::Probe(", 1)[1].split(
+            "AndroidOpenXRColdDiscovery::Retire(", 1)
+        self.assertLess(probe.index("Retire()"), probe.index("return retired == XR_SUCCESS"))
+        self.assertIn("AndroidOpenXRProbeResult{InstanceRetirement, retired}", probe)
+        self.assertIn("if (result == XR_SUCCESS)\n            instance_ = XR_NULL_HANDLE;", retirement)
+
+    def test_android_openxr_preset_wires_only_its_resume_deferred_diagnostic(self):
+        option = "HORO_ANDROID_QUALIFICATION_OPENXR_DISCOVERY"
+        self.assertEqual(self.variables("android-openxr-development")[option], "ON")
+        for preset in ("android-debug", "android-release", "android-vulkan-development"):
+            self.assertNotIn(option, self.variables(preset))
+        package = (ROOT / "cmake/HoroAndroidPackageQualification.cmake").read_text(encoding="utf-8")
+        self.assertIn('string(JSON _horo_openxr_digest GET "${_horo_openxr_json}" abiSha256 "${ANDROID_ABI}")', package)
+        self.assertIn("/apps/android-package-qualification/OpenXRDiagnosticHost.cpp", package)
+        app = ROOT / "apps/android-package-qualification"
+        entry = (app / "NativeEntry.cpp").read_text(encoding="utf-8")
+        self.assertIn("discovery.Command(command)", entry)
+        self.assertIn("discovery.Pump(app)", entry)
+        host = (app / "OpenXRDiagnosticHost.cpp").read_text(encoding="utf-8")
+        command, pump = host.split("OpenXRDiagnosticHost::Command(", 1)[1].split("OpenXRDiagnosticHost::Pump(", 1)
+        self.assertIn("APP_CMD_RESUME", command)
+        self.assertIn("APP_CMD_PAUSE", command)
+        self.assertNotIn("Probe(app)", command)
+        self.assertLess(pump.index("State::Attempted"), pump.index("Probe(app)"))
 
     def test_off_composition_stays_off_and_checks_real_target_population(self):
         values = self.variables("ci-xr-disabled")

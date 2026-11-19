@@ -28,6 +28,8 @@ LIFECYCLE = ("host-state lifecycleRevision=3 activity=1 state=2 process=1 window
              "attempts=2 presentAccepted=1")
 FRAME = ("host-frame stage=present outcome=accepted attempts=2 presentAccepted=1 beginPending=0 "
          "executePending=0 presentPending=0 completion=unobserved")
+OPENXR = "host-openxr abi=arm64-v8a stage=discovered result=0 runtimeMajor=1 runtimeMinor=1 runtimePatch=63"
+OPENXR_OPTIONS = ("--host", "linux-x64", "--connection", "emulator", "--runtime", "openxr")
 DEVICE_CLOCK = ("shell", "toybox", "date", "+%s.%N")
 UID_QUERY = ("shell", "toybox", "ps", "-p", "123", "-o", "UID")
 STAT_QUERY = ("shell", "toybox", "cat", "/proc/123/stat")
@@ -48,11 +50,12 @@ def proc_stat(start_ticks=123456):
 
 
 class AndroidDeployTests(unittest.TestCase):
-    def execute(self, override=None, options=()):
+    def execute(self, override=None, options=(), profile_name=PROFILE):
         """Run the real CLI orchestration against an exact scripted ADB transport."""
-        _, profile = project.load_contract(PROFILE, ["arm64-v8a"])
-        launch = ("shell", "am", "start", "-W", "--user", "10", "-n", f"{APPLICATION}/{APPLICATION}.PackageActivity")
-        stop = ("shell", "am", "force-stop", "--user", "10", APPLICATION)
+        _, profile = project.load_contract(profile_name, ["arm64-v8a"])
+        application = profile["applicationId"]
+        launch = ("shell", "am", "start", "-W", "--user", "10", "-n", f"{application}/{application}.PackageActivity")
+        stop = ("shell", "am", "force-stop", "--user", "10", application)
         replies = {
             ("devices", "-l"): f"List of devices attached\n{SERIAL} device product:probe transport_id:{TRANSPORT}",
             ("get-serialno",): SERIAL,
@@ -61,13 +64,13 @@ class AndroidDeployTests(unittest.TestCase):
             ("shell", "am", "get-current-user"): "10",
             ("shell", "getprop", "ro.build.version.sdk"): "36",
             ("shell", "getprop", "ro.product.cpu.abi"): "arm64-v8a",
-            ("shell", "pm", "path", "--user", "10", APPLICATION): f"package:{PACKAGE}",
+            ("shell", "pm", "path", "--user", "10", application): f"package:{PACKAGE}",
             ("shell", "toybox", "sha256sum", PACKAGE): f"{DIGEST}  {PACKAGE}",
-            launch: f"Status: ok\nLaunchState: COLD\nActivity: {APPLICATION}/.PackageActivity",
+            launch: f"Status: ok\nLaunchState: COLD\nActivity: {application}/.PackageActivity",
             stop: "",
-            ("shell", "cmd", "package", "list", "packages", "--user", "10", "-U", APPLICATION):
-                f"package:{APPLICATION} uid:1010200",
-            ("shell", "pidof", APPLICATION): "123",
+            ("shell", "cmd", "package", "list", "packages", "--user", "10", "-U", application):
+                f"package:{application} uid:1010200",
+            ("shell", "pidof", application): "123",
             UID_QUERY: "UID\n1010200",
             STAT_QUERY: proc_stat(),
             LOGCAT: (log_line(LIFECYCLE) + log_line(FRAME) + log_line("ignored secret=/sdcard/personal")
@@ -89,7 +92,7 @@ class AndroidDeployTests(unittest.TestCase):
             if args[:4] == ("install", "-r", "--user", "10"):
                 self.assertEqual(str(Path(args[4])), str(Path("a package ü.apk")))
                 return 0, "Performing Streamed Install\nSuccess"
-            if args == ("shell", "pidof", APPLICATION) and not running and (not override or args not in override):
+            if args == ("shell", "pidof", application) and not running and (not override or args not in override):
                 return 1, ""
             response = replies[args]
             if isinstance(response, list):
@@ -110,7 +113,7 @@ class AndroidDeployTests(unittest.TestCase):
                 patch.object(project, "deploy_process", side_effect=run), \
                 patch.object(project.time, "monotonic_ns", side_effect=[100_000_000, 101_000_000, 109_000_000, 111_000_000]), \
                 contextlib.redirect_stdout(stdout):
-            status = project.main(["android-deploy", "--artifact", ".", "--profile", PROFILE, "--sdk", ".",
+            status = project.main(["android-deploy", "--artifact", ".", "--profile", profile_name, "--sdk", ".",
                                    "--device", SERIAL, "--timeout", "30", *options])
         return status, json.loads(stdout.getvalue()), commands
 
@@ -177,27 +180,39 @@ class AndroidDeployTests(unittest.TestCase):
             with self.subTest(serial=serial, details=details):
                 self.assertEqual(project.adb_connection_mode(serial, details), expected)
 
-    def test_openxr_staged_profile_verifies_signed_artifact_and_never_launches(self):
+    def test_openxr_discovery_launch_is_attributed_redacted_and_stopped(self):
         name = project.OPENXR_DEVELOPMENT_PROFILE
         _, profile = project.load_contract(name, ["arm64-v8a"])
-        artifact = project.VerifiedAndroidArtifact(Path("unused.apk"), profile, DIGEST, PROVENANCE_DIGEST,
-                                                   SOURCE_REVISION, frozenset({"arm64-v8a"}))
-        stdout = io.StringIO()
-        with patch.object(project, "deploy_artifact", return_value=artifact) as verify, \
-                patch.object(project, "android_deploy_host", return_value="linux-x64"), \
-                patch.object(project, "admit_adb_device") as adb, contextlib.redirect_stdout(stdout):
-            status = project.main(["android-deploy", "--artifact", ".", "--profile", name, "--sdk", ".",
-                                   "--device", SERIAL, "--host", "linux-x64", "--connection", "usb", "--runtime", "openxr"])
-        verify.assert_called_once()
-        adb.assert_not_called()
-        report = json.loads(stdout.getvalue())
-        self.assertEqual((status, report["status"], report["stage"]), (1, "partial", "runtime"))
-        self.assertEqual(report["error"], "android_openxr_activity_route_staged")
+        log = log_line(OPENXR) + log_line("host-openxr raw=private", pid=999)
+        status, report, commands = self.execute({LOGCAT: log}, OPENXR_OPTIONS, name)
+        self.assertEqual((status, report["status"], report["stage"]), (0, "diagnostic_complete", "diagnostics"))
         self.assertEqual(report["artifact"]["apkSha256"], DIGEST)
         self.assertEqual(report["artifact"]["openxr"], profile["openxrProfile"])
-        self.assertEqual(report["qualification"]["runtime"]["status"], "packaged_not_launched")
+        self.assertEqual(report["qualification"]["runtime"],
+                         {"requested": "openxr", "selection": "system-default", "status": "cold_system_discovered"})
         self.assertEqual(report["qualification"]["physicalXrQualification"], "not_run")
-        self.assertNotIn("device", report)
+        self.assertEqual(report["observed"]["openxr"]["runtimeVersion"], {"major": 1, "minor": 1, "patch": 63})
+        self.assertEqual(report["cleanup"], {"status": "stopped"})
+        self.assertIn(("shell", "am", "force-stop", "--user", "10", profile["applicationId"]), commands)
+        self.assertNotIn("private", json.dumps(report))
+
+    def test_openxr_discovery_rejects_ambiguous_or_wrong_abi_evidence_and_stops(self):
+        name = project.OPENXR_DEVELOPMENT_PROFILE
+        for raw, reason in ((log_line(OPENXR) * 2, "openxr_diagnostic_ambiguous"),
+                            (log_line(OPENXR.replace("arm64-v8a", "x86_64")), "openxr_diagnostic_abi_mismatch"),
+                            (log_line(OPENXR.replace("result=0", "result=-1")), "openxr_diagnostic_invalid")):
+            with self.subTest(reason=reason):
+                status, report, _ = self.execute({LOGCAT: raw}, OPENXR_OPTIONS, name)
+                self.assertEqual((status, report["error"]), (1, reason))
+                self.assertEqual(report["cleanup"], {"status": "stopped"})
+                self.assertEqual(report["qualification"]["physicalXrQualification"], "not_run")
+
+    def test_openxr_cold_discovery_native_failure_keeps_typed_stage(self):
+        raw = log_line("host-openxr abi=arm64-v8a stage=extension-admission result=-51 runtimeMajor=0 runtimeMinor=0 runtimePatch=0")
+        status, report, _ = self.execute({LOGCAT: raw}, OPENXR_OPTIONS, project.OPENXR_DEVELOPMENT_PROFILE)
+        self.assertEqual((status, report["error"]), (1, "openxr_cold_discovery_failed"))
+        self.assertEqual(report["observed"]["openxr"], {"abi": "arm64-v8a", "stage": "extension-admission", "result": -51})
+        self.assertEqual(report["cleanup"], {"status": "stopped"})
 
     def test_explicit_connection_fails_closed_for_contradictory_inventory(self):
         inventory = f"List of devices attached\n{SERIAL} device usb:1-2 transport_id:{TRANSPORT}"

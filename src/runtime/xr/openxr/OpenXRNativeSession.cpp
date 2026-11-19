@@ -2,13 +2,6 @@
 
 #include "host/OpenXRNativeNames.h"
 
-#if defined(__ANDROID__)
-#ifndef XR_USE_PLATFORM_ANDROID
-#define XR_USE_PLATFORM_ANDROID
-#endif
-#include <openxr/openxr_platform.h>
-#endif
-
 #include <algorithm>
 #include <bit>
 #include <exception>
@@ -311,17 +304,14 @@ namespace Horo::XR::OpenXRInternal {
         if (requested.size() >= MaximumEnabledExtensions)
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
         if (!std::ranges::any_of(requested, [](const NativeExtensionRequest &extension) {
-            return extension.name == XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME && extension.required && !extension.promotedToCore;
+            return extension.name == AndroidOpenXRInstanceExtension && extension.required && !extension.promotedToCore;
         }))
             return Result<void>::Failure(
                 MakeError(XRErrors::LoaderPreflightInvalid, "Android OpenXR selection must require XR_KHR_android_create_instance"));
 
-        PFN_xrInitializeLoaderKHR initialize{};
-        if (auto resolved = Resolve(dispatch_.getProc, XR_NULL_HANDLE, "xrInitializeLoaderKHR", initialize); resolved.HasError())
-            return resolved;
-        const XrLoaderInitInfoAndroidKHR info{XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR, nullptr, application.vm,
-                                              application.applicationContext};
-        const auto initialized = initialize(reinterpret_cast<const XrLoaderInitInfoBaseHeaderKHR *>(&info));
+        const auto initialized = InitializeAndroidOpenXRLoader(dispatch_.getProc, application);
+        if (initialized == XR_ERROR_FUNCTION_UNSUPPORTED)
+            return Result<void>::Failure(MakeError(XRErrors::LoaderIncompatible, "Selected loader has no Android initialization dispatch"));
         return initialized == XR_SUCCESS ? Result<void>::Success()
                                          : Result<void>::Failure(NativeError("xrInitializeLoaderKHR", initialized));
     }
@@ -577,19 +567,23 @@ namespace Horo::XR::OpenXRInternal {
         info.enabledExtensionCount = names_.extensionCount;
         info.enabledExtensionNames = names_.extensions.data();
 #if defined(__ANDROID__)
-        const auto slot = ExtensionSlot(XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME);
+        const auto slot = ExtensionSlot(AndroidOpenXRInstanceExtension);
         if (slot == extensionEvidenceCount_ || extensionEvidence_[slot].admission.state != NativeExtensionState::Enabled)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported, "Android OpenXR instance extension was not enabled"));
-        const XrInstanceCreateInfoAndroidKHR androidInfo{XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR, nullptr, androidApplication_.vm,
-                                                         androidApplication_.activity};
-        info.next = &androidInfo;
 #endif
         XrInstance candidate{XR_NULL_HANDLE};
-        auto result = dispatch_.createInstance(&info, &candidate);
+        const auto create = [&] {
+#if defined(__ANDROID__)
+            return CreateAndroidOpenXRInstance(dispatch_.createInstance, info, androidApplication_, candidate);
+#else
+            return dispatch_.createInstance(&info, &candidate);
+#endif
+        };
+        auto result = create();
         if (result == XR_ERROR_EXTENSION_NOT_PRESENT && candidate == XR_NULL_HANDLE && request.optionalReprojection &&
             OmitRefusedReprojectionExtensions()) {
             info.enabledExtensionCount = names_.extensionCount;
-            result = dispatch_.createInstance(&info, &candidate);
+            result = create();
         }
         if (XR_FAILED(result))
             return Result<void>::Failure(NativeError("xrCreateInstance", result));

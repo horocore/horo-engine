@@ -252,21 +252,8 @@ elseif(WIN32)
 endif()
 
 set(_HORO_BUILD_TESTING "${BUILD_TESTING}")
-set(HORO_MINIZ_REVISION "174573d60290f447c13a2b1b3405de2b96e27d6c")
-set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(
-    miniz
-    GIT_REPOSITORY https://github.com/richgel999/miniz.git
-    GIT_TAG "${HORO_MINIZ_REVISION}"
-    GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(miniz)
-
-# miniz hard-codes /Zi in its MSVC flags. With /Z7 selected for cached builds,
-# sccache otherwise expects a PDB that the compiler intentionally does not emit.
-if(MSVC AND CMAKE_C_COMPILER_LAUNCHER MATCHES "sccache")
-    set_property(TARGET miniz PROPERTY C_COMPILER_LAUNCHER "")
-endif()
+include(HoroMinizDependency)
+horo_add_miniz_dependency()
 
 # Portable package paths need Unicode normalization and full case folding.
 set(HORO_UTF8PROC_REVISION "d7bf128df773c2a1a7242eb80e51e91a769fc985")

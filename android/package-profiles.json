@@ -66,7 +66,7 @@
       "versionName": "0.2.0",
       "versionCode": 1,
       "configuration": "Debug",
-      "preset": "android-debug",
+      "preset": "android-openxr-development",
       "minimumApi": 29,
       "targetApi": 36,
       "renderer": "none",
@@ -96,7 +96,7 @@
         "schema": 1,
         "runtime": "openxr",
         "loaderSource": "bundled",
-        "activityRoute": "staged"
+        "activityRoute": "cold-discovery"
       }
     },
     "qualification-vulkan-development": {

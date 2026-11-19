@@ -1,4 +1,7 @@
 #include "AndroidGameActivityInput.h"
+#if defined(HORO_ANDROID_QUALIFICATION_OPENXR_DISCOVERY)
+#include "OpenXRDiagnosticHost.h"
+#endif
 #if defined(HORO_ANDROID_QUALIFICATION_VULKAN)
 #include "QualificationHost.h"
 
@@ -74,11 +77,17 @@ namespace {
 #if defined(HORO_ANDROID_QUALIFICATION_VULKAN)
         Horo::AndroidQualification::QualificationHost &host;
 #endif
+#if defined(HORO_ANDROID_QUALIFICATION_OPENXR_DISCOVERY)
+        Horo::AndroidQualification::OpenXRDiagnosticHost discovery;
+#endif
         bool failed{};
 
         /** @brief Preserves existing Input semantics before the selected host handles lifecycle/window observations. */
         void Command(android_app &app, std::int32_t command) {
             input.Command(command);
+#if defined(HORO_ANDROID_QUALIFICATION_OPENXR_DISCOVERY)
+            discovery.Command(command);
+#endif
 #if defined(HORO_ANDROID_QUALIFICATION_VULKAN)
             if (auto observed = host.Command(app, command); observed.HasError()) {
                 Report(observed.ErrorValue());
@@ -88,7 +97,10 @@ namespace {
         }
 
         /** @brief Pumps only the explicitly selected renderer; no renderer is substituted after admission failure. */
-        void Pump() {
+        void Pump([[maybe_unused]] android_app &app) {
+#if defined(HORO_ANDROID_QUALIFICATION_OPENXR_DISCOVERY)
+            discovery.Pump(app);
+#endif
 #if defined(HORO_ANDROID_QUALIFICATION_VULKAN)
             if (auto rendered = host.Pump(); rendered.HasError()) {
                 Report(rendered.ErrorValue());
@@ -112,7 +124,7 @@ namespace {
             const auto &snapshot = collector.Commit();
             static_cast<void>(snapshot);
             if (app.destroyRequested == 0 && !owner.failed)
-                owner.Pump();
+                owner.Pump(app);
         }
         app.onAppCmd = nullptr;
         app.userData = nullptr;

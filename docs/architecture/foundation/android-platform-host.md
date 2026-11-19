@@ -311,13 +311,15 @@ owner chain the exact Activity into instance creation. A missing host lease,
 unavailable loader entry point or failed initialization prevents native
 discovery.
 
-These contracts qualify separately from Android deployment. Compile the
-`HoroXROpenXR` target with the pinned OpenXR SDK headers and the Android NDK
-for each ABI enabled in the product. The current package qualification profiles
-omit this target. Product qualification also needs an explicit XR package
-profile, a verified ABI-specific loader, a composition that hands the
-GameActivity references to that selected native owner, and device evidence for
-discovery and shutdown.
+The signed `qualification-openxr-development` APK compiles the same Android
+loader initialization and Activity instance ABI used by `HoroXROpenXR`. Its
+GameActivity queues one cold diagnostic on resume and consumes it after pending
+commands. Pause, stop and destruction cancel a queued diagnostic. The installed
+base APK's exact stored ABI image is checked against the compiled lock digest
+and opened by descriptor and offset. The diagnostic reports the HMD system
+query and runtime version only after successful instance retirement. Native
+session and graphics activation require separate product composition and device
+qualification.
 
 Developer deployment selects a device explicitly. Install, launch, log capture,
 termination, timeout, and disconnect use argv-based process APIs and bounded
@@ -340,11 +342,12 @@ and source revision, the renderer declaration and packaged ABIs identify the
 artifact. The provenance includes the producer's Java dependency inventory
 and the checked-in dependency lock digest.
 
-The runtime selection is explicit for OpenXR and requires both host and
-connection. The current Android qualification profiles provide the platform
-probe only. An OpenXR request reports an unsupported route before package
-verification or device access. The report reserves physical XR qualification
-for a separate, measured headset operation.
+The OpenXR deployment diagnostic requires explicit host, connection, device
+and `--runtime openxr` selection. The command accepts a single closed marker
+from the verified cold process, validates its runtime result and ABI, and stops
+that exact diagnostic process before reporting `diagnostic_complete`. The
+observation records only the diagnostic stage, native result and numeric
+runtime version. The report keeps physical XR qualification separate.
 
 The command emits one JSON record. Process evidence is restricted to the
 matching package UID, PID and kernel start ticks. The log query accepts only

@@ -179,10 +179,10 @@ def validate_openxr_profile(profile: dict, tools: dict, abis: list[str]) -> None
         if "openxrProfile" in profile or OPENXR_LOADER_NAME in profile["nativeLibraries"]:
             raise AndroidError("Only the declared OpenXR profile may include an OpenXR loader.")
         return
-    expected = {"schema": 1, "runtime": "openxr", "loaderSource": "bundled", "activityRoute": "staged"}
-    if (not exact_profile_fields(profile.get("openxrProfile"), expected) or profile["preset"] != "android-debug"
+    expected = {"schema": 1, "runtime": "openxr", "loaderSource": "bundled", "activityRoute": "cold-discovery"}
+    if (not exact_profile_fields(profile.get("openxrProfile"), expected) or profile["preset"] != "android-openxr-development"
             or profile["configuration"] != "Debug" or profile["renderer"] != "none"):
-        raise AndroidError("The Android OpenXR development profile only stages a loader for a future Activity route.")
+        raise AndroidError("The Android OpenXR profile requires its explicit cold-discovery preset.")
     if profile["nativeLibraries"].count(OPENXR_LOADER_NAME) != 1 or any(abi not in lock["abiSha256"] for abi in abis):
         raise AndroidError("OpenXR loader packaging requires one pinned image for every selected ABI.")
 
@@ -777,6 +777,8 @@ def verify_assets(archive: zipfile.ZipFile, expected: dict) -> None:
 
 def assemble(arguments: argparse.Namespace) -> None:
     tools, profile = load_contract(arguments.profile, arguments.abi)
+    if "openxrProfile" in profile and arguments.native_root:
+        raise AndroidError("The Android OpenXR profile must build its declared native diagnostic host.")
     openxr_loader = read_openxr_loader(arguments.openxr_loader, tools, arguments.abi, arguments.unsigned)
     capability = tools_preflight(tools, arguments.sdk, arguments.ndk, arguments.gradle, not arguments.unsigned)
     workspace = arguments.output.resolve()
@@ -1131,6 +1133,10 @@ STATE_LINE = re.compile(
 FRAME_LINE = re.compile(
     r"host-frame stage=(?P<stage>begin|execute|present) outcome=(?P<outcome>accepted|backpressure|failed) "
     + " ".join(fr"{name}=(?P<{name}>[0-9]{{1,20}})" for name in FRAME_FIELDS) + r" completion=unobserved")
+OPENXR_LINE = re.compile(
+    r"host-openxr abi=(arm64-v8a|x86_64) stage=(host-application|bundled-loader|loader-dispatch|loader-initialization|extension-admission|"
+    r"instance-creation|system-discovery|runtime-properties|instance-retirement|discovered) "
+    r"result=(0|-?[1-9][0-9]{0,9}) runtimeMajor=([0-9]{1,5}) runtimeMinor=([0-9]{1,5}) runtimePatch=([0-9]{1,10})")
 
 
 LOG_ENTRY_TIME = re.compile(
@@ -1174,7 +1180,24 @@ class DeployedProcess:
     start_ticks: int
 
 
-def package_log_evidence(log: str, process: DeployedProcess, after: int, through: int) -> dict:
+def openxr_log_evidence(message: str) -> dict:
+    match = OPENXR_LINE.fullmatch(message)
+    if match is None:
+        raise AndroidDeployError("openxr_diagnostic_invalid")
+    abi, stage, result, major, minor, patch = match.groups()
+    result, major, minor, patch = map(int, (result, major, minor, patch))
+    if not -2**31 <= result < 2**31 or major >= 2**16 or minor >= 2**16 or patch >= 2**32:
+        raise AndroidDeployError("openxr_diagnostic_invalid")
+    evidence = {"abi": abi, "stage": stage, "result": result}
+    if stage == "discovered":
+        if result == 0 and major:
+            return evidence | {"runtimeVersion": {"major": major, "minor": minor, "patch": patch}}
+    elif result != 0 and not (major or minor or patch):
+        return evidence
+    raise AndroidDeployError("openxr_diagnostic_invalid")
+
+
+def package_log_evidence(log: str, process: DeployedProcess, after: int, through: int, *, openxr: bool = False) -> dict:
     """Project named telemetry only from the exact UID, PID and admitted time interval."""
     evidence = {"crashObserved": False}
     latest = {}
@@ -1194,6 +1217,11 @@ def package_log_evidence(log: str, process: DeployedProcess, after: int, through
             continue
         if tag == "AndroidRuntime":
             evidence["crashObserved"] |= priority in ("E", "F") and message.startswith("FATAL EXCEPTION:")
+            continue
+        if openxr and message.startswith("host-openxr "):
+            if "openxr" in evidence:
+                raise AndroidDeployError("openxr_diagnostic_ambiguous")
+            evidence["openxr"] = openxr_log_evidence(message)
             continue
         for category, pattern in (("lifecycle", STATE_LINE), ("renderer", FRAME_LINE)):
             if logged >= latest.get(category, 0) and (match := pattern.fullmatch(message)):
@@ -1239,18 +1267,30 @@ def deployed_process(device: AdmittedAdbDevice, application: str, uid: int) -> D
     return DeployedProcess(pid, uid, started)
 
 
-def deploy_diagnostics(device: AdmittedAdbDevice, application: str, process: DeployedProcess, start: AndroidLogClock) -> dict:
+def deploy_diagnostics(device: AdmittedAdbDevice, application: str, process: DeployedProcess, start: AndroidLogClock,
+                       *, openxr: bool = False) -> dict:
     """Collect bounded markers from the exact process captured by this launch."""
     raw = device.run("logcat", f"--pid={process.pid}", "-v", "time,epoch,nsec,uid", "-t", "200", "-s",
                      "HoroPackageQualification:I", "AndroidRuntime:E")
     end = AndroidLogClock.read(device)
     end.require_continuity(start)
-    facts = package_log_evidence(raw, process, start.nanoseconds, end.nanoseconds)
+    facts = package_log_evidence(raw, process, start.nanoseconds, end.nanoseconds, openxr=openxr)
     if facts["crashObserved"] and device.process_id(application) is None:
         return facts
     if deployed_process(device, application, process.uid) != process:
         raise AndroidDeployError("application_process_changed")
     return facts
+
+
+def await_openxr_diagnostics(device: AdmittedAdbDevice, application: str, process: DeployedProcess,
+                             start: AndroidLogClock) -> dict:
+    """Wait for one terminal diagnostic through the same verified ADB transport and PID."""
+    while time.monotonic() < device.deadline:
+        facts = deploy_diagnostics(device, application, process, start, openxr=True)
+        if facts["crashObserved"] or "openxr" in facts:
+            return facts
+        time.sleep(min(0.1, max(0, device.deadline - time.monotonic())))
+    raise AndroidDeployError("openxr_diagnostic_timeout")
 
 
 @dataclass
@@ -1364,12 +1404,11 @@ def android_deploy_main(argv=None) -> int:
                                   "apkSha256": artifact.apk_sha256, "provenanceSha256": artifact.provenance_sha256,
                                   "sourceRevision": artifact.source_revision, "declaredRenderer": profile["renderer"],
                                   "abis": sorted(artifact.abis)}
-            if "openxrProfile" in profile:
-                report["stage"] = "runtime"
+            openxr = "openxrProfile" in profile
+            if openxr:
+                runtime["selection"] = "system-default"
                 report["artifact"]["openxr"] = profile["openxrProfile"]
                 report["qualification"]["profile"] = arguments.profile
-                runtime["status"] = "packaged_not_launched"
-                raise AndroidDeployError("android_openxr_activity_route_staged")
             report["stage"] = "device"
             device = admit_adb_device(deploy_tool(arguments.sdk / "platform-tools", "adb"), arguments.device, deadline)
             connection["observed"] = device.connection
@@ -1392,13 +1431,27 @@ def android_deploy_main(argv=None) -> int:
             launch = AndroidPackageLaunch(device, application, user, artifact.apk_sha256)
             process, launch_time = launch.start()
             report["stage"] = "diagnostics"
-            observed = deploy_diagnostics(device, application, process, launch_time)
+            if openxr:
+                observed = await_openxr_diagnostics(device, application, process, launch_time)
+            else:
+                observed = deploy_diagnostics(device, application, process, launch_time)
             report["observed"] = observed
             if observed["crashObserved"]:
                 raise AndroidDeployError("application_crashed")
-            if "lifecycle" not in observed and "renderer" not in observed:
+            if openxr:
+                if observed["openxr"]["abi"] != abi:
+                    raise AndroidDeployError("openxr_diagnostic_abi_mismatch")
+                runtime["status"] = "cold_system_discovered" if observed["openxr"]["stage"] == "discovered" else "cold_discovery_failed"
+                if runtime["status"] != "cold_system_discovered":
+                    raise AndroidDeployError("openxr_cold_discovery_failed")
+                report["cleanup"] = launch.rollback()
+                if report["cleanup"]["status"] not in ("stopped", "already_exited"):
+                    raise AndroidDeployError("application_stop_unconfirmed")
+                report["status"] = "diagnostic_complete"
+            elif "lifecycle" not in observed and "renderer" not in observed:
                 raise AndroidDeployError("application_evidence_unavailable")
-            report["status"] = "complete"
+            else:
+                report["status"] = "complete"
             exit_code = 0
     except KeyboardInterrupt:
         report["error"] = "cancelled"
@@ -1407,7 +1460,7 @@ def android_deploy_main(argv=None) -> int:
         report["error"] = error.code
     except (OSError, ValueError, KeyError, TypeError, AttributeError, zipfile.BadZipFile):
         report["error"] = "artifact_invalid" if report["stage"] == "artifact" else "host_operation_failed"
-    if exit_code != 0 and launch is not None and launch.attempted:
+    if exit_code != 0 and launch is not None and launch.attempted and "cleanup" not in report:
         if report["error"] == "device_transport_changed":
             report["cleanup"] = {"status": "unconfirmed", "reason": "device_transport_changed"}
         else:

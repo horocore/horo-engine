@@ -3,9 +3,13 @@ if(NOT ANDROID)
     message(FATAL_ERROR "Android package qualification requires the declared NDK toolchain preset")
 endif()
 set(HORO_ANDROID_QUALIFICATION_RENDERER "none" CACHE STRING "Explicit Android qualification renderer")
+option(HORO_ANDROID_QUALIFICATION_OPENXR_DISCOVERY "Run the installed APK's cold OpenXR diagnostic on Activity resume" OFF)
 if(NOT HORO_ANDROID_QUALIFICATION_RENDERER STREQUAL "none" AND
    NOT HORO_ANDROID_QUALIFICATION_RENDERER STREQUAL "vulkan-android")
     message(FATAL_ERROR "Android qualification requires the explicit none or vulkan-android profile")
+endif()
+if(HORO_ANDROID_QUALIFICATION_OPENXR_DISCOVERY AND NOT HORO_ANDROID_QUALIFICATION_RENDERER STREQUAL "none")
+    message(FATAL_ERROR "Android OpenXR diagnostics require their explicit renderer-free qualification profile")
 endif()
 if(NOT DEFINED ENV{HORO_GAME_ACTIVITY_ROOT})
     message(FATAL_ERROR "Android preflight: extract the verified pinned GameActivity AAR before configure")
@@ -36,6 +40,18 @@ if(HORO_ANDROID_QUALIFICATION_RENDERER STREQUAL "vulkan-android")
     add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/apps/android-package-qualification"
         "${CMAKE_CURRENT_BINARY_DIR}/android-qualification-composition")
 endif()
+if(HORO_ANDROID_QUALIFICATION_OPENXR_DISCOVERY)
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/HoroAndroidRendererCore.cmake")
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/HoroMinizDependency.cmake")
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/HoroOpenXRDependency.cmake")
+    include(GNUInstallDirs)
+    horo_add_android_foundation_core()
+    horo_add_miniz_dependency()
+    horo_add_openxr_headers_dependency()
+    add_library(HoroPlatform STATIC "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/PlatformErrors.cpp")
+    target_compile_features(HoroPlatform PRIVATE cxx_std_20)
+    target_link_libraries(HoroPlatform PUBLIC HoroFoundation)
+endif()
 add_library(HoroAndroidPackageQualification SHARED
     "${CMAKE_CURRENT_SOURCE_DIR}/apps/android-package-qualification/NativeEntry.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/android/AndroidGameActivityInput.cpp"
@@ -48,6 +64,28 @@ target_include_directories(HoroAndroidPackageQualification PRIVATE "${_horo_acti
 target_link_libraries(HoroAndroidPackageQualification PRIVATE HoroAndroidInputIntegration
     "-Wl,--whole-archive" "${_horo_activity_library}" "-Wl,--no-whole-archive" android log)
 set(_horo_qualification_targets HoroFoundation HoroInput HoroAndroidInputIntegration HoroAndroidPackageQualification)
+if(HORO_ANDROID_QUALIFICATION_OPENXR_DISCOVERY)
+    set(_horo_openxr_lock "${CMAKE_CURRENT_SOURCE_DIR}/android/openxr-loader-lock.json")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_horo_openxr_lock}")
+    file(READ "${_horo_openxr_lock}" _horo_openxr_json)
+    string(JSON _horo_openxr_digest GET "${_horo_openxr_json}" abiSha256 "${ANDROID_ABI}")
+    string(LENGTH "${_horo_openxr_digest}" _horo_openxr_digest_size)
+    if(NOT _horo_openxr_digest_size EQUAL 64 OR _horo_openxr_digest MATCHES "[^0-9a-f]")
+        message(FATAL_ERROR "Android OpenXR loader requires one canonical SHA-256 pin for ${ANDROID_ABI}")
+    endif()
+    file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/openxr-qualification/OpenXRLoaderPin.h" CONTENT
+        "#pragma once\n#include <string_view>\nnamespace Horo::AndroidQualification {\ninline constexpr std::string_view OpenXRLoaderPin = \"sha256:${_horo_openxr_digest}\";\ninline constexpr char OpenXRLoaderAbi[] = \"${ANDROID_ABI}\";\n}\n")
+    target_sources(HoroAndroidPackageQualification PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/apps/android-package-qualification/OpenXRDiagnosticHost.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/android/AndroidApkOpenXRLoader.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/xr/openxr/OpenXRAndroidDiscovery.cpp")
+    target_include_directories(HoroAndroidPackageQualification PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/xr/openxr/host"
+        "${CMAKE_CURRENT_BINARY_DIR}/openxr-qualification")
+    target_compile_definitions(HoroAndroidPackageQualification PRIVATE HORO_ANDROID_QUALIFICATION_OPENXR_DISCOVERY=1)
+    target_link_libraries(HoroAndroidPackageQualification PRIVATE HoroPlatform HoroOpenXRHeaders miniz dl)
+    list(APPEND _horo_qualification_targets HoroPlatform)
+endif()
 if(HORO_ANDROID_QUALIFICATION_RENDERER STREQUAL "vulkan-android")
     target_sources(HoroAndroidPackageQualification PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/apps/android-package-qualification/QualificationHost.cpp")
