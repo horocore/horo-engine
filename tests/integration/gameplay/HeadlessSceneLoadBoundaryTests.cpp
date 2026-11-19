@@ -294,11 +294,15 @@ namespace {
         CHECK(fixture.probe.factories == 0);
 #if HORO_TEST_PHYSICS_NATIVE
         if (available) {
+            using namespace Network;
+            const auto mode = GENERATE(NetworkProjectRole::Standalone, NetworkProjectRole::ListenServer);
             JobSystem jobs{{1, 8}};
             Assets::AssetLoadService loads{jobs, committed.Value()->SceneProvider()};
             const HeadlessSceneLoadBoundary load{{}, std::chrono::steady_clock::now() + std::chrono::seconds{5}};
             auto execution = input;
             execution.execution.emplace(AiSceneCookedDecisionExecution{jobs, {}, {}});
+            Gameplay::GameplayReplicationAdmissionPolicy replication;
+            replication.inventory.completeness = NetworkReplicationInventoryCompleteness::Complete;
             auto composed =
                 ComposeHeadlessSceneNetworkServices(std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(scene).Value()),
                                                     {.mode = Physics::PhysicsRuntimeMode::Canonical,
@@ -308,17 +312,18 @@ namespace {
                                                      .load = load,
                                                      .aiControllers = catalog,
                                                      .cookedDecisions =
-                                                         std::make_shared<const HeadlessCookedDecisionInput>(std::move(execution))});
+                                                         std::make_shared<const HeadlessCookedDecisionInput>(std::move(execution))},
+                                                    {}, std::nullopt, replication);
             REQUIRE(composed.HasValue());
-            using namespace Network;
-            const auto service = [&](NetworkModeServiceKind kind) {
-                return composed.Value().factories.services[static_cast<std::size_t>(kind)](
-                    {kind, NetworkProjectRole::Standalone, {}, NetworkModeWorldKind::Standalone, {7}});
+            const auto service = [&](NetworkModeServiceKind kind, NetworkModeWorldKind world, Runtime::SceneRuntimeId sceneId) {
+                return composed.Value().factories.services[static_cast<std::size_t>(kind)]({kind, mode, {}, world, sceneId});
             };
-            auto sceneService = service(NetworkModeServiceKind::Scene);
+            const auto authority =
+                mode == NetworkProjectRole::Standalone ? NetworkModeWorldKind::Standalone : NetworkModeWorldKind::AuthorityServer;
+            auto sceneService = service(NetworkModeServiceKind::Scene, authority, {7});
             REQUIRE(sceneService.HasValue());
             REQUIRE(sceneService.Value()->Prepare().HasValue());
-            auto physics = service(NetworkModeServiceKind::Physics);
+            auto physics = service(NetworkModeServiceKind::Physics, authority, {7});
             REQUIRE(physics.HasValue());
             REQUIRE(physics.Value()->Prepare().HasValue());
             REQUIRE(physics.Value()->Activate().HasValue());
@@ -340,6 +345,21 @@ namespace {
             const auto &winner = std::get<Math::WorldCoordinate64>(std::get<BlackboardScalarValue>(*after.Value()));
             CHECK(winner == Math::WorldCoordinate64::FromMillimeters(2000, 0, -500));
             CHECK(fixture.probe.factories == 0);
+            if (mode == NetworkProjectRole::ListenServer) {
+                auto client = service(NetworkModeServiceKind::Scene, NetworkModeWorldKind::Client, {8});
+                REQUIRE(client.HasValue());
+                REQUIRE(client.Value()->Prepare().HasValue());
+                const auto replica = InspectHeadlessScene(*client.Value());
+                REQUIRE(replica);
+                CHECK(replica->RuntimeId() == Runtime::SceneRuntimeId{8});
+                const auto clientValue = InspectHeadlessDecisionValue(*client.Value(), identity, key);
+                REQUIRE(clientValue.HasError());
+                CHECK(clientValue.ErrorValue().code.Value() == AIErrors::RuntimeUnavailable.code.Value());
+                const auto unchanged = InspectHeadlessDecisionValue(*physics.Value(), identity, key);
+                REQUIRE(unchanged.HasValue());
+                CHECK(unchanged.Value() == after.Value());
+                client.Value()->Shutdown();
+            }
             physics.Value()->Shutdown();
             sceneService.Value()->Shutdown();
             CHECK(InspectHeadlessDecisionValue(*physics.Value(), identity, key).HasError());

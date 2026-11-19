@@ -38,13 +38,16 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         }
 
         std::shared_ptr<const AI::PerceptionSpatialSnapshot> PerceptionSnapshot() const noexcept {
-            if (std::this_thread::get_id() != owners_->owner || !record_ || record_->closeRequested || record_->closed)
+            if (!IsAuthoritativeWorld() || std::this_thread::get_id() != owners_->owner || !record_ || record_->closeRequested ||
+                record_->closed)
                 return {};
             return record_->perception.Current();
         }
 
         /** @brief Reads one agent's owned native observations from the exact currently committed Scene. */
         Result<AI::PerceptionMemorySnapshot> PerceptionMemory(const Runtime::EntityRef recipient) const {
+            if (!IsAuthoritativeWorld())
+                return Result<AI::PerceptionMemorySnapshot>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
             const auto scene = ActiveScene();
             if (!scene || !record_->ai)
                 return Result<AI::PerceptionMemorySnapshot>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
@@ -54,7 +57,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         /** @brief Reads a copied Blackboard value from this exact live owner for product inspection. */
         Result<std::optional<AI::BlackboardValue>> ReadDecisionValue(AI::AgentId identity, AI::BlackboardKeyId key) const {
             using Value = Result<std::optional<AI::BlackboardValue>>;
-            if (!ActiveScene() || !record_->ai)
+            if (!IsAuthoritativeWorld() || !ActiveScene() || !record_->ai)
                 return Value::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
             const auto capability = record_->ai->CapabilityAtSafePoint();
             const auto agent = capability.ResolveAgent(identity);
@@ -65,6 +68,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
 
         /** @brief Copies the last completed runtime finding from the authoritative Scene on its owner lane. */
         Result<std::optional<AI::AiRuntimeDecisionDiagnostic>> ReadDecisionFailure() const {
+            if (!IsAuthoritativeWorld())
+                return Result<std::optional<AI::AiRuntimeDecisionDiagnostic>>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
             const auto scene = ActiveScene();
             if (!scene || !record_->ai)
                 return Result<std::optional<AI::AiRuntimeDecisionDiagnostic>>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));

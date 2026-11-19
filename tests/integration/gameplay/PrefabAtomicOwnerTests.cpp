@@ -659,7 +659,7 @@ namespace Horo::Application::PrefabAtomicTest {
                 CHECK(Internal::InspectHeadlessPerceptionMemory(*sceneService.Value(), *observer).HasError());
                 const auto denied = Internal::InspectHeadlessDecisionValue(*sceneService.Value(), observerId, privateKey);
                 REQUIRE(denied.HasError());
-                CHECK(denied.ErrorValue().code.Value() == AI::AIErrors::HandleInvalid.code.Value());
+                CHECK(denied.ErrorValue().code.Value() == AI::AIErrors::RuntimeUnavailable.code.Value());
                 return;
             }
             CHECK(Internal::InspectHeadlessDecisionValue(*sceneService.Value(), observerId, privateKey).HasValue());

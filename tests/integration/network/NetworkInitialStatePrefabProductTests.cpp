@@ -1,6 +1,7 @@
 #include "../../helpers/GameplayModuleTestSupport.h"
 #include "../../unit/runtime/physics/PhysicsSceneActivationTestSupport.h"
 #include "HeadlessPrefabIntent.h"
+#include "Horo/AI/AIErrors.h"
 #include "NetworkInitialStateProductTestSupport.h"
 #include "NetworkModeHostTestSupport.h"
 #include "NetworkProductPrefabTestSupport.h"
@@ -19,6 +20,11 @@ namespace Horo::Network {
         constexpr auto AuthoredObject = Runtime::SceneObjectId{10};
         constexpr std::uint64_t AdmissionTick = 22;
         constexpr std::uint64_t AuthorityTick = 39;
+
+        /** @brief Supplies a stable authored AI binding shared by both occurrences of the replicated object. */
+        AI::AiAgentComponent AuthoredAiAgent() {
+            return {.agent = AI::AgentId::Create(81).Value()};
+        }
 
         /** @brief Builds the registered movement schema and its actual canonical scalar codec. */
         std::shared_ptr<const ReplicationSerializerRegistry> MovementRegistry() {
@@ -178,6 +184,11 @@ namespace Horo::Network {
             std::shared_ptr<const Runtime::RuntimeSceneDefinition> Definition() const {
                 Runtime::SceneDefinitionBuilder builder{{19}, {1}};
                 Runtime::RuntimeEntityDefinition authored{.object = AuthoredObject};
+                authored.components.aiAgent = AuthoredAiAgent();
+                authored.components.aiController =
+                    AI::AiControllerComponent{.controller = AI::ControllerTypeId::Create(82).Value(),
+                                              .decisionAsset = AI::DecisionGraphAssetId::Create(83).Value(),
+                                              .blackboardSchema = AI::BlackboardSchemaId::Create(84).Value()};
                 const auto json = std::as_bytes(std::span(std::string_view{R"({"speed":1.25})"}));
                 authored.components.gameplayComponents.push_back({Gameplay::ComponentTypeId::Parse("game.tests.movement_settings").Value(),
                                                                   2,
@@ -191,7 +202,8 @@ namespace Horo::Network {
         /** @brief Builds the actual product's client mode with the declared movement schema and cooked Prefab loader. */
         std::unique_ptr<NetworkProductHost> CreateReplica(ReplicaResources &resources, const std::shared_ptr<ProductOwners> &owners,
                                                           Clock &clock,
-                                                          const std::shared_ptr<const Runtime::RuntimeSceneDefinition> &definition) {
+                                                          const std::shared_ptr<const Runtime::RuntimeSceneDefinition> &definition,
+                                                          const INetworkModeService *&observedScene) {
             Gameplay::GameplayReplicationAdmissionPolicy admission;
             admission.inventory.completeness = NetworkReplicationInventoryCompleteness::Complete;
             admission.inventory.declarations = {NativePrefabDeclaration()};
@@ -217,6 +229,13 @@ namespace Horo::Network {
             const auto project = NetworkProjectSettings::Create(settings).Value();
             const auto facts = ProductFacts(project, NetworkProjectRole::Client, false);
             auto services = ComposeHeadlessSceneNetworkServices(definition, input, ProductFactories(owners), selection, admission).Value();
+            auto &sceneFactory = services.factories.services[static_cast<std::size_t>(NetworkModeServiceKind::Scene)];
+            sceneFactory = [factory = std::move(sceneFactory), &observedScene](const NetworkModeServiceRequest &request) {
+                auto created = factory(request);
+                if (created.HasValue())
+                    observedScene = created.Value().get();
+                return created;
+            };
             const std::array worlds{NetworkModeWorld{NetworkModeWorldKind::Client, ReplicaScene}};
             return NetworkProductHost::Create(clock,
                                               {project,
@@ -336,12 +355,13 @@ namespace Horo::Network {
             std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition{resources.Definition()};
             RemotePublisher remote{setup, resources, *definition};
             DeterministicClock clock;
+            const INetworkModeService *observedScene{}; /**< Borrow valid only while the host owns the current Scene service. */
             std::unique_ptr<NetworkProductHost> host;
             std::shared_ptr<PeerSessionLifecycle> peer{ModeBindingTests::Negotiating(Connection(), Session())};
 
             NonemptyInitialProduct() {
                 owners->worldSetup = setup;
-                host = CreateReplica(resources, owners, clock, definition);
+                host = CreateReplica(resources, owners, clock, definition, observedScene);
                 auto &wire = *owners->binding;
                 wire.setup = setup;
                 wire.AttachOwner(owners->sessions->WorldBinding());
@@ -428,6 +448,34 @@ namespace Horo::Network {
                 }
             }
 
+            /** @brief Checks that the public field committed for a live AI-authored object confers no client AI access. */
+            void VerifyPrivateAiUnavailable(const Runtime::SceneRuntimeId expectedScene) const {
+                REQUIRE(observedScene);
+                const auto scene = InspectHeadlessScene(*observedScene);
+                REQUIRE(scene);
+                REQUIRE(scene->RuntimeId() == expectedScene);
+                const auto entity = scene->Find(AuthoredObject);
+                REQUIRE(entity);
+                const auto view = scene->Get(*entity);
+                REQUIRE(view.HasValue());
+                REQUIRE(view.Value().components);
+                CHECK(view.Value().components->aiAgent == AuthoredAiAgent());
+                REQUIRE(view.Value().components->aiController);
+
+                const auto expected = MakeError(AI::AIErrors::RuntimeUnavailable).code.Value();
+                const auto privateValue =
+                    InspectHeadlessDecisionValue(*observedScene, AuthoredAiAgent().agent, AI::BlackboardKeyId::Create(85).Value());
+                REQUIRE(privateValue.HasError());
+                CHECK(privateValue.ErrorValue().code.Value() == expected);
+                const auto memory = InspectHeadlessPerceptionMemory(*observedScene, *entity);
+                REQUIRE(memory.HasError());
+                CHECK(memory.ErrorValue().code.Value() == expected);
+                CHECK_FALSE(InspectHeadlessPerception(*observedScene));
+                const auto failure = InspectHeadlessDecisionFailure(*observedScene);
+                REQUIRE(failure.HasError());
+                CHECK(failure.ErrorValue().code.Value() == expected);
+            }
+
             void ReplaceWorld(std::span<const std::byte> staleFrame) {
                 const auto previous = ReplicaMapping();
                 constexpr auto replacement = Runtime::SceneRuntimeId{62};
@@ -452,6 +500,7 @@ namespace Horo::Network {
                           ->InitialClientOwnership(ReplicaScene, previous.Descriptor().session, previous.Mapping().Entries()[0].object)
                           .HasError());
                 CHECK(fields->applied->commits == 1);
+                VerifyPrivateAiUnavailable(replacement);
             }
         };
     }  // namespace
@@ -477,6 +526,7 @@ namespace Horo::Network {
         CHECK(product.fields->applied->values.empty());
         CHECK(product.ClientController()->InitialClientOwnership(ReplicaScene, originalSession, originalObject).HasError());
         REQUIRE(product.ReplicaMapping().Mapping().Entries().size() == 1);
+        product.VerifyPrivateAiUnavailable(ReplicaScene);
         SECTION("Shutdown cancels the complete field snapshot before Prefab reconstruction") {
             product.host->Shutdown();
             CHECK(original.IsRevoked());
@@ -486,6 +536,7 @@ namespace Horo::Network {
         SECTION("Cooked children get authoritative field values in the same owner commit as the authored object") {
             product.WaitForFields();
             product.VerifyPublishedFields(originalSession);
+            product.VerifyPrivateAiUnavailable(ReplicaScene);
             product.ConfirmFields();
             product.ReplaceWorld(lastField);
         }
