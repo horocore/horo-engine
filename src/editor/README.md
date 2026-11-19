@@ -2,6 +2,8 @@
 
 Owns editor documents, screens, authoring tools and editor-only runtime adapters.
 
-Start at [`screens/`](screens/) for screen and workspace flows, [`document/`](document/) for editable Scene state, [`design_system/`](design_system/) for shared controls, or [`renderer/`](renderer/) for viewport composition. XR authoring tools are in [`xr/`](xr/) and runtime XR is in [the XR module](../runtime/xr/README.md).
+Start at [`screens/`](screens/) for screen and workspace flows, [`document/`](document/) for editable Scene state, [`design_system/`](design_system/) for shared controls, or [`renderer/`](renderer/) for viewport composition. See the [Editor XR tools](xr/README.md) for simulator authoring and [XR runtime](../runtime/xr/README.md) for session and tracking implementation.
+
+The [workspace guide](screens/workspace/README.md) maps document commands, panel views and viewport tools to their owners.
 
 [Public headers](../../include/Horo/Editor/) · [Tests](../../tests/unit/editor/) · [Architecture](../../docs/architecture/editor/editor-document-model.md)

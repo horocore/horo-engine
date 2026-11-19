@@ -5,7 +5,7 @@ Owns XR capabilities, session and frame lifecycle, tracking and interaction cont
 - [`api/`](api/) — Backend-neutral identities, poses, views and capability snapshots.
 - [`runtime/`](runtime/) — Session, reference-space and frame admission.
 - [`input/`](input/) — Action bindings and tracking publication.
-- [`openxr/`](openxr/) — Native discovery, spaces, actions, swapchains and compositor. The optional passthrough provider lives in [`openxr/modules/meta_quest/`](openxr/modules/meta_quest/).
+- [OpenXR adapter](openxr/README.md) — Native discovery, spaces, actions, swapchains and compositor, including the optional Meta Quest passthrough provider.
 - [`simulator/`](simulator/) — Simulated XR input and tracking for development and tests.
 
 ## Where to start
@@ -19,6 +19,6 @@ Owns XR capabilities, session and frame lifecycle, tracking and interaction cont
 | Reproducing input with the simulator | [Simulator runtime](simulator/XRSimulatorRuntime.cpp), [simulator tests](../../../tests/unit/runtime/xr/XRSimulatorRuntimeTests.cpp) |
 | Backend selection and the Editor Play lifecycle | [Editor Play host](../../../apps/HoroEditor/composition/xr/OpenXRPlayHost.cpp), [host composition guide](../../../docs/guides/openxr-native-session-composition.md) |
 
-Keep native handles in the OpenXR adapter. Keep host selection and Play composition in the application. Use the [Editor XR tools](../../editor/xr/) for simulator UI and editor-side authoring.
+Keep native handles in the OpenXR adapter. Keep host selection and Play composition in the application. Use the [Editor XR tools](../../editor/xr/README.md) for simulator UI and editor-side authoring.
 
 [Public headers](../../../include/Horo/XR/) · [Tests](../../../tests/unit/runtime/xr/) · [Architecture](../../../docs/architecture/runtime/vr-ar-architecture.md)
