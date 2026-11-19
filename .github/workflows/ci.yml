@@ -591,7 +591,7 @@ jobs:
       - name: Build Windows Release allocation qualification
         id: mcp_release_build
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.release_build.outcome == 'success' }}
-        run: cmake --build --preset ci-audio-release --parallel 4 --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroSceneDocumentTests HoroRuntimeSaveSlotLifecycleTests HoroNavigationProjectSettingsTests HoroProjectCollisionSettingsTests HoroExtensionManagerTests HoroWorkspaceLayoutPersistenceTests HoroFoundationJsonTests HoroGameplayRuntimeTests HoroPrefabPersistenceTests HoroPrefabMetricsTests
+        run: cmake --build --preset ci-audio-release --parallel 4 --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroSceneDocumentTests HoroRuntimeSaveSlotLifecycleTests HoroNavigationProjectSettingsTests HoroNavigationDataQualificationTests HoroProjectCollisionSettingsTests HoroExtensionManagerTests HoroWorkspaceLayoutPersistenceTests HoroFoundationJsonTests HoroGameplayRuntimeTests HoroPrefabPersistenceTests HoroPrefabMetricsTests
 
       - name: Configure navigation without Recast Detour
         if: runner.os == 'Linux'
@@ -884,6 +884,10 @@ jobs:
           ctest --test-dir $root --parallel 1 --output-on-failure --no-tests=error --timeout 90 -R $pattern --test-output-size-passed 16384 --output-junit "navigation-allocation-ctest.xml"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/dev.py qualify-scene --family navigation --output-junit "$root/navigation-allocation-ctest.xml"
+
+      - name: Test Windows Release Navigation data allocation qualification
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
+        run: ctest --test-dir build/ci-audio-release --output-on-failure --no-tests=error --timeout 90 -R "^HoroNavigationDataQualificationTests::Every observed definition allocation failure"
 
       - name: Test Windows Release Collision settings allocation qualification
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
