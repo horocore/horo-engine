@@ -86,12 +86,12 @@ namespace Horo::Render {
                    (requested & static_cast<std::uint8_t>(~allowed)) == 0 && support.IsValid() && support.Supports(descriptor);
         }
 
-        /** @brief Closed two-eye scalar coverage attachment shape, with no upload or copy roles. */
+        /** @brief Closed stereo scalar coverage shape, with an optional diagnostic copy-source role. */
         [[nodiscard]] constexpr bool IsStereoCoverageTexture(const RenderTextureDescriptor &descriptor) noexcept {
             using enum RenderTextureUsage;
             return descriptor.dimension == RenderTextureDimension::TwoD && descriptor.depth == 1 && descriptor.mipCount == 1 &&
                    descriptor.layerCount == 2 && descriptor.sampleCount == 1 && descriptor.format == RenderTextureFormat::R32Float &&
-                   descriptor.usage == (Sampled | RenderAttachment);
+                   (descriptor.usage == (Sampled | RenderAttachment) || descriptor.usage == (Sampled | RenderAttachment | CopySource));
         }
 
         /** @brief Admits the exact stereo coverage target only with selected device extent, format and multiview evidence. */

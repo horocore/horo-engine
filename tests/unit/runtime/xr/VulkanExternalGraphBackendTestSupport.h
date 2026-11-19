@@ -29,6 +29,8 @@ namespace Horo::Render::VulkanExternalTest {
             capabilities_.support.limits = {65536, 2048, 1, 3, 2, 2};
             capabilities_.support.formats.sampleCountMask = 2;
             capabilities_.support.formats.usages.fill(RenderTextureUsage::RenderAttachment | RenderTextureUsage::Sampled);
+            capabilities_.support.formats.usages[static_cast<std::size_t>(RenderTextureFormat::R32Float)] =
+                RenderTextureUsage::RenderAttachment | RenderTextureUsage::Sampled | RenderTextureUsage::CopySource;
             capabilities_.supportsBufferResources = true;
             capabilities_.supportsMeshResources = true;
             capabilities_.supportsRenderTargetResources = true;

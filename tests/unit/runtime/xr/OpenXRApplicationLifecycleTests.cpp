@@ -2526,11 +2526,14 @@ namespace Horo::Tests::OpenXRApplication {
         enum class CoverageMode {
             Absent,
             Fits,
+            Probe,
             SceneGrew
         };
-        const auto coverageMode = GENERATE(CoverageMode::Absent, CoverageMode::Fits, CoverageMode::SceneGrew);
+        const auto coverageMode = GENERATE(CoverageMode::Absent, CoverageMode::Fits, CoverageMode::Probe, CoverageMode::SceneGrew);
         const bool withCoverage = coverageMode != CoverageMode::Absent;
-        const bool expectCoverage = coverageMode == CoverageMode::Fits;
+        const bool expectProbe = coverageMode == CoverageMode::Probe;
+        const bool expectCoverage = coverageMode == CoverageMode::Fits || expectProbe;
+        const std::array probe{MultiviewRenderRectangle{1, 2, 3, 4}, MultiviewRenderRectangle{2, 1, 4, 2}};
         viewport.StageXrMotionProgram(
             RequireValue(Editor::LoadEditorVulkanMultiviewMotionCook(cook.compiled.payload,
                                                                      RequireValue(EncodeReflectedShaderArtifact(cook.reflected)))));
@@ -2542,6 +2545,8 @@ namespace Horo::Tests::OpenXRApplication {
                 Editor::LoadEditorVulkanMultiviewCoverageCook(coverage.compiled.payload,
                                                               RequireValue(EncodeReflectedShaderArtifact(coverage.reflected)))));
         }
+        if (expectProbe)
+            REQUIRE(Viewport::RequestCoverageProbe(viewport, probe));
         auto geometry = RequireValue(fixture.source.Port().Capture(fixture.definition.Revision(), fixture.scene->View()));
         const auto initialInstances = RequireValue(geometry->Update(fixture.scene->View()));
         REQUIRE(initialInstances.size() == 1);
@@ -2610,6 +2615,12 @@ namespace Horo::Tests::OpenXRApplication {
                 CHECK(coverage->eyes.front() != coverage->eyes.back());
                 CHECK(coverage->extent == FramebufferExtent{8, 8});
                 CHECK(coverage->completion.IsValid());
+                CHECK(coverage->pixels.has_value() == expectProbe);
+                if (expectProbe) {
+                    REQUIRE(coverage->pixels);
+                    CHECK(coverage->pixels->tiles == probe);
+                    CHECK(coverage->pixels->count == 20);
+                }
             }
             CHECK_FALSE(Viewport::TakeCoverage(viewport, motionFrame.frame));
             // This is the fixture's caller-supplied projection result, independent of any GPU coverage claim.
@@ -2628,6 +2639,15 @@ namespace Horo::Tests::OpenXRApplication {
         RequireValue(Viewport::Bind(viewport, second.texture, second.views, publication, eyes, instances, &motionFrame,
                                     Editor::EditorXrProjectionAlpha::Opaque, &pair));
         submit(2);
+        REQUIRE(vulkan.encoded.coverageCopies.size() == (expectProbe ? 2 : 0));
+        if (expectProbe) {
+            const auto &copy = vulkan.encoded.coverageCopies;
+            CHECK(copy[0].imageSubresource.baseArrayLayer == 0);
+            CHECK(copy[0].imageOffset.x == 1);
+            CHECK(copy[1].imageSubresource.baseArrayLayer == 1);
+            CHECK(copy[1].imageOffset.x == 2);
+            CHECK(copy[1].bufferOffset == 12 * sizeof(float));
+        }
         const auto expected = expectCoverage ? 6U : 4U;
         CHECK(vulkan.encoded.drawCalls.size() == previousDraws + expected * instances.size());
         REQUIRE(vulkan.encoded.renderingCalls.size() == begins + expected);

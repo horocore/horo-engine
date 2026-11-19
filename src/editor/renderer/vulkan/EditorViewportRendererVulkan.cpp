@@ -354,6 +354,7 @@ namespace Horo::Editor {
         xrMotionFormats_.reset();
         xrMotionCook_.reset();
         xrCoverageCook_.reset();
+        xrCoverageProbe_.reset();
     }
 
     void EditorViewportRendererVulkan::RetireXrProgram() noexcept {

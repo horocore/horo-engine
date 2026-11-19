@@ -381,6 +381,7 @@ namespace Horo::Editor {
         ShaderResources xrShader_;
         std::optional<EditorVulkanMultiviewCook> xrMotionCook_;
         std::optional<EditorVulkanMultiviewCook> xrCoverageCook_;
+        std::optional<std::array<Render::MultiviewRenderRectangle, 2>> xrCoverageProbe_;
         ShaderResources xrMotionShader_;
         ShaderResources xrCoverageShader_;
         std::array<DrawSlot, Render::RenderMaterialPass::MaximumDraws> xrMotionDrawSlots_;

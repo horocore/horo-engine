@@ -56,6 +56,28 @@ namespace Horo::Render {
         RenderTextureFormat format{RenderTextureFormat::Rgba8Unorm}; /**< Exact tightly packed source and destination pixel format. */
     };
 
+    /** @brief Copies two bounded, caller-selected tiles of the exact stereo R32Float coverage producer into one staging buffer.
+     * @details The source is the same submitted graph's owned coverage attachment. Tiles are tightly packed in eye order.
+     * Only diagnostic observations are exposed. This copy carries no pixel verdict or compositor capability.
+     */
+    struct RenderGraphStereoCoverageCopy final {
+        static constexpr std::uint32_t MaximumTileAxis = 8;
+        static constexpr std::size_t MaximumPixels = 2 * MaximumTileAxis * MaximumTileAxis;
+        RenderGraphResourceId source, destination;
+        std::array<MultiviewRenderRectangle, 2> tiles;
+
+        /** @brief Returns exactly the packed byte length, or zero for malformed tile dimensions. */
+        [[nodiscard]] constexpr std::size_t PackedBytes() const noexcept {
+            std::size_t pixels{};
+            for (const auto &tile : tiles) {
+                if (!tile.width || !tile.height || tile.width > MaximumTileAxis || tile.height > MaximumTileAxis)
+                    return 0;
+                pixels += static_cast<std::size_t>(tile.width) * tile.height;
+            }
+            return pixels * sizeof(float);
+        }
+    };
+
     /** @brief One bounded cooked light-culling dispatch over four distinct whole graph buffers.
      * @details The owned preparation lease pins the kernel; graph submission leases pin the buffers.
      * All buffers use Storage semantics: Lights/Clusters read, Membership/References write.
@@ -167,10 +189,11 @@ namespace Horo::Render {
     };
 
     /** @brief Exact typed operation; an empty workload represents an ordering-only pass. */
-    using RenderGraphWorkload = std::variant<std::monostate, PrimaryOutputAttachment, RenderGraphColorAttachment, RenderGraphBufferCopy,
-                                             RenderGraphLightCulling, RenderGraphVfx, RenderGraphDepthAttachment, RenderGraphMultiview,
-                                             RenderGraphUiPaint, RenderGraphMaterialRaster, RenderGraphVfxGpuCompute, RenderGraphVfxGpuDraw,
-                                             RenderGraphExposureGpu, RenderGraphTextureUpload, RenderGraphNativeReconstruction>;
+    using RenderGraphWorkload =
+        std::variant<std::monostate, PrimaryOutputAttachment, RenderGraphColorAttachment, RenderGraphBufferCopy, RenderGraphLightCulling,
+                     RenderGraphVfx, RenderGraphDepthAttachment, RenderGraphMultiview, RenderGraphUiPaint, RenderGraphMaterialRaster,
+                     RenderGraphVfxGpuCompute, RenderGraphVfxGpuDraw, RenderGraphExposureGpu, RenderGraphTextureUpload,
+                     RenderGraphNativeReconstruction, RenderGraphStereoCoverageCopy>;
 
     /** @brief Validates exact native reconstruction graph roles before resolving backend descriptors.
      * @param request Immutable execution request. @param pass Exact compiled compute pass.

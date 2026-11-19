@@ -275,6 +275,9 @@ namespace Horo::Render::Detail {
         prepared.materialRaster.reset();
         if (const auto valid = ValidatePassUses(request, index); valid.HasError())
             return valid;
+        for (const auto &use : request.graph.Usages().subspan(pass.usages.offset, pass.usages.count))
+            if (use.access != RenderGraphAccess::Read)
+                states[use.resource.value - 1].coverageReadbackBytes = 0;
         prepared.before.offset = barriers.size();
         if (const auto transitions = PrepareTransitions(request, pass, false); transitions.HasError())
             return transitions;

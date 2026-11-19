@@ -86,9 +86,13 @@ namespace Horo::Render::Detail {
              */
             void EncodeTextureUpload(VkCommandBuffer command, const RenderGraphTextureUpload &upload,
                                      std::span<const VulkanGraphResource> resident) const noexcept;
+            /** @brief Copies exact eye tiles and makes the completed coherent storage visible to the host. */
+            void EncodeStereoCoverageCopy(VkCommandBuffer command, const RenderGraphStereoCoverageCopy &copy,
+                                          std::span<const VulkanGraphResource> resident) const noexcept;
             PFN_vkCmdPipelineBarrier2 barrier{};
             PFN_vkCmdCopyBuffer2 copy{};
             PFN_vkCmdCopyBufferToImage2 copyImage{};
+            PFN_vkCmdCopyImageToBuffer2 copyStereoCoverage{};
             PFN_vkCmdBeginRendering beginRendering{};
             PFN_vkCmdEndRendering endRendering{};
             PFN_vkCmdBindPipeline bindPipeline{};
@@ -277,6 +281,8 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> ValidateDepthAttachment(const RenderGraphDepthAttachment &depth, RenderQueueId queue);
         /** @brief Validates native copy roles, checked ranges and defined contents before recording. */
         [[nodiscard]] Result<void> ValidateBufferCopy(const RenderGraphBufferCopy &copy);
+        /** @brief Validates native owned coverage texture and exact coherent staging bytes before encoding. */
+        [[nodiscard]] Result<void> ValidateStereoCoverageCopy(const RenderGraphStereoCoverageCopy &copy);
         /** @brief Checks exact native upload descriptors and defined source contents before recording.
          * @param upload Closed whole-base-level operation. @return Success or typed failure without persistent state mutation.
          */

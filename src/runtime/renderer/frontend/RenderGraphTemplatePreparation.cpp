@@ -59,7 +59,8 @@ namespace Horo::Render::Detail {
                 if (use.resource != read.resource)
                     continue;
                 auto &seen = resourceByPass[use.pass.id.value - 1];
-                if (seen == read.resource.value || use.kind != read.role || use.access != RenderGraphAccess::Read)
+                if (graph.Passes()[use.pass.id.value - 1].kind != RenderPassKind::Graphics || seen == read.resource.value ||
+                    use.kind != read.role || use.access != RenderGraphAccess::Read)
                     return false;
                 seen = read.resource.value;
                 found = true;
@@ -78,7 +79,7 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(MakeError(RenderGraphErrors::InvalidImport));
         const auto queue = graph.Passes().front().queue;
         if (!std::ranges::all_of(graph.Passes(), [queue](const auto &pass) {
-            return pass.kind == RenderPassKind::Graphics && pass.queue == queue;
+            return (pass.kind == RenderPassKind::Graphics || pass.kind == RenderPassKind::Copy) && pass.queue == queue;
         }))
             return Result<void>::Failure(MakeError(RenderGraphErrors::InvalidImport));
         std::array<std::uint8_t, RenderGraphLimits::HardMaxResources> selected{};

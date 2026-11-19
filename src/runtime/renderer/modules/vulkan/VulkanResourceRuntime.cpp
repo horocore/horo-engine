@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cstring>
 #include <memory>
 #include <new>
 #include <string_view>
@@ -167,16 +168,16 @@ namespace Horo::Render::Detail {
             PFN_vkDestroyImageView destroyImageView{nullptr};
         };
 
-        Result<void> MapParticleBuffer(Buffer &buffer) {
+        /** @brief Maps an allocator-proven coherent buffer for its exact resident lifetime. */
+        Result<void> MapCoherentBuffer(Buffer &buffer) {
             if (buffer.descriptor.access != RenderBufferAccess::HostVisible)
-                return Result<void>::Failure(ResourceError(VulkanBackendErrors::MemoryTypeUnavailable,
-                                                           "Particle mapping requires allocator-proven coherent memory."));
+                return Result<void>::Failure(
+                    ResourceError(VulkanBackendErrors::MemoryTypeUnavailable, "Host mapping requires allocator-proven coherent memory."));
             if (buffer.mapped)
                 return Result<void>::Success();
             void *mapped{};
             if (dispatch.mapMemory(device, buffer.memory, 0, buffer.descriptor.byteSize, 0, &mapped) != VK_SUCCESS || !mapped)
-                return Result<void>::Failure(
-                    ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Particle coherent memory mapping failed."));
+                return Result<void>::Failure(ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Coherent buffer mapping failed."));
             buffer.mapped = mapped;
             buffer.unmap = dispatch.unmapMemory;
             return Result<void>::Success();
@@ -560,13 +561,31 @@ namespace Horo::Render::Detail {
             return Outcome::Failure(ResourceError(VulkanBackendErrors::ResourceRequestInvalid,
                                                   "Particle buffer usage/extent differs from its closed word ABI."));
         if (hostVisible)
-            if (const auto mapped = impl_->MapParticleBuffer(buffer); mapped.HasError())
+            if (const auto mapped = impl_->MapCoherentBuffer(buffer); mapped.HasError())
                 return Outcome::Failure(mapped.ErrorValue());
         VulkanGraphResource resource{.kind = RenderGraphResourceKind::Buffer,
                                      .buffer = buffer.handle,
                                      .bufferDescriptor = buffer.descriptor,
                                      .state = &buffer.graphState};
         return Outcome::Success({source, resource, found->second, buffer.mapped});
+    }
+
+    /** @copydoc VulkanResourceRuntime::ReadStereoCoverage */
+    Result<void> VulkanResourceRuntime::ReadStereoCoverage(std::uint64_t instance, const RenderTimelinePoint completion,
+                                                           std::span<std::byte> destination) {
+        const auto found = impl_->buffers.find(instance);
+        if (found == impl_->buffers.end())
+            return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
+        auto &buffer = *found->second;
+        const auto &state = buffer.graphState;
+        if (!completion.IsValid() || state.completion != completion || !state.hasNativeState || !state.contentsDefined ||
+            state.logical.operation != RenderGraphSynchronizationOperation::CopyDestination || destination.empty() ||
+            state.coverageReadbackBytes != destination.size() || buffer.descriptor.byteSize != destination.size())
+            return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
+        if (const auto mapped = impl_->MapCoherentBuffer(buffer); mapped.HasError())
+            return mapped;
+        std::memcpy(destination.data(), buffer.mapped, destination.size());
+        return Result<void>::Success();
     }
 
     Result<std::uint64_t> VulkanResourceRuntime::CreateMesh(const RenderMeshDescriptor &descriptor, const std::uint64_t vertexBuffer,

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <type_traits>
+#include <utility>
 
 namespace Horo::Render::Detail {
     namespace {
@@ -67,6 +68,30 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
+    /** @copydoc VulkanGraphRuntime::Impl::ValidateStereoCoverageCopy */
+    Result<void> VulkanGraphRuntime::Impl::ValidateStereoCoverageCopy(const RenderGraphStereoCoverageCopy &copy) {
+        if (!native.copyStereoCoverage)
+            return Result<void>::Failure(Unsupported("Coverage readback requires Vulkan image-to-buffer copy support."));
+        const auto &source = bindings[copy.source.value - 1];
+        const auto &destination = bindings[copy.destination.value - 1];
+        const auto &texture = source.textureDescriptor;
+        const auto &buffer = destination.bufferDescriptor;
+        if (!source.image || !destination.buffer || texture.format != RenderTextureFormat::R32Float ||
+            texture.layerCount != copy.tiles.size() || texture.sampleCount != 1 || texture.mipCount != 1 ||
+            !HasTextureUsage(texture.usage, RenderTextureUsage::RenderAttachment | RenderTextureUsage::CopySource) ||
+            buffer.access != RenderBufferAccess::HostVisible || buffer.usage != RenderBufferUsage::CopyDestination ||
+            buffer.byteSize != copy.PackedBytes())
+            return Result<void>::Failure(Invalid("Coverage readback resident formats, usage or coherent staging extent differ."));
+        if (!std::ranges::all_of(copy.tiles, [&](const auto &tile) {
+            return tile.Fits(texture.extent) && std::in_range<std::int32_t>(tile.x) && std::in_range<std::int32_t>(tile.y);
+        }))
+            return Result<void>::Failure(Invalid("Coverage readback rectangle exceeds its exact eye attachment."));
+        auto &state = states[copy.destination.value - 1];
+        state.contentsDefined = true;
+        state.coverageReadbackBytes = copy.PackedBytes();
+        return Result<void>::Success();
+    }
+
     Result<void> VulkanGraphRuntime::Impl::ValidateColor(const RenderGraphColorAttachment &operation, RenderQueueId queue) {
         const auto *color = &operation;
 
@@ -108,6 +133,8 @@ namespace Horo::Render::Detail {
             return ValidateBufferCopy(*copy);
         if (const auto *upload = std::get_if<RenderGraphTextureUpload>(&workload))
             return ValidateTextureUpload(*upload);
+        if (const auto *copy = std::get_if<RenderGraphStereoCoverageCopy>(&workload))
+            return ValidateStereoCoverageCopy(*copy);
         if (const auto *color = std::get_if<RenderGraphColorAttachment>(&workload))
             return ValidateColor(*color, queue);
         if (std::holds_alternative<PrimaryOutputAttachment>(workload))
@@ -159,6 +186,44 @@ namespace Horo::Render::Detail {
         copyImage(command, &copy);
     }
 
+    /** @copydoc VulkanGraphRuntime::Impl::Dispatch::EncodeStereoCoverageCopy */
+    void VulkanGraphRuntime::Impl::Dispatch::EncodeStereoCoverageCopy(const VkCommandBuffer command,
+                                                                      const RenderGraphStereoCoverageCopy &copy,
+                                                                      const std::span<const VulkanGraphResource> resident) const noexcept {
+        std::array<VkBufferImageCopy2, 2> regions{};
+        VkDeviceSize offset{};
+        for (std::uint32_t eye = 0; eye < regions.size(); ++eye) {
+            const auto &tile = copy.tiles[eye];
+            regions[eye] = {.sType = VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2,
+                            .bufferOffset = offset,
+                            .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, eye, 1},
+                            .imageOffset = {static_cast<std::int32_t>(tile.x), static_cast<std::int32_t>(tile.y), 0},
+                            .imageExtent = {tile.width, tile.height, 1}};
+            offset += static_cast<VkDeviceSize>(tile.width) * tile.height * sizeof(float);
+        }
+        const auto buffer = resident[copy.destination.value - 1].buffer;
+        const VkCopyImageToBufferInfo2 transfer{.sType = VK_STRUCTURE_TYPE_COPY_IMAGE_TO_BUFFER_INFO_2,
+                                                .srcImage = resident[copy.source.value - 1].image,
+                                                .srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                                .dstBuffer = buffer,
+                                                .regionCount = static_cast<std::uint32_t>(regions.size()),
+                                                .pRegions = regions.data()};
+        copyStereoCoverage(command, &transfer);
+        const VkBufferMemoryBarrier2 hostVisibility{.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                                                    .srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT,
+                                                    .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                                    .dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
+                                                    .dstAccessMask = VK_ACCESS_2_HOST_READ_BIT,
+                                                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                                    .buffer = buffer,
+                                                    .size = offset};
+        const VkDependencyInfo dependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                                          .bufferMemoryBarrierCount = 1,
+                                          .pBufferMemoryBarriers = &hostVisibility};
+        barrier(command, &dependency);
+    }
+
     /** @copydoc VulkanGraphRuntime::Impl::Dispatch::EncodeColor */
     void VulkanGraphRuntime::Impl::Dispatch::EncodeColor(const VkCommandBuffer command, const RenderGraphColorAttachment &operation,
                                                          const std::span<const VulkanGraphResource> resident) const noexcept {
@@ -194,6 +259,8 @@ namespace Horo::Render::Detail {
                 native.EncodeCopy(command, operation, bindings);
             } else if constexpr (std::is_same_v<Operation, RenderGraphTextureUpload>) {
                 native.EncodeTextureUpload(command, operation, bindings);
+            } else if constexpr (std::is_same_v<Operation, RenderGraphStereoCoverageCopy>) {
+                native.EncodeStereoCoverageCopy(command, operation, bindings);
             } else if constexpr (std::is_same_v<Operation, RenderGraphColorAttachment>) {
                 native.EncodeColor(command, operation, bindings);
             } else if constexpr (!std::is_same_v<Operation, std::monostate>) {

@@ -6,6 +6,7 @@
 #include "EditorVulkanXrProjectionAlpha.h"
 #include "Horo/Runtime/Render/MultiviewMotionHistory.h"
 #include "Horo/Runtime/Render/RenderGraphSynchronization.h"
+#include "Horo/Runtime/Render/RenderGraphWorkload.h"
 #include "Horo/Runtime/Render/RenderScene.h"
 #include "VulkanEditorGraphicsBridge.h"
 
@@ -121,6 +122,17 @@ namespace Horo::Editor {
          */
         [[nodiscard]] static std::optional<PreviousEyeDepth> PreviousDepth(const EditorViewportRendererVulkan &viewport) noexcept;
 
+        /** @brief Stages explicit diagnostic regions for both eyes before the viewport prepares its Scene graph. */
+        [[nodiscard]] static bool RequestCoverageProbe(EditorViewportRendererVulkan &viewport,
+                                                       const std::array<Render::MultiviewRenderRectangle, 2> &tiles) noexcept;
+
+        /** @brief Closely bounded native pixels packed in eye, row, then column order. */
+        struct CoveragePixels final {
+            std::array<Render::MultiviewRenderRectangle, 2> tiles;
+            std::array<float, Render::RenderGraphStereoCoverageCopy::MaximumPixels> samples{};
+            std::size_t count{};
+        };
+
         /** @brief Exact queue-observed coverage observation for one live frame and its retained predecessor.
          * @details Borrowed renderer identities are valid on the owner lane until the next bind or frame completion.
          * Pixel validity and any native compositor encoding must be verified separately.
@@ -132,6 +144,7 @@ namespace Horo::Editor {
             std::array<Render::RenderTextureViewHandle, 2> eyes;
             Render::FramebufferExtent extent;
             Render::RenderTimelinePoint completion;
+            std::optional<CoveragePixels> pixels;
         };
 
         /** @brief Consumes a completed observation once for the exact live frame.

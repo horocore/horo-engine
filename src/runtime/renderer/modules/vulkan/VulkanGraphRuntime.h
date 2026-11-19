@@ -53,6 +53,11 @@ namespace Horo::Render::Detail {
         [[nodiscard]] bool CanWriteFrameInputs(FrameToken frame) const noexcept;
         /** @copydoc IVulkanEditorGraphicsPort::ObservePreparationBuffer */
         [[nodiscard]] Result<bool> ObservePreparationBuffer(std::uint64_t instance);
+        /** @copydoc IVulkanEditorGraphicsPort::SupportsStereoCoverageReadback */
+        [[nodiscard]] bool SupportsStereoCoverageReadback() const noexcept;
+        /** @copydoc IVulkanEditorGraphicsPort::ReadCompletedStereoCoverage */
+        [[nodiscard]] Result<bool> ReadCompletedStereoCoverage(std::uint64_t instance, RenderTimelinePoint completion,
+                                                               std::span<std::byte> destination);
         /** @copydoc IVulkanEditorGraphicsPort::WritePreparationUniform */
         [[nodiscard]] Result<void> WritePreparationUniform(std::uint64_t instance, std::span<const std::byte> bytes);
         /** @copydoc IVulkanEditorGraphicsPort::WriteFrameBuffer */

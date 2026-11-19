@@ -56,6 +56,15 @@ Result<bool> ObservePreparationBuffer(const std::uint64_t instance) override {
     return graph_.ObservePreparationBuffer(instance);
 }
 
+bool SupportsStereoCoverageReadback() const noexcept override {
+    return graph_.SupportsStereoCoverageReadback();
+}
+
+Result<bool> ReadCompletedStereoCoverage(std::uint64_t instance, RenderTimelinePoint completion,
+                                         std::span<std::byte> destination) override {
+    return graph_.ReadCompletedStereoCoverage(instance, completion, destination);
+}
+
 /** @copydoc IVulkanEditorGraphicsPort::WritePreparationUniform */
 Result<void> WritePreparationUniform(const std::uint64_t instance, const std::span<const std::byte> bytes) override {
     return graph_.WritePreparationUniform(instance, bytes);

@@ -80,6 +80,19 @@ namespace Horo::Render::Detail {
          * @return True for a reusable preparation slot, false while native work remains, or typed owner/lifecycle failure.
          */
         [[nodiscard]] virtual Result<bool> ObservePreparationBuffer(std::uint64_t instance) = 0;
+
+        /** @brief Reports the selected native image-copy route for bounded stereo coverage observations. */
+        [[nodiscard]] virtual bool SupportsStereoCoverageReadback() const noexcept {
+            return false;
+        }
+
+        /** @brief Copies exact native completed pixels without allocating or waiting.
+         * @return True for copied bytes, false when the route or completion is unavailable, or a typed error.
+         */
+        [[nodiscard]] virtual Result<bool> ReadCompletedStereoCoverage(std::uint64_t, RenderTimelinePoint, std::span<std::byte>) {
+            return Result<bool>::Success(false);
+        }
+
         /** @brief Writes a whole host-visible uniform only after its exact prior native use retires.
          * @param instance Exact live uniform buffer instance from the selected frontend.
          * @param bytes Prepared full-size native uniform contents.

@@ -55,6 +55,15 @@ namespace Horo::Tests::OpenXRApplication {
             return native_.graph.FrameSlot(frame);
         }
 
+        bool SupportsStereoCoverageReadback() const noexcept override {
+            return native_.graph.SupportsStereoCoverageReadback();
+        }
+
+        Result<bool> ReadCompletedStereoCoverage(const std::uint64_t instance, const Render::RenderTimelinePoint completion,
+                                                 const std::span<std::byte> bytes) override {
+            return native_.graph.ReadCompletedStereoCoverage(instance, completion, bytes);
+        }
+
         Result<void> WriteFrameBuffer(const Render::FrameToken frame, const std::uint64_t instance,
                                       const std::span<const std::byte> bytes) override {
             if (!native_.graph.CanWriteFrameInputs(frame))

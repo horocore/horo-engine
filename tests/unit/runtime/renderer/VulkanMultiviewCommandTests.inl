@@ -18,9 +18,10 @@ struct MultiviewPacket {
 
     MultiviewPacket(NativeGraphFixture &fixture, const bool instanced, const bool motion = false,
                     const RenderTextureFormat motionFormat = RenderTextureFormat::Rgba16Float, const std::uint32_t slotBase = 0,
-                    std::span<const RenderTextureViewHandle> predecessor = {})
+                    std::span<const RenderTextureViewHandle> predecessor = {}, bool copySource = false)
         : native(fixture, true, motion ? motionFormat : RenderTextureFormat::Rgba8Unorm,
-                 motion ? RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment : RenderTextureUsage::RenderAttachment,
+                 (motion ? RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment : RenderTextureUsage::RenderAttachment) |
+                     (copySource ? RenderTextureUsage::CopySource : RenderTextureUsage::None),
                  slotBase) {
         const RenderBufferHandle uniformHandle{{1}, slotBase + 5, 1};
         const RenderTextureHandle colorHandle{{1}, slotBase + 3, 1};
@@ -246,7 +247,7 @@ TEST_CASE("Vulkan motion graph records paired floating and depth attachments onl
 /** @brief Rebinds an admitted packet's logical graph identities for the combined graph without changing native targets. */
 void AppendMultiviewPacket(RenderGraphBuilder &builder, MultiviewPacket &packet, const RenderGraphPassRef pass,
                            std::vector<RenderGraphResourceInstance> &resources, std::vector<RenderGraphImportedState> &initial,
-                           const MultiviewPacket *sharedGeometry = nullptr) {
+                           const MultiviewPacket *sharedGeometry = nullptr, bool persistentColor = false) {
     std::vector<RenderGraphResourceId> imported;
     for (const auto &source : packet.graph->Resources()) {
         if (sharedGeometry && (source.id == packet.geometry.front().vertices || source.id == packet.geometry.front().indices)) {
@@ -256,7 +257,10 @@ void AppendMultiviewPacket(RenderGraphBuilder &builder, MultiviewPacket &packet,
         }
         const auto id =
             source.kind == RenderGraphResourceKind::Texture
-                ? SubmissionTest::Take(builder.ImportTexture(std::get<RenderTextureHandle>(source.binding), source.resourceClass))
+                ? SubmissionTest::Take(builder.ImportTexture(std::get<RenderTextureHandle>(source.binding),
+                                                             persistentColor && source.id == packet.targets.front().color
+                                                                 ? RenderGraphResourceClass::Persistent
+                                                                 : source.resourceClass))
                 : SubmissionTest::Take(builder.ImportBuffer(std::get<RenderBufferHandle>(source.binding), source.resourceClass));
         imported.push_back(id);
         const auto state = packet.graph->ImportedStates()[source.id.value - 1];
@@ -383,8 +387,12 @@ TEST_CASE("Vulkan coverage admits exact completed predecessor depth and ordered 
         Undefined,
         WrongDescriptor,
         WrongLayer,
+        Readback,
+        OversizedTile,
     };
-    const auto input = GENERATE(Prior::Completed, Prior::Undefined, Prior::WrongDescriptor, Prior::WrongLayer);
+    const auto input =
+        GENERATE(Prior::Completed, Prior::Undefined, Prior::WrongDescriptor, Prior::WrongLayer, Prior::Readback, Prior::OversizedTile);
+    const bool copy = input == Prior::Readback || input == Prior::OversizedTile;
     NativeGraphFixture fixture;
     MultiviewPacket predecessor(fixture, false, true, RenderTextureFormat::Rgba16Float, 32);
     RenderGraphLeaseTransfer priorTransfer;
@@ -406,7 +414,7 @@ TEST_CASE("Vulkan coverage admits exact completed predecessor depth and ordered 
 
     const std::array priorEyes{predecessor.targets.front().depthView, predecessor.targets.back().depthView};
     MultiviewPacket projection(fixture, false);
-    MultiviewPacket coverage(fixture, false, true, RenderTextureFormat::R32Float, 16, priorEyes);
+    MultiviewPacket coverage(fixture, false, true, RenderTextureFormat::R32Float, 16, priorEyes, copy);
     auto instances = projection.scene->Instances().front();
     instances.material = coverage.material->Id();
     const auto snapshot = SubmissionTest::Take(
@@ -414,8 +422,10 @@ TEST_CASE("Vulkan coverage admits exact completed predecessor depth and ordered 
                                         {32, true, true, false}, MultiviewExecutionPolicy::Multipass));
     coverage.Workload().scene = std::make_shared<const MultiviewSceneSnapshot>(snapshot);
     coverage.Workload().output = MultiviewOutput::ReprojectionCoverage;
-    coverage.targets.front().rectangle = {1, 1, 5, 6};
-    coverage.targets.back().rectangle = {0, 0, 7, 4};
+    if (!copy) {
+        coverage.targets.front().rectangle = {1, 1, 5, 6};
+        coverage.targets.back().rectangle = {0, 0, 7, 4};
+    }
 
     auto builder = SubmissionTest::Take(RenderGraphBuilder::Create());
     const auto colorPass = SubmissionTest::Take(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
@@ -424,7 +434,7 @@ TEST_CASE("Vulkan coverage admits exact completed predecessor depth and ordered 
     std::vector<RenderGraphResourceInstance> resources;
     std::vector<RenderGraphImportedState> initial;
     AppendMultiviewPacket(builder, projection, colorPass, resources, initial);
-    AppendMultiviewPacket(builder, coverage, coveragePass, resources, initial, &projection);
+    AppendMultiviewPacket(builder, coverage, coveragePass, resources, initial, &projection, copy);
     const auto priorHandle = std::get<RenderTextureHandle>(predecessor.graph->Resources()[priorResource.value - 1].binding);
     const auto source = SubmissionTest::Take(builder.ImportTexture(priorHandle, RenderGraphResourceClass::Persistent));
     REQUIRE(builder.AddUsage({coveragePass, source, RenderGraphAccess::Read, RenderGraphUsageKind::Sampled}).HasValue());
@@ -455,14 +465,31 @@ TEST_CASE("Vulkan coverage admits exact completed predecessor depth and ordered 
     }
     if (input == Prior::WrongDescriptor)
         std::swap(coverage.native.material.resources.front().view, coverage.native.material.resources.back().view);
+    std::vector<RenderGraphPassWorkload> workloads{{colorPass, projection.Workload()}, {coveragePass, coverage.Workload()}};
+    std::uint64_t staging{};
+    std::array<float, 7> pixels{};
+    if (copy) {
+        const auto pass = SubmissionTest::Take(builder.AddPass(RenderPassKind::Copy, RenderQueueRole::Graphics));
+        REQUIRE(builder.AddDependency({coveragePass, pass}).HasValue());
+        const auto buffer = SubmissionTest::Take(builder.ImportBuffer({{1}, 59, 1}, RenderGraphResourceClass::Persistent));
+        const RenderGraphStereoCoverageCopy readback{coverage.targets.front().color,
+                                                     buffer,
+                                                     {{{1, 2, 2, 2}, {3, 4, input == Prior::OversizedTile ? 9U : 3U, 1}}}};
+        const RenderBufferDescriptor descriptor{sizeof(pixels), RenderBufferUsage::CopyDestination, RenderBufferAccess::HostVisible};
+        const auto cost = SubmissionTest::Take(fixture.resources.QueryBufferMemoryCost(descriptor));
+        staging = SubmissionTest::Take(fixture.resources.CreateBuffer(descriptor, {}, TestSupport::PlacementFor(cost, 1)));
+        resources.push_back({buffer, staging});
+        initial.push_back({buffer, {}, RenderGraphInitialContents::Discarded});
+        REQUIRE(builder.AddUsage({pass, readback.source, RenderGraphAccess::Read, RenderGraphUsageKind::CopySource}).HasValue());
+        REQUIRE(builder.AddUsage({pass, buffer, RenderGraphAccess::Write, RenderGraphUsageKind::CopyDestination}).HasValue());
+        workloads.push_back({pass, readback});
+    }
     const auto authored = SubmissionTest::Take(builder.Finalize());
     const auto schedule = SubmissionTest::Take(CompileRenderGraph(authored));
     const std::array queues{RenderQueueAssignment{RenderQueueRole::Graphics, {1}}};
     const auto sync = SubmissionTest::Take(SynthesizeRenderGraphSynchronization(authored, schedule, queues, initial));
     const auto graph = SubmissionTest::Take(CompileRenderGraphExecution(authored, schedule, sync, queues));
-    const std::array workloads{RenderGraphPassWorkload{colorPass, projection.Workload()},
-                               RenderGraphPassWorkload{coveragePass, coverage.Workload()}};
-    const std::array submissions{RenderGraphQueueSubmission{{{1}, {2}, {}, {{1}, 2}}, {0, 2}}};
+    const std::array submissions{RenderGraphQueueSubmission{{{1}, {2}, {}, {{1}, 2}}, {0, workloads.size()}}};
     RenderGraphLeaseTransfer transfer;
     const RenderGraphExecutionRequest request{{2},   graph,     workloads,   resources,         &fixture.lease,
                                               false, &transfer, submissions, projection.meshes, views};
@@ -470,7 +497,7 @@ TEST_CASE("Vulkan coverage admits exact completed predecessor depth and ordered 
     const auto releases = fixture.lease.releases;
     REQUIRE(fixture.graph.BeginFrame({2}).HasValue());
     const auto recorded = fixture.graph.ExecuteGraph(request);
-    if (input != Prior::Completed) {
+    if (input != Prior::Completed && input != Prior::Readback) {
         REQUIRE(recorded.HasError());
         if (input == Prior::Undefined)
             CHECK(recorded.ErrorValue().message.find("Undefined native storage") != std::string::npos);
@@ -484,17 +511,38 @@ TEST_CASE("Vulkan coverage admits exact completed predecessor depth and ordered 
     REQUIRE(recorded.HasValue());
     const auto calls = std::span{fixture.encoded.renderingCalls}.subspan(before);
     REQUIRE(calls.size() == 4);
-    CHECK(calls[2].extent.width == 5);
-    CHECK(calls[3].extent.height == 4);
+    CHECK(calls[2].extent.width == (copy ? 8 : 5));
+    CHECK(calls[3].extent.height == (copy ? 8 : 4));
     CHECK(calls[2].colorClear.color.float32[0] == 0.0F);
     CHECK(calls[3].colorClear.color.float32[0] == 0.0F);
     CHECK(fixture.encoded.drawCalls[before + 2].firstView == 0);
     CHECK(fixture.encoded.drawCalls[before + 3].firstView == 1);
     REQUIRE(fixture.graph.SubmitFrame({2}).HasValue());
     CHECK(fixture.lease.releases == releases);
+    if (copy) {
+        REQUIRE(fixture.encoded.coverageCopies.size() == 2);
+        const auto &left = fixture.encoded.coverageCopies[0];
+        const auto &right = fixture.encoded.coverageCopies[1];
+        CHECK(left.imageSubresource.baseArrayLayer == 0);
+        CHECK(right.imageSubresource.baseArrayLayer == 1);
+        CHECK(left.imageOffset.y == 2);
+        CHECK(right.imageOffset.x == 3);
+        CHECK(right.bufferOffset == 4 * sizeof(float));
+        CHECK(std::ranges::any_of(fixture.encoded.barriers, [](const auto &barrier) {
+            return barrier.dstAccessMask == VK_ACCESS_2_HOST_READ_BIT && barrier.size == 7 * sizeof(float);
+        }));
+        CHECK_FALSE(
+            SubmissionTest::Take(fixture.graph.ReadCompletedStereoCoverage(staging, {{1}, 2}, std::as_writable_bytes(std::span{pixels}))));
+    }
     fixture.commandState.state.Complete();
     REQUIRE(fixture.graph.ObserveSubmission({{{1}, 2}, RenderCpuWaitPurpose::Poll, {}, 11}).Value());
     CHECK(fixture.lease.releases == releases + 1);
+    if (copy) {
+        CHECK_FALSE(
+            SubmissionTest::Take(fixture.graph.ReadCompletedStereoCoverage(staging, {{1}, 1}, std::as_writable_bytes(std::span{pixels}))));
+        CHECK(
+            SubmissionTest::Take(fixture.graph.ReadCompletedStereoCoverage(staging, {{1}, 2}, std::as_writable_bytes(std::span{pixels}))));
+    }
     CHECK(fixture.commandState.state.waitCalls == 0);
 }
 

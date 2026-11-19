@@ -20,6 +20,7 @@ namespace Horo::Render::Detail {
         RenderTimelinePoint completion;
         bool hasNativeState{false};
         bool contentsDefined{false};
+        std::size_t coverageReadbackBytes{};
     };
 
     /** @brief Device-private graph binding captured before recording, with an exact immutable descriptor. */
@@ -170,6 +171,9 @@ namespace Horo::Render::Detail {
                                                                             bool hostVisible);
         /** @brief Borrows the canonical buffer completion proof before an explicitly retired-slot host write. */
         [[nodiscard]] Result<RenderTimelinePoint> BufferCompletion(std::uint64_t instance) const;
+        /** @brief Copies an exact coherent coverage result after the caller observes its matching GPU signal. */
+        [[nodiscard]] Result<void> ReadStereoCoverage(std::uint64_t instance, RenderTimelinePoint completion,
+                                                      std::span<std::byte> destination);
         /** @brief Replaces exact host-visible uniform or vertex bytes after the selected frame owner proves prior retirement.
          * @pre Caller admits the exact active canonical frame and verifies BufferCompletion before writing.
          * No index/storage usage, allocation, submission or completion authority is introduced. */

@@ -96,6 +96,23 @@ namespace Horo::Render {
             return source && destination;
         }
 
+        /** @brief Only retained renderer storage can participate in the closed coverage readback workload. */
+        bool MatchesStereoCoverageCopy(const CompiledRenderGraphExecution &graph, const RenderGraphExecutionPass &pass,
+                                       std::span<const RenderGraphResourceUsage> uses, const RenderGraphStereoCoverageCopy &copy) {
+            const auto resident = [&](RenderGraphResourceId id, RenderGraphResourceKind kind) {
+                return id.owner == graph.Owner() && id.value != 0 && id.value <= graph.Resources().size() &&
+                       graph.Resources()[id.value - 1].kind == kind &&
+                       graph.Resources()[id.value - 1].resourceClass == RenderGraphResourceClass::Persistent;
+            };
+            return pass.kind == RenderPassKind::Copy && uses.size() == 2 && copy.PackedBytes() != 0 &&
+                   resident(copy.source, RenderGraphResourceKind::Texture) && resident(copy.destination, RenderGraphResourceKind::Buffer) &&
+                   std::ranges::any_of(uses, [&](const auto &use) {
+                return MatchesCopyUse(use, copy.source, RenderGraphUsageKind::CopySource, RenderGraphAccess::Read);
+            }) && std::ranges::any_of(uses, [&](const auto &use) {
+                return MatchesCopyUse(use, copy.destination, RenderGraphUsageKind::CopyDestination, RenderGraphAccess::Write);
+            });
+        }
+
         bool ExternallyValidated(const RenderGraphWorkload &workload) {
             return std::holds_alternative<RenderGraphMaterialRaster>(workload) || std::holds_alternative<RenderGraphMultiview>(workload) ||
                    std::holds_alternative<RenderGraphVfx>(workload) || std::holds_alternative<RenderGraphExposureGpu>(workload) ||
@@ -131,6 +148,8 @@ namespace Horo::Render {
                 return MatchesColor(pass, uses, *value);
             if (const auto *value = std::get_if<RenderGraphBufferCopy>(&workload))
                 return MatchesCopy(pass, uses, *value);
+            if (const auto *value = std::get_if<RenderGraphStereoCoverageCopy>(&workload))
+                return MatchesStereoCoverageCopy(request.graph, pass, uses, *value);
             return MatchesBasic(pass, uses, workload);
         }
 
@@ -365,9 +384,34 @@ namespace Horo::Render {
             return std::ranges::equal(projection.scene->Draws(), coverage.scene->Draws(), equivalent);
         }
 
+        /** @brief Requires exact ordered eye subresources and one producer/copy graphics submission. */
+        bool CoverageCopyProven(const RenderGraphExecutionRequest &request, const RenderGraphMultiview &coverage,
+                                const RenderGraphStereoCoverageCopy &copy, std::size_t producer, std::size_t consumer) {
+            if (producer >= consumer || !std::ranges::any_of(request.submissions, [&](const auto &submission) {
+                return submission.passes.IsValidFor(request.workloads.size()) && producer >= submission.passes.offset &&
+                       consumer - submission.passes.offset < submission.passes.count;
+            }))
+                return false;
+            for (std::size_t eye = 0; eye < copy.tiles.size(); ++eye) {
+                const auto &target = coverage.targets[eye];
+                const auto &tile = copy.tiles[eye];
+                const auto &rect = target.rectangle;
+                if (target.color != copy.source || target.arrayLayer != eye || tile.x < rect.x || tile.y < rect.y ||
+                    !MultiviewRenderRectangle{tile.x - rect.x, tile.y - rect.y, tile.width, tile.height}.Fits({rect.width, rect.height}))
+                    return false;
+            }
+            return std::ranges::none_of(request.graph.Usages(), [&](const auto &use) {
+                return (use.resource == copy.source && use.access != RenderGraphAccess::Read &&
+                        use.pass != request.workloads[producer].pass) ||
+                       (use.resource == copy.destination && use.pass != request.workloads[consumer].pass);
+            });
+        }
+
         Result<void> ValidateTypedWorkloads(const RenderGraphExecutionRequest &request) {
             std::array<const RenderGraphMultiview *, RenderGraphMultiview::MaximumPassesPerFrame> multiview{};
             std::size_t reconstructionCount = 0;
+            const RenderGraphStereoCoverageCopy *readback{};
+            std::size_t coverageIndex{}, readbackIndex{};
             for (std::size_t index = 0; index < request.workloads.size(); ++index) {
                 const auto &binding = request.workloads[index];
                 if (std::holds_alternative<RenderGraphNativeReconstruction>(binding.workload) &&
@@ -375,6 +419,12 @@ namespace Horo::Render {
                     return Result<void>::Failure(MakeError(NativeReconstructionErrors::InvalidDispatch));
                 if (auto valid = ValidateTypedPass(request, request.graph.Passes()[index], binding.workload); valid.HasError())
                     return valid;
+                if (const auto *copy = std::get_if<RenderGraphStereoCoverageCopy>(&binding.workload)) {
+                    if (readback)
+                        return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+                    readback = copy;
+                    readbackIndex = index;
+                }
                 if (const auto *scene = std::get_if<RenderGraphMultiview>(&binding.workload)) {
                     if (const auto valid = ValidateMultiviewGraphWorkload(request, request.graph.Passes()[index], *scene); valid.HasError())
                         return valid;
@@ -383,6 +433,8 @@ namespace Horo::Render {
                         return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload,
                                                                "One graph admits at most one multiview pass for each output."));
                     output = scene;
+                    if (scene->output == MultiviewOutput::ReprojectionCoverage)
+                        coverageIndex = index;
                 }
             }
             const auto *color = multiview[static_cast<std::size_t>(MultiviewOutput::ProjectionColor)];
@@ -395,6 +447,9 @@ namespace Horo::Render {
                              !DisjointMultiviewTargets(*color, *coverage) || (motion && !DisjointMultiviewTargets(*motion, *coverage))))
                 return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph,
                                                        "Coverage requires the exact current projection geometry and disjoint outputs."));
+            if (readback && (!coverage || !CoverageCopyProven(request, *coverage, *readback, coverageIndex, readbackIndex)))
+                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph,
+                                                       "Coverage readback requires exact owned eye tiles and its producer submission."));
             return Result<void>::Success();
         }
 

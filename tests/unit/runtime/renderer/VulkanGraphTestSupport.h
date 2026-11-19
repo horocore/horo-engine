@@ -17,6 +17,7 @@ namespace Horo::Render::VulkanGraphTest {
 
     struct EncodedGraph {
         std::vector<EncodedCopy> copies;
+        std::vector<VkBufferImageCopy2> coverageCopies;
         std::vector<VkBufferMemoryBarrier2> barriers;
         std::vector<VkImageMemoryBarrier2> imageBarriers;
         std::vector<std::string> operations;
@@ -69,6 +70,11 @@ namespace Horo::Render::VulkanGraphTest {
         REQUIRE(info->regionCount == 1);
         CHECK(info->dstImageLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         encodedGraph->operations.emplace_back("upload-image");
+    }
+
+    inline VKAPI_ATTR void VKAPI_CALL CaptureCoverageCopy(VkCommandBuffer, const VkCopyImageToBufferInfo2 *info) {
+        CHECK(info->srcImageLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        encodedGraph->coverageCopies.insert(encodedGraph->coverageCopies.end(), info->pRegions, info->pRegions + info->regionCount);
     }
 
     inline VKAPI_ATTR void VKAPI_CALL CaptureBeginRendering(VkCommandBuffer, const VkRenderingInfo *info) {
@@ -141,6 +147,8 @@ namespace Horo::Render::VulkanGraphTest {
             return EraseFunction(PFN_vkCmdCopyBuffer2{CaptureCopy});
         if (symbol == "vkCmdCopyBufferToImage2")
             return EraseFunction(PFN_vkCmdCopyBufferToImage2{CaptureImageCopy});
+        if (symbol == "vkCmdCopyImageToBuffer2")
+            return EraseFunction(PFN_vkCmdCopyImageToBuffer2{CaptureCoverageCopy});
         if (symbol == "vkCmdBeginRendering")
             return EraseFunction(PFN_vkCmdBeginRendering{CaptureBeginRendering});
         if (symbol == "vkCmdEndRendering")

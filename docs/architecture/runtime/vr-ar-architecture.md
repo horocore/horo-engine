@@ -708,8 +708,13 @@ for the alternating retained depth slots. Only an adjacent completed native
 projection with compatible renderer history can supply the opposite eye
 views. The viewport can report a one-shot observation after its exact graphics
 submission completes. That observation identifies the current frame,
-predecessor, coverage images and completion point. Pixel reduction and
-provider-specific encoding remain prerequisites for compositor admission.
+predecessor, coverage images and completion point. The renderer's private
+diagnostic hook can request one bounded tile per eye before graph preparation.
+The same graphics submission copies those tiles into a small coherent buffer.
+The viewport reads it only after the exact submission completes and returns
+the classified samples with that observation. Normal Play leaves the
+diagnostic hook inactive. Full-frame reduction and provider-specific encoding
+remain prerequisites for compositor admission.
 
 See the [Khronos space-warp layer contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrCompositionLayerSpaceWarpInfoFB.html)
 for the distinction between runtime motion inputs and internal Renderer UV history.
