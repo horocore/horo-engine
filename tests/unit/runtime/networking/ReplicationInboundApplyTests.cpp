@@ -139,8 +139,8 @@ namespace Horo::Network {
         CHECK(snapshot.session == World().session);
         CHECK(snapshot.authority == World().authority);
         CHECK(snapshot.tick == 1);
-        CHECK(snapshot.records[0].object == Object().object);
-        CHECK(snapshot.records[1].object == Object(2).object);
+        CHECK(snapshot.records[0].ownership.object == Object().object);
+        CHECK(snapshot.records[1].ownership.object == Object(2).object);
         CHECK(EncodeReplicationInitialState(authority, *fixture.sender.capture, 2, reversed, 4096).HasError());
         CHECK(EncodeReplicationInitialState(authority, *fixture.sender.capture, 1, reversed, snapshot.records[0].wire.size()).HasError());
         CHECK(EncodeReplicationInitialState(authority, *fixture.sender.capture, 1, std::span{reversed}.first(1), 4096).HasError());

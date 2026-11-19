@@ -67,6 +67,10 @@ namespace Horo::Network {
         /** @brief Resolves a mapped object in the exact client Scene. */
         [[nodiscard]] Result<Runtime::EntityRef> ResolveClientObject(Runtime::SceneRuntimeId scene, NetworkSessionGeneration session,
                                                                      NetworkObjectId object) const;
+        /** @brief Reads the initial owner of a live client object with no current ownership authority grant. */
+        [[nodiscard]] Result<ReplicationInitialOwnership> InitialClientOwnership(Runtime::SceneRuntimeId scene,
+                                                                                 NetworkSessionGeneration session,
+                                                                                 NetworkObjectId object) const;
         /** @brief Authorize non-Control dispatch against the same live peer and published local world. */
         [[nodiscard]] Result<void> AdmitWorldDispatch(ConnectionHandle connection, NetworkOperationGeneration generation,
                                                       const PeerSessionLifecycle &peer, std::uint64_t nowTick) const;

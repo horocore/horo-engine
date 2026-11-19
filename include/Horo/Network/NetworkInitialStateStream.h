@@ -6,7 +6,7 @@
 
 namespace Horo::Network {
     inline constexpr std::size_t MaximumNetworkInitialStateFrameBytes = 1024;
-    inline constexpr std::size_t NetworkInitialStateSegmentHeaderBytes = 48;
+    inline constexpr std::size_t NetworkInitialStateSegmentHeaderBytes = 64;
     inline constexpr std::size_t MaximumNetworkInitialStateWireBytes = 64 * 1024 * 1024;
 
     /** @brief Binds the client's successful publication to an exact server snapshot. */
@@ -31,6 +31,16 @@ namespace Horo::Network {
         std::shared_ptr<ReplicationInboundApply> receiver;
     };
 
+    /** @brief Projects an authority ownership fact against the exact recipient without granting authority.
+     * @param ownership Ownership metadata published by the authority on the initial snapshot route.
+     * @param mapping Exact resolved Scene object and schema.
+     * @param session Receiving world generation.
+     * @param recipient Bound identity of the local or selected remote replica.
+     * @return Complete autonomous or simulated binding, or a typed stale-identity failure. */
+    [[nodiscard]] Result<ReplicationRoleBinding> ProjectInitialReplicationRole(const ReplicationInitialOwnership &ownership,
+                                                                               const NetworkObjectMappingEntry &mapping,
+                                                                               NetworkSessionGeneration session, NetworkPeerId recipient);
+
     /** @brief Owner-thread application adapters for declared, recipient-specific field capture and transactional apply.
      * @details These synchronous callbacks must not reenter the network controller or retain borrowed world/peer references. */
     class INetworkInitialStateHost {
@@ -53,10 +63,14 @@ namespace Horo::Network {
         /** @brief Builds the apply owner and binds every object in the exact published replica mapping.
          * @param authority Exact authenticated local receiver grant.
          * @param world Borrowed receiving lifecycle; the controller retires the target first.
+         * @param ownership Ordered exact object ownership facts, borrowed only during preparation.
          * @param now Current admission clock.
-         * @return Complete target or typed incompatibility. */
+         * @return Complete target or typed incompatibility.
+         * @details Keep new ownership detached until the same apply transaction commits its field values. */
         [[nodiscard]] virtual Result<NetworkInitialStateTarget> PrepareReceiver(const ReplicationInboundAuthority &authority,
-                                                                                ReplicationWorldLifecycle &world, std::uint64_t now) = 0;
+                                                                                ReplicationWorldLifecycle &world,
+                                                                                std::span<const ReplicationInitialOwnership> ownership,
+                                                                                std::uint64_t now) = 0;
     };
 
     /**
@@ -124,6 +138,10 @@ namespace Horo::Network {
         /** @brief Reports the required committed object count after all wire bytes have arrived.
          * @return Exact declared record count, or no count while receipt is pending or retired. */
         [[nodiscard]] std::optional<std::size_t> ReadyRecordCount() const noexcept;
+        /** @brief Copies the immutable ownership facts of a complete admitted stream.
+         * @param now Current owner admission-clock tick.
+         * @return Ordered facts or a typed pending/capacity error. */
+        [[nodiscard]] Result<std::vector<ReplicationInitialOwnership>> ReadOwnership(std::uint64_t now) const;
 
     private:
         /** @brief Verifies the authenticated connection and exact reserved Control route. */
@@ -133,9 +151,9 @@ namespace Horo::Network {
         /** @brief Adds the next contiguous slice to the current record. */
         [[nodiscard]] Result<void> Append(std::uint64_t tick, std::span<const std::byte> body);
         /** @brief Opens a new record or checks the next exact offset of an in-progress record. */
-        [[nodiscard]] Result<void> PrepareRecord(NetworkObjectId object, std::size_t total, std::size_t offset);
+        [[nodiscard]] Result<void> PrepareRecord(const ReplicationInitialOwnership &ownership, std::size_t total, std::size_t offset);
         /** @brief Reserves one record within the remaining manifest budget. */
-        [[nodiscard]] Result<void> StartRecord(NetworkObjectId object, std::size_t bytes);
+        [[nodiscard]] Result<void> StartRecord(const ReplicationInitialOwnership &ownership, std::size_t bytes);
         /** @brief Checks that the complete record and byte inventories arrived. */
         [[nodiscard]] bool Complete() const noexcept;
 

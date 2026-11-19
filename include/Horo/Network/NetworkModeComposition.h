@@ -282,6 +282,14 @@ namespace Horo::Network {
         [[nodiscard]] bool ServicesStarted() const noexcept;
         /** @brief Whether this host has published all selected worlds. */
         [[nodiscard]] bool Active() const noexcept;
+        /** @brief Reads a live client object's initial ownership fact after its complete baseline has published.
+         * @param scene Exact active client Scene.
+         * @param session Exact bound world occurrence.
+         * @param object Exact mapped object.
+         * @return Initial ownership or a typed pending/stale error. This immutable fact does not grant current ownership. */
+        [[nodiscard]] Result<ReplicationInitialOwnership> InitialClientOwnership(Runtime::SceneRuntimeId scene,
+                                                                                 NetworkSessionGeneration session,
+                                                                                 NetworkObjectId object) const;
 
     private:
         friend struct NetworkModeHostAccess;

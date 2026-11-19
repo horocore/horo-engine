@@ -22,8 +22,7 @@ namespace Horo::Network {
             const auto &initial = first.Recipient();
             return codec.RecordKind() == ReplicationRecordKind::Spawn && codec.DescriptorGeneration() == first.DescriptorGeneration() &&
                    recipient.session == session && recipient.object == object.object && recipient.localPeer == initial.localPeer &&
-                   recipient.role == initial.role && recipient.schema == object.provenance.schema &&
-                   recipient.schemaVersion == object.provenance.schemaVersion;
+                   recipient.schema == object.provenance.schema && recipient.schemaVersion == object.provenance.schemaVersion;
         }
 
         /** @brief Acquires all immutable source pins before invoking any serializer. */
@@ -61,7 +60,8 @@ namespace Horo::Network {
                 if (record.Value().size() > remaining)
                     return Fail<ReplicationInitialStateSnapshot>(ReplicationStateErrors::Capacity);
                 remaining -= record.Value().size();
-                snapshot.records.push_back({sources[index]->Object().object, std::move(record).Value()});
+                const auto &recipient = codecs[index]->Recipient();
+                snapshot.records.push_back({{recipient.object, recipient.revision, recipient.autonomousOwner}, std::move(record).Value()});
             }
             if (cancellation.IsCancellationRequested() || !world.HasCurrentMapping())
                 return Fail<ReplicationInitialStateSnapshot>(ReplicationStateErrors::Stale);

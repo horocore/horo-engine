@@ -22,6 +22,12 @@ namespace Horo::Network {
                    request.phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges && request.simulationTick != 0;
         }
 
+        /** @brief An autonomous-capable world may also host simulated replicas of other objects. */
+        bool SupportsReplicaRole(ReplicationExecutionRole world, ReplicationExecutionRole object) {
+            return world == object ||
+                   (world == ReplicationExecutionRole::AutonomousClient && object == ReplicationExecutionRole::SimulatedClient);
+        }
+
         /** @brief Preserves the requested result type when constructing a domain rejection. */
         template <typename T> Result<T> Fail(const ErrorCodeDescriptor &error) {
             return Result<T>::Failure(MakeError(error));
@@ -146,7 +152,7 @@ namespace Horo::Network {
             return Result<void>::Failure(role.ErrorValue());
         if (const auto &recipient = object.codec->Recipient();
             role.Value() != recipient || recipient.object != object.mapping.object || recipient.session != authority_.networkSession ||
-            recipient.localPeer != authority_.localRecipient || recipient.role != world.Descriptor().role ||
+            recipient.localPeer != authority_.localRecipient || !SupportsReplicaRole(world.Descriptor().role, recipient.role) ||
             recipient.schema != object.mapping.provenance.schema || recipient.schemaVersion != object.mapping.provenance.schemaVersion)
             return Fail<void>(ReplicationStateErrors::Stale);
         if (std::ranges::find(world.Mapping().Entries(), object.mapping) == world.Mapping().Entries().end())
@@ -288,7 +294,9 @@ namespace Horo::Network {
         auto index = ResolveRecord(record.wire, world);
         if (index.HasError())
             return Result<void>::Failure(index.ErrorValue());
-        if (objects_[index.Value()].mapping.object != record.object)
+        const auto &binding = objects_[index.Value()].codec->Recipient();
+        if (binding.object != record.ownership.object || binding.revision != record.ownership.revision ||
+            binding.autonomousOwner != record.ownership.autonomousOwner)
             return Fail<void>(ReplicationStateErrors::Stale);
         return DecodeAndStage(index.Value(), phase, now, delivery, record.wire);
     }

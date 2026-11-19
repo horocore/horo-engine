@@ -126,6 +126,9 @@ namespace Horo::Network {
         SECTION("The decoded tick does not match the manifest") {
             snapshot.tick += 1;
         }
+        SECTION("The ownership metadata does not match the codec") {
+            snapshot.records[1].ownership.autonomousOwner = NetworkPeerId::Create(99).Value();
+        }
         SECTION("The inbound session retired after the complete transfer") {
             retireSession = true;
         }

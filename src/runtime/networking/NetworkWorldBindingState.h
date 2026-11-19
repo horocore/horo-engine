@@ -151,9 +151,14 @@ namespace Horo::Network {
         void ApplyInitial(std::uint64_t localSimulationTick, const CancellationToken &cancellation);
         /** @brief Applies one complete snapshot using the exact configured Scene/Gameplay owner. */
         [[nodiscard]] Result<void> ApplyClientInitial(Peer &peer, std::uint64_t localSimulationTick, const CancellationToken &cancellation);
+        /** @brief Commits a fully reconstructed client baseline and publishes its initial owner facts before receipt. */
+        [[nodiscard]] Result<void> CommitClientInitial(Peer &peer, ReplicationWorldLifecycle &world,
+                                                       const ReplicationWorldWorkRequest &request, std::uint64_t tick);
         /** @brief Acquires the explicit Scene transaction owner behind the synchronous provider boundary. */
         [[nodiscard]] Result<NetworkInitialStateTarget> PrepareInitialTarget(const ReplicationInboundAuthority &authority,
-                                                                             ReplicationWorldLifecycle &world, std::uint64_t tick);
+                                                                             ReplicationWorldLifecycle &world,
+                                                                             std::span<const ReplicationInitialOwnership> ownership,
+                                                                             std::uint64_t tick);
         /** @brief Binds the first accepted frame to the live local recipient and exact receiving Scene. */
         [[nodiscard]] Result<void> OpenInitialInbox(Peer &peer, NetworkInitialStateStamp stamp, Runtime::SceneRuntimeId scene,
                                                     std::uint64_t tick);

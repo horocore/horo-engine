@@ -12,13 +12,13 @@ namespace Horo::Network {
     namespace {
         using AdmissionWire::Reader;
         using AdmissionWire::Writer;
-        constexpr std::uint16_t Version = 1;
+        constexpr std::uint16_t Version = 2;
         constexpr std::size_t ScopeBytes = 28;
         constexpr std::size_t ManifestBytes = ScopeBytes + 6;
         constexpr std::size_t MaximumRecords = ReplicationWorldLimits{}.maximumObjects;
         constexpr std::size_t MinimumRecordBytes = StateCodecDetail::HeaderBytes;
         constexpr std::size_t MaximumRecordBytes = 16 * 1024 * 1024;
-        static_assert(NetworkInitialStateSegmentHeaderBytes == ScopeBytes + 20);
+        static_assert(NetworkInitialStateSegmentHeaderBytes == ScopeBytes + 36);
 
         enum class FrameKind : std::uint16_t {
             Manifest = 1,
@@ -39,7 +39,9 @@ namespace Horo::Network {
 
         /** @brief Checks an encoded record's scope and payload budget without decoding its fields. */
         bool ValidRecord(const ReplicationInitialStateSnapshot &snapshot, const ReplicationInitialStateRecord &record) {
-            return record.object.IsValid() && record.object.Epoch() == snapshot.authority && record.wire.size() >= MinimumRecordBytes &&
+            const auto &ownership = record.ownership;
+            return ownership.object.IsValid() && ownership.object.Epoch() == snapshot.authority && ownership.revision.IsValid() &&
+                   (!ownership.autonomousOwner || ownership.autonomousOwner->IsValid()) && record.wire.size() >= MinimumRecordBytes &&
                    record.wire.size() <= MaximumRecordBytes;
         }
 
@@ -48,11 +50,11 @@ namespace Horo::Network {
             std::size_t total{};
             NetworkObjectId previous;
             for (const auto &record : snapshot.records) {
-                if (!ValidRecord(snapshot, record) || (previous.IsValid() && previous >= record.object))
+                if (!ValidRecord(snapshot, record) || (previous.IsValid() && previous >= record.ownership.object))
                     return Reject<std::size_t>();
                 if (record.wire.size() > MaximumNetworkInitialStateWireBytes - total)
                     return Reject<std::size_t>(NetworkErrors::MessageEnvelopeCapacityExceeded);
-                previous = record.object;
+                previous = record.ownership.object;
                 total += record.wire.size();
             }
             return Result<std::size_t>::Success(total);
@@ -117,11 +119,25 @@ namespace Horo::Network {
 
         /** @brief Snapshot chunk that borrows only the admitted envelope payload. */
         struct SegmentView final {
-            NetworkObjectId object;
+            ReplicationInitialOwnership ownership;
             std::size_t total{};
             std::size_t offset{};
             std::span<const std::byte> bytes;
         };
+
+        /** @brief Reads the revision and optional session-scoped owner before assembling a field record. */
+        Result<ReplicationInitialOwnership> ReadOwnership(Reader &reader, NetworkObjectId object) {
+            std::uint64_t revision{}, owner{};
+            if (!reader.Number(revision, 8) || !reader.Number(owner, 8))
+                return Reject<ReplicationInitialOwnership>();
+            auto roleRevision = ReplicationRoleRevision::Create(revision);
+            if (roleRevision.HasError())
+                return Reject<ReplicationInitialOwnership>();
+            ReplicationInitialOwnership ownership{object, roleRevision.Value(), {}};
+            if (owner != 0)
+                ownership.autonomousOwner = NetworkPeerId::Create(owner).Value();
+            return Result<ReplicationInitialOwnership>::Success(ownership);
+        }
 
         /** @brief Verifies that a nonempty segment lies within its declared record. */
         bool ContainsSegment(std::size_t total, std::size_t offset, std::size_t count) {
@@ -135,19 +151,24 @@ namespace Horo::Network {
             std::uint32_t generation{}, total{}, offset{};
             if (!reader.Number(slot, 8) || !reader.Number(generation, 4) || !reader.Number(total, 4) || !reader.Number(offset, 4))
                 return Reject<SegmentView>();
-            const auto bytes = body.subspan(NetworkInitialStateSegmentHeaderBytes - ScopeBytes);
-            if (!ContainsSegment(total, offset, bytes.size()))
-                return Reject<SegmentView>();
             auto object = NetworkObjectId::Create(epoch, slot, generation);
             if (object.HasError())
                 return Reject<SegmentView>();
-            return Result<SegmentView>::Success({object.Value(), total, offset, bytes});
+            auto ownership = ReadOwnership(reader, object.Value());
+            if (ownership.HasError())
+                return Result<SegmentView>::Failure(ownership.ErrorValue());
+            const auto bytes = body.subspan(NetworkInitialStateSegmentHeaderBytes - ScopeBytes);
+            if (!ContainsSegment(total, offset, bytes.size()))
+                return Reject<SegmentView>();
+            return Result<SegmentView>::Success({ownership.Value(), total, offset, bytes});
         }
 
         /** @brief Writes the record identity, bounds and exact bytes of a checked segment. */
         bool WriteSegment(Writer &writer, const SegmentView &segment) {
-            return writer.Number(segment.object.Slot(), 8) && writer.Number(segment.object.Generation(), 4) &&
-                   writer.Number(segment.total, 4) && writer.Number(segment.offset, 4) && writer.Bytes(segment.bytes);
+            const auto &ownership = segment.ownership;
+            return writer.Number(ownership.object.Slot(), 8) && writer.Number(ownership.object.Generation(), 4) &&
+                   writer.Number(segment.total, 4) && writer.Number(segment.offset, 4) && writer.Number(ownership.revision.Value(), 8) &&
+                   writer.Number(ownership.autonomousOwner.value_or(NetworkPeerId{}).Value(), 8) && writer.Bytes(segment.bytes);
         }
 
         /** @brief Converts raw header fields into a typed world occurrence and tick. */
@@ -159,6 +180,26 @@ namespace Horo::Network {
             return Result<NetworkInitialStateStamp>::Success({session.Value(), authority.Value(), frame.tick});
         }
     }  // namespace
+
+    /** @copydoc ProjectInitialReplicationRole */
+    Result<ReplicationRoleBinding> ProjectInitialReplicationRole(const ReplicationInitialOwnership &ownership,
+                                                                 const NetworkObjectMappingEntry &mapping, NetworkSessionGeneration session,
+                                                                 NetworkPeerId recipient) {
+        if (ownership.object != mapping.object)
+            return Reject<ReplicationRoleBinding>(NetworkErrors::ReplicationWorldStale);
+        const auto role =
+            ownership.autonomousOwner == recipient ? ReplicationExecutionRole::AutonomousClient : ReplicationExecutionRole::SimulatedClient;
+        ReplicationRoleBinding binding{ownership.revision,
+                                       session,
+                                       mapping.object,
+                                       mapping.provenance.schema,
+                                       mapping.provenance.schemaVersion,
+                                       role,
+                                       recipient,
+                                       ownership.autonomousOwner};
+        return binding.IsValid() ? Result<ReplicationRoleBinding>::Success(binding)
+                                 : Reject<ReplicationRoleBinding>(NetworkErrors::ReplicationDescriptorIncompatible);
+    }
 
     /** @copydoc ReadNetworkInitialStateStamp */
     Result<NetworkInitialStateStamp> ReadNetworkInitialStateStamp(std::span<const std::byte> payload) {
@@ -227,7 +268,7 @@ namespace Horo::Network {
         if (!ValidRecord(snapshot, record) || offset >= record.wire.size())
             return Reject<NetworkInitialStateSegment>();
         const auto count = std::min(maximumPayloadBytes - NetworkInitialStateSegmentHeaderBytes, record.wire.size() - offset);
-        const SegmentView segment{record.object, record.wire.size(), offset, std::span{record.wire}.subspan(offset, count)};
+        const SegmentView segment{record.ownership, record.wire.size(), offset, std::span{record.wire}.subspan(offset, count)};
         try {
             std::vector<std::byte> bytes(NetworkInitialStateSegmentHeaderBytes + count);
             Writer writer{bytes};
@@ -315,7 +356,7 @@ namespace Horo::Network {
         if (decoded.HasError())
             return Result<void>::Failure(decoded.ErrorValue());
         const auto &segment = decoded.Value();
-        if (auto prepared = PrepareRecord(segment.object, segment.total, segment.offset); prepared.HasError())
+        if (auto prepared = PrepareRecord(segment.ownership, segment.total, segment.offset); prepared.HasError())
             return prepared;
         auto &record = snapshot_.records.back();
         record.wire.insert(record.wire.end(), segment.bytes.begin(), segment.bytes.end());
@@ -326,26 +367,27 @@ namespace Horo::Network {
     }
 
     /** @copydoc NetworkInitialStateInbox::PrepareRecord */
-    Result<void> NetworkInitialStateInbox::PrepareRecord(NetworkObjectId object, std::size_t total, std::size_t offset) {
+    Result<void> NetworkInitialStateInbox::PrepareRecord(const ReplicationInitialOwnership &ownership, std::size_t total,
+                                                         std::size_t offset) {
         if (pendingBytes_ == 0)
-            return offset == 0 ? StartRecord(object, total) : Reject<void>();
+            return offset == 0 ? StartRecord(ownership, total) : Reject<void>();
         const auto &record = snapshot_.records.back();
-        if (object != record.object || offset != record.wire.size() || total != pendingBytes_)
+        if (ownership != record.ownership || offset != record.wire.size() || total != pendingBytes_)
             return Reject<void>();
         return Result<void>::Success();
     }
 
     /** @copydoc NetworkInitialStateInbox::StartRecord */
-    Result<void> NetworkInitialStateInbox::StartRecord(NetworkObjectId object, std::size_t bytes) {
+    Result<void> NetworkInitialStateInbox::StartRecord(const ReplicationInitialOwnership &ownership, std::size_t bytes) {
         if (snapshot_.records.size() >= expectedRecords_ || bytes > remainingBytes_)
             return Reject<void>();
-        if (!snapshot_.records.empty() && snapshot_.records.back().object >= object)
+        if (!snapshot_.records.empty() && snapshot_.records.back().ownership.object >= ownership.object)
             return Reject<void>();
         const auto remainingRecords = expectedRecords_ - snapshot_.records.size() - 1;
         if (!ValidRecordBudget(remainingRecords, remainingBytes_ - bytes))
             return Reject<void>();
         try {
-            ReplicationInitialStateRecord record{object};
+            ReplicationInitialStateRecord record{ownership};
             record.wire.reserve(bytes);
             snapshot_.records.push_back(std::move(record));
             pendingBytes_ = bytes;
@@ -368,6 +410,24 @@ namespace Horo::Network {
     /** @copydoc NetworkInitialStateInbox::ReadyRecordCount */
     std::optional<std::size_t> NetworkInitialStateInbox::ReadyRecordCount() const noexcept {
         return Ready() ? std::optional{expectedRecords_} : std::nullopt;
+    }
+
+    /** @copydoc NetworkInitialStateInbox::ReadOwnership */
+    Result<std::vector<ReplicationInitialOwnership>> NetworkInitialStateInbox::ReadOwnership(std::uint64_t now) const {
+        using Outcome = Result<std::vector<ReplicationInitialOwnership>>;
+        if (!Ready() || !authority_.session || delivery_.IsCancellationRequested())
+            return Reject<std::vector<ReplicationInitialOwnership>>(NetworkErrors::NetworkModeUnavailable);
+        if (auto admitted = authority_.session->AdmitGameplay(authority_.connection, authority_.generation, now); admitted.HasError())
+            return Outcome::Failure(admitted.ErrorValue());
+        try {
+            std::vector<ReplicationInitialOwnership> ownership;
+            ownership.reserve(snapshot_.records.size());
+            for (const auto &record : snapshot_.records)
+                ownership.push_back(record.ownership);
+            return Outcome::Success(std::move(ownership));
+        } catch (const std::bad_alloc &) {
+            return Reject<std::vector<ReplicationInitialOwnership>>(NetworkErrors::MessageEnvelopeCapacityExceeded);
+        }
     }
 
     /** @copydoc NetworkInitialStateInbox::Take */

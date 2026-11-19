@@ -227,9 +227,9 @@ namespace Horo::Network {
         Sha256Digest fingerprint_;
     };
 
-    /** @brief One full initial field record encoded for the exact admitted client projection. */
+    /** @brief One full initial field record and the owner decision used to select its recipient view. */
     struct ReplicationInitialStateRecord final {
-        NetworkObjectId object;
+        ReplicationInitialOwnership ownership;
         std::vector<std::byte> wire;
     };
 

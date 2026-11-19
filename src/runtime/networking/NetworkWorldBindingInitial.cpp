@@ -17,8 +17,10 @@ namespace Horo::Network {
             if (!lease.HasCurrentMapping() || snapshot.session != lease.Descriptor().session ||
                 snapshot.authority != lease.Descriptor().authority || snapshot.tick == 0)
                 return false;
-            if (!std::ranges::equal(snapshot.records, lease.Mapping().Entries(), {}, &ReplicationInitialStateRecord::object,
-                                    &NetworkObjectMappingEntry::object))
+            const auto object = [](const ReplicationInitialStateRecord &row) {
+                return row.ownership.object;
+            };
+            if (!std::ranges::equal(snapshot.records, lease.Mapping().Entries(), {}, object, &NetworkObjectMappingEntry::object))
                 return false;
             for (const auto &object : snapshot.records) {
                 if (object.wire.size() > budget)
@@ -28,6 +30,17 @@ namespace Horo::Network {
             return true;
         }
     }  // namespace
+
+    /** @copydoc NetworkWorldBindingController::InitialClientOwnership */
+    Result<ReplicationInitialOwnership> NetworkWorldBindingController::InitialClientOwnership(Runtime::SceneRuntimeId scene,
+                                                                                              NetworkSessionGeneration session,
+                                                                                              NetworkObjectId object) const {
+        if (auto checked = impl_->CheckOwner(); checked.HasError())
+            return Result<ReplicationInitialOwnership>::Failure(checked.ErrorValue());
+        if (!impl_->setup.policy.initialState)
+            return Result<ReplicationInitialOwnership>::Failure(MakeError(NetworkErrors::NetworkModeUnavailable));
+        return impl_->worlds.InitialOwnership(scene, session, object);
+    }
 
     /** @copydoc NetworkWorldBindingController::Impl::InitialConfirmed */
     bool NetworkWorldBindingController::Impl::InitialConfirmed(const Peer &peer) const noexcept {
@@ -260,27 +273,41 @@ namespace Horo::Network {
         auto *world = worlds.InitialReceiver(stream.stamp.session, *count);
         if (!world)
             return Result<void>::Success();
+        const ReplicationWorldWorkRequest request{stream.clientScene, stream.stamp.session,
+                                                  Runtime::RuntimePhase::CommitDeferredLifecycleChanges, localSimulationTick, cancellation};
+        return CommitClientInitial(peer, *world, request, tick);
+    }
+
+    /** @copydoc NetworkWorldBindingController::Impl::CommitClientInitial */
+    Result<void> NetworkWorldBindingController::Impl::CommitClientInitial(Peer &peer, ReplicationWorldLifecycle &world,
+                                                                          const ReplicationWorldWorkRequest &request, std::uint64_t tick) {
+        auto &stream = peer.initial;
         const auto authority = InitialAuthority(peer);
-        auto target = PrepareInitialTarget(authority, *world, tick);
+        auto ownership = stream.inbox->ReadOwnership(tick);
+        if (ownership.HasError())
+            return Result<void>::Failure(ownership.ErrorValue());
+        auto target = PrepareInitialTarget(authority, world, ownership.Value(), tick);
         if (target.HasError())
             return Result<void>::Failure(target.ErrorValue());
-        const ReplicationWorldWorkRequest request{authority.scene, authority.networkSession,
-                                                  Runtime::RuntimePhase::CommitDeferredLifecycleChanges, localSimulationTick, cancellation};
         auto applied = stream.inbox->ApplyCompleted(*target.Value().receiver, request, tick);
         if (applied.HasError())
             return Result<void>::Failure(applied.ErrorValue());
-        stream.published = applied.Value().initialPublished;
-        if (stream.published)
-            stream.inbox.reset();
+        if (!applied.Value().initialPublished)
+            return Result<void>::Success();
+        if (!worlds.PublishInitialOwnership(stream.stamp.session, std::move(ownership).Value()))
+            return RejectInitial(NetworkErrors::ReplicationWorldStale);
+        stream.published = true;
+        stream.inbox.reset();
         return Result<void>::Success();
     }
 
     /** @copydoc NetworkWorldBindingController::Impl::PrepareInitialTarget */
     Result<NetworkInitialStateTarget> NetworkWorldBindingController::Impl::PrepareInitialTarget(
-        const ReplicationInboundAuthority &authority, ReplicationWorldLifecycle &world, std::uint64_t tick) {
+        const ReplicationInboundAuthority &authority, ReplicationWorldLifecycle &world,
+        std::span<const ReplicationInitialOwnership> ownership, std::uint64_t tick) {
         using Outcome = Result<NetworkInitialStateTarget>;
         auto prepared = Detail::InvokeAdmissionProvider([&] {
-            return setup.initialStateHost->PrepareReceiver(authority, world, tick);
+            return setup.initialStateHost->PrepareReceiver(authority, world, ownership, tick);
         });
         if (stopped || !prepared)
             return Outcome::Failure(MakeError(NetworkErrors::NetworkModeUnavailable));

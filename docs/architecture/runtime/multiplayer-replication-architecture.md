@@ -84,6 +84,20 @@ The decoded records must match their segment identities and the manifest
 tick. Validation, cancellation, or a rejected owner transaction discards
 the batch before any Scene value is published.
 
+The version 2 initial stream also carries one authority-issued ownership
+revision and an optional autonomous owner per object. Every segment of that
+record must repeat the same ownership facts. `PrepareReceiver` receives
+those facts after complete receipt and structural reconstruction. It
+derives each object role against the exact local peer through
+`ProjectInitialReplicationRole` and keeps the binding detached until the
+same owner transaction commits the fields and ownership. An autonomous
+client world may receive both owned and simulated objects. A simulated
+client world cannot accept an autonomous object grant. The host can read
+the committed initial fact through `InitialClientOwnership` while the exact
+Scene, session, and object remain live. Future ownership transitions use
+the live role owner. Rebuild configured host adapters for the updated
+receiver callback and use the same stream revision on both peers.
+
 Hosts enable this path with `NetworkWorldBindingPolicy::initialState`, a
 distinct required handshake feature and Control message, and a live
 `INetworkInitialStateHost` adapter. The configured lane shares the world,

@@ -1,6 +1,8 @@
 #include "Horo/Network/NetworkErrors.h"
 #include "NetworkModeWorldState.h"
 
+#include <algorithm>
+
 namespace Horo::Network::Detail {
     /** @copydoc NetworkModeWorldState::AuthorizeInitial */
     Result<Runtime::SceneRuntimeId> NetworkModeWorldState::AuthorizeInitial(NetworkSessionGeneration session,
@@ -31,6 +33,32 @@ namespace Horo::Network::Detail {
             return nullptr;
         auto &lifecycle = current_[index]->lifecycle;
         return lifecycle.CommittedObjectCount() >= minimumObjects ? &lifecycle : nullptr;
+    }
+
+    /** @copydoc NetworkModeWorldState::PublishInitialOwnership */
+    bool NetworkModeWorldState::PublishInitialOwnership(NetworkSessionGeneration session,
+                                                        std::vector<ReplicationInitialOwnership> ownership) noexcept {
+        const auto *binding = ClientBinding();
+        if (!binding || binding->worldSession != session)
+            return false;
+        current_[Index(NetworkModeWorldKind::Client)]->initialOwnership.emplace(std::move(ownership));
+        return true;
+    }
+
+    /** @copydoc NetworkModeWorldState::InitialOwnership */
+    Result<ReplicationInitialOwnership> NetworkModeWorldState::InitialOwnership(Runtime::SceneRuntimeId scene,
+                                                                                NetworkSessionGeneration session,
+                                                                                NetworkObjectId object) const {
+        using Outcome = Result<ReplicationInitialOwnership>;
+        if (auto live = ResolveClientObject(scene, session, object); live.HasError())
+            return Outcome::Failure(live.ErrorValue());
+        const auto &published = current_[Index(NetworkModeWorldKind::Client)]->initialOwnership;
+        if (!published)
+            return Outcome::Failure(MakeError(NetworkErrors::ReplicationInitialStatePending));
+        const auto row = std::ranges::lower_bound(*published, object, {}, &ReplicationInitialOwnership::object);
+        if (row == published->end() || row->object != object)
+            return Outcome::Failure(MakeError(NetworkErrors::ReplicationWorldStale));
+        return Outcome::Success(*row);
     }
 
     /** @copydoc NetworkModeWorldState::ClientBinding */

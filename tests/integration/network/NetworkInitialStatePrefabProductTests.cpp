@@ -41,6 +41,7 @@ namespace Horo::Network {
         struct AcceptedField final {
             NetworkObjectMappingEntry mapping;
             double value;
+            ReplicationRoleBinding role;
         };
 
         class AppliedFields final : public IReplicationApplyOwner {
@@ -69,7 +70,7 @@ namespace Horo::Network {
                     REQUIRE(update.state.Fields().size() == 1);
                     const auto &field = update.state.Fields().front();
                     REQUIRE(field.field == TestSupport::FieldIdValue(1));
-                    accepted.push_back({update.mapping, std::get<double>(field.value)});
+                    accepted.push_back({update.mapping, std::get<double>(field.value), update.role});
                 }
                 return Result<std::unique_ptr<IReplicationApplyCandidate>>::Success(
                     std::make_unique<Candidate>(*this, std::move(accepted)));
@@ -95,12 +96,14 @@ namespace Horo::Network {
                         .Value();
                 std::vector<ReplicationCaptureTarget> targets;
                 std::vector<std::shared_ptr<ReplicationStateCodec>> codecs;
+                const auto recipient = ClientRecipient(peer).Value();
                 for (const auto &mapping : world.Mapping().Entries()) {
                     auto source = std::make_shared<CaptureTestSupport::Owner>();
                     const auto value = mapping.provenance.authoredObject ? 7.5 : 10.0 + mapping.provenance.prefab->source.entitySlot;
                     source->Commit(AuthorityTick, value);
                     targets.push_back({mapping, std::move(source)});
-                    codecs.push_back(Codec(mapping, descriptor.session, ClientRecipient(peer).Value()));
+                    const auto ownership = Ownership(mapping, recipient);
+                    codecs.push_back(Codec(ProjectInitialReplicationRole(ownership, mapping, descriptor.session, recipient).Value()));
                 }
                 auto capture = ReplicationStateCapture::Prepare(read, registry, targets).Value();
                 REQUIRE(capture->CaptureAtCommit(read, AuthorityTick).Value().published == targets.size());
@@ -111,14 +114,21 @@ namespace Horo::Network {
             }
 
             Result<NetworkInitialStateTarget> PrepareReceiver(const ReplicationInboundAuthority &authority,
-                                                              ReplicationWorldLifecycle &world, std::uint64_t now) override {
+                                                              ReplicationWorldLifecycle &world,
+                                                              std::span<const ReplicationInitialOwnership> ownership,
+                                                              std::uint64_t now) override {
                 ++receiverPreparations;
                 auto receiver =
                     ReplicationInboundApply::Create(authority, world, applied, now, {}, ReplicationInboundApplyMode::InitialSnapshot)
                         .Value();
                 const auto mappings = world.Acquire({authority.scene, authority.networkSession, CommitPhase, 1}).Value();
-                for (const auto &mapping : mappings.Mapping().Entries()) {
-                    auto codec = Codec(mapping, authority.networkSession, authority.localRecipient);
+                const auto entries = mappings.Mapping().Entries();
+                REQUIRE(entries.size() == ownership.size());
+                for (std::size_t i{}; i < entries.size(); ++i) {
+                    const auto &mapping = entries[i];
+                    const auto projected =
+                        ProjectInitialReplicationRole(ownership[i], mapping, authority.networkSession, authority.localRecipient);
+                    auto codec = Codec(projected.Value());
                     auto role = std::make_shared<ReplicationRoleState>(ReplicationRoleState::Create(codec->Recipient()).Value());
                     REQUIRE(receiver->RegisterObject(mapping, std::move(role), std::move(codec)).HasValue());
                 }
@@ -129,16 +139,16 @@ namespace Horo::Network {
             std::size_t receiverPreparations{};
 
         private:
-            std::shared_ptr<ReplicationStateCodec> Codec(const NetworkObjectMappingEntry &mapping, NetworkSessionGeneration session,
-                                                         NetworkPeerId recipient) const {
-                const ReplicationRoleBinding role{TestSupport::Id<ReplicationRoleRevision>(1),
-                                                  session,
-                                                  mapping.object,
-                                                  mapping.provenance.schema,
-                                                  mapping.provenance.schemaVersion,
-                                                  ReplicationExecutionRole::AutonomousClient,
-                                                  recipient,
-                                                  recipient};
+            static ReplicationInitialOwnership Ownership(const NetworkObjectMappingEntry &mapping, NetworkPeerId local) {
+                ReplicationInitialOwnership ownership{mapping.object, ReplicationRoleRevision::Create(mapping.object.Slot() + 3).Value()};
+                if (mapping.provenance.authoredObject)
+                    ownership.autonomousOwner = local;
+                else if (mapping.provenance.prefab->source.entitySlot == 0)
+                    ownership.autonomousOwner = NetworkPeerId::Create(9).Value();
+                return ownership;
+            }
+
+            std::shared_ptr<ReplicationStateCodec> Codec(const ReplicationRoleBinding &role) const {
                 return std::shared_ptr<ReplicationStateCodec>{
                     ReplicationStateCodec::Create(registry, role, ReplicationRecordKind::Spawn, 1).Value()};
             }
@@ -386,6 +396,38 @@ namespace Horo::Network {
                 CHECK(remote.owner->AdmitWorldDispatch(remote.peer->Connection(), Session(8), *remote.peer, AdmissionTick).HasValue());
             }
 
+            void VerifyPublishedFields(NetworkSessionGeneration originalSession) const {
+                CHECK(fields->receiverPreparations == 1);
+                CHECK(fields->applied->commits == 1);
+                const auto current = ReplicaMapping();
+                const auto &values = fields->applied->values;
+                REQUIRE(values.size() == 3);
+                CHECK(values[0].mapping.provenance.authoredObject == AuthoredObject);
+                CHECK(values[0].value == 7.5);
+                CHECK(values[0].role.role == ReplicationExecutionRole::AutonomousClient);
+                CHECK(values[0].role.autonomousOwner == NetworkPeerId::Create(7).Value());
+                CHECK(values[1].role.autonomousOwner == NetworkPeerId::Create(9).Value());
+                CHECK_FALSE(values[2].role.autonomousOwner);
+                for (std::size_t i = 1; i < values.size(); ++i) {
+                    CHECK_FALSE(values[i].mapping.provenance.authoredObject);
+                    REQUIRE(values[i].mapping.provenance.prefab);
+                    const auto &origin = *values[i].mapping.provenance.prefab;
+                    CHECK(origin.occurrence == values[1].mapping.object);
+                    CHECK(origin.source.recipe.artifactDigest == resources.artifact);
+                    CHECK(values[i].value == 10.0 + origin.source.entitySlot);
+                    CHECK(values[i].role.role == ReplicationExecutionRole::SimulatedClient);
+                    CHECK(values[i].role.revision.Value() == values[i].mapping.object.Slot() + 3);
+                }
+                REQUIRE(current.Mapping().Entries().size() == values.size());
+                CHECK(std::ranges::equal(current.Mapping().Entries(), values, {}, std::identity{}, &AcceptedField::mapping));
+                for (const auto &value : values) {
+                    const auto ownership =
+                        ClientController()->InitialClientOwnership(ReplicaScene, originalSession, value.mapping.object).Value();
+                    CHECK(ownership.revision == value.role.revision);
+                    CHECK(ownership.autonomousOwner == value.role.autonomousOwner);
+                }
+            }
+
             void ReplaceWorld(std::span<const std::byte> staleFrame) {
                 const auto previous = ReplicaMapping();
                 constexpr auto replacement = Runtime::SceneRuntimeId{62};
@@ -406,6 +448,9 @@ namespace Horo::Network {
                 CHECK(current.Mapping().Entries()[0].entity.runtime == replacement);
                 const auto stale = DecodeMessageEnvelope(staleFrame, *setup.codecs).Value();
                 CHECK(ClientController()->HandleAdmitted({peer->Connection(), Session(), peer, AdmissionTick}, stale).HasError());
+                CHECK(ClientController()
+                          ->InitialClientOwnership(ReplicaScene, previous.Descriptor().session, previous.Mapping().Entries()[0].object)
+                          .HasError());
                 CHECK(fields->applied->commits == 1);
             }
         };
@@ -421,6 +466,8 @@ namespace Horo::Network {
         REQUIRE(product.host->RunFrame().HasValue());
         const auto original = product.ReplicaMapping();
         REQUIRE(original.Mapping().Entries().size() == 1);
+        const auto originalObject = original.Mapping().Entries().front().object;
+        const auto originalSession = original.Descriptor().session;
         product.Receive();  // The Prefab is queued, but its cooked entities are not committed yet.
         product.Receive();  // Manifest.
         std::vector<std::byte> lastField;
@@ -428,31 +475,17 @@ namespace Horo::Network {
             lastField = product.Receive();
         CHECK(product.fields->receiverPreparations == 0);
         CHECK(product.fields->applied->values.empty());
+        CHECK(product.ClientController()->InitialClientOwnership(ReplicaScene, originalSession, originalObject).HasError());
         REQUIRE(product.ReplicaMapping().Mapping().Entries().size() == 1);
         SECTION("Shutdown cancels the complete field snapshot before Prefab reconstruction") {
             product.host->Shutdown();
             CHECK(original.IsRevoked());
             CHECK(product.fields->applied->commits == 0);
+            CHECK(product.ClientController()->InitialClientOwnership(ReplicaScene, originalSession, originalObject).HasError());
         }
         SECTION("Cooked children get authoritative field values in the same owner commit as the authored object") {
             product.WaitForFields();
-            CHECK(product.fields->receiverPreparations == 1);
-            CHECK(product.fields->applied->commits == 1);
-            const auto current = product.ReplicaMapping();
-            const auto &values = product.fields->applied->values;
-            REQUIRE(values.size() == 3);
-            CHECK(values[0].mapping.provenance.authoredObject == AuthoredObject);
-            CHECK(values[0].value == 7.5);
-            for (std::size_t i = 1; i < values.size(); ++i) {
-                CHECK_FALSE(values[i].mapping.provenance.authoredObject);
-                REQUIRE(values[i].mapping.provenance.prefab);
-                const auto &origin = *values[i].mapping.provenance.prefab;
-                CHECK(origin.occurrence == values[1].mapping.object);
-                CHECK(origin.source.recipe.artifactDigest == product.resources.artifact);
-                CHECK(values[i].value == 10.0 + origin.source.entitySlot);
-            }
-            REQUIRE(current.Mapping().Entries().size() == values.size());
-            CHECK(std::ranges::equal(current.Mapping().Entries(), values, {}, std::identity{}, &AcceptedField::mapping));
+            product.VerifyPublishedFields(originalSession);
             product.ConfirmFields();
             product.ReplaceWorld(lastField);
         }

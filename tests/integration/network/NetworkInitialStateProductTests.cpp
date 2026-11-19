@@ -24,7 +24,10 @@ namespace Horo::Network {
             }
 
             Result<NetworkInitialStateTarget> PrepareReceiver(const ReplicationInboundAuthority &authority,
-                                                              ReplicationWorldLifecycle &world, std::uint64_t now) override {
+                                                              ReplicationWorldLifecycle &world,
+                                                              std::span<const ReplicationInitialOwnership> ownership,
+                                                              std::uint64_t now) override {
+                REQUIRE(ownership.empty());
                 ++prepared;
                 auto owner = shared_from_this();
                 auto receiver =
@@ -92,17 +95,18 @@ namespace Horo::Network {
                 return *owners->binding;
             }
 
-            InboundDispatchReport Deliver(ConnectionHandle connection, ChannelId channel, std::vector<std::byte> payload) {
+            InboundDispatchReport Deliver(ConnectionHandle connection, ChannelId channel, std::vector<std::byte> payload,
+                                          std::uint64_t now = 22) {
                 Wire().transport.event = {.kind = NetworkTransportEventKind::PacketReceived,
                                           .connection = connection,
                                           .channel = channel,
                                           .delivery = DeliveryPolicy::ReliableOrdered,
                                           .payload = std::move(payload)};
                 Wire().transport.queued = true;
-                return Wire().dispatcher->RunNetworkPoll(22).Value();
+                return Wire().dispatcher->RunNetworkPoll(now).Value();
             }
 
-            InboundDispatchReport Command(std::uint32_t sequence) {
+            InboundDispatchReport Command(std::uint32_t sequence, std::uint64_t now = 22) {
                 MessageEnvelope envelope;
                 envelope.protocol = owners->worldSetup.policy.control.protocol;
                 envelope.message = WireIdentity<MessageTypeId>(12);
@@ -110,12 +114,19 @@ namespace Horo::Network {
                 envelope.schemaVersion = {1, 0};
                 envelope.sequence = MessageSequenceNumber{sequence};
                 return Deliver(server->Connection(), ChannelId::Create(1, 2).Value(),
-                               EncodeMessageEnvelope(envelope, *Wire().setup.codecs).Value());
+                               EncodeMessageEnvelope(envelope, *Wire().setup.codecs).Value(), now);
             }
 
             std::vector<std::byte> Outgoing() {
                 const auto bytes = std::span{Wire().transport.sent}.first(Wire().transport.size);
                 return {bytes.begin(), bytes.end()};
+            }
+
+            void DeliverBaseline() {
+                Wire().Deliver();  // World binding.
+                Wire().Deliver();  // Authored inventory.
+                REQUIRE(host->RunFrame().HasValue());
+                Wire().Deliver();  // Complete empty field manifest.
             }
         };
     }  // namespace
@@ -127,10 +138,7 @@ namespace Horo::Network {
         InitialProduct product;
         auto controller = product.Wire().binding.lock();
         REQUIRE(controller);
-        product.Wire().Deliver();  // World binding.
-        product.Wire().Deliver();  // Authored inventory.
-        REQUIRE(product.host->RunFrame().HasValue());
-        product.Wire().Deliver();  // Complete empty field manifest.
+        product.DeliverBaseline();
         CHECK(product.fields->captures == 1);
         CHECK(product.fields->prepared == 0);
         CHECK(product.Command(1).rejectedPackets == 1);
@@ -154,5 +162,40 @@ namespace Horo::Network {
         REQUIRE(product.Deliver(product.server->Connection(), {}, product.Outgoing()).rejectedPackets == 0);
         CHECK(product.Command(2).rejectedPackets == 0);
         CHECK(product.command->accepted == 1);
+    }
+
+    TEST_CASE("An interrupted initial sync retires only the unconfirmed peer", "[integration][network][mode][binding]") {
+        if constexpr (!HORO_TEST_PHYSICS_NATIVE)
+            SKIP("Canonical Physics is required for actual product world activation.");
+        InitialProduct product;
+        auto controller = product.Wire().binding.lock();
+        REQUIRE(controller);
+        product.DeliverBaseline();
+        REQUIRE(product.host->RunFrame().HasValue());
+        REQUIRE(controller->Flush(22).HasValue());
+        REQUIRE(product.Deliver(product.server->Connection(), {}, product.Outgoing()).rejectedPackets == 0);
+        REQUIRE(product.Command(1).rejectedPackets == 0);
+
+        const auto connection = ConnectionHandle::Create(4, 1).Value();
+        const auto generation = Session(9);
+        auto joining = ModeBindingTests::Negotiating(connection, generation);
+        ModeBindingTests::CompleteAdmission(joining, generation, product.owners->worldSetup.policy.initialState->feature);
+        REQUIRE(controller->BindPeer(AdmissionEndpoint::Server, joining, generation, 22).HasValue());
+        product.Wire().RegisterClient(joining);
+        for (int i = 0; i < 3; ++i)
+            REQUIRE(controller->Flush(22).HasValue());
+        const auto lost = DecodeMessageEnvelope(product.Outgoing(), *product.Wire().setup.codecs).Value();
+        REQUIRE(ReadNetworkInitialStateStamp(lost.payload).HasValue());
+        CHECK(product.fields->captures == 2);
+        CHECK(joining->State() == PeerSessionState::Active);
+        CHECK(controller->AdmitWorldDispatch(connection, generation, *joining, 22).HasError());
+
+        const auto deadline = 22 + product.owners->worldSetup.maximumPendingTicks;
+        REQUIRE(controller->Flush(deadline).HasValue());
+        CHECK(joining->State() != PeerSessionState::Active);
+        CHECK(product.server->State() == PeerSessionState::Active);
+        CHECK(product.client->State() == PeerSessionState::Active);
+        CHECK(product.Command(2, deadline).rejectedPackets == 0);
+        CHECK(product.command->accepted == 2);
     }
 }  // namespace Horo::Network

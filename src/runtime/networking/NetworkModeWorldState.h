@@ -98,6 +98,12 @@ namespace Horo::Network::Detail {
                                                                        const InboundMessageContext &context) const;
         /** @brief Borrows the exact published receiving lifecycle after structural receipt is drained. */
         [[nodiscard]] ReplicationWorldLifecycle *InitialReceiver(NetworkSessionGeneration session, std::size_t minimumObjects) noexcept;
+        /** @brief Installs the validated owner facts after the same initial field transaction succeeds. */
+        [[nodiscard]] bool PublishInitialOwnership(NetworkSessionGeneration session,
+                                                   std::vector<ReplicationInitialOwnership> ownership) noexcept;
+        /** @brief Looks up a published initial grant only while its exact Scene, session and object remain live. */
+        [[nodiscard]] Result<ReplicationInitialOwnership> InitialOwnership(Runtime::SceneRuntimeId scene, NetworkSessionGeneration session,
+                                                                           NetworkObjectId object) const;
         /** @brief Selects the exact published client binding for traffic admission. */
         [[nodiscard]] const NetworkWorldBindingRecord *ClientBinding() const noexcept;
         /** @brief Acquires a pinned authority mapping at NetworkFlush for the selected published world. */
@@ -131,6 +137,7 @@ namespace Horo::Network::Detail {
             std::optional<NetworkAuthoredSceneAssembly> authoredAssembly;
             CancellationToken authoredDelivery;
             std::uint64_t authoredDeadline{};
+            std::optional<std::vector<ReplicationInitialOwnership>> initialOwnership;
         };
 
         [[nodiscard]] Result<void> CheckOwner() const;

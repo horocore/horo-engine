@@ -447,6 +447,15 @@ namespace Horo::Network {
         return mode.binding_;
     }
 
+    /** @copydoc NetworkModeComposition::InitialClientOwnership */
+    Result<ReplicationInitialOwnership> NetworkModeComposition::InitialClientOwnership(Runtime::SceneRuntimeId scene,
+                                                                                       NetworkSessionGeneration session,
+                                                                                       NetworkObjectId object) const {
+        if (!binding_)
+            return Result<ReplicationInitialOwnership>::Failure(MakeError(NetworkErrors::NetworkModeUnavailable));
+        return binding_->InitialClientOwnership(scene, session, object);
+    }
+
     /** @copydoc NetworkModeComposition::AcquireReplication */
     Result<ReplicationWorldReadLease> NetworkModeComposition::AcquireReplication(const NetworkModeWorldKind world,
                                                                                  const ReplicationWorldWorkRequest &request,
