@@ -23,6 +23,47 @@ namespace Horo::Application::Internal {
             return T::Create(1).Value();
         }
 
+        /** @brief Accumulates the exact parent-to-local transforms without decomposing inherited scale or shear. */
+        Result<Math::Mat4> CanvasToScene(const Runtime::RuntimeSceneView &scene, Runtime::RuntimeEntityView entity) {
+            constexpr std::size_t MaximumCanvasAncestors = 64;
+            auto world = Math::Mat4::Identity();
+            for (std::size_t depth = 0; depth < MaximumCanvasAncestors; ++depth) {
+                if (!entity.localTransform)
+                    return Invalid<Math::Mat4>(UiErrors::CanvasSpaceInvalid);
+                const auto local = entity.localTransform->TryToMatrix();
+                if (local.HasError())
+                    return Result<Math::Mat4>::Failure(local.ErrorValue());
+                world = Math::Multiply(local.Value(), world);
+                if (!entity.parent)
+                    return Result<Math::Mat4>::Success(world);
+                const auto parent = scene.Get(*entity.parent);
+                if (parent.HasError())
+                    return Result<Math::Mat4>::Failure(parent.ErrorValue());
+                entity = parent.Value();
+            }
+            return Invalid<Math::Mat4>(UiErrors::CapacityExceeded);
+        }
+
+        /** @brief Derives the same exact affine basis for rendered geometry and eventual interaction receipt. */
+        Result<UiWorldCanvasProjection> CanvasPlane(const Runtime::RuntimeSceneView &scene, const Runtime::RuntimeEntityView &owner) {
+            using Projection = Result<UiWorldCanvasProjection>;
+            const auto world = CanvasToScene(scene, owner);
+            if (world.HasError())
+                return Projection::Failure(world.ErrorValue());
+            const auto origin = Math::TryTransformPoint(world.Value(), {-0.5F, 0.5F, 0.0F});
+            if (origin.HasError())
+                return Projection::Failure(origin.ErrorValue());
+            const UiWorldCanvasProjection plane{origin.Value(), Math::TransformDirection(world.Value(), {1.0F, 0.0F, 0.0F}),
+                                                Math::TransformDirection(world.Value(), {0.0F, -1.0F, 0.0F})};
+            return plane.IsValid() ? Projection::Success(plane) : Invalid<UiWorldCanvasProjection>(UiErrors::CanvasSpaceInvalid);
+        }
+
+        /** @brief Copies the entity with its registered asset before leaving the private Scene candidate read. */
+        struct SceneCanvasSource final {
+            Runtime::EntityRef entity;
+            UiCanvasAssetReference reference;
+        };
+
         /** @brief Preserves actual authored child order under one selected canvas; no component pointer escapes preparation. */
         Result<std::vector<UiElementDescriptor>> TreeElements(const CookedUiDocument &document, const UiCanvasDescriptor &canvas,
                                                               const std::uint32_t capacity) {
@@ -201,6 +242,62 @@ namespace Horo::Application::Internal {
         }
     }  // namespace
 
+    /** @copydoc ResolveRuntimeUiPaintWorldCanvas */
+    Result<RuntimeUiPaintWorldCanvas> ResolveRuntimeUiPaintWorldCanvas(const Runtime::RuntimeSceneView scene,
+                                                                       const Runtime::EntityRef entity,
+                                                                       const UiRuntimeAssetLoadResult &loaded,
+                                                                       const std::uint32_t maximumRasterAxis) {
+        using Placement = Result<RuntimeUiPaintWorldCanvas>;
+        const auto owner = scene.Get(entity);
+        if (owner.HasError())
+            return Placement::Failure(owner.ErrorValue());
+        const auto *components = owner.Value().components;
+        if (!components || !components->uiCanvas)
+            return Invalid<RuntimeUiPaintWorldCanvas>(UiErrors::CanvasReferenceInvalid);
+        const auto &reference = components->uiCanvas->canvas;
+        const auto &document = loaded.document;
+        if (loaded.rootAsset != reference.asset || document.Id() != reference.document ||
+            document.SourceRevision() < reference.minimumRevision)
+            return Invalid<RuntimeUiPaintWorldCanvas>(UiErrors::CanvasReferenceInvalid);
+        if (loaded.registryRevision != scene.AssetRegistryRevision())
+            return Invalid<RuntimeUiPaintWorldCanvas>(UiErrors::RevisionStale);
+        const auto selected = std::ranges::find(document.Canvases(), reference.canvas, &UiCanvasDescriptor::id);
+        if (selected == document.Canvases().end())
+            return Invalid<RuntimeUiPaintWorldCanvas>(UiErrors::CanvasReferenceInvalid);
+        const auto &canvas = *selected;
+        const auto logical = ResolveUiWorldCanvas(canvas);
+        if (logical.HasError())
+            return Placement::Failure(logical.ErrorValue());
+        const auto [width, height] = canvas.referenceResolution;
+        if (width > maximumRasterAxis || height > maximumRasterAxis)
+            return Invalid<RuntimeUiPaintWorldCanvas>(UiErrors::CapacityExceeded);
+        const auto plane = CanvasPlane(scene, owner.Value());
+        if (plane.HasError())
+            return Placement::Failure(plane.ErrorValue());
+        return Placement::Success({entity,
+                                   reference,
+                                   document.SourceRevision(),
+                                   loaded.registryRevision,
+                                   plane.Value(),
+                                   logical.Value(),
+                                   {width, height},
+                                   canvas.presentation.fontScale});
+    }
+
+    /** @copydoc CaptureRuntimeUiPaintWorldCanvasPlane */
+    Result<UiWorldCanvasProjection> CaptureRuntimeUiPaintWorldCanvasPlane(const Runtime::RuntimeSceneView scene,
+                                                                          const RuntimeUiPaintWorldCanvas &canvas) {
+        const auto owner = scene.Get(canvas.entity);
+        if (owner.HasError())
+            return Result<UiWorldCanvasProjection>::Failure(owner.ErrorValue());
+        const auto *components = owner.Value().components;
+        if (!components || !components->uiCanvas || components->uiCanvas->canvas != canvas.reference)
+            return Invalid<UiWorldCanvasProjection>(UiErrors::CanvasReferenceInvalid);
+        if (scene.AssetRegistryRevision() != canvas.registryRevision)
+            return Invalid<UiWorldCanvasProjection>(UiErrors::RevisionStale);
+        return CanvasPlane(scene, owner.Value());
+    }
+
     /** @brief Application source factory state; only the sole allocator is retained by admitted source owners. */
     struct RuntimeUiPaintProjectSources::Storage final {
         RuntimeUiPaintPort port;
@@ -220,8 +317,8 @@ namespace Horo::Application::Internal {
         /** @brief Lazily prepares the explicitly selected real kernel policy; failures leave the cache unpublished. */
         Result<void> PrepareKernel();
 
-        Result<RuntimeUiPaintSceneSourcePreparation> Build(UiRuntimeAssetLoadResult loaded, const UiCanvasAssetReference &reference,
-                                                           const Runtime::SceneRuntimeId scene);
+        Result<RuntimeUiPaintSceneSourcePreparation> Build(UiRuntimeAssetLoadResult loaded, const SceneCanvasSource &source,
+                                                           const Runtime::RuntimeSceneView &scene);
         Result<std::unique_ptr<Runtime::SceneActivationCandidate>> Prepare(const Runtime::RuntimeSceneService &scenes,
                                                                            const Assets::AssetRegistry &registry,
                                                                            UiRuntimeAssetLoadService &loads,
@@ -231,9 +328,10 @@ namespace Horo::Application::Internal {
 
     /** @copydoc RuntimeUiPaintProjectSources::Storage::Build */
     Result<RuntimeUiPaintSceneSourcePreparation> RuntimeUiPaintProjectSources::Storage::Build(UiRuntimeAssetLoadResult loaded,
-                                                                                              const UiCanvasAssetReference &reference,
-                                                                                              const Runtime::SceneRuntimeId scene) {
+                                                                                              const SceneCanvasSource &source,
+                                                                                              const Runtime::RuntimeSceneView &scene) {
         using Built = Result<RuntimeUiPaintSceneSourcePreparation>;
+        const auto &reference = source.reference;
         if (!host->Available() || !host->output)
             return Invalid<RuntimeUiPaintSceneSourcePreparation>(UiErrors::CanvasSpaceInvalid);
         if (!policy.kernel)
@@ -245,6 +343,14 @@ namespace Horo::Application::Internal {
         const auto selected = std::ranges::find(loaded.document.Canvases(), reference.canvas, &UiCanvasDescriptor::id);
         if (selected == loaded.document.Canvases().end())
             return Invalid<RuntimeUiPaintSceneSourcePreparation>(UiErrors::AssetMissing);
+        if (selected->renderMode == UiRenderMode::WorldSpace) {
+            const auto limit = host->frontend->Capabilities().support.limits.maxTextureDimension2D;
+            const auto placement = ResolveRuntimeUiPaintWorldCanvas(scene, source.entity, loaded, limit);
+            if (placement.HasError())
+                return Built::Failure(placement.ErrorValue());
+            return Invalid<RuntimeUiPaintSceneSourcePreparation>(UiErrors::CapabilityUnsupported,
+                                                                 "The selected viewport has no World canvas consumer.");
+        }
         auto resolved = ResolveUiScreenCanvasWithEvidence(*selected, *host->output);
         if (resolved.HasError())
             return Built::Failure(resolved.ErrorValue());
@@ -254,8 +360,8 @@ namespace Horo::Application::Internal {
         auto canvases = BuildCanvases(loaded.document, instance);
         if (canvases.HasError())
             return Built::Failure(canvases.ErrorValue());
-        return FinishSource(std::move(loaded), reference, scene, instance, std::move(canvases).Value(), std::move(registry).Value(),
-                            resolved.Value());
+        return FinishSource(std::move(loaded), reference, scene.RuntimeId(), instance, std::move(canvases).Value(),
+                            std::move(registry).Value(), resolved.Value());
     }
 
     /** @copydoc RuntimeUiPaintProjectSources::Storage::BuildCanvases */
@@ -348,14 +454,14 @@ namespace Horo::Application::Internal {
         const Runtime::RuntimeSceneService &scenes, const Assets::AssetRegistry &registry, UiRuntimeAssetLoadService &loads,
         const std::optional<Assets::AssetCookTargetId> &target, const Runtime::RuntimeSceneView &scene) {
         using Prepared = Result<std::unique_ptr<Runtime::SceneActivationCandidate>>;
-        std::vector<UiCanvasAssetReference> references;
+        std::vector<SceneCanvasSource> references;
         for (std::size_t slot = 0; slot < scene.SlotCount(); ++slot) {
             const auto entity = scene.EntityAt(slot);
             if (!entity || !entity->components || !entity->components->uiCanvas)
                 continue;
             if (references.size() == Detail::MaximumSceneUiSources)
                 return Prepared::Failure(MakeError(UiErrors::CapacityExceeded));
-            references.push_back(entity->components->uiCanvas->canvas);
+            references.push_back({entity->entity, entity->components->uiCanvas->canvas});
         }
         const auto active = scenes.ActiveScene();
         const UiSceneTransitionRequest transition{active ? std::optional{active->RuntimeId()} : std::nullopt, scene.RuntimeId()};
@@ -370,8 +476,8 @@ namespace Horo::Application::Internal {
         const auto snapshot = registry.Snapshot();
         std::vector<RuntimeUiPaintSceneSourcePreparation> sources;
         sources.reserve(references.size());
-        for (const auto &reference : references) {
-            auto request = loads.LoadAsync(snapshot, {reference, {}, target}, host->cancellation.Token());
+        for (const auto &source : references) {
+            auto request = loads.LoadAsync(snapshot, {source.reference, {}, target}, host->cancellation.Token());
             if (request.HasError())
                 return Prepared::Failure(request.ErrorValue());
             auto handle = std::move(request).Value();
@@ -380,7 +486,7 @@ namespace Horo::Application::Internal {
             auto loaded = handle.TakeResult();
             if (loaded.HasError())
                 return Prepared::Failure(loaded.ErrorValue());
-            auto built = Build(std::move(loaded).Value(), reference, scene.RuntimeId());
+            auto built = Build(std::move(loaded).Value(), source, scene);
             if (built.HasError())
                 return Prepared::Failure(built.ErrorValue());
             sources.push_back(std::move(built).Value());

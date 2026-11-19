@@ -58,7 +58,9 @@ namespace {
         UiCanvasAssetReference reference{asset, Source::Stable<UiDocumentId>(1), Source::Stable<UiCanvasId>(2),
                                          Source::Revision<UiDocumentRevision>(1)};
 
-        explicit ProjectUi(const bool paint = true, const bool kernel = true, const std::filesystem::path &packagedRoot = {})
+        explicit ProjectUi(const bool paint = true, const bool kernel = true, const std::filesystem::path &packagedRoot = {},
+                           const UiRenderMode renderMode = UiRenderMode::ScreenSpaceOverlay,
+                           const UiCanvasReferenceResolution resolution = {}, const UiCanvasScaleFactor fontScale = {})
             : frontend(Frontend(paint)) {
             const auto type = Take(Assets::AssetTypeId::Parse("runtime.ui.document"));
             REQUIRE(registry
@@ -66,7 +68,13 @@ namespace {
                                    Take(ProjectPath::Parse("assets/project.ui.horo"))}})
                         .status == Assets::AssetRegistryBuildStatus::Complete);
             UiDocumentBuilder builder{reference.document, reference.minimumRevision};
-            REQUIRE(builder.AddCanvas({reference.canvas, Source::Stable<UiElementId>(3)}).HasValue());
+            REQUIRE(builder
+                        .AddCanvas({.id = reference.canvas,
+                                    .rootElement = Source::Stable<UiElementId>(3),
+                                    .renderMode = renderMode,
+                                    .referenceResolution = resolution,
+                                    .presentation = {.fontScale = fontScale}})
+                        .HasValue());
             auto root = Take(CreateUiElement(UiElementKind::Canvas, Source::Stable<UiElementId>(3), {}));
             root.presentation->layout.width = UiLength::Percent(64);
             root.presentation->layout.height = UiLength::Percent(64);
@@ -200,6 +208,102 @@ namespace {
         }
     };
 }  // namespace
+
+TEST_CASE("World canvas projection derives one centered plane from the exact current Scene entity",
+          "[application][runtime_ui][project][world-canvas]") {
+    ProjectUi fixture{true, true, {}, UiRenderMode::WorldSpace, {200, 80}, {3, 2}};
+    // Observe the same registered Canvas on a Scene owner that deliberately has no renderer activation participant.
+    Runtime::RuntimeSceneService placementScene{fixture.registry, fixture.assetLoads, {}, {100}};
+    REQUIRE(placementScene.Startup({}).HasValue());
+    const auto publish = [&](const std::uint64_t revision, const float x) {
+        Runtime::SceneDefinitionBuilder scene{{9}, {revision}};
+        scene.Add({.object = {1}, .localTransform = {.translation = {x, 20, -5}, .scale = {2, 3, 1}}});
+        Runtime::RuntimeEntityDefinition child{.object = {2},
+                                               .parent = Runtime::SceneObjectId{1},
+                                               .localTransform = {.translation = {1, 2, 0},
+                                                                  .rotation = Math::Quaternion::FromEulerRadians({0, 0, Math::Pi / 2}),
+                                                                  .scale = {2, 1, 1}}};
+        child.components.uiCanvas = Runtime::UiCanvasComponent{fixture.reference};
+        scene.Add(std::move(child));
+        REQUIRE(placementScene.QueuePreparation(Take(std::move(scene).Build())).HasValue());
+        REQUIRE_FALSE(FinishScenePublication(placementScene, {revision}, [&] {
+            return placementScene.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges,
+                                          {.frameNumber = revision, .cancellation = fixture.cancellation});
+        }));
+        return *placementScene.ActiveScene();
+    };
+    auto load = Take(fixture.uiLoads.LoadAsync(fixture.registry.Snapshot(), {fixture.reference, {}, fixture.target}));
+    REQUIRE(load.Wait().HasValue());
+    auto authored = Take(load.TakeResult());
+    const auto original = publish(1, 10);
+    REQUIRE(original.Find({2}));
+    const auto child = *original.Find({2});
+    const auto resolved = Take(ResolveRuntimeUiPaintWorldCanvas(original, child, authored, 512));
+    CHECK(resolved.entity == child);
+    CHECK(resolved.reference == fixture.reference);
+    CHECK(resolved.documentRevision == fixture.reference.minimumRevision);
+    CHECK(Math::NearlyEqual(resolved.plane.origin, {11, 23, -5}, 0.0001F));
+    CHECK(Math::NearlyEqual(resolved.plane.horizontalExtent, {0, 6, 0}, 0.0001F));
+    CHECK(Math::NearlyEqual(resolved.plane.verticalExtent, {2, 0, 0}, 0.0001F));
+    CHECK((resolved.logicalExtent == UiCanvasLogicalExtent{12'800, 5'120}));
+    CHECK((resolved.rasterExtent == UiCanvasPixelExtent{200, 80}));
+    CHECK((resolved.fontScale == UiCanvasScaleFactor{3, 2}));
+    const auto capacity = ResolveRuntimeUiPaintWorldCanvas(original, child, authored, 199);
+    REQUIRE(capacity.HasError());
+    CHECK(capacity.ErrorValue().code.Value() == UiErrors::CapacityExceeded.code.Value());
+    authored.rootAsset = {};
+    const auto wrongAsset = ResolveRuntimeUiPaintWorldCanvas(original, child, authored, 512);
+    REQUIRE(wrongAsset.HasError());
+    CHECK(wrongAsset.ErrorValue().code.Value() == UiErrors::CanvasReferenceInvalid.code.Value());
+    authored.rootAsset = fixture.asset;
+    const auto registryRevision = authored.registryRevision;
+    authored.registryRevision = {};
+    const auto staleAsset = ResolveRuntimeUiPaintWorldCanvas(original, child, authored, 512);
+    REQUIRE(staleAsset.HasError());
+    CHECK(staleAsset.ErrorValue().code.Value() == UiErrors::RevisionStale.code.Value());
+    authored.registryRevision = registryRevision;
+
+    Runtime::SceneCommandBuffer edits;
+    REQUIRE(original.Find({1}));
+    edits.SetLocalTransform(*original.Find({1}), {.translation = {20, 20, -5}, .scale = {2, 3, 1}});
+    REQUIRE(placementScene.QueueStructuralCommands(std::move(edits)).HasValue());
+    REQUIRE(placementScene
+                .OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, {.frameNumber = 2, .cancellation = fixture.cancellation})
+                .HasValue());
+    REQUIRE_FALSE(placementScene.TakeOperationError());
+    const auto changed = *placementScene.ActiveScene();
+    const auto updated = Take(CaptureRuntimeUiPaintWorldCanvasPlane(changed, resolved));
+    CHECK(Math::NearlyEqual(updated.origin, {21, 23, -5}, 0.0001F));
+    CHECK(Math::NearlyEqual(updated.horizontalExtent, resolved.plane.horizontalExtent));
+
+    const auto replacement = publish(2, 30);
+    REQUIRE(replacement.Find({2}));
+    CHECK(ResolveRuntimeUiPaintWorldCanvas(original, child, authored, 512).HasError());
+    CHECK(ResolveRuntimeUiPaintWorldCanvas(replacement, child, authored, 512).HasError());
+    CHECK(CaptureRuntimeUiPaintWorldCanvasPlane(replacement, resolved).HasError());
+    const auto moved = Take(ResolveRuntimeUiPaintWorldCanvas(replacement, *replacement.Find({2}), authored, 512));
+    CHECK(Math::NearlyEqual(moved.plane.origin, {31, 23, -5}, 0.0001F));
+    CHECK(moved.rasterExtent == resolved.rasterExtent);
+    placementScene.Shutdown();
+    CHECK(ResolveRuntimeUiPaintWorldCanvas(replacement, moved.entity, authored, 512).HasError());
+}
+
+TEST_CASE("Registered World canvas needs an actual selected Scene consumer before publication",
+          "[application][runtime_ui][project][world-canvas]") {
+    ProjectUi fixture{true, true, {}, UiRenderMode::WorldSpace};
+    REQUIRE_FALSE(fixture.Publish(1, 0));
+    const auto prior = *fixture.scenes.ActiveScene();
+    const auto failure = fixture.Publish(2, 1);
+    REQUIRE(failure);
+    CHECK(failure->domain.Value() == UiErrors::CapabilityUnsupported.domain.Value());
+    CHECK(failure->code.Value() == UiErrors::CapabilityUnsupported.code.Value());
+    CHECK(prior.IsCurrent());
+    CHECK(fixture.scenes.ActiveScene()->RuntimeId() == prior.RuntimeId());
+    CHECK_FALSE(fixture.port.InputEligible({Source::Owner(), 1, 1}));
+    fixture.Frame();
+    CHECK(Tests::RenderFrontendTesting::lifecycleState.uiPaint.graphCalls == 0);
+    CHECK(Tests::RenderFrontendTesting::lifecycleState.uiPaint.kernels == 0);
+}
 
 TEST_CASE("Project Scene canvas sources use canonical admission and the same application paint phase",
           "[application][runtime_ui][project]") {
