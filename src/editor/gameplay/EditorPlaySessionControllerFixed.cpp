@@ -41,6 +41,10 @@ namespace Horo::Editor {
             return Result<void>::Success();
         fixedAttempt_.emplace(sceneHost_.get(), context.dispatchEvidence, facts, state_ == EditorPlaySessionState::Paused);
         const Gameplay::FixedDeltaTime delta{static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0};
+        const auto evaluated = fixedAttempt_->scene->EvaluateDecisionBeforeGameplay(context);
+        if (evaluated.HasError())
+            return RejectFixedAttempt(context, evaluated.ErrorValue());
+        fixedAttempt_->decisionsAdvanced = evaluated.Value();
         if (auto gameplay = RunGameplayFixed(input, delta); gameplay.HasError())
             return RejectFixedAttempt(context, gameplay.ErrorValue());
         if (auto native = fixedAttempt_->scene->OnRuntimeFixedUpdate(context); native.HasError())
@@ -108,8 +112,11 @@ namespace Horo::Editor {
             return;
         if (!MatchesFixedAttempt(context))
             return;
+        const bool retire = fixedAttempt_->decisionsAdvanced;
         fixedAttempt_->scene->AbortRuntimeFixedUpdate(context);
         fixedAttempt_.reset();
+        if (retire)
+            Stop();
     }
 
     void EditorPlaySessionController::FlushPendingStop() noexcept {

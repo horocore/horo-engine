@@ -71,6 +71,7 @@ namespace Horo::Editor {
          * @param selectedXrHost Exact factory participant identity, mandatory for selected XR; outlives Play.
          * @param projectRelativeSource Current workspace-owned installed source route, required for authored children.
          * @param viewportPrimitives Existing workspace primitive cache, required for the mounted World viewport.
+         * @param decisionProviders Synchronous exact Project provider acquisition, called only by an explicitly configured Play host.
          * @return Accepted preparation or a typed Play-gate/conversion/runtime activation error.
          * @pre Registry/module ownership outlives pending preparation and Play; reload waits until readiness.
          * @details No normal-frame wait: presentation/fixed updates pump bounded Scene progress while Starting.
@@ -83,7 +84,8 @@ namespace Horo::Editor {
                                          EditorPlayViewSource viewSource = EditorPlayViewSource::AuthoredCamera,
                                          const IEditorPlayXrHost *selectedXrHost = nullptr,
                                          const std::filesystem::path &projectRelativeSource = {},
-                                         Runtime::PrimitiveMeshCache *viewportPrimitives = nullptr);
+                                         Runtime::PrimitiveMeshCache *viewportPrimitives = nullptr,
+                                         const EditorPlayDecisionProviderSource &decisionProviders = {});
         /** @brief Selects explicit application lifetime storage before activation. No queue is discovered implicitly.
          * @param owner Cold bounded queue outliving the controller and actual scheduler join. */
         void ConfigureSaveRetirement(std::shared_ptr<EditorPlaySaveRetirement> owner) noexcept;
@@ -157,6 +159,12 @@ namespace Horo::Editor {
 
         [[nodiscard]] EditorPlaySessionState State() const noexcept;
         [[nodiscard]] bool IsActive() const noexcept;
+
+        /** @brief Stops hot provider replacement while the exact cooked Play lease is owned. */
+        [[nodiscard]] bool UsesCookedDecisionExecution() const noexcept {
+            return sceneHost_ && sceneHost_->UsesCookedDecisionExecution();
+        }
+
         /** @brief Borrows only a ready isolated Play Scene; pending/closed sessions expose no Scene.
          * @return Read-only current view or absence. Never transfers mutable Scene ownership.
          */
@@ -183,6 +191,7 @@ namespace Horo::Editor {
             Runtime::RuntimeDispatchFacts facts;
             bool consumesStep{};
             bool prepared{};
+            bool decisionsAdvanced{};
         };
 
         Runtime::RuntimeDispatchSource dispatchSource_;
@@ -195,7 +204,8 @@ namespace Horo::Editor {
         /** @brief Acquires one configured owner and admits its asynchronous Scene preparation without waiting. */
         [[nodiscard]] Result<void> BeginPreparation(Runtime::RuntimeSceneDefinition definition, const Gameplay::BehaviorRegistry &registry,
                                                     const EditorPlaySceneFactory &factory, const EditorPlayChildSceneSource *childSource,
-                                                    Runtime::PrimitiveMeshCache *viewportPrimitives);
+                                                    Runtime::PrimitiveMeshCache *viewportPrimitives,
+                                                    const EditorPlayDecisionProviderSource &decisionProviders);
         /** @brief Starts the configured Scene and retains the actual pending registry through activation.
          * @param definition Validated owned Play definition. @param registry Live frozen registry retained by the Play unit.
          * @return Original Scene startup/preparation failure or genuine queue admission. */

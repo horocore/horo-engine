@@ -239,10 +239,11 @@ configure_file(HoroEditor/composition/scene/EditorMountedWorldViewport.h
     "${HORO_EDITOR_PROJECT_SCENE_HEADERS}/EditorMountedWorldViewport.h" COPYONLY)
 add_library(HoroEditorSceneProductHost STATIC
     HoroEditor/composition/scene/EditorMountedWorldViewport.cpp
+    HoroEditor/composition/scene/EditorPlayDecisionComposition.cpp
     HoroEditor/composition/scene/EditorPlayNavigationComposition.cpp
     HoroEditor/composition/scene/EditorProjectSceneHost.cpp
     HoroEditor/composition/scene/EditorProjectSceneHostResources.cpp)
-target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroEditorPlaySaveHostInternal)
+target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroEditorPlaySaveHostInternal HoroCookedDecisionSceneAdmissionInternal)
 target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroAnimationSceneHostInternal HoroMountedWorldHostInternal)
 target_link_libraries(HoroEditorSceneProductHost PRIVATE HoroEngine::EditorServices HoroEngine::PrefabProjectSettings
         HoroEngine::ProjectSurfaceSettings)

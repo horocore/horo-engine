@@ -803,6 +803,36 @@ that evidence with the save lease held.
 Successful save retires the coordinated history boundary. Independent Save,
 reload and close cannot split an applied group.
 
+### Decision diagnostics during Play
+
+The Editor admits cooked Decision execution for an explicitly selected project
+Scene. Start the Editor with the committed cook target and the registered asset
+identities for that Scene and its initial controllers:
+
+```text
+HoroEditor --project <root> --cooked-root <committed-target-root> --cook-target <target>
+           --play-ai-scene <scene-asset-id> --play-ai-decision <controller-id> <decision-asset-id>
+```
+
+Repeat `--play-ai-decision` for each controller used by that Scene. Play verifies
+the authored projection against the selected committed Scene and pins the current
+project's Decision provider generation. This path supports flat Behavior Trees
+in the initial Scene. Mounted Worlds, child Scenes, Prefab grants, and query tasks
+require additional owners. Preview keeps its own Scene and does not execute the
+selected Play plan.
+
+Decision evaluation and intent dispatch precede Gameplay in each verified fixed
+attempt. Paused frames do not advance the Play-local sequence. Stop retires the
+Scene and its provider pins. An aborted attempt that already advanced Decision
+execution also retires Play, since the provider callbacks cannot be replayed as
+the same tick.
+
+The Game panel shows the latest committed scheduler diagnostic for its current
+Play Scene. It uses the typed error code, phase, and tick. Selecting the original
+object requires the same Scene and entity generations and the unchanged authored
+document. If any of those identities is stale or unavailable, the diagnostic
+remains readable and explains why selection is unavailable.
+
 ## Cinematic Sequence Asset Documents
 
 [ADR-121](../../adr/121-cinematic-editor-document-and-authoring-context.md)

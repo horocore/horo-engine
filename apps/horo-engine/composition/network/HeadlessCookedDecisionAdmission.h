@@ -2,32 +2,11 @@
 /** @file HeadlessCookedDecisionAdmission.h
  * @brief Exact application-owned mapping between controller identities and committed decision assets.
  */
-#include "Horo/AI/AISceneActivation.h"
-#include "Horo/AI/DecisionPlanCodec.h"
-#include "Horo/Assets/AssetId.h"
-#include "Horo/Prefab/PrefabLimits.h"
-
-#include <map>
-
-namespace Horo::AI {
-    class QuerySchemaRegistry;
-    class EnvironmentQueryPlan;
-}  // namespace Horo::AI
-
-namespace Horo::Runtime {
-    class RuntimeSceneDefinition;
-}
+#include "CookedDecisionSceneAdmission.h"
 
 namespace Horo::Application::Internal {
-    class CommittedSceneAssets;
-    using HeadlessQueryPlanCatalog = std::map<AI::QueryId, std::shared_ptr<const AI::EnvironmentQueryPlan>>;
-
-    /** @brief Durable project asset selection for one existing AI controller descriptor. */
-    struct HeadlessCookedDecisionBinding final {
-        AI::ControllerTypeId controller;
-        Assets::AssetId artifact;
-        std::optional<Assets::AssetId> prefab; /**< Exact optional committed template that declares a spawn-only controller. */
-    };
+    using HeadlessQueryPlanCatalog = CookedSceneQueryPlanCatalog;
+    using HeadlessCookedDecisionBinding = CookedDecisionSceneBinding;
 
     /** @brief Provider ownership chosen by the composing host before opening any candidate. */
     enum class HeadlessDecisionProvider {
@@ -55,8 +34,12 @@ namespace Horo::Application::Internal {
      * @param queryPlans Optional output for the immutable plans from the exact same generation, assigned only on success.
      * @return Owned descriptors for both initial and structural owners, or original typed admission failure.
      */
-    [[nodiscard]] Result<std::vector<AI::AiControllerDescriptor>> AdmitHeadlessCookedControllers(
+    [[nodiscard]] inline Result<std::vector<AI::AiControllerDescriptor>> AdmitHeadlessCookedControllers(
         std::span<const AI::AiControllerDescriptor> catalog, const Runtime::RuntimeSceneDefinition &scene,
         const HeadlessCookedDecisionInput &input, const Prefab::PrefabLimitProfile &prefabLimits, const CancellationToken &cancellation,
-        HeadlessQueryPlanCatalog *queryPlans = nullptr);
+        HeadlessQueryPlanCatalog *queryPlans = nullptr) {
+        return AdmitCookedSceneControllers(catalog, scene,
+                                           {input.committed, input.environment, input.bindings, input.limits, input.querySchema},
+                                           prefabLimits, cancellation, queryPlans);
+    }
 }  // namespace Horo::Application::Internal

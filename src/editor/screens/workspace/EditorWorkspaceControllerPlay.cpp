@@ -183,7 +183,9 @@ namespace Horo::Editor {
                                 m_triggerBinding, m_selectedXrPlayHost ? m_selectedXrPlayHost->ViewSource() : desktopView,
                                 m_selectedXrPlayHost,
                                 m_defaultScenePath ? m_defaultScenePath->lexically_relative(ProjectRoot()) : std::filesystem::path{},
-                                &m_primitiveMeshCache);
+                                &m_primitiveMeshCache, [this] {
+            return m_gameplayRegistry->AcquireDecisionAuthoringGeneration();
+        });
         m_viewModel.activeDocumentPanelId = "horo.game";
         SyncPanelHost(WorkspaceDockArea::Document, "horo.game");
         if (started.HasError())
@@ -267,7 +269,10 @@ namespace Horo::Editor {
         if (entity.HasError() || !entity.Value().authoredObject || !entity.Value().components || !entity.Value().components->aiAgent ||
             entity.Value().components->aiAgent->agent != problem.agent)
             return std::nullopt;
-        return SceneObjectId{entity.Value().authoredObject->value};
+        const SceneObjectId object{entity.Value().authoredObject->value};
+        if (!m_document.Contains(object))
+            return std::nullopt;
+        return object;
     }
 
     /** @copydoc EditorWorkspaceController::RefreshPlayDecisionProblem */

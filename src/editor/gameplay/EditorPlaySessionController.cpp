@@ -187,7 +187,8 @@ namespace Horo::Editor {
                                                     const std::optional<SceneSource::TriggerVolumeConversionContext> &triggerBinding,
                                                     const EditorPlayViewSource viewSource, const IEditorPlayXrHost *selectedXrHost,
                                                     const std::filesystem::path &projectRelativeSource,
-                                                    Runtime::PrimitiveMeshCache *viewportPrimitives) {
+                                                    Runtime::PrimitiveMeshCache *viewportPrimitives,
+                                                    const EditorPlayDecisionProviderSource &decisionProviders) {
         if (state_ != EditorPlaySessionState::Idle && state_ != EditorPlaySessionState::Failed)
             return Result<void>::Failure(InvalidTransition("A play session is already active."));
         Stop();
@@ -250,7 +251,7 @@ namespace Horo::Editor {
             return Result<void>::Failure(converted.ErrorValue());
         }
         if (auto prepared = BeginPreparation(std::move(converted).Value(), registry, factory, childSource ? &*childSource : nullptr,
-                                             viewportPrimitives);
+                                             viewportPrimitives, decisionProviders);
             prepared.HasError()) {
             Fail(prepared.ErrorValue());
             return prepared;
@@ -280,7 +281,8 @@ namespace Horo::Editor {
                                                                const Gameplay::BehaviorRegistry &registry,
                                                                const EditorPlaySceneFactory &factory,
                                                                const EditorPlayChildSceneSource *childSource,
-                                                               Runtime::PrimitiveMeshCache *viewportPrimitives) {
+                                                               Runtime::PrimitiveMeshCache *viewportPrimitives,
+                                                               const EditorPlayDecisionProviderSource &decisionProviders) {
         if (const auto reserved = ReservePlayOwnership(); reserved.HasError())
             return reserved;
         const Runtime::SceneRuntimeId identity{nextRuntimeId_};
@@ -299,6 +301,11 @@ namespace Horo::Editor {
         ++nextRuntimeId_;
         preparationCancellation_ = CancellationSource{};
         preparationFrame_ = 1;
+        if (sceneHost_->RequiresDecisionProviders()) {
+            if (auto admitted = sceneHost_->ConfigureDecisionProviders(definition, decisionProviders, preparationCancellation_.Token());
+                admitted.HasError())
+                return admitted;
+        }
         if (const auto prepared = PrepareBehaviorOwner(registry); prepared.HasError())
             return prepared;
         if (const auto registered =
@@ -666,6 +673,9 @@ namespace Horo::Editor {
     /** @copydoc EditorPlaySessionController::QuiesceForReload */
     Result<EditorPlayReloadSnapshot> EditorPlaySessionController::QuiesceForReload() {
         using enum EditorPlaySessionState;
+        if (UsesCookedDecisionExecution())
+            return Result<EditorPlayReloadSnapshot>::Failure(
+                InvalidTransition("Stop Play before replacing its cooked Decision providers."));
         if (fixedAttempt_ || !sceneHost_ || !behaviors_ || (state_ != Playing && state_ != Paused))
             return Result<EditorPlayReloadSnapshot>::Failure(InvalidTransition("Native reload requires an active play session."));
         if (!PrepareSaveRetirement())

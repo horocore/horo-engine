@@ -4,6 +4,7 @@
  * @brief Explicit non-installed Editor Play application composition over the canonical Scene owner.
  */
 #include "CommittedSceneAssets.h"
+#include "CookedDecisionSceneAdmission.h"
 #include "EditorMountedWorldViewport.h"
 #include "EditorPlaySaveHost.h"
 #include "EditorPlaySceneHost.h"
@@ -26,6 +27,13 @@ namespace Horo::Application::Internal {
         std::optional<EditorMountedWorldViewportSelection> viewport;
     };
 
+    /** @brief Play-only exact project, committed Scene and initial controller artifact choices. */
+    struct EditorPlayDecisionSelection final {
+        std::filesystem::path projectRoot;
+        Assets::AssetId scene;
+        std::vector<CookedDecisionSceneBinding> controllers;
+    };
+
     /** @brief Application policy captured before workspace creation; no backend inference or fallback. */
     struct EditorProjectScenePolicy final {
         Physics::PhysicsRuntimeMode physicsMode{Physics::PhysicsRuntimeMode::Null};
@@ -43,6 +51,7 @@ namespace Horo::Application::Internal {
         std::optional<Physics::PhysicsWorldSettings> physicsSettings; /**< Captured host override, never inferred from current occupancy.
             Canonical Save setup installs its explicit bounded default only when this field is absent. */
         std::optional<EditorPlayWorldSelection> world;                /**< Play-only mount, scoped to its launch project. */
+        std::optional<EditorPlayDecisionSelection> decisions;
     };
 
     /** @brief Observes the exact committed World origin through a ready Editor Play Scene owner.

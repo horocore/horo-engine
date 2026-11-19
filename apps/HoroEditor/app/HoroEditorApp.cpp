@@ -352,6 +352,9 @@ namespace Horo::Editor {
             std::string cookTarget;
             bool cookOptionsValid{true};
             std::optional<Assets::AssetId> playNavigationScene;
+            std::optional<Assets::AssetId> playDecisionScene;
+            std::vector<Application::Internal::CookedDecisionSceneBinding> playDecisionBindings;
+            bool playDecisionSelectionValid{true};
             std::optional<Application::Internal::CommittedWorldSelection> playWorld;
             std::optional<Error> playWorldError;
             std::optional<Application::Internal::CommittedWorldInitialCell> playWorldCell;
@@ -691,6 +694,7 @@ namespace Horo::Editor {
         CookedRoot,
         CookTarget,
         PlayNavigationScene,
+        PlayDecisionScene,
         FrameRateLimit,
         ExitAfterFrames,
         XrTrackingRoot,
@@ -733,6 +737,14 @@ namespace Horo::Editor {
                     opts.playNavigationSceneValid && !opts.playNavigationScene && selected.HasValue() && selected.Value().IsValid();
                 if (opts.playNavigationSceneValid)
                     opts.playNavigationScene = selected.Value();
+                return true;
+            }
+            case PlayDecisionScene: {
+                const auto selected = Assets::AssetId::Parse(value);
+                opts.playDecisionSelectionValid =
+                    opts.playDecisionSelectionValid && !opts.playDecisionScene && selected.HasValue() && selected.Value().IsValid();
+                if (opts.playDecisionSelectionValid)
+                    opts.playDecisionScene = selected.Value();
                 return true;
             }
             case FrameRateLimit:
@@ -811,6 +823,8 @@ namespace Horo::Editor {
             pending = CookTarget;
         else if (argument == "--play-navigation-scene")
             pending = PlayNavigationScene;
+        else if (argument == "--play-ai-scene")
+            pending = PlayDecisionScene;
         else if (argument.starts_with("--play-navigation-scene=")) {
             pending = PlayNavigationScene;
             static_cast<void>(
@@ -877,6 +891,27 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @brief Parses one exact durable controller-to-Decision activation selection. */
+    [[nodiscard]] static bool ReadEditorPlayDecision(std::span<char *> args, std::size_t &index, EditorGuiOptions &options) {
+        if (args.size() - index <= 2 || options.playDecisionBindings.size() == AI::MaximumAiSceneAgents)
+            return false;
+        const std::string_view controller{args[index + 1]};
+        std::uint64_t id{};
+        const auto parsed = std::from_chars(controller.data(), controller.data() + controller.size(), id);
+        if (parsed.ec != std::errc{} || parsed.ptr != controller.data() + controller.size())
+            return false;
+        const auto type = AI::ControllerTypeId::Create(id);
+        const auto asset = Assets::AssetId::Parse(args[index + 2]);
+        if (type.HasError() || asset.HasError() || !asset.Value().IsValid() ||
+            std::ranges::any_of(options.playDecisionBindings, [&](const auto &binding) {
+            return binding.controller == type.Value();
+        }))
+            return false;
+        options.playDecisionBindings.push_back({type.Value(), asset.Value(), {}});
+        index += 2;
+        return true;
+    }
+
     [[nodiscard]] static EditorGuiOptions ParseOptions(const std::span<char *> args) noexcept {
         using enum PendingEditorOption;
         EditorGuiOptions opts;
@@ -892,6 +927,13 @@ namespace Horo::Editor {
             const std::string_view argument{args[index]};
             if (ConsumeEditorOptionValue(argument, pending, opts))
                 continue;
+            if (argument == "--play-ai-decision") {
+                if (!ReadEditorPlayDecision(args, index, opts)) {
+                    opts.playDecisionSelectionValid = false;
+                    break;
+                }
+                continue;
+            }
             if (argument == "--play-world-cell") {
                 if (auto cell = ReadEditorPlayWorldCell(args, index, opts); cell.HasError()) {
                     opts.playWorldError = cell.ErrorValue();
@@ -930,6 +972,8 @@ namespace Horo::Editor {
             opts.xrInputPlayerValid = false;
         if (pending == PlayNavigationScene)
             opts.playNavigationSceneValid = false;
+        if (pending == PlayDecisionScene)
+            opts.playDecisionSelectionValid = false;
         if (pending == CookedRoot || pending == CookTarget || opts.cookedRoot.empty() != opts.cookTarget.empty())
             opts.cookOptionsValid = false;
         return opts;
@@ -1015,6 +1059,14 @@ namespace Horo::Editor {
             }
             if (options.playNavigationScene)
                 arguments.insert(arguments.end(), {"--play-navigation-scene", options.playNavigationScene->ToString()});
+            std::error_code identityError;
+            if (options.playDecisionScene && std::filesystem::equivalent(options.projectRoot, request.projectRoot, identityError) &&
+                !identityError) {
+                arguments.insert(arguments.end(), {"--play-ai-scene", options.playDecisionScene->ToString()});
+                for (const auto &binding : options.playDecisionBindings)
+                    arguments.insert(arguments.end(),
+                                     {"--play-ai-decision", std::to_string(binding.controller.Value()), binding.artifact.ToString()});
+            }
             std::vector<char *> nativeArguments;
             nativeArguments.reserve(arguments.size() + 1);
             for (std::string &argument : arguments) {
@@ -3623,6 +3675,10 @@ namespace Horo::Editor {
                 }
             }
             playPolicy.aiSettings.missingController = AI::AiMissingControllerPolicy::Reject;
+            if (p.options.playDecisionScene)
+                playPolicy.decisions.emplace(Application::Internal::EditorPlayDecisionSelection{previewProjectRoot,
+                                                                                                *p.options.playDecisionScene,
+                                                                                                p.options.playDecisionBindings});
             Application::Internal::ConfigureEditorPlaySavePolicy(playPolicy, p.background.jobs, p.operationServices.operationStore, clock,
                                                                  wallClock);
             playPolicy.xrHost = SelectedEditorPlayHost(p.presentation.composition);
@@ -3875,6 +3931,14 @@ namespace Horo::Editor {
             (options.playNavigationScene && (options.projectRoot.empty() || options.cookedRoot.empty()))) {
             LOG_CRITICAL("editor.runtime",
                          "--play-navigation-scene requires an exact Scene AssetId, --project, --cooked-root and --cook-target.");
+            return false;
+        }
+        if (!options.playDecisionSelectionValid || options.playDecisionScene.has_value() != !options.playDecisionBindings.empty() ||
+            (options.playDecisionScene &&
+             (options.projectRoot.empty() || options.cookedRoot.empty() || options.playWorld || options.prefabGranted.value_or(false)))) {
+            LOG_CRITICAL("editor.runtime",
+                         "Use --play-ai-scene <Scene AssetId> and --play-ai-decision <controller id> <Decision AssetId> "
+                         "with --project, --cooked-root and --cook-target. This selection admits initial Scene controllers only.");
             return false;
         }
         if (!options.physicsMode || !options.prefabGranted.has_value() || !options.cookOptionsValid ||

@@ -20,6 +20,10 @@ namespace Horo::Gameplay {
     class ComponentRegistry;
 }
 
+namespace Horo::AI {
+    class DecisionNodeGeneration;
+}
+
 namespace Horo::Runtime {
     class SceneAnimationRuntime;
     class PrimitiveMeshCache;
@@ -84,6 +88,9 @@ namespace Horo::Editor {
         std::optional<Runtime::EntityRef> entity; /**< Available only when the runtime verified the original entity generation. */
     };
 
+    /** @brief Synchronous acquisition from the current Project's existing provider owner. */
+    using EditorPlayDecisionProviderSource = std::function<Result<std::shared_ptr<const AI::DecisionNodeGeneration>>()>;
+
     class EditorPlaySceneHost {
     public:
         /** @brief Identifies the actual selected XR participant in this factory composition.
@@ -116,6 +123,29 @@ namespace Horo::Editor {
          */
         [[nodiscard]] virtual std::optional<EditorPlayDecisionProblem> ReadDecisionProblem() const {
             return std::nullopt;
+        }
+
+        /** @brief Reports an explicit host-selected committed Decision configuration awaiting the project provider lease. */
+        [[nodiscard]] virtual bool RequiresDecisionProviders() const noexcept {
+            return false;
+        }
+
+        /** @brief Whether this host owns a cooked provider lease that cannot be replaced mid-Play. */
+        [[nodiscard]] virtual bool UsesCookedDecisionExecution() const noexcept {
+            return false;
+        }
+
+        /** @brief Admits exactly the selected cooked controllers before Scene startup, with the current provider lease. */
+        [[nodiscard]] virtual Result<void> ConfigureDecisionProviders(const Runtime::RuntimeSceneDefinition &,
+                                                                      const EditorPlayDecisionProviderSource &, const CancellationToken &) {
+            return Result<void>::Failure(MakeError(Runtime::SaveErrors::CompositionUnsupported));
+        }
+
+        /** @brief Executes bounded Decision phases before Gameplay on the authenticated fixed owner lane.
+         * @return True when Decision state advanced. Aborting this fixed attempt then retires the Play owner.
+         */
+        [[nodiscard]] virtual Result<bool> EvaluateDecisionBeforeGameplay(const Runtime::FixedStepContext &) {
+            return Result<bool>::Success(false);
         }
 
         /** @brief Queues the initial Scene using an explicitly selected installed child-aware host when required.

@@ -24,21 +24,21 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             return SceneCook::EncodeCookedSceneDefinition(normalized.Value());
         }
 
-        /** @brief Uses the same canonical compaction for current authoring values and committed asset bytes. */
-        [[nodiscard]] Result<void> MatchCommittedProjection(const Runtime::RuntimeSceneDefinition &live,
-                                                            const Runtime::RuntimeSceneDefinition &committed) {
-            const auto encoded = EncodePlayProjection(live, committed);
-            if (encoded.HasError())
-                return Result<void>::Failure(encoded.ErrorValue());
-            const auto expected = SceneCook::EncodeCookedSceneDefinition(committed);
-            if (expected.HasError())
-                return Result<void>::Failure(expected.ErrorValue());
-            if (encoded.Value() != expected.Value())
-                return Result<void>::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot,
-                                                       "The active Play Scene differs from the selected committed Scene."));
-            return Result<void>::Success();
-        }
     }  // namespace
+
+    /** @copydoc MatchCommittedPlayProjection */
+    Result<void> MatchCommittedPlayProjection(const Runtime::RuntimeSceneDefinition &live, const Runtime::RuntimeSceneDefinition &committed,
+                                              const ErrorCodeDescriptor &stale) {
+        const auto encoded = EncodePlayProjection(live, committed);
+        if (encoded.HasError())
+            return Result<void>::Failure(encoded.ErrorValue());
+        const auto expected = SceneCook::EncodeCookedSceneDefinition(committed);
+        if (expected.HasError())
+            return Result<void>::Failure(expected.ErrorValue());
+        if (encoded.Value() != expected.Value())
+            return Result<void>::Failure(MakeError(stale, "The active Play Scene differs from the selected committed Scene."));
+        return Result<void>::Success();
+    }
 
     /** @copydoc ProjectPlaySceneHost::PrepareNavigation */
     Result<void> ProjectPlaySceneHost::PrepareNavigation(const std::filesystem::path &root, JobSystem &jobs,
@@ -52,7 +52,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         const auto selected = resources_.assets_->DecodeScene(*policy.playNavigationScene);
         if (selected.HasError())
             return Result<void>::Failure(selected.ErrorValue());
-        if (const auto matched = MatchCommittedProjection(*definition, selected.Value()); matched.HasError())
+        if (const auto matched = MatchCommittedPlayProjection(*definition, selected.Value(), Navigation::NavigationErrors::StaleSnapshot);
+            matched.HasError())
             return matched;
 
         const auto metadata = LoadProjectMetadata(root);

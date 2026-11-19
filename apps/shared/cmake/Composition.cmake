@@ -81,6 +81,15 @@ target_include_directories(HoroScenePhysicsHost PUBLIC "${HORO_SCENE_PHYSICS_HOS
 target_link_libraries(HoroScenePhysicsHost PUBLIC HoroPhysicsSceneHostInternal HoroEngine::SceneCook HoroEngine::Assets
         HoroEngine::ProjectPhysicsCapture)
 
+set(HORO_SCENE_DECISION_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/scene_decision_headers")
+file(GENERATE OUTPUT "${HORO_SCENE_DECISION_HEADERS}/CookedDecisionSceneAdmission.h"
+    CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/shared/scene/CookedDecisionSceneAdmission.h\"\n")
+add_library(HoroCookedDecisionSceneAdmissionInternal STATIC shared/scene/CookedDecisionSceneAdmission.cpp)
+target_compile_features(HoroCookedDecisionSceneAdmissionInternal PUBLIC cxx_std_20)
+target_include_directories(HoroCookedDecisionSceneAdmissionInternal PUBLIC "${HORO_SCENE_DECISION_HEADERS}")
+target_link_libraries(HoroCookedDecisionSceneAdmissionInternal PUBLIC HoroEngine::AISceneIntegration HoroEngine::PrefabRuntime
+    PRIVATE HoroScenePhysicsHost HoroEngine::SceneRuntimeConversion)
+
 # The installed standalone and Editor Play hosts share a canonical mounted-World adapter.
 set(HORO_MOUNTED_WORLD_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/mounted_world_host_headers")
 file(MAKE_DIRECTORY "${HORO_MOUNTED_WORLD_HOST_HEADERS}")

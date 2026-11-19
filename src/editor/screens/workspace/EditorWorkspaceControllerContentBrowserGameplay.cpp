@@ -141,8 +141,8 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::ApplyPendingGameplayRegistry() {
-        if (!m_pendingGameplayRegistry || m_playSession.State() == EditorPlaySessionState::Starting ||
-            m_playSession.State() == EditorPlaySessionState::Stopping)
+        if (!m_pendingGameplayRegistry || m_playSession.UsesCookedDecisionExecution() ||
+            m_playSession.State() == EditorPlaySessionState::Starting || m_playSession.State() == EditorPlaySessionState::Stopping)
             return;
         if (m_playSession.IsActive() && !m_playSession.PrepareSaveRetirement())
             return;
@@ -169,7 +169,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::CanApplyNativeGameplayReload */
     bool EditorWorkspaceController::CanApplyNativeGameplayReload() {
-        if (m_nativeGameplayReloadQuarantined || !m_nativeGameplayReloadPending ||
+        if (m_nativeGameplayReloadQuarantined || !m_nativeGameplayReloadPending || m_playSession.UsesCookedDecisionExecution() ||
             m_playSession.State() == EditorPlaySessionState::Starting || m_playSession.State() == EditorPlaySessionState::Stopping)
             return false;
         return m_playSession.PrepareSaveRetirement();

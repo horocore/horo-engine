@@ -1,4 +1,4 @@
-#include "HeadlessCookedDecisionAdmission.h"
+#include "CookedDecisionSceneAdmission.h"
 
 #include "CommittedSceneAssets.h"
 #include "Horo/AI/AIErrors.h"
@@ -32,11 +32,12 @@ namespace Horo::Application::Internal {
         using Descriptors = std::map<AI::ControllerTypeId, AI::AiControllerDescriptor>;
 
         /** @brief Resolves query plans from the same verified generation as the selected Decision artifacts. */
-        Result<HeadlessQueryPlanCatalog> LoadQueryPlans(const HeadlessCookedDecisionInput &input, const CancellationToken &cancellation) {
-            using Loaded = Result<HeadlessQueryPlanCatalog>;
+        Result<CookedSceneQueryPlanCatalog> LoadQueryPlans(const CookedDecisionSceneAdmissionInput &input,
+                                                           const CancellationToken &cancellation) {
+            using Loaded = Result<CookedSceneQueryPlanCatalog>;
             if (!input.querySchema)
                 return Loaded::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
-            HeadlessQueryPlanCatalog queries;
+            CookedSceneQueryPlanCatalog queries;
             for (const auto &artifact : input.committed.Artifacts()) {
                 if (cancellation.IsCancellationRequested())
                     return Loaded::Failure(JobCancelled().ErrorValue());
@@ -53,8 +54,8 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Validates exact query output identity before publishing a controller, loading queries only when referenced. */
-        Result<void> ValidateQueryOutput(const AI::BehaviorTreeQueryOutput &output, const HeadlessCookedDecisionInput &input,
-                                         const CancellationToken &cancellation, std::optional<HeadlessQueryPlanCatalog> &queries,
+        Result<void> ValidateQueryOutput(const AI::BehaviorTreeQueryOutput &output, const CookedDecisionSceneAdmissionInput &input,
+                                         const CancellationToken &cancellation, std::optional<CookedSceneQueryPlanCatalog> &queries,
                                          std::span<const AI::DecisionPlanBlackboardBinding> bindings) {
             if (!queries) {
                 auto loaded = LoadQueryPlans(input, cancellation);
@@ -80,8 +81,8 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Checks query dependencies throughout the selected compiled graph closure. */
-        Result<void> ValidatePlanQueries(const AI::CookedDecisionPlan &plan, const HeadlessCookedDecisionInput &input,
-                                         const CancellationToken &cancellation, std::optional<HeadlessQueryPlanCatalog> &queries) {
+        Result<void> ValidatePlanQueries(const AI::CookedDecisionPlan &plan, const CookedDecisionSceneAdmissionInput &input,
+                                         const CancellationToken &cancellation, std::optional<CookedSceneQueryPlanCatalog> &queries) {
             for (const auto &graph : plan.Graphs()) {
                 for (const auto &node : graph.providerProperties) {
                     for (const auto &property : node.properties) {
@@ -165,7 +166,7 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Resolves explicit asset selections before decision decoding, once per selected template. */
-        Result<Selections> SelectControllers(const Runtime::RuntimeSceneDefinition &scene, const HeadlessCookedDecisionInput &input,
+        Result<Selections> SelectControllers(const Runtime::RuntimeSceneDefinition &scene, const CookedDecisionSceneAdmissionInput &input,
                                              const Prefab::PrefabLimitProfile &prefabLimits, const CancellationToken &cancellation) {
             Selections selections;
             std::set<Assets::AssetId> templates;
@@ -226,7 +227,7 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Materializes typed schema definitions from the exact committed generation when none were supplied explicitly. */
-        Result<AI::DecisionCompilationEnvironment> ResolveEnvironment(const HeadlessCookedDecisionInput &input,
+        Result<AI::DecisionCompilationEnvironment> ResolveEnvironment(const CookedDecisionSceneAdmissionInput &input,
                                                                       const CancellationToken &cancellation) {
             using Environment = Result<AI::DecisionCompilationEnvironment>;
             auto environment = input.environment;
@@ -311,9 +312,9 @@ namespace Horo::Application::Internal {
 
         /** @brief Captures independent public descriptors; all validation occurs before the app constructs its Scene participant. */
         [[nodiscard]] Result<Catalog> Admit(const std::span<const AI::AiControllerDescriptor> catalog,
-                                            const Runtime::RuntimeSceneDefinition &scene, const HeadlessCookedDecisionInput &input,
+                                            const Runtime::RuntimeSceneDefinition &scene, const CookedDecisionSceneAdmissionInput &input,
                                             const Prefab::PrefabLimitProfile &prefabLimits, const CancellationToken &cancellation,
-                                            HeadlessQueryPlanCatalog *queryPlans) {
+                                            CookedSceneQueryPlanCatalog *queryPlans) {
             Descriptors descriptors;
             for (const auto &descriptor : catalog)
                 if (!descriptors.emplace(descriptor.controller, descriptor).second)
@@ -326,7 +327,7 @@ namespace Horo::Application::Internal {
             if (environment.HasError())
                 return Result<Catalog>::Failure(environment.ErrorValue());
             std::map<Assets::AssetId, Plan> plans;
-            std::optional<HeadlessQueryPlanCatalog> queries;
+            std::optional<CookedSceneQueryPlanCatalog> queries;
             auto remaining = input.limits.compilation.maximumCoreBytes;
             for (const auto &[identity, binding] : selected.Value()) {
                 if (cancellation.IsCancellationRequested())
@@ -364,16 +365,17 @@ namespace Horo::Application::Internal {
             for (auto &[identity, descriptor] : descriptors)
                 admitted.push_back(std::move(descriptor));
             if (queryPlans)
-                *queryPlans = queries ? std::move(*queries) : HeadlessQueryPlanCatalog{};
+                *queryPlans = queries ? std::move(*queries) : CookedSceneQueryPlanCatalog{};
             return Result<Catalog>::Success(std::move(admitted));
         }
     }  // namespace
 
-    /** @copydoc AdmitHeadlessCookedControllers */
-    Result<Catalog> AdmitHeadlessCookedControllers(const std::span<const AI::AiControllerDescriptor> catalog,
-                                                   const Runtime::RuntimeSceneDefinition &scene, const HeadlessCookedDecisionInput &input,
-                                                   const Prefab::PrefabLimitProfile &prefabLimits, const CancellationToken &cancellation,
-                                                   HeadlessQueryPlanCatalog *queryPlans) {
+    /** @copydoc AdmitCookedSceneControllers */
+    Result<Catalog> AdmitCookedSceneControllers(const std::span<const AI::AiControllerDescriptor> catalog,
+                                                const Runtime::RuntimeSceneDefinition &scene,
+                                                const CookedDecisionSceneAdmissionInput &input,
+                                                const Prefab::PrefabLimitProfile &prefabLimits, const CancellationToken &cancellation,
+                                                CookedSceneQueryPlanCatalog *queryPlans) {
         if (catalog.size() > AI::MaximumAiSceneAgents || input.bindings.size() > AI::MaximumAiSceneAgents)
             return Result<Catalog>::Failure(MakeError(AI::AIErrors::AgentCapacityExceeded));
         try {

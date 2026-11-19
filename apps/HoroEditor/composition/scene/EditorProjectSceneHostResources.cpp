@@ -44,6 +44,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
     Result<void> ProjectPlaySceneHost::QueueInitialScene(const Runtime::RuntimeSceneDefinition &definition,
                                                          const Editor::EditorPlayChildSceneSource *source,
                                                          const CancellationToken &cancellation) {
+        if (pendingDecisionPolicy_ || (decisionJobs_ && source))
+            return Result<void>::Failure(
+                MakeError(InvalidProjectScene, "Selected Decision Play requires a qualified initial Scene without child Scenes."));
         if (worldSelection_ && source)
             return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Unsupported,
                                                    "Mounted World startup does not admit a separate activated child Scene batch."));

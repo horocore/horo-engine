@@ -25,6 +25,10 @@
 #include <utility>
 
 namespace Horo::Application::Internal::EditorProjectSceneDetail {
+    /** @brief Compares an authored Play projection to exact committed Scene bytes after canonical identity normalization. */
+    [[nodiscard]] Result<void> MatchCommittedPlayProjection(const Runtime::RuntimeSceneDefinition &live,
+                                                            const Runtime::RuntimeSceneDefinition &committed,
+                                                            const ErrorCodeDescriptor &stale);
     inline const ErrorCodeDescriptor InvalidProjectScene{ErrorDomainId{"application.scene"},
                                                          ErrorCode{"application.scene.project.invalid"},
                                                          ErrorSeverity::Error,
@@ -251,6 +255,13 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 if (auto prepared = PreparePrefabServices(std::move(*prefabLimits), policy); prepared.HasError())
                     return prepared;
             }
+            if (policy.decisions) {
+                if (!definition)
+                    return Result<void>::Failure(MakeError(InvalidProjectScene));
+                if (auto admitted = PrepareDecisionSelection(root, jobs, *definition, policy); admitted.HasError())
+                    return admitted;
+                return Result<void>::Success();
+            }
             return RegisterPresentationParticipants(policy);
         }
 
@@ -369,8 +380,10 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         }
 
         /** @brief Registers the same canonical AI, selected XR and final UI participants in publication order. */
-        Result<void> RegisterPresentationParticipants(const EditorProjectScenePolicy &policy) {
-            auto ai = AI::AiSceneRuntime::Create(policy.aiSettings);
+        Result<void> RegisterPresentationParticipants(const EditorProjectScenePolicy &policy,
+                                                      std::optional<AI::AiSceneCookedDecisionExecution> execution = {}) {
+            auto ai = execution ? AI::AiSceneRuntime::Create(policy.aiSettings, std::move(*execution))
+                                : AI::AiSceneRuntime::Create(policy.aiSettings);
             if (ai.HasError())
                 return Result<void>::Failure(ai.ErrorValue());
             ai_ = std::make_shared<AI::AiSceneRuntime>(std::move(ai).Value());
@@ -428,13 +441,31 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             return *scenes_;
         }
 
+        /** @copydoc Editor::EditorPlaySceneHost::RequiresDecisionProviders */
+        bool RequiresDecisionProviders() const noexcept override {
+            return pendingDecisionPolicy_.has_value();
+        }
+
+        /** @copydoc Editor::EditorPlaySceneHost::UsesCookedDecisionExecution */
+        bool UsesCookedDecisionExecution() const noexcept override {
+            return decisionJobs_ != nullptr;
+        }
+
+        /** @copydoc Editor::EditorPlaySceneHost::ConfigureDecisionProviders */
+        Result<void> ConfigureDecisionProviders(const Runtime::RuntimeSceneDefinition &definition,
+                                                const Editor::EditorPlayDecisionProviderSource &providerSource,
+                                                const CancellationToken &cancellation) override;
+
+        /** @copydoc Editor::EditorPlaySceneHost::EvaluateDecisionBeforeGameplay */
+        Result<bool> EvaluateDecisionBeforeGameplay(const Runtime::FixedStepContext &context) override;
+
         /** @copydoc Editor::EditorPlaySceneHost::ReadDecisionProblem */
         std::optional<Editor::EditorPlayDecisionProblem> ReadDecisionProblem() const override {
             const auto scene = scenes_ ? scenes_->ActiveScene() : std::nullopt;
             if (!scene || !ai_)
                 return std::nullopt;
             auto captured = ai_->ReadDecisionFailureAtSafePoint(*scene);
-            if (captured.HasError() || !captured.Value())
+            if (captured.HasError() || !captured.Value() || captured.Value()->tick > committedDecisionTick_)
                 return std::nullopt;
             auto report = std::move(captured).Value();
             const auto phase = report->origin.phase == AI::AiSchedulingFailurePhase::Evaluate ? Editor::EditorPlayDecisionPhase::Evaluate
@@ -519,8 +550,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         }
 
         Result<void> FixedUpdate(const Gameplay::FixedDeltaTime delta) override {
-            if (animation_)
-                return Result<void>::Failure(MakeError(InvalidProjectScene, "Animation requires the actual runtime fixed context."));
+            if (animation_ || decisionJobs_)
+                return Result<void>::Failure(
+                    MakeError(InvalidProjectScene, "The selected Play owner requires the actual runtime fixed context."));
             // The existing Editor screen contract supplies seconds. Convert that one
             // host quantum once to the nearest representable nanosecond, never from
             // frame time.
@@ -546,11 +578,16 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         void CommitRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
             if (animation_)
                 animation_->CommitFixedUpdate(context);
+            if (decisionTickPending_) {
+                ++committedDecisionTick_;
+                decisionTickPending_ = false;
+            }
         }
 
         void AbortRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
             if (animation_)
                 animation_->AbortFixedUpdate(context);
+            decisionTickPending_ = false;
         }
 
         void Shutdown() noexcept override {
@@ -623,6 +660,13 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         ScenePhysicsHost native_;
         std::vector<AI::AiControllerDescriptor> controllers_;
         std::shared_ptr<AI::AiSceneRuntime> ai_;
+        [[nodiscard]] Result<void> PrepareDecisionSelection(const std::filesystem::path &root, JobSystem &jobs,
+                                                            const Runtime::RuntimeSceneDefinition &definition,
+                                                            const EditorProjectScenePolicy &policy);
+        std::optional<EditorProjectScenePolicy> pendingDecisionPolicy_;
+        JobSystem *decisionJobs_{};
+        std::uint64_t committedDecisionTick_{};
+        bool decisionTickPending_{};
         std::shared_ptr<PlaySaveAiServices> aiSave_;
         CancellationSource animationLifetime_;
         std::unique_ptr<Runtime::SceneAnimationRuntime> animation_;

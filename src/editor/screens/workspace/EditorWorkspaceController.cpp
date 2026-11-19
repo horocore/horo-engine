@@ -327,7 +327,8 @@ namespace Horo::Editor {
         RefreshSourceDocumentProjection();
         (void)m_gameplayRetirements->Drain();
         UpdateGameplayBuild(elapsedSeconds);
-        if (m_nativeGameplayReloadQuarantined || m_gameplayRegistry == nullptr || !std::isfinite(elapsedSeconds) || elapsedSeconds <= 0.0F)
+        if (m_nativeGameplayReloadQuarantined || m_gameplayRegistry == nullptr || m_playSession.UsesCookedDecisionExecution() ||
+            !std::isfinite(elapsedSeconds) || elapsedSeconds <= 0.0F)
             return;
         m_gameplaySourceWatchElapsedSeconds += elapsedSeconds;
         if (m_gameplaySourceWatchElapsedSeconds < 0.5F)

@@ -75,6 +75,7 @@ namespace Horo::Application::Internal {
     /** @copydoc MakeEditorProjectPrefabStageFactory */
     Editor::EditorProjectPrefabStageFactory MakeEditorProjectPrefabStageFactory(JobSystem &jobs, EditorProjectScenePolicy policy) {
         policy.world.reset();
+        policy.decisions.reset();
         return {ProjectFactory(jobs, std::move(policy), {Editor::EditorFirstPrefabStage, Editor::EditorLastPrefabStage})};
     }
 
