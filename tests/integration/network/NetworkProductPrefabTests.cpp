@@ -395,7 +395,6 @@ namespace Horo::Network {
             TestSupport::RequireError(host->RunFrame(), Prefab::PrefabErrors::AssetNotFound);
             CHECK(empty.Mapping().Entries().empty());
             CHECK(empty.IsRevoked());
-            return;
         }
         SECTION("shutdown cancels accepted but unpublished reconstruction") {
             const auto empty = read();
@@ -403,7 +402,6 @@ namespace Horo::Network {
             host->Shutdown();
             CHECK(empty.Mapping().Entries().empty());
             CHECK(empty.IsRevoked());
-            return;
         }
         const auto awaitMapping = [&](std::size_t count, std::size_t previous) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
@@ -454,34 +452,35 @@ namespace Horo::Network {
                 CHECK(empty.Mapping().Entries().empty());
                 CHECK(empty.IsRevoked());
             }
-            return;
         }
-        DeliverReplicaRecord(*owners, spawn, 2);
-        awaitMapping(2, 0);
-        const auto published = read();
-        const auto entries = published.Mapping().Entries();
-        REQUIRE(entries.size() == 2);
-        CHECK(entries.front().object == anchor);
-        CHECK(entries.front().entity.runtime == scene);
-        CHECK(entries.back().object == child);
-        REQUIRE(entries.back().provenance.prefab);
-        CHECK(entries.back().provenance.prefab->source.entitySlot == 2);
-        SECTION("despawn retires the whole group") {
-            DeliverReplicaRecord(*owners, {session, anchor, std::nullopt}, 3);
-            awaitMapping(0, 2);
-            host->Shutdown();
+        SECTION("a complete replica is published before any later lifecycle change") {
+            DeliverReplicaRecord(*owners, spawn, 2);
+            awaitMapping(2, 0);
+            const auto published = read();
+            const auto entries = published.Mapping().Entries();
+            REQUIRE(entries.size() == 2);
+            CHECK(entries.front().object == anchor);
+            CHECK(entries.front().entity.runtime == scene);
+            CHECK(entries.back().object == child);
+            REQUIRE(entries.back().provenance.prefab);
+            CHECK(entries.back().provenance.prefab->source.entitySlot == 2);
+            SECTION("despawn retires the whole group") {
+                DeliverReplicaRecord(*owners, {session, anchor, std::nullopt}, 3);
+                awaitMapping(0, 2);
+                host->Shutdown();
+            }
+            SECTION("duplicate occurrence stops the client with the original mapping intact") {
+                DeliverReplicaRecord(*owners, spawn, 3);
+                TestSupport::RequireError(host->RunFrame(), NetworkErrors::NetworkObjectMappingConflict);
+            }
+            SECTION("stale despawn stops the client with the original mapping intact") {
+                const auto stale = NetworkObjectId::Create(epoch, anchor.Slot(), 1).Value();
+                DeliverReplicaRecord(*owners, {session, stale, std::nullopt}, 3);
+                TestSupport::RequireError(host->RunFrame(), NetworkErrors::ReplicationWorldStale);
+            }
+            CHECK(published.IsRevoked());
+            CHECK(published.Mapping().Entries().size() == 2);
         }
-        SECTION("duplicate occurrence stops the client with the original mapping intact") {
-            DeliverReplicaRecord(*owners, spawn, 3);
-            TestSupport::RequireError(host->RunFrame(), NetworkErrors::NetworkObjectMappingConflict);
-        }
-        SECTION("stale despawn stops the client with the original mapping intact") {
-            const auto stale = NetworkObjectId::Create(epoch, anchor.Slot(), 1).Value();
-            DeliverReplicaRecord(*owners, {session, stale, std::nullopt}, 3);
-            TestSupport::RequireError(host->RunFrame(), NetworkErrors::ReplicationWorldStale);
-        }
-        CHECK(published.IsRevoked());
-        CHECK(published.Mapping().Entries().size() == 2);
     }
 
 }  // namespace Horo::Network
