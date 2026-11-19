@@ -989,6 +989,7 @@
     "workspace.decision_graph.select_task": {"text": "Kurulu bir görev seçin"},
     "workspace.decision_graph.task_properties": {"text": "Sağlayıcı özellikleri"},
     "workspace.decision_graph.task_filter_all": {"text": "Tümü"},
+    "workspace.decision_graph.task_filter_verified_compatible": {"text": "Yalnızca uyumluluğu doğrulanmış düğümler"},
     "workspace.decision_graph.task_filter_capability": {"text": "Gerekli yetenek"},
     "workspace.decision_graph.task_filter_origin": {"text": "Sağlayıcı kaynağı"},
     "workspace.decision_graph.task_filter_behavior": {"text": "Davranış"},

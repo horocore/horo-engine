@@ -141,6 +141,10 @@ namespace Horo::Editor {
         struct TaskAvailability final {
             const char *diagnostic{};
             bool blocked{};
+
+            [[nodiscard]] bool IsVerifiedCompatible() const noexcept {
+                return !blocked && diagnostic == nullptr;
+            }
         };
 
         /** @brief Displays the first exact compiler incompatibility for a declared Blackboard requirement. */
@@ -893,16 +897,29 @@ namespace Horo::Editor {
                                                {.hint = text("workspace.source_edit.find").c_str()}));
         command.sourceTextInputOwned = command.sourceTextInputOwned || ImGui::IsItemActive();
         DrawTaskMetadataFilters(context, choices, draft);
+        static_cast<void>(Ui::CheckboxControl(text("workspace.decision_graph.task_filter_verified_compatible").c_str(),
+                                              &draft.verifiedCompatibleOnly, fonts));
+
+        struct PaletteRow final {
+            std::size_t choice{};
+            std::optional<TaskAvailability> evidence; /**< Reused by filtering, the selected row and shared combo callbacks. */
+        };
 
         constexpr auto Maximum = AI::DecisionNodeGeneration::MaximumNodes;
-        std::array<std::size_t, Maximum> visible;
+        std::array<PaletteRow, Maximum> visible;
         const std::string_view search(draft.search.begin(), std::ranges::find(draft.search, '\0'));
         int count = 0;
         int selection = 0;
         for (std::size_t index = 0; index < std::min(choices.size(), Maximum); ++index) {
             if (!MatchesTaskMetadata(choices[index], draft) || !MatchesTaskLabel(choices[index].label, search))
                 continue;
-            visible[static_cast<std::size_t>(count++)] = index;
+            PaletteRow row{.choice = index};
+            if (draft.verifiedCompatibleOnly) {
+                row.evidence = InspectPaletteTask(catalog, choices[index]);
+                if (!row.evidence->IsVerifiedCompatible())
+                    continue;
+            }
+            visible[static_cast<std::size_t>(count++)] = row;
             if (choices[index].type == draft.selected)
                 selection = count;
         }
@@ -912,10 +929,15 @@ namespace Horo::Editor {
         }
         const auto &placeholder = text("workspace.decision_graph.select_task");
         const auto choice = [&](int row) -> const DecisionTaskChoice & {
-            return choices[visible[static_cast<std::size_t>(row - 1)]];
+            return choices[visible[static_cast<std::size_t>(row - 1)].choice];
         };
         const auto availability = [&](int row) {
-            return row == 0 ? TaskAvailability{} : InspectPaletteTask(catalog, choice(row));
+            if (row == 0)
+                return TaskAvailability{};
+            auto &entry = visible[static_cast<std::size_t>(row - 1)];
+            if (!entry.evidence)
+                entry.evidence = InspectPaletteTask(catalog, choices[entry.choice]);
+            return *entry.evidence;
         };
         auto selectedAvailability = availability(selection);
         if (selectedAvailability.blocked)

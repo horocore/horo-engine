@@ -244,17 +244,24 @@ namespace Horo::Editor {
         const auto metadata = DecisionBlackboardProviderMetadata::Capture(*generation.Value());
         REQUIRE(metadata.HasValue());
         const auto &descriptor = registration.contract.descriptor;
-        const std::array choices{DecisionTaskChoice{descriptor.type, descriptor.origin.provider, descriptor.origin.version, "Task", false}};
+        const std::array choices{DecisionTaskChoice{descriptor.type, descriptor.origin.provider, descriptor.origin.version, "Task", true}};
         DecisionTaskPaletteDraft draft{.selected = descriptor.type, .catalogRevision = 1};
         DecisionTaskPaletteCatalog catalog{choices, 1, metadata.Value().get()};
         CHECK(fixture.DrawPalette(catalog, draft) == &choices[0]);
         CHECK(fixture.labels.Used("workspace.decision_graph.task_schema_unverified"));
+        draft.verifiedCompatibleOnly = true;
+        CHECK(fixture.DrawPalette(catalog, draft) == nullptr);
+        CHECK(fixture.labels.Used("workspace.decision_graph.task_filter_verified_compatible"));
+        CHECK(draft.selected == descriptor.type);
 
         const std::array readOnly{
             BlackboardKeyDescriptor{.key = key, .kind = BlackboardValueKind::Boolean, .access = BlackboardKeyAccess::ReadOnly}};
         const auto incompatible = BlackboardSchema::Capture({SchemaId(), 1, BlackboardUnknownValuePolicy::Reject, readOnly});
         REQUIRE(incompatible.HasValue());
         catalog.schema = &incompatible.Value();
+        CHECK(fixture.DrawPalette(catalog, draft) == nullptr);
+        CHECK(fixture.labels.Used("workspace.source_edit.no_match"));
+        draft.verifiedCompatibleOnly = false;
         CHECK(fixture.DrawPalette(catalog, draft) == nullptr);
         CHECK(fixture.labels.Used("workspace.decision_graph.task_key_access"));
 
@@ -264,10 +271,22 @@ namespace Horo::Editor {
         REQUIRE(compatible.HasValue());
         catalog.schema = &compatible.Value();
         CHECK(fixture.DrawPalette(catalog, draft) == &choices[0]);
+        draft.verifiedCompatibleOnly = true;
+        CHECK(fixture.DrawPalette(catalog, draft) == &choices[0]);
+        catalog.allowQueryOutput = false;
+        CHECK(fixture.DrawPalette(catalog, draft) == nullptr);
+        catalog.allowQueryOutput = true;
+        catalog.providers = nullptr;
+        CHECK(fixture.DrawPalette(catalog, draft) == nullptr);
+        CHECK(draft.selected == descriptor.type);
+        catalog.providers = metadata.Value().get();
+        CHECK(fixture.DrawPalette(catalog, draft) == &choices[0]);
 
         auto stale = choices;
         ++stale[0].version;
         catalog.choices = stale;
+        CHECK(fixture.DrawPalette(catalog, draft) == nullptr);
+        draft.verifiedCompatibleOnly = false;
         CHECK(fixture.DrawPalette(catalog, draft) == nullptr);
         CHECK(fixture.labels.Used("workspace.decision_canvas.provider_version_mismatch"));
         CHECK(provider.probe.factories == 0);

@@ -296,6 +296,7 @@ TEST_CASE("Decision graph workspace and initial state machine labels resolve in 
         CHECK_FALSE(service.Get("editor", "workspace.decision_graph.task_key_default").starts_with("[missing:"));
         CHECK_FALSE(service.Get("editor", "workspace.decision_graph.task_properties").starts_with("[missing:"));
         constexpr std::array PaletteLabels{"task_filter_all",
+                                           "task_filter_verified_compatible",
                                            "task_filter_capability",
                                            "task_filter_origin",
                                            "task_filter_behavior",

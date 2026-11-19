@@ -989,6 +989,7 @@
     "workspace.decision_graph.select_task": {"text": "Select an installed task"},
     "workspace.decision_graph.task_properties": {"text": "Provider properties"},
     "workspace.decision_graph.task_filter_all": {"text": "All"},
+    "workspace.decision_graph.task_filter_verified_compatible": {"text": "Only verified compatible nodes"},
     "workspace.decision_graph.task_filter_capability": {"text": "Required capability"},
     "workspace.decision_graph.task_filter_origin": {"text": "Provider source"},
     "workspace.decision_graph.task_filter_behavior": {"text": "Behavior"},

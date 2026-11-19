@@ -50,6 +50,7 @@ namespace Horo::Editor {
         std::optional<AI::AiCapability> capability;
         std::optional<AI::DecisionDescriptorSourceKind> origin;
         std::optional<AI::DecisionNodeRole> role;
+        bool verifiedCompatibleOnly{}; /**< Filters to choices verified for the exact family, provider and saved schema. */
     };
 
     /** @brief Draws the themed search and picker for the current model's registered task choices.
