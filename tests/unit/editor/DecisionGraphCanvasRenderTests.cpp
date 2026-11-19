@@ -107,6 +107,18 @@ namespace Horo::Editor {
                 REQUIRE(ImGui::GetDrawData()->TotalVtxCount > 0);
                 return choice;
             }
+
+            void DrawCreateDecisionModal(AssetBrowserInteractionState &state, const EditorWorkspaceViewModel &model,
+                                         const AI::DecisionNodeTypeId selected) {
+                state.initialTaskPalette.selected = selected;
+                EditorWorkspaceViewCommandData command;
+                ImGui::NewFrame();
+                ImGui::SetNextWindowSize({600, 650});
+                ImGui::Begin("Decision creation test", nullptr, ImGuiWindowFlags_NoSavedSettings);
+                DrawAssetBrowserDialogs(state, model, command, context);
+                ImGui::End();
+                ImGui::Render();
+            }
         };
 
         /** @brief Captures the native tree limits using one legal root and proportional Sequence fan-out. */
@@ -255,18 +267,8 @@ namespace Horo::Editor {
         state.createTaskDecision.name = "Guard";
         state.createTaskDecision.schema = schema;
         state.initialTaskPalette.catalogRevision = model.availableBehaviorsRevision;
-        const auto draw = [&](DecisionNodeTypeId node) {
-            state.initialTaskPalette.selected = node;
-            EditorWorkspaceViewCommandData command;
-            ImGui::NewFrame();
-            ImGui::SetNextWindowSize({600, 650});
-            ImGui::Begin("Decision creation test", nullptr, ImGuiWindowFlags_NoSavedSettings);
-            DrawAssetBrowserDialogs(state, model, command, fixture.context);
-            ImGui::End();
-            ImGui::Render();
-        };
 
-        draw(task);
+        fixture.DrawCreateDecisionModal(state, model, task);
         CHECK(state.createTaskDecision.task == task);
         CHECK(state.createTaskDecision.provider == provider);
         CHECK(state.createTaskDecision.version == 3);
@@ -274,23 +276,75 @@ namespace Horo::Editor {
         CHECK(fixture.labels.Used("workspace.decision_graph.task_filter_verified_compatible"));
         CHECK(fixture.labels.Used("workspace.packages.execution_trust_required"));
 
-        draw(query);
+        fixture.DrawCreateDecisionModal(state, model, query);
         CHECK_FALSE(AssetBrowserInteractionSession::CanConfirmTaskDecision(state.createTaskDecision));
         CHECK(fixture.labels.Used("workspace.decision_graph.palette_query_requires_wiring"));
         state.createTaskDecision.family = DecisionPlanKind::Utility;
-        draw(query);
+        fixture.DrawCreateDecisionModal(state, model, query);
         CHECK_FALSE(state.createTaskDecision.task.IsValid());
         CHECK(fixture.labels.Used("workspace.decision_graph.palette_query_requires_tree"));
         state.createTaskDecision.family = DecisionPlanKind::BehaviorTree;
-        draw(largeVersion);
+        fixture.DrawCreateDecisionModal(state, model, largeVersion);
         CHECK_FALSE(AssetBrowserInteractionSession::CanConfirmTaskDecision(state.createTaskDecision));
         CHECK(fixture.labels.Used("workspace.decision_canvas.provider_version_mismatch"));
 
         ++model.availableBehaviorsRevision;
-        draw(task);
+        fixture.DrawCreateDecisionModal(state, model, task);
         CHECK_FALSE(state.initialTaskPalette.selected.IsValid());
         CHECK_FALSE(AssetBrowserInteractionSession::CanConfirmTaskDecision(state.createTaskDecision));
         CHECK(fixture.labels.Used("workspace.decision_graph.catalog_changed"));
+    }
+
+    TEST_CASE("New Utility modal binds only saved single scalar score keys", "[unit][editor][decision][palette]") {
+        using namespace AI;
+        CanvasFixture fixture;
+        EditorWorkspaceViewModel model;
+        model.availableBehaviorsRevision = 1;
+        const auto asset = Assets::AssetId::FromBytes({7});
+        const auto task = DecisionNodeTypeId::Create(101).Value();
+        const auto provider = DecisionProviderId::Create(202).Value();
+        const auto schemaId = BlackboardSchemaId::Create(21).Value();
+        const auto boolean = BlackboardKeyId::Create(1).Value();
+        const auto scalar = BlackboardKeyId::Create(2).Value();
+        const std::array keys{BlackboardKeyDescriptor{.key = boolean},
+                              BlackboardKeyDescriptor{.key = scalar, .kind = BlackboardValueKind::Scalar}};
+        auto schema = BlackboardSchema::Capture({.identity = schemaId, .keys = keys});
+        REQUIRE(schema.HasValue());
+        const Sha256Digest savedDigest{{3}};
+        model.decisionSchemaChoices.push_back({asset, "assets/utility.horo_bb"});
+        model.decisionTaskPaletteChoices.push_back({task, provider, 1, "Starter"});
+        model.blackboardDocuments.push_back(
+            {.snapshot = {
+                 .source = std::make_shared<BlackboardSchemaSource>(
+                     BlackboardSchemaSource{.asset = asset, .schema = schemaId, .rows = {{keys[0], "Condition"}, {keys[1], "Score"}}}),
+                 .schema = std::make_shared<const BlackboardSchema>(std::move(schema).Value()),
+                 .sourceDigest = savedDigest,
+             }});
+
+        AssetBrowserInteractionSession browser;
+        browser.OpenCreateTaskDecision("assets", DecisionPlanKind::Utility, model.availableBehaviorsRevision);
+        auto &state = browser.State();
+        auto &draft = state.createTaskDecision;
+        draft.name = "Utility";
+        draft.schema = asset;
+        state.initialTaskPalette.catalogRevision = model.availableBehaviorsRevision;
+        REQUIRE(draft.score);
+        draft.score->key = scalar;
+        fixture.DrawCreateDecisionModal(state, model, task);
+        CHECK(draft.score->key == scalar);
+        CHECK(draft.score->schemaSource == savedDigest);
+        CHECK(AssetBrowserInteractionSession::CanConfirmTaskDecision(draft));
+
+        draft.score->key = boolean;
+        fixture.DrawCreateDecisionModal(state, model, task);
+        CHECK_FALSE(draft.score->key.IsValid());
+        CHECK_FALSE(AssetBrowserInteractionSession::CanConfirmTaskDecision(draft));
+
+        model.blackboardDocuments.front().snapshot.dirty = true;
+        draft.score->key = scalar;
+        fixture.DrawCreateDecisionModal(state, model, task);
+        CHECK_FALSE(draft.score->key.IsValid());
+        CHECK(draft.score->schemaSource == Sha256Digest{});
     }
 
     TEST_CASE("Decision task palette explains exact saved schema incompatibilities without creating a provider",

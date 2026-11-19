@@ -441,6 +441,41 @@ namespace Horo::Editor {
             draft.version = selected ? selected->version : 0;
         }
 
+        /** @brief Offers only single scalar keys and resets a selection that is absent from the current schema. */
+        AI::BlackboardKeyId PickUtilityScoreKey(const std::span<const BlackboardSchemaRow> rows, const AI::BlackboardKeyId current,
+                                                const EditorGuiContext &context) {
+            const auto &fonts = context.theme.fonts;
+            std::array<const BlackboardSchemaRow *, AI::MaximumBlackboardKeys + 1> options{};
+            int count{1};
+            int index{};
+            for (const auto &row : rows) {
+                if (row.descriptor.kind != AI::BlackboardValueKind::Scalar ||
+                    row.descriptor.cardinality != AI::BlackboardValueCardinality::Scalar)
+                    continue;
+                if (static_cast<std::size_t>(count) == options.size())
+                    break;
+                if (row.descriptor.key == current)
+                    index = count;
+                options[static_cast<std::size_t>(count++)] = &row;
+            }
+            Ui::FieldLabel(context.localization.Get("editor", "workspace.decision_graph.scoring_key").c_str(), fonts);
+            const auto &empty = context.localization.Get("editor", "workspace.decision_graph.select_scoring_key");
+            std::array<char, 32> idBuffer{};
+            const Ui::ComboItemSource choices{.label = [&](int item) -> const char * {
+                const auto *row = options[static_cast<std::size_t>(item)];
+                if (!row)
+                    return empty.c_str();
+                if (row->displayName)
+                    return row->displayName->c_str();
+                const auto converted = std::to_chars(idBuffer.data(), idBuffer.data() + idBuffer.size() - 1, row->descriptor.key.Value());
+                *converted.ptr = char{};
+                return idBuffer.data();
+            }};
+            (void)Ui::ComboControl("##NewUtilityScoreKey", &index, count, choices, fonts);
+            const auto *selected = options[static_cast<std::size_t>(index)];
+            return selected ? selected->descriptor.key : AI::BlackboardKeyId{};
+        }
+
         /** @brief Draws Utility scoring keys from a clean opened Blackboard, whose durable version is rechecked on commit. */
         void ChooseUtilityScore(AssetBrowserInteractionState &state, const BlackboardSchemaDocumentSnapshot *source,
                                 const EditorGuiContext &context) {
@@ -460,33 +495,7 @@ namespace Horo::Editor {
                 return;
             }
             score.schemaSource = *source->sourceDigest;
-            std::array<const BlackboardSchemaRow *, AI::MaximumBlackboardKeys> scalar{};
-            std::size_t count{};
-            int index{};
-            for (const auto &row : source->source->rows) {
-                if (row.descriptor.kind != AI::BlackboardValueKind::Scalar ||
-                    row.descriptor.cardinality != AI::BlackboardValueCardinality::Scalar)
-                    continue;
-                scalar[count++] = &row;
-                if (row.descriptor.key == score.key)
-                    index = static_cast<int>(count);
-            }
-            score.key = index == 0 ? AI::BlackboardKeyId{} : scalar[static_cast<std::size_t>(index - 1)]->descriptor.key;
-            Ui::FieldLabel(text("workspace.decision_graph.scoring_key").c_str(), fonts);
-            const auto &empty = text("workspace.decision_graph.select_scoring_key");
-            std::array<char, 32> idBuffer{};
-            const Ui::ComboItemSource choices{.label = [&](int item) -> const char * {
-                if (item == 0)
-                    return empty.c_str();
-                const auto &row = *scalar[static_cast<std::size_t>(item - 1)];
-                if (row.displayName)
-                    return row.displayName->c_str();
-                const auto converted = std::to_chars(idBuffer.data(), idBuffer.data() + idBuffer.size() - 1, row.descriptor.key.Value());
-                *converted.ptr = char{};
-                return idBuffer.data();
-            }};
-            if (Ui::ComboControl("##NewUtilityScoreKey", &index, static_cast<int>(count) + 1, choices, fonts))
-                score.key = index == 0 ? AI::BlackboardKeyId{} : scalar[static_cast<std::size_t>(index - 1)]->descriptor.key;
+            score.key = PickUtilityScoreKey(source->source->rows, score.key, context);
             Ui::FieldLabel(text("workspace.decision_graph.score_minimum").c_str(), fonts);
             Ui::InputFloatControl("##UtilityScoreMinimum", &state.utilityMinimum, fonts);
             Ui::FieldLabel(text("workspace.decision_graph.score_maximum").c_str(), fonts);
