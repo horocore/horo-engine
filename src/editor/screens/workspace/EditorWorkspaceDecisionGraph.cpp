@@ -26,6 +26,14 @@
 #include <type_traits>
 
 namespace Horo::Editor {
+    /** @copydoc CanEditStateMachineTopology */
+    bool CanEditStateMachineTopology(const AI::StateMachineAssetDescriptor &machine) {
+        return std::ranges::none_of(machine.states, [](const auto &state) {
+            return state.call || state.entry || state.update || state.exit || state.entryProvider || state.updateProvider ||
+                   state.exitProvider;
+        });
+    }
+
     namespace {
         constexpr std::array DecisionTypes{Application::DecisionBehaviorTreeSourceType, Application::DecisionStateMachineSourceType,
                                            Application::DecisionUtilitySourceType};
@@ -160,12 +168,17 @@ namespace Horo::Editor {
         /** @brief Identifies the intrinsic subset that needs no provider generation or Subplan grants. */
         const AI::StateMachineAssetDescriptor *EditableMachine(const AI::DecisionGraphSource &source) {
             const auto *machine = std::get_if<AI::StateMachineAssetDescriptor>(&source.body);
-            if (!machine || std::ranges::any_of(machine->states, [](const auto &state) {
-                return state.call || state.entry || state.update || state.exit || state.entryProvider || state.updateProvider ||
-                       state.exitProvider;
-            }))
-                return nullptr;
-            return machine;
+            return machine && CanEditStateMachineTopology(*machine) ? machine : nullptr;
+        }
+
+        /** @brief Admits existing provider actions for scalar edits while leaving subplan topology read-only. */
+        bool IsProviderPropertyMachine(const AI::DecisionGraphSource &source) {
+            const auto *machine = std::get_if<AI::StateMachineAssetDescriptor>(&source.body);
+            return machine && std::ranges::none_of(machine->states, [](const auto &state) {
+                return state.call.has_value();
+            }) && std::ranges::any_of(machine->states, [](const auto &state) {
+                return state.entryProvider || state.updateProvider || state.exitProvider;
+            });
         }
 
         /** @brief Restricts structural surgery to the supported flat intrinsic controls and typed Task leaves. */
@@ -209,7 +222,7 @@ namespace Horo::Editor {
         /** @brief Whether this draft needs the actual Project-owned task metadata generation. */
         bool NeedsDecisionTaskProviders(const AI::DecisionGraphSource &source) {
             const auto *utility = std::get_if<AI::UtilityDecisionSource>(&source.body);
-            return EditableTree(source) || (utility && CanAuthorUtilityGraph(*utility));
+            return EditableTree(source) || (utility && CanAuthorUtilityGraph(*utility)) || IsProviderPropertyMachine(source);
         }
 
         /** @brief Pins the unique compatible registered Blackboard source before any semantic candidate is admitted. */
@@ -492,10 +505,12 @@ namespace Horo::Editor {
         /** @brief Applies one typed topology command to a detached graph, deferring admission to the compiler. */
         Result<bool> EditStateMachineCandidate(AI::DecisionGraphSource &candidate, const StateMachineEditRequest &request) {
             using Edit = Result<bool>;
-            auto &machine = std::get<AI::StateMachineAssetDescriptor>(candidate.body);
             const auto fail = [] {
                 return Edit::Failure(MakeError(Application::DecisionCookErrors::Invalid));
             };
+            if (!EditableMachine(candidate))
+                return fail();
+            auto &machine = std::get<AI::StateMachineAssetDescriptor>(candidate.body);
             const auto state = std::ranges::find(machine.states, request.node, &AI::StateMachineState::id);
             const bool canConnect = state != machine.states.end() && state->terminal == AI::DecisionStateTerminal::None &&
                                     machine.transitions.size() < AI::StateMachineLimits::Transitions;
@@ -591,32 +606,64 @@ namespace Horo::Editor {
         }
 
         /** @brief Writes one explicit scalar override under the exact installed and previously offered contract. */
-        Result<bool> SetAuthoredTreeTaskProperty(AI::BehaviorTreeNode &node, const BehaviorTreeEditRequest &request,
-                                                 const AI::DecisionNodeGeneration &providers, std::uint64_t catalogRevision) {
+        Result<bool> SetAuthoredDecisionTaskProperty(std::vector<AI::BehaviorTreeProperty> &properties, AI::DecisionNodeTypeId type,
+                                                     AI::DecisionVersionRange versions,
+                                                     const std::optional<DecisionTaskSelection> &selected,
+                                                     const std::optional<DecisionTaskPropertyEdit> &edit,
+                                                     const AI::DecisionNodeGeneration &providers, std::uint64_t catalogRevision) {
             using Edit = Result<bool>;
-            if (!request.task || !request.property)
+            if (!selected || !edit)
                 return Edit::Failure(MakeError(Application::DecisionCookErrors::Invalid));
-            if (request.task->catalogRevision != catalogRevision)
+            if (selected->catalogRevision != catalogRevision)
                 return Edit::Failure(MakeError(Application::DecisionCookErrors::Stale));
-            const auto *contract = FindStarterTask(providers, *request.task);
-            if (!contract || node.control.kind != AI::DecisionControlKind::Task || node.type.Value() != contract->descriptor.type.Value() ||
-                node.typeVersion.major != contract->descriptor.origin.version)
+            const auto *contract = FindStarterTask(providers, *selected);
+            if (!contract || type != contract->descriptor.type || !versions.Contains(contract->descriptor.origin.version))
                 return Edit::Failure(MakeError(AI::AIErrors::DecisionAssetDescriptorIncompatible));
 
-            const auto id = request.property->property;
+            const auto id = edit->property;
             const auto declared = std::ranges::find(contract->properties, id, &AI::BehaviorTreeProperty::id);
-            const auto authored = std::ranges::find(node.properties, id, &AI::BehaviorTreeProperty::id);
+            const auto authored = std::ranges::find(properties, id, &AI::BehaviorTreeProperty::id);
             if (declared == contract->properties.end() || !CanEditDecisionTaskProperty(declared->kind) ||
-                (authored != node.properties.end() && authored->kind != declared->kind))
+                (authored != properties.end() && authored->kind != declared->kind))
                 return Edit::Failure(MakeError(AI::AIErrors::DecisionAssetDescriptorIncompatible));
-            const auto &current = authored != node.properties.end() ? *authored : *declared;
-            if (current.value == request.property->value)
+            const auto &current = authored != properties.end() ? *authored : *declared;
+            if (current.value == edit->value)
                 return Edit::Success(false);
-            if (authored == node.properties.end())
-                node.properties.emplace_back(current.id, current.displayName, current.kind, request.property->value);
+            if (authored == properties.end())
+                properties.emplace_back(current.id, current.displayName, current.kind, edit->value);
             else
-                authored->value = request.property->value;
+                authored->value = edit->value;
             return Edit::Success(true);
+        }
+
+        /** @brief Resolves one existing state action phase before any scalar is offered to the compiler. */
+        Result<bool> EditStateMachineTaskProperty(AI::DecisionGraphSource &graph, const StateMachineEditRequest &request,
+                                                  const AI::DecisionNodeGeneration &providers, std::uint64_t catalogRevision) {
+            const auto slot = StateMachineTaskSlot(request.taskPhase);
+            if (!slot || !IsProviderPropertyMachine(graph))
+                return Result<bool>::Failure(MakeError(Application::DecisionCookErrors::Invalid));
+            auto &machine = std::get<AI::StateMachineAssetDescriptor>(graph.body);
+            const auto state = std::ranges::find(machine.states, request.node, &AI::StateMachineState::id);
+            if (state == machine.states.end() || !((*state).*slot))
+                return Result<bool>::Failure(MakeError(Application::DecisionCookErrors::Invalid));
+            auto &action = *((*state).*slot);
+            return SetAuthoredDecisionTaskProperty(action.properties, action.binding.type, action.binding.descriptorVersion, request.task,
+                                                   request.property, providers, catalogRevision);
+        }
+
+        /** @brief Resolves one existing Utility option and its actual provider binding. */
+        Result<bool> EditUtilityTaskProperty(AI::DecisionGraphSource &graph, const UtilityGraphEditRequest &request,
+                                             const AI::DecisionNodeGeneration &providers, std::uint64_t catalogRevision) {
+            auto *utility = std::get_if<AI::UtilityDecisionSource>(&graph.body);
+            if (!utility || !CanAuthorUtilityGraph(*utility))
+                return Result<bool>::Failure(MakeError(Application::DecisionCookErrors::Invalid));
+            const auto option = std::ranges::find(utility->options, request.option, [](const auto &entry) {
+                return entry.option.id;
+            });
+            if (option == utility->options.end())
+                return Result<bool>::Failure(MakeError(Application::DecisionCookErrors::Invalid));
+            return SetAuthoredDecisionTaskProperty(option->properties, option->provider.type, option->provider.descriptorVersion,
+                                                   request.task, request.property, providers, catalogRevision);
         }
 
         /** @brief Issues a stable identity from the canonical node, edge or pin namespace. */
@@ -787,7 +834,12 @@ namespace Horo::Editor {
             using enum BehaviorTreeEditOperation;
             switch (request.operation) {
                 case SetTaskProperty: {
-                    const auto updated = SetAuthoredTreeTaskProperty(*node, request, providers, catalogRevision);
+                    const auto type = AI::DecisionNodeTypeId::Create(node->type.Value());
+                    if (node->control.kind != AI::DecisionControlKind::Task || type.HasError())
+                        return invalid();
+                    const AI::DecisionVersionRange version{node->typeVersion.major, node->typeVersion.major};
+                    const auto updated = SetAuthoredDecisionTaskProperty(node->properties, type.Value(), version, request.task,
+                                                                         request.property, providers, catalogRevision);
                     if (updated.HasError() || !updated.Value())
                         return updated;
                     break;
@@ -1253,7 +1305,7 @@ namespace Horo::Editor {
             }
         }
         candidate.editable = !prepared.empty();
-        candidate.layoutWritable = candidate.editable && candidate.layoutWritable;
+        candidate.layoutWritable = candidate.editable && candidate.layoutWritable && !IsProviderPropertyMachine(*candidate.graph);
         candidate.revision = existing == documents.end() ? 1 : existing->revision + 1;
         if (host.OpenDocument(opened.identity.key).HasError()) {
             fail("workspace.source_open.unavailable");
@@ -1585,12 +1637,16 @@ namespace Horo::Editor {
         };
         auto candidate = std::make_shared<AI::DecisionGraphSource>(*document.graph);
         const auto edited = [&]() {
-            if constexpr (std::is_same_v<Request, StateMachineEditRequest>)
+            if constexpr (std::is_same_v<Request, StateMachineEditRequest>) {
+                if (request.operation == StateMachineEditOperation::SetTaskProperty)
+                    return EditStateMachineTaskProperty(*candidate, request, *providers.Value(), m_viewModel.availableBehaviorsRevision);
                 return EditStateMachineCandidate(*candidate, request);
-            else if constexpr (std::is_same_v<Request, BehaviorTreeEditRequest>)
+            } else if constexpr (std::is_same_v<Request, BehaviorTreeEditRequest>) {
                 return EditBehaviorTreeCandidate(*candidate, request, *providers.Value(), m_viewModel.availableBehaviorsRevision,
                                                  queryOutput);
-            else {
+            } else {
+                if (request.operation == UtilityGraphEditOperation::SetTaskProperty)
+                    return EditUtilityTaskProperty(*candidate, request, *providers.Value(), m_viewModel.availableBehaviorsRevision);
                 const auto *task = request.task && request.task->catalogRevision == m_viewModel.availableBehaviorsRevision
                                        ? FindStarterTask(*providers.Value(), *request.task)
                                        : nullptr;

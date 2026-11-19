@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <filesystem>
 #include <format>
@@ -1594,7 +1595,7 @@ TEST_CASE("Behavior Tree and Utility New use the current registered native task 
                                                              .operation = BehaviorTreeEditOperation::SetTaskProperty,
                                                              .node = node,
                                                              .task = exact,
-                                                             .property = BehaviorTreePropertyEdit{property, std::move(value)}}});
+                                                             .property = DecisionTaskPropertyEdit{property, std::move(value)}}});
         };
         edit(declared.id, false, selected, document.revision);
         CHECK(document.graph == initial);
@@ -1629,6 +1630,147 @@ TEST_CASE("Behavior Tree and Utility New use the current registered native task 
         edit(declared.id, false, selected, initialRevision);
         REQUIRE(document.diagnostic);
         CHECK(document.graph == edited);
+        controller.ProcessCommand(MakeDecisionHistoryCommand(document, DecisionHistoryAction::Undo));
+        REQUIRE_FALSE(document.diagnostic);
+        CHECK(document.graph == initial);
+        CHECK_FALSE(document.dirty);
+        controller.ProcessCommand(MakeDecisionHistoryCommand(document, DecisionHistoryAction::Redo));
+        REQUIRE_FALSE(document.diagnostic);
+        checkOverride(document);
+        controller.ProcessCommand(MakeDecisionHistoryCommand(document, DecisionHistoryAction::Save));
+        REQUIRE_FALSE(document.diagnostic);
+        CHECK_FALSE(document.dirty);
+        const auto path = document.graph->location.source;
+        controller.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = document.identity.instance});
+        REQUIRE(model.decisionGraphDocuments.empty());
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::OpenSourceFile,
+                                   .sourceOpenRequest = SourceOpenRequest{.path = path, .origin = SourceOpenOrigin::AssetActivation}});
+        REQUIRE(model.decisionGraphDocuments.size() == 1);
+        checkOverride(model.decisionGraphDocuments.front());
+    }
+    SECTION("Utility and State Machine provider properties use the same durable command history") {
+        using namespace AI::DecisionGraphTestSupport;
+        enum class Family {
+            Utility,
+            Machine
+        };
+        const auto family = GENERATE(Family::Utility, Family::Machine);
+        const bool machineFamily = family == Family::Machine;
+        constexpr auto machinePath = "assets/Provider phases.horo_sm";
+        if (machineFamily) {
+            auto graph = TerminalMachine(650);
+            graph.blackboard = project.schema;
+            auto &machine = std::get<AI::StateMachineAssetDescriptor>(graph.body);
+            {
+                auto &state = machine.states.front();
+                state.terminal = AI::DecisionStateTerminal::None;
+                for (std::size_t index = 0; index < static_cast<std::size_t>(StateMachineTaskPhase::Count); ++index) {
+                    const auto phase = static_cast<StateMachineTaskPhase>(index);
+                    const auto task = MakeIdentity<AI::TaskId>(720 + index);
+                    const std::array taskSlots{&AI::StateMachineState::entry, &AI::StateMachineState::update, &AI::StateMachineState::exit};
+                    state.*taskSlots[index] = task;
+                    state.*StateMachineTaskSlot(phase) = AI::StateMachineProviderAction{{.id = Node(20 + index),
+                                                                                         .type = providerType,
+                                                                                         .descriptorVersion = {1, 1},
+                                                                                         .source = Location()},
+                                                                                        {}};
+                }
+            }
+            machine.states.push_back({.id = Node(2), .terminal = AI::DecisionStateTerminal::Succeeded, .source = Location()});
+            machine.transitions.push_back({.id = Node(3), .source = Node(1), .target = Node(2), .location = Location()});
+            const auto encoded = AI::DecisionPlanCodec::EncodeSource(std::span{&graph, 1}, graph.asset);
+            REQUIRE(encoded.HasValue());
+            {
+                std::ofstream file(project.root / machinePath, std::ios::binary);
+                file.write(reinterpret_cast<const char *>(encoded.Value().data()), static_cast<std::streamsize>(encoded.Value().size()));
+                REQUIRE(static_cast<bool>(file));
+            }
+            project.WriteSidecar(machinePath, Assets::AssetId::FromBytes({0x5d}), Application::DecisionStateMachineSourceType);
+            project.RebuildRegistry();
+            controller.RefreshAssets(project.registry.Snapshot());
+            controller.ProcessCommand(
+                {.command = EditorWorkspaceViewCommand::OpenSourceFile,
+                 .sourceOpenRequest = SourceOpenRequest{.path = machinePath, .origin = SourceOpenOrigin::AssetActivation}});
+        } else {
+            controller.ProcessCommand(make(AI::DecisionPlanKind::Utility, "Editable utility property"));
+        }
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        const auto &model = controller.ViewModel();
+        REQUIRE(model.decisionGraphDocuments.size() == 1);
+        const auto &document = model.decisionGraphDocuments.front();
+        REQUIRE(document.editable);
+        if (machineFamily)
+            CHECK_FALSE(document.layoutWritable);
+        const auto task = std::ranges::find(model.behaviorTreeTaskChoices, providerType, &DecisionTaskChoice::type);
+        REQUIRE(task != model.behaviorTreeTaskChoices.end());
+        REQUIRE(task->editableProperties.size() == 1);
+        const auto propertyId = task->editableProperties.front().id;
+        const DecisionTaskSelection selected{task->type, task->provider, task->version, model.availableBehaviorsRevision};
+        const auto initial = document.graph;
+        const auto edit = [&](DecisionTaskSelection selection, StateMachineTaskPhase phase, AI::BehaviorTreePropertyValue value) {
+            const DecisionTaskPropertyEdit property{propertyId, std::move(value)};
+            if (machineFamily) {
+                controller.ProcessCommand(
+                    {.command = EditorWorkspaceViewCommand::EditDecisionStateMachine,
+                     .stateMachineEdit = StateMachineEditRequest{.instance = document.identity.instance,
+                                                                 .revision = document.revision,
+                                                                 .operation = StateMachineEditOperation::SetTaskProperty,
+                                                                 .node = Node(1),
+                                                                 .taskPhase = phase,
+                                                                 .task = selection,
+                                                                 .property = property}});
+            } else {
+                controller.ProcessCommand(
+                    {.command = EditorWorkspaceViewCommand::EditDecisionUtilityGraph,
+                     .utilityGraphEdit = UtilityGraphEditRequest{.instance = document.identity.instance,
+                                                                 .revision = document.revision,
+                                                                 .operation = UtilityGraphEditOperation::SetTaskProperty,
+                                                                 .option = Node(2),
+                                                                 .task = selection,
+                                                                 .property = property}});
+            }
+        };
+        const auto checkOverride = [&](const DecisionGraphWorkspaceDocument &current) {
+            const std::vector<AI::BehaviorTreeProperty> *properties{};
+            if (machineFamily) {
+                const auto &state = std::get<AI::StateMachineAssetDescriptor>(current.graph->body).states.front();
+                CHECK(state.entryProvider->properties.empty());
+                CHECK(state.exitProvider->properties.empty());
+                properties = &state.updateProvider->properties;
+            } else {
+                const auto &options = std::get<AI::UtilityDecisionSource>(current.graph->body).options;
+                REQUIRE(options.front().option.considerations.size() == 1);
+                properties = &options.front().properties;
+            }
+            REQUIRE(properties->size() == 1);
+            CHECK(properties->front().id == propertyId);
+            CHECK(properties->front().value == AI::BehaviorTreePropertyValue{true});
+        };
+        if (machineFamily) {
+            controller.ProcessCommand({.command = EditorWorkspaceViewCommand::EditDecisionStateMachine,
+                                       .stateMachineEdit = StateMachineEditRequest{.instance = document.identity.instance,
+                                                                                   .revision = document.revision,
+                                                                                   .operation = StateMachineEditOperation::SetTerminal,
+                                                                                   .node = Node(2),
+                                                                                   .terminal = AI::DecisionStateTerminal::Failed}});
+            REQUIRE(document.diagnostic);
+            edit(selected, StateMachineTaskPhase::Count, true);
+            REQUIRE(document.diagnostic);
+        }
+        auto stale = selected;
+        ++stale.catalogRevision;
+        edit(stale, StateMachineTaskPhase::Update, true);
+        REQUIRE(document.diagnostic);
+        edit(selected, StateMachineTaskPhase::Update, std::int64_t{42});
+        REQUIRE(document.diagnostic);
+        CHECK(document.graph == initial);
+        CHECK_FALSE(document.canUndo);
+
+        edit(selected, StateMachineTaskPhase::Update, true);
+        REQUIRE_FALSE(document.diagnostic);
+        CHECK(document.dirty);
+        checkOverride(document);
         controller.ProcessCommand(MakeDecisionHistoryCommand(document, DecisionHistoryAction::Undo));
         REQUIRE_FALSE(document.diagnostic);
         CHECK(document.graph == initial);

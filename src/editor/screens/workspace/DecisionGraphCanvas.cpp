@@ -315,7 +315,9 @@ namespace Horo::Editor {
         const bool rebuildCanvas = !session.context || session.source != document.graph || session.scale != scale;
         const bool replacePositions = rebuildCanvas || session.snapshot.revision != document.revision;
         if (rebuildCanvas) {
-            session.snapshot = ProjectDecisionCanvas(*document.graph, {document.identity.instance, document.revision}, document.editable);
+            const auto *machine = std::get_if<AI::StateMachineAssetDescriptor>(&document.graph->body);
+            const auto editable = document.editable && (!machine || CanEditStateMachineTopology(*machine));
+            session.snapshot = ProjectDecisionCanvas(*document.graph, {document.identity.instance, document.revision}, editable);
             session.source = document.graph;
             session.scale = scale;
             session.context = CreateCanvasContext();
@@ -349,7 +351,7 @@ namespace Horo::Editor {
         const auto &fonts = context.theme.fonts;
         const auto &frameLabel = context.localization.Get("editor", "workspace.decision_canvas.fit");
         const bool fit = Ui::Button({.label = frameLabel.c_str(), .font = fonts.sans});
-        if (document.editable) {
+        if (graph.editable) {
             const auto &automatic = context.localization.Get("editor", "workspace.decision_canvas.auto_layout");
             if (Ui::Button({.label = automatic.c_str(), .enabled = document.layoutWritable, .font = fonts.sans}))
                 out.layout =

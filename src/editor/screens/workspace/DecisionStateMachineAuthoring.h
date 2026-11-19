@@ -2,6 +2,7 @@
 
 #include "Horo/AI/BehaviorTree.h"
 #include "Horo/AI/DecisionControl.h"
+#include "Horo/AI/StateMachine.h"
 #include "Horo/AI/UtilitySelector.h"
 #include "Horo/Assets/AssetId.h"
 #include "Horo/Editor/EditorSurfaceIdentity.h"
@@ -17,6 +18,7 @@ namespace Horo::Editor {
         SetTerminal,
         Connect,
         SetTransitionPriority,
+        SetTaskProperty,
         RemoveTransition,
         RemoveState,
         Undo,
@@ -59,7 +61,7 @@ namespace Horo::Editor {
     };
 
     /** @brief Sets a scalar override using a stable property declared by the installed provider. */
-    struct BehaviorTreePropertyEdit final {
+    struct DecisionTaskPropertyEdit final {
         AI::BehaviorTreePropertyId property;
         AI::BehaviorTreePropertyValue value;
     };
@@ -102,13 +104,14 @@ namespace Horo::Editor {
         std::optional<Assets::AssetId> subtreeTarget;
         std::optional<BehaviorTreeSubtreeReview> subtree;
         std::optional<BehaviorTreeQueryOutputEdit> queryOutput;
-        std::optional<BehaviorTreePropertyEdit> property;
+        std::optional<DecisionTaskPropertyEdit> property;
     };
 
     /** @brief Typed operations for the authored option and its complete scoring policy. */
     enum class UtilityGraphEditOperation : std::uint8_t {
         AddOption,
         SetOptionPolicy,
+        SetTaskProperty,
         DeleteOption,
         AddConsideration,
         SetConsideration,
@@ -141,6 +144,7 @@ namespace Horo::Editor {
         std::optional<UtilityConsiderationSlot> slot;
         double priority{1};
         double compensation{};
+        std::optional<DecisionTaskPropertyEdit> property;
     };
 
     /** @brief Exact revision held by an outstanding Decision document close prompt. */
@@ -148,6 +152,33 @@ namespace Horo::Editor {
         DocumentInstanceId instance;
         std::uint64_t revision{};
     };
+
+    /** @brief Stable owner of a provider-bound action within an authored state. */
+    enum class StateMachineTaskPhase : std::uint8_t {
+        Entry,
+        Update,
+        Exit,
+        Count,
+    };
+
+    /** @brief Locates a typed provider action without depending on a widget position. */
+    [[nodiscard]] constexpr auto StateMachineTaskSlot(StateMachineTaskPhase phase) noexcept
+        -> std::optional<AI::StateMachineProviderAction> AI::StateMachineState::* {
+        using enum StateMachineTaskPhase;
+        switch (phase) {
+            case Entry:
+                return &AI::StateMachineState::entryProvider;
+            case Update:
+                return &AI::StateMachineState::updateProvider;
+            case Exit:
+                return &AI::StateMachineState::exitProvider;
+            default:
+                return nullptr;
+        }
+    }
+
+    /** @brief Reports whether ordinary topology commands support every state in this machine. */
+    [[nodiscard]] bool CanEditStateMachineTopology(const AI::StateMachineAssetDescriptor &machine);
 
     /** @brief Revision-correlated authoring intent. Operands are semantic identities.
      * @details AddState takes an existing running source in node and atomically adds a state plus its incoming transition.
@@ -161,5 +192,8 @@ namespace Horo::Editor {
         AI::DecisionNodeId target; /**< Target of a connection. */
         AI::DecisionStateTerminal terminal{AI::DecisionStateTerminal::None};
         std::optional<std::int32_t> priority{}; /**< Required signed authored value for SetTransitionPriority. */
+        StateMachineTaskPhase taskPhase{StateMachineTaskPhase::Count};
+        std::optional<DecisionTaskSelection> task;
+        std::optional<DecisionTaskPropertyEdit> property;
     };
 }  // namespace Horo::Editor

@@ -400,8 +400,8 @@ namespace Horo::Editor {
         return std::nullopt;
     }
 
-    /** @copydoc EditorWorkspaceView::BehaviorTreeTaskPropertyDraft::Select */
-    void EditorWorkspaceView::BehaviorTreeTaskPropertyDraft::Select(const AI::BehaviorTreeProperty &effective) {
+    /** @copydoc EditorWorkspaceView::DecisionTaskPropertyDraft::Select */
+    void EditorWorkspaceView::DecisionTaskPropertyDraft::Select(const AI::BehaviorTreeProperty &effective) {
         property = effective.id;
         fieldScope = std::format("{}/{}/{}/{}/{}", instance.Value(), node.Value(), revision, catalogRevision, property.Value());
         text.fill('\0');
@@ -416,10 +416,10 @@ namespace Horo::Editor {
         }
     }
 
-    /** @copydoc EditorWorkspaceView::DrawBehaviorTreeTaskPropertyValue */
-    std::optional<AI::BehaviorTreePropertyValue> EditorWorkspaceView::DrawBehaviorTreeTaskPropertyValue(
-        const AI::BehaviorTreeProperty &effective, std::string_view label, EditorWorkspaceViewCommandData &outCommand) const {
-        auto &draft = m_behaviorTreeTaskPropertyDraft;
+    /** @copydoc EditorWorkspaceView::DrawDecisionTaskPropertyValue */
+    std::optional<AI::BehaviorTreePropertyValue> EditorWorkspaceView::DrawDecisionTaskPropertyValue(
+        const AI::BehaviorTreeProperty &effective, std::string_view label, std::size_t textLimit, DecisionTaskPropertyDraft &draft,
+        EditorWorkspaceViewCommandData &outCommand) const {
         const auto &fonts = m_context.theme.fonts;
         const auto text = [&](const char *key) -> const std::string & {
             return m_context.localization.Get("editor", key);
@@ -437,7 +437,7 @@ namespace Horo::Editor {
             outCommand.sourceTextInputOwned = outCommand.sourceTextInputOwned || ImGui::IsItemActive();
             if (const auto *original = std::get_if<std::string>(&effective.value)) {
                 const std::string_view edited{draft.text.data()};
-                if (edited.size() <= AI::BehaviorTreeAssetHardLimits::DisplayNameBytes) {
+                if (edited.size() <= textLimit) {
                     changed = edited != *original;
                 } else {
                     Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("workspace.decision_graph.edit_property_text_too_long"),
@@ -467,26 +467,22 @@ namespace Horo::Editor {
         return value;
     }
 
-    /** @copydoc EditorWorkspaceView::DrawBehaviorTreeTaskPropertyEditor */
-    void EditorWorkspaceView::DrawBehaviorTreeTaskPropertyEditor(const EditorWorkspaceViewModel &viewModel,
-                                                                 const DecisionGraphWorkspaceDocument &document,
-                                                                 const AI::BehaviorTreeNode &node,
-                                                                 EditorWorkspaceViewCommandData &outCommand) const {
-        if (node.control.kind != AI::DecisionControlKind::Task)
-            return;
+    /** @copydoc EditorWorkspaceView::DrawDecisionTaskPropertyEditor */
+    std::optional<EditorWorkspaceView::DecisionTaskPropertyIntent> EditorWorkspaceView::DrawDecisionTaskPropertyEditor(
+        const EditorWorkspaceViewModel &viewModel, const DecisionGraphWorkspaceDocument &document,
+        const DecisionTaskPropertyBinding &binding, DecisionTaskPropertyDraft &draft, EditorWorkspaceViewCommandData &outCommand) const {
         const auto &choices = viewModel.behaviorTreeTaskChoices;
         const auto contract = std::ranges::find_if(choices, [&](const DecisionTaskChoice &choice) {
-            return choice.type.Value() == node.type.Value() && choice.version == node.typeVersion.major;
+            return choice.type == binding.type && binding.versions.Contains(choice.version);
         });
         if (contract == choices.end() || contract->editableProperties.empty())
-            return;
+            return std::nullopt;
 
-        auto &draft = m_behaviorTreeTaskPropertyDraft;
         const auto instance = document.identity.instance;
         const auto catalogRevision = viewModel.availableBehaviorsRevision;
-        if (draft.instance != instance || draft.node != node.id || draft.revision != document.revision ||
+        if (draft.instance != instance || draft.node != binding.node || draft.revision != document.revision ||
             draft.catalogRevision != catalogRevision) {
-            draft = {.instance = instance, .node = node.id, .revision = document.revision, .catalogRevision = catalogRevision};
+            draft = {.instance = instance, .node = binding.node, .revision = document.revision, .catalogRevision = catalogRevision};
         }
         const auto &fonts = m_context.theme.fonts;
         const auto text = [&](const char *key) -> const std::string & {
@@ -503,25 +499,53 @@ namespace Horo::Editor {
         static_cast<void>(Ui::ComboControl("##DecisionTaskProperty", &row, static_cast<int>(fields.size()) + 1, items, fonts));
         if (row == 0) {
             draft.property = {};
-            return;
+            return std::nullopt;
         }
         const auto &declaration = fields[static_cast<std::size_t>(row - 1)];
-        const auto authored = std::ranges::find(node.properties, declaration.id, &AI::BehaviorTreeProperty::id);
-        if (authored != node.properties.end() && authored->kind != declaration.kind)
-            return;
-        const auto &property = authored != node.properties.end() ? *authored : declaration;
+        const auto authored = std::ranges::find(binding.properties, declaration.id, &AI::BehaviorTreeProperty::id);
+        if (authored != binding.properties.end() && authored->kind != declaration.kind)
+            return std::nullopt;
+        const auto &property = authored != binding.properties.end() ? *authored : declaration;
         if (draft.property != property.id)
             draft.Select(property);
-        if (auto value = DrawBehaviorTreeTaskPropertyValue(property, declaration.displayName, outCommand)) {
-            outCommand = {.command = EditorWorkspaceViewCommand::EditDecisionBehaviorTree,
-                          .behaviorTreeEdit = BehaviorTreeEditRequest{
-                              .instance = instance,
-                              .revision = document.revision,
-                              .operation = BehaviorTreeEditOperation::SetTaskProperty,
-                              .node = AI::DecisionNodeId::Create(node.id.Value()).Value(),
-                              .task = DecisionTaskSelection{contract->type, contract->provider, contract->version, catalogRevision},
-                              .property = BehaviorTreePropertyEdit{property.id, std::move(*value)},
-                          }};
+        const auto textLimit = document.family == AI::DecisionPlanKind::BehaviorTree ? AI::BehaviorTreeAssetHardLimits::DisplayNameBytes
+                                                                                     : AI::BehaviorTreeAssetHardLimits::PropertyBytes;
+        if (auto value = DrawDecisionTaskPropertyValue(property, declaration.displayName, textLimit, draft, outCommand)) {
+            return DecisionTaskPropertyIntent{{contract->type, contract->provider, contract->version, catalogRevision},
+                                              {property.id, std::move(*value)}};
+        }
+        return std::nullopt;
+    }
+
+    /** @copydoc EditorWorkspaceView::DrawStateMachineTaskPropertyEditors */
+    void EditorWorkspaceView::DrawStateMachineTaskPropertyEditors(const EditorWorkspaceViewModel &viewModel,
+                                                                  const DecisionGraphWorkspaceDocument &document,
+                                                                  const AI::StateMachineState &state,
+                                                                  EditorWorkspaceViewCommandData &outCommand) const {
+        constexpr std::array headings{"workspace.decision_graph.task_properties_entry", "workspace.decision_graph.task_properties_update",
+                                      "workspace.decision_graph.task_properties_exit"};
+        for (std::size_t index = 0; index < headings.size(); ++index) {
+            const auto phase = static_cast<StateMachineTaskPhase>(index);
+            const auto &action = state.*StateMachineTaskSlot(phase);
+            if (!action)
+                continue;
+            const DecisionTaskPropertyBinding binding{action->binding.id, action->binding.type, action->binding.descriptorVersion,
+                                                      action->properties};
+            ImGui::PushID(headings[index]);
+            DrawDecisionTaskProperties(action->properties, m_context, headings[index]);
+            Ui::FieldLabel(m_context.localization.Get("editor", headings[index]).c_str(), m_context.theme.fonts);
+            auto edit = DrawDecisionTaskPropertyEditor(viewModel, document, binding, m_stateTaskPropertyDrafts[index], outCommand);
+            ImGui::PopID();
+            if (edit) {
+                outCommand = {.command = EditorWorkspaceViewCommand::EditDecisionStateMachine,
+                              .stateMachineEdit = StateMachineEditRequest{.instance = document.identity.instance,
+                                                                          .revision = document.revision,
+                                                                          .operation = StateMachineEditOperation::SetTaskProperty,
+                                                                          .node = state.id,
+                                                                          .taskPhase = phase,
+                                                                          .task = edit->task,
+                                                                          .property = std::move(edit->property)}};
+            }
         }
     }
 
@@ -641,7 +665,20 @@ namespace Horo::Editor {
             }
         }
         if (node.kind == AI::BehaviorTreeNodeKind::Task) {
-            DrawBehaviorTreeTaskPropertyEditor(viewModel, document, node, outCommand);
+            const auto type = AI::DecisionNodeTypeId::Create(node.type.Value());
+            if (node.control.kind == AI::DecisionControlKind::Task && type.HasValue()) {
+                const AI::DecisionVersionRange version{node.typeVersion.major, node.typeVersion.major};
+                const DecisionTaskPropertyBinding binding{selection.node, type.Value(), version, node.properties};
+                if (auto edit = DrawDecisionTaskPropertyEditor(viewModel, document, binding, m_behaviorTreeTaskPropertyDraft, outCommand)) {
+                    outCommand = {.command = EditorWorkspaceViewCommand::EditDecisionBehaviorTree,
+                                  .behaviorTreeEdit = BehaviorTreeEditRequest{.instance = document.identity.instance,
+                                                                              .revision = document.revision,
+                                                                              .operation = BehaviorTreeEditOperation::SetTaskProperty,
+                                                                              .node = selection.node,
+                                                                              .task = edit->task,
+                                                                              .property = std::move(edit->property)}};
+                }
+            }
             DrawBehaviorTreeQueryOutput(viewModel, document, node, outCommand);
             const auto *parent = tree.FindNode(incoming->sourceNode);
             const auto siblings = std::ranges::count(edges, incoming->sourceNode, &AI::BehaviorTreeEdge::sourceNode);
@@ -985,10 +1022,12 @@ namespace Horo::Editor {
             feedback == "workspace.decision_graph.diagnostic_key_unavailable")
             label(text(feedback), Theme::Warn());
 
+        const auto *propertyMachine = std::get_if<AI::StateMachineAssetDescriptor>(&opened->graph->body);
+        const bool propertyOnly = opened->editable && propertyMachine && !CanEditStateMachineTopology(*propertyMachine);
         const auto drawTransitionOrder = [&](const AI::StateMachineAssetDescriptor &machine, const AI::StateMachineTransition &transition) {
             const auto order = ProjectStateMachineTransitionOrder(machine, transition);
             label(std::format("{} → {}", transition.source.Value(), transition.target.Value()), Theme::Text());
-            if (!opened->editable)
+            if (!opened->editable || propertyOnly)
                 label(std::format("{} {}", text("workspace.decision_graph.transition_priority"), order.priority), Theme::Text());
             label(std::format("{} {}", text("workspace.decision_graph.transition_order"), order.rank), Theme::Text());
             label(text("workspace.decision_graph.transition_precedence"), Theme::Muted());
@@ -1004,12 +1043,30 @@ namespace Horo::Editor {
                 return m_utilityGraphSelection.option;
             return {};
         };
-        if (!opened->editable) {
-            label(text("workspace.decision_graph.read_only"), Theme::Muted());
+        if (!opened->editable || propertyOnly) {
+            label(text(propertyOnly ? "workspace.decision_graph.provider_machine_properties_only" : "workspace.decision_graph.read_only"),
+                  Theme::Muted());
+            if (propertyOnly) {
+                const auto history = [&](const char *key, bool enabled, DecisionHistoryAction action) {
+                    if (Ui::Button({.label = text(key).c_str(), .enabled = enabled, .font = m_context.theme.fonts.sans}))
+                        outCommand = MakeDecisionHistoryCommand(*opened, action);
+                };
+                history("workspace.decision_graph.edit_save", opened->dirty, DecisionHistoryAction::Save);
+                history("workspace.decision_graph.edit_undo", opened->canUndo, DecisionHistoryAction::Undo);
+                history("workspace.decision_graph.edit_redo", opened->canRedo, DecisionHistoryAction::Redo);
+            }
             const auto canvas = m_decisionGraphCanvas.Draw(*opened, m_context, viewModel.decisionProviderMetadata);
             ApplyDecisionCanvasInteraction(*opened, {.node = canvas.node, .transition = canvas.transition}, outCommand);
-            DrawReadOnlyDecisionProperties(*opened->graph, selectedNode(), m_context);
-            if (const auto *machine = std::get_if<AI::StateMachineAssetDescriptor>(&opened->graph->body)) {
+            if (propertyOnly) {
+                const auto selected = selectedNode();
+                const auto state = std::ranges::find(propertyMachine->states, selected.IsValid() ? selected : propertyMachine->initial,
+                                                     &AI::StateMachineState::id);
+                if (state != propertyMachine->states.end())
+                    DrawStateMachineTaskPropertyEditors(viewModel, *opened, *state, outCommand);
+            } else {
+                DrawReadOnlyDecisionProperties(*opened->graph, selectedNode(), m_context);
+            }
+            if (const auto *machine = propertyMachine) {
                 const auto &selection = m_stateMachineSelection;
                 const auto transition = std::ranges::find(machine->transitions, selection.transition, &AI::StateMachineTransition::id);
                 if (transition != machine->transitions.end())

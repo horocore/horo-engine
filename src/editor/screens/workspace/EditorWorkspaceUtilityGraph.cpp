@@ -241,6 +241,17 @@ namespace Horo::Editor {
             Ui::ComboControl("##UtilityAuthoringOption", &optionIndex, static_cast<int>(source.options.size()), options, fonts));
         const auto &selected = source.options[static_cast<std::size_t>(optionIndex)];
         DrawDecisionTaskProperties(selected.properties, m_context);
+        const DecisionTaskPropertyBinding binding{selected.option.id, selected.provider.type, selected.provider.descriptorVersion,
+                                                  selected.properties};
+        if (auto edit = DrawDecisionTaskPropertyEditor(viewModel, document, binding, m_utilityTaskPropertyDraft, outCommand)) {
+            outCommand = {.command = EditorWorkspaceViewCommand::EditDecisionUtilityGraph,
+                          .utilityGraphEdit = UtilityGraphEditRequest{.instance = document.identity.instance,
+                                                                      .revision = document.revision,
+                                                                      .operation = UtilityGraphEditOperation::SetTaskProperty,
+                                                                      .option = selected.option.id,
+                                                                      .task = edit->task,
+                                                                      .property = std::move(edit->property)}};
+        }
         const auto &option = selected.option;
         const auto resetScore = [&] {
             draft.score = draft.row ? option.considerations[*draft.row] : AI::UtilityConsideration{};
