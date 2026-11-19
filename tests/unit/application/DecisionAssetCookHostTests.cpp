@@ -158,6 +158,7 @@ namespace {
             CaptureBlackboardUsageReview(fixture.source.path, fixture.registry, original, mutations, selection, metadata.Value());
         REQUIRE(review.HasValue());
         CHECK(review.Value().registry == original);
+        CHECK(review.Value().perceptionScope == BlackboardPerceptionUsageScope::IncludeExternalBindings);
         CHECK(review.Value().providers.lock() == metadata.Value());
         CHECK(review.Value().sources.size() == 3);
         REQUIRE(review.Value().uses.size() == 1);
@@ -180,6 +181,19 @@ namespace {
         CHECK((std::ranges::find(partial.Value().gaps, BlackboardUsageGapKind::RegistryInventory, &BlackboardUsageGap::kind) !=
                partial.Value().gaps.end()));
 
+        SECTION("registered authoring scope keeps unrelated provider and inventory gaps") {
+            const auto scoped = CaptureBlackboardUsageReview(fixture.source.path, fixture.registry, {}, mutations, selection, {}, {}, {},
+                                                             BlackboardPerceptionUsageScope::RegisteredProjectSources);
+            REQUIRE(scoped.HasValue());
+            CHECK(scoped.Value().perceptionScope == BlackboardPerceptionUsageScope::RegisteredProjectSources);
+            REQUIRE(scoped.Value().uses.size() == 1);
+            const auto hasGap = [&](BlackboardUsageGapKind kind) {
+                return std::ranges::find(scoped.Value().gaps, kind, &BlackboardUsageGap::kind) != scoped.Value().gaps.end();
+            };
+            CHECK_FALSE(hasGap(BlackboardUsageGapKind::PerceptionPolicy));
+            CHECK(hasGap(BlackboardUsageGapKind::RegistryInventory));
+            CHECK(hasGap(BlackboardUsageGapKind::DecisionProvider));
+        }
         SECTION("an observed provider requirement carries its origin without keeping the provider alive") {
             auto contribution = Registration(fixture.ai.probe);
             const auto origin = contribution.contract.descriptor.origin;
@@ -609,14 +623,15 @@ namespace {
             return {id, SchemaId(), 1, output.key, ComputeSha256(std::as_bytes(std::span{schemaBytes.Value()}))};
         }
 
-        Result<BlackboardUsageReview> Review(BlackboardUsageSelection selection,
-                                             std::shared_ptr<const DecisionBlackboardProviderMetadata> providers = {},
-                                             const BlackboardRetargetValidationInput &validation = {}) {
+        Result<BlackboardUsageReview> Review(
+            BlackboardUsageSelection selection, std::shared_ptr<const DecisionBlackboardProviderMetadata> providers = {},
+            const BlackboardRetargetValidationInput &validation = {},
+            BlackboardPerceptionUsageScope scope = BlackboardPerceptionUsageScope::IncludeExternalBindings) {
             const auto revision = Rebuild();
             NativeDurableFileSystem files;
             Editor::ProjectMutationCoordinator mutations{files};
             return CaptureBlackboardUsageReview(project.source.path, project.registry, revision, mutations, selection, std::move(providers),
-                                                {}, validation);
+                                                {}, validation, scope);
         }
     };
 
@@ -791,6 +806,7 @@ namespace {
             REQUIRE(report.Value().decisionValidation);
             CHECK(report.Value().decisionValidation->roots == 2);
             CHECK(report.Value().decisionValidation->nodes.lock() == environment.nodes);
+            CHECK_FALSE(report.Value().commitEvidence);  // External SDK projections remain out of reach.
             REQUIRE(report.Value().decisionRetargets.size() == 1);
             CHECK(report.Value().decisionRetargets.front().original.asset == query.project.child);
         }
@@ -804,7 +820,8 @@ namespace {
             const auto scene = SceneSource::EncodeSceneSource({sceneObjects, {}});
             writeScene(scene);
             query.WriteSidecar(scenePath, sceneAsset, "core.scene");
-            const auto report = query.Review(selection, metadata.Value(), validation);
+            const auto report =
+                query.Review(selection, metadata.Value(), validation, BlackboardPerceptionUsageScope::RegisteredProjectSources);
             REQUIRE(report.HasValue());
             REQUIRE(report.Value().commitEvidence);
             REQUIRE(std::ranges::find(report.Value().sources, sceneAsset, &BlackboardUsageSourceStamp::asset) !=
@@ -878,8 +895,8 @@ namespace {
             NativeDurableFileSystem files;
             Editor::ProjectMutationCoordinator mutations{files};
             const auto &root = query.project.source.path;
-            const auto report =
-                CaptureBlackboardUsageReview(root, query.project.registry, {}, mutations, selection, metadata.Value(), {}, validation);
+            const auto report = CaptureBlackboardUsageReview(root, query.project.registry, {}, mutations, selection, metadata.Value(), {},
+                                                             validation, BlackboardPerceptionUsageScope::RegisteredProjectSources);
             REQUIRE(report.HasValue());
             REQUIRE(report.Value().decisionValidation);
             CHECK_FALSE(report.Value().commitEvidence);
@@ -934,6 +951,95 @@ namespace {
             const auto report = query.Review(selection, metadata.Value(), validation);
             REQUIRE(report.HasValue());
             CHECK_FALSE(report.Value().decisionValidation);
+            CHECK(std::ranges::any_of(report.Value().gaps, [](const auto &gap) {
+                return gap.kind == BlackboardUsageGapKind::DecisionClosure && gap.diagnostic &&
+                       gap.diagnostic->code.Value() == DecisionCookErrors::Invalid.code.Value();
+            }));
+        }
+        CHECK(query.project.ai.probe.factories == 0);
+    }
+
+    TEST_CASE("Blackboard key migration without a replacement preserves compatible registered bindings", "[native][decision-cook][usage]") {
+        QueryOutputFixture query;
+        auto selection = query.WriteSchema();
+        const auto &environment = query.project.request.environment;
+        const auto metadata = DecisionBlackboardProviderMetadata::Capture(*environment.nodes);
+        REQUIRE(metadata.HasValue());
+        const auto current = environment.schemas.front()->Keys();
+        std::vector<BlackboardKeyDescriptor> keys(current.begin(), current.end());
+        constexpr auto scope = BlackboardPerceptionUsageScope::RegisteredProjectSources;
+        const auto review = [&] {
+            auto changed = BlackboardSchema::Capture({.identity = SchemaId(), .keys = keys});
+            REQUIRE(changed.HasValue());
+            BlackboardRetargetValidationInput validation{std::make_shared<const BlackboardSchema>(std::move(changed).Value()),
+                                                         environment.nodes, query.project.request.querySchema};
+            return query.Review(selection, metadata.Value(), validation, scope);
+        };
+
+        SECTION("an unused key may be removed") {
+            selection.key = query.replacement;
+            std::erase_if(keys, [&](const auto &key) {
+                return key.key == selection.key;
+            });
+            const auto report = review();
+            REQUIRE(report.HasValue());
+            REQUIRE(report.Value().commitEvidence);
+            REQUIRE(report.Value().decisionValidation);
+            CHECK(report.Value().decisionValidation->roots == 2);
+            CHECK(report.Value().decisionRetargets.empty());
+        }
+        SECTION("an unused key may be edited under the same identity") {
+            selection.key = query.replacement;
+            const auto edited = std::ranges::find(keys, selection.key, &BlackboardKeyDescriptor::key);
+            REQUIRE(edited != keys.end());
+            edited->kind = BlackboardValueKind::Boolean;
+            const auto report = review();
+            REQUIRE(report.HasValue());
+            REQUIRE(report.Value().commitEvidence);
+            REQUIRE(report.Value().decisionValidation);
+            CHECK(report.Value().decisionValidation->roots == 2);
+            CHECK(report.Value().decisionRetargets.empty());
+        }
+        SECTION("a registered query output cannot be silently dropped") {
+            std::erase_if(keys, [&](const auto &key) {
+                return key.key == selection.key;
+            });
+            const auto report = review();
+            REQUIRE(report.HasValue());
+            REQUIRE_FALSE(report.Value().queryUsages.empty());
+            CHECK_FALSE(report.Value().decisionValidation);
+            CHECK_FALSE(report.Value().commitEvidence);
+        }
+        SECTION("a default edit preserves a registered query output under the same identity") {
+            const auto edited = std::ranges::find(keys, selection.key, &BlackboardKeyDescriptor::key);
+            REQUIRE(edited != keys.end());
+            edited->defaultValue = BlackboardScalarValue{Math::WorldCoordinate64::FromMillimeters(1, 2, 3)};
+            const auto report = review();
+            REQUIRE(report.HasValue());
+            REQUIRE_FALSE(report.Value().queryUsages.empty());
+            REQUIRE(report.Value().commitEvidence);
+            REQUIRE(report.Value().decisionValidation);
+            CHECK(report.Value().decisionValidation->roots == 2);
+            CHECK(report.Value().decisionRetargets.empty());
+        }
+        SECTION("making a registered query output read-only prevents confirmation") {
+            const auto edited = std::ranges::find(keys, selection.key, &BlackboardKeyDescriptor::key);
+            REQUIRE(edited != keys.end());
+            edited->access = BlackboardKeyAccess::ReadOnly;
+            const auto report = review();
+            REQUIRE(report.HasValue());
+            REQUIRE_FALSE(report.Value().queryUsages.empty());
+            CHECK_FALSE(report.Value().decisionValidation);
+            CHECK_FALSE(report.Value().commitEvidence);
+        }
+        SECTION("an edit may not change a second schema contract") {
+            selection.key = query.replacement;
+            for (auto &key : keys)
+                key.kind = BlackboardValueKind::Boolean;
+            const auto report = review();
+            REQUIRE(report.HasValue());
+            CHECK_FALSE(report.Value().decisionValidation);
+            CHECK_FALSE(report.Value().commitEvidence);
             CHECK(std::ranges::any_of(report.Value().gaps, [](const auto &gap) {
                 return gap.kind == BlackboardUsageGapKind::DecisionClosure && gap.diagnostic &&
                        gap.diagnostic->code.Value() == DecisionCookErrors::Invalid.code.Value();

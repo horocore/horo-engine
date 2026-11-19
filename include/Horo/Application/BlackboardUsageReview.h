@@ -23,6 +23,15 @@ namespace Horo::AI {
 }
 
 namespace Horo::Application {
+    /** @brief Explicit Perception scope for a registered Blackboard authoring review.
+     * @details The current closed headless Perception policies have no authored Blackboard key fields.
+     * SDK hosts can supply separate projection keys; the project registry cannot discover or rewrite those bindings.
+     */
+    enum class BlackboardPerceptionUsageScope : std::uint8_t {
+        IncludeExternalBindings,  /**< Bound external SDK projections are unresolved without an external authority. */
+        RegisteredProjectSources, /**< Restrict this review to supported registered authoring contracts. */
+    };
+
     /** @brief Stable owner boundaries where this review cannot establish coverage. */
     enum class BlackboardUsageGapKind : std::uint8_t {
         RegistryInventory,
@@ -109,7 +118,7 @@ namespace Horo::Application {
         std::weak_ptr<const AI::DecisionNodeGeneration> nodes;
     };
 
-    /** @brief Explicit compiler authority for one proposed removal, captured by the workspace owner. */
+    /** @brief Explicit compiler authority for one proposed key edit or removal, captured by the workspace owner. */
     struct BlackboardRetargetValidationInput final {
         std::shared_ptr<const AI::BlackboardSchema> proposedSchema;
         std::shared_ptr<const AI::DecisionNodeGeneration> nodes;
@@ -135,6 +144,7 @@ namespace Horo::Application {
         std::vector<BlackboardDecisionRetarget> decisionRetargets;
         std::optional<BlackboardDecisionValidation> decisionValidation;
         std::shared_ptr<const BlackboardUsageCommitEvidence> commitEvidence; /**< Exact bounded migration witnesses. */
+        BlackboardPerceptionUsageScope perceptionScope{BlackboardPerceptionUsageScope::IncludeExternalBindings};
     };
 
     /** @brief Captures and reviews actual registered source/sidecar pairs under the Project mutation coordinator.
@@ -142,7 +152,9 @@ namespace Horo::Application {
      * @param completeInventory Native complete rebuild revision, when supplied by the host. Stale or absent coverage is reported.
      * @param mutations Project's normal source transaction coordinator. @param selection Exact durable key and schema selection.
      * @param providers Detached observed provider declarations, when the Project owns a snapshot. @param cancellation Cooperative read
-     * fence. @param validation Optional compiler input for validating the explicit removal's Decision closure.
+     * fence. @param validation Optional compiler input for validating the exact selected key edit or removal.
+     * @param perceptionScope Explicit Perception review scope. Registered authoring scope is required for publication evidence;
+     * the host must identify that scope when offering a migration action.
      * @return Owned typed occurrences, stamps and gaps, or a typed capture/staleness error. No authored sources or runtime state are
      * changed.
      */
@@ -150,13 +162,14 @@ namespace Horo::Application {
         const std::filesystem::path &root, const Assets::AssetRegistry &registry,
         std::optional<Assets::AssetRegistryRevision> completeInventory, const Editor::ProjectMutationCoordinator &mutations,
         BlackboardUsageSelection selection, std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> providers = {},
-        const CancellationToken &cancellation = {}, const BlackboardRetargetValidationInput &validation = {});
+        const CancellationToken &cancellation = {}, const BlackboardRetargetValidationInput &validation = {},
+        BlackboardPerceptionUsageScope perceptionScope = BlackboardPerceptionUsageScope::IncludeExternalBindings);
 
     /** @brief Rechecks the complete registered source witnesses at the Blackboard migration commit boundary.
      * @param root Exact canonical project root used for the review.
      * @param registry Live Project registry publisher that supplied the reviewed revision.
      * @param lease Caller-owned exclusive mutation lease for this project.
-     * @param review Original immutable review with successful Decision validation and complete captured source witnesses.
+     * @param review Original immutable registered-authoring review with successful Decision validation and complete source witnesses.
      * @param currentProviders Current detached provider declarations supplied by the same Project host.
      * @param currentNodes Current compiler generation supplied by the same host, including a live owner for a nonempty closure.
      * @param cancellation Cooperative stop fence, checked during bounded source and sidecar reads.

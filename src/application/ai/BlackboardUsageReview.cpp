@@ -294,7 +294,7 @@ namespace Horo::Application {
             return Result<void>::Success();
         }
 
-        /** @brief Overlays exactly one key removal on the canonical captured schema set. */
+        /** @brief Overlays only the selected durable key while preserving all other schema contracts. */
         Result<void> OverlaySchema(DecisionCookDetail::State &state, const BlackboardUsageSelection &selection,
                                    const std::shared_ptr<const AI::BlackboardSchema> &proposed) {
             const auto existing = std::ranges::find_if(state.environment.schemas, [&selection](const auto &schema) {
@@ -303,10 +303,16 @@ namespace Horo::Application {
             if (existing == state.environment.schemas.end() || proposed->Identity() != selection.schema ||
                 proposed->Version() != selection.version || proposed->UnknownValuePolicy() != (*existing)->UnknownValuePolicy())
                 return Result<void>::Failure(MakeError(DecisionCookErrors::Stale));
-            auto remaining = (*existing)->Keys() | std::views::filter([&selection](const auto &key) {
+            const auto prior = (*existing)->Keys();
+            const auto candidate = proposed->Keys();
+            const auto otherKeys = std::views::filter([&selection](const auto &key) {
                 return key.key != selection.key;
             });
-            if (!std::ranges::equal(remaining, proposed->Keys()))
+            if (!std::ranges::equal(prior | otherKeys, candidate | otherKeys))
+                return Result<void>::Failure(MakeError(DecisionCookErrors::Invalid));
+            const auto original = std::ranges::find(prior, selection.key, &AI::BlackboardKeyDescriptor::key);
+            const auto edited = std::ranges::find(candidate, selection.key, &AI::BlackboardKeyDescriptor::key);
+            if (original == prior.end() || (edited != candidate.end() && (selection.replacement || *edited == *original)))
                 return Result<void>::Failure(MakeError(DecisionCookErrors::Invalid));
             *existing = proposed;
             return Result<void>::Success();
@@ -358,11 +364,19 @@ namespace Horo::Application {
                                       const CancellationToken &cancellation) {
             if (!input.proposedSchema)
                 return Result<void>::Success();
-            if (!review.selection.replacement)
-                return Result<void>::Failure(MakeError(DecisionCookErrors::Invalid));
+            const bool removesKey =
+                !std::ranges::binary_search(input.proposedSchema->Keys(), review.selection.key, {}, &AI::BlackboardKeyDescriptor::key);
+            if (removesKey && !review.selection.replacement && (!review.uses.empty() || !review.queryUsages.empty()))
+                return AddGap(review, {BlackboardUsageGapKind::DecisionClosure,
+                                       {},
+                                       {},
+                                       MakeError(DecisionCookErrors::Invalid, "The selected Blackboard key still has registered uses.")});
             const auto validated = ValidateRetarget(review, capture, registry, input, cancellation);
             if (validated.HasValue()) {
-                review.decisionValidation.emplace(BlackboardDecisionValidation{validated.Value(), input.nodes});
+                std::weak_ptr<const AI::DecisionNodeGeneration> authority;
+                if (validated.Value() != 0)
+                    authority = input.nodes;
+                review.decisionValidation.emplace(BlackboardDecisionValidation{validated.Value(), std::move(authority)});
                 return Result<void>::Success();
             }
             if (cancellation.IsCancellationRequested())
@@ -407,8 +421,12 @@ namespace Horo::Application {
                                                                const BlackboardUsageSelection selection,
                                                                std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> providers,
                                                                const CancellationToken &cancellation,
-                                                               const BlackboardRetargetValidationInput &validation) {
+                                                               const BlackboardRetargetValidationInput &validation,
+                                                               const BlackboardPerceptionUsageScope perceptionScope) {
         using Review = Result<BlackboardUsageReview>;
+        using enum BlackboardPerceptionUsageScope;
+        if (perceptionScope != IncludeExternalBindings && perceptionScope != RegisteredProjectSources)
+            return Review::Failure(MakeError(DecisionCookErrors::Invalid));
         if (!selection.schemaAsset.IsValid() || !selection.schema.IsValid() || !selection.key.IsValid() || selection.version == 0)
             return Review::Failure(MakeError(DecisionCookErrors::Invalid));
         if (cancellation.IsCancellationRequested())
@@ -420,10 +438,14 @@ namespace Horo::Application {
         const auto pinned = registry.Snapshot();
         if (pinned.Revision().value == 0)
             return Review::Failure(MakeError(DecisionCookErrors::Stale));
-        BlackboardUsageReview review{.selection = selection, .registry = pinned.Revision(), .providers = providers};
+        BlackboardUsageReview review{.selection = selection,
+                                     .registry = pinned.Revision(),
+                                     .providers = providers,
+                                     .perceptionScope = perceptionScope};
         if (completeInventory != pinned.Revision())
             review.gaps.push_back({BlackboardUsageGapKind::RegistryInventory});
-        review.gaps.push_back({BlackboardUsageGapKind::PerceptionPolicy});
+        if (perceptionScope == IncludeExternalBindings)
+            review.gaps.push_back({BlackboardUsageGapKind::PerceptionPolicy});
         const auto selected = SelectSources(pinned, review, cancellation);
         if (selected.HasError())
             return Review::Failure(selected.ErrorValue());
@@ -451,8 +473,8 @@ namespace Horo::Application {
             return Review::Failure(verified.ErrorValue());
         if (registry.Snapshot().Revision() != review.registry)
             return Review::Failure(MakeError(DecisionCookErrors::Stale));
-        if (review.decisionValidation && completeInventory == review.registry && selected.Value().hierarchyComplete &&
-            (hierarchy.Value() || selected.Value().hierarchy.empty()))
+        if (perceptionScope == RegisteredProjectSources && review.decisionValidation && completeInventory == review.registry &&
+            selected.Value().hierarchyComplete && (hierarchy.Value() || selected.Value().hierarchy.empty()))
             review.commitEvidence = std::make_shared<const BlackboardUsageCommitEvidence>(
                 BlackboardUsageCommitEvidence{&registry, capture.Value(), hierarchy.Value()});
         return Review::Success(std::move(review));
@@ -471,7 +493,8 @@ namespace Horo::Application {
             return Result<void>::Failure(MakeError(DecisionCookErrors::Cancelled));
         if (!lease.ProtectsProject(root))
             return stale();
-        if (!review.commitEvidence || !review.decisionValidation)
+        if (review.perceptionScope != BlackboardPerceptionUsageScope::RegisteredProjectSources || !review.commitEvidence ||
+            !review.decisionValidation)
             return Result<void>::Failure(MakeError(DecisionCookErrors::Invalid));
         const auto &evidence = *review.commitEvidence;
         if (evidence.registry != &registry || evidence.ai.SourceRoot() != root || evidence.ai.Registry().Revision() != review.registry)
