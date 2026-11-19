@@ -583,9 +583,9 @@ class AndroidAssemblyTests(unittest.TestCase):
         self.assertNotIn('ninja==', workflow)
         self.assertEqual(len(self.tools["ninjaSha256"]), 64)
 
-    def test_hosted_gradle_cache_isolates_profiles_and_keys_locked_resolution_inputs(self):
+    def test_hosted_gradle_cache_reuses_debug_graph_and_isolates_release_resolution(self):
         workflow = (android_package.ROOT / ".github/workflows/android-package.yml").read_text()
-        cache_step = workflow.split("- name: Cache Gradle dependencies by qualification profile", 1)[1]
+        cache_step = workflow.split("- name: Cache Gradle dependencies by build variant", 1)[1]
         cache_step = cache_step.split("- name:", 1)[0]
         self.assertIn("uses: actions/cache@", cache_step)
         cache_paths, key = cache_step.split("key:", 1)
@@ -593,12 +593,14 @@ class AndroidAssemblyTests(unittest.TestCase):
             "~/.gradle/caches/modules-2/files-2.1",
             "~/.gradle/caches/modules-2/metadata-*",
         })
-        self.assertIn("${{ matrix.profile }}", key)
-        self.assertNotIn("restore-keys:", cache_step)
+        self.assertIn("matrix.profile == 'qualification-release' && 'qualification-release' || 'qualification-debug'", cache_paths)
+        prefix = "android-gradle-${{ runner.os }}-${{ runner.arch }}-${{ env.GRADLE_CACHE_VARIANT }}-"
+        cache_key, restore_keys = key.split("restore-keys: |", 1)
+        self.assertTrue(cache_key.strip().startswith(prefix + "locked-"))
+        self.assertEqual([line.strip() for line in restore_keys.splitlines() if line.strip()], [prefix + "locked-", prefix])
         hashed_files = key.split("hashFiles(", 1)[1].split(")", 1)[0]
         self.assertEqual({path.strip().strip("'") for path in hashed_files.split(",")}, {
             "android/toolchain-lock.json",
-            "android/package-profiles.json",
             "android/gradle/build.gradle",
             "android/gradle/settings.gradle",
             "android/gradle/gradle.properties",

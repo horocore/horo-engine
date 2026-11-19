@@ -29,14 +29,19 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Cache Gradle dependencies by qualification profile
-        # Release lint resolves extra modules, so debug and release need separate cache entries.
+      - name: Cache Gradle dependencies by build variant
+        # Debug profiles share the same Java graph. Release lint adds dependencies.
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        env:
+          GRADLE_CACHE_VARIANT: ${{ matrix.profile == 'qualification-release' && 'qualification-release' || 'qualification-debug' }}
         with:
           path: |
             ~/.gradle/caches/modules-2/files-2.1
             ~/.gradle/caches/modules-2/metadata-*
-          key: android-gradle-${{ runner.os }}-${{ runner.arch }}-${{ matrix.profile }}-${{ hashFiles('android/toolchain-lock.json', 'android/package-profiles.json', 'android/gradle/build.gradle', 'android/gradle/settings.gradle', 'android/gradle/gradle.properties', 'android/gradle/gradle.lockfile') }}
+          key: android-gradle-${{ runner.os }}-${{ runner.arch }}-${{ env.GRADLE_CACHE_VARIANT }}-locked-${{ hashFiles('android/toolchain-lock.json', 'android/gradle/build.gradle', 'android/gradle/settings.gradle', 'android/gradle/gradle.properties', 'android/gradle/gradle.lockfile') }}
+          restore-keys: |
+            android-gradle-${{ runner.os }}-${{ runner.arch }}-${{ env.GRADLE_CACHE_VARIANT }}-locked-
+            android-gradle-${{ runner.os }}-${{ runner.arch }}-${{ env.GRADLE_CACHE_VARIANT }}-
       - name: Install locked SDK and build tools
         shell: bash
         run: |
