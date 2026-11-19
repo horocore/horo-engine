@@ -50,6 +50,7 @@
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
 #include "EditorSurfaceLifecycleQualification.h"
 #endif
+#include "ApprovedGameplayPackageHost.h"
 #include "EditorPlaySaveRetirement.h"
 #include "EditorUserStateMigration.h"
 #include "EditorWindowChrome.h"
@@ -347,6 +348,7 @@ namespace Horo::Editor {
             std::string rendererBackend;
             std::optional<EditorImageProviderInspection> imageProviderInspection;
             std::string projectRoot;
+            std::optional<Application::Internal::ApprovedGameplayPackageArguments> gameplayPackages;
             std::optional<Physics::PhysicsRuntimeMode> physicsMode{Physics::PhysicsRuntimeMode::Null};
             std::string cookedRoot;
             std::string cookTarget;
@@ -3373,6 +3375,7 @@ namespace Horo::Editor {
 
         /** @brief Keeps an optional fallback host and the selected package service in one startup lifetime. */
         struct EditorPackageComposition final {
+            std::optional<Application::Internal::ApprovedGameplayPackageHost> approval;
             std::unique_ptr<Application::Internal::PackageProjectHost> owned;
             Application::Internal::PackageProjectHost *selected{};
         };
@@ -3390,16 +3393,37 @@ namespace Horo::Editor {
             if (p.background.xrHost && p.background.xrHost->packages)
                 packages.selected = p.background.xrHost->packages.get();
 #endif
+            if (p.options.gameplayPackages && packages.selected)
+                return Output::Failure(MakeError(Packages::PackageLifecycleErrors::InvalidLifecycle,
+                                                 "Gameplay package execution is unavailable with the selected XR package owner."));
             if (!packages.selected) {
                 const auto cache = ResolveEditorSettingsHomeDirectory() / ".cache" / "horo" / "packages";
-                auto created = Application::Internal::PackageProjectHost::
-                    Create({p.background.jobs, durableFiles, clock, wallClock, trust},
-                           {.cacheRoot = cache,
-                            .platform = std::move(platform).Value(),
-                            .lifecycle = {.temporaryRoot = cache / "native",
-                                          .profile = Extensions::ExtensionHostProfile::Interactive,
-                                          .artifactGate = std::make_shared<Application::Internal::UnconfiguredPackageGate>()}},
-                           Duration::FromMilliseconds(1'000));
+                Application::Internal::PackageProjectPolicy
+                    policy{.cacheRoot = cache,
+                           .platform = std::move(platform).Value(),
+                           .lifecycle = {.temporaryRoot = cache / "native",
+                                         .profile = Extensions::ExtensionHostProfile::Interactive,
+                                         .artifactGate = std::make_shared<Application::Internal::UnconfiguredPackageGate>()}};
+                const Packages::IPackageExtensionTrust *execution = &trust;
+                Packages::PackagePublisherVerificationService *publishers{};
+                if (const auto &requested = p.options.gameplayPackages) {
+                    auto project = CaptureEditorPreviewRoot(p.options);
+                    if (project.HasError())
+                        return Output::Failure(std::move(project).ErrorValue());
+                    policy.projectRoot = std::move(project).Value();
+                    auto approved =
+                        Application::Internal::PrepareApprovedGameplayPackageHost(durableFiles, wallClock, std::move(policy), *requested);
+                    if (approved.HasError())
+                        return Output::Failure(std::move(approved).ErrorValue());
+                    packages.approval.emplace(std::move(approved).Value());
+                    execution = packages.approval->execution.get();
+                    publishers = packages.approval->publishers.get();
+                    policy = std::move(packages.approval->policy);
+                }
+                auto created =
+                    Application::Internal::PackageProjectHost::Create({p.background.jobs, durableFiles, clock, wallClock, *execution},
+                                                                      std::move(policy), Duration::FromMilliseconds(1'000), nullptr,
+                                                                      publishers);
                 if (created.HasError())
                     return Output::Failure(created.ErrorValue());
                 packages.owned = std::move(created).Value();
@@ -3653,8 +3677,12 @@ namespace Horo::Editor {
             SteadyClock packageClock;
             Application::Internal::UnconfiguredPackageTrust packageTrust;
             auto preparedPackages = PrepareEditorPackages(p, durableFiles, packageClock, wallClock, packageTrust);
-            if (preparedPackages.HasError())
+            if (preparedPackages.HasError()) {
+                LOG_ERROR("editor.packages", "%s: %s", preparedPackages.ErrorValue().code.Value().c_str(),
+                          preparedPackages.ErrorValue().message.c_str());
+                p.healthy = false;
                 return std::nullopt;
+            }
             auto packageComposition = std::move(preparedPackages).Value();
             auto *packages = packageComposition.selected;
             ProjectMutationCoordinator mutationCoordinator{durableFiles};
@@ -4940,6 +4968,16 @@ namespace Horo::Editor {
             return 1;
 #endif
         auto opts = ParseOptions(launch.hostArguments);
+        auto gameplayPackages = Application::Internal::ParseApprovedGameplayPackageArguments(launch.hostArguments);
+        if (gameplayPackages.HasError() || (gameplayPackages.Value() && (opts.projectRoot.empty() || opts.textPreview))) {
+            const auto error = gameplayPackages.HasError()
+                                   ? gameplayPackages.ErrorValue()
+                                   : MakeError(Packages::PackageLifecycleErrors::InvalidCandidate,
+                                               "Gameplay package execution requires one explicit interactive --project.");
+            LOG_ERROR("editor.packages", "%s: %s", error.code.Value().c_str(), error.message.c_str());
+            return 1;
+        }
+        opts.gameplayPackages = std::move(gameplayPackages).Value();
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
         if (packageProbe.Value() && (opts.textPreview || opts.xrSimulator))
             return 1;

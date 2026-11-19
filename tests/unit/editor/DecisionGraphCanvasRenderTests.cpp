@@ -15,12 +15,14 @@
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserDialogs.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
 #include "support/DecisionGraphCompilerTestSupport.h"
+#include "support/OwnedTestDirectory.h"
 
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <cstdint>
+#include <fstream>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <limits>
@@ -345,6 +347,77 @@ namespace Horo::Editor {
         fixture.DrawCreateDecisionModal(state, model, task);
         CHECK_FALSE(draft.score->key.IsValid());
         CHECK(draft.score->schemaSource == Sha256Digest{});
+    }
+
+    TEST_CASE("Package Decision contributions follow shared theme tokens without calling provider code",
+              "[unit][editor][decision][palette][theme]") {
+        using namespace AI;
+        using namespace AI::DecisionGraphTestSupport;
+        CanvasFixture fixture;
+        Fixture provider;
+        auto registration = Registration(provider.probe);
+        registration.contract.descriptor.origin.kind = DecisionDescriptorSourceKind::Package;
+        registration.contract.descriptor.requirements = {{.key = MakeIdentity<BlackboardKeyId>(1),
+                                                          .kind = BlackboardValueKind::Boolean,
+                                                          .access = BlackboardKeyAccess::ReadWrite,
+                                                          .source = Location()}};
+        const auto generation = DecisionNodeGeneration::Capture({&registration, 1}, provider.admission);
+        REQUIRE(generation.HasValue());
+        const auto metadata = DecisionBlackboardProviderMetadata::Capture(*generation.Value());
+        REQUIRE(metadata.HasValue());
+        const auto &descriptor = registration.contract.descriptor;
+        const std::array choices{DecisionTaskChoice{descriptor.type,
+                                                    descriptor.origin.provider,
+                                                    descriptor.origin.version,
+                                                    "Package contribution",
+                                                    false,
+                                                    {},
+                                                    DecisionDescriptorSourceKind::Package}};
+        const DecisionTaskPaletteCatalog catalog{choices, 1, metadata.Value().get()};
+        DecisionTaskPaletteDraft draft{.selected = descriptor.type, .catalogRevision = 1};
+        const Horo::Tests::OwnedTestDirectory themes{"decision-package-theme"};
+        const auto writeTheme = [&](const char *filename, const char *contents) {
+            std::ofstream file{themes.Path() / filename};
+            file << contents;
+            REQUIRE(file.good());
+        };
+        writeTheme("a.json", R"({"colors":{"Text":"#E13865","TextDisabled":"#8CA321"}})");
+        writeTheme("b.json", R"({"colors":{"Text":"#29A7D4","TextDisabled":"#D18C35"}})");
+
+        struct RestoreTheme final {
+            int index;
+
+            ~RestoreTheme() {
+                Theme::RefreshThemeList(nullptr);
+                Theme::SelectThemeByIndex(index);
+            }
+        } restore{Theme::GetActiveThemeIndex()};
+
+        Theme::RefreshThemeList(themes.Path().string().c_str());
+        const auto count = static_cast<int>(Theme::GetThemeList().size());
+        REQUIRE(count >= 2);
+        const auto drawn = [](const ImU32 color) {
+            const auto *data = ImGui::GetDrawData();
+            for (const auto *list : data->CmdLists)
+                if (std::ranges::any_of(list->VtxBuffer, [color](const auto &vertex) {
+                    return vertex.col == color;
+                }))
+                    return true;
+            return false;
+        };
+        const auto observe = [&](const int index) {
+            Theme::SelectThemeByIndex(index);
+            CHECK(fixture.DrawPalette(catalog, draft) == &choices[0]);
+            CHECK(fixture.labels.Used("workspace.decision_graph.task_schema_unverified"));
+            const auto foreground = Theme::U32(Theme::Text());
+            const auto diagnostic = Theme::U32(Theme::Muted());
+            CHECK(drawn(foreground));
+            CHECK(drawn(diagnostic));
+            return std::array{foreground, diagnostic};
+        };
+        CHECK(observe(count - 2) != observe(count - 1));
+        CHECK(draft.selected == descriptor.type);
+        CHECK(provider.probe.factories == 0);
     }
 
     TEST_CASE("Decision task palette explains exact saved schema incompatibilities without creating a provider",

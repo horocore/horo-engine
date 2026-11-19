@@ -1,4 +1,5 @@
 #include "../runtime/ai/BehaviorTreeRuntimeTestSupport.h"
+#include "ApprovedGameplayPackageHost.h"
 #include "GameplayModuleTestSupport.h"
 #include "Horo/AI/AIScenePerceptionSource.h"
 #include "Horo/AI/PerceptionSenseScene.h"
@@ -6,19 +7,25 @@
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Gameplay/GameEventRegistry.h"
 #include "Horo/Packages/GameplayPackageModuleHost.h"
+#include "Horo/Packages/PackageCache.h"
 #include "Horo/Packages/PackageRequest.h"
+#include "HostSignatureDocument.h"
+#include "OpenXRProductSigningTestSupport.h"
 #include "PackageApplicationServiceTestSupport.h"
+#include "PackageHostPolicy.h"
 #include "PackageLifecycleTestSupport.h"
 #include "PackageProjectHost.h"
 #include "PerceptionSenseTestSupport.h"
 
+#include <catch2/generators/catch_generators.hpp>
 #include <cstdint>
 #include <fstream>
 #include <thread>
 using namespace Horo::Packages::Tests::Support;
 
 namespace {
-    std::shared_ptr<PackageRestoreGraph> GameplayGraph(const bool withBackend = false) {
+    std::shared_ptr<PackageRestoreGraph> GameplayGraph(const bool withBackend = false,
+                                                       std::optional<std::string> moduleSignature = std::nullopt) {
         const auto entry = "module" + std::filesystem::path{HORO_TEST_GAME_MODULE_PATH}.extension().string();
         nlohmann::json descriptor{{"id", "fixture.gameplay"},
                                   {"version", "1.0.0"},
@@ -32,6 +39,8 @@ namespace {
         std::vector<std::pair<std::string, std::string>> files;
         files.emplace_back("extensions/native/Node.horo_script", "return {role='condition',check=function() return true end}");
         files.emplace_back("extensions/native/Sense.horo_script", "return function(x,y,z,lx,ly,lz) return x-lx < 500 end");
+        if (moduleSignature)
+            files.emplace_back("extensions/native/" + entry + ".signature.json", std::move(*moduleSignature));
         if (withBackend) {
             const auto backend = "backend" + std::filesystem::path{HORO_PACKAGE_NATIVE_FIXTURE}.extension().string();
             descriptor["modules"].push_back({{"id", "fixture.backend"},
@@ -250,17 +259,25 @@ TEST_CASE("Verified package decision nodes retain exact locked version and real 
     CHECK(fixture.retirement->Close().HasValue());
 }
 
-TEST_CASE("Editor package selection publishes exact Decision nodes through the configured project host",
-          "[packages][decision-node][editor]") {
-    using Horo::Application::Internal::PackageProjectHost;
+TEST_CASE("Signed offline Editor package selection publishes only exactly approved Decision nodes", "[packages][decision-node][editor]") {
+    using namespace Horo::Application::Internal;
+    enum class Admission {
+        Approved,
+        ArchiveMismatch,
+        NativeSignatureMismatch
+    };
+    const auto admission = GENERATE(Admission::Approved, Admission::ArchiveMismatch, Admission::NativeSignatureMismatch);
     GameplayFixture fixture;
     Horo::Tests::Packages::TemporaryDirectory project{"editor package decisions"};
     const auto root = std::filesystem::canonical(project.Path());
     const auto content = std::filesystem::canonical(fixture.base.temporary.Path());
     const auto relativeMetadata = root / ".horo";
     REQUIRE(std::filesystem::create_directories(relativeMetadata));
-    const auto locked = fixture.base.install.ActiveGraph();
-    REQUIRE(locked);
+    Horo::Tests::OpenXRProduct::SigningKey key;
+    const auto moduleBytes = FileBytes(HORO_TEST_GAME_MODULE_PATH);
+    const auto signedModule = key.Sign(std::as_bytes(
+        std::span{admission == Admission::NativeSignatureMismatch ? std::string_view{"different bytes"} : std::string_view{moduleBytes}}));
+    const auto locked = GameplayGraph(false, EncodeDetachedSignatureDocument(signedModule));
     const auto &entry = locked->packages.front();
     const auto intent = nlohmann::json{{"sources", {{"fixture.source", {{"kind", "public-registry"}, {"registry", "official"}}}}},
                                        {"dependencies", {{"fixture.gameplay", {{"source", "fixture.source"}, {"version", "1.0.0"}}}}}}
@@ -280,27 +297,66 @@ TEST_CASE("Editor package selection publishes exact Decision nodes through the c
     const auto lock = ValidatedPackageLockfileV1::Generate(resolution, std::span{&entry.lock.package, 1}, request.Value().Digest(),
                                                            std::span{&artifact, 1});
     REQUIRE(lock.HasValue());
-    std::ofstream{relativeMetadata / "packages.json", std::ios::binary} << intent;
-    std::ofstream{relativeMetadata / "packages.lock", std::ios::binary} << lock.Value().SerializeCanonical();
-    const auto bytes = entry.archive->Bytes();
-    Horo::Tests::PackageApplicationService::ControlledSource source{std::vector<std::byte>{bytes.begin(), bytes.end()}};
+    const auto write = [](const std::filesystem::path &path, std::string_view bytes) {
+        std::ofstream file{path, std::ios::binary};
+        file << bytes;
+        REQUIRE(file.good());
+    };
+    write(relativeMetadata / "packages.json", intent);
+    write(relativeMetadata / "packages.lock", lock.Value().SerializeCanonical());
+    const auto cacheRoot = content / "decision-host-cache";
+    auto cache = PackageCacheStore::Create(fixture.base.files, cacheRoot);
+    REQUIRE(cache.HasValue());
+    auto cacheStore = std::move(cache).Value();
+    REQUIRE(cacheStore.Publish(*entry.archive, key.Sign(entry.archive->Bytes())).HasValue());
+    const auto trustDocument = content / "approved-publishers.json";
+    constexpr std::string_view digits{"0123456789abcdef"};
+    std::string publicKey;
+    for (const auto byte : key.root.publicKey) {
+        const auto value = std::to_integer<unsigned>(byte);
+        publicKey.push_back(digits[value >> 4U]);
+        publicKey.push_back(digits[value & 15U]);
+    }
+    const auto trustJson = nlohmann::json{{"schemaVersion", 1},
+                                          {"allowUnsigned", false},
+                                          {"publishers",
+                                           {{{"publisherId", key.root.publisherId},
+                                             {"keyId", key.root.keyId},
+                                             {"algorithm", "ecdsa-p256-sha256"},
+                                             {"publicKeyHex", publicKey},
+                                             {"expiresAtUnixMilliseconds", 0},
+                                             {"revoked", false}}}}}
+                               .dump();
+    write(trustDocument, trustJson);
+    const auto projectTrust = root / "unapproved-publishers.json";
+    write(projectTrust, trustJson);
     JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 8, .ioWorkerCount = 1}};
     const SteadyClock clock;
     const SystemWallClock wall;
-    auto created = PackageProjectHost::Create({jobs, fixture.base.files, clock, wall, fixture.base.trust},
-                                              {.cacheRoot = content / "decision-host-cache",
-                                               .platform = {"linux", "x64", "horo-sdk-2"},
-                                               .lifecycle = {.temporaryRoot = content,
-                                                             .capabilities = {"runtime.participate"},
-                                                             .artifactGate = Horo::Tests::CreateAcceptingArtifactGate(),
-                                                             .moduleHosts = {fixture.gameplay},
-                                                             .moduleRetirements = fixture.retirement},
-                                               .mode = PackageRestoreMode::Online,
-                                               .gameplayModules = fixture.gameplay.get()},
-                                              Duration::FromMilliseconds(60'000), &source);
+    const auto platform = NativePackagePlatform();
+    REQUIRE(platform.HasValue());
+    const PackageProjectPolicy base{.projectRoot = root,
+                                    .cacheRoot = cacheRoot,
+                                    .platform = platform.Value(),
+                                    .lifecycle = {.temporaryRoot = cacheRoot / "native",
+                                                  .profile = Extensions::ExtensionHostProfile::Interactive}};
+    const ApprovedGameplayPackage approved{entry.lock.package,
+                                           "fixture.gameplay",
+                                           fixture.enabled.module,
+                                           admission == Admission::ArchiveMismatch ? ComputeSha256({}) : entry.lock.artifactDigest,
+                                           entry.lock.manifestDigest,
+                                           Horo::Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH)};
+    CHECK(PrepareApprovedGameplayPackageHost(fixture.base.files, wall, base, {projectTrust, {approved}}).HasError());
+    auto prepared = PrepareApprovedGameplayPackageHost(fixture.base.files, wall, base, {trustDocument, {approved}});
+    REQUIRE(prepared.HasValue());
+    auto configuration = std::move(prepared).Value();
+    auto created =
+        PackageProjectHost::Create({jobs, fixture.base.files, clock, wall, *configuration.execution}, std::move(configuration.policy),
+                                   Duration::FromMilliseconds(60'000), nullptr, configuration.publishers.get());
     REQUIRE(created.HasValue());
     const auto host = std::move(created).Value();
     CHECK(host->HasGameplayModuleOwner());
+    CHECK(host->Acquire(content).HasError());
     std::shared_ptr<Horo::Application::PackageApplication> application;
     for (const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
          !application && std::chrono::steady_clock::now() < deadline;) {
@@ -334,6 +390,13 @@ TEST_CASE("Editor package selection publishes exact Decision nodes through the c
     };
     const auto publication = pump(activated.Value());
     INFO((publication.diagnostic ? publication.diagnostic->message : ""));
+    if (admission != Admission::Approved) {
+        CHECK(publication.outcome == Horo::Application::PackageOperationOutcome::Failed);
+        CHECK_FALSE(host->DecisionCatalog(root));
+        REQUIRE(modal.Close(generation.Value()).HasValue());
+        REQUIRE(host->Close().HasValue());
+        return;
+    }
     REQUIRE(publication.outcome == Horo::Application::PackageOperationOutcome::Succeeded);
     const auto stamp = host->DecisionCatalog(root);
     REQUIRE(stamp);

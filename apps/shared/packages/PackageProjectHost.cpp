@@ -39,6 +39,9 @@ namespace Horo::Application::Internal {
         if (metadataMaximumAge <= Duration{} || metadataMaximumAge > Duration::FromMilliseconds(60'000) || policy.cacheRoot.empty() ||
             !policy.cacheRoot.is_absolute() || !policy.lifecycle.artifactGate)
             return Result<std::unique_ptr<PackageProjectHost>>::Failure(Failure("packages.host.invalid_policy"));
+        if (const auto &pin = policy.executionProjectRoot;
+            pin && (!pin->is_absolute() || *pin != pin->lexically_normal() || *pin != policy.projectRoot || !policy.gameplayModules))
+            return Result<std::unique_ptr<PackageProjectHost>>::Failure(Failure("packages.host.policy_mismatch"));
         if (policy.gameplayModules && !std::ranges::any_of(policy.lifecycle.moduleHosts, [&policy](const auto &host) {
             return host.get() == policy.gameplayModules;
         }))
@@ -69,6 +72,8 @@ namespace Horo::Application::Internal {
             return Result<std::shared_ptr<PackageApplication>>::Failure(Failure("packages.host.closed"));
         if (root.empty() || !root.is_absolute() || root != root.lexically_normal())
             return Result<std::shared_ptr<PackageApplication>>::Failure(Failure("packages.host.invalid_project"));
+        if (impl_->policy.executionProjectRoot && root != *impl_->policy.executionProjectRoot)
+            return Result<std::shared_ptr<PackageApplication>>::Failure(Failure("packages.host.project_stale"));
         if (root != impl_->policy.projectRoot || impl_->generation == 0) {
             if (auto advanced = impl_->AdvanceGeneration(); advanced.HasError())
                 return Result<std::shared_ptr<PackageApplication>>::Failure(advanced.ErrorValue());
@@ -105,7 +110,8 @@ namespace Horo::Application::Internal {
             if (auto composed = impl_->ComposePrepared(); composed.HasError())
                 return composed;
         }
-        if (!impl_->policy.projectRoot.empty() && !impl_->metadataJob && !impl_->Fresh(now)) {
+        if (!impl_->policy.projectRoot.empty() && (!impl_->policy.executionProjectRoot || impl_->generation != 0) && !impl_->metadataJob &&
+            !impl_->Fresh(now)) {
             if (auto started = impl_->StartMetadata(); started.HasError()) {
                 impl_->diagnostic = started.ErrorValue();
                 return started;

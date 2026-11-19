@@ -32,7 +32,8 @@ namespace Horo::Application::Internal {
         Packages::PackageRestoreLimits limits;
         Packages::PackageRestoreMode mode{Packages::PackageRestoreMode::Offline};
         bool requirePublisherVerification{};
-        Packages::GameplayPackageModuleHost *gameplayModules{}; /**< Optional exact owner already retained by lifecycle.moduleHosts. */
+        Packages::GameplayPackageModuleHost *gameplayModules{};    /**< Optional exact owner already retained by lifecycle.moduleHosts. */
+        std::optional<std::filesystem::path> executionProjectRoot; /**< Explicit launcher pin for execution-enabled hosts only. */
     };
 
     /** @brief Bounded inert project snapshot prepared on a host-owned I/O job, never during modal drawing. */

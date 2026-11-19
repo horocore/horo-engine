@@ -91,6 +91,30 @@ safe merely by reducing permissions.
 In non-interactive mode, new trust requirements fail unless a policy allowlist or
 previous user-local trust state exists.
 
+### Editor Gameplay Package Approval
+
+The ordinary desktop Editor accepts an explicit startup project, a separate
+publisher roots document in the existing signature-document format, and one or
+more exact gameplay module approvals.
+
+```text
+HoroEditor --project <absolute-project> --gameplay-package-publisher-trust <absolute-roots-json> --approve-gameplay-package <package> <extension> <module> <archive-sha256> <manifest-sha256> <descriptor-revision>
+```
+
+The publisher roots document must be outside the project and package cache.
+Repeat the approval option for additional modules. All approvals for one package
+must identify the same archive, manifest and extension. The archive publisher
+signature is reverified from the offline cache. The selected native role also
+requires its own signed `<artifact>.signature.json` sibling in the exact
+verified contribution inventory. The SDK build fingerprint comes from the host.
+
+Startup approval makes the role available for explicit activation from the
+existing Package dialog. Decision descriptors become visible only after that
+activation publishes and disappear when it is withdrawn. The configured package
+host is bound to the one startup project. A selected XR package host currently
+rejects the combined gameplay package request. The default desktop package
+host continues to require configured execution authority.
+
 ### Extension Activation Hand-Off
 
 For each enabled extension descriptor, `PackageLifecycleService` lends
