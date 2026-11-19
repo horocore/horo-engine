@@ -136,12 +136,13 @@ namespace Horo::Network {
         return Result<void>::Success();
     }
 
-    Result<void> NetworkModeComposition::AdvanceTravel(const Runtime::RuntimePhase phase) {
+    Result<void> NetworkModeComposition::AdvanceTravel(const Runtime::RuntimePhase phase, std::uint64_t localSimulationTick,
+                                                       const CancellationToken &cancellation) {
         if (auto pending = binding_->TravelStatus(); pending.HasError())
             return pending;
         if (!binding_->TravelReady())
             return Result<void>::Success();
-        if (auto committed = binding_->Commit(phase); committed.HasError())
+        if (auto committed = binding_->Commit(phase, localSimulationTick, cancellation); committed.HasError())
             return committed;
         // Every service and both detached world lifecycles are ready. The remaining
         // swap cannot fail and no external callback observes half a listen aggregate.

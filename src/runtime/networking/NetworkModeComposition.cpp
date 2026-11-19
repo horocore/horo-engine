@@ -322,7 +322,8 @@ namespace Horo::Network {
     }
 
     /** @copydoc NetworkModeComposition::RunPhase */
-    Result<void> NetworkModeComposition::RunPhase(const Runtime::RuntimePhase phase) {
+    Result<void> NetworkModeComposition::RunPhase(const Runtime::RuntimePhase phase, std::uint64_t completedSimulationTick,
+                                                  const CancellationToken &cancellation) {
         if (!started_ || stopped_)
             return Unavailable("Mode worlds are not published.");
         if (phase > Runtime::RuntimePhase::EndFrame || phase == Runtime::RuntimePhase::FixedUpdate)
@@ -333,7 +334,9 @@ namespace Horo::Network {
                 return advanced;
         }
         if (binding_ && phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges) {
-            auto advanced = travelPending_ ? AdvanceTravel(phase) : binding_->Commit(phase);
+            const auto localSimulationTick = completedSimulationTick + 1;
+            auto advanced = travelPending_ ? AdvanceTravel(phase, localSimulationTick, cancellation)
+                                           : binding_->Commit(phase, localSimulationTick, cancellation);
             if (advanced.HasError() && travelPending_) {
                 travelFailure_ = advanced.ErrorValue();
                 (void)binding_->CancelTravel();

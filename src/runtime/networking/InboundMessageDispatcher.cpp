@@ -10,6 +10,14 @@
 #include <utility>
 
 namespace Horo::Network {
+    namespace {
+        /** @brief Distinguishes a live synchronizing peer from a stale or unauthorized world grant. */
+        bool InitialStatePending(const Error &error) noexcept {
+            return error.domain.Value() == NetworkErrors::ReplicationInitialStatePending.domain.Value() &&
+                   error.code.Value() == NetworkErrors::ReplicationInitialStatePending.code.Value();
+        }
+    }  // namespace
+
     struct InboundMessageDispatcher::Session final {
         Session(std::shared_ptr<PeerSessionLifecycle> owner, const ConnectionHandle handle,
                 const NetworkOperationGeneration sessionGeneration, MessageDeliveryGate delivery,
@@ -282,8 +290,11 @@ namespace Horo::Network {
             if (!worlds)
                 return RejectAndClose(connection, MakeError(NetworkErrors::NetworkModeUnavailable));
             if (auto admitted = worlds->AdmitWorldDispatch(connection, session.generation, *session.lifecycle, nowTick);
-                admitted.HasError())
+                admitted.HasError()) {
+                if (InitialStatePending(admitted.ErrorValue()))
+                    return admitted;
                 return RejectAndClose(connection, admitted.ErrorValue());
+            }
         }
         return Result<void>::Success();
     }
@@ -292,8 +303,18 @@ namespace Horo::Network {
     Result<void> InboundMessageDispatcher::InvokeHandler(const std::shared_ptr<Session> &session, Handler &handler,
                                                          const NetworkTransportEvent &event, const MessageEnvelope &message,
                                                          const std::uint64_t nowTick) {
-        if (auto world = AdmitWorldBinding(*session, handler.binding.traffic, event.connection, nowTick); world.HasError())
+        const MessageDeliveryInput
+            input{event.connection,    session->generation, event.channel, event.delivery, handler.binding.traffic, message.sequence, 0,
+                  event.payload.size()};
+        if (auto world = AdmitWorldBinding(*session, handler.binding.traffic, event.connection, nowTick); world.HasError()) {
+            if (InitialStatePending(world.ErrorValue())) {
+                // Consume an otherwise valid reliable sequence without invoking the handler or extending the session.
+                return session->gate.Apply(input, nowTick, [&world] {
+                    return std::move(world);
+                });
+            }
             return world;
+        }
         const auto bound = handler.owner.lock();
         if (bound == nullptr)
             return RejectAndClose(event.connection, MakeError(NetworkErrors::GameplayDispatchRejected));
@@ -314,9 +335,6 @@ namespace Horo::Network {
         }
         if (rate->count >= handler.binding.maximumPerTick)
             return RejectAndClose(event.connection, MakeError(NetworkErrors::TransportReliableBackpressure));
-        const MessageDeliveryInput
-            input{event.connection,    session->generation, event.channel, event.delivery, handler.binding.traffic, message.sequence, 0,
-                  event.payload.size()};
         try {
             // Apply invokes synchronously; pin both owners while the decoded message and rate slot are borrowed.
             return session->gate.Apply(input, nowTick,

@@ -1,0 +1,190 @@
+#include "Horo/Network/NetworkAuthoredScenePage.h"
+#include "Horo/Network/NetworkInitialStateStream.h"
+#include "NetworkModeHostTestSupport.h"
+
+namespace Horo::Network {
+    namespace {
+        constexpr auto CommitPhase = Runtime::RuntimePhase::CommitDeferredLifecycleChanges;
+
+        /** @brief An explicitly empty replicated Scene uses the real receiver without invoking a field owner. */
+        class EmptyInitialStateOwner final : public INetworkInitialStateHost,
+                                             public IReplicationApplyOwner,
+                                             public std::enable_shared_from_this<EmptyInitialStateOwner> {
+        public:
+            Result<NetworkPeerId> ClientRecipient(const PeerSessionLifecycle &) override {
+                return NetworkPeerId::Create(7);
+            }
+
+            Result<std::optional<ReplicationInitialStateSnapshot>> Capture(const ReplicationWorldReadLease &world,
+                                                                           const ReplicationWorldLifecycle &, const PeerSessionLifecycle &,
+                                                                           std::size_t) override {
+                REQUIRE(world.Mapping().Entries().empty());
+                ++captures;
+                return Result<std::optional<ReplicationInitialStateSnapshot>>::Success(
+                    ReplicationInitialStateSnapshot{world.Descriptor().session, world.Descriptor().authority, 21, {}});
+            }
+
+            Result<NetworkInitialStateTarget> PrepareReceiver(const ReplicationInboundAuthority &authority,
+                                                              ReplicationWorldLifecycle &world, std::uint64_t now) override {
+                ++prepared;
+                auto owner = shared_from_this();
+                auto receiver =
+                    ReplicationInboundApply::Create(authority, world, owner, now, {}, ReplicationInboundApplyMode::InitialSnapshot);
+                if (receiver.HasError())
+                    return Result<NetworkInitialStateTarget>::Failure(receiver.ErrorValue());
+                return Result<NetworkInitialStateTarget>::Success({std::move(owner), std::move(receiver).Value()});
+            }
+
+            Result<std::unique_ptr<IReplicationApplyCandidate>> Prepare(std::span<const ReplicationApplyUpdate>) override {
+                FAIL("An empty snapshot has no field owner work");
+                return Result<std::unique_ptr<IReplicationApplyCandidate>>::Failure(MakeError(NetworkErrors::NetworkModeUnavailable));
+            }
+
+            std::size_t captures{};
+            std::size_t prepared{};
+        };
+
+        /** @brief Records whether the canonical dispatcher actually invoked a gameplay handler. */
+        class ObservedCommand final : public IInboundMessageHandler {
+        public:
+            Result<void> Handle(const MessageEnvelope &) override {
+                ++accepted;
+                return Result<void>::Success();
+            }
+
+            std::size_t accepted{};
+        };
+
+        /** @brief Explicit immutable route registrations for a configured product instance. */
+        NetworkWorldBindingSetup InitialSetup(const std::shared_ptr<EmptyInitialStateOwner> &owner) {
+            auto setup = ModeBindingTests::Setup();
+            const auto protocol = setup.policy.control.protocol;
+            const auto worldFeature = setup.policy.feature;
+            const auto initialFeature = WireIdentity<ProtocolFeatureId>(2);
+            const auto route = [protocol](std::uint16_t id) {
+                return MessageIdentityDescriptor{protocol,
+                                                 WireIdentity<MessageTypeId>(id),
+                                                 WireIdentity<MessageSchemaId>(id),
+                                                 {1, 0},
+                                                 false};
+            };
+            const std::array messages{setup.policy.control, route(12), route(14), route(16), route(18)};
+            setup.policy.authoredScene = NetworkAuthoredScenePolicy{messages[2], worldFeature};
+            setup.policy.prefabLifecycle = NetworkPrefabLifecyclePolicy{messages[3], worldFeature};
+            setup.policy.initialState = NetworkInitialStatePolicy{messages[4], initialFeature, 4096};
+            setup.initialStateHost = owner;
+            const ProtocolIdentityDescriptor identity{protocol, {{1, 0}, {1, 0}}};
+            const std::array features{FeatureIdentityDescriptor{protocol, worldFeature, {1, 0}},
+                                      FeatureIdentityDescriptor{protocol, initialFeature, {1, 0}}};
+            const auto identities = ProtocolIdentityRegistry::Create({std::span{&identity, 1}, messages, features, {}}).Value();
+            const std::array capacities{NetworkWorldBindingWireBytes, std::size_t{8}, MaximumNetworkAuthoredScenePageBytes,
+                                        MaximumNetworkPrefabLifecycleBytes, MaximumNetworkInitialStateFrameBytes};
+            std::array<MessageCodecDescriptor, messages.size()> codecs;
+            for (std::size_t i{}; i < messages.size(); ++i)
+                codecs[i] = {protocol, messages[i].id, messages[i].schema, {{1, 0}, {1, 0}}, capacities[i]};
+            setup.codecs = std::make_shared<const MessageCodecRegistry>(MessageCodecRegistry::Create({codecs, {}}, identities).Value());
+            return setup;
+        }
+
+        /** @brief Real scheduler, mode controller, authenticated peers and packet dispatcher with a captured native outbox. */
+        struct InitialProduct final {
+            std::shared_ptr<EmptyInitialStateOwner> fields{std::make_shared<EmptyInitialStateOwner>()};
+            std::shared_ptr<ProductOwners> owners{std::make_shared<ProductOwners>()};
+            DeterministicClock clock;
+            std::unique_ptr<Application::Internal::NetworkProductHost> host;
+            std::shared_ptr<PeerSessionLifecycle> client{ModeBindingTests::Negotiating(Connection(), Session())};
+            std::shared_ptr<PeerSessionLifecycle> server{ModeBindingTests::Negotiating(ConnectionHandle::Create(3, 1).Value(), Session(8))};
+            std::shared_ptr<ObservedCommand> command{std::make_shared<ObservedCommand>()};
+
+            InitialProduct() {
+                owners->worldSetup = InitialSetup(fields);
+                const std::array worlds{World(NetworkModeWorldKind::AuthorityServer, 1), World(NetworkModeWorldKind::Client, 2)};
+                host = Product(clock, NetworkProjectRole::ListenServer, worlds, {.localPlayer = true}, owners).Value();
+                Wire().setup = owners->worldSetup;
+                Wire().AttachOwner(owners->sessions->WorldBinding());
+                REQUIRE(host->Startup().HasValue());
+                REQUIRE(host->RunFrame().HasValue());
+                const auto feature = owners->worldSetup.policy.initialState->feature;
+                ModeBindingTests::CompleteAdmission(client, Session(), feature);
+                ModeBindingTests::CompleteAdmission(server, Session(8), feature);
+                REQUIRE(owners->sessions->OnSessionActivated(AdmissionEndpoint::Server, server, Session(8), 22).HasValue());
+                REQUIRE(owners->sessions->OnSessionActivated(AdmissionEndpoint::Client, client, Session(), 22).HasValue());
+                Wire().RegisterClient(server);
+                Wire().RegisterClient(client);
+                REQUIRE(Wire()
+                            .dispatcher
+                            ->RegisterHandler({owners->worldSetup.policy.control.protocol, WireIdentity<MessageTypeId>(12),
+                                               MessageTrafficClass::Command, Runtime::RuntimePhase::NetworkPoll, 8},
+                                              command)
+                            .HasValue());
+                REQUIRE(host->RunFrame().HasValue());
+            }
+
+            ModeBindingTests::BindingFixture &Wire() {
+                return *owners->binding;
+            }
+
+            InboundDispatchReport Deliver(ConnectionHandle connection, ChannelId channel, std::vector<std::byte> payload) {
+                Wire().transport.event = {.kind = NetworkTransportEventKind::PacketReceived,
+                                          .connection = connection,
+                                          .channel = channel,
+                                          .delivery = DeliveryPolicy::ReliableOrdered,
+                                          .payload = std::move(payload)};
+                Wire().transport.queued = true;
+                return Wire().dispatcher->RunNetworkPoll(22).Value();
+            }
+
+            InboundDispatchReport Command(std::uint32_t sequence) {
+                MessageEnvelope envelope;
+                envelope.protocol = owners->worldSetup.policy.control.protocol;
+                envelope.message = WireIdentity<MessageTypeId>(12);
+                envelope.schema = WireIdentity<MessageSchemaId>(12);
+                envelope.schemaVersion = {1, 0};
+                envelope.sequence = MessageSequenceNumber{sequence};
+                return Deliver(server->Connection(), ChannelId::Create(1, 2).Value(),
+                               EncodeMessageEnvelope(envelope, *Wire().setup.codecs).Value());
+            }
+
+            std::vector<std::byte> Outgoing() {
+                const auto bytes = std::span{Wire().transport.sent}.first(Wire().transport.size);
+                return {bytes.begin(), bytes.end()};
+            }
+        };
+    }  // namespace
+
+    TEST_CASE("Configured product waits for a matching initial publication receipt before gameplay",
+              "[integration][network][mode][binding]") {
+        if constexpr (!HORO_TEST_PHYSICS_NATIVE)
+            SKIP("Canonical Physics is required for actual product world activation.");
+        InitialProduct product;
+        auto controller = product.Wire().binding.lock();
+        REQUIRE(controller);
+        product.Wire().Deliver();  // World binding.
+        product.Wire().Deliver();  // Authored inventory.
+        REQUIRE(product.host->RunFrame().HasValue());
+        product.Wire().Deliver();  // Complete empty field manifest.
+        CHECK(product.fields->captures == 1);
+        CHECK(product.fields->prepared == 0);
+        CHECK(product.Command(1).rejectedPackets == 1);
+        CHECK(product.command->accepted == 0);
+        CHECK(product.server->State() == PeerSessionState::Active);
+        REQUIRE(product.host->RunFrame().HasValue());
+        CHECK(product.fields->prepared == 1);
+        product.Wire().transport.backpressure = true;
+        REQUIRE(controller->Flush(22).HasValue());
+        CHECK(controller->AdmitWorldDispatch(product.client->Connection(), Session(), *product.client, 22).HasError());
+        product.Wire().transport.backpressure = false;
+        REQUIRE(controller->Flush(22).HasValue());
+        CHECK(controller->AdmitWorldDispatch(product.client->Connection(), Session(), *product.client, 22).HasValue());
+        CHECK(controller->AdmitWorldDispatch(product.server->Connection(), Session(8), *product.server, 22).HasError());
+        auto receipt = DecodeMessageEnvelope(product.Outgoing(), *product.Wire().setup.codecs).Value();
+        auto wrong = DecodeNetworkInitialStateReceipt(receipt.payload).Value();
+        ++wrong.tick;
+        receipt.payload = EncodeNetworkInitialStateReceipt(wrong).Value();
+        CHECK(controller->HandleAdmitted({product.server->Connection(), Session(8), product.server, 22}, receipt).HasError());
+        CHECK(controller->AdmitWorldDispatch(product.server->Connection(), Session(8), *product.server, 22).HasError());
+        REQUIRE(product.Deliver(product.server->Connection(), {}, product.Outgoing()).rejectedPackets == 0);
+        CHECK(product.Command(2).rejectedPackets == 0);
+        CHECK(product.command->accepted == 1);
+    }
+}  // namespace Horo::Network

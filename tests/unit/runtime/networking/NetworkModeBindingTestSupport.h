@@ -22,7 +22,8 @@ namespace Horo::Network::ModeBindingTests {
         return owner;
     }
 
-    inline void CompleteAdmission(const std::shared_ptr<PeerSessionLifecycle> &owner, const NetworkOperationGeneration generation) {
+    inline void CompleteAdmission(const std::shared_ptr<PeerSessionLifecycle> &owner, const NetworkOperationGeneration generation,
+                                  ProtocolFeatureId additionalFeature = {}) {
         const auto connection = owner->Connection();
         HandshakeSelection selected;
         selected.connection = connection;
@@ -32,6 +33,10 @@ namespace Horo::Network::ModeBindingTests {
         selected.schemaFingerprint = 42;
         selected.features.values[0] = WireIdentity<ProtocolFeatureId>(1);
         selected.features.count = 1;
+        if (additionalFeature.IsValid()) {
+            selected.features.values[1] = additionalFeature;
+            selected.features.count = 2;
+        }
         selected.transport.capabilityRevision = 3;
         selected.transport.admittedDelivery[static_cast<std::size_t>(DeliveryPolicy::ReliableOrdered)] = true;
         selected.transport.channelCount = 2;

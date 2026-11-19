@@ -14,7 +14,7 @@ namespace Horo::Network {
         constexpr std::array<std::byte, 4> EnvelopeMagic{static_cast<std::byte>('H'), static_cast<std::byte>('M'),
                                                          static_cast<std::byte>('S'), static_cast<std::byte>('G')};
         constexpr std::uint8_t EnvelopeVersion = 1;
-        constexpr std::size_t FixedHeaderBytes = 32;
+        constexpr std::size_t FixedHeaderBytes = MessageEnvelopeFixedHeaderBytes;
         constexpr std::size_t FieldHeaderBytes = 6;
 
         template <typename T> [[nodiscard]] Result<T> Fail(const ErrorCodeDescriptor &code) {

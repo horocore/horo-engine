@@ -42,7 +42,8 @@ namespace Horo::Network {
     }
 
     /** @copydoc NetworkWorldBindingController::Commit */
-    Result<void> NetworkWorldBindingController::Commit(const Runtime::RuntimePhase phase) {
+    Result<void> NetworkWorldBindingController::Commit(const Runtime::RuntimePhase phase, std::uint64_t localSimulationTick,
+                                                       const CancellationToken &cancellation) {
         if (auto checked = impl_->CheckOwner(); checked.HasError())
             return checked;
         const Impl::BusyScope busy{impl_->busy};
@@ -73,6 +74,8 @@ namespace Horo::Network {
             if (reservedCommit)
                 impl_->ReleaseCommitReservations(*reservedCommit);
             impl_->worlds.CancelTravel();
+        } else if (impl_->setup.policy.initialState) {
+            impl_->ApplyInitial(localSimulationTick, cancellation);
         }
         // No network send occurs here. After local publication each exact reserved
         // sequence remains owned until accepted, deadline, or typed peer failure.

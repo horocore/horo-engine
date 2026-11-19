@@ -1,5 +1,6 @@
 #pragma once
 /** @file NetworkWorldBindingState.h @brief Bounded private world-control publication/outbox ownership. */
+#include "Horo/Network/NetworkInitialStateStream.h"
 #include "NetworkModeWorldState.h"
 #include "NetworkWorldBindingController.h"
 
@@ -8,6 +9,8 @@ namespace Horo::Network {
     [[nodiscard]] bool ValidPrefabLifecycleRoute(const NetworkWorldBindingPolicy &policy, const MessageCodecRegistry &codecs);
     /** @brief Verifies the authored lane's identity and finite page budget against the registry. */
     [[nodiscard]] bool ValidAuthoredSceneRoute(const NetworkWorldBindingPolicy &policy, const MessageCodecRegistry &codecs);
+    /** @brief Verifies the selected field synchronization route and its structural prerequisites. */
+    [[nodiscard]] bool ValidInitialStateRoute(const NetworkWorldBindingPolicy &policy, const MessageCodecRegistry &codecs);
 
     struct NetworkWorldBindingController::Impl final {
         struct BusyScope final {
@@ -25,6 +28,22 @@ namespace Horo::Network {
         };
 
         struct Peer final {
+            struct InitialTransfer final {
+                NetworkInitialStateStamp stamp;
+                std::optional<ReplicationInitialStateSnapshot> snapshot;
+                std::unique_ptr<NetworkInitialStateInbox> inbox;
+                Runtime::SceneRuntimeId clientScene;
+                NetworkPeerId recipient;
+                std::size_t record{};
+                std::size_t offset{};
+                std::uint64_t deadline{};
+                std::uint64_t receivedTick{};
+                bool manifestQueued{};
+                bool sent{};
+                bool published{};
+                bool confirmed{};
+            };
+
             struct PrefabChange final {
                 NetworkObjectId occurrence;
                 bool spawn;
@@ -53,6 +72,8 @@ namespace Horo::Network {
             std::vector<NetworkObjectId> knownPrefabs;
             NetworkSessionGeneration prefabSession;
             std::uint64_t prefabRevision{};
+            Peer::InitialTransfer initial;
+            bool initialFramePending{};
             std::size_t frameBytes{};
             std::uint64_t deadline{};          // Current queued frame's bounded send deadline.
             std::uint64_t preparedDeadline{};  // Native-accepted PREPARE fence; unrelated traffic cannot extend it.
@@ -95,7 +116,39 @@ namespace Horo::Network {
         /** @brief Advances authored inventory progress only after native delivery accepts its exact frame. */
         static void CompleteAuthoredSend(Peer &peer) noexcept;
         /** @brief Advances the world handoff and its established authored generation. */
-        static void CompleteBindingSend(Peer &peer) noexcept;
+        void CompleteBindingSend(Peer &peer, std::uint64_t tick) const noexcept;
+        /** @brief Guards normal traffic until the exact current occurrence is confirmed. */
+        [[nodiscard]] bool InitialConfirmed(const Peer &peer) const noexcept;
+        /** @brief Accepts a frame from the authority or an exact publication receipt from its client. */
+        [[nodiscard]] Result<void> AcceptInitial(const MessageEnvelope &message, const InboundMessageContext &context);
+        /** @brief Confirms only a receipt for a fully sent snapshot on its bound client peer. */
+        [[nodiscard]] static Result<void> AcceptInitialReceipt(Peer &peer, std::span<const std::byte> payload, std::uint64_t tick);
+        /** @brief Forwards a field frame only to its exact authenticated world and receiving inbox. */
+        [[nodiscard]] Result<void> ReceiveInitial(Peer &peer, const MessageEnvelope &message, const InboundMessageContext &context);
+        /** @brief Acquires the next complete capture and advances the single reliable outbox by one frame. */
+        [[nodiscard]] Result<void> QueueInitial(Peer &peer, const NetworkWorldBindingRecord *current, std::uint64_t tick);
+        /** @brief Queues the receiver's receipt only after the initial transaction publishes. */
+        [[nodiscard]] Result<void> QueueInitialReceipt(Peer &peer, std::uint64_t tick);
+        /** @brief Serializes the next manifest or contiguous segment within the negotiated frame budget. */
+        [[nodiscard]] Result<void> QueueInitialPayload(Peer &peer, std::uint64_t tick);
+        /** @brief Chooses a bounded capture only after the peer has the matching structural inventory. */
+        [[nodiscard]] Result<void> CaptureInitial(Peer &peer, const NetworkWorldBindingRecord &current, std::uint64_t tick);
+        /** @brief Encodes a frame in the same reliable outbox as world and Prefab messages. */
+        [[nodiscard]] Result<void> QueueInitialFrame(Peer &peer, std::span<const std::byte> payload, std::uint64_t tick);
+        /** @brief Applies complete received fields after the structural owner phase. */
+        void ApplyInitial(std::uint64_t localSimulationTick, const CancellationToken &cancellation);
+        /** @brief Applies one complete snapshot using the exact configured Scene/Gameplay owner. */
+        [[nodiscard]] Result<void> ApplyClientInitial(Peer &peer, std::uint64_t localSimulationTick, const CancellationToken &cancellation);
+        /** @brief Acquires the explicit Scene transaction owner behind the synchronous provider boundary. */
+        [[nodiscard]] Result<NetworkInitialStateTarget> PrepareInitialTarget(const ReplicationInboundAuthority &authority,
+                                                                             ReplicationWorldLifecycle &world, std::uint64_t tick);
+        /** @brief Binds the first accepted frame to the live local recipient and exact receiving Scene. */
+        [[nodiscard]] Result<void> OpenInitialInbox(Peer &peer, NetworkInitialStateStamp stamp, Runtime::SceneRuntimeId scene,
+                                                    std::uint64_t tick);
+        /** @brief Projects the exact receipt and apply authority for an admitted client peer. */
+        [[nodiscard]] ReplicationInboundAuthority InitialAuthority(const Peer &peer) const;
+        /** @brief Releases captured storage and advances receipt eligibility only after native acceptance. */
+        static void CompleteInitialSend(Peer &peer) noexcept;
         [[nodiscard]] Result<void> Send(Peer &peer, std::uint64_t nowTick);
         void Retire(Peer &peer, std::uint64_t nowTick) noexcept;
         void ClearPending() noexcept;

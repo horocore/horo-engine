@@ -16,6 +16,12 @@ namespace Horo::Network::Detail {
         std::span<const NetworkPrefabLifecycleRecord> records;
     };
 
+    /** @brief Mapping pin and read-only capture authority for one synchronous host call. */
+    struct AuthorityInitialView final {
+        ReplicationWorldReadLease mapping;
+        const ReplicationWorldLifecycle &lifecycle;
+    };
+
     /** @brief One owner-thread identity/publication authority; all external references point to this stable allocation.
      * The composition transfers the owner on move. Shutdown revokes records before any Scene facade is
      * destroyed; borrowed transport/handler owners must detach before this allocation is released.
@@ -86,6 +92,16 @@ namespace Horo::Network::Detail {
             std::span<const Runtime::EntityRef> retired, const CancellationToken &cancellation) const;
         /** @brief Borrow the committed server binding record; absent before actual publication. */
         [[nodiscard]] const NetworkWorldBindingRecord *ServerBinding() const noexcept;
+        /** @brief Checks the authority and matches an inbound scope to the current or staged client Scene. */
+        [[nodiscard]] Result<Runtime::SceneRuntimeId> AuthorizeInitial(NetworkSessionGeneration session,
+                                                                       ReplicationAuthorityEpoch authority,
+                                                                       const InboundMessageContext &context) const;
+        /** @brief Borrows the exact published receiving lifecycle after structural receipt is drained. */
+        [[nodiscard]] ReplicationWorldLifecycle *InitialReceiver(NetworkSessionGeneration session) noexcept;
+        /** @brief Selects the exact published client binding for traffic admission. */
+        [[nodiscard]] const NetworkWorldBindingRecord *ClientBinding() const noexcept;
+        /** @brief Acquires a pinned authority mapping at NetworkFlush for the selected published world. */
+        [[nodiscard]] Result<AuthorityInitialView> AcquireInitialAuthority(std::uint64_t tick) const;
         /** @brief Refreshes and borrows the authority group inventory at NetworkFlush. */
         [[nodiscard]] Result<AuthorityPrefabView> CaptureAuthorityPrefabs();
         /** @brief Reverse index lookup for a currently published authority. */

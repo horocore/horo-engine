@@ -82,8 +82,10 @@ namespace Horo::Network {
     Result<void> NetworkWorldBindingController::Impl::QueuePrefabUpdate(Peer &peer, const NetworkWorldBindingRecord *prepared,
                                                                         const NetworkWorldBindingRecord *current,
                                                                         const std::uint64_t tick) {
-        if (!setup.policy.prefabLifecycle || !peer.sendsWorld || peer.frameBytes != 0 || prepared || !current ||
+        if (!setup.policy.prefabLifecycle || !peer.sendsWorld || peer.frameBytes != 0 || !current ||
             peer.establishedWorld != current->worldSession || !AuthoredSent(peer, current->worldSession))
+            return Result<void>::Success();
+        if ((prepared && InitialConfirmed(peer)) || (peer.initial.stamp.tick != 0 && !peer.initial.confirmed))
             return Result<void>::Success();
         const auto features = peer.lifecycle->Negotiation()->features.Values();
         if (std::ranges::find(features, setup.policy.prefabLifecycle->feature) == features.end())

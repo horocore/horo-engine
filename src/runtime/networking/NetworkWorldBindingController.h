@@ -94,7 +94,8 @@ namespace Horo::Network {
         /** @brief Whether every local detached candidate and required commit outbox reservation is ready. */
         [[nodiscard]] bool TravelReady() const noexcept;
         /** @brief Commit only at the actual canonical safe point after all dependent service preparation. */
-        [[nodiscard]] Result<void> Commit(Runtime::RuntimePhase phase);
+        [[nodiscard]] Result<void> Commit(Runtime::RuntimePhase phase, std::uint64_t localSimulationTick = 1,
+                                          const CancellationToken &cancellation = {});
         /** @brief Discard only detached travel candidates, retaining old published worlds. */
         [[nodiscard]] Result<void> CancelTravel();
         /** @brief Query canonical readiness without allocating an expected-unready frame error. */

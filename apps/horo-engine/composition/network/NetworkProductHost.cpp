@@ -103,7 +103,7 @@ namespace Horo::Application::Internal {
         Result<void> OnPhase(Runtime::RuntimePhase phase, const Runtime::FrameContext &frame) override {
             if (auto prepared = PreparePhase(phase, frame); prepared.HasError())
                 return FailPhase(prepared.ErrorValue());
-            if (auto advanced = mode_.RunPhase(phase); advanced.HasError())
+            if (auto advanced = mode_.RunPhase(phase, frame.completedSimulationTick, frame.cancellation); advanced.HasError())
                 return FailPhase(advanced.ErrorValue());
             if (auto failed = mode_.TakeTravelFailure(); failed && !travelFailure_)
                 travelFailure_ = std::move(failed);

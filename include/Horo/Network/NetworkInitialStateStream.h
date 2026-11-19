@@ -7,6 +7,57 @@
 namespace Horo::Network {
     inline constexpr std::size_t MaximumNetworkInitialStateFrameBytes = 1024;
     inline constexpr std::size_t NetworkInitialStateSegmentHeaderBytes = 48;
+    inline constexpr std::size_t MaximumNetworkInitialStateWireBytes = 64 * 1024 * 1024;
+
+    /** @brief Binds the client's successful publication to an exact server snapshot. */
+    struct NetworkInitialStateStamp final {
+        NetworkSessionGeneration session;
+        ReplicationAuthorityEpoch authority;
+        std::uint64_t tick{};
+
+        auto operator<=>(const NetworkInitialStateStamp &) const noexcept = default;
+    };
+
+    /** @brief Reads an admitted frame's world scope without retaining its payload. @return Exact stamp or a typed framing error. */
+    [[nodiscard]] Result<NetworkInitialStateStamp> ReadNetworkInitialStateStamp(std::span<const std::byte> payload);
+    /** @brief Encodes the publication receipt on the initial-state route. @return Owned bounded receipt or a typed framing error. */
+    [[nodiscard]] Result<std::vector<std::byte>> EncodeNetworkInitialStateReceipt(NetworkInitialStateStamp stamp);
+    /** @brief Decodes a receipt with an exact fixed representation. @return Its stamp or a typed framing error. */
+    [[nodiscard]] Result<NetworkInitialStateStamp> DecodeNetworkInitialStateReceipt(std::span<const std::byte> payload);
+
+    /** @brief Strongly retains the local Scene transaction owner through initial field publication. */
+    struct NetworkInitialStateTarget final {
+        std::shared_ptr<IReplicationApplyOwner> owner;
+        std::shared_ptr<ReplicationInboundApply> receiver;
+    };
+
+    /** @brief Owner-thread application adapters for declared, recipient-specific field capture and transactional apply.
+     * @details These synchronous callbacks must not reenter the network controller or retain borrowed world/peer references. */
+    class INetworkInitialStateHost {
+    public:
+        virtual ~INetworkInitialStateHost() = default;
+        /** @brief Resolves the local shadow-world recipient from the current admitted connection.
+         * @param peer Exact authenticated server channel.
+         * @return Local recipient or typed incompatibility. */
+        [[nodiscard]] virtual Result<NetworkPeerId> ClientRecipient(const PeerSessionLifecycle &peer) = 0;
+        /** @brief Supplies a complete, committed capture for a remote client, or pending while capture catches up.
+         * @param world Borrowed exact authority mapping for this call.
+         * @param lifecycle Borrowed read-only lifecycle for acquiring capture evidence at the owner's committed tick.
+         * @param peer Exact authenticated target client channel.
+         * @param maximumWireBytes Total field record budget.
+         * @return Complete recipient snapshot, pending or typed failure. */
+        [[nodiscard]] virtual Result<std::optional<ReplicationInitialStateSnapshot>> Capture(const ReplicationWorldReadLease &world,
+                                                                                             const ReplicationWorldLifecycle &lifecycle,
+                                                                                             const PeerSessionLifecycle &peer,
+                                                                                             std::size_t maximumWireBytes) = 0;
+        /** @brief Builds the apply owner and binds every object in the exact published replica mapping.
+         * @param authority Exact authenticated local receiver grant.
+         * @param world Borrowed receiving lifecycle; the controller retires the target first.
+         * @param now Current admission clock.
+         * @return Complete target or typed incompatibility. */
+        [[nodiscard]] virtual Result<NetworkInitialStateTarget> PrepareReceiver(const ReplicationInboundAuthority &authority,
+                                                                                ReplicationWorldLifecycle &world, std::uint64_t now) = 0;
+    };
 
     /**
      * @brief Encodes the complete expected snapshot size and authoritative tick.
@@ -68,6 +119,8 @@ namespace Horo::Network {
          */
         [[nodiscard]] Result<ReplicationApplyReport> ApplyCompleted(ReplicationInboundApply &receiver,
                                                                     const ReplicationWorldWorkRequest &request, std::uint64_t now);
+        /** @brief Reports that all declared bytes have arrived. @return True only before the snapshot is transferred. */
+        [[nodiscard]] bool Ready() const noexcept;
 
     private:
         /** @brief Verifies the authenticated connection and exact reserved Control route. */

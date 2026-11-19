@@ -18,12 +18,12 @@ namespace Horo::Network {
         constexpr std::size_t MaximumRecords = ReplicationWorldLimits{}.maximumObjects;
         constexpr std::size_t MinimumRecordBytes = StateCodecDetail::HeaderBytes;
         constexpr std::size_t MaximumRecordBytes = 16 * 1024 * 1024;
-        constexpr std::size_t MaximumSnapshotBytes = 64 * 1024 * 1024;
         static_assert(NetworkInitialStateSegmentHeaderBytes == ScopeBytes + 20);
 
         enum class FrameKind : std::uint16_t {
             Manifest = 1,
-            Segment = 2
+            Segment = 2,
+            Receipt = 3
         };
 
         template <typename T> Result<T> Reject(const ErrorCodeDescriptor &error = NetworkErrors::MessageEnvelopeInvalid) {
@@ -31,7 +31,7 @@ namespace Horo::Network {
         }
 
         /** @brief Writes the scope shared by the manifest and every segment. */
-        bool WriteScope(Writer &writer, FrameKind kind, const ReplicationInitialStateSnapshot &snapshot) {
+        bool WriteScope(Writer &writer, FrameKind kind, NetworkInitialStateStamp snapshot) {
             return writer.Number(Version, 2) && writer.Number(static_cast<std::uint16_t>(kind), 2) &&
                    writer.Number(snapshot.session.Value(), 8) && writer.Number(snapshot.authority.Value(), 8) &&
                    writer.Number(snapshot.tick, 8);
@@ -50,7 +50,7 @@ namespace Horo::Network {
             for (const auto &record : snapshot.records) {
                 if (!ValidRecord(snapshot, record) || (previous.IsValid() && previous >= record.object))
                     return Reject<std::size_t>();
-                if (record.wire.size() > MaximumSnapshotBytes - total)
+                if (record.wire.size() > MaximumNetworkInitialStateWireBytes - total)
                     return Reject<std::size_t>(NetworkErrors::MessageEnvelopeCapacityExceeded);
                 previous = record.object;
                 total += record.wire.size();
@@ -80,8 +80,8 @@ namespace Horo::Network {
         /** @brief Reads the fixed version and rejects unknown frame kinds before reading the scope. */
         bool ReadFrameKind(Reader &reader, FrameKind &kind) {
             std::uint16_t version{};
-            return reader.Number(version, 2) && version == Version && reader.Number(kind, 2) &&
-                   (kind == FrameKind::Manifest || kind == FrameKind::Segment);
+            return reader.Number(version, 2) && version == Version && reader.Number(kind, 2) && kind >= FrameKind::Manifest &&
+                   kind <= FrameKind::Receipt;
         }
 
         /** @brief Admits a versioned manifest or segment up to the Control frame ceiling. */
@@ -143,7 +143,51 @@ namespace Horo::Network {
             return writer.Number(segment.object.Slot(), 8) && writer.Number(segment.object.Generation(), 4) &&
                    writer.Number(segment.total, 4) && writer.Number(segment.offset, 4) && writer.Bytes(segment.bytes);
         }
+
+        /** @brief Converts raw header fields into a typed world occurrence and tick. */
+        Result<NetworkInitialStateStamp> ToStamp(const FrameView &frame) {
+            const auto session = NetworkSessionGeneration::Create(frame.session);
+            const auto authority = ReplicationAuthorityEpoch::Create(frame.epoch);
+            if (session.HasError() || authority.HasError())
+                return Reject<NetworkInitialStateStamp>();
+            return Result<NetworkInitialStateStamp>::Success({session.Value(), authority.Value(), frame.tick});
+        }
     }  // namespace
+
+    /** @copydoc ReadNetworkInitialStateStamp */
+    Result<NetworkInitialStateStamp> ReadNetworkInitialStateStamp(std::span<const std::byte> payload) {
+        const auto frame = ReadFrame(payload);
+        if (frame.HasError())
+            return Result<NetworkInitialStateStamp>::Failure(frame.ErrorValue());
+        if (frame.Value().kind == FrameKind::Receipt)
+            return Reject<NetworkInitialStateStamp>();
+        return ToStamp(frame.Value());
+    }
+
+    /** @copydoc EncodeNetworkInitialStateReceipt */
+    Result<std::vector<std::byte>> EncodeNetworkInitialStateReceipt(NetworkInitialStateStamp stamp) {
+        if (!stamp.session.IsValid() || !stamp.authority.IsValid() || stamp.tick == 0)
+            return Reject<std::vector<std::byte>>();
+        try {
+            std::vector<std::byte> bytes(ScopeBytes);
+            Writer writer{bytes};
+            if (!WriteScope(writer, FrameKind::Receipt, stamp))
+                return Reject<std::vector<std::byte>>();
+            return Result<std::vector<std::byte>>::Success(std::move(bytes));
+        } catch (const std::bad_alloc &) {
+            return Reject<std::vector<std::byte>>(NetworkErrors::MessageEnvelopeCapacityExceeded);
+        }
+    }
+
+    /** @copydoc DecodeNetworkInitialStateReceipt */
+    Result<NetworkInitialStateStamp> DecodeNetworkInitialStateReceipt(std::span<const std::byte> payload) {
+        const auto frame = ReadFrame(payload);
+        if (frame.HasError())
+            return Result<NetworkInitialStateStamp>::Failure(frame.ErrorValue());
+        if (frame.Value().kind != FrameKind::Receipt || !frame.Value().body.empty())
+            return Reject<NetworkInitialStateStamp>();
+        return ToStamp(frame.Value());
+    }
 
     /** @copydoc EncodeNetworkInitialStateManifest */
     Result<std::vector<std::byte>> EncodeNetworkInitialStateManifest(const ReplicationInitialStateSnapshot &snapshot) {
@@ -157,8 +201,8 @@ namespace Horo::Network {
         try {
             std::vector<std::byte> bytes(ManifestBytes);
             Writer writer{bytes};
-            if (!WriteScope(writer, FrameKind::Manifest, snapshot) || !writer.Number(snapshot.records.size(), 2) ||
-                !writer.Number(total.Value(), 4))
+            if (!WriteScope(writer, FrameKind::Manifest, {snapshot.session, snapshot.authority, snapshot.tick}) ||
+                !writer.Number(snapshot.records.size(), 2) || !writer.Number(total.Value(), 4))
                 return Reject<std::vector<std::byte>>();
             return Result<std::vector<std::byte>>::Success(std::move(bytes));
         } catch (const std::bad_alloc &) {
@@ -181,7 +225,8 @@ namespace Horo::Network {
         try {
             std::vector<std::byte> bytes(NetworkInitialStateSegmentHeaderBytes + count);
             Writer writer{bytes};
-            if (!WriteScope(writer, FrameKind::Segment, snapshot) || !WriteSegment(writer, segment))
+            if (!WriteScope(writer, FrameKind::Segment, {snapshot.session, snapshot.authority, snapshot.tick}) ||
+                !WriteSegment(writer, segment))
                 return Reject<NetworkInitialStateSegment>();
             return Result<NetworkInitialStateSegment>::Success({std::move(bytes), offset + count});
         } catch (const std::bad_alloc &) {
@@ -221,6 +266,8 @@ namespace Horo::Network {
         if (decoded.HasError())
             return Result<void>::Failure(decoded.ErrorValue());
         const auto &frame = decoded.Value();
+        if (frame.kind == FrameKind::Receipt)
+            return Reject<void>();
         if (frame.session == 0 || frame.epoch == 0 || frame.session != authority_.networkSession.Value() ||
             frame.epoch != authority_.epoch.Value())
             return Reject<void>(NetworkErrors::ReplicationWorldStale);
@@ -237,7 +284,7 @@ namespace Horo::Network {
         std::uint32_t bytes{};
         if (begun_ || !reader.Number(count, 2) || !reader.Number(bytes, 4) || !reader.Done())
             return Reject<void>();
-        if (count > MaximumRecords || bytes > std::min(maximumWireBytes_, MaximumSnapshotBytes))
+        if (count > MaximumRecords || bytes > std::min(maximumWireBytes_, MaximumNetworkInitialStateWireBytes))
             return Reject<void>(NetworkErrors::MessageEnvelopeCapacityExceeded);
         if (!ValidRecordBudget(count, bytes))
             return Reject<void>();
@@ -306,6 +353,11 @@ namespace Horo::Network {
     /** @copydoc NetworkInitialStateInbox::Complete */
     bool NetworkInitialStateInbox::Complete() const noexcept {
         return begun_ && pendingBytes_ == 0 && remainingBytes_ == 0 && snapshot_.records.size() == expectedRecords_;
+    }
+
+    /** @copydoc NetworkInitialStateInbox::Ready */
+    bool NetworkInitialStateInbox::Ready() const noexcept {
+        return std::this_thread::get_id() == owner_ && !transferred_ && Complete();
     }
 
     /** @copydoc NetworkInitialStateInbox::Take */

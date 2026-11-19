@@ -84,6 +84,18 @@ The decoded records must match their segment identities and the manifest
 tick. Validation, cancellation, or a rejected owner transaction discards
 the batch before any Scene value is published.
 
+Hosts enable this path with `NetworkWorldBindingPolicy::initialState`, a
+distinct required handshake feature and Control message, and a live
+`INetworkInitialStateHost` adapter. The configured lane shares the world,
+authored inventory, and Prefab outbox. It starts a field snapshot only after
+the matching structural inventory is sent and defers subsequent Prefab
+changes while that snapshot is in flight. The receiving owner applies the
+snapshot after its structural safe point. Only a successful apply issues a
+receipt for that world session, authority epoch, and tick. Normal traffic
+is admitted after the matching receipt. A valid early packet consumes its
+lane sequence without invoking gameplay or extending the peer lifetime.
+Build native consumers again for the extended policy and phase interfaces.
+
 `CaptureReplicationAuthoredScene` extracts an ordered inventory of exact
 authority identities and stable Scene provenance. It omits process-local
 entity handles and dynamic Prefab occurrences. Once a caller has admitted the

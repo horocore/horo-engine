@@ -29,5 +29,6 @@ namespace Horo::Application::Internal {
     [[nodiscard]] Result<NetworkProductGnsSelection> SelectNetworkProductGns(
         const Network::NetworkAdmissionPolicy &policy, Network::NetworkAdmissionProviders providers,
         std::shared_ptr<const Network::MessageCodecRegistry> codecs, std::span<const NetworkProductInboundHandler> handlers,
-        const Network::GnsNativeSecurityOptions &options, std::optional<Network::NetworkWorldBindingPolicy> worldBinding = std::nullopt);
+        const Network::GnsNativeSecurityOptions &options, std::optional<Network::NetworkWorldBindingPolicy> worldBinding = std::nullopt,
+        std::shared_ptr<Network::INetworkInitialStateHost> initialStateHost = {});
 }  // namespace Horo::Application::Internal

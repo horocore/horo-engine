@@ -15,7 +15,8 @@ namespace Horo::Network {
             !setup.policy.authorityPublisher.IsValid() || setup.maximumPeers == 0 || setup.maximumPeers > 64 ||
             setup.maximumPendingTicks == 0 || plan.mode == NetworkProjectRole::Standalone)
             return Result<std::shared_ptr<NetworkWorldBindingController>>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
-        if (!ValidPrefabLifecycleRoute(setup.policy, *setup.codecs) || !ValidAuthoredSceneRoute(setup.policy, *setup.codecs))
+        if (!ValidPrefabLifecycleRoute(setup.policy, *setup.codecs) || !ValidAuthoredSceneRoute(setup.policy, *setup.codecs) ||
+            !ValidInitialStateRoute(setup.policy, *setup.codecs) || setup.policy.initialState.has_value() != bool(setup.initialStateHost))
             return Result<std::shared_ptr<NetworkWorldBindingController>>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
         try {
             auto implementation = std::make_unique<Impl>(std::move(plan), std::move(setup));
@@ -71,27 +72,29 @@ namespace Horo::Network {
     /** @copydoc NetworkWorldBindingController::Impl::RegisterRoutes */
     Result<void> NetworkWorldBindingController::Impl::RegisterRoutes(InboundMessageDispatcher &router,
                                                                      const std::shared_ptr<NetworkWorldBindingController> &owner) const {
-        const auto &control = setup.policy.control;
-        const auto bind = [&](const MessageIdentityDescriptor &identity, std::uint32_t rate) {
-            return router.RegisterHandler({identity.protocol, identity.id, MessageTrafficClass::Control, Runtime::RuntimePhase::NetworkPoll,
-                                           rate},
-                                          owner);
+        struct Route final {
+            const MessageIdentityDescriptor *identity;
+            std::uint32_t rate;
         };
-        if (auto registered = bind(control, 4); registered.HasError())
+
+        const auto &policy = setup.policy;
+        const std::array routes{Route{&policy.control, 4}, Route{policy.prefabLifecycle ? &policy.prefabLifecycle->control : nullptr, 16},
+                                Route{policy.authoredScene ? &policy.authoredScene->control : nullptr, 16},
+                                Route{policy.initialState ? &policy.initialState->control : nullptr, 64}};
+        for (std::size_t index{}; index < routes.size(); ++index) {
+            const auto [identity, rate] = routes[index];
+            if (!identity)
+                continue;
+            auto registered = router.RegisterHandler({identity->protocol, identity->id, MessageTrafficClass::Control,
+                                                      Runtime::RuntimePhase::NetworkPoll, rate},
+                                                     owner);
+            if (registered.HasValue())
+                continue;
+            for (const auto &previous : std::span{routes}.first(index)) {
+                if (previous.identity)
+                    router.RevokeHandler(previous.identity->protocol, previous.identity->id);
+            }
             return registered;
-        if (setup.policy.prefabLifecycle) {
-            if (auto registered = bind(setup.policy.prefabLifecycle->control, 16); registered.HasError()) {
-                router.RevokeHandler(control.protocol, control.id);
-                return registered;
-            }
-        }
-        if (setup.policy.authoredScene) {
-            if (auto registered = bind(setup.policy.authoredScene->control, 16); registered.HasError()) {
-                if (const auto &route = setup.policy.prefabLifecycle)
-                    router.RevokeHandler(route->control.protocol, route->control.id);
-                router.RevokeHandler(control.protocol, control.id);
-                return registered;
-            }
         }
         return Result<void>::Success();
     }
@@ -105,6 +108,8 @@ namespace Horo::Network {
             if (const auto &route = impl_->setup.policy.prefabLifecycle)
                 impl_->dispatcher->RevokeHandler(route->control.protocol, route->control.id);
             if (const auto &route = impl_->setup.policy.authoredScene)
+                impl_->dispatcher->RevokeHandler(route->control.protocol, route->control.id);
+            if (const auto &route = impl_->setup.policy.initialState)
                 impl_->dispatcher->RevokeHandler(route->control.protocol, route->control.id);
         }
         impl_->dispatcher = nullptr;
@@ -142,6 +147,8 @@ namespace Horo::Network {
             return impl_->worlds.AcceptPrefab(message.payload, context);
         if (policy.authoredScene && matches(policy.authoredScene->control))
             return impl_->worlds.AcceptAuthored(message.payload, context);
+        if (policy.initialState && matches(policy.initialState->control))
+            return impl_->AcceptInitial(message, context);
         if (!matches(policy.control))
             return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
         const auto decoded = DecodeNetworkWorldBinding(message.payload);
@@ -213,6 +220,8 @@ namespace Horo::Network {
             peer.pending.reset();
             peer.prefabPending.reset();
             peer.authoredPending.reset();
+            peer.initial = {};
+            peer.initialFramePending = false;
             peer.knownPrefabs.clear();
             peer.frameBytes = 0;
         }

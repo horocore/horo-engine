@@ -247,7 +247,8 @@ namespace Horo::Network {
         /** @brief Construct, prepare and activate exactly the selected service set, or unwind it. */
         [[nodiscard]] Result<void> Start();
         /** @brief Dispatch the canonical runtime phase to currently active participants. */
-        [[nodiscard]] Result<void> RunPhase(Runtime::RuntimePhase phase);
+        [[nodiscard]] Result<void> RunPhase(Runtime::RuntimePhase phase, std::uint64_t completedSimulationTick = 0,
+                                            const CancellationToken &cancellation = {});
         /** @brief Dispatch one exact canonical fixed tick to active participants. */
         [[nodiscard]] Result<void> RunFixedTick(const Runtime::FixedStepContext &context);
         /** @brief Publish a client session only after the peer lifecycle admits exact active evidence. */
@@ -311,7 +312,8 @@ namespace Horo::Network {
         void CommitTravelEntries(std::span<const NetworkModeWorld> replacements, std::array<Entry, 5> &prepared,
                                  std::size_t count) noexcept;
 
-        [[nodiscard]] Result<void> AdvanceTravel(Runtime::RuntimePhase phase);
+        [[nodiscard]] Result<void> AdvanceTravel(Runtime::RuntimePhase phase, std::uint64_t localSimulationTick,
+                                                 const CancellationToken &cancellation);
         NetworkModePlan plan_;
         NetworkModeFactories factories_;
         NetworkWorldCompositionPurpose purpose_;

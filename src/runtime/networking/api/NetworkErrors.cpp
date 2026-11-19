@@ -31,6 +31,13 @@ namespace Horo::Network::NetworkErrors {
                                                "Use the current host, Scene, session and authority generation.",
                                                false,
                                                false};
+    const ErrorCodeDescriptor ReplicationInitialStatePending{NetworkDomain,
+                                                             ErrorCode{"network.replication.initial_state_pending"},
+                                                             ErrorSeverity::Info,
+                                                             "The peer is still synchronizing initial world state.",
+                                                             "Wait for the current initial publication receipt.",
+                                                             true,
+                                                             false};
     const ErrorCodeDescriptor NetworkModeShuttingDown{NetworkDomain,
                                                       ErrorCode{"network.mode.shutting_down"},
                                                       ErrorSeverity::Error,
