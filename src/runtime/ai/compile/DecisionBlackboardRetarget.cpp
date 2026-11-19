@@ -14,13 +14,6 @@ namespace Horo::AI {
             return found != keys.end() && found->key == key ? &*found : nullptr;
         }
 
-        /** @brief Checks the key contract independently of identity and the value of a provided default. */
-        bool SameKeyContract(const BlackboardKeyDescriptor &left, const BlackboardKeyDescriptor &right) {
-            return left.kind == right.kind && left.access == right.access && left.presence == right.presence &&
-                   left.cardinality == right.cardinality && left.maximumCollectionElements == right.maximumCollectionElements &&
-                   left.defaultValue.has_value() == right.defaultValue.has_value();
-        }
-
         /** @brief Rewrites bounded authored records in the isolated source candidate. */
         class KeyRetarget final {
         public:
@@ -142,6 +135,14 @@ namespace Horo::AI {
         }
     }  // namespace
 
+    /** @copydoc IsCompatibleBlackboardReplacement */
+    bool IsCompatibleBlackboardReplacement(const BlackboardKeyDescriptor &original, const BlackboardKeyDescriptor &replacement) noexcept {
+        return original.key != replacement.key && original.kind == replacement.kind && original.access == replacement.access &&
+               original.presence == replacement.presence && original.cardinality == replacement.cardinality &&
+               original.maximumCollectionElements == replacement.maximumCollectionElements &&
+               original.defaultValue.has_value() == replacement.defaultValue.has_value();
+    }
+
     /** @copydoc RetargetDecisionBlackboardKey */
     Result<bool> RetargetDecisionBlackboardKey(DecisionGraphSource &source, const BlackboardSchema &schema, BlackboardKeyId from,
                                                BlackboardKeyId to, const DecisionBlackboardProviderMetadata *providers) {
@@ -150,7 +151,7 @@ namespace Horo::AI {
             return Retargeted::Failure(MakeError(AIErrors::DecisionAssetSchemaInvalid));
         const auto *original = FindKey(schema, from);
         const auto *replacement = FindKey(schema, to);
-        if (!original || !replacement || !SameKeyContract(*original, *replacement))
+        if (!original || !replacement || !IsCompatibleBlackboardReplacement(*original, *replacement))
             return Retargeted::Failure(MakeError(AIErrors::BlackboardValueTypeMismatch));
         const auto evidence = InspectDecisionBlackboardUses(source, from, providers);
         if (evidence.HasError())

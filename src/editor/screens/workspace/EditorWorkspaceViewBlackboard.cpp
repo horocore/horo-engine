@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <format>
+#include <span>
 #include <type_traits>
 
 namespace Horo::Editor {
@@ -48,11 +49,13 @@ namespace Horo::Editor {
                                    .style = {.width = Ui::StyleWidth::FillAvailable}});
             }
 
-            void Request(BlackboardDocumentOperation operation, std::optional<BlackboardSchemaEdit> edit = {}) const {
+            void Request(BlackboardDocumentOperation operation, std::optional<BlackboardSchemaEdit> edit = {},
+                         std::optional<AI::BlackboardKeyId> replacement = {}) const {
                 if (command.command != EditorWorkspaceViewCommand::None)
                     return;
                 command.command = EditorWorkspaceViewCommand::BlackboardDocument;
-                command.blackboard = BlackboardWorkspaceRequest{.fence = fence, .operation = operation, .edit = std::move(edit)};
+                command.blackboard =
+                    BlackboardWorkspaceRequest{.fence = fence, .operation = operation, .edit = std::move(edit), .replacement = replacement};
             }
 
             /** @brief Renders a typed enum using an exhaustive locale label array. */
@@ -221,6 +224,8 @@ namespace Horo::Editor {
                     return "usage_queries";
                 case PerceptionPolicy:
                     return "usage_perception";
+                case DecisionRetarget:
+                    return "usage_retarget_blocked";
             }
             return "operation_failed";
         }
@@ -265,6 +270,8 @@ namespace Horo::Editor {
                 frame.Label(gap.asset->ToString());
             if (gap.node)
                 frame.Label(std::to_string(gap.node->Value()));
+            if (gap.diagnostic)
+                frame.Label(gap.diagnostic->code.Value());
         }
 
         /** @brief Pages the captured rows without copying the usage collections. */
@@ -300,6 +307,42 @@ namespace Horo::Editor {
                 frame.Caption("usage_schema_bindings");
             if (!review.gaps.empty())
                 frame.Caption("usage_incomplete");
+            if (review.selection.replacement) {
+                frame.Caption("usage_retarget_candidates");
+                frame.Label(std::to_string(review.decisionRetargets.size()));
+                frame.Caption("usage_retarget_reviewed_destination");
+                frame.Label(std::to_string(review.selection.replacement->Value()));
+            }
+        }
+
+        /** @brief Lists compatible destinations in authored row order under the current clean document fence. */
+        std::optional<AI::BlackboardKeyId> DrawRetargetDestination(const BlackboardFrame &frame, const BlackboardSchemaSource &source,
+                                                                   const BlackboardSchemaRow &original, std::span<const std::string> rowIds,
+                                                                   std::optional<AI::BlackboardKeyId> current) {
+            std::array<std::size_t, AI::MaximumBlackboardKeys> entries{};
+            std::size_t total = 1;
+            int selected = 0;
+            for (std::size_t row = 0; row < source.rows.size(); ++row) {
+                const auto &key = source.rows[row].descriptor;
+                if (!AI::IsCompatibleBlackboardReplacement(original.descriptor, key))
+                    continue;
+                if (key.key == current)
+                    selected = static_cast<int>(total);
+                entries[total++] = row;
+            }
+            if (total == 1)
+                return {};
+            frame.Caption("review_retarget_destination");
+            const Ui::ComboItemSource choices{.label = [&](int index) {
+                if (index == 0)
+                    return frame.Text("review_retarget_none").c_str();
+                const auto row = entries[static_cast<std::size_t>(index)];
+                return source.rows[row].displayName ? source.rows[row].displayName->c_str() : rowIds[row].c_str();
+            }};
+            static_cast<void>(Ui::ComboControl("BlackboardRetargetTarget", &selected, static_cast<int>(total), choices, frame.fonts));
+            if (!selected)
+                return {};
+            return source.rows[entries[static_cast<std::size_t>(selected)]].descriptor.key;
         }
 
         /** @brief Displays scoped review evidence for the selected durable key. */
@@ -392,6 +435,7 @@ namespace Horo::Editor {
             draft.selected = selectedRow.descriptor.key;
             draft.name = selectedRow.displayName.value_or("");
             draft.proposed = selectedRow.descriptor;
+            draft.replacement.reset();
             draft.numericDefault = BlackboardNumericDefaultText(selectedRow.descriptor.defaultValue);
             draft.usagePage = 0;
         };
@@ -459,8 +503,10 @@ namespace Horo::Editor {
                 frame.Request(BlackboardDocumentOperation::ReviewUsages, EditBlackboardKey{draft.proposed});
                 draft.usagePage = 0;
             }
+            if (canReview && rows.size() > 1)
+                draft.replacement = DrawRetargetDestination(frame, *snapshot.source, row, draft.rowIds, draft.replacement);
             if (frame.Button("review_removal", canReview && rows.size() > 1)) {
-                frame.Request(BlackboardDocumentOperation::ReviewUsages, RemoveBlackboardKey{draft.selected});
+                frame.Request(BlackboardDocumentOperation::ReviewUsages, RemoveBlackboardKey{draft.selected}, draft.replacement);
                 draft.usagePage = 0;
             }
             DrawUsages(frame, *document, draft.proposed, viewModel.assetRegistryRevision, draft.usagePage);

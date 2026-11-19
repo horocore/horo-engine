@@ -635,6 +635,7 @@ namespace Horo::Editor {
         BlackboardDocumentOperation operation{BlackboardDocumentOperation::Edit};
         std::optional<BlackboardSchemaEdit> edit;
         std::optional<AI::BlackboardKeyId> reviewKey;
+        std::optional<AI::BlackboardKeyId> replacement;
     };
 
     struct BlackboardWorkspaceDocument final {

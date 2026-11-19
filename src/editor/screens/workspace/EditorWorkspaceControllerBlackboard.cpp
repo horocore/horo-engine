@@ -209,6 +209,8 @@ namespace Horo::Editor {
             return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Authority));
         if (request.reviewKey.has_value() == request.edit.has_value())
             return Result<void>::Failure(MakeError(BlackboardDocumentErrors::InvalidEdit));
+        if (request.replacement && (!request.edit || !std::holds_alternative<RemoveBlackboardKey>(*request.edit)))
+            return Result<void>::Failure(MakeError(BlackboardDocumentErrors::InvalidEdit));
         if (m_blackboardUsageWork)
             return Result<void>::Failure(MakeError(BlackboardDocumentErrors::Busy));
         const auto current = document.Snapshot();
@@ -231,8 +233,12 @@ namespace Horo::Editor {
         if (!std::ranges::binary_search(snapshot.durableSchema->Keys(), *key, {}, &AI::BlackboardKeyDescriptor::key))
             return Result<void>::Failure(MakeError(BlackboardDocumentErrors::InvalidEdit));
 
-        const Application::BlackboardUsageSelection selection{snapshot.source->asset, snapshot.durableSchema->Identity(),
-                                                              snapshot.durableSchema->Version(), *key, *snapshot.sourceDigest};
+        const Application::BlackboardUsageSelection selection{snapshot.source->asset,
+                                                              snapshot.durableSchema->Identity(),
+                                                              snapshot.durableSchema->Version(),
+                                                              *key,
+                                                              *snapshot.sourceDigest,
+                                                              request.replacement};
         std::optional<Assets::AssetRegistryRevision> complete;
         if (m_collisionInventory && m_collisionInventory->status == Assets::AssetRegistryBuildStatus::Complete)
             complete = m_collisionInventory->revision;

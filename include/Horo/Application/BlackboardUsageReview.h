@@ -27,6 +27,7 @@ namespace Horo::Application {
         PrefabSource,
         EnvironmentQueryBindings,
         PerceptionPolicy,
+        DecisionRetarget,
     };
 
     /** @brief An exact unresolved source or provider, or a project-level owner with no review adapter. */
@@ -86,7 +87,14 @@ namespace Horo::Application {
         AI::BlackboardSchemaId schema;
         std::uint32_t version{};
         AI::BlackboardKeyId key;
-        Sha256Digest source; /**< Exact schema bytes accepted by the durable document opening. */
+        Sha256Digest source;                            /**< Exact schema bytes accepted by the durable document opening. */
+        std::optional<AI::BlackboardKeyId> replacement; /**< Explicit destination for a detached migration preview. */
+    };
+
+    /** @brief Proposed replacement bytes for one exact registered source and sidecar capture. */
+    struct BlackboardDecisionRetarget final {
+        BlackboardUsageSourceStamp original;
+        std::vector<std::uint8_t> candidate;
     };
 
     /** @brief Read-only observations scoped to a captured Project publication.
@@ -103,6 +111,7 @@ namespace Horo::Application {
         std::vector<BlackboardSchemaBinding> schemaBindings;
         std::vector<BlackboardUsageGap> gaps;
         std::vector<BlackboardQueryUsage> queryUsages;
+        std::vector<BlackboardDecisionRetarget> decisionRetargets;
     };
 
     /** @brief Captures and reviews actual registered source/sidecar pairs under the Project mutation coordinator.

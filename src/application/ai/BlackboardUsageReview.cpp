@@ -99,27 +99,41 @@ namespace Horo::Application {
         }
 
         /** @brief Validates exact selected durable identity and rejects ambiguous semantic schema ownership. */
-        Result<void> CheckSchema(const Assets::AssetCookInputSnapshot &capture, BlackboardUsageSelection selection) {
-            bool found = false;
+        Result<AI::BlackboardSchema> CaptureSchema(const Assets::AssetCookInputSnapshot &capture, BlackboardUsageSelection selection) {
+            using Schema = Result<AI::BlackboardSchema>;
+            std::optional<AI::BlackboardSchema> found;
             for (const auto &file : capture.Sources()) {
                 if (file.record.type.Value() != AI::BlackboardSchemaAssetType)
                     continue;
-                const auto decoded = AI::BlackboardSchemaSourceCodec::Decode(file.bytes);
+                auto decoded = AI::BlackboardSchemaSourceCodec::Decode(file.bytes);
                 if (decoded.HasError())
-                    return Result<void>::Failure(decoded.ErrorValue());
+                    return Schema::Failure(decoded.ErrorValue());
                 const auto &schema = decoded.Value().schema;
                 const bool selectedSchema = schema.Identity() == selection.schema && schema.Version() == selection.version;
                 if (file.record.id != selection.schemaAsset) {
                     if (selectedSchema)
-                        return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetSchemaAmbiguous));
+                        return Schema::Failure(MakeError(AI::AIErrors::DecisionAssetSchemaAmbiguous));
                     continue;
                 }
-                found = selectedSchema && file.sourceDigest == selection.source &&
-                        std::ranges::binary_search(schema.Keys(), selection.key, {}, &AI::BlackboardKeyDescriptor::key);
-                if (!found)
-                    return Result<void>::Failure(MakeError(DecisionCookErrors::Stale));
+                if (!selectedSchema || file.sourceDigest != selection.source)
+                    return Schema::Failure(MakeError(DecisionCookErrors::Stale));
+                found.emplace(std::move(decoded).Value().schema);
             }
-            return found ? Result<void>::Success() : Result<void>::Failure(MakeError(DecisionCookErrors::Invalid));
+            return found ? Schema::Success(std::move(*found)) : Schema::Failure(MakeError(DecisionCookErrors::Invalid));
+        }
+
+        /** @brief Validates the selected key and optional explicit destination against the same captured schema. */
+        Result<void> CheckSelection(const AI::BlackboardSchema &schema, const BlackboardUsageSelection &selection) {
+            const auto keys = schema.Keys();
+            const auto original = std::ranges::find(keys, selection.key, &AI::BlackboardKeyDescriptor::key);
+            if (original == keys.end())
+                return Result<void>::Failure(MakeError(DecisionCookErrors::Stale));
+            if (!selection.replacement)
+                return Result<void>::Success();
+            const auto replacement = std::ranges::find(keys, *selection.replacement, &AI::BlackboardKeyDescriptor::key);
+            if (replacement == keys.end() || !AI::IsCompatibleBlackboardReplacement(*original, *replacement))
+                return Result<void>::Failure(MakeError(AI::AIErrors::BlackboardValueTypeMismatch));
+            return Result<void>::Success();
         }
 
         /** @brief Authored query result contract with the exact registered owner in the active snapshot. */
@@ -192,13 +206,36 @@ namespace Horo::Application {
             return Result<void>::Success();
         }
 
+        /** @brief Stages bounded replacement bytes and the exact source commitment for one registered graph. */
+        Result<void> AppendRetarget(BlackboardUsageReview &review, const Assets::AssetCookPinnedSource &file,
+                                    AI::DecisionGraphSource &graph, const AI::BlackboardSchema &schema,
+                                    const AI::DecisionBlackboardProviderMetadata *providers, std::uint64_t &availableBytes) {
+            if (!review.selection.replacement)
+                return Result<void>::Success();
+            const auto rewritten =
+                AI::RetargetDecisionBlackboardKey(graph, schema, review.selection.key, *review.selection.replacement, providers);
+            if (rewritten.HasError())
+                return AddGap(review, {BlackboardUsageGapKind::DecisionRetarget, file.record.id, {}, rewritten.ErrorValue()});
+            if (!rewritten.Value())
+                return Result<void>::Success();
+            auto encoded = AI::DecisionPlanCodec::EncodeSource(std::span{&graph, 1}, graph.asset);
+            if (encoded.HasError())
+                return AddGap(review, {BlackboardUsageGapKind::DecisionRetarget, file.record.id, {}, encoded.ErrorValue()});
+            if (encoded.Value().size() > availableBytes)
+                return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetLimitExceeded));
+            availableBytes -= encoded.Value().size();
+            review.decisionRetargets.push_back({{file.record.id, file.sourceDigest, file.metadataDigest}, std::move(encoded).Value()});
+            return Result<void>::Success();
+        }
+
         /** @brief Projects one admitted source while preserving exact unresolved or malformed source identities. */
         Result<void> InspectFile(BlackboardUsageReview &review, const Assets::AssetCookPinnedSource &file,
-                                 const AI::DecisionBlackboardProviderMetadata *providers, std::span<const QuerySource> queries) {
+                                 const AI::BlackboardSchema &schema, const AI::DecisionBlackboardProviderMetadata *providers,
+                                 std::span<const QuerySource> queries, std::uint64_t &availableBytes) {
             const auto unresolved = [&](const Error &error) {
                 return AddGap(review, {BlackboardUsageGapKind::DecisionSource, file.record.id, {}, error});
             };
-            const auto graph = DecodeRegisteredDecisionGraphSource(file, GraphLimits);
+            auto graph = DecodeRegisteredDecisionGraphSource(file, GraphLimits);
             if (graph.HasError())
                 return unresolved(graph.ErrorValue());
             if (graph.Value().blackboard != review.selection.schema || !graph.Value().blackboardVersion.Contains(review.selection.version))
@@ -213,24 +250,32 @@ namespace Horo::Application {
                 review.uses.push_back({file.record.id, graph.Value().asset, std::string{file.record.sourcePath.String()}, std::move(use)});
             for (const auto node : inspected.Value().unresolvedProviders)
                 review.gaps.push_back({BlackboardUsageGapKind::DecisionProvider, file.record.id, node});
-            return AppendQueryUsages(review, file.record, inspected.Value().queryOutputs, queries);
+            if (auto appended = AppendQueryUsages(review, file.record, inspected.Value().queryOutputs, queries); appended.HasError())
+                return appended;
+            auto candidate = std::move(graph).Value();
+            return AppendRetarget(review, file, candidate, schema, providers, availableBytes);
         }
 
         /** @brief Checks the durable key and inspects Decision sources against the same registered query capture. */
         Result<void> InspectAiSources(BlackboardUsageReview &review, const Assets::AssetCookInputSnapshot &capture,
                                       const AI::DecisionBlackboardProviderMetadata *providers, const CancellationToken &cancellation) {
-            if (auto checked = CheckSchema(capture, review.selection); checked.HasError())
+            const auto schema = CaptureSchema(capture, review.selection);
+            if (schema.HasError())
+                return Result<void>::Failure(schema.ErrorValue());
+            if (auto checked = CheckSelection(schema.Value(), review.selection); checked.HasError())
                 return checked;
             const auto queries = IndexQueries(review, capture, cancellation);
             if (queries.HasError())
                 return Result<void>::Failure(queries.ErrorValue());
+            auto availableBytes = MaximumCapturedBytes;
             for (const auto &file : capture.Sources()) {
                 if (cancellation.IsCancellationRequested())
                     return Result<void>::Failure(MakeError(DecisionCookErrors::Cancelled));
                 AppendStamp(review, file);
                 if (!IsDecision(file.record.type.Value()))
                     continue;
-                if (auto inspected = InspectFile(review, file, providers, queries.Value()); inspected.HasError())
+                if (auto inspected = InspectFile(review, file, schema.Value(), providers, queries.Value(), availableBytes);
+                    inspected.HasError())
                     return inspected;
             }
             return Result<void>::Success();

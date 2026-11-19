@@ -2285,6 +2285,43 @@ TEST_CASE("Blackboard workspace publishes a Project usage review only for an unc
     CHECK_FALSE(view.diagnostic);
 }
 
+TEST_CASE("Blackboard workspace pins the selected replacement to a removal proposal", "[unit][editor][blackboard][workspace]") {
+    BlackboardWorkspaceFixture project;
+    const auto replacement = AI::BlackboardKeyId::Create(project.key.Value() + 1).Value();
+    const std::array keys{AI::BlackboardKeyDescriptor{.key = project.key}, AI::BlackboardKeyDescriptor{.key = replacement}};
+    const std::array rows{AI::BlackboardSchemaAuthoringRow{project.key, "Original"},
+                          AI::BlackboardSchemaAuthoringRow{replacement, "Replacement"}};
+    project.WriteSchema(keys, rows);
+    project.RebuildRegistry();
+    JobSystem jobs{JobSystemConfig{.ioWorkerCount = 1}};
+    const auto registry = project.registry.Snapshot();
+    CollisionInventoryEvidence inventory{registry.Revision(), Assets::AssetRegistryBuildStatus::Complete};
+    EditorWorkspaceController controller(project.root, project.runtime, registry,
+                                         {.assets = {.mutableAssetRegistry = &project.registry},
+                                          .collision = {.inventory = &inventory},
+                                          .mutations = &project.mutations,
+                                          .durableFiles = &project.files,
+                                          .jobs = &jobs});
+    controller.ProcessCommand(project.Open());
+    const auto issued = project.Current(controller);
+    controller.ProcessCommand({.command = EditorWorkspaceViewCommand::BlackboardDocument,
+                               .blackboard = BlackboardWorkspaceRequest{.fence = issued,
+                                                                        .operation = BlackboardDocumentOperation::ReviewUsages,
+                                                                        .edit = RemoveBlackboardKey{project.key},
+                                                                        .replacement = replacement}});
+    REQUIRE(controller.ViewModel().blackboardDocuments.front().reviewingUsages);
+    jobs.Shutdown(ShutdownPolicy::Drain);
+    controller.UpdateBlackboardUsageReview();
+    const auto &view = controller.ViewModel().blackboardDocuments.front();
+    REQUIRE(view.usageReview);
+    CHECK(view.usageReview->selection.replacement == replacement);
+    REQUIRE(view.referencePreview);
+    REQUIRE(view.referencePreview->schema->Keys().size() == 1);
+    CHECK(view.referencePreview->schema->Keys().front().key == replacement);
+    CHECK(view.snapshot.schema->Keys().size() == 2);
+    CHECK(view.snapshot.revision == issued.revision);
+}
+
 TEST_CASE("Blackboard workspace reviews the loaded native Decision catalog and rejects its retired stamp",
           "[unit][editor][blackboard][workspace]") {
     BlackboardWorkspaceFixture project;

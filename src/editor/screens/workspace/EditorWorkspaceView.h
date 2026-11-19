@@ -192,6 +192,7 @@ namespace Horo::Editor {
             std::string name;
             std::string numericDefault;
             AI::BlackboardKeyDescriptor proposed;
+            std::optional<AI::BlackboardKeyId> replacement;
             std::size_t usagePage{};
             std::vector<std::string> rowIds;
         };

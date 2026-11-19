@@ -534,6 +534,7 @@ namespace {
 
     struct QueryOutputFixture final {
         static constexpr std::string_view SourcePath = "assets/tactics.horo_eqs";
+        const BlackboardKeyId replacement = MakeIdentity<BlackboardKeyId>(52);
 
         Fixture project;
         const AssetId asset = Files::Id("00000000-0000-0000-0000-0000000000ae");
@@ -549,6 +550,9 @@ namespace {
             REQUIRE(registry.HasValue());
             project.request.querySchema = std::make_shared<const QuerySchemaRegistry>(std::move(registry).Value());
             const std::array keys{BlackboardKeyDescriptor{.key = output.key,
+                                                          .kind = BlackboardValueKind::WorldCoordinate,
+                                                          .presence = BlackboardKeyPresence::Optional},
+                                  BlackboardKeyDescriptor{.key = replacement,
                                                           .kind = BlackboardValueKind::WorldCoordinate,
                                                           .presence = BlackboardKeyPresence::Optional}};
             auto schema = BlackboardSchema::Capture({.identity = SchemaId(), .keys = keys});
@@ -604,11 +608,13 @@ namespace {
             return {id, SchemaId(), 1, output.key, ComputeSha256(std::as_bytes(std::span{schemaBytes.Value()}))};
         }
 
-        Result<BlackboardUsageReview> Review(BlackboardUsageSelection selection) {
+        Result<BlackboardUsageReview> Review(BlackboardUsageSelection selection,
+                                             std::shared_ptr<const DecisionBlackboardProviderMetadata> providers = {}) {
             const auto revision = Rebuild();
             NativeDurableFileSystem files;
             Editor::ProjectMutationCoordinator mutations{files};
-            return CaptureBlackboardUsageReview(project.source.path, project.registry, revision, mutations, selection);
+            return CaptureBlackboardUsageReview(project.source.path, project.registry, revision, mutations, selection,
+                                                std::move(providers));
         }
     };
 
@@ -710,6 +716,55 @@ namespace {
             CHECK(std::ranges::any_of(partial.Value().gaps, [&](const auto &gap) {
                 return gap.kind == BlackboardUsageGapKind::EnvironmentQueryBindings && gap.asset == duplicateAsset && gap.diagnostic;
             }));
+        }
+    }
+
+    TEST_CASE("Blackboard replacement review stages only exact compatible Decision candidates", "[native][decision-cook][eqs][usage]") {
+        QueryOutputFixture query;
+        auto selection = query.WriteSchema();
+        selection.replacement = query.replacement;
+        const auto providers = DecisionBlackboardProviderMetadata::Capture(*query.project.request.environment.nodes);
+        REQUIRE(providers.HasValue());
+        SECTION("registered source bytes remain at the original key") {
+            const auto report = query.Review(selection, providers.Value());
+            REQUIRE(report.HasValue());
+            REQUIRE(report.Value().decisionRetargets.size() == 1);
+            const auto &change = report.Value().decisionRetargets.front();
+            CHECK(change.original.asset == query.project.child);
+            const auto stamp = std::ranges::find(report.Value().sources, change.original.asset, &BlackboardUsageSourceStamp::asset);
+            REQUIRE(stamp != report.Value().sources.end());
+            CHECK(stamp->source == change.original.source);
+            CHECK(stamp->metadata == change.original.metadata);
+            DecisionGraphAssetId graph;
+            const auto candidate = DecisionPlanCodec::DecodeSource(change.candidate, graph);
+            REQUIRE(candidate.HasValue());
+            REQUIRE(candidate.Value().size() == 1);
+            const auto uses = InspectDecisionBlackboardUses(candidate.Value().front(), query.replacement, providers.Value().get());
+            REQUIRE(uses.HasValue());
+            REQUIRE(uses.Value().queryOutputs.size() == 1);
+            auto expected = query.output;
+            expected.key = query.replacement;
+            CHECK(uses.Value().queryOutputs.front().output == expected);
+            selection.replacement.reset();
+            const auto reread = query.Review(selection, providers.Value());
+            REQUIRE(reread.HasValue());
+            REQUIRE(reread.Value().queryUsages.size() == 1);
+            CHECK(reread.Value().queryUsages.front().use.output == query.output);
+            CHECK(reread.Value().decisionRetargets.empty());
+        }
+        SECTION("an unresolved provider produces an explicit gap and no replacement bytes") {
+            const auto report = query.Review(selection);
+            REQUIRE(report.HasValue());
+            CHECK(report.Value().decisionRetargets.empty());
+            CHECK(std::ranges::any_of(report.Value().gaps, [&](const auto &gap) {
+                return gap.kind == BlackboardUsageGapKind::DecisionRetarget && gap.asset == query.project.child && gap.diagnostic;
+            }));
+        }
+        SECTION("the destination must exist in the exact schema capture") {
+            selection.replacement = MakeIdentity<BlackboardKeyId>(91);
+            const auto report = query.Review(selection, providers.Value());
+            REQUIRE(report.HasError());
+            CHECK(report.ErrorValue().code.Value() == AIErrors::BlackboardValueTypeMismatch.code.Value());
         }
     }
 

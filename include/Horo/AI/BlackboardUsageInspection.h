@@ -80,6 +80,13 @@ namespace Horo::AI {
     [[nodiscard]] Result<DecisionBlackboardSourceUses> InspectDecisionBlackboardUses(const DecisionGraphSource &source, BlackboardKeyId key,
                                                                                      const DecisionBlackboardProviderMetadata *providers);
 
+    /** @brief Checks whether distinct admitted keys have compatible declaration contracts for retargeting.
+     * @param original Key being retired. @param replacement Key selected as the destination.
+     * @return Whether type, access, presence, capacity and default availability are compatible.
+     */
+    [[nodiscard]] bool IsCompatibleBlackboardReplacement(const BlackboardKeyDescriptor &original,
+                                                         const BlackboardKeyDescriptor &replacement) noexcept;
+
     /** @brief Retargets typed Blackboard references in one detached Decision source.
      * @param source Authored graph using the exact schema and an admitted version range.
      * @param schema Current immutable Blackboard schema containing both keys.
