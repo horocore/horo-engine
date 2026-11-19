@@ -4,6 +4,7 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 
 namespace Horo::Network::NativeQualification {
     /** @brief Owner-thread-only observation lease; null before/after actual native transport lifetime. */
@@ -16,6 +17,9 @@ namespace Horo::Network::NativeQualification {
         std::array<NetworkTransportEventKind, 8> eventPrefix{};
         NetworkTransportEventKind lastEvent{NetworkTransportEventKind::Failed};
         const ErrorCodeDescriptor *failure{};  // Stable canonical descriptor, never raw native diagnostics.
+        std::optional<ChannelId> snapshotChannel;
+        std::size_t snapshotsSent{};
+        std::size_t snapshotsReceived{};
     };
 
     /** @brief Forward every operation to the same native adapter and retain only its actual Connect result. */
@@ -47,7 +51,10 @@ namespace Horo::Network::NativeQualification {
 
         Result<void> Send(ConnectionHandle connection, ChannelId channel, std::span<const std::byte> bytes,
                           DeliveryPolicy delivery) override {
-            return native_->Send(connection, channel, bytes, delivery);
+            auto sent = native_->Send(connection, channel, bytes, delivery);
+            if (sent.HasValue() && channel == observation_->snapshotChannel && delivery == DeliveryPolicy::UnreliableUnordered)
+                ++observation_->snapshotsSent;
+            return sent;
         }
 
         Result<void> Close(ConnectionHandle connection) override {
@@ -96,6 +103,9 @@ namespace Horo::Network::NativeQualification {
                 ++observation_.events;
                 if (event.kind == NetworkTransportEventKind::Accepted || event.kind == NetworkTransportEventKind::Connected)
                     ++observation_.readyEvents;
+                if (event.kind == NetworkTransportEventKind::PacketReceived && event.channel == observation_.snapshotChannel &&
+                    event.delivery == DeliveryPolicy::UnreliableUnordered)
+                    ++observation_.snapshotsReceived;
                 observation_.lastEvent = event.kind;
                 if (!observation_.failure)
                     observation_.failure = event.failure;

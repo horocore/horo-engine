@@ -1,5 +1,6 @@
 #include "../NetworkAdmissionProductTestSupport.h"
 #include "GnsEvidenceAssertions.h"
+#include "GnsLiveSceneSupport.h"
 #include "GnsObservedTransport.h"
 #include "GnsQualificationSupport.h"
 #include "Horo/Foundation/Platform.h"
@@ -22,6 +23,7 @@ namespace Horo::Network::NativeQualification {
             std::string directory;
             std::string nativeDirectory;
             bool rejectNativeRoot{};
+            bool liveScene{};
             unsigned side{};
         } input;
 
@@ -90,9 +92,10 @@ namespace Horo::Network::NativeQualification {
             void assertionEnded(const Catch::AssertionStats &stats) override {
                 if (!stats.assertionResult.isOk()) {
                     // Catch captures test output; listeners run outside that capture boundary.
+                    std::cout << "NATIVE_ASSERT " << stats.assertionResult.getSourceInfo().line;
                     if (!publicError.empty())
-                        std::cout << std::exchange(publicError, {}) << '\n';
-                    std::cout << "NATIVE_ASSERT " << stats.assertionResult.getSourceInfo().line << '\n' << std::flush;
+                        std::cout << ' ' << std::exchange(publicError, {});
+                    std::cout << '\n' << std::flush;
                 }
             }
         };
@@ -105,6 +108,7 @@ namespace Horo::Network::NativeQualification {
             std::shared_ptr<CredentialObservation> credentials = std::make_shared<CredentialObservation>();
             std::unique_ptr<INetworkTransport> native;
             std::vector<std::byte> command;
+            std::unique_ptr<LiveScene::Product> live;
             std::unique_ptr<Application::Internal::NetworkProductHost> host;
 
             ChildOwners() {
@@ -133,6 +137,8 @@ namespace Horo::Network::NativeQualification {
             policy.trust.allowUnprotectedInMemoryLoopback = false;
             // One explicit millisecond clock domain shared by admission and the actual frame poll.
             policy.timeouts = {3000, 5000, 7000, 30000, 15000};
+            if (owners.live)
+                owners.live->routes.Apply(policy);
             return policy;
         }
 
@@ -151,7 +157,7 @@ namespace Horo::Network::NativeQualification {
                 LoadNativeSelection(input.nativeDirectory.empty() ? input.directory : input.nativeDirectory, input.side, policy.trust);
             REQUIRE(optionsResult.HasValue());
             auto options = std::move(optionsResult).Value();
-            options.transport.maximumChannels = 2;
+            options.transport.maximumChannels = policy.local.transport.maximumChannels;
             owners.handler->observation = owners.observation;
             owners.handler->expected = input.side == 0 ? std::byte{0x41} : std::byte{0x42};
             if (input.side == 0)
@@ -161,12 +167,19 @@ namespace Horo::Network::NativeQualification {
                 Application::Internal::NetworkProductInboundHandler{{owners.fixtures.protocols[0].id, owners.fixtures.messages[4].id,
                                                                      MessageTrafficClass::Command, Runtime::RuntimePhase::NetworkPoll, 64},
                                                                     owners.handler}};
-            auto selected = Application::Internal::SelectNetworkProductGns(policy, std::move(providers), owners.fixtures.codecs, bindings,
-                                                                           options, owners.fixtures.WorldPolicy());
+            auto selected =
+                Application::Internal::SelectNetworkProductGns(policy, std::move(providers),
+                                                               owners.live ? owners.live->routes.codecs : owners.fixtures.codecs, bindings,
+                                                               options,
+                                                               owners.live ? owners.live->routes.binding : owners.fixtures.WorldPolicy(),
+                                                               owners.live ? owners.live->state : nullptr,
+                                                               owners.live ? owners.live->state : nullptr);
             REQUIRE(selected.HasValue());
             auto composition = std::move(selected).Value();
             owners.handler->admission = composition.admission;
             policy = composition.admission->Policy();
+            if (owners.live)
+                owners.observation->snapshotChannel = owners.live->routes.binding.stateUpdates->channel;
             // Passive observation wraps the same selected production candidate; it grants no authority.
             owners.native = std::make_unique<ObservedTransport>(std::move(composition.transport), owners.observation);
             return std::move(composition.admission);
@@ -193,7 +206,8 @@ namespace Horo::Network::NativeQualification {
             auto sessions = std::make_shared<Application::Internal::ClientSessionOwner>(selectedClock);
             owners.fixtures.owners[input.side]->sessions = sessions;
             const auto role = input.side == 0 ? NetworkProjectRole::DedicatedServer : NetworkProjectRole::Client;
-            auto facts = ProductFacts(*owners.fixtures.project, role, false);
+            const auto &project = owners.live ? *owners.live->project : *owners.fixtures.project;
+            auto facts = ProductFacts(project, role, false);
             facts.product.providers[0].capabilities = policy.local.transport;
             facts.inventory.providers[0] = facts.product.providers[0];
             facts.host.providers[0].capabilities = policy.local.transport;
@@ -208,10 +222,26 @@ namespace Horo::Network::NativeQualification {
                 return Application::Internal::CreateNetworkProductTransport(std::move(*slot), role, endpoint, endpoint, debugger, sessions,
                                                                             capture);
             };
+            Application::Internal::NetworkProductComposition composition{std::move(factories)};
+            if (owners.live) {
+                auto configured = owners.live->Compose(std::move(composition.factories));
+                if (configured.HasError())
+                    ReportError(configured.ErrorValue());
+                REQUIRE(configured.HasValue());
+                composition = std::move(configured).Value();
+                auto &sceneFactory = composition.factories.services[static_cast<std::size_t>(NetworkModeServiceKind::Scene)];
+                sceneFactory = [factory = std::move(sceneFactory), &live = *owners.live](const NetworkModeServiceRequest &request) {
+                    auto candidate = factory(request);
+                    if (candidate.HasValue())
+                        live.scene = candidate.Value().get();
+                    return candidate;
+                };
+            }
             const std::array world{input.side == 0 ? World(NetworkModeWorldKind::AuthorityServer, 1701)
                                                    : World(NetworkModeWorldKind::Client, 1702)};
+            NetworkTargetDiagnostic targetDiagnostic;
             auto created = Application::Internal::NetworkProductHost::Create(*owners.clock,
-                                                                             {*owners.fixtures.project,
+                                                                             {project,
                                                                               facts.product,
                                                                               facts.inventory,
                                                                               facts.host,
@@ -222,10 +252,15 @@ namespace Horo::Network::NativeQualification {
                                                                               {.localPlayer = input.side == 1},
                                                                               sessions,
                                                                               NetworkWorldCompositionPurpose::Gameplay,
-                                                                              capture->WorldBinding()},
-                                                                             std::move(factories));
-            if (created.HasError())
+                                                                              capture->WorldBinding(),
+                                                                              composition.fixedParticipant,
+                                                                              composition.pollRetirement},
+                                                                             std::move(composition.factories), &targetDiagnostic);
+            if (created.HasError()) {
                 ReportError(created.ErrorValue());
+                publicError += " target=" + std::to_string(static_cast<unsigned>(targetDiagnostic.capability)) + ':' +
+                               std::to_string(static_cast<unsigned>(targetDiagnostic.reason));
+            }
             REQUIRE(created.HasValue());
             owners.host = std::move(created).Value();
             StartHost(owners, world[0]);
@@ -251,10 +286,19 @@ namespace Horo::Network::NativeQualification {
                       << counters.sentMessages << ':' << counters.receivedMessages << ':'
                       << (terminal ? static_cast<unsigned>(terminal->kind) : static_cast<unsigned>(PeerSessionTerminalKind::Count)) << '\n'
                       << std::flush;
+            if (owners.live) {
+                const auto y = owners.live->SceneY();
+                const auto authoredY = input.side == 0 ? LiveScene::AuthorityStartY : LiveScene::ClientStartY;
+                std::cout << "NATIVE_STATE scene:" << owners.observation->snapshotsSent << ':' << owners.observation->snapshotsReceived
+                          << ':' << y.has_value() << ':' << (y && *y != authoredY) << '\n'
+                          << std::flush;
+            }
         }
 
         void ShutdownAndVerifyReuse(ChildOwners &owners) {
             owners.handler->observation.reset();
+            if (owners.live)
+                owners.live->scene = nullptr;
             owners.host->Shutdown();
             REQUIRE(owners.observation->transport == nullptr);
             owners.host.reset();
@@ -327,12 +371,28 @@ namespace Horo::Network::NativeQualification {
             // Covers peer cold startup; the canonical admission policy still owns its strict protocol timeouts.
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
             bool sent{};
+            std::optional<float> authorityY;
+            std::size_t snapshotsAtFirstValue{};
+            bool appliedSnapshot{};
             while (std::chrono::steady_clock::now() < deadline) {
                 auto frame = owners.host->RunFrame();
                 if (frame.HasError())
                     ReportError(frame.ErrorValue());
                 REQUIRE(frame.HasValue());
-                if (input.side == 1 && !sent) {
+                if (input.side == 1 && owners.live) {
+                    const auto y = owners.live->SceneY();
+                    if (y && *y != LiveScene::ClientStartY) {
+                        const auto snapshots = owners.observation->snapshotsReceived;
+                        // The initial receipt and first live packet can be processed in the same host frame.
+                        if (!authorityY) {
+                            authorityY = y;
+                            snapshotsAtFirstValue = snapshots;
+                        } else if (snapshots > snapshotsAtFirstValue && *y < *authorityY) {
+                            appliedSnapshot = true;
+                        }
+                    }
+                }
+                if (input.side == 1 && !sent && (!owners.live || appliedSnapshot)) {
                     const auto role = owners.host->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702});
                     if (role.HasValue() && role.Value().session.has_value()) {
                         REQUIRE(role.Value().worldSession.has_value());
@@ -353,6 +413,19 @@ namespace Horo::Network::NativeQualification {
             if (owners.handler->calls == 0)
                 ReportPeerState(owners, sent);
             REQUIRE(owners.handler->calls > 0);
+            if (owners.live) {
+                if (input.side == 0) {
+                    const auto y = owners.live->SceneY();
+                    REQUIRE(y);
+                    REQUIRE(*y < LiveScene::AuthorityStartY);
+                    REQUIRE(owners.observation->snapshotsSent > 0);
+                } else {
+                    REQUIRE(authorityY);
+                    REQUIRE(appliedSnapshot);
+                    REQUIRE(owners.observation->snapshotsReceived > 0);
+                }
+                std::cout << "NATIVE_SNAPSHOT " << (input.side == 0 ? "server" : "client") << '\n' << std::flush;
+            }
             REQUIRE(owners.host->ClientConnectionTerminal() == nullptr);
             ShutdownAndVerifyReuse(owners);
             REQUIRE(owners.fixtures.owners[input.side]->sessions->ConnectionAttemptTerminal() == nullptr);
@@ -364,6 +437,10 @@ namespace Horo::Network::NativeQualification {
         REQUIRE(input.side <= 1);
         REQUIRE_FALSE(input.directory.empty());
         ChildOwners owners;
+        if (input.liveScene) {
+            REQUIRE_FALSE(input.rejectNativeRoot);
+            owners.live = std::make_unique<LiveScene::Product>(owners.fixtures, owners.credentials, input.side == 0);
+        }
         CreateHost(owners);
         if (input.rejectNativeRoot)
             PumpRejectedRoot(owners);
@@ -379,7 +456,8 @@ int main(int argc, char **argv) {
     auto cli = session.cli() | Catch::Clara::Opt(Horo::Network::NativeQualification::input.directory, "directory")["--fixture-dir"] |
                Catch::Clara::Opt(Horo::Network::NativeQualification::input.side, "side")["--side"] |
                Catch::Clara::Opt(Horo::Network::NativeQualification::input.nativeDirectory, "native-directory")["--native-dir"] |
-               Catch::Clara::Opt(Horo::Network::NativeQualification::input.rejectNativeRoot)["--reject-native-root"];
+               Catch::Clara::Opt(Horo::Network::NativeQualification::input.rejectNativeRoot)["--reject-native-root"] |
+               Catch::Clara::Opt(Horo::Network::NativeQualification::input.liveScene)["--live-scene"];
     session.cli(cli);
     return session.run(argc, argv);
 }

@@ -197,6 +197,28 @@ private:
 
 HORO_BEHAVIOR(MoveBehavior, "game.tests.dynamic_mover")
 
+/** @brief Drives a declared Scene transform through the ordinary fixed gameplay command path. */
+class ReplicatedPresentationMotion final : public IBehaviorInstance {
+public:
+    static BehaviorDescriptor DescribeBehavior() {
+        BehaviorDescriptor descriptor;
+        descriptor.displayName = "Replicated Presentation Motion";
+        descriptor.phases.push_back({BehaviorPhase::Gameplay, "game.tests.replicated_presentation_motion", {}, {}, {}});
+        return descriptor;
+    }
+
+    void OnFixedUpdate(BehaviorContext &context, FixedDeltaTime) override {
+        auto transform = context.LocalTransform();
+        if (transform.HasError())
+            return;
+        auto moved = transform.Value();
+        moved.translation.y -= 0.125F;
+        static_cast<void>(context.SetLocalTransform(moved));
+    }
+};
+
+HORO_BEHAVIOR(ReplicatedPresentationMotion, "game.tests.replicated_presentation_motion")
+
 #if defined(HORO_TEST_GAMEPLAY_NAVIGATION) && HORO_TEST_GAMEPLAY_NAVIGATION
 namespace {
     std::shared_ptr<const GameplayNavigationResult> navigationClientCompleted;

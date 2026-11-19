@@ -705,7 +705,13 @@ if(HORO_BUILD_NETWORK_GNS)
         message(STATUS "Native secure pair runtime qualification requires native Physics and provable owner-only POSIX fixture files")
     endif()
 endif()
-horo_register_catch_test(HoroNetworkModeHostIntegrationTests LABELS "integration;network;headless")
+if(HORO_BUILD_NETWORK_GNS AND UNIX AND HORO_BUILD_PHYSICS_NATIVE)
+    # The signed two-process cases share one qualification listener in the host network namespace.
+    horo_register_catch_test(HoroNetworkModeHostIntegrationTests LABELS "integration;network;headless"
+        PROPERTIES RESOURCE_LOCK horo-gns-native-loopback)
+else()
+    horo_register_catch_test(HoroNetworkModeHostIntegrationTests LABELS "integration;network;headless")
+endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND Python3_Interpreter_FOUND)
     add_test(NAME HoroXRPackageLaunchContract
         COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/integration/xr_package_launch_contract.py"
@@ -2894,6 +2900,12 @@ target_include_directories(HoroTestGameModule PRIVATE "${PROJECT_SOURCE_DIR}/tes
 target_compile_definitions(HoroTestGameModule PRIVATE HORO_TEST_GAMEPLAY_PHYSICS=1 HORO_TEST_GAMEPLAY_NAVIGATION=1 HORO_TEST_GAMEPLAY_UI=1)
 target_link_libraries(HoroTestGameModule PRIVATE HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::PrefabRuntime HoroEngine::GameplayNavigationIntegration HoroEngine::RuntimeUi)
 get_property(HORO_TEST_GAME_MODULE_REVISION_FILE TARGET HoroTestGameModule PROPERTY HORO_GAMEPLAY_DESCRIPTOR_REVISION_FILE)
+if(TARGET HoroGnsSecureProductChild)
+    target_compile_definitions(HoroGnsSecureProductChild PRIVATE
+        HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
+        HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}")
+    add_dependencies(HoroGnsSecureProductChild HoroTestGameModule)
+endif()
 target_compile_definitions(HoroNetworkModeHostIntegrationTests PRIVATE
     HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
     HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}")

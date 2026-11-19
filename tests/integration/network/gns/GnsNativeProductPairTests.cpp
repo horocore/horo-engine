@@ -50,13 +50,15 @@ namespace Horo::Network::NativeQualification {
             std::atomic<bool> ready{};
             std::atomic<bool> qualified{};
             std::atomic<bool> rejected{};
+            std::atomic<bool> snapshot{};
+            std::atomic<bool> finished{};
             std::optional<Result<ExternalProcessResult>> result;
             std::string safeError;  // Written only by this worker; inspected only after join.
         };
 
         /** @brief Capture only fixed public phase tokens, never credential/key/certificate bytes or generic child output. */
         ExternalProcessRequest Request(const std::filesystem::path &directory, const unsigned side, ProcessState &state,
-                                       const std::filesystem::path &nativeDirectory = {}, const bool rejectNativeRoot = false) {
+                                       const std::filesystem::path &nativeDirectory, const bool rejectNativeRoot, const bool liveScene) {
             ExternalProcessRequest request;
             request.executable = HORO_GNS_PRODUCT_CHILD;
             request.arguments = {"--fixture-dir", directory.string(), "--side", std::to_string(side), "--reporter", "compact"};
@@ -66,6 +68,8 @@ namespace Horo::Network::NativeQualification {
             }
             if (rejectNativeRoot)
                 request.arguments.push_back("--reject-native-root");
+            if (liveScene)
+                request.arguments.push_back("--live-scene");
             // Both real products verify their complete native image before peer admission.
             request.timeout = std::chrono::seconds(120);
             request.gracefulTermination = std::chrono::milliseconds(200);
@@ -84,6 +88,8 @@ namespace Horo::Network::NativeQualification {
                     state.qualified.store(true);
                 if (line.text == (side == 0 ? "NATIVE_REJECTED server" : "NATIVE_REJECTED client"))
                     state.rejected.store(true);
+                if (line.text == (side == 0 ? "NATIVE_SNAPSHOT server" : "NATIVE_SNAPSHOT client"))
+                    state.snapshot.store(true);
             };
             return request;
         }
@@ -94,9 +100,10 @@ namespace Horo::Network::NativeQualification {
                 state.result.emplace(runner.Run(request, cancellation));
             } catch (...) { /* Joined parent reports the missing terminal result; nothing escapes an owned worker. */
             }
+            state.finished.store(true);
         }
 
-        void RequireQualified(const ProcessState &state, const bool expectNativeRejection) {
+        void RequireQualified(const ProcessState &state, const bool expectNativeRejection, const bool expectLiveScene) {
             INFO(state.safeError);
             REQUIRE(state.result.has_value());
             if (state.result->HasError())
@@ -106,21 +113,22 @@ namespace Horo::Network::NativeQualification {
             REQUIRE(state.result->Value().exitCode == 0);
             REQUIRE(state.qualified.load() == !expectNativeRejection);
             REQUIRE(state.rejected.load() == expectNativeRejection);
+            REQUIRE(state.snapshot.load() == expectLiveScene);
         }
 
         /** @brief Keep one shared Horo credential directory while optionally selecting a different native CA for the client. */
         void RunPair(const std::filesystem::path &credentials, const std::filesystem::path &clientNative = {},
-                     const bool expectNativeRejection = false) {
+                     const bool expectNativeRejection = false, const bool liveScene = false) {
             ProcessState server;
             ProcessState client;
             CancellationSource cancellation;
-            const auto serverRequest = Request(credentials, 0, server, {}, expectNativeRejection);
-            const auto clientRequest = Request(credentials, 1, client, clientNative, expectNativeRejection);
+            const auto serverRequest = Request(credentials, 0, server, {}, expectNativeRejection, liveScene);
+            const auto clientRequest = Request(credentials, 1, client, clientNative, expectNativeRejection, liveScene);
             std::jthread serverWorker([&] {
                 RunChild(serverRequest, server, cancellation.Token());
             });
             const auto readyDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
-            while (!server.ready.load() && std::chrono::steady_clock::now() < readyDeadline)
+            while (!server.ready.load() && !server.finished.load() && std::chrono::steady_clock::now() < readyDeadline)
                 std::this_thread::sleep_for(std::chrono::milliseconds(2));
             if (server.ready.load()) {
                 std::jthread clientWorker([&] {
@@ -136,8 +144,8 @@ namespace Horo::Network::NativeQualification {
             INFO("server public diagnostics: " << server.safeError);
             INFO("client public diagnostics: " << client.safeError);
             REQUIRE(server.ready.load());
-            RequireQualified(client, expectNativeRejection);
-            RequireQualified(server, expectNativeRejection);
+            RequireQualified(client, expectNativeRejection, liveScene);
+            RequireQualified(server, expectNativeRejection, liveScene);
         }
 
         void Provision(FixtureDirectory &fixture) {
@@ -183,6 +191,13 @@ namespace Horo::Network::NativeQualification {
         FixtureDirectory fixture;
         Provision(fixture);
         RunPair(fixture.root);
+    }
+
+    TEST_CASE("Two signed native ProductHost processes replicate a live committed Scene transform",
+              "[integration][network][gns][native-pair][replication]") {
+        FixtureDirectory fixture;
+        Provision(fixture);
+        RunPair(fixture.root, {}, false, true);
     }
 
     TEST_CASE("Distinct native CA roots reject both ProductHost peers before readiness despite a shared Horo proof authority",
