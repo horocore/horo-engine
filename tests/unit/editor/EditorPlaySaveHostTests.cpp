@@ -110,6 +110,12 @@ namespace {
                 .projectBuildId = config.projectBuildId};
     }
 
+    /** @brief Allows a fixture to seed an older archive before the live host claims its namespace. */
+    enum class HostStartup {
+        Immediate,
+        Deferred
+    };
+
     /** @brief Owns a genuine scheduler, Scene, canonical participants and ordinary filesystem sandbox. */
     struct Fixture final {
         TemporaryDirectory directory;
@@ -132,7 +138,8 @@ namespace {
         std::uint64_t frame{};
         bool acceptAiRestore{true};
 
-        explicit Fixture(bool failOpen = false, bool sceneOwnedGameplay = false, bool sceneOwnedAi = false) {
+        explicit Fixture(bool failOpen = false, bool sceneOwnedGameplay = false, bool sceneOwnedAi = false,
+                         HostStartup startup = HostStartup::Immediate) {
             schema->identities = {{Value(PersistentEntityId::Parse("7d00b1e9-ec8b-407b-a132-d349f5ccaf76")),
                                    {1},
                                    AuthoredPersistentEntityProvenance{{41}, {1}},
@@ -152,6 +159,12 @@ namespace {
             REQUIRE(scenes.ActiveScene());
             if (behaviorOwner)
                 REQUIRE(behaviorOwner->ActivatePublished().HasValue());
+            if (startup == HostStartup::Immediate)
+                OpenHost(failOpen);
+        }
+
+        /** @brief Opens the product's exclusive slot namespace after any fixture seeding is complete. */
+        void OpenHost(bool failOpen = false) {
             auto config = Storage(directory.Path());
             if (failOpen) {
                 blockedRoot = config.root.CanonicalPath();
@@ -233,13 +246,16 @@ namespace {
         }
 
         ~Fixture() {
-            host->BeginRetirement();
+            if (host)
+                host->BeginRetirement();
             jobs.StopAccepting();
             jobs.Shutdown(ShutdownPolicy::Cancel);
-            for (std::size_t phase = 0; phase < MaximumSaveParticipantCount + 8 && !host->IsSettled(); ++phase)
-                Pump();
-            REQUIRE(host->IsSettled());
-            host.reset();
+            if (host) {
+                for (std::size_t phase = 0; phase < MaximumSaveParticipantCount + 8 && !host->IsSettled(); ++phase)
+                    Pump();
+                REQUIRE(host->IsSettled());
+                host.reset();
+            }
             scenes.Shutdown();
         }
 
@@ -423,11 +439,10 @@ TEST_CASE("Play retirement retains actual accepted worker until scheduler "
 }
 
 TEST_CASE("Play Save reads an earlier reference-free AI slot under the current policy", "[editor][play][save][host][ai]") {
-    Fixture f{false, false, true};
+    Fixture f{false, false, true, HostStartup::Deferred};
     const auto original = f.scenes.ActiveScene();
     REQUIRE(original);
     const auto agent = Value(f.aiRuntime->Snapshot()).Agents().front().handle;
-    f.SetAiValue(agent, true);
     const auto saved = Value(f.aiRuntime->CaptureCanonicalState(*original));
     const auto &descriptor = *f.schema->ai;
     const auto old = Value(AI::BindAiSaveCapture(descriptor.participant, descriptor.ownedRecords.front(),
@@ -440,15 +455,14 @@ TEST_CASE("Play Save reads an earlier reference-free AI slot under the current p
     const auto slot = Value(storage->NewSlot());
     const auto header = Value(storage->Header(slot, 1, 0));
     const auto archive = Value(BuildPlaySaveArchive(captured, header));
-    REQUIRE(storage->Commit(slot, archive, {.displayName = "Legacy AI checkpoint"}).HasValue());
+    (void)Value(storage->Commit(slot, archive, {.displayName = "Legacy AI checkpoint"}));
     storage.reset();
 
-    REQUIRE(f.host->Request({.kind = Editor::PlaySaveCommandKind::Refresh}).HasValue());
-    f.Ready();
+    f.OpenHost();
     const auto page = f.Page();
     REQUIRE(page.rows.size() == 1);
     const auto command = Value(f.host->Snapshot()->manager->Command(SaveManagerCommandKind::Load, page.rows.front().slot));
-    f.SetAiValue(agent, false);
+    f.SetAiValue(agent, true);
     REQUIRE(f.host->Request({.kind = Editor::PlaySaveCommandKind::Load, .selection = command}).HasValue());
     f.Ready();
     const auto restored = f.scenes.ActiveScene();

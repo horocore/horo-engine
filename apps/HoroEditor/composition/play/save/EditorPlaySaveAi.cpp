@@ -20,6 +20,11 @@ namespace Horo::Application::Internal {
         SaveParticipantId AiParticipant() {
             return SaveParticipantId::Parse("horo.editor.play.ai.v1").Value();
         }
+
+        /** @brief Confirms the archive names the exact record set and an admitted participant version. */
+        bool MatchesAiParticipant(const SaveManifestParticipant &row, const CanonicalStateParticipantDescriptor &descriptor) {
+            return row.required && row.schemaVersion <= descriptor.schemaVersion && row.chunks == descriptor.ownedRecords;
+        }
     }  // namespace
 
     /** @copydoc PlaySaveAiServices::PlaySaveAiServices */
@@ -93,7 +98,7 @@ namespace Horo::Application::Internal {
                                                                : AiRecordRead::Failure(MakeError(SaveErrors::CompositionUnsupported));
         if (row == participants.end() || !bytes.Value())
             return AiRecordRead::Failure(MakeError(SaveErrors::CaptureIncomplete));
-        if (row->schemaVersion > descriptor->schemaVersion || !row->required || row->chunks != descriptor->ownedRecords)
+        if (!MatchesAiParticipant(*row, *descriptor))
             return AiRecordRead::Failure(MakeError(SaveErrors::CaptureRegistryStale));
         const auto &record = *bytes.Value();
         const auto validated = AI::ValidateAiCanonicalStateRecord({reinterpret_cast<const std::uint8_t *>(record.data()), record.size()},

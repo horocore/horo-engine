@@ -222,6 +222,19 @@ namespace Horo::AI {
             return resolved.Value();
         }
 
+        /** @brief Writes a bounded population in canonical agent identity order. */
+        void WritePopulation(DecisionWriter &writer, const AiCanonicalState &state, const Detail::WriteBlackboardEntity &entity) {
+            AgentId previous;
+            for (const auto &agent : state.agents) {
+                if (!writer.Valid() || agent.authored.agent <= previous || !IsValid(agent)) {
+                    writer.Reject();
+                    return;
+                }
+                previous = agent.authored.agent;
+                WriteAgent(writer, agent, entity);
+            }
+        }
+
         /** @brief Validates wire framing and optionally materializes one complete runtime AI population. */
         Decoded DecodeRecord(std::span<const std::uint8_t> bytes, std::size_t maximumBytes, const AiSaveEntityResolver *resolve,
                              std::optional<std::uint32_t> requiredVersion = {}) {
@@ -257,19 +270,11 @@ namespace Horo::AI {
             DecisionWriter writer{maximumBytes};
             writer.Unsigned(project ? AiCanonicalReferenceRecordVersion : AiCanonicalRecordVersion, 4);
             writer.Unsigned(state.agents.size(), 4);
-            AgentId previous;
             std::optional<Error> error;
             const Detail::WriteBlackboardEntity entity = [&](DecisionWriter &record, const BlackboardStoredEntityReference &value) {
                 WriteEntity(record, value, project, error);
             };
-            for (const auto &agent : state.agents) {
-                if (!writer.Valid() || agent.authored.agent <= previous || !IsValid(agent)) {
-                    writer.Reject();
-                    break;
-                }
-                previous = agent.authored.agent;
-                WriteAgent(writer, agent, entity);
-            }
+            WritePopulation(writer, state, entity);
             if (error)
                 return Encoded::Failure(std::move(*error));
             if (!writer.Valid())
