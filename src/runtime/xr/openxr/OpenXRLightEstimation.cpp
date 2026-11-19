@@ -30,14 +30,6 @@ namespace Horo::XR::OpenXRInternal {
             return true;
         }
 
-        /** @brief Requires a fresh app grant and the exact live calibrated World relation. */
-        bool ValidScope(const XRLightEstimateScope &scope) noexcept {
-            return scope.session.IsValid() && scope.grant.IsValid() && scope.space.id.IsValid() &&
-                   scope.space.id.session == scope.session && scope.space.kind == XRSpaceKind::World &&
-                   scope.space.worldOriginRevision.IsValid() &&
-                   scope.space.convention == XRCoordinateConvention::RightHandedYUpNegativeZForward;
-        }
-
         /** @brief Maps provider failure to the actionable portable controller outcome. */
         const ErrorCodeDescriptor &LightFailure(XrResult result) noexcept {
             switch (result) {
@@ -122,7 +114,7 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
         if (light_.handle != XR_NULL_HANDLE)
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded, "Retire the previous light estimator first"));
-        if (!ValidScope(scope) || limits.minimumUpdateInterval <= Duration{} || limits.maximumAge <= Duration{})
+        if (!scope.IsValid() || limits.minimumUpdateInterval <= Duration{} || limits.maximumAge <= Duration{})
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
         if (scope.grant <= lastLightGrant_)
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));

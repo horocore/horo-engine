@@ -1,3 +1,4 @@
+#include "Horo/XR/XRLightProjection.h"
 #include "OpenXRPlaneCapture.h"
 #include "OpenXRPlaneSnapshot.h"
 #include "support/OpenXRPlaneCaptureTestSupport.h"
@@ -224,6 +225,30 @@ namespace Horo::Tests::OpenXR {
         CHECK(reading.Value().directional->providerDirection.y == -1.0F);
         CHECK(reading.Value().directional->intensity.relativeRgb.x == 4.0F);
 
+        SECTION("explicit host policy projects the native observation and withdraws it on source retirement") {
+            const Render::SceneColorSourcePolicy color{Render::SceneColorEncoding::LinearAcesCg};
+            auto created = XRLightProjection::Create(fixture.scope, {.ambientColor = color,
+                                                                     .directionalColor = color,
+                                                                     .direction = XRLightDirectionConvention::TowardScene,
+                                                                     .ambientScale = 0.5F,
+                                                                     .directionalScale = 0.25F,
+                                                                     .maximumAbsoluteChannel = 12.0F,
+                                                                     .directionalIdentity = 67,
+                                                                     .maximumAge = fixture.limits.maximumAge});
+            REQUIRE(created.HasValue());
+            auto projection = std::move(created).Value();
+            const auto projected = projection.Update(fixture.scope, LightFixture::Time(100), &reading.Value());
+            REQUIRE(projected.HasValue());
+            REQUIRE(projected.Value());
+            REQUIRE(projected.Value()->ambient);
+            CHECK(projected.Value()->ambient->y == 1.5F);
+            REQUIRE(projected.Value()->directional);
+            CHECK(projected.Value()->directional->color.x == 1.0F);
+            CHECK(projected.Value()->directional->direction.y == -1.0F);
+            REQUIRE(owner.StopLightEstimation(fixture.scope).HasValue());
+            CHECK_FALSE(projection.Update(fixture.scope, LightFixture::Time(101), nullptr).Value());
+            CHECK_FALSE(projection.Update(fixture.scope, LightFixture::Time(102), &reading.Value()).Value());
+        }
         SECTION("cadence and a repeated runtime sample do not renew expiry") {
             const auto bounded = fixture.Advance(109);
             REQUIRE(bounded.HasValue());

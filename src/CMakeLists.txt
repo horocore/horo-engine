@@ -2469,6 +2469,7 @@ add_library(HoroXRApi STATIC
         runtime/xr/api/XRSpacePose.cpp
         runtime/xr/api/XRHandTracking.cpp
         runtime/xr/api/XRInteraction.cpp
+        runtime/xr/api/XRLightProjection.cpp
         runtime/xr/api/XRPlaneTracking.cpp
         runtime/xr/api/XRSpatialHitTest.cpp
         runtime/xr/api/XRTrackingSnapshot.cpp

@@ -19,6 +19,14 @@ namespace Horo::XR {
         XRSessionId session;
         XRCoordinateSpace space;
         XRLightEstimateGrant grant;
+
+        /** @brief Checks representation and exact World/session lineage. @return True for a well-formed scope. */
+        [[nodiscard]] constexpr bool IsValid() const noexcept {
+            return session.IsValid() && grant.IsValid() && space.id.IsValid() && space.id.session == session &&
+                   space.kind == XRSpaceKind::World && space.worldOriginRevision.IsValid() &&
+                   space.convention == XRCoordinateConvention::RightHandedYUpNegativeZForward;
+        }
+
         constexpr auto operator<=>(const XRLightEstimateScope &) const noexcept = default;
     };
 

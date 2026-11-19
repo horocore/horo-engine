@@ -2084,6 +2084,7 @@ add_executable(HoroXRApiTests
         unit/runtime/xr/XRLoaderPreflightTests.cpp
         unit/runtime/xr/XRSpacePoseTests.cpp
         unit/runtime/xr/XRHandTrackingTests.cpp
+        unit/runtime/xr/XRLightProjectionTests.cpp
         unit/runtime/xr/XRTrackingSnapshotTests.cpp
         unit/runtime/xr/XRViewRenderPlanTests.cpp
 )
