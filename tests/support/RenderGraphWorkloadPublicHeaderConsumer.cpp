@@ -7,6 +7,8 @@
 
 static_assert(std::is_constructible_v<Horo::Render::RenderGraphWorkload, Horo::Render::RenderGraphBufferCopy>);
 static_assert(std::is_constructible_v<Horo::Render::RenderGraphWorkload, Horo::Render::RenderGraphColorAttachment>);
+static_assert(std::is_constructible_v<Horo::Render::RenderGraphWorkload, Horo::Render::RenderGraphStereoCoverageReduction>);
+static_assert(sizeof(Horo::Render::RenderGraphStereoCoverageReduction::Tallies) == 16);
 static_assert(std::is_constructible_v<Horo::Render::RenderGraphWorkload, Horo::Render::RenderGraphLightCulling>);
 static_assert(!std::is_copy_constructible_v<Horo::Render::CompiledRenderGraphExecution>);
 

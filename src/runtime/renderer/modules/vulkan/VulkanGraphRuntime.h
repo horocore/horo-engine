@@ -58,6 +58,14 @@ namespace Horo::Render::Detail {
         /** @copydoc IVulkanEditorGraphicsPort::ReadCompletedStereoCoverage */
         [[nodiscard]] Result<bool> ReadCompletedStereoCoverage(std::uint64_t instance, RenderTimelinePoint completion,
                                                                std::span<std::byte> destination);
+        /** @copydoc IVulkanEditorGraphicsPort::SupportsStereoCoverageReduction */
+        [[nodiscard]] bool SupportsStereoCoverageReduction(RenderQueueId queue) const noexcept;
+        /** @copydoc IVulkanEditorGraphicsPort::PrepareStereoCoverageReduction */
+        [[nodiscard]] Result<std::shared_ptr<IResidentStereoCoverageReducer>> PrepareStereoCoverageReduction(
+            const VulkanStereoCoveragePreparation &request);
+        /** @copydoc IVulkanEditorGraphicsPort::ReadCompletedStereoCoverageReduction */
+        [[nodiscard]] Result<bool> ReadCompletedStereoCoverageReduction(std::uint64_t instance, RenderTimelinePoint completion,
+                                                                        RenderGraphStereoCoverageReduction::Tallies &destination);
         /** @copydoc IVulkanEditorGraphicsPort::WritePreparationUniform */
         [[nodiscard]] Result<void> WritePreparationUniform(std::uint64_t instance, std::span<const std::byte> bytes);
         /** @copydoc IVulkanEditorGraphicsPort::WriteFrameBuffer */

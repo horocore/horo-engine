@@ -5,6 +5,15 @@
 #include "ShaderReflectionCook.h"
 
 namespace Horo::Editor {
+    /** @brief The closed stereo reduction package after its bound reflection is validated. */
+    struct EditorVulkanCoverageReductionCook final {
+        std::vector<std::uint8_t> payload;
+    };
+
+    /** @brief Verifies the complete cooked Vulkan reduction program against its same-operation sidecar. */
+    [[nodiscard]] Result<EditorVulkanCoverageReductionCook> LoadEditorVulkanCoverageReductionCook(std::span<const std::uint8_t> payload,
+                                                                                                  std::span<const std::uint8_t> metadata);
+
     [[nodiscard]] Render::ShaderTargetRequirement EditorVulkanViewportShaderTarget();
     [[nodiscard]] Render::ShaderManifest EditorVulkanViewportShaderManifest();
     [[nodiscard]] std::vector<Render::ShaderReflectionBindingName> EditorVulkanViewportReflectionNames();

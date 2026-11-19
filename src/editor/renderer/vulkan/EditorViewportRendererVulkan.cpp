@@ -382,6 +382,7 @@ namespace Horo::Editor {
         xrMotionFormats_.reset();
         xrMotionCook_.reset();
         xrCoverageCook_.reset();
+        xrCoverageReductionArtifact_.clear();
         xrCoverageProbe_.reset();
     }
 

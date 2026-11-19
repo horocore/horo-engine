@@ -79,7 +79,7 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(MakeError(RenderGraphErrors::InvalidImport));
         const auto queue = graph.Passes().front().queue;
         if (!std::ranges::all_of(graph.Passes(), [queue](const auto &pass) {
-            return (pass.kind == RenderPassKind::Graphics || pass.kind == RenderPassKind::Copy) && pass.queue == queue;
+            return pass.queue == queue;
         }))
             return Result<void>::Failure(MakeError(RenderGraphErrors::InvalidImport));
         std::array<std::uint8_t, RenderGraphLimits::HardMaxResources> selected{};

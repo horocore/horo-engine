@@ -101,6 +101,10 @@ namespace Horo::Render::Detail {
         if (request.properties) {
             if (std::ranges::any_of(request.queues, &VulkanCommandQueue::supportsCompute))
                 reconstruction.Initialize(request.device, request.properties->limits, request.frames, request.resolver);
+            if (std::ranges::any_of(request.queues, [](const auto &queue) {
+                return queue.supportsGraphics && queue.supportsCompute;
+            }))
+                coverageReduction.Initialize(request.device, request.properties->limits, request.resolver);
             return vfxGpu.Initialize(request.device, *request.properties, request.frames, request.deviceIncarnation, request.queues,
                                      request.resources, commands, request.resolver);
         }
@@ -237,6 +241,43 @@ namespace Horo::Render::Detail {
         if (observed.HasError() || !observed.Value())
             return observed;
         if (const auto read = impl_->resources->ReadStereoCoverage(instance, completion, destination); read.HasError())
+            return Outcome::Failure(read.ErrorValue());
+        return Outcome::Success(true);
+    }
+
+    /** @copydoc VulkanGraphRuntime::SupportsStereoCoverageReduction */
+    bool VulkanGraphRuntime::SupportsStereoCoverageReduction(const RenderQueueId queue) const noexcept {
+        const auto *native = impl_->Queue(queue);
+        return impl_->owner == std::this_thread::get_id() && !impl_->lifecycle.closing && impl_->coverageReduction.Supported() && native &&
+               native->supportsGraphics && native->supportsCompute;
+    }
+
+    /** @copydoc VulkanGraphRuntime::PrepareStereoCoverageReduction */
+    Result<std::shared_ptr<IResidentStereoCoverageReducer>> VulkanGraphRuntime::PrepareStereoCoverageReduction(
+        const VulkanStereoCoveragePreparation &request) {
+        using Outcome = Result<std::shared_ptr<IResidentStereoCoverageReducer>>;
+        if (const auto access = impl_->GpuAccess(true); access.HasError())
+            return Outcome::Failure(access.ErrorValue());
+        if (!SupportsStereoCoverageReduction(request.queue))
+            return Outcome::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+        return impl_->coverageReduction.Realize(request, *impl_->resources);
+    }
+
+    /** @copydoc VulkanGraphRuntime::ReadCompletedStereoCoverageReduction */
+    Result<bool> VulkanGraphRuntime::ReadCompletedStereoCoverageReduction(std::uint64_t instance, const RenderTimelinePoint completion,
+                                                                          RenderGraphStereoCoverageReduction::Tallies &destination) {
+        using Outcome = Result<bool>;
+        if (const auto admitted = impl_->GpuAccess(false); admitted.HasError())
+            return Outcome::Failure(admitted.ErrorValue());
+        const auto written = impl_->resources->BufferCompletion(instance);
+        if (written.HasError())
+            return Outcome::Failure(written.ErrorValue());
+        if (!completion.IsValid() || written.Value() != completion)
+            return Outcome::Success(false);
+        const auto observed = impl_->commands.Observe({.completion = completion, .expectedDeviceIncarnation = impl_->deviceIncarnation});
+        if (observed.HasError() || !observed.Value())
+            return observed;
+        if (const auto read = impl_->resources->ReadStereoCoverageReduction(instance, completion, destination); read.HasError())
             return Outcome::Failure(read.ErrorValue());
         return Outcome::Success(true);
     }
@@ -439,6 +480,7 @@ namespace Horo::Render::Detail {
             if (pins.references != 0 || pins.lease)
                 std::terminate();
         reconstruction.Reset();
+        coverageReduction.Reset();
         resources = nullptr;
         owner = {};
     }

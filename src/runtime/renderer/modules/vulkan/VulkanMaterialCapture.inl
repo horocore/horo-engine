@@ -151,7 +151,7 @@ Result<RenderTimelinePoint> VulkanResourceRuntime::BufferCompletion(const std::u
 /** @copydoc VulkanResourceRuntime::WriteHostFrameBuffer */
 Result<void> VulkanResourceRuntime::WriteHostFrameBuffer(const std::uint64_t instance, const std::span<const std::byte> bytes) {
     auto *buffer = Impl::Find(impl_->buffers, instance);
-    if (!buffer || buffer->descriptor.access != RenderBufferAccess::HostVisible ||
+    if (!buffer || buffer->coverageInputSealed || buffer->descriptor.access != RenderBufferAccess::HostVisible ||
         (!HasBufferUsage(buffer->descriptor.usage, RenderBufferUsage::Uniform) && buffer->descriptor.usage != RenderBufferUsage::Vertex) ||
         bytes.size() != buffer->descriptor.byteSize)
         return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceRequestInvalid));

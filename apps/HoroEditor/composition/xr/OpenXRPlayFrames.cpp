@@ -356,6 +356,13 @@ namespace Horo::Application::Internal {
                    : Pending;
     }
 
+    /** @copydoc OpenXRPlayHost::CoverageState */
+    OpenXRPlayCoverageStatus OpenXRPlayHost::CoverageState(const XRFrameId &frame) const noexcept {
+        if (PresentationState() != OpenXRPlayPresentation::FrameAdmitted || !render_ || render_->coverageFrame != frame)
+            return OpenXRPlayCoverageStatus::Unobserved;
+        return render_->coverageStatus;
+    }
+
     /** @copydoc OpenXRPlayHost::AbortRenderFrame */
     Result<void> OpenXRPlayHost::AbortRenderFrame() {
         using enum Horo::XR::XRFramePhase;
@@ -387,6 +394,7 @@ namespace Horo::Application::Internal {
         if (state.phase != XRFramePhase::Idle && (render_->submitted || render_->guiFinished))
             return Output::Success(false);
         if (state.phase == XRFramePhase::Idle) {
+            render_->coverageFrame.reset();
             const auto started = render_->StartPrediction();
             if (started.HasError() || !started.Value())
                 return started;
@@ -562,6 +570,7 @@ namespace Horo::Application::Internal {
             const auto polled = Editor::EditorVulkanXrViewportAccess::Poll(composition_.viewport);
             if (polled.HasError())
                 return polled;
+            render_->ObserveCoverage(state.frame);
         }
         const auto retired = render_->RetireImageReferences();
         if (retired.HasError())
@@ -587,6 +596,22 @@ namespace Horo::Application::Internal {
         return Result<void>::Success();
     }
 
+    /** @copydoc OpenXRPlayHost::FrameState::ObserveCoverage */
+    void OpenXRPlayHost::FrameState::ObserveCoverage(const XRFrameId &frame) noexcept {
+        if (coverageFrame || !rendered || !motionFrame || !writer || !writer->ready || writer->frame != frame)
+            return;
+        const auto reduction = Editor::EditorVulkanXrViewportAccess::TakeCoverageReduction(host.composition_.viewport, *motionFrame);
+        if (!reduction)
+            return;
+        const auto &actual = reduction->auxiliary;
+        const auto &expected = *writer->ready;
+        if (actual.motion != expected.motion || actual.depth != expected.depth || actual.motionViews != expected.motionViews ||
+            actual.depthViews != expected.depthViews)
+            return;
+        coverageFrame = frame;
+        coverageStatus = reduction->Complete() ? OpenXRPlayCoverageStatus::Complete : OpenXRPlayCoverageStatus::Incomplete;
+    }
+
     /** @copydoc OpenXRPlayHost::FrameState::EndRenderedProjection */
     Result<void> OpenXRPlayHost::FrameState::EndRenderedProjection(const XRFrameId &frame) {
         const std::array targets{NativeProjectionTarget{&color, acquisition->image}};
@@ -609,6 +634,8 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRPlayHost::FrameState::CompleteMotion */
     void OpenXRPlayHost::FrameState::CompleteMotion(const bool projected) noexcept {
         Editor::EditorVulkanXrViewportAccess::CompleteMotion(host.composition_.viewport, motionFrame, projected);
+        if (!projected)
+            coverageFrame.reset();
         motionFrame.reset();
     }
 

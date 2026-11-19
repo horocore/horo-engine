@@ -120,6 +120,23 @@ namespace Horo::Render {
                    MatchesCopyUse(*destination, copy.destination, RenderGraphUsageKind::CopyDestination, RenderGraphAccess::Write);
         }
 
+        /** @brief Matches only the sampled mask and accumulating counter storage of the closed kernel. */
+        bool MatchesStereoCoverageReduction(const CompiledRenderGraphExecution &graph, const RenderGraphExecutionPass &pass,
+                                            std::span<const RenderGraphResourceUsage> uses,
+                                            const RenderGraphStereoCoverageReduction &reduction) {
+            if (pass.kind != RenderPassKind::Compute || uses.size() != 2 || !reduction.reducer || reduction.reset == reduction.result)
+                return false;
+            if (!IsPersistentResource(graph, reduction.mask, RenderGraphResourceKind::Texture) ||
+                !IsPersistentResource(graph, reduction.reset, RenderGraphResourceKind::Buffer) ||
+                !IsPersistentResource(graph, reduction.result, RenderGraphResourceKind::Buffer))
+                return false;
+            return std::ranges::any_of(uses, [&](const auto &use) {
+                return MatchesCopyUse(use, reduction.mask, RenderGraphUsageKind::Sampled, RenderGraphAccess::Read);
+            }) && std::ranges::any_of(uses, [&](const auto &use) {
+                return MatchesCopyUse(use, reduction.result, RenderGraphUsageKind::Storage, RenderGraphAccess::ReadWrite);
+            });
+        }
+
         bool ExternallyValidated(const RenderGraphWorkload &workload) {
             return std::holds_alternative<RenderGraphMaterialRaster>(workload) || std::holds_alternative<RenderGraphMultiview>(workload) ||
                    std::holds_alternative<RenderGraphVfx>(workload) || std::holds_alternative<RenderGraphExposureGpu>(workload) ||
@@ -157,6 +174,8 @@ namespace Horo::Render {
                 return MatchesCopy(pass, uses, *value);
             if (const auto *value = std::get_if<RenderGraphStereoCoverageCopy>(&workload))
                 return MatchesStereoCoverageCopy(request.graph, pass, uses, *value);
+            if (const auto *value = std::get_if<RenderGraphStereoCoverageReduction>(&workload))
+                return MatchesStereoCoverageReduction(request.graph, pass, uses, *value);
             return MatchesBasic(pass, uses, workload);
         }
 
@@ -437,11 +456,77 @@ namespace Horo::Render {
             });
         }
 
+        /** @brief The full-eye reader samples precisely the two coverage attachment views of this frame. */
+        bool MatchesReductionEyes(const RenderGraphStereoCoverageReduction &reduction, const RenderGraphMultiview &coverage) {
+            if (coverage.targets.size() != reduction.eyes.size())
+                return false;
+            for (std::size_t eye = 0; eye < reduction.eyes.size(); ++eye) {
+                const auto &target = coverage.targets[eye];
+                if (target.color != reduction.mask || target.colorView != reduction.eyes[eye] || target.arrayLayer != eye ||
+                    target.rectangle != reduction.rectangles[eye])
+                    return false;
+            }
+            return true;
+        }
+
+        /** @brief Finds the exact full mask clear and full counter reset ordered before their respective consumers. */
+        std::optional<std::array<RenderGraphPassRef, 2>> FindReductionInitializers(const RenderGraphExecutionRequest &request,
+                                                                                   const RenderGraphStereoCoverageReduction &reduction,
+                                                                                   std::size_t coverage, std::size_t consumer) {
+            std::array<RenderGraphPassRef, 2> initializers;
+            for (std::size_t index = 0; index < coverage; ++index) {
+                const auto &entry = request.workloads[index];
+                const auto *clear = std::get_if<RenderGraphColorAttachment>(&entry.workload);
+                if (clear && clear->texture == reduction.mask && clear->operations.loadOperation == AttachmentLoadOperation::Clear &&
+                    clear->operations.clearColor.red == 0.0F && SharesOrderedSubmission(request, index, coverage))
+                    initializers[0] = entry.pass;
+            }
+            for (std::size_t index = 0; index < consumer; ++index) {
+                const auto &entry = request.workloads[index];
+                const auto *reset = std::get_if<RenderGraphBufferCopy>(&entry.workload);
+                if (reset && reset->source == reduction.reset && reset->destination == reduction.result && reset->sourceOffset == 0 &&
+                    reset->destinationOffset == 0 && reset->byteCount == reduction.CounterBytes &&
+                    SharesOrderedSubmission(request, index, consumer))
+                    initializers[1] = entry.pass;
+            }
+            if (!initializers[0].IsValid() || !initializers[1].IsValid())
+                return std::nullopt;
+            return initializers;
+        }
+
+        /** @brief Prevents alternate writes or reads from changing the paired mask or full-eye result. */
+        bool ReductionInputsExclusive(const RenderGraphExecutionRequest &request, const RenderGraphStereoCoverageReduction &reduction,
+                                      RenderGraphPassRef coverage, RenderGraphPassRef consumer,
+                                      const std::array<RenderGraphPassRef, 2> &initializers) {
+            return std::ranges::all_of(request.graph.Usages(), [&](const auto &use) {
+                if (use.resource == reduction.mask)
+                    return use.pass == initializers[0] || use.pass == coverage || use.pass == consumer;
+                if (use.resource == reduction.reset)
+                    return use.pass == initializers[1];
+                if (use.resource == reduction.result)
+                    return use.pass == initializers[1] || use.pass == consumer;
+                return true;
+            });
+        }
+
+        /** @brief Proves the same-submission producer pair and its unique initialization before reduction. */
+        bool CoverageReductionProven(const RenderGraphExecutionRequest &request, const RenderGraphMultiview &coverage,
+                                     const RenderGraphStereoCoverageReduction &reduction, std::size_t motion, std::size_t producer,
+                                     std::size_t consumer) {
+            if (!SharesOrderedSubmission(request, motion, consumer) || !SharesOrderedSubmission(request, producer, consumer) ||
+                !MatchesReductionEyes(reduction, coverage))
+                return false;
+            const auto initializers = FindReductionInitializers(request, reduction, producer, consumer);
+            return initializers && ReductionInputsExclusive(request, reduction, request.workloads[producer].pass,
+                                                            request.workloads[consumer].pass, *initializers);
+        }
+
         Result<void> ValidateTypedWorkloads(const RenderGraphExecutionRequest &request) {
             std::array<const RenderGraphMultiview *, RenderGraphMultiview::MaximumPassesPerFrame> multiview{};
             std::size_t reconstructionCount = 0;
             const RenderGraphStereoCoverageCopy *readback{};
-            std::size_t coverageIndex{}, readbackIndex{};
+            const RenderGraphStereoCoverageReduction *reduction{};
+            std::size_t coverageIndex{}, motionIndex{}, readbackIndex{}, reductionIndex{};
             for (std::size_t index = 0; index < request.workloads.size(); ++index) {
                 const auto &binding = request.workloads[index];
                 if (std::holds_alternative<RenderGraphNativeReconstruction>(binding.workload) &&
@@ -455,6 +540,12 @@ namespace Horo::Render {
                     readback = copy;
                     readbackIndex = index;
                 }
+                if (const auto *reducer = std::get_if<RenderGraphStereoCoverageReduction>(&binding.workload)) {
+                    if (reduction)
+                        return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+                    reduction = reducer;
+                    reductionIndex = index;
+                }
                 if (const auto *scene = std::get_if<RenderGraphMultiview>(&binding.workload)) {
                     if (const auto valid = ValidateMultiviewGraphWorkload(request, request.graph.Passes()[index], *scene); valid.HasError())
                         return valid;
@@ -465,6 +556,8 @@ namespace Horo::Render {
                     output = scene;
                     if (scene->output == MultiviewOutput::ReprojectionCoverage)
                         coverageIndex = index;
+                    if (scene->output == MultiviewOutput::MotionDepth)
+                        motionIndex = index;
                 }
             }
             const auto *color = multiview[static_cast<std::size_t>(MultiviewOutput::ProjectionColor)];
@@ -483,6 +576,10 @@ namespace Horo::Render {
             if (readback && (!coverage || !CoverageCopyProven(request, *coverage, *readback, coverageIndex, readbackIndex)))
                 return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph,
                                                        "Coverage readback requires exact owned eye tiles and its producer submission."));
+            if (reduction && (!motion || !coverage ||
+                              !CoverageReductionProven(request, *coverage, *reduction, motionIndex, coverageIndex, reductionIndex)))
+                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph,
+                                                       "Coverage reduction requires exact paired eyes, reset and producer submission."));
             return Result<void>::Success();
         }
 

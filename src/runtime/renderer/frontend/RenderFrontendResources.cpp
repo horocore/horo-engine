@@ -355,7 +355,8 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::AdmitUiPaintBufferRequest */
     Result<void> RenderFrontend::AdmitUiPaintBufferRequest(const RenderBufferDescriptor &descriptor,
-                                                           const std::span<const std::byte> initialData) const {
+                                                           const std::span<const std::byte> initialData,
+                                                           const bool stereoCoverageCounter) const {
         if (auto admission = RequireOpenOwner(); admission.HasError())
             return Result<void>::Failure(std::move(admission).ErrorValue());
         if (activeFrameScope_ != nullptr)
@@ -365,7 +366,12 @@ namespace Horo::Render {
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::InvalidBufferDescriptor,
                                   "The buffer descriptor is structurally invalid: " + DescribeRenderBufferRequest(descriptor)));
+        const bool exactCoverageCounter = stereoCoverageCounter && initialData.empty() &&
+                                          descriptor.access == RenderBufferAccess::HostVisible &&
+                                          descriptor.usage == (RenderBufferUsage::Storage | RenderBufferUsage::CopyDestination) &&
+                                          descriptor.byteSize == RenderGraphStereoCoverageReduction::CounterBytes;
         if (const auto &features = backend_->Capabilities().support.features;
+            !exactCoverageCounter &&
             AdmitCurrentBufferDescriptor(descriptor, features.Supports(RenderCapability::LightCulling),
                                          SupportsClosedGpuStorage(features)) == ResourceDescriptorAdmission::Unsupported)
             return Result<void>::Failure(
@@ -387,8 +393,8 @@ namespace Horo::Render {
     /** @copydoc RenderFrontend::CreateOwnedUiPaintBuffer */
     Result<ResourceCreation<RenderBufferHandle>> RenderFrontend::CreateOwnedUiPaintBuffer(
         const RenderMemoryScopeId scope, const RenderBufferDescriptor &descriptor, const std::span<const std::byte> initialData,
-        const std::shared_ptr<Detail::UiPaintOwnerRetirement> &owner) {
-        if (const auto valid = AdmitUiPaintBufferRequest(descriptor, initialData); valid.HasError())
+        const std::shared_ptr<Detail::UiPaintOwnerRetirement> &owner, const bool stereoCoverageCounter) {
+        if (const auto valid = AdmitUiPaintBufferRequest(descriptor, initialData, stereoCoverageCounter); valid.HasError())
             return Result<ResourceCreation<RenderBufferHandle>>::Failure(valid.ErrorValue());
         auto admitted =
             ReserveAdmittedResource(*resourceRegistry_, *memoryBudget_, scope, Detail::RenderResourceClass::Buffer, [this, &descriptor] {

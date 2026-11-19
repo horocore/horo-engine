@@ -20,7 +20,7 @@
 #include <variant>
 
 namespace Horo::Render {
-    /** @brief Clears or preserves one whole single-mip, single-layer, single-sample graph color texture. */
+    /** @brief Clears or preserves one whole single-mip, single-sample graph color texture, including its admitted layers. */
     struct RenderGraphColorAttachment {
         RenderGraphResourceId texture;
         PrimaryOutputAttachment operations; /**< Clear/Load and Store are required to preserve declared graph contents. */
@@ -76,6 +76,33 @@ namespace Horo::Render {
             }
             return pixels * sizeof(float);
         }
+    };
+
+    /** @brief A device-owned closed stereo coverage reducer, retained through accepted queue execution. */
+    class IResidentStereoCoverageReducer {
+    public:
+        virtual ~IResidentStereoCoverageReducer() = default;
+    };
+
+    /** @brief Counters written for one eye by the closed coverage reducer. */
+    struct StereoCoverageTally final {
+        std::uint32_t visited{}, unresolved{};
+    };
+
+    /** @brief Reduces the exact paired motion coverage mask in the producer's graphics submission.
+     * @details The mask is sampled read. The exact two eye views belong to the paired coverage raster and are
+     * retained by its normal graph lease. The result is a storage read/write over two zero-initialized tallies,
+     * preceded by a full copy from the reducer's immutable reset source. No compositor admission is implied.
+     */
+    struct RenderGraphStereoCoverageReduction final {
+        using Tallies = std::array<StereoCoverageTally, 2>;
+        static constexpr std::size_t CounterBytes = sizeof(Tallies);
+        static_assert(CounterBytes == 16);
+
+        RenderGraphResourceId mask, reset, result;
+        std::array<RenderTextureViewHandle, 2> eyes;
+        std::array<MultiviewRenderRectangle, 2> rectangles;
+        std::shared_ptr<IResidentStereoCoverageReducer> reducer;
     };
 
     /** @brief One bounded cooked light-culling dispatch over four distinct whole graph buffers.
@@ -193,7 +220,7 @@ namespace Horo::Render {
         std::variant<std::monostate, PrimaryOutputAttachment, RenderGraphColorAttachment, RenderGraphBufferCopy, RenderGraphLightCulling,
                      RenderGraphVfx, RenderGraphDepthAttachment, RenderGraphMultiview, RenderGraphUiPaint, RenderGraphMaterialRaster,
                      RenderGraphVfxGpuCompute, RenderGraphVfxGpuDraw, RenderGraphExposureGpu, RenderGraphTextureUpload,
-                     RenderGraphNativeReconstruction, RenderGraphStereoCoverageCopy>;
+                     RenderGraphNativeReconstruction, RenderGraphStereoCoverageCopy, RenderGraphStereoCoverageReduction>;
 
     /** @brief Validates exact native reconstruction graph roles before resolving backend descriptors.
      * @param request Immutable execution request. @param pass Exact compiled compute pass.

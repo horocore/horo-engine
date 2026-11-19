@@ -5,10 +5,21 @@
 #include "Horo/Runtime/Render/RenderScene.h"
 #include "Horo/Runtime/Render/ShaderArtifact.h"
 #include "Horo/Runtime/Render/ShaderReflectionErrors.h"
+#include "ShaderReflectionCook.h"
 
 #include <algorithm>
 
 namespace Horo::Editor {
+    /** @copydoc LoadEditorVulkanCoverageReductionCook */
+    Result<EditorVulkanCoverageReductionCook> LoadEditorVulkanCoverageReductionCook(const std::span<const std::uint8_t> payload,
+                                                                                    const std::span<const std::uint8_t> metadata) {
+        using Outcome = Result<EditorVulkanCoverageReductionCook>;
+        const auto valid = Render::ValidateStereoCoverageReductionCook(payload, metadata);
+        if (valid.HasError())
+            return Outcome::Failure(valid.ErrorValue());
+        return Outcome::Success({{payload.begin(), payload.end()}});
+    }
+
     /** @copydoc EditorVulkanViewportShaderTarget */
     Render::ShaderTargetRequirement EditorVulkanViewportShaderTarget() {
         return {.backend = Render::ShaderTargetBackend::Vulkan,

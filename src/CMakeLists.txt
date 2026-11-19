@@ -3501,6 +3501,7 @@ if (HORO_BUILD_RENDER_VULKAN)
         runtime/renderer/modules/vulkan/VulkanGuiCommands.cpp
             runtime/renderer/modules/vulkan/VulkanGraphPreparation.cpp
             runtime/renderer/modules/vulkan/VulkanGraphCommands.cpp
+            runtime/renderer/modules/vulkan/VulkanStereoCoverageRuntime.cpp
             runtime/renderer/modules/vulkan/VulkanReconstructionRuntime.cpp
             runtime/renderer/modules/vulkan/VulkanMaterialCommands.cpp
             runtime/renderer/modules/vulkan/VulkanMaterialGraph.cpp

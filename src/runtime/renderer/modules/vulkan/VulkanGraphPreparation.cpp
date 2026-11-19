@@ -272,12 +272,17 @@ namespace Horo::Render::Detail {
         auto &prepared = passes[index];
         prepared.vfxDraws = {};
         prepared.reconstruction = {};
+        prepared.coverageReduction = {};
         prepared.materialRaster.reset();
         if (const auto valid = ValidatePassUses(request, index); valid.HasError())
             return valid;
-        for (const auto &use : request.graph.Usages().subspan(pass.usages.offset, pass.usages.count))
-            if (use.access != RenderGraphAccess::Read)
-                states[use.resource.value - 1].coverageReadbackBytes = 0;
+        for (const auto &use : request.graph.Usages().subspan(pass.usages.offset, pass.usages.count)) {
+            if (use.access == RenderGraphAccess::Read)
+                continue;
+            auto &state = states[use.resource.value - 1];
+            state.coverageReadbackBytes = 0;
+            state.coverageReduction = false;
+        }
         prepared.before.offset = barriers.size();
         if (const auto transitions = PrepareTransitions(request, pass, false); transitions.HasError())
             return transitions;
@@ -289,6 +294,12 @@ namespace Horo::Render::Detail {
         if (const auto *work = std::get_if<RenderGraphNativeReconstruction>(&operation)) {
             if (const auto result = PrepareReconstruction(request, index, *work, pins); result.HasError())
                 return result;
+        } else if (const auto *work = std::get_if<RenderGraphStereoCoverageReduction>(&operation)) {
+            const auto reduction = coverageReduction.Prepare(*work, request, bindings, pass.queue, pins);
+            if (reduction.HasError())
+                return Result<void>::Failure(reduction.ErrorValue());
+            prepared.coverageReduction = reduction.Value();
+            states[work->result.value - 1].coverageReduction = true;
         } else if (const auto *material = std::get_if<RenderGraphMaterialRaster>(&operation)) {
             if (const auto result = PrepareGraphMaterial(request, index, *material, pins); result.HasError())
                 return result;

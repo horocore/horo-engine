@@ -403,16 +403,33 @@ namespace {
 }  // namespace
 
 namespace {
+    /** @brief Cold selected producer bindings for the native full-eye variant of the coverage graph. */
+    struct NativeCoverageReductionDraw final {
+        const NativeCoverageDraw &motion;
+        const NativeCoverageImage &motionColor, &motionDepth;
+        std::shared_ptr<IResidentStereoCoverageReducer> reducer;
+        std::array<MultiviewRenderRectangle, 2> rectangles;
+        std::uint64_t reset{}, counters{};
+    };
+
     /** @brief Renders exact shared current geometry, then transfers every requested classified sample in the same submission. */
     void ExecuteNativeCoverageProbe(NativeTransformFixture &fixture, const NativeCoverageDraw &projection,
                                     const NativeCoverageDraw &coverage, const NativeCoverageImage &prior, const NativeCoverageImage &color,
                                     const NativeCoverageImage &mask, const NativeCoverageImage &depth, const RenderMeshHandle mesh,
-                                    const std::uint64_t staging) {
+                                    const std::uint64_t staging, const std::uint64_t sequence = 2,
+                                    const NativeCoverageReductionDraw *reduction = nullptr) {
         auto builder = SubmissionTest::Take(RenderGraphBuilder::Create());
         const auto projectionPass = SubmissionTest::Take(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
+        RenderGraphPassRef motionPass, clearPass;
+        if (reduction) {
+            motionPass = SubmissionTest::Take(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
+            clearPass = SubmissionTest::Take(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
+            REQUIRE(builder.AddDependency({projectionPass, motionPass}).HasValue());
+            REQUIRE(builder.AddDependency({motionPass, clearPass}).HasValue());
+        }
         const auto coveragePass = SubmissionTest::Take(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
         const auto copyPass = SubmissionTest::Take(builder.AddPass(RenderPassKind::Copy, RenderQueueRole::Graphics));
-        REQUIRE(builder.AddDependency({projectionPass, coveragePass}).HasValue());
+        REQUIRE(builder.AddDependency({reduction ? clearPass : projectionPass, coveragePass}).HasValue());
         REQUIRE(builder.AddDependency({coveragePass, copyPass}).HasValue());
         std::vector<RenderGraphResourceInstance> resources;
         std::vector<RenderGraphImportedState> initial;
@@ -423,10 +440,20 @@ namespace {
                                             RenderGraphTextureLayout::NotApplicable,
                                             {1}};
         const auto buffer = [&](const RenderBufferHandle handle, const std::uint64_t native,
-                                const RenderGraphInitialContents contents = RenderGraphInitialContents::Preserved) {
+                                const RenderGraphInitialContents contents = RenderGraphInitialContents::Preserved,
+                                const bool reset = false) {
             const auto id = SubmissionTest::Take(builder.ImportBuffer(handle, RenderGraphResourceClass::Persistent));
             resources.push_back({id, native});
-            initial.push_back({id, contents == RenderGraphInitialContents::Discarded ? RenderGraphLogicalState{} : input, contents});
+            const RenderGraphLogicalState source{RenderGraphSynchronizationAccess::Read,
+                                                 RenderGraphSynchronizationOperation::CopySource,
+                                                 RenderGraphPipelineScope::Transfer,
+                                                 RenderGraphTextureLayout::NotApplicable,
+                                                 {1}};
+            initial.push_back({id,
+                               contents == RenderGraphInitialContents::Discarded ? RenderGraphLogicalState{}
+                               : reset                                           ? source
+                                                                                 : input,
+                               contents});
             return id;
         };
         const auto importImage = [&](const NativeCoverageImage &image, const bool preserved = false) {
@@ -438,7 +465,12 @@ namespace {
                                                         RenderGraphPipelineScope::Graphics,
                                                         RenderGraphTextureLayout::DepthStencilAttachment,
                                                         {1}};
-            initial.push_back({id, preserved ? retainedDepth : RenderGraphLogicalState{},
+            const RenderGraphLogicalState sampledDepth{RenderGraphSynchronizationAccess::Read,
+                                                       RenderGraphSynchronizationOperation::Sampled,
+                                                       RenderGraphPipelineScope::Graphics,
+                                                       RenderGraphTextureLayout::ShaderReadOnly,
+                                                       {1}};
+            initial.push_back({id, preserved ? (sequence > 2 ? sampledDepth : retainedDepth) : RenderGraphLogicalState{},
                                preserved ? RenderGraphInitialContents::Preserved : RenderGraphInitialContents::Discarded});
             return id;
         };
@@ -470,24 +502,72 @@ namespace {
             ordinaryTargets[eye] = {colorId, {}, color.eyes[eye].view, {}, {0, 0, 8, 8}, eye};
             coverageTargets[eye] =
                 {maskId, depthId, mask.eyes[eye].view, depth.eyes[eye].view, {0, 0, 8, 8}, eye, eye, priorId, prior.eyes[eye].view, eye};
+            if (reduction)
+                coverageTargets[eye].rectangle = reduction->rectangles[eye];
+        }
+        const RenderGraphPassWorkload projected{projectionPass, RenderGraphMultiview{projection.scene, projection.scene->Publication(),
+                                                                                     ordinaryTargets, ordinaryGeometry}};
+        const RenderGraphPassWorkload covered{coveragePass, RenderGraphMultiview{.scene = coverage.scene,
+                                                                                 .active = coverage.scene->Publication(),
+                                                                                 .targets = coverageTargets,
+                                                                                 .geometry = coverageGeometry,
+                                                                                 .clearColor = {0, 0, 0, 0},
+                                                                                 .output = MultiviewOutput::ReprojectionCoverage}};
+        const std::array meshes{RenderGraphMeshInstance{mesh, fixture.mesh}};
+        if (reduction) {
+            const auto reduced = SubmissionTest::Take(builder.AddPass(RenderPassKind::Compute, RenderQueueRole::Graphics));
+            REQUIRE(builder.AddDependency({copyPass, reduced}).HasValue());
+            const auto zero = buffer({{1}, 94, 1}, reduction->reset, RenderGraphInitialContents::Preserved, true);
+            const auto counters = buffer({{1}, 95, 1}, reduction->counters, RenderGraphInitialContents::Discarded);
+            const auto auxColor = importImage(reduction->motionColor);
+            const auto auxDepth = importImage(reduction->motionDepth);
+            using enum RenderGraphUsageKind;
+            use(motionPass, auxColor, ColorAttachment, RenderGraphAccess::Write);
+            use(motionPass, auxDepth, DepthStencilAttachment, RenderGraphAccess::Write);
+            use(clearPass, maskId, ColorAttachment, RenderGraphAccess::Write);
+            use(copyPass, zero, CopySource);
+            use(copyPass, counters, CopyDestination, RenderGraphAccess::Write);
+            use(reduced, maskId, Sampled);
+            use(reduced, counters, Storage, RenderGraphAccess::ReadWrite);
+            const auto motionGeometry = geometry(reduction->motion, motionPass);
+            std::array<MultiviewGraphTarget, 2> motionTargets;
+            for (std::uint32_t eye = 0; eye < motionTargets.size(); ++eye)
+                motionTargets[eye] = {auxColor,
+                                      auxDepth,
+                                      reduction->motionColor.eyes[eye].view,
+                                      reduction->motionDepth.eyes[eye].view,
+                                      reduction->rectangles[eye],
+                                      eye,
+                                      eye};
+            const auto &motionScene = reduction->motion.scene;
+            const std::array workloads{projected,
+                                       RenderGraphPassWorkload{motionPass, RenderGraphMultiview{.scene = motionScene,
+                                                                                                .active = motionScene->Publication(),
+                                                                                                .targets = motionTargets,
+                                                                                                .geometry = motionGeometry,
+                                                                                                .clearColor = {0, 0, 0, 0},
+                                                                                                .output = MultiviewOutput::MotionDepth}},
+                                       RenderGraphPassWorkload{clearPass, RenderGraphColorAttachment{maskId, {.clearColor = {0, 0, 0, 0}}}},
+                                       covered,
+                                       RenderGraphPassWorkload{copyPass,
+                                                               RenderGraphBufferCopy{zero, counters, 0, 0,
+                                                                                     RenderGraphStereoCoverageReduction::CounterBytes}},
+                                       RenderGraphPassWorkload{reduced,
+                                                               RenderGraphStereoCoverageReduction{maskId,
+                                                                                                  zero,
+                                                                                                  counters,
+                                                                                                  {mask.eyes[0].view, mask.eyes[1].view},
+                                                                                                  reduction->rectangles,
+                                                                                                  reduction->reducer}}};
+            SubmitNativeCoverageGraph(*fixture.backend, builder, initial, workloads, resources, sequence, meshes, views);
+            return;
         }
         const auto stagingId = buffer({{1}, 93, 1}, staging, RenderGraphInitialContents::Discarded);
         const RenderGraphStereoCoverageCopy copy{maskId, stagingId, {{{4, 4, 1, 1}, {3, 4, 2, 1}}}};
         use(copyPass, maskId, RenderGraphUsageKind::CopySource);
         use(copyPass, stagingId, RenderGraphUsageKind::CopyDestination, RenderGraphAccess::Write);
-        const std::array workloads{RenderGraphPassWorkload{projectionPass,
-                                                           RenderGraphMultiview{projection.scene, projection.scene->Publication(),
-                                                                                ordinaryTargets, ordinaryGeometry}},
-                                   RenderGraphPassWorkload{coveragePass,
-                                                           RenderGraphMultiview{.scene = coverage.scene,
-                                                                                .active = coverage.scene->Publication(),
-                                                                                .targets = coverageTargets,
-                                                                                .geometry = coverageGeometry,
-                                                                                .clearColor = {0, 0, 0, 0},
-                                                                                .output = MultiviewOutput::ReprojectionCoverage}},
-                                   RenderGraphPassWorkload{copyPass, copy}};
-        const std::array meshes{RenderGraphMeshInstance{mesh, fixture.mesh}};
-        SubmitNativeCoverageGraph(*fixture.backend, builder, initial, workloads, resources, 2, meshes, views);
+        const std::array workloads{projected, covered, RenderGraphPassWorkload{copyPass, copy}};
+        SubmitNativeCoverageGraph(*fixture.backend, builder, initial, workloads, resources, sequence, meshes, views);
     }
 
     /** @brief Packs known projected depths through the exact reflected material layout used by the native program. */
@@ -563,14 +643,76 @@ TEST_CASE("Vulkan native coverage pixels classify exact stereo depth and copy th
     auto maskUniform = NativeCoverageUniform(SubmissionTest::Take(PrepareMaterialBindingLayout(coverageCook.metadata.reflection)));
     PublishNativeCoverageDraw(fixture, coverage, std::move(maskUniform), publication, eyes, mesh, model, &previous);
 
-    std::array<float, 3> pixels{};
-    const auto staging = fixture.Buffer(std::as_bytes(std::span{pixels}), RenderBufferUsage::CopyDestination);
-    ExecuteNativeCoverageProbe(fixture, projection, coverage, previous, color, mask, depth, mesh, staging);
-    CHECK_FALSE(
-        SubmissionTest::Take(bridge.Port()->ReadCompletedStereoCoverage(staging, {{1}, 1}, std::as_writable_bytes(std::span{pixels}))));
-    REQUIRE(SubmissionTest::Take(bridge.Port()->ReadCompletedStereoCoverage(staging, {{1}, 2}, std::as_writable_bytes(std::span{pixels}))));
-    using Code = Editor::EditorVulkanReprojectionCoverage;
-    CHECK(pixels ==
-          std::array{static_cast<float>(Code::DepthConsistent), static_cast<float>(Code::Occluded), static_cast<float>(Code::Occluded)});
+    SECTION("copies exact bounded classified pixels") {
+        std::array<float, 3> pixels{};
+        const auto staging = fixture.Buffer(std::as_bytes(std::span{pixels}), RenderBufferUsage::CopyDestination);
+        ExecuteNativeCoverageProbe(fixture, projection, coverage, previous, color, mask, depth, mesh, staging);
+        CHECK_FALSE(
+            SubmissionTest::Take(bridge.Port()->ReadCompletedStereoCoverage(staging, {{1}, 1}, std::as_writable_bytes(std::span{pixels}))));
+        REQUIRE(
+            SubmissionTest::Take(bridge.Port()->ReadCompletedStereoCoverage(staging, {{1}, 2}, std::as_writable_bytes(std::span{pixels}))));
+        using Code = Editor::EditorVulkanReprojectionCoverage;
+        CHECK(pixels == std::array{static_cast<float>(Code::DepthConsistent), static_cast<float>(Code::Occluded),
+                                   static_cast<float>(Code::Occluded)});
+    }
+
+    SECTION("reduces exact asymmetric paired eyes and resets the next submission") {
+        const char *motionPayload = std::getenv("HORO_NATIVE_MOTION_PAYLOAD");
+        const char *motionMetadata = std::getenv("HORO_NATIVE_MOTION_REFLECTION");
+        const char *reductionPayload = std::getenv("HORO_NATIVE_REDUCTION_PAYLOAD");
+        const char *reductionMetadata = std::getenv("HORO_NATIVE_REDUCTION_REFLECTION");
+        if (!motionPayload || !motionMetadata || !reductionPayload || !reductionMetadata)
+            SKIP("Cook the shipped motion and coverage reduction programs for the paired native graph.");
+        if (!bridge.Port()->SupportsStereoCoverageReduction({1}))
+            SKIP("The selected graphics queue does not include the exact compute route.");
+        const auto motionCook =
+            SubmissionTest::Take(Editor::LoadEditorVulkanMultiviewMotionCook(ReadShader(motionPayload), ReadShader(motionMetadata)));
+        const auto reductionCook = SubmissionTest::Take(
+            Editor::LoadEditorVulkanCoverageReductionCook(ReadShader(reductionPayload), ReadShader(reductionMetadata)));
+        const auto outMotion = NativeCoverageTarget(backend, RenderTextureFormat::Rgba16Float, attachment | sampled, 100);
+        const auto outDepth = NativeCoverageTarget(backend, RenderTextureFormat::Depth32Float, attachment | sampled, 110);
+        auto motionState = coverageState;
+        motionState.colorFormat = RenderTextureFormat::Rgba16Float;
+        PrepareNativeCoverageProgram(fixture, motionCook, Editor::EditorVulkanMultiviewMotionShaderManifest(), motionState);
+        NativeCoverageDraw motion{.uniform = {{1}, 72, 1}};
+        auto motionUniform = NativeCoverageUniform(SubmissionTest::Take(PrepareMaterialBindingLayout(motionCook.metadata.reflection)));
+        PublishNativeCoverageDraw(fixture, motion, std::move(motionUniform), publication, eyes, mesh, model);
+
+        const std::array rectangles{MultiviewRenderRectangle{1, 1, 6, 7}, MultiviewRenderRectangle{2, 0, 4, 5}};
+        const auto &left = rectangles.front();
+        const auto &right = rectangles.back();
+        const std::array constants{left.x, left.y, left.width, left.height, right.x, right.y, right.width, right.height};
+        constexpr RenderGraphStereoCoverageReduction::Tallies zeros{};
+        const auto reset = fixture.Buffer(std::as_bytes(std::span{zeros}), RenderBufferUsage::CopySource);
+        const auto counters =
+            fixture.Buffer(std::as_bytes(std::span{zeros}), RenderBufferUsage::Storage | RenderBufferUsage::CopyDestination);
+        const auto parameters = fixture.Buffer(std::as_bytes(std::span{constants}), RenderBufferUsage::Uniform);
+        const auto kernel =
+            SubmissionTest::Take(bridge.Port()->PrepareStereoCoverageReduction({.artifact = reductionCook.payload,
+                                                                                .eyes = {mask.eyes[0].instance, mask.eyes[1].instance},
+                                                                                .rectangles = rectangles,
+                                                                                .reset = reset,
+                                                                                .result = counters,
+                                                                                .parameters = parameters,
+                                                                                .queue = {1}}));
+        const NativeCoverageReductionDraw reduction{motion, outMotion, outDepth, kernel, rectangles, reset, counters};
+        RenderGraphStereoCoverageReduction::Tallies tallies;
+        CHECK_FALSE(SubmissionTest::Take(bridge.Port()->ReadCompletedStereoCoverageReduction(counters, {{1}, 1}, tallies)));
+        ExecuteNativeCoverageProbe(fixture, projection, coverage, previous, color, mask, depth, mesh, 0, 2, &reduction);
+        REQUIRE(SubmissionTest::Take(bridge.Port()->ReadCompletedStereoCoverageReduction(counters, {{1}, 2}, tallies)));
+        CHECK(tallies[0].visited == left.width * left.height);
+        CHECK(tallies[0].unresolved > 0);
+        CHECK(tallies[0].unresolved < tallies[0].visited);
+        CHECK(tallies[1].visited == right.width * right.height);
+        CHECK(tallies[1].unresolved == tallies[1].visited);
+        const auto first = tallies;
+        ExecuteNativeCoverageProbe(fixture, projection, coverage, previous, color, mask, depth, mesh, 0, 3, &reduction);
+        CHECK_FALSE(SubmissionTest::Take(bridge.Port()->ReadCompletedStereoCoverageReduction(counters, {{1}, 2}, tallies)));
+        REQUIRE(SubmissionTest::Take(bridge.Port()->ReadCompletedStereoCoverageReduction(counters, {{1}, 3}, tallies)));
+        for (std::size_t eye = 0; eye < tallies.size(); ++eye) {
+            CHECK(tallies[eye].visited == first[eye].visited);
+            CHECK(tallies[eye].unresolved == first[eye].unresolved);
+        }
+    }
 }
 #endif

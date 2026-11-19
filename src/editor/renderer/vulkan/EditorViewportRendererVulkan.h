@@ -59,6 +59,8 @@ namespace Horo::Editor {
         void StageXrMotionProgram(EditorVulkanMultiviewCook cooked) noexcept;
         /** @brief Stages the optional packaged stereo depth coverage cook before Play records frames. */
         void StageXrCoverageProgram(EditorVulkanMultiviewCook cooked) noexcept;
+        /** @brief Stages the exact artifact after its runtime package and reflected closed compute layout are validated. */
+        void StageXrCoverageReductionProgram(EditorVulkanCoverageReductionCook cooked) noexcept;
         /** @brief Prepares the selected same-device pipeline for the exact native/renderer format pair.
          * @param motion Admitted
          * signed floating-point color attachment.
@@ -430,6 +432,7 @@ namespace Horo::Editor {
         ShaderResources xrShader_;
         std::optional<EditorVulkanMultiviewCook> xrMotionCook_;
         std::optional<EditorVulkanMultiviewCook> xrCoverageCook_;
+        std::vector<std::uint8_t> xrCoverageReductionArtifact_;
         std::optional<std::array<Render::MultiviewRenderRectangle, 2>> xrCoverageProbe_;
         ShaderResources xrMotionShader_;
         ShaderResources xrCoverageShader_;

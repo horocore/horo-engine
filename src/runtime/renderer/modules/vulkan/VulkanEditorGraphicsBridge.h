@@ -1,9 +1,20 @@
 #pragma once
 /** @file VulkanEditorGraphicsBridge.h
  * @brief Non-installed selected-device composition seam for the matching Vulkan editor pair. */
+#include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
+#include "Horo/Runtime/Render/RenderGraphWorkload.h"
 #include "VulkanBackendModule.h"
 
 namespace Horo::Render::Detail {
+    /** @brief Cold reducer inputs resolved by the selected viewport's frontend resource owner. */
+    struct VulkanStereoCoveragePreparation final {
+        std::span<const std::uint8_t> artifact;
+        std::array<std::uint64_t, 2> eyes;
+        std::array<MultiviewRenderRectangle, 2> rectangles;
+        std::uint64_t reset{}, result{}, parameters{};
+        RenderQueueId queue;
+    };
+
     /** @brief Canonical retired retention slot, independent of swapchain image and encoder call counts. */
     struct VulkanFrameRetentionSlot {
         std::uint32_t index{};
@@ -90,6 +101,24 @@ namespace Horo::Render::Detail {
          * @return True for copied bytes, false when the route or completion is unavailable, or a typed error.
          */
         [[nodiscard]] virtual Result<bool> ReadCompletedStereoCoverage(std::uint64_t, RenderTimelinePoint, std::span<std::byte>) {
+            return Result<bool>::Success(false);
+        }
+
+        /** @brief Reports the closed compute route only on the exact selected graphics queue. */
+        [[nodiscard]] virtual bool SupportsStereoCoverageReduction(RenderQueueId) const noexcept {
+            return false;
+        }
+
+        /** @brief Materializes immutable descriptors and the closed reduction pipeline outside normal frame recording. */
+        [[nodiscard]] virtual Result<std::shared_ptr<IResidentStereoCoverageReducer>> PrepareStereoCoverageReduction(
+            const VulkanStereoCoveragePreparation &) {
+            return Result<std::shared_ptr<IResidentStereoCoverageReducer>>::Failure(
+                MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+        }
+
+        /** @brief Returns completed exact full-eye counters without waiting or reading a different submission. */
+        [[nodiscard]] virtual Result<bool> ReadCompletedStereoCoverageReduction(std::uint64_t, RenderTimelinePoint,
+                                                                                RenderGraphStereoCoverageReduction::Tallies &) {
             return Result<bool>::Success(false);
         }
 

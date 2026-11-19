@@ -41,6 +41,13 @@ namespace Horo::Application::Internal {
         FrameAdmitted
     };
 
+    /** @brief Classification of the exact last projected frame's full-eye producer result. */
+    enum class OpenXRPlayCoverageStatus : std::uint8_t {
+        Unobserved,
+        Incomplete,
+        Complete
+    };
+
     /** @brief Same startup authorities, retained until native frame/image debt is actually drained.
      * @details This composition is selected only for explicit XR+Vulkan. The ordinary desktop has no host.
      * The same RuntimeHost source/fixedStep and same canonical InputRouter are mandatory; no clock, tick,
@@ -197,6 +204,11 @@ namespace Horo::Application::Internal {
          * @details Pending forbids desktop-camera fallback. This query never issues a frame or native readiness.
          */
         [[nodiscard]] OpenXRPlayPresentation PresentationState() const noexcept;
+        /** @brief Reads the exact just-ended frame's owned coverage status, if available before the next prediction.
+         * @param frame Canonical native frame that was projected.
+         * @return Unobserved for stale identities, unsupported paths or absent completion. Does not admit a compositor provider.
+         */
+        [[nodiscard]] OpenXRPlayCoverageStatus CoverageState(const XR::XRFrameId &frame) const noexcept;
         /** @brief Prepares one actual native prediction/acquisition and binds cold graph storage before the SAME App scope.
          * @param frameNumber SAME RuntimeHost frame number, never a second counter.
          * @return True for a complete bound acquisition, false while actual retirement/wait is pending; original errors persist.

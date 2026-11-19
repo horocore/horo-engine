@@ -65,6 +65,23 @@ Result<bool> ReadCompletedStereoCoverage(std::uint64_t instance, RenderTimelineP
     return graph_.ReadCompletedStereoCoverage(instance, completion, destination);
 }
 
+/** @copydoc IVulkanEditorGraphicsPort::SupportsStereoCoverageReduction */
+bool SupportsStereoCoverageReduction(RenderQueueId queue) const noexcept override {
+    return graph_.SupportsStereoCoverageReduction(queue);
+}
+
+/** @copydoc IVulkanEditorGraphicsPort::PrepareStereoCoverageReduction */
+Result<std::shared_ptr<IResidentStereoCoverageReducer>> PrepareStereoCoverageReduction(
+    const Detail::VulkanStereoCoveragePreparation &request) override {
+    return graph_.PrepareStereoCoverageReduction(request);
+}
+
+/** @copydoc IVulkanEditorGraphicsPort::ReadCompletedStereoCoverageReduction */
+Result<bool> ReadCompletedStereoCoverageReduction(std::uint64_t instance, RenderTimelinePoint completion,
+                                                  RenderGraphStereoCoverageReduction::Tallies &destination) override {
+    return graph_.ReadCompletedStereoCoverageReduction(instance, completion, destination);
+}
+
 /** @copydoc IVulkanEditorGraphicsPort::WritePreparationUniform */
 Result<void> WritePreparationUniform(const std::uint64_t instance, const std::span<const std::byte> bytes) override {
     return graph_.WritePreparationUniform(instance, bytes);

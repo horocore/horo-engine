@@ -1568,6 +1568,9 @@ namespace Horo::Editor {
                 auto coverage = LoadPackagedVulkanMultiviewCoverageShader(EditorAssetRoot());
                 if (coverage.HasValue())
                     composition.xrViewport->StageXrCoverageProgram(std::move(coverage).Value());
+                auto reduction = LoadPackagedVulkanCoverageReductionShader(EditorAssetRoot());
+                if (reduction.HasValue())
+                    composition.xrViewport->StageXrCoverageReductionProgram(std::move(reduction).Value());
                 return Result<void>::Success();
             }
 #endif

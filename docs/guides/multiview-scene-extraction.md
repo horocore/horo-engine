@@ -205,18 +205,24 @@ at the first cook's stage package and reflection. Set
 second cook's equivalent files. In the Vulkan and OpenXR Editor test build, run
 `HoroRenderVulkanTests '[vulkan][multiview][coverage][native-smoke]'`.
 The regression checks packed pixels from two eyes at known depths and rejects
-a stale completion. Full-image reduction and runtime-specific encoding
-remain separate from this bounded probe.
+a stale completion. The same native qualification exercises the full-eye
+graph when the separately cooked motion and reduction programs are supplied.
 
 The closed reduction stage is available through the same offline cooker. Cook
 `assets/shaders/runtime/multiview_coverage_reduce.hlsl` with
 `--multiview-coverage-reduction`. Its two input views and two exact active
 rectangles map to one pair of visited and unresolved counters per eye.
 Every covered pixel contributes once. Only the depth-consistent code
-resolves a sample. The producer must initialize the counter storage per
-submission and retain the exact paired mask through graphics completion.
-The cooked stage is a prerequisite for an integrated GPU result and
-compositor admission.
+resolves a sample. Place the matching pair under
+`shaders/runtime/multiview-coverage-reduction-vulkan` in the installed asset
+root. Play resets the counter storage per submission and retains the exact
+paired mask through graphics completion. For native qualification also set
+`HORO_NATIVE_MOTION_PAYLOAD`, `HORO_NATIVE_MOTION_REFLECTION`,
+`HORO_NATIVE_REDUCTION_PAYLOAD`, and `HORO_NATIVE_REDUCTION_REFLECTION` to the
+matching output files. The paired graph test checks asymmetric active areas,
+unresolved samples, reset across successive submissions, and exact completion.
+Renderer completion supplies coverage evidence. Native provider admission still
+requires the matching runtime encoding and auxiliary image lifecycle.
 
 ## Public contract migration and evidence
 

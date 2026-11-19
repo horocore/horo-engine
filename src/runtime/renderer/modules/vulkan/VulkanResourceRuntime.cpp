@@ -104,6 +104,7 @@ namespace Horo::Render::Detail {
             std::uint64_t vfxRevision{};
             std::uint32_t vfxInstances{};
             bool vfxPublished{};
+            bool coverageInputSealed{};
         };
 
         struct Texture final : AllocationResource<VkImage, PFN_vkDestroyImage> {
@@ -574,6 +575,68 @@ namespace Horo::Render::Detail {
                                      .bufferDescriptor = buffer.descriptor,
                                      .state = &buffer.graphState};
         return Outcome::Success({source, resource, found->second, buffer.mapped});
+    }
+
+    /** @copydoc VulkanResourceRuntime::SealCoverageInput */
+    Result<VulkanCoverageInput> VulkanResourceRuntime::SealCoverageInput(const std::uint64_t instance, const RenderBufferUsage usage,
+                                                                         const std::span<const std::byte> expected) {
+        using Outcome = Result<VulkanCoverageInput>;
+        const auto found = impl_->buffers.find(instance);
+        if (found == impl_->buffers.end())
+            return Outcome::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
+        auto &buffer = *found->second;
+        if (buffer.descriptor.access != RenderBufferAccess::HostVisible || buffer.descriptor.usage != usage ||
+            buffer.descriptor.byteSize != expected.size() || !buffer.graphState.contentsDefined || buffer.graphState.hasNativeState)
+            return Outcome::Failure(MakeError(VulkanBackendErrors::ResourceRequestInvalid));
+        if (const auto mapped = impl_->MapCoherentBuffer(buffer); mapped.HasError())
+            return Outcome::Failure(mapped.ErrorValue());
+        if (std::memcmp(buffer.mapped, expected.data(), expected.size()) != 0)
+            return Outcome::Failure(MakeError(VulkanBackendErrors::ResourceRequestInvalid));
+        buffer.coverageInputSealed = true;
+        return Outcome::Success({buffer.handle, found->second});
+    }
+
+    /** @copydoc VulkanResourceRuntime::ExactStereoCoverageCounter */
+    Result<VulkanCoverageInput> VulkanResourceRuntime::ExactStereoCoverageCounter(const std::uint64_t instance) {
+        using Outcome = Result<VulkanCoverageInput>;
+        const auto found = impl_->buffers.find(instance);
+        if (found == impl_->buffers.end())
+            return Outcome::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
+        auto &buffer = *found->second;
+        if (buffer.descriptor.access != RenderBufferAccess::HostVisible ||
+            buffer.descriptor.usage != (RenderBufferUsage::Storage | RenderBufferUsage::CopyDestination) ||
+            buffer.descriptor.byteSize != RenderGraphStereoCoverageReduction::CounterBytes)
+            return Outcome::Failure(MakeError(VulkanBackendErrors::ResourceRequestInvalid));
+        if (const auto mapped = impl_->MapCoherentBuffer(buffer); mapped.HasError())
+            return Outcome::Failure(mapped.ErrorValue());
+        return Outcome::Success({buffer.handle, found->second});
+    }
+
+    /** @copydoc VulkanResourceRuntime::ResolveOwnedCoverageView */
+    Result<VulkanDrawViewBinding> VulkanResourceRuntime::ResolveOwnedCoverageView(const std::uint64_t instance) const {
+        const auto *view = Impl::Find(impl_->views, instance);
+        if (!view || view->texture->externalSource != nullptr)
+            return Result<VulkanDrawViewBinding>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
+        return MaterialCapture().ResolveDrawView(instance);
+    }
+
+    /** @copydoc VulkanResourceRuntime::ReadStereoCoverageReduction */
+    Result<void> VulkanResourceRuntime::ReadStereoCoverageReduction(std::uint64_t instance, RenderTimelinePoint completion,
+                                                                    RenderGraphStereoCoverageReduction::Tallies &destination) {
+        const auto found = impl_->buffers.find(instance);
+        if (found == impl_->buffers.end())
+            return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
+        auto &buffer = *found->second;
+        const auto &state = buffer.graphState;
+        if (!state.coverageReduction || state.completion != completion || !state.contentsDefined ||
+            state.logical.operation != RenderGraphSynchronizationOperation::Storage ||
+            state.logical.scope != RenderGraphPipelineScope::Compute ||
+            buffer.descriptor.byteSize != RenderGraphStereoCoverageReduction::CounterBytes)
+            return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
+        if (const auto mapped = impl_->MapCoherentBuffer(buffer); mapped.HasError())
+            return mapped;
+        std::memcpy(destination.data(), buffer.mapped, sizeof(destination));
+        return Result<void>::Success();
     }
 
     /** @copydoc VulkanResourceRuntime::ReadStereoCoverage */

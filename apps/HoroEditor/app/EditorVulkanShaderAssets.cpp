@@ -98,4 +98,10 @@ namespace Horo::Editor {
     Result<EditorVulkanMultiviewCook> LoadPackagedVulkanMultiviewCoverageShader(const std::filesystem::path &assetRoot) {
         return LoadPackagedProgram(assetRoot / "shaders/runtime/multiview-coverage-vulkan", &LoadEditorVulkanMultiviewCoverageCook);
     }
+
+    /** @copydoc LoadPackagedVulkanCoverageReductionShader */
+    Result<EditorVulkanCoverageReductionCook> LoadPackagedVulkanCoverageReductionShader(const std::filesystem::path &assetRoot) {
+        return LoadPackagedProgram(assetRoot / "shaders/runtime/multiview-coverage-reduction-vulkan",
+                                   &LoadEditorVulkanCoverageReductionCook);
+    }
 }  // namespace Horo::Editor

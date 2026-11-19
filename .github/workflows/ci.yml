@@ -274,7 +274,7 @@ jobs:
           HORO_VULKAN_VERTEX_FIXTURE="$RUNNER_TEMP/preparation.vert.spv" \
           HORO_VULKAN_FRAGMENT_FIXTURE="$RUNNER_TEMP/preparation.frag.spv" \
           build/ci/tests/HoroRenderVulkanTests '[native-smoke]' --reporter junit --out build/ci/vulkan-shaders.xml
-      - name: Qualify stereo coverage pixels on lavapipe
+      - name: Qualify stereo coverage pixels and reduction on lavapipe
         if: runner.os == 'Linux'
         run: |
           coverage_root="$RUNNER_TEMP/viewport-qualification"
@@ -282,6 +282,10 @@ jobs:
           HORO_NATIVE_MULTIVIEW_REFLECTION="$coverage_root/multiview.reflection.json" \
           HORO_NATIVE_COVERAGE_PAYLOAD="$coverage_root/coverage.horoshdr" \
           HORO_NATIVE_COVERAGE_REFLECTION="$coverage_root/coverage.reflection.json" \
+          HORO_NATIVE_MOTION_PAYLOAD="$coverage_root/motion.horoshdr" \
+          HORO_NATIVE_MOTION_REFLECTION="$coverage_root/motion.reflection.json" \
+          HORO_NATIVE_REDUCTION_PAYLOAD="$coverage_root/reduction.horoshdr" \
+          HORO_NATIVE_REDUCTION_REFLECTION="$coverage_root/reduction.reflection.json" \
           build/ci/tests/HoroRenderVulkanTests '[vulkan][multiview][coverage][native-smoke]'
       - name: Test Vulkan commands on lavapipe
         if: runner.os == 'Linux'

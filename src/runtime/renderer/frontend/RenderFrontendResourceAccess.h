@@ -41,6 +41,13 @@ namespace Horo::Render::Detail {
          */
         [[nodiscard]] static Result<ResourceCreation<RenderTextureHandle>> CreateMultiviewDepth(
             RenderFrontend &frontend, RenderMemoryScopeId scope, FramebufferExtent extent, std::uint32_t viewCount, bool sampled = false);
+        /** @brief Cold-admits only the bounded host-visible counter of the selected stereo reduction route.
+         * @param frontend Selected frontend on its owner thread, after exact native route admission.
+         * @param scope Canonical memory scope charged for the counter.
+         * @return Pending counter storage with no initialized contents or the original admission/budget error.
+         */
+        [[nodiscard]] static Result<ResourceCreation<RenderBufferHandle>> CreateStereoCoverageCounter(RenderFrontend &frontend,
+                                                                                                      RenderMemoryScopeId scope);
         /** @brief Retires an owned creation, recognizing only its already-retired failed operation as complete.
          * @param frontend Same canonical creation owner.
          * @param creation Unmodified handle/operation pair returned by this frontend's creation request.

@@ -155,6 +155,22 @@ namespace Horo::Editor {
          */
         [[nodiscard]] static std::optional<CoverageObservation> TakeCoverage(EditorViewportRendererVulkan &viewport,
                                                                              const Render::MultiviewMotionFrame &frame) noexcept;
+
+        /** @brief Observed full-eye GPU counters and completion bound to the exact paired writer and predecessor. */
+        struct CoverageReduction final {
+            Render::MultiviewMotionFrame frame, predecessor;
+            AuxiliaryImages auxiliary;
+            std::array<Render::MultiviewRenderRectangle, 2> rectangles;
+            Render::RenderTimelinePoint completion;
+            Render::RenderGraphStereoCoverageReduction::Tallies tallies;
+
+            /** @brief Reports whether all pixels of both active eyes have usable motion and matching previous depth. */
+            [[nodiscard]] bool Complete() const noexcept;
+        };
+
+        /** @brief Consumes the exact paired reduction result once after queue observation. */
+        [[nodiscard]] static std::optional<CoverageReduction> TakeCoverageReduction(EditorViewportRendererVulkan &viewport,
+                                                                                    const Render::MultiviewMotionFrame &frame) noexcept;
         /** @brief Records the exact projection or zero-layer completion after successful native end only. */
         static void CompleteMotion(EditorViewportRendererVulkan &viewport, const std::optional<Render::MultiviewMotionFrame> &frame,
                                    bool projected) noexcept;

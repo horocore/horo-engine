@@ -75,6 +75,8 @@ namespace Horo::Application::Internal {
 
         std::optional<PassthroughFrame> passthrough;
         std::optional<Render::MultiviewMotionFrame> motionFrame;
+        std::optional<XR::XRFrameId> coverageFrame;
+        OpenXRPlayCoverageStatus coverageStatus{OpenXRPlayCoverageStatus::Unobserved};
         std::optional<XR::OpenXRInternal::NativePresentationViews> views;
         std::uint64_t hostFrameNumber{}; /**< Exact successful bind receipt, not another frame issuer. */
         bool guiFinished{};
@@ -254,6 +256,9 @@ namespace Horo::Application::Internal {
 
         /** @brief Ends a fully released projection, adding the underlay only for the exact live alpha proof. */
         [[nodiscard]] Result<void> EndRenderedProjection(const XR::XRFrameId &frame);
+
+        /** @brief Consumes exact queue-observed coverage before this frame's paired writer releases its image references. */
+        void ObserveCoverage(const XR::XRFrameId &frame) noexcept;
 
         /** @brief Reports the exact compositor result to the existing selected viewport after successful native end. */
         void CompleteMotion(bool projected) noexcept;

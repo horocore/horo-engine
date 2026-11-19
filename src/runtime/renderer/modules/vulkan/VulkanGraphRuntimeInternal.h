@@ -4,6 +4,7 @@
 #include "VulkanMultiviewRuntime.h"
 #include "VulkanReconstructionRuntime.h"
 #include "VulkanRenderBackendErrors.h"
+#include "VulkanStereoCoverageRuntime.h"
 #include "VulkanVfxGpuRuntime.h"
 
 #include <array>
@@ -46,6 +47,7 @@ namespace Horo::Render::Detail {
             VulkanMaterialTarget vfxTarget;
             RenderGraphExecutionRange vfxDraws;
             VulkanPreparedReconstruction reconstruction;
+            VulkanPreparedStereoCoverage coverageReduction;
             std::optional<std::size_t> materialRaster;
         };
 
@@ -132,6 +134,7 @@ namespace Horo::Render::Detail {
         VulkanVfxGpuRuntime vfxGpu;
         std::array<VulkanMultiviewRecorder, RenderGraphMultiview::MaximumPassesPerFrame> multiview;
         VulkanReconstructionRuntime reconstruction;
+        VulkanStereoCoverageRuntime coverageReduction;
         std::size_t reconstructionPassCount{};
         VulkanResourceRuntime *resources{};
         std::thread::id owner;

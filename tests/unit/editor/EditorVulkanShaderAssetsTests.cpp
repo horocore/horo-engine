@@ -85,6 +85,16 @@ TEST_CASE("Packaged Vulkan stereo coverage binds the separate reflected artifact
     CHECK(LoadPackagedVulkanMultiviewCoverageShader(bundle.root).HasError());
 }
 
+TEST_CASE("Packaged Vulkan full-eye reduction requires the closed compute bundle", "[editor][shader-cook][assets][xr]") {
+    Bundle bundle;
+    CHECK(LoadPackagedVulkanCoverageReductionShader(bundle.root).HasError());
+    std::filesystem::create_directories(bundle.root / "shaders/runtime");
+    constexpr std::string_view prefix = "multiview-coverage-reduction-vulkan";
+    const CookFixture motion{CookFixtureRole::MultiviewMotion, MultiviewMotionEvidence()};
+    bundle.WriteCook(prefix, motion, "runtime");
+    CHECK(LoadPackagedVulkanCoverageReductionShader(bundle.root).HasError());
+}
+
 TEST_CASE("Packaged Vulkan scene raster admission requires its distinct compiled stage and matched reflection",
           "[editor][shader-cook][assets][reconstruction]") {
     Bundle bundle;

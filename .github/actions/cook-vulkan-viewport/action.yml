@@ -61,6 +61,12 @@ runs:
           "$COOK_BUILD_DIR/apps/HoroEditorVulkanShaderCook" assets/shaders/runtime/multiview_motion.hlsl \
             "$COOK_QUALIFICATION_ROOT/coverage" "$RUNNER_TEMP/multiview-coverage-cook-scratch" \
             "${executables[0]}" "${executables[1]}" "${executables[2]}" --multiview-coverage
+          "$COOK_BUILD_DIR/apps/HoroEditorVulkanShaderCook" assets/shaders/runtime/multiview_motion.hlsl \
+            "$COOK_QUALIFICATION_ROOT/motion" "$RUNNER_TEMP/multiview-motion-cook-scratch" \
+            "${executables[0]}" "${executables[1]}" "${executables[2]}" --multiview-motion
+          "$COOK_BUILD_DIR/apps/HoroEditorVulkanShaderCook" assets/shaders/runtime/multiview_coverage_reduce.hlsl \
+            "$COOK_QUALIFICATION_ROOT/reduction" "$RUNNER_TEMP/multiview-reduction-cook-scratch" \
+            "${executables[0]}" "${executables[1]}" "${executables[2]}" --multiview-coverage-reduction
           "$COOK_BUILD_DIR/apps/HoroEditorVulkanShaderCook" assets/shaders/editor/viewport_cross_fade.hlsl \
             "$COOK_QUALIFICATION_ROOT/viewport-cross-fade-vulkan" "$RUNNER_TEMP/viewport-cross-fade-cook-scratch" \
             "${executables[0]}" "${executables[1]}" "${executables[2]}" --camera-cross-fade

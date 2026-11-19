@@ -57,7 +57,7 @@ namespace Horo::Tests::RenderFrontendTesting {
             std::array<RenderBufferHandle, 2> readBuffers{};
             std::array<RenderGraphOptionalRead, 2> reads{};
 
-            explicit TemplateFixture(bool optionalReads = false) {
+            explicit TemplateFixture(bool optionalReads = false, bool sampleAfterGraphics = false) {
                 lifecycleState = {};
                 frontend = CreateTrackingFrontend();
                 source = std::make_shared<ExternalSource>(frontend->Capabilities().support.deviceIncarnation);
@@ -66,6 +66,8 @@ namespace Horo::Tests::RenderFrontendTesting {
                 texture = imported.Value();
                 auto limits = Render::Test::SmallLimits();
                 limits.maxResources = static_cast<std::uint32_t>(1 + reads.size());
+                if (sampleAfterGraphics)
+                    ++limits.maxUsages;
                 auto builder = Render::Test::RequireBuilder(limits);
                 const auto pass = Render::Test::RequirePass(builder, RenderPassKind::Graphics, RenderQueueRole::Graphics);
                 auto declared = PreparedRenderGraphTemplate::DeclareTexture(builder, source->Descriptor(), source->AcquiredState(),
@@ -73,6 +75,13 @@ namespace Horo::Tests::RenderFrontendTesting {
                 REQUIRE(declared.HasValue());
                 slot = declared.Value();
                 Render::Test::RequireUsage(builder, {pass, slot.resource, RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment});
+                if (sampleAfterGraphics) {
+                    const auto compute = Render::Test::RequirePass(builder, RenderPassKind::Compute, RenderQueueRole::Graphics);
+                    REQUIRE(builder.AddDependency({pass, compute}).HasValue());
+                    const auto sampled = builder.AddUsage({compute, slot.resource, RenderGraphAccess::Read, RenderGraphUsageKind::Sampled});
+                    INFO((sampled.HasError() ? sampled.ErrorValue().message : "compute input declared"));
+                    REQUIRE(sampled.HasValue());
+                }
                 std::array<RenderGraphImportedState, 2> inputs{};
                 if (optionalReads) {
                     const std::array<std::byte, 16> bytes{};
@@ -344,6 +353,24 @@ namespace Horo::Tests::RenderFrontendTesting {
                 if (count)
                     CHECK(uses.back().resource == resource.Value());
             }
+        }
+    }
+
+    TEST_CASE("Graphics queue template retains mandatory compute inputs when selecting optional geometry",
+              "[renderer][render-graph][template]") {
+        TemplateFixture fixture{true, true};
+        const std::array texture{RenderGraphExternalTextureBinding{fixture.slot.resource, fixture.texture}};
+        for (std::size_t count = 0; count <= fixture.reads.size(); ++count) {
+            const auto bound = fixture.topology->Bind(*fixture.frontend, 0, texture, std::span{fixture.reads}.first(count));
+            REQUIRE(bound.HasValue());
+            const auto passes = bound.Value()->Passes();
+            REQUIRE(passes.size() == 2);
+            CHECK(passes.front().usages.count == count + 1);
+            CHECK(passes.back().kind == RenderPassKind::Compute);
+            REQUIRE(passes.back().usages.count == 1);
+            const auto &sample = bound.Value()->Usages()[passes.back().usages.offset];
+            CHECK(sample.resource == fixture.slot.resource);
+            CHECK(sample.kind == RenderGraphUsageKind::Sampled);
         }
     }
 

@@ -720,10 +720,16 @@ The paired raster requires the same D32 depth test as the motion output.
 The current frontend cannot realize the per-eye D16 views, so Play retires
 that incomplete auxiliary acquisition and submits ordinary projection.
 Its observation also identifies the exact auxiliary acquisitions. The tile
-diagnostic uses the full projection mask. Padded areas outside the paired
-rectangles carry no coverage evidence. Normal Play leaves the diagnostic hook
-inactive. Full-frame reduction and provider-specific encoding remain
-prerequisites for compositor admission.
+diagnostic uses the full projection mask and remains inactive in normal Play.
+With the matching cooked reduction program and a graphics queue that supports
+compute, Play clears the owned paired mask, replays the exact eye rectangles,
+and resets and dispatches both eye counters in the same graphics submission as
+the paired motion/depth producer. The GPU counts only pixels inside each eye's
+active rectangle. Cleared, missing, occluded and unknown samples are unresolved.
+Play observes the result on its existing retirement poll, before releasing the
+auxiliary image references. Incomplete or absent tallies leave ordinary
+projection available. Provider-specific compositor encoding and its native
+acquisition contract remain separate prerequisites for admission.
 
 See the [Khronos space-warp layer contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrCompositionLayerSpaceWarpInfoFB.html)
 for the distinction between runtime motion inputs and internal Renderer UV history.

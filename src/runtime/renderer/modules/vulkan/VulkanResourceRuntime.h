@@ -21,6 +21,7 @@ namespace Horo::Render::Detail {
         bool hasNativeState{false};
         bool contentsDefined{false};
         std::size_t coverageReadbackBytes{};
+        bool coverageReduction{};
     };
 
     /** @brief Device-private graph binding captured before recording, with an exact immutable descriptor. */
@@ -86,6 +87,12 @@ namespace Horo::Render::Detail {
         VulkanGraphResource resource;
         std::shared_ptr<const void> backing;
         void *mapped{};
+    };
+
+    /** @brief Immutable cold coverage input and its retained native allocation. */
+    struct VulkanCoverageInput final {
+        VkBuffer buffer{};
+        std::shared_ptr<const void> backing;
     };
 
     class VulkanMaterialCapture;
@@ -171,6 +178,16 @@ namespace Horo::Render::Detail {
                                                                             bool hostVisible);
         /** @brief Borrows the canonical buffer completion proof before an explicitly retired-slot host write. */
         [[nodiscard]] Result<RenderTimelinePoint> BufferCompletion(std::uint64_t instance) const;
+        /** @brief Seals an unused exact prepared coverage input after comparing its mapped initialized bytes. */
+        [[nodiscard]] Result<VulkanCoverageInput> SealCoverageInput(std::uint64_t instance, RenderBufferUsage usage,
+                                                                    std::span<const std::byte> expected);
+        /** @brief Captures and maps the selected exact coherent storage counter for cold reducer realization. */
+        [[nodiscard]] Result<VulkanCoverageInput> ExactStereoCoverageCounter(std::uint64_t instance);
+        /** @brief Resolves an owned coverage image view and rejects imported native images. */
+        [[nodiscard]] Result<VulkanDrawViewBinding> ResolveOwnedCoverageView(std::uint64_t instance) const;
+        /** @brief Maps only the storage result marked by the accepted exact reduction completion. */
+        [[nodiscard]] Result<void> ReadStereoCoverageReduction(std::uint64_t instance, RenderTimelinePoint completion,
+                                                               RenderGraphStereoCoverageReduction::Tallies &destination);
         /** @brief Copies an exact coherent coverage result after the caller observes its matching GPU signal. */
         [[nodiscard]] Result<void> ReadStereoCoverage(std::uint64_t instance, RenderTimelinePoint completion,
                                                       std::span<std::byte> destination);

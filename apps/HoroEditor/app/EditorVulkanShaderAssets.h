@@ -30,4 +30,7 @@ namespace Horo::Editor {
     [[nodiscard]] Result<EditorVulkanMultiviewCook> LoadPackagedVulkanMultiviewMotionShader(const std::filesystem::path &assetRoot);
     /** @brief Loads the optional Vulkan stereo depth coverage program and its exact reflected sidecar. */
     [[nodiscard]] Result<EditorVulkanMultiviewCook> LoadPackagedVulkanMultiviewCoverageShader(const std::filesystem::path &assetRoot);
+    /** @brief Loads the optional stereo counter reducer only from the exact installed payload and reflection pair. */
+    [[nodiscard]] Result<EditorVulkanCoverageReductionCook> LoadPackagedVulkanCoverageReductionShader(
+        const std::filesystem::path &assetRoot);
 }  // namespace Horo::Editor
