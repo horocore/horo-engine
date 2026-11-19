@@ -87,6 +87,10 @@ namespace Horo::Network {
         /** @brief Acquire actual phase/tick role permission from the same canonical lifecycle. */
         [[nodiscard]] Result<ReplicationWorldReadLease> Acquire(NetworkModeWorldKind kind, const ReplicationWorldWorkRequest &request,
                                                                 ReplicationWorldCapability capability) const;
+        /** @brief Routes a generation-scoped host Scene mutation into the canonical authority lifecycle. */
+        [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareAuthorityObjects(
+            Runtime::SceneRuntimeId scene, std::span<const ReplicationDynamicSceneObject> added,
+            std::span<const Runtime::EntityRef> retired, const CancellationToken &cancellation) const;
         /** @brief Revoke worlds/handler/outboxes idempotently before dependent owner teardown. */
         void Shutdown() noexcept;
 

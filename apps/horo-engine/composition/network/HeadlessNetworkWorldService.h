@@ -584,6 +584,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return Result<void>::Success();
             auto selected = *selectedGameplay_;
             selected.vfxScene = record_->vfxScene;
+            if (auto bound = BindAuthorityPrefabs(selected); bound.HasError())
+                return bound;
             if (auto bound = BindNavigationPath(selected); bound.HasError())
                 return bound;
             auto gameplay = ComposeConfiguredGameplay(selected, scope.Value().physics, scope.Value().character);
@@ -594,6 +596,9 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             record_->gameplay = gameplay_->PhysicsContext();
             return Result<void>::Success();
         }
+
+        /** @brief Installs the cooked Prefab mapping adapter for this exact authority Scene only. */
+        [[nodiscard]] Result<void> BindAuthorityPrefabs(GameplayWorldSelection &selected) const;
 
         /** @brief Binds only the module's selected registered path scope to the already activated immutable provider. */
         Result<void> BindNavigationPath(GameplayWorldSelection &selected) {

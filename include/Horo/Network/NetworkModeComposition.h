@@ -20,6 +20,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <utility>
 
 namespace Horo::Network {
     class NetworkWorldBindingController;
@@ -91,6 +92,38 @@ namespace Horo::Network {
                                                                  std::span<const NetworkModeWorld> worlds,
                                                                  NetworkModePresentation presentation = {});
 
+    /** @brief Weak, Scene-scoped host grant for dynamic object publication through the canonical authority world. */
+    class NetworkAuthorityObjectPublication final {
+    public:
+        NetworkAuthorityObjectPublication() = default;
+
+        /** @brief Checks whether this factory received a binding. @return True while the issuing composition still exists. */
+        [[nodiscard]] bool IsBound() const noexcept {
+            return !binding_.expired();
+        }
+
+        /**
+         * @brief Prepares one dynamic mapping change at the Scene structural safe point.
+         * @param added Newly reserved members and their admitted schema versions.
+         * @param retired Exact Scene members whose existing dynamic mappings should retire.
+         * @param cancellation Owning Scene's cancellation token.
+         * @return A detached Scene candidate or the typed role, lifecycle or mapping failure.
+         * @pre Called by the Scene structural owner on the composition owner lane.
+         */
+        [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(
+            std::span<const ReplicationDynamicSceneObject> added, std::span<const Runtime::EntityRef> retired,
+            const CancellationToken &cancellation) const;
+
+    private:
+        friend class NetworkModeComposition;
+
+        NetworkAuthorityObjectPublication(std::weak_ptr<NetworkWorldBindingController> binding, Runtime::SceneRuntimeId scene) noexcept
+            : binding_(std::move(binding)), scene_(scene) {}
+
+        std::weak_ptr<NetworkWorldBindingController> binding_;
+        Runtime::SceneRuntimeId scene_;
+    };
+
     /** @brief Factory request, with Count world kind for process-scoped services. */
     struct NetworkModeServiceRequest final {
         NetworkModeServiceKind service{NetworkModeServiceKind::Count};
@@ -98,6 +131,7 @@ namespace Horo::Network {
         NetworkTransportProviderId provider{};
         NetworkModeWorldKind world{NetworkModeWorldKind::Count};
         Runtime::SceneRuntimeId scene{};
+        NetworkAuthorityObjectPublication authorityObjects; /**< Grant for the exact authority Gameplay owner only. */
     };
 
     /** @brief Copy of the declared authored mappings from a committed authority Scene. */
@@ -218,8 +252,8 @@ namespace Horo::Network {
         NetworkModeComposition(NetworkModePlan plan, NetworkModeFactories factories, NetworkWorldCompositionPurpose purpose,
                                std::shared_ptr<NetworkWorldBindingController> binding) noexcept;
         [[nodiscard]] static bool WorldShapeMatches(NetworkProjectRole mode, std::span<const NetworkModeWorld> worlds) noexcept;
-        [[nodiscard]] static NetworkModeServiceRequest Request(const NetworkModePlan &plan, NetworkModeServiceKind service,
-                                                               const NetworkModeWorld *world = nullptr) noexcept;
+        [[nodiscard]] NetworkModeServiceRequest Request(const NetworkModePlan &plan, NetworkModeServiceKind service,
+                                                        const NetworkModeWorld *world = nullptr) const noexcept;
         [[nodiscard]] Result<void> BuildEntries();
         /** @brief Selects the exact authority Scene service from a complete, activated set. */
         [[nodiscard]] static Result<NetworkAuthoredSceneProjection> CaptureAuthorityScene(std::span<const Entry> entries);

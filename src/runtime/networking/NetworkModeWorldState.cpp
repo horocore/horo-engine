@@ -400,6 +400,21 @@ namespace Horo::Network::Detail {
         return current_[index]->lifecycle.AcquireFor(request, capability);
     }
 
+    /** @copydoc NetworkModeWorldState::PrepareAuthorityObjects */
+    Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> NetworkModeWorldState::PrepareAuthorityObjects(
+        Runtime::SceneRuntimeId scene, std::span<const ReplicationDynamicSceneObject> added, std::span<const Runtime::EntityRef> retired,
+        const CancellationToken &cancellation) const {
+        constexpr auto kind = NetworkModeWorldKind::AuthorityServer;
+        const auto role = Role(kind, scene);
+        if (role.HasError())
+            return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(role.ErrorValue());
+        const ReplicationWorldWorkRequest work{.scene = scene,
+                                               .session = *role.Value().worldSession,
+                                               .phase = Runtime::RuntimePhase::CommitDeferredLifecycleChanges,
+                                               .cancellation = cancellation};
+        return current_[Index(kind)]->lifecycle.PrepareDynamicObjectBatch(work, added, retired);
+    }
+
     const NetworkWorldBindingRecord *NetworkModeWorldState::ServerBinding() const noexcept {
         const auto index = Index(NetworkModeWorldKind::AuthorityServer);
         return !stopped_ && index != plan_.worldCount && current_[index] ? &current_[index]->binding : nullptr;

@@ -5,6 +5,7 @@
 #include "Horo/Network/ReplicationWorldLifecycle.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Physics/PhysicsWorld.h"
+#include "Horo/Prefab/PreparedPrefabSpawn.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 #include "PhysicsStateHostLifecycle.h"
 
@@ -143,8 +144,8 @@ namespace Horo::Application::Internal {
             }
         }
 
-        /** @brief Counts enabled persisted owners on an authored entity. Services have no authored occurrence. */
-        std::size_t CountAuthoredOwners(const Runtime::RuntimeComponentSet &components, const Gameplay::GameplayReplicationOwner &owner) {
+        /** @brief Counts enabled registered owners on one Scene entity. Services have no entity occurrence. */
+        std::size_t CountEntityOwners(const Runtime::RuntimeComponentSet &components, const Gameplay::GameplayReplicationOwner &owner) {
             if (const auto *behavior = std::get_if<Gameplay::BehaviorTypeId>(&owner))
                 return static_cast<std::size_t>(std::ranges::count_if(components.behaviors, [&](const auto &binding) {
                     return binding.enabled && binding.typeId == *behavior;
@@ -155,16 +156,16 @@ namespace Horo::Application::Internal {
             return 0;
         }
 
-        struct AuthoredSchemaBinding final {
+        struct EntitySchemaBinding final {
             const Gameplay::GameplayReplicationOwner *owner;
             const Network::ReplicationSchemaDescriptor *schema;
         };
 
         /** @brief Pins only registered and project-declared object schemas for this synchronous projection. */
-        Result<std::vector<AuthoredSchemaBinding>> AdmitAuthoredSchemas(const Gameplay::GameplayReplicationLease &installed,
-                                                                        std::span<const Network::ReplicationSchemaId> schemas) {
-            using Bindings = Result<std::vector<AuthoredSchemaBinding>>;
-            std::vector<AuthoredSchemaBinding> admitted;
+        Result<std::vector<EntitySchemaBinding>> AdmitEntitySchemas(const Gameplay::GameplayReplicationLease &installed,
+                                                                    std::span<const Network::ReplicationSchemaId> schemas) {
+            using Bindings = Result<std::vector<EntitySchemaBinding>>;
+            std::vector<EntitySchemaBinding> admitted;
             admitted.reserve(schemas.size());
             for (const auto &registration : installed.Registrations()) {
                 if (std::holds_alternative<Gameplay::GameplayServiceId>(registration.owner))
@@ -180,25 +181,25 @@ namespace Horo::Application::Internal {
             return Bindings::Success(std::move(admitted));
         }
 
-        /** @brief Locates the sole admitted replication owner for one committed authored entity. */
-        Result<const Network::ReplicationSchemaDescriptor *> SelectAuthoredSchema(const Runtime::RuntimeComponentSet &components,
-                                                                                  std::span<const AuthoredSchemaBinding> bindings) {
+        /** @brief Locates the sole admitted replication owner for one Scene entity. */
+        Result<const Network::ReplicationSchemaDescriptor *> SelectEntitySchema(const Runtime::RuntimeComponentSet &components,
+                                                                                std::span<const EntitySchemaBinding> bindings) {
             using Schema = Result<const Network::ReplicationSchemaDescriptor *>;
             const Network::ReplicationSchemaDescriptor *selected{};
             for (const auto &binding : bindings) {
-                const auto count = CountAuthoredOwners(components, *binding.owner);
+                const auto count = CountEntityOwners(components, *binding.owner);
                 if (count == 0)
                     continue;
                 if (selected || count > 1)
                     return Schema::Failure(MakeError(Network::NetworkErrors::NetworkObjectMappingConflict,
-                                                     "An authored network object must have one declared replication owner."));
+                                                     "A network object must have one declared replication owner."));
                 selected = binding.schema;
             }
             return Schema::Success(selected);
         }
 
         /** @brief Copies only authored Scene entities with a unique admitted replication owner. */
-        Result<void> ProjectDiscoveredObjects(const Runtime::RuntimeSceneView &scene, std::span<const AuthoredSchemaBinding> bindings,
+        Result<void> ProjectDiscoveredObjects(const Runtime::RuntimeSceneView &scene, std::span<const EntitySchemaBinding> bindings,
                                               Network::NetworkAuthoredSceneProjection &projection) {
             const auto slots = scene.SlotCount();
             for (std::size_t slot = 0; slot < slots; ++slot) {
@@ -207,7 +208,7 @@ namespace Horo::Application::Internal {
                 const auto entity = scene.EntityAt(slot);
                 if (!entity || !entity->authoredObject)
                     continue;
-                auto schema = SelectAuthoredSchema(*entity->components, bindings);
+                auto schema = SelectEntitySchema(*entity->components, bindings);
                 if (schema.HasError())
                     return Result<void>::Failure(schema.ErrorValue());
                 if (const auto *selected = schema.Value()) {
@@ -226,7 +227,7 @@ namespace Horo::Application::Internal {
                                                                                 const CancellationToken &cancellation) {
             using Outcome = Result<Network::NetworkAuthoredSceneProjection>;
             try {
-                auto admitted = AdmitAuthoredSchemas(installed, schemas);
+                auto admitted = AdmitEntitySchemas(installed, schemas);
                 if (admitted.HasError())
                     return Outcome::Failure(admitted.ErrorValue());
                 Network::NetworkAuthoredSceneProjection projection{.cancellation = cancellation};
@@ -239,7 +240,117 @@ namespace Horo::Application::Internal {
                 return Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationWorldCapacityExceeded));
             }
         }
+
+        /** @brief Admitted schema and exact position in the verified cooked entity order. */
+        struct PrefabMemberSchema final {
+            std::size_t index;
+            Network::ReplicationSchemaId schema;
+            Network::ReplicationSchemaVersion version;
+        };
+
+        /** @brief Retains the projected members through both structural publications of this occurrence. */
+        class AuthorityPrefabPublication final : public Runtime::SceneGroupPublication {
+        public:
+            AuthorityPrefabPublication(Network::NetworkAuthorityObjectPublication authority, CancellationToken cancellation,
+                                       std::size_t entityCount, std::vector<PrefabMemberSchema> schemas)
+                : authority_(std::move(authority)), cancellation_(std::move(cancellation)), entityCount_(entityCount),
+                  schemas_(std::move(schemas)) {}
+
+            Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(const Runtime::RuntimeSceneView &,
+                                                                               std::span<const Runtime::EntityRef> members,
+                                                                               bool creating) const override {
+                using Outcome = Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>;
+                if (members.size() != entityCount_)
+                    return Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationWorldInvalid));
+                if (!creating) {
+                    std::vector<Runtime::EntityRef> retired;
+                    retired.reserve(schemas_.size());
+                    for (const auto &schema : schemas_)
+                        retired.push_back(members[schema.index]);
+                    return authority_.Prepare({}, retired, cancellation_);
+                }
+                std::vector<Network::ReplicationDynamicSceneObject> added;
+                added.reserve(schemas_.size());
+                for (const auto &schema : schemas_)
+                    added.push_back({members[schema.index], schema.schema, schema.version});
+                return authority_.Prepare(added, {}, cancellation_);
+            }
+
+        private:
+            Network::NetworkAuthorityObjectPublication authority_;
+            CancellationToken cancellation_;
+            std::size_t entityCount_;
+            std::vector<PrefabMemberSchema> schemas_;
+        };
+
+        /** @brief Captures only schemas admitted by the authority module and project before a cooked group is queued. */
+        class AuthorityPrefabOwner final : public Prefab::IPrefabGroupPublicationOwner {
+        public:
+            AuthorityPrefabOwner(Network::NetworkAuthorityObjectPublication authority, std::weak_ptr<const WorldRecord> record)
+                : authority_(std::move(authority)), record_(std::move(record)) {}
+
+            Result<std::shared_ptr<const Runtime::SceneGroupPublication>> Bind(const Prefab::PreparedPrefabSpawn &recipe,
+                                                                               const Prefab::PrefabSpawnRequest &,
+                                                                               std::span<const Runtime::RuntimeComponentSet> projected,
+                                                                               std::string_view) const override {
+                const auto record = record_.lock();
+                if (!record || record->closeRequested || !record->activeGameplay || record->sceneCancellation.IsCancellationRequested())
+                    return Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationWorldUnavailable));
+                if (recipe.Data().entities.size() != projected.size())
+                    return Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationWorldInvalid));
+                const auto *installed = record->activeGameplay->Replication();
+                if (!installed)
+                    return Outcome::Success(nullptr);
+                try {
+                    return BindProjected(projected, *installed, record->activeGameplay->AdmittedReplicationSchemas(),
+                                         record->sceneCancellation);
+                } catch (const std::bad_alloc &) {
+                    return Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationWorldCapacityExceeded));
+                }
+            }
+
+        private:
+            using Outcome = Result<std::shared_ptr<const Runtime::SceneGroupPublication>>;
+
+            /** @brief Resolves each candidate member through the same admission rules used for authored entities. */
+            Outcome BindProjected(std::span<const Runtime::RuntimeComponentSet> projected,
+                                  const Gameplay::GameplayReplicationLease &installed,
+                                  std::span<const Network::ReplicationSchemaId> schemas, const CancellationToken &cancellation) const {
+                auto admitted = AdmitEntitySchemas(installed, schemas);
+                if (admitted.HasError())
+                    return Outcome::Failure(admitted.ErrorValue());
+                if (admitted.Value().empty())
+                    return Outcome::Success(nullptr);
+                std::vector<PrefabMemberSchema> members;
+                for (std::size_t index = 0; index < projected.size(); ++index) {
+                    auto schema = SelectEntitySchema(projected[index], admitted.Value());
+                    if (schema.HasError())
+                        return Outcome::Failure(schema.ErrorValue());
+                    if (const auto *selected = schema.Value())
+                        members.push_back({index, selected->id, selected->version});
+                }
+                if (members.empty())
+                    return Outcome::Success(nullptr);
+                return Outcome::Success(
+                    std::make_shared<const AuthorityPrefabPublication>(authority_, cancellation, projected.size(), std::move(members)));
+            }
+
+            Network::NetworkAuthorityObjectPublication authority_;
+            std::weak_ptr<const WorldRecord> record_;
+        };
     }  // namespace
+
+    /** @copydoc HeadlessNetworkDetail::WorldService::BindAuthorityPrefabs */
+    Result<void> WorldService::BindAuthorityPrefabs(GameplayWorldSelection &selected) const {
+        if (selected.prefabPermission != GameplayPrefabPermission::Granted || !request_.authorityObjects.IsBound())
+            return Result<void>::Success();
+        try {
+            selected.prefabGroupPublication = std::make_shared<const AuthorityPrefabOwner>(request_.authorityObjects, record_);
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(Network::NetworkErrors::ReplicationWorldCapacityExceeded));
+        }
+    }
 
     /** @copydoc HeadlessNetworkDetail::WorldService::CaptureAuthoredScene */
     Result<Network::NetworkAuthoredSceneProjection> WorldService::CaptureAuthoredScene() const {

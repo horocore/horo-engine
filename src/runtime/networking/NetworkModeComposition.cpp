@@ -121,8 +121,22 @@ namespace Horo::Network {
     }
 
     NetworkModeServiceRequest NetworkModeComposition::Request(const NetworkModePlan &plan, const NetworkModeServiceKind service,
-                                                              const NetworkModeWorld *world) noexcept {
-        return Horo::Network::Request(plan, service, world);
+                                                              const NetworkModeWorld *world) const noexcept {
+        auto request = Horo::Network::Request(plan, service, world);
+        if (binding_ && request.world == NetworkModeWorldKind::AuthorityServer && service == NetworkModeServiceKind::Physics)
+            request.authorityObjects = NetworkAuthorityObjectPublication{binding_, request.scene};
+        return request;
+    }
+
+    /** @copydoc NetworkAuthorityObjectPublication::Prepare */
+    Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> NetworkAuthorityObjectPublication::Prepare(
+        std::span<const ReplicationDynamicSceneObject> added, std::span<const Runtime::EntityRef> retired,
+        const CancellationToken &cancellation) const {
+        const auto binding = binding_.lock();
+        if (!binding)
+            return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
+                MakeError(NetworkErrors::ReplicationWorldUnavailable));
+        return binding->PrepareAuthorityObjects(scene_, added, retired, cancellation);
     }
 
     NetworkModeComposition::NetworkModeComposition(NetworkModePlan plan, NetworkModeFactories factories,

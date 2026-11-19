@@ -57,6 +57,10 @@ namespace Horo::Network::Detail {
         /** @brief Acquire actual phase/tick permission from the same published lifecycle. */
         [[nodiscard]] Result<ReplicationWorldReadLease> Acquire(NetworkModeWorldKind kind, const ReplicationWorldWorkRequest &request,
                                                                 ReplicationWorldCapability capability) const;
+        /** @brief Prepares a structural mapping delta only for the currently published authority Scene. */
+        [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareAuthorityObjects(
+            Runtime::SceneRuntimeId scene, std::span<const ReplicationDynamicSceneObject> added,
+            std::span<const Runtime::EntityRef> retired, const CancellationToken &cancellation) const;
         /** @brief Borrow the committed server binding record; absent before actual publication. */
         [[nodiscard]] const NetworkWorldBindingRecord *ServerBinding() const noexcept;
         /** @brief Revoke every published and staged occurrence once before dependent teardown. */

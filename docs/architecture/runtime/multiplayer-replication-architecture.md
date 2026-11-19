@@ -105,6 +105,13 @@ retired slots only at their next generation. Despawn resolves the exact Scene
 entity generation and rejects authored mappings. Rollback discards the assigned
 identities and preserves the live mapping and its capture revision.
 
+The configured headless host binds the authority Gameplay service to the
+canonical network world through a weak grant for its exact Scene. It projects
+cooked Prefab members through the same admitted behavior and component schemas
+used for authored discovery. Members without an admitted owner stay local.
+Scene travel and shutdown revoke the old grant, and the client factory receives
+no authority grant.
+
 ```cpp
 enum class ReplicationExecutionRole : std::uint8_t {
     Standalone,

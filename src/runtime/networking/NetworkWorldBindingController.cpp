@@ -127,6 +127,13 @@ namespace Horo::Network {
         return impl_->worlds.Acquire(kind, request, capability);
     }
 
+    /** @copydoc NetworkWorldBindingController::PrepareAuthorityObjects */
+    Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> NetworkWorldBindingController::PrepareAuthorityObjects(
+        Runtime::SceneRuntimeId scene, std::span<const ReplicationDynamicSceneObject> added, std::span<const Runtime::EntityRef> retired,
+        const CancellationToken &cancellation) const {
+        return impl_->worlds.PrepareAuthorityObjects(scene, added, retired, cancellation);
+    }
+
     void NetworkWorldBindingController::Impl::ClearPending() noexcept {
         for (auto &peer : peers) {
             peer.pending.reset();
