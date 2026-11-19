@@ -18,6 +18,7 @@ import project
 PROFILE = "qualification-debug"
 APPLICATION = "org.horocore.packagequalification"
 SERIAL = "emulator-5554"
+TRANSPORT = "37"
 DIGEST = "a" * 64
 PACKAGE = "/data/app/~~hash/example==/base.apk"
 LIFECYCLE = ("host-state lifecycleRevision=3 activity=1 state=2 process=1 window=5 presentation=8 "
@@ -31,15 +32,19 @@ class AndroidDeployTests(unittest.TestCase):
     def execute(self, override=None):
         """Run the real CLI orchestration against an exact scripted ADB transport."""
         _, profile = project.load_contract(PROFILE, ["arm64-v8a"])
+        launch = ("shell", "am", "start", "-W", "--user", "10", "-n", f"{APPLICATION}/{APPLICATION}.PackageActivity")
+        stop = ("shell", "am", "force-stop", "--user", "10", APPLICATION)
         replies = {
+            ("devices", "-l"): f"List of devices attached\n{SERIAL} device product:probe transport_id:{TRANSPORT}",
+            ("get-serialno",): SERIAL,
             ("get-state",): "device",
             ("shell", "am", "get-current-user"): "10",
             ("shell", "getprop", "ro.build.version.sdk"): "36",
             ("shell", "getprop", "ro.product.cpu.abi"): "arm64-v8a",
             ("shell", "pm", "path", "--user", "10", APPLICATION): f"package:{PACKAGE}",
             ("shell", "toybox", "sha256sum", PACKAGE): f"{DIGEST}  {PACKAGE}",
-            ("shell", "am", "start", "-W", "--user", "10", "-n", f"{APPLICATION}/{APPLICATION}.PackageActivity"):
-                f"Status: ok\nActivity: {APPLICATION}/.PackageActivity",
+            launch: f"Status: ok\nLaunchState: COLD\nActivity: {APPLICATION}/.PackageActivity",
+            stop: "",
             ("shell", "cmd", "package", "list", "packages", "--user", "10", "-U", APPLICATION):
                 f"package:{APPLICATION} uid:1010200",
             ("shell", "pidof", APPLICATION): "123",
@@ -51,18 +56,31 @@ class AndroidDeployTests(unittest.TestCase):
         }
         replies.update(override or {})
         commands = []
+        running = False
 
         def run(command, deadline):
-            self.assertEqual(command[1:3], ["-s", SERIAL])
+            nonlocal running
+            if command[1:] == ["devices", "-l"]:
+                args = tuple(command[1:])
+            else:
+                self.assertEqual(command[1:3], ["-t", TRANSPORT])
+                args = tuple(command[3:])
             self.assertGreater(deadline, time.monotonic())
-            args = tuple(command[3:])
             commands.append(args)
             if args[:4] == ("install", "-r", "--user", "10"):
                 self.assertEqual(str(Path(args[4])), str(Path("a package ü.apk")))
                 return 0, "Performing Streamed Install\nSuccess"
+            if args == ("shell", "pidof", APPLICATION) and not running and (not override or args not in override):
+                return 1, ""
             response = replies[args]
+            if isinstance(response, list):
+                response = response.pop(0)
             if isinstance(response, BaseException):
                 raise response
+            if args == launch:
+                running = True
+            if args == stop and not isinstance(response, tuple):
+                running = False
             return response if isinstance(response, tuple) else (0, response)
 
         stdout = io.StringIO()
@@ -109,7 +127,7 @@ class AndroidDeployTests(unittest.TestCase):
                 status, report, commands = self.execute({("get-state",): response})
                 self.assertEqual((status, report["status"], report["error"]), (code, "partial", error))
                 self.assertNotIn("SECRET", json.dumps(report))
-                self.assertEqual(commands, [("get-state",)])
+                self.assertEqual(commands, [("devices", "-l"), ("get-serialno",), ("get-state",)])
 
     def test_refuses_another_users_process_before_logcat(self):
         status, report, commands = self.execute({("shell", "toybox", "ps", "-p", "123", "-o", "UID,STIME:19"): "UID STIME\n10200 2026-11-18 10:30:01"})
@@ -122,6 +140,53 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual((status, report["status"], report["error"]), (1, "partial", "application_crashed"))
         self.assertTrue(report["observed"]["crashObserved"])
         self.assertNotIn("personal-thread-name", json.dumps(report))
+
+    def test_failed_capture_retires_only_the_attributed_launch(self):
+        command = ("logcat", "--pid=123", "-v", "brief", "-t", "200", "-s", "HoroPackageQualification:I", "AndroidRuntime:E")
+        for failure, error in (("I/HoroPackageQualification( 123): ignored room=data", "application_evidence_unavailable"),
+                               (project.AndroidDeployError("deadline_exceeded"), "deadline_exceeded")):
+            with self.subTest(error=error):
+                status, report, commands = self.execute({command: failure})
+                self.assertEqual((status, report["error"], report["cleanup"]), (1, error, {"status": "stopped"}))
+                self.assertIn(("shell", "am", "force-stop", "--user", "10", APPLICATION), commands)
+                self.assertNotIn("room=data", json.dumps(report))
+
+    def test_preexisting_process_is_never_replaced_or_stopped(self):
+        status, report, commands = self.execute({("shell", "pidof", APPLICATION): "123"})
+        self.assertEqual((status, report["error"]), (1, "application_already_running"))
+        self.assertNotIn("cleanup", report)
+        self.assertFalse(any("install" in cmd or "start" in cmd or "force-stop" in cmd for cmd in commands))
+
+    def test_replaced_process_is_never_stopped(self):
+        query = ("shell", "toybox", "ps", "-p", "123", "-o", "UID,STIME:19")
+        status, report, commands = self.execute({query: [
+            "UID STIME\n1010200 2026-11-18 10:30:01",
+            "UID STIME\n1010200 2026-11-18 10:30:02",
+            "UID STIME\n1010200 2026-11-18 10:30:02",
+        ]})
+        self.assertEqual((status, report["error"]), (1, "application_process_changed"))
+        self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": "application_process_changed"})
+        self.assertFalse(any("force-stop" in cmd for cmd in commands))
+
+    def test_disconnected_transport_never_reselects_target(self):
+        command = ("logcat", "--pid=123", "-v", "brief", "-t", "200", "-s", "HoroPackageQualification:I", "AndroidRuntime:E")
+        status, report, commands = self.execute({
+            command: (1, "error: device disconnected"),
+            ("get-serialno",): [SERIAL, (1, "error: device not found")],
+        })
+        self.assertEqual((status, report["error"]), (1, "device_disconnected"))
+        self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": "device_disconnected"})
+        self.assertFalse(any("force-stop" in cmd for cmd in commands))
+        self.assertEqual(commands.count(("devices", "-l")), 1)
+
+    def test_ambiguous_activity_start_is_not_attributed(self):
+        launch = ("shell", "am", "start", "-W", "--user", "10", "-n", f"{APPLICATION}/{APPLICATION}.PackageActivity")
+        status, report, commands = self.execute({
+            launch: f"Status: ok\nLaunchState: WARM\nActivity: {APPLICATION}/.PackageActivity",
+        })
+        self.assertEqual((status, report["error"]), (1, "launch_unconfirmed"))
+        self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": "launch_process_unattributed"})
+        self.assertFalse(any("force-stop" in cmd or "logcat" in cmd for cmd in commands))
 
     def test_package_bytes_manifest_and_signature_are_verified_before_adb(self):
         tools, profile = project.load_contract(PROFILE, ["arm64-v8a"])

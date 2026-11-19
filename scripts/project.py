@@ -779,6 +779,7 @@ def apk_main(argv=None) -> int:
 
 PACKAGE_ACTIVITY = "PackageActivity"
 DEPLOY_CAPTURE_BYTES = 256 * 1024
+DEPLOY_CLEANUP_SECONDS = 5
 
 
 class AndroidDeployError(AndroidError):
@@ -886,19 +887,56 @@ class AdmittedAdbDevice:
 
     executable: str
     serial: str
+    transport: int
     deadline: float
 
-    def run(self, *arguments: str) -> str:
-        status, output = deploy_process([self.executable, "-s", self.serial, *arguments], self.deadline)
+    def run(self, *arguments: str, missing_process: bool = False) -> str:
+        status, output = deploy_process([self.executable, "-t", str(self.transport), *arguments], self.deadline)
+        if any(line.startswith("* daemon") for line in output.splitlines()):
+            raise AndroidDeployError("device_transport_changed")
         if status:
+            if missing_process and status == 1 and not output.strip():
+                return ""
             lower = output.lower()
             if "unauthorized" in lower:
                 raise AndroidDeployError("device_unauthorized")
             if "offline" in lower or "not found" in lower or "no devices" in lower or "disconnected" in lower:
                 raise AndroidDeployError("device_disconnected")
             raise AndroidDeployError("device_command_failed")
-        return "\n".join(line for line in output.splitlines() if not line.startswith(
-            ("* daemon not running; starting now at tcp:", "* daemon started successfully"))).strip()
+        return "\n".join(output.splitlines()).strip()
+
+    def process_id(self, application: str) -> int | None:
+        output = self.run("shell", "pidof", application, missing_process=True)
+        if not output:
+            return None
+        pid = deploy_number(output, 2**31 - 1, "application_process_unavailable")
+        if not pid:
+            raise AndroidDeployError("application_process_unavailable")
+        return pid
+
+
+def admit_adb_device(executable: str, serial: str, deadline: float) -> AdmittedAdbDevice:
+    """Resolve a serial to one current ADB transport. Reconnects require a new operation."""
+    status, output = deploy_process([executable, "devices", "-l"], deadline)
+    if status:
+        raise AndroidDeployError("device_inventory_unavailable")
+    matches = [fields for line in output.splitlines() if (fields := line.split()) and fields[0] == serial]
+    if len(matches) != 1 or len(matches[0]) < 2:
+        raise AndroidDeployError("device_unavailable")
+    if matches[0][1] == "unauthorized":
+        raise AndroidDeployError("device_unauthorized")
+    if matches[0][1] != "device":
+        raise AndroidDeployError("device_disconnected")
+    identities = [field.removeprefix("transport_id:") for field in matches[0][2:] if field.startswith("transport_id:")]
+    if len(identities) != 1:
+        raise AndroidDeployError("device_transport_unavailable")
+    transport = deploy_number(identities[0], 2**63 - 1, "device_transport_unavailable")
+    if transport == 0:
+        raise AndroidDeployError("device_transport_unavailable")
+    device = AdmittedAdbDevice(executable, serial, transport, deadline)
+    if device.run("get-serialno") != serial:
+        raise AndroidDeployError("device_transport_changed")
+    return device
 
 
 def deploy_number(output: str, maximum: int, code: str) -> int:
@@ -965,30 +1003,98 @@ def package_log_evidence(log: str, pid: int) -> dict:
     return evidence
 
 
-def deploy_diagnostics(device: AdmittedAdbDevice, application: str, user: str) -> dict:
-    """Collect typed markers from the single live process for the specified package and Android user."""
+def deployed_uid(device: AdmittedAdbDevice, application: str, user: str) -> int:
     inventory = device.run("shell", "cmd", "package", "list", "packages", "--user", user, "-U", application)
     matches = re.findall(r"^package:" + re.escape(application) + r" uid:([0-9]{1,10})$", inventory, re.MULTILINE)
     if len(matches) != 1:
         raise AndroidDeployError("installed_identity_unverifiable")
-    expected_uid = deploy_number(matches[0], 2**32 - 1, "installed_identity_unverifiable")
-    pid = deploy_number(device.run("shell", "pidof", application), 2**31 - 1, "application_process_unavailable")
+    return deploy_number(matches[0], 2**32 - 1, "installed_identity_unverifiable")
+
+
+@dataclass(frozen=True)
+class DeployedProcess:
+    pid: int
+    uid: int
+    started: str
+
+
+def deployed_process(device: AdmittedAdbDevice, application: str, uid: int) -> DeployedProcess:
+    """Capture the exact live process incarnation for one already verified package user."""
+    pid = device.process_id(application)
     if not pid:
         raise AndroidDeployError("application_process_unavailable")
-    process_query = ("shell", "toybox", "ps", "-p", str(pid), "-o", "UID,STIME:19")
-    identity = device.run(*process_query)
+    identity = device.run("shell", "toybox", "ps", "-p", str(pid), "-o", "UID,STIME:19")
     matched = re.fullmatch(r"UID\s+STIME\n\s*([0-9]{1,10})\s+([0-9-]{10} [0-9:]{8})", identity)
     if not matched:
         raise AndroidDeployError("application_process_unavailable")
-    if expected_uid != int(matched.group(1)):
+    if uid != int(matched.group(1)):
         raise AndroidDeployError("application_process_identity_mismatch")
-    raw = device.run("logcat", f"--pid={pid}", "-v", "brief", "-t", "200", "-s", "HoroPackageQualification:I", "AndroidRuntime:E")
-    facts = package_log_evidence(raw, pid)
+    return DeployedProcess(pid, uid, matched.group(2))
+
+
+def deploy_diagnostics(device: AdmittedAdbDevice, application: str, process: DeployedProcess) -> dict:
+    """Collect bounded markers from the exact process captured by this launch."""
+    raw = device.run("logcat", f"--pid={process.pid}", "-v", "brief", "-t", "200", "-s",
+                     "HoroPackageQualification:I", "AndroidRuntime:E")
+    facts = package_log_evidence(raw, process.pid)
     if facts["crashObserved"]:
         return facts
-    if device.run("shell", "pidof", application) != str(pid) or device.run(*process_query) != identity:
+    if deployed_process(device, application, process.uid) != process:
         raise AndroidDeployError("application_process_changed")
     return facts
+
+
+@dataclass
+class AndroidPackageLaunch:
+    """Retains rollback ownership only after an admitted launch produces an exact process."""
+
+    device: AdmittedAdbDevice
+    application: str
+    user: str
+    digest: str
+    process: DeployedProcess | None = None
+    attempted: bool = False
+
+    def start(self) -> DeployedProcess:
+        uid = deployed_uid(self.device, self.application, self.user)
+        if self.device.process_id(self.application) is not None:
+            raise AndroidDeployError("application_already_running")
+        component = f"{self.application}/{self.application}.{PACKAGE_ACTIVITY}"
+        self.attempted = True
+        launched = self.device.run("shell", "am", "start", "-W", "--user", self.user, "-n", component)
+        allowed_components = {component, f"{self.application}/.{PACKAGE_ACTIVITY}"}
+        states = re.findall(r"^LaunchState: ([A-Z]+)$", launched, re.MULTILINE)
+        activities = re.findall(r"^Activity: (\S+)$", launched, re.MULTILINE)
+        if (re.findall(r"^Status: ([a-z]+)$", launched, re.MULTILINE) != ["ok"]
+                or len(activities) != 1 or activities[0] not in allowed_components
+                or states not in ([], ["COLD"]) or "Warning: Activity not started" in launched):
+            raise AndroidDeployError("launch_unconfirmed")
+        self.process = deployed_process(self.device, self.application, uid)
+        return self.process
+
+    def rollback(self) -> dict:
+        """Use a separate bounded deadline to stop only the already attributed package process."""
+        if self.process is None:
+            return {"status": "unconfirmed", "reason": "launch_process_unattributed"}
+        device = AdmittedAdbDevice(self.device.executable, self.device.serial, self.device.transport,
+                                   time.monotonic() + DEPLOY_CLEANUP_SECONDS)
+        try:
+            if device.run("get-serialno") != device.serial:
+                raise AndroidDeployError("device_transport_changed")
+            if device.process_id(self.application) is None:
+                return {"status": "already_exited"}
+            deploy_verified_install(device, self.application, self.user, self.digest)
+            if (deployed_uid(device, self.application, self.user) != self.process.uid
+                    or deployed_process(device, self.application, self.process.uid) != self.process):
+                raise AndroidDeployError("application_process_changed")
+            device.run("shell", "am", "force-stop", "--user", self.user, self.application)
+            if device.process_id(self.application) is not None:
+                raise AndroidDeployError("application_stop_unconfirmed")
+            return {"status": "stopped"}
+        except AndroidDeployError as error:
+            return {"status": "unconfirmed", "reason": error.code}
+        except (KeyboardInterrupt, OSError):
+            return {"status": "unconfirmed", "reason": "cleanup_interrupted"}
 
 
 def android_deploy_main(argv=None) -> int:
@@ -1006,6 +1112,7 @@ def android_deploy_main(argv=None) -> int:
     deadline = time.monotonic() + arguments.timeout
     report = {"schema": 1, "status": "partial", "stage": "artifact"}
     exit_code = 1
+    launch = None
     try:
         with tempfile.TemporaryDirectory(prefix="horo-android-deploy-") as directory:
             package, profile, digest_value, abis = deploy_artifact(
@@ -1014,23 +1121,23 @@ def android_deploy_main(argv=None) -> int:
             report["artifact"] = {"profile": arguments.profile, "applicationId": application,
                                   "apkSha256": digest_value, "declaredRenderer": profile["renderer"]}
             report["stage"] = "device"
-            device = AdmittedAdbDevice(deploy_tool(arguments.sdk / "platform-tools", "adb"), arguments.device, deadline)
+            device = admit_adb_device(deploy_tool(arguments.sdk / "platform-tools", "adb"), arguments.device, deadline)
             current_user, api, abi = deploy_device_identity(device, profile["minimumApi"], abis)
             report["device"] = {"androidApi": api, "abi": abi}
             user = str(current_user)
             report["stage"] = "install"
+            if device.process_id(application) is not None:
+                raise AndroidDeployError("application_already_running")
             installed = device.run("install", "-r", "--user", user, str(package)).splitlines()
             if installed not in (["Success"], ["Performing Streamed Install", "Success"], ["Performing Push Install", "Success"]):
                 raise AndroidDeployError("install_unconfirmed")
             report["stage"] = "verify_install"
             deploy_verified_install(device, application, user, digest_value)
             report["stage"] = "launch"
-            component = f"{application}/{application}.{PACKAGE_ACTIVITY}"
-            launched = device.run("shell", "am", "start", "-W", "--user", user, "-n", component)
-            if re.findall(r"^Status: ([a-z]+)$", launched, re.MULTILINE) != ["ok"]:
-                raise AndroidDeployError("launch_unconfirmed")
+            launch = AndroidPackageLaunch(device, application, user, digest_value)
+            process = launch.start()
             report["stage"] = "diagnostics"
-            observed = deploy_diagnostics(device, application, user)
+            observed = deploy_diagnostics(device, application, process)
             report["observed"] = observed
             if observed["crashObserved"]:
                 raise AndroidDeployError("application_crashed")
@@ -1045,6 +1152,11 @@ def android_deploy_main(argv=None) -> int:
         report["error"] = error.code
     except (OSError, ValueError, KeyError, TypeError, AttributeError, zipfile.BadZipFile):
         report["error"] = "artifact_invalid" if report["stage"] == "artifact" else "host_operation_failed"
+    if exit_code != 0 and launch is not None and launch.attempted:
+        if report["error"] == "device_transport_changed":
+            report["cleanup"] = {"status": "unconfirmed", "reason": "device_transport_changed"}
+        else:
+            report["cleanup"] = launch.rollback()
     print(canonical_json(report).decode("utf-8"), end="")
     return exit_code
 

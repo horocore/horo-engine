@@ -295,7 +295,8 @@ For the qualification packages, `python scripts/project.py android-deploy`
 takes the existing signed package output directory, declared profile, Android
 SDK and a specific ADB serial. It verifies the staged APK, the activity
 component and the installed byte digest before launching. It selects the
-device's current Android user explicitly for install and launch. Missing,
+device's current ADB transport and Android user explicitly for install and launch. A
+replacement connection requires a new invocation. Missing,
 unauthorized, disconnected or incompatible targets return portable failure
 codes and no automatic device retry or downgrade.
 
@@ -303,8 +304,15 @@ The command emits one JSON record. Process evidence is restricted to the
 matching package UID and PID. Its bounded log query projects Horo lifecycle
 and renderer counters and a crash marker without writing raw message text,
 serials, personal paths or unrelated logs. Cancellation, unverifiable
-installation, missing evidence and crashes retain a partial result. The
-renderer declaration comes from the package. Renderer counters describe
+installation, missing evidence and crashes retain a partial result. Before
+replacing an APK, the command checks whether its package already has a process.
+After an attributed launch, failure gives cleanup its own five-second deadline.
+Cleanup checks the selected transport, installed digest and process identity
+before requesting a stop for the exact package and user. The JSON reports
+stopped, already_exited or unconfirmed alongside the deployment error.
+An ambiguous launch or disconnected transport can leave cleanup unconfirmed.
+A successful operation leaves the app running. The renderer declaration
+comes from the package. Renderer counters describe
 observed acceptance, with GPU and physical presentation completion outside
 this diagnostic contract.
 
