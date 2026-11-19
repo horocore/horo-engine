@@ -209,8 +209,6 @@ namespace {
             RequireError(adapter.Submit(stale, tracking, Fixture::revision, step), XRErrors::TrackingSnapshotStale);
             RequireError(adapter.Submit(host.Intent(tracking, step, valid), tracking, Fixture::revision + 1, step),
                          XRErrors::IdentityStale);
-            const auto lost = host.Tracking(XRTrackingFocusState::Focused, XRTrackingState::TrackingLost);
-            RequireError(adapter.Submit(host.Intent(lost, step, valid), lost, Fixture::revision, step), XRErrors::OperationUnavailable);
             RequireError(submit(XRLocomotionMotion{}), XRErrors::OperationInvalid);
             RequireError(submit(XRLocomotionMotion{.velocityMetersPerSecond = Math::Vec3{5, 0, 0}}), XRErrors::CapacityExceeded);
             RequireError(submit(XRLocomotionMotion{.velocityMetersPerSecond = Math::Vec3{0, 0, std::numeric_limits<float>::infinity()}}),
@@ -225,6 +223,19 @@ namespace {
         REQUIRE(host.World().AdvanceFixedTick(FixedTick(1, trace.Observer())).HasValue());
         REQUIRE(trace.movementCount == 0);
         REQUIRE(host.Authority().Validate().HasValue());
+    }
+
+    TEST_CASE("XR locomotion neutralizes admission when tracking is lost", "[xr][character][locomotion]") {
+        Fixture host;
+        const auto lost = host.Tracking(XRTrackingFocusState::Focused, XRTrackingState::TrackingLost);
+        auto adapter = host.Adapter();
+        host.Tick([&host, &lost, &adapter](const Runtime::FixedStepContext &step) {
+            const auto intent = host.Intent(lost, step, XRLocomotionMotion{.velocityMetersPerSecond = Math::Vec3{4, 0, 0}});
+            RequireError(adapter.Submit(intent, lost, Fixture::revision, step), XRErrors::OperationUnavailable);
+        });
+        CommandTrace trace;
+        REQUIRE(host.World().AdvanceFixedTick(FixedTick(1, trace.Observer())).HasValue());
+        REQUIRE(trace.movementCount == 0);
     }
 
     TEST_CASE("XR placement and recenter defer to their owners and support capacity retry and shutdown", "[xr][character][locomotion]") {
