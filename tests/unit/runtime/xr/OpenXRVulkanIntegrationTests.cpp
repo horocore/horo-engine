@@ -9,6 +9,8 @@
 #include "runtime/renderer/modules/vulkan/VulkanRenderBackendErrors.h"
 #include "support/OpenXRCensusTestSupport.h"
 
+#include <catch2/generators/catch_generators.hpp>
+
 namespace {
     using Horo::Result;
     using namespace Horo::Render;
@@ -68,7 +70,7 @@ namespace {
 
         explicit NativeXRSessionFixture(const bool depth,
                                         const NativeXR::NativeReprojectionRoute route = NativeXR::NativeReprojectionRoute::None,
-                                        const bool enable = true) {
+                                        const bool enable = true, const bool prepared = false) {
             script.depthExtension = depth && route == NativeXR::NativeReprojectionRoute::None;
             script.synthesisExtension = route == NativeXR::NativeReprojectionRoute::FrameSynthesisExt;
             script.spaceWarpExtension = route == NativeXR::NativeReprojectionRoute::SpaceWarpFb;
@@ -79,13 +81,37 @@ namespace {
             if (enable && route != NativeXR::NativeReprojectionRoute::None)
                 extensions.push_back(
                     {script.synthesisExtension ? XR_EXT_FRAME_SYNTHESIS_EXTENSION_NAME : XR_FB_SPACE_WARP_EXTENSION_NAME, true});
+            if (prepared) {
+                REQUIRE(owner
+                            .PrepareDiscovery({.selection = {.contractVersion = preflight.ContractVersion(),
+                                                             .attempt = preflight.Attempt(),
+                                                             .backend = preflight.Backend(),
+                                                             .installRecord = preflight.InstallRecord(),
+                                                             .productProfile = preflight.ProductProfile(),
+                                                             .admittedLoaderVersions = {{1, 0, 0}, {1, 1, 63}}},
+                                               .requestedApi = preflight.LoaderApiVersion(),
+                                               .extensions = extensions})
+                            .HasValue());
+                REQUIRE(owner.PrepareSession({preflight, preflight.Attempt()}).HasValue());
+            } else {
+                REQUIRE(owner
+                            .Create({.candidate = identity,
+                                     .preflight = preflight,
+                                     .capabilities = capabilities,
+                                     .plan = plan,
+                                     .activeAttempt = preflight.Attempt(),
+                                     .extensions = extensions})
+                            .HasValue());
+            }
+        }
+
+        void Activate() {
             REQUIRE(owner
-                        .Create({.candidate = identity,
-                                 .preflight = preflight,
-                                 .capabilities = capabilities,
-                                 .plan = plan,
-                                 .activeAttempt = preflight.Attempt(),
-                                 .extensions = extensions})
+                        .Activate({.candidate = identity,
+                                   .preflight = preflight,
+                                   .capabilities = capabilities,
+                                   .plan = plan,
+                                   .activeAttempt = preflight.Attempt()})
                         .HasValue());
         }
     };
@@ -113,8 +139,8 @@ namespace {
         explicit XRBridgeFixture(const bool depth,
                                  const Detail::VulkanExternalViewDispatch views = {&FakeCreateImageView, &FakeDestroyImageView},
                                  const NativeXR::NativeReprojectionRoute route = NativeXR::NativeReprojectionRoute::None,
-                                 const bool enable = true)
-            : session(depth, route, enable), frontend(CreateFrontend(native)),
+                                 const bool enable = true, const bool prepared = false)
+            : session(depth, route, enable, prepared), frontend(CreateFrontend(native)),
               images(*frontend, session.graphics, session.graphics.binding, {1}, views), swapchain(session.owner, images),
               request{.target = {session.identity, {.index = 1, .generation = 1}},
                       .texture = {.extent = {640, 480},
@@ -312,6 +338,53 @@ namespace {
         CHECK(fixture.xr.calls == std::vector<std::string_view>{"formats", "formats"});
     }
 
+    TEST_CASE("OpenXR cold auxiliary allocation is adopted once by the exact promoted session without recreating images",
+              "[unit][xr][vulkan][reprojection][preactivation]") {
+        using enum NativeXR::NativeSwapchainPhase;
+        using enum NativeXR::NativeReprojectionRoute;
+        const auto route = GENERATE(FrameSynthesisExt, SpaceWarpFb);
+        const bool depth = GENERATE(false, true);
+        XRBridgeFixture fixture{depth, {&FakeCreateImageView, &FakeDestroyImageView}, route, true, true};
+        const auto &owner = fixture.session;
+        const auto &request = fixture.request;
+        const NativeXR::NativeSessionPreparation session{owner.preflight, owner.preflight.Attempt()};
+        const NativeXR::NativePreparedReprojectionSwapchain allocation{request.target.slot, request.texture, request.role,
+                                                                       *request.reprojection};
+        CHECK_FALSE(owner.owner.Session().IsValid());
+        CHECK(fixture.swapchain.AdoptReprojection(owner.identity).HasError());
+        auto stale = allocation;
+        stale.selection.attempt = Horo::Tests::IdentityValue<Horo::XR::XRLoaderPreflightAttempt>(99);
+        CHECK(fixture.swapchain.StageReprojection(session, stale, XRTest::SwapchainScript::GetProc).HasError());
+        CHECK(fixture.xr.calls.empty());
+        REQUIRE(fixture.swapchain.StageReprojection(session, allocation, XRTest::SwapchainScript::GetProc).HasValue());
+        REQUIRE(fixture.swapchain.Phase() == Prepared);
+        const auto coldViews = fixture.native.resourceState.state.createViewCount;
+        CHECK(coldViews == fixture.xr.imageCount * 3);
+        CHECK(fixture.swapchain.Acquire().HasError());
+        CHECK(fixture.swapchain.Import().HasError());
+        CHECK(fixture.swapchain.AdoptReprojection(owner.identity).HasError());
+        CHECK(std::ranges::count(fixture.xr.calls, "acquire") == 0);
+        fixture.session.Activate();
+        auto replacement = owner.identity;
+        ++replacement.slot.generation;
+        CHECK(fixture.swapchain.AdoptReprojection(replacement).HasError());
+        const auto binding = fixture.session.graphics.binding.device;
+        fixture.session.graphics.binding.device = NativeHandle<VkDevice>(5);
+        CHECK(fixture.swapchain.AdoptReprojection(owner.identity).HasError());
+        fixture.session.graphics.binding.device = binding;
+        REQUIRE(fixture.swapchain.AdoptReprojection(owner.identity).HasValue());
+        CHECK(fixture.swapchain.Phase() == Available);
+        CHECK(fixture.swapchain.AdoptReprojection(owner.identity).HasError());
+        CHECK(fixture.xr.creates == 1);
+        CHECK(fixture.native.resourceState.state.createViewCount == coldViews);
+        REQUIRE(fixture.swapchain.Acquire().HasValue());
+        REQUIRE(SubmissionTest::Take(fixture.swapchain.Wait(0)));
+        REQUIRE(SubmissionTest::Take(fixture.swapchain.Close()));
+        CHECK(fixture.xr.releases == 1);
+        CHECK(fixture.xr.destroys == 1);
+        CHECK(fixture.native.resourceState.state.destroyViewCount == coldViews);
+    }
+
     std::vector<VkImageViewCreateInfo> coldViewRequests;
 
     VKAPI_ATTR VkResult VKAPI_CALL RecordColdView(VkDevice device, const VkImageViewCreateInfo *info,
@@ -393,6 +466,36 @@ namespace {
         CHECK(fixture.native.resourceState.state.destroyViewCount == failedViewAttempt - 1);
         CHECK(fixture.xr.destroys == 1);
         CHECK(std::ranges::find(fixture.xr.calls, "acquire") == fixture.xr.calls.end());
+    }
+
+    TEST_CASE("OpenXR cold auxiliary view rollback never exposes an unissued image", "[unit][xr][vulkan][reprojection][preactivation]") {
+        using enum NativeXR::NativeSwapchainPhase;
+        const bool retry = GENERATE(false, true);
+        viewAttempts = 0;
+        failedViewAttempt = 3;
+        XRBridgeFixture fixture{false,
+                                {&FailSecondView, &FakeDestroyImageView},
+                                NativeXR::NativeReprojectionRoute::FrameSynthesisExt,
+                                true,
+                                true};
+        const auto &request = fixture.request;
+        const auto &preflight = fixture.session.preflight;
+        const NativeXR::NativeSessionPreparation session{preflight, preflight.Attempt()};
+        const NativeXR::NativePreparedReprojectionSwapchain allocation{request.target.slot, request.texture, request.role,
+                                                                       *request.reprojection};
+        if (retry)
+            fixture.xr.fail = "destroy";
+        CHECK(fixture.swapchain.StageReprojection(session, allocation, XRTest::SwapchainScript::GetProc).HasError());
+        CHECK(fixture.swapchain.Phase() == (retry ? Closing : Empty));
+        CHECK(fixture.native.resourceState.state.createViewCount == 2);
+        CHECK(fixture.native.resourceState.state.destroyViewCount == 2);
+        CHECK(fixture.xr.destroys == (retry ? 0U : 1U));
+        CHECK(fixture.swapchain.Acquire().HasError());
+        CHECK(fixture.swapchain.AdoptReprojection(fixture.session.identity).HasError());
+        CHECK(std::ranges::count(fixture.xr.calls, "acquire") == 0);
+        fixture.xr.fail = {};
+        REQUIRE(SubmissionTest::Take(fixture.swapchain.Close()));
+        CHECK(fixture.xr.destroys == 1);
     }
 
 #include "../renderer/OpenXRMultiviewGraphTests.inl"

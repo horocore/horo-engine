@@ -117,8 +117,8 @@ if(HORO_BUILD_XR_OPENXR AND HORO_BUILD_RENDER_VULKAN AND TARGET HoroEditorVulkan
     target_include_directories(HoroOpenXRApplicationHost PUBLIC "${HORO_OPENXR_APPLICATION_HEADERS}")
     target_link_libraries(HoroOpenXRApplicationHost
         PUBLIC HoroOpenXRApplicationClock HoroEditorPlayXrHostInterface HoroEditorXrSceneInternal HoroXRRuntimeHostInterface HoroEngine::RuntimeScene HoroOpenXRProductHost HoroOpenXRApplicationBindings HoroXROpenXRHostInterface HoroXROpenXRVulkanHostInterface HoroRenderVulkanHostInterface HoroEngine::XRRuntime HoroEngine::Runtime
-        PRIVATE HoroEngine::XROpenXR HoroXROpenXRVulkan HoroEngine::RenderFrontend HoroEditorVulkanXrHostInterface
-            HoroEngine::SceneRenderExtraction)
+            HoroEditorVulkanXrHostInterface
+        PRIVATE HoroEngine::XROpenXR HoroXROpenXRVulkan HoroEngine::RenderFrontend HoroEngine::SceneRenderExtraction)
 endif()
 
 # Pure App-owned package admission is shared by runtime loading and offline production.

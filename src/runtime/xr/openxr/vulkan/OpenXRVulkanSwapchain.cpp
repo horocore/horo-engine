@@ -10,6 +10,17 @@
 
 namespace Horo::XR::OpenXRInternal {
     namespace {
+        /** @brief Checks the immutable resident allocation fields shared by staged and active images. */
+        bool SameAllocation(const NativeSwapchainRequest &a, const NativeSwapchainRequest &b) noexcept {
+            if (a.role != b.role || a.foveation != b.foveation || a.reprojection != b.reprojection)
+                return false;
+            const auto &left = a.texture;
+            const auto &right = b.texture;
+            return left.dimension == right.dimension && left.extent == right.extent && left.format == right.format &&
+                   left.mipCount == right.mipCount && left.layerCount == right.layerCount && left.sampleCount == right.sampleCount &&
+                   left.usage == right.usage && left.depth == right.depth;
+        }
+
         // Ordinary same-address-space data-pointer ABI qualification is required; these
         // SDK layout contracts do not prove pointer representation or grant aliasing.
         static_assert(std::is_standard_layout_v<XrSwapchainImageVulkanKHR>);
@@ -220,34 +231,66 @@ namespace Horo::XR::OpenXRInternal {
         return Result<void>::Success();
     }
 
+    /** @copydoc OpenXRVulkanSwapchainImages::ValidateAllocation */
+    Result<void> OpenXRVulkanSwapchainImages::ValidateAllocation(const Render::RenderTextureDescriptor &texture,
+                                                                 const NativeSwapchainRole role,
+                                                                 const NativeSwapchainFoveation foveation) const {
+        if (owner_ == nullptr || binding_->type != XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR || binding_->device == VK_NULL_HANDLE ||
+            !queue_.IsValid() || binding_->queueIndex != 0 || !texture.IsValid() || !views_.create || !views_.destroy)
+            return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
+        if (foveation != NativeSwapchainFoveation::None ||
+            (role != NativeSwapchainRole::Color && !IsDepthSwapchain(role) && role != NativeSwapchainRole::Motion) ||
+            !NativeFormat(texture.format).has_value() ||
+            (texture.format == Render::RenderTextureFormat::Rgba32Float && role != NativeSwapchainRole::Motion) ||
+            texture.sampleCount != 1 || texture.layerCount > Render::Detail::VulkanExternalNativeViews::MaximumLayers ||
+            texture.dimension != Render::RenderTextureDimension::TwoD || texture.mipCount != 1 ||
+            !Render::HasTextureUsage(texture.usage, Render::RenderTextureUsage::RenderAttachment))
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
+        return Result<void>::Success();
+    }
+
     /** @copydoc OpenXRVulkanSwapchainImages::Validate */
     Result<void> OpenXRVulkanSwapchainImages::Validate(const NativeSwapchainRequest &request) const {
-        if (owner_ == nullptr || binding_->type != XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR || binding_->device == VK_NULL_HANDLE ||
-            !queue_.IsValid() || binding_->queueIndex != 0 || !request.texture.IsValid() || !views_.create || !views_.destroy)
-            return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
-        if (request.foveation != NativeSwapchainFoveation::None ||
-            (request.role != NativeSwapchainRole::Color && !IsDepthSwapchain(request.role) &&
-             request.role != NativeSwapchainRole::Motion) ||
-            !NativeFormat(request.texture.format).has_value() ||
-            (request.texture.format == Render::RenderTextureFormat::Rgba32Float && request.role != NativeSwapchainRole::Motion) ||
-            request.texture.sampleCount != 1 || request.texture.layerCount > Render::Detail::VulkanExternalNativeViews::MaximumLayers ||
-            request.texture.dimension != Render::RenderTextureDimension::TwoD || request.texture.mipCount != 1 ||
-            !Render::HasTextureUsage(request.texture.usage, Render::RenderTextureUsage::RenderAttachment))
-            return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
+        if (!request.target.IsValid())
+            return Result<void>::Failure(MakeError(XRErrors::IdentityInvalid));
+        if (auto valid = ValidateAllocation(request.texture, request.role, request.foveation); valid.HasError())
+            return valid;
         return graphics_->Validate(request.target.session);
     }
+
+    /** @copydoc OpenXRVulkanSwapchainImages::ValidatePrepared */
+    Result<void> OpenXRVulkanSwapchainImages::ValidatePrepared(const NativePreparedReprojectionSwapchain &allocation) const {
+        if (!IsReprojectionSwapchain(allocation.role))
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
+        if (auto valid = ValidateAllocation(allocation.texture, allocation.role, NativeSwapchainFoveation::None); valid.HasError())
+            return valid;
+        return graphics_->ValidatePreparation();
+    }
+
+    namespace {
+        /** @brief Matches a selected texture to a runtime-offered native format without fallback. */
+        Result<std::int64_t> OfferedFormat(Render::RenderTextureFormat format, std::span<const std::int64_t> formats) {
+            const auto native = NativeFormat(format);
+            if (native && std::ranges::find(formats, *native) != formats.end())
+                return Result<std::int64_t>::Success(*native);
+            return Result<std::int64_t>::Failure(MakeError(XRErrors::OperationUnsupported));
+        }
+    }  // namespace
 
     /** @copydoc OpenXRVulkanSwapchainImages::SelectFormat */
     Result<std::int64_t> OpenXRVulkanSwapchainImages::SelectFormat(const NativeSwapchainRequest &request,
                                                                    const std::span<const std::int64_t> formats) const {
         if (auto valid = Validate(request); valid.HasError())
             return Result<std::int64_t>::Failure(valid.ErrorValue());
-        const auto native = NativeFormat(request.texture.format);
-        if (!native.has_value())
-            return Result<std::int64_t>::Failure(MakeError(XRErrors::OperationUnsupported));
-        return std::ranges::find(formats, *native) != formats.end()
-                   ? Result<std::int64_t>::Success(*native)
-                   : Result<std::int64_t>::Failure(MakeError(XRErrors::OperationUnsupported));
+        return OfferedFormat(request.texture.format, formats);
+    }
+
+    /** @copydoc OpenXRVulkanSwapchainImages::SelectPreparedFormat */
+    Result<std::int64_t> OpenXRVulkanSwapchainImages::SelectPreparedFormat(const NativePreparedReprojectionSwapchain &allocation,
+                                                                           const std::span<const std::int64_t> formats) const {
+        if (auto valid = ValidatePrepared(allocation); valid.HasError())
+            return Result<std::int64_t>::Failure(valid.ErrorValue());
+        return OfferedFormat(allocation.texture.format, formats);
     }
 
     /** @copydoc OpenXRVulkanSwapchainImages::Enumerate */
@@ -255,6 +298,45 @@ namespace Horo::XR::OpenXRInternal {
                                                         const IOpenXRSwapchainImageEnumeration &enumeration) {
         if (auto valid = Validate(request); valid.HasError())
             return valid;
+        return EnumerateViews(request, count, enumeration);
+    }
+
+    /** @copydoc OpenXRVulkanSwapchainImages::EnumeratePrepared */
+    Result<void> OpenXRVulkanSwapchainImages::EnumeratePrepared(const NativePreparedReprojectionSwapchain &allocation,
+                                                                const std::uint32_t count,
+                                                                const IOpenXRSwapchainImageEnumeration &enumeration) {
+        if (auto valid = ValidatePrepared(allocation); valid.HasError())
+            return valid;
+        // An unissued target stays private to the cold view storage; the import boundary requires a live owner.
+        const NativeSwapchainRequest unissued{{},
+                                              allocation.texture,
+                                              allocation.role,
+                                              NativeSwapchainFoveation::None,
+                                              allocation.selection};
+        return EnumerateViews(unissued, count, enumeration);
+    }
+
+    /** @copydoc OpenXRVulkanSwapchainImages::AdoptPrepared */
+    Result<void> OpenXRVulkanSwapchainImages::AdoptPrepared(const NativeSwapchainRequest &request) {
+        if (!request.target.IsValid() || !IsReprojectionSwapchain(request.role) || count_ == 0 || imported_.IsValid())
+            return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
+        if (auto valid = Validate(request); valid.HasError())
+            return valid;
+        const auto live = std::span{sources_}.first(count_);
+        const auto incarnation = frontend_->Capabilities().support.deviceIncarnation;
+        if (!std::ranges::all_of(live, [&](const auto &source) {
+            return source && !source->request.target.IsValid() && SameAllocation(source->request, request) &&
+                   source->incarnation == incarnation && source->device == binding_->device && source->family == binding_->queueFamilyIndex;
+        }))
+            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        for (auto &source : live)
+            source->request.target = request.target;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRVulkanSwapchainImages::EnumerateViews */
+    Result<void> OpenXRVulkanSwapchainImages::EnumerateViews(const NativeSwapchainRequest &request, const std::uint32_t count,
+                                                             const IOpenXRSwapchainImageEnumeration &enumeration) {
         if (!enumeration.IsAvailable() || count == 0 || count > sources_.size() || count_ != 0)
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
         std::array<XrSwapchainImageVulkanKHR, 64> images{};
@@ -311,12 +393,7 @@ namespace Horo::XR::OpenXRInternal {
             return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
         const auto &source = sources_[index];
         const auto &prepared = source->request;
-        const auto &left = prepared.texture;
-        if (const auto &right = request.texture;
-            prepared.target != request.target || prepared.role != request.role || prepared.foveation != request.foveation ||
-            left.dimension != right.dimension || left.extent != right.extent || left.format != right.format ||
-            left.mipCount != right.mipCount || left.layerCount != right.layerCount || left.sampleCount != right.sampleCount ||
-            left.usage != right.usage || left.depth != right.depth || source->views.attachment == VK_NULL_HANDLE)
+        if (prepared.target != request.target || !SameAllocation(prepared, request) || source->views.attachment == VK_NULL_HANDLE)
             return Outcome::Failure(MakeError(XRErrors::IdentityStale));
         source->image = image;
         source->releaseStateProved = false;

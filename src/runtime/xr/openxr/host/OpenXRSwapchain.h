@@ -49,6 +49,7 @@ namespace Horo::XR::OpenXRInternal {
         XRLoaderPreflightAttempt attempt;
         NativeReprojectionRoute route{NativeReprojectionRoute::None};
         std::array<Render::FramebufferExtent, 2> eyeExtents; /**< Exact observed native rectangles in primary stereo order. */
+        bool operator==(const NativeReprojectionAllocation &) const noexcept = default;
     };
 
     /** @brief Immutable allocation request; view rectangles/layers belong to the frame's XRViewRenderPlan. */
@@ -58,6 +59,14 @@ namespace Horo::XR::OpenXRInternal {
         NativeSwapchainRole role{NativeSwapchainRole::Color};
         NativeSwapchainFoveation foveation{NativeSwapchainFoveation::None};
         std::optional<NativeReprojectionAllocation> reprojection;
+    };
+
+    /** @brief Exact auxiliary allocation intent before the canonical session ID has been issued. */
+    struct NativePreparedReprojectionSwapchain final {
+        Horo::Handle<XRSwapchainTargetSlotTag> slot;
+        Render::RenderTextureDescriptor texture;
+        NativeSwapchainRole role{NativeSwapchainRole::Motion};
+        NativeReprojectionAllocation selection;
     };
 
     /** @brief Synchronous, borrowed native enumeration context; adapters must not retain it. */
@@ -139,6 +148,29 @@ namespace Horo::XR::OpenXRInternal {
          * keeps the native swapchain and selected device alive until that reset succeeds. */
         [[nodiscard]] virtual Result<void> Enumerate(const NativeSwapchainRequest &request, std::uint32_t count,
                                                      const IOpenXRSwapchainImageEnumeration &enumeration) = 0;
+
+        /** @brief Validates the real prepared graphics owner while the canonical XR identity remains unpublished. */
+        [[nodiscard]] virtual Result<void> ValidatePrepared(const NativePreparedReprojectionSwapchain &) const {
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
+        }
+
+        /** @brief Selects the exact staged format from the same native session's bounded runtime publication. */
+        [[nodiscard]] virtual Result<std::int64_t> SelectPreparedFormat(const NativePreparedReprojectionSwapchain &,
+                                                                        std::span<const std::int64_t>) const {
+            return Result<std::int64_t>::Failure(MakeError(XRErrors::OperationUnsupported));
+        }
+
+        /** @brief Prepares actual unissued image/view borrows with no import or frame admission. */
+        [[nodiscard]] virtual Result<void> EnumeratePrepared(const NativePreparedReprojectionSwapchain &, std::uint32_t,
+                                                             const IOpenXRSwapchainImageEnumeration &) {
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
+        }
+
+        /** @brief Associates previously enumerated image/view borrows with the exact issued target once. */
+        [[nodiscard]] virtual Result<void> AdoptPrepared(const NativeSwapchainRequest &) {
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
+        }
+
         /** @brief Imports one exact ready acquisition into the canonical registry.
          * @post Failure retains no registry or native work; partial asynchronous ownership must return a handle for retirement. */
         [[nodiscard]] virtual Result<Render::RenderTextureHandle> Import(const NativeSwapchainRequest &request,
@@ -159,7 +191,8 @@ namespace Horo::XR::OpenXRInternal {
         Ready,
         Imported,
         Retiring,
-        Closing
+        Closing,
+        Prepared /**< Native allocation and image views exist privately; acquire/import is not admitted. */
     };
 
     /** @brief Exact ready acquisition publication; invalidated before retirement starts. */
@@ -237,6 +270,21 @@ namespace Horo::XR::OpenXRInternal {
             }
         }
 
+        /** @brief Creates an exact optional allocation in a private native session and warms its real image views.
+         * @param session Same selected native preparation and attempt.
+         * @param allocation Requested role, preplanned target slot and exact runtime/renderer descriptors.
+         * @param getProc Official retained-loader dispatch.
+         * @return Success with prepared but unissued ownership, or typed failure with any incomplete rollback retained for Close.
+         */
+        [[nodiscard]] Result<void> StageReprojection(const NativeSessionPreparation &session,
+                                                     const NativePreparedReprojectionSwapchain &allocation,
+                                                     PFN_xrGetInstanceProcAddr getProc);
+        /** @brief Publishes the same cold allocation only to the now-issued session that owns its exact native incarnation.
+         * @param session Exact canonical session issued by the lifecycle.
+         * @return Success once, or an identity/device/ordering error retaining staged cleanup ownership.
+         */
+        [[nodiscard]] Result<void> AdoptReprojection(const XRSessionId &session);
+
         /** @brief Acquires one runtime image; zero native work is allowed when an old acquisition remains open.
          * @return Success or typed failure; successful native acquisition always retains its release obligation. */
         [[nodiscard]] Result<void> Acquire();
@@ -285,6 +333,20 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<NativeSessionBorrow> AdmitCreate(const NativeSwapchainRequest &request) const;
         /** @brief Admits only exact negotiated stereo allocation geometry for the live native route. */
         [[nodiscard]] Result<void> AdmitReprojectionAllocation(const NativeSwapchainRequest &request) const;
+
+        struct RuntimeFormats final {
+            std::array<std::int64_t, 128> entries;
+            std::uint32_t count{};
+        };
+
+        /** @brief Reads the selected native session's bounded offered formats without issuing any allocation. */
+        [[nodiscard]] Result<RuntimeFormats> ReadRuntimeFormats(XrSession session) const;
+        /** @brief Creates and counts one actual native allocation, shared by staged and directly active routes. */
+        [[nodiscard]] Result<void> CreateAllocation(XrSession session, const Render::RenderTextureDescriptor &texture,
+                                                    NativeSwapchainRole role, std::int64_t format);
+        /** @brief Runs staged validation and renderer enumeration once the exact dispatch is retained. */
+        [[nodiscard]] Result<void> PrepareReprojection(const NativeSessionPreparation &session, const NativeSessionBorrow &owner,
+                                                       const NativePreparedReprojectionSwapchain &allocation);
         [[nodiscard]] static Error DispatchFailure(const char *name, XrResult result);
 
         /** @brief Secures candidate-scoped dispatch before native allocation. */
@@ -339,6 +401,13 @@ namespace Horo::XR::OpenXRInternal {
         IOpenXRSwapchainImages *images_;
         const std::thread::id thread_{std::this_thread::get_id()};
         NativeSwapchainRequest request_{};
+
+        struct StagedReprojection final {
+            NativePreparedReprojectionSwapchain allocation;
+            std::uint64_t incarnation{};
+        };
+
+        std::optional<StagedReprojection> stagedReprojection_;
         XRSwapchainTargetId lastTarget_{};
         XrSwapchain native_{XR_NULL_HANDLE};
         NativeSwapchainPhase phase_{NativeSwapchainPhase::Empty};

@@ -738,6 +738,13 @@ The receipt distinguishes an ordinary paired writer from a graph with a fully
 prepared reducer. Early cancellation and failed activation retire the viewport
 through the owning Scene even if native frame resources were never created.
 
+The native swapchain owner also supports private auxiliary preparation on an
+already prepared runtime session. It selects an offered format and retains the
+actual Vulkan array and eye views before any Horo target is published. Promotion
+adopts those same views once into the exact issued session and preplanned slot.
+An unissued image cannot be acquired or imported. Partial failure destroys the
+views before the swapchain, retaining any native destroy debt for retry.
+
 See the [Khronos space-warp layer contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrCompositionLayerSpaceWarpInfoFB.html)
 for the distinction between runtime motion inputs and internal Renderer UV history.
 The [EXT per-view](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrFrameSynthesisConfigViewEXT.html)

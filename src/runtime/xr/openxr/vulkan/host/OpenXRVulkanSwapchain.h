@@ -60,6 +60,12 @@ namespace Horo::XR::OpenXRInternal {
                                                         std::span<const std::int64_t> formats) const override;
         [[nodiscard]] Result<void> Enumerate(const NativeSwapchainRequest &request, std::uint32_t count,
                                              const IOpenXRSwapchainImageEnumeration &enumeration) override;
+        [[nodiscard]] Result<void> ValidatePrepared(const NativePreparedReprojectionSwapchain &allocation) const override;
+        [[nodiscard]] Result<std::int64_t> SelectPreparedFormat(const NativePreparedReprojectionSwapchain &allocation,
+                                                                std::span<const std::int64_t> formats) const override;
+        [[nodiscard]] Result<void> EnumeratePrepared(const NativePreparedReprojectionSwapchain &allocation, std::uint32_t count,
+                                                     const IOpenXRSwapchainImageEnumeration &enumeration) override;
+        [[nodiscard]] Result<void> AdoptPrepared(const NativeSwapchainRequest &request) override;
         [[nodiscard]] Result<Render::RenderTextureHandle> Import(const NativeSwapchainRequest &request, const XRSwapchainImageId &image,
                                                                  std::uint32_t index) override;
         [[nodiscard]] Result<void> Retire(Render::RenderTextureHandle texture) override;
@@ -67,6 +73,12 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> Reset() override;
 
     private:
+        /** @brief Validates the same selected Vulkan allocation shape for staged and active graphics ownership. */
+        [[nodiscard]] Result<void> ValidateAllocation(const Render::RenderTextureDescriptor &texture, NativeSwapchainRole role,
+                                                      NativeSwapchainFoveation foveation) const;
+        /** @brief Enumerates actual native images and creates their retained views before any import. */
+        [[nodiscard]] Result<void> EnumerateViews(const NativeSwapchainRequest &request, std::uint32_t count,
+                                                  const IOpenXRSwapchainImageEnumeration &enumeration);
         struct Source;
         Render::RenderFrontend *frontend_;
         IOpenXRGraphicsBinding *graphics_;
