@@ -1,3 +1,4 @@
+#include "AITaskSchedulerTestSupport.h"
 #include "AiSceneTestSupport.h"
 #include "Horo/AI/PerceptionSpatialBroadphase.h"
 
@@ -163,6 +164,7 @@ namespace Horo::AI {
             auto scene = Runtime::RuntimeScene::Create(definition.Value(), Runtime::SceneRuntimeId{47});
             REQUIRE(scene.HasValue());
 
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
             auto runtime = std::move(AiSceneRuntime::Create()).Value();
             const auto descriptors = std::array{fixture.descriptor};
             AiSceneActivationParticipant participant{runtime, descriptors};
@@ -177,6 +179,39 @@ namespace Horo::AI {
             REQUIRE(snapshot.Value().Agents().size() == 1);
             CHECK(snapshot.Value().Agents().front().owner.runtime == Runtime::SceneRuntimeId{47});
             CHECK(snapshot.Value().Agents().front().owner.entity.generation == 1);
+
+            SECTION("A failed Decision callback is attributable only to its exact live entity generation") {
+                const auto &agent = snapshot.Value().Agents().front();
+                REQUIRE(runtime.ConfigureTaskSchedulerAtSafePoint(jobs).HasValue());
+                auto decision = std::make_shared<SchedulerTestSupport::Probe>();
+                decision->fail = true;
+                REQUIRE(runtime.RegisterDecisionAtSafePoint(agent.handle, {}, std::make_shared<int>(1), decision).HasValue());
+                const auto scheduler = runtime.TaskSchedulerAtSafePoint();
+                REQUIRE(scheduler.HasValue());
+                CHECK_FALSE(runtime.ReadDecisionFailureAtSafePoint(scene.Value()->View()).Value());
+                REQUIRE(scheduler.Value()->EvaluateAtDecision(1).HasValue());
+                CHECK_FALSE(runtime.ReadDecisionFailureAtSafePoint(scene.Value()->View()).Value());
+                REQUIRE(scheduler.Value()->CommitAtIntentDispatch(1).HasValue());
+
+                const auto failure = runtime.ReadDecisionFailureAtSafePoint(scene.Value()->View());
+                REQUIRE(failure.HasValue());
+                REQUIRE(failure.Value());
+                CHECK(failure.Value()->tick == 1);
+                CHECK(failure.Value()->origin.agent == agent.handle);
+                CHECK(failure.Value()->origin.identity == agent.agent.agent);
+                CHECK(failure.Value()->entity == agent.owner);
+                CHECK(failure.Value()->error.code.Value() == AIErrors::CapabilityUnavailable.code.Value());
+                auto foreign = Runtime::RuntimeScene::Create(definition.Value(), Runtime::SceneRuntimeId{48});
+                REQUIRE(foreign.HasValue());
+                ExpectError(runtime.ReadDecisionFailureAtSafePoint(foreign.Value()->View()), AIErrors::TaskContextInvalid);
+
+                REQUIRE(runtime.RetireOwnerAtSafePoint(agent.owner).Value() == 1);
+                const auto retired = runtime.ReadDecisionFailureAtSafePoint(scene.Value()->View());
+                REQUIRE(retired.HasValue());
+                REQUIRE(retired.Value());
+                CHECK_FALSE(retired.Value()->entity);
+                CHECK(retired.Value()->error.code.Value() == failure.Value()->error.code.Value());
+            }
         }
 
         TEST_CASE("AI scene activation stages and retires its exact Perception authorization",

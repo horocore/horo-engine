@@ -188,12 +188,26 @@ namespace Horo::AI {
         std::optional<AiDecisionSimulationProfile> simulationProfile; /**< Opt-in; accepted only in BestEffort mode. */
     };
 
+    /** @brief Fixed phase in which a scheduled Decision callback failed. */
+    enum class AiSchedulingFailurePhase : std::uint8_t {
+        Evaluate,
+        Commit
+    };
+
+    /** @brief Exact registered generation and phase preserved alongside the first error in a tick. */
+    struct AiSchedulingFailureOrigin final {
+        AgentHandle agent;
+        AgentId identity;
+        AiSchedulingFailurePhase phase{};
+    };
+
     /** @brief Observable bounded outcomes for the most recent fixed tick; repeated calls never replenish it. */
     struct AiSchedulingReport final {
         std::uint64_t tick{};
         std::size_t evaluated{}, workUnits{}, commands{}, workerSubmissions{};
         std::size_t deferred{}, starved{}, exhausted{}, yielded{}, failed{}, cancelled{};
         std::optional<Error> firstFailure; /**< Original first callback failure; never replaced by a generic status. */
+        std::optional<AiSchedulingFailureOrigin> firstFailureOrigin; /**< Set together with firstFailure. */
     };
 
     /**
@@ -288,6 +302,11 @@ namespace Horo::AI {
         /** @brief Commits bounded intents at AiIntentDispatch; no worker waits. @param tick Exact evaluated tick.
          * @return Cumulative report or typed phase/lifecycle failure. */
         [[nodiscard]] Result<AiSchedulingReport> CommitAtIntentDispatch(std::uint64_t tick);
+
+        /** @brief Borrows the latest completed tick on the scheduler owner lane.
+         * @return Report through the next scheduler mutation, or null before dispatch completes or after shutdown.
+         */
+        [[nodiscard]] const AiSchedulingReport *CompletedReportAtSafePoint() const noexcept;
         /** @brief Admits detached computation from the currently executing owner slice only.
          * @param continuation Exact current task/agent identity. @param work Immutable budgeted work/image lease.
          * @details Declared worker units are charged from the current owner slice before Foundation admission.

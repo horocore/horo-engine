@@ -3010,7 +3010,13 @@ polling coalesces missed intervals without catch-up. Authored priority, overdue
 age and persistent `AgentId` determine stable admission independently of registration
 order. After the declared starvation age, overdue agents precede ordinary priority.
 `AiSchedulingReport` exposes starved/deferred, exhausted/yielded, failure and
-cancellation counts plus the original first callback error.
+cancellation counts plus the original first callback error and its exact agent
+generation, authored identity, and phase. The scene owner reads the completed
+tick after dispatch. Its detached diagnostic retains the error after entity
+retirement, with an entity target only if that exact generation is live at
+capture. Navigation revalidates the copied entity against the current Scene
+before applying a selection.
+Native consumers rebuild against the extended scheduler report layout.
 
 Positive finite per-agent and global evaluation/work/command/submission limits
 are validated before registration. Deterministic admission requires interval one

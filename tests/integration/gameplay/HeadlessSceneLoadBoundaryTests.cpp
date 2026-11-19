@@ -332,6 +332,9 @@ namespace {
                 REQUIRE(frame.HasValue());
             }
             const auto after = InspectHeadlessDecisionValue(*physics.Value(), identity, key);
+            const auto diagnostic = InspectHeadlessDecisionFailure(*physics.Value());
+            REQUIRE(diagnostic.HasValue());
+            CHECK_FALSE(diagnostic.Value());
             REQUIRE(after.HasValue());
             REQUIRE(after.Value());
             const auto &winner = std::get<Math::WorldCoordinate64>(std::get<BlackboardScalarValue>(*after.Value()));
@@ -340,6 +343,7 @@ namespace {
             physics.Value()->Shutdown();
             sceneService.Value()->Shutdown();
             CHECK(InspectHeadlessDecisionValue(*physics.Value(), identity, key).HasError());
+            CHECK(InspectHeadlessDecisionFailure(*physics.Value()).HasError());
         }
 #endif
     }

@@ -274,6 +274,14 @@ namespace Horo::Application::Internal {
         return world->ReadDecisionValue(agent, key);
     }
 
+    /** @copydoc InspectHeadlessDecisionFailure */
+    Result<std::optional<AI::AiRuntimeDecisionDiagnostic>> InspectHeadlessDecisionFailure(const Network::INetworkModeService &service) {
+        const auto *world = dynamic_cast<const WorldService *>(&service);
+        if (!world)
+            return Result<std::optional<AI::AiRuntimeDecisionDiagnostic>>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+        return world->ReadDecisionFailure();
+    }
+
     /** @copydoc InspectHeadlessScene */
     std::optional<Runtime::RuntimeSceneView> InspectHeadlessScene(const Network::INetworkModeService &service) noexcept {
         const auto *world = dynamic_cast<const WorldService *>(&service);

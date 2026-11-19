@@ -320,12 +320,37 @@ namespace Horo::AI {
             REQUIRE(report.HasValue());
             REQUIRE(report.Value().firstFailure);
             CHECK(report.Value().firstFailure->code.Value() == AIErrors::CapabilityUnavailable.code.Value());
+            REQUIRE(report.Value().firstFailureOrigin);
+            CHECK(report.Value().firstFailureOrigin->agent == h.Handle(1));
+            CHECK(report.Value().firstFailureOrigin->phase == AiSchedulingFailurePhase::Evaluate);
+            CHECK(h.scheduler->CompletedReportAtSafePoint() == nullptr);
             REQUIRE(h.scheduler->CommitAtIntentDispatch(2).HasValue());
             CHECK(failing->committed == 0);
             h.scheduler->Shutdown();
             h.scheduler->Shutdown();
             ExpectError(h.scheduler->EvaluateAtDecision(3), AIErrors::SchedulerPhaseInvalid);
             ExpectError(h.scheduler->Wake(h.Handle(1), {.task = true}), AIErrors::TaskContextInvalid);
+        }
+
+        TEST_CASE("The completed AI report identifies a failed commit and clears its origin on the next clean tick",
+                  "[unit][ai][scheduler]") {
+            Harness h;
+            auto probe = h.Register(0);
+            probe->failCommit = true;
+            REQUIRE(h.scheduler->EvaluateAtDecision(1).HasValue());
+            REQUIRE(h.scheduler->CommitAtIntentDispatch(1).HasValue());
+            const auto *completed = h.scheduler->CompletedReportAtSafePoint();
+            REQUIRE(completed);
+            REQUIRE(completed->firstFailureOrigin);
+            CHECK(completed->firstFailureOrigin->agent == h.Handle(0));
+            CHECK(completed->firstFailureOrigin->identity == MakeIdentity<AgentId>(1));
+            CHECK(completed->firstFailureOrigin->phase == AiSchedulingFailurePhase::Commit);
+            probe->failCommit = false;
+            REQUIRE(h.scheduler->EvaluateAtDecision(2).HasValue());
+            CHECK(h.scheduler->CompletedReportAtSafePoint() == nullptr);
+            REQUIRE(h.scheduler->CommitAtIntentDispatch(2).HasValue());
+            REQUIRE(h.scheduler->CompletedReportAtSafePoint());
+            CHECK_FALSE(h.scheduler->CompletedReportAtSafePoint()->firstFailureOrigin);
         }
 
         TEST_CASE("AI cancellation published after ordering prevents a later peer from evaluating", "[unit][ai][scheduler]") {

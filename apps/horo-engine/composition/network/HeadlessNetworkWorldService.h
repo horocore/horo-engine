@@ -63,6 +63,14 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             return capability.ReadBlackboard(agent.Value(), key);
         }
 
+        /** @brief Copies the last completed runtime finding from the authoritative Scene on its owner lane. */
+        Result<std::optional<AI::AiRuntimeDecisionDiagnostic>> ReadDecisionFailure() const {
+            const auto scene = ActiveScene();
+            if (!scene || !record_->ai)
+                return Result<std::optional<AI::AiRuntimeDecisionDiagnostic>>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+            return record_->ai->ReadDecisionFailureAtSafePoint(*scene);
+        }
+
         /** @brief Borrows the committed configured Scene on the current owner lane. */
         std::optional<Runtime::RuntimeSceneView> ActiveScene() const noexcept {
             if (std::this_thread::get_id() != owners_->owner || !record_ || record_->closeRequested || !record_->scenes)

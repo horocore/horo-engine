@@ -140,6 +140,10 @@ namespace Horo::Application::Internal {
     [[nodiscard]] Result<std::optional<AI::BlackboardValue>> InspectHeadlessDecisionValue(const Network::INetworkModeService &service,
                                                                                           AI::AgentId agent, AI::BlackboardKeyId key);
 
+    /** @brief Reads the authoritative world's copied Decision failure through the current owner lane. */
+    [[nodiscard]] Result<std::optional<AI::AiRuntimeDecisionDiagnostic>> InspectHeadlessDecisionFailure(
+        const Network::INetworkModeService &service);
+
     /** @brief Borrows the committed configured Scene for read-only diagnostics on its owner lane.
      * @param service Actual retained Scene/Physics service facade.
      * @return View until the next lifecycle mutation, or no view when absent, closing, or called off-lane.

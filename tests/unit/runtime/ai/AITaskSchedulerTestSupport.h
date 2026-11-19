@@ -12,7 +12,7 @@ namespace Horo::AI::SchedulerTestSupport {
         std::vector<std::uint64_t> *order{};
         std::uint64_t id{};
         std::size_t remaining{1}, intents{}, committed{}, cancelled{}, evaluations{};
-        bool fail{}, exhaust{}, stop{};
+        bool fail{}, failCommit{}, exhaust{}, stop{};
         CancellationSource *cancelPeer{};
         CancellationSource *cancelAtCommit{};
         AiTaskScheduler *scheduler{};
@@ -61,6 +61,8 @@ namespace Horo::AI::SchedulerTestSupport {
             if (cancelAtCommit)
                 cancelAtCommit->RequestCancellation();
             CHECK(std::this_thread::get_id() == owner);
+            if (failCommit)
+                return Result<bool>::Failure(MakeError(AIErrors::SchedulerPolicyInvalid));
             while (intents > 0) {
                 if (context.cancellation.IsCancellationRequested())
                     return Result<bool>::Success(false);

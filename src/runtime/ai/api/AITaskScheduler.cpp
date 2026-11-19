@@ -567,8 +567,10 @@ namespace Horo::AI {
             return;
         if (evaluated.HasError() || evaluated.Value() >= AiSliceOutcome::Count) {
             ++report_.failed;
-            if (!report_.firstFailure)
+            if (!report_.firstFailure) {
                 report_.firstFailure = evaluated.HasError() ? evaluated.ErrorValue() : MakeError(AIErrors::SchedulerPolicyInvalid);
+                report_.firstFailureOrigin = AiSchedulingFailureOrigin{entry.agent, entry.identity, AiSchedulingFailurePhase::Evaluate};
+            }
             entry.executor->Cancel();
             return;
         }
@@ -660,8 +662,10 @@ namespace Horo::AI {
             return;
         if (committed.HasError()) {
             ++report_.failed;
-            if (!report_.firstFailure)
+            if (!report_.firstFailure) {
                 report_.firstFailure = committed.ErrorValue();
+                report_.firstFailureOrigin = AiSchedulingFailureOrigin{entry.agent, entry.identity, AiSchedulingFailurePhase::Commit};
+            }
             entry.executor->Cancel();
             entry.intents = false;
         } else {
@@ -694,6 +698,11 @@ namespace Horo::AI {
         if (closed_)
             Shutdown();
         return Result<AiSchedulingReport>::Success(report_);
+    }
+
+    /** @copydoc AiTaskScheduler::CompletedReportAtSafePoint */
+    const AiSchedulingReport *AiTaskScheduler::CompletedReportAtSafePoint() const noexcept {
+        return committed_ && !inPhase_ && !closed_ ? &report_ : nullptr;
     }
 
     /** @copydoc AiTaskScheduler::SubmitWorker */

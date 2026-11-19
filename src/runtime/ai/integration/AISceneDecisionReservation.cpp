@@ -69,6 +69,30 @@ namespace Horo::AI {
         return Owner::Success(selected.Value()->record.owner);
     }
 
+    /** @copydoc AiSceneRuntime::ReadDecisionFailureAtSafePoint */
+    Result<std::optional<AiRuntimeDecisionDiagnostic>> AiSceneRuntime::ReadDecisionFailureAtSafePoint(
+        const Runtime::RuntimeSceneView &scene) const {
+        using Diagnostic = Result<std::optional<AiRuntimeDecisionDiagnostic>>;
+        if (auto owner = CapabilityAtSafePoint().ValidateAtSafePoint(); owner.HasError())
+            return Diagnostic::Failure(owner.ErrorValue());
+        const auto scheduler = TaskSchedulerAtSafePoint();
+        if (scheduler.HasError())
+            return Diagnostic::Failure(scheduler.ErrorValue());
+        if (!scene.IsCurrent() || scene.RuntimeId() != active_->binding.scene)
+            return Diagnostic::Failure(MakeError(AIErrors::TaskContextInvalid, "Decision diagnostics require the current AI Scene."));
+        const auto *report = scheduler.Value()->CompletedReportAtSafePoint();
+        if (!report || !report->firstFailure || !report->firstFailureOrigin)
+            return Diagnostic::Success(std::nullopt);
+
+        const auto &origin = *report->firstFailureOrigin;
+        const auto *slot = Detail::FindAgent(*active_, origin.agent);
+        std::optional<Runtime::EntityRef> entity;
+        if (slot && slot->record.state == AiAgentActivationState::Active && slot->record.agent.agent == origin.identity &&
+            scene.Get(slot->record.owner).HasValue())
+            entity = slot->record.owner;
+        return Diagnostic::Success(AiRuntimeDecisionDiagnostic{report->tick, origin, *report->firstFailure, entity});
+    }
+
     /** @copydoc AiSceneRuntime::SyncDecisionQueryAtBlackboardSync */
     Result<bool> AiSceneRuntime::SyncDecisionQueryAtBlackboardSync(DecisionQueryTask &task, const Runtime::RuntimeSceneView &scene,
                                                                    std::uint64_t tick) const {

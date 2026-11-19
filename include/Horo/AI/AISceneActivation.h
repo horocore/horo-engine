@@ -115,6 +115,14 @@ namespace Horo::AI {
         bool hasRunningTask{};
     };
 
+    /** @brief Most recent first Decision callback failure from an exact Scene publication. */
+    struct AiRuntimeDecisionDiagnostic final {
+        std::uint64_t tick{};
+        AiSchedulingFailureOrigin origin;
+        Error error;
+        std::optional<Runtime::EntityRef> entity; /**< Present only while the original agent and entity generations are live. */
+    };
+
     /** @brief Immutable value snapshot of one AI scene publication. */
     class AiSceneSnapshot final {
     public:
@@ -419,6 +427,13 @@ namespace Horo::AI {
          * @return Active scheduler or typed unavailable failure.
          * @details Borrow expires on scene replacement, restore, shutdown or destruction. Workers must never retain it. */
         [[nodiscard]] Result<AiTaskScheduler *> TaskSchedulerAtSafePoint() const;
+
+        /** @brief Copies the last completed Decision failure from the exact current Scene.
+         * @param scene The current Scene view owned by this AI runtime.
+         * @return A copied failure, empty after a clean tick, or a typed error when the Scene or scheduler is unavailable.
+         */
+        [[nodiscard]] Result<std::optional<AiRuntimeDecisionDiagnostic>> ReadDecisionFailureAtSafePoint(
+            const Runtime::RuntimeSceneView &scene) const;
 
         /**
          * @brief Starts one owned task at the AI decision safe point.
