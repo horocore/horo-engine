@@ -741,6 +741,9 @@ and job ID.
 Arguments are redacted before logging. Diagnostic bundles may include the safe
 effective command configuration but not credentials or arbitrary environment
 variables.
+Log admission and bundle export share key classification. Camel case and common
+separators are equivalent for API key and private key fields, including nested
+diagnostic records.
 
 The parser rejects ordinary argv values for any option marked `sensitive`.
 This closes the previous path that retained such values in a typed request.

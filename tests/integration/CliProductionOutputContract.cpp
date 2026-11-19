@@ -74,6 +74,16 @@ namespace {
                     "CMake CLI executable is missing");
         }
 
+        /** @brief Seeds a retained diagnostic only in this fixture's private child home. */
+        void SeedRetainedLog() const {
+            const auto logs = home_.Path() / ".horo" / "logs";
+            std::filesystem::create_directories(logs);
+            std::ofstream stream(logs / "horo-engine.jsonl.1", std::ios::binary);
+            stream << R"({"headers":{"X-API-Key":"fake-header-material-945"},"message":"retained diagnostic control"})" << '\n';
+            stream.close();
+            Require(!stream.fail(), "could not seed the fixture's retained diagnostic");
+        }
+
         std::string Run(std::vector<std::string> arguments, const int expected) {
             std::string output;
             std::string diagnostics;
@@ -248,6 +258,7 @@ namespace {
             }
         } guard{zip};
 
+        bool foundRetained = false;
         for (mz_uint index = 0; index < mz_zip_reader_get_num_files(&zip); ++index) {
             mz_zip_archive_file_stat entry{};
             Require(mz_zip_reader_file_stat(&zip, index, &entry) != 0, "bundle entry metadata is invalid");
@@ -255,13 +266,20 @@ namespace {
             std::string contents(static_cast<std::size_t>(entry.m_uncomp_size), '\0');
             Require(mz_zip_reader_extract_to_mem(&zip, index, contents.data(), contents.size(), 0) != 0, "bundle entry is unreadable");
             Require(contents.find("fake-cli-secret-731") == std::string::npos, "bundle disclosed an environment credential");
+            Require(contents.find("fake-header-material-945") == std::string::npos, "bundle disclosed a retained API key");
+            if (std::string_view{entry.m_filename} == "logs/horo-engine.1.jsonl") {
+                foundRetained = contents.find("retained diagnostic control") != std::string::npos &&
+                                contents.find(R"("X-API-Key":"[REDACTED]")") != std::string::npos;
+            }
         }
+        Require(foundRetained, "expected a redacted retained diagnostic in the bundle");
     }
 
     /** @brief Verifies declared progress and one correlated summary for a real ZIP in Unicode/space paths. */
     void JsonLinesCases(ProcessFixture &process) {
         TemporaryDirectory directory;
         const auto destination = directory.Path() / "diagnostics bundle.zip";
+        process.SeedRetainedLog();
         const auto records = Records(process.Run({"--diagnostic-bundle", Utf8Path(destination), "--output", "jsonl"}, 0));
         Require(std::filesystem::is_regular_file(destination), "diagnostic ZIP was not produced");
         Require(records.size() == 2, "expected one progress record and one terminal summary");

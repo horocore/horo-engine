@@ -1,5 +1,7 @@
 #include "Horo/Foundation/Telemetry/Telemetry.h"
 
+#include "../diagnostics/DiagnosticPrivacy.h"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -109,24 +111,12 @@ namespace Horo::Telemetry {
             return state >= MetricAvailabilityState::Available && state <= MetricAvailabilityState::SamplerFailed;
         }
 
-        [[nodiscard]] bool IsSensitiveKey(std::string_view key) {
-            std::string normalized{key};
-            std::ranges::transform(normalized, normalized.begin(), [](const unsigned char character) {
-                return static_cast<char>(std::tolower(character));
-            });
-            static constexpr std::array<std::string_view, 7> fragments{"authorization", "cookie", "credential", "password",
-                                                                       "private_key",   "secret", "token"};
-            return std::ranges::any_of(fragments, [&normalized](const std::string_view fragment) {
-                return normalized.find(fragment) != std::string::npos;
-            });
-        }
-
         void RedactFields(std::vector<Field> &fields) {
             std::erase_if(fields, [](const Field &field) {
                 return field.privacy == FieldPrivacy::Forbidden;
             });
             for (Field &field : fields) {
-                if (field.privacy == FieldPrivacy::SensitiveRedacted || IsSensitiveKey(field.key))
+                if (field.privacy == FieldPrivacy::SensitiveRedacted || Diagnostics::Detail::IsSensitiveKey(field.key))
                     field.value = std::string{"[REDACTED]"};
             }
         }
@@ -135,7 +125,7 @@ namespace Horo::Telemetry {
             if (!record.context.Fields().empty()) {
                 Log::LogContextSnapshot redacted;
                 for (const auto &[key, value] : record.context.Fields())
-                    redacted = redacted.With(key, IsSensitiveKey(key) ? "[REDACTED]" : value);
+                    redacted = redacted.With(key, Diagnostics::Detail::IsSensitiveKey(key) ? "[REDACTED]" : value);
                 record.context = std::move(redacted);
             }
             std::visit([]<typename Payload>(Payload &payload) {

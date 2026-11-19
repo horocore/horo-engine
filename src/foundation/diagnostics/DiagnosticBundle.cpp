@@ -1,6 +1,7 @@
 #include "Horo/Foundation/Diagnostics/DiagnosticBundle.h"
 
 #include "../FoundationErrors.h"
+#include "DiagnosticPrivacy.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Foundation/TransparentString.h"
 
@@ -72,17 +73,6 @@ namespace Horo::Diagnostics {
                    first == "packages";
         }
 
-        [[nodiscard]] bool IsSensitiveMetadataKey(std::string key) {
-            std::ranges::transform(key, key.begin(), [](const unsigned char character) {
-                return static_cast<char>(std::tolower(character));
-            });
-            static constexpr std::array<std::string_view, 7> forbidden{"password",      "secret", "token",  "credential",
-                                                                       "authorization", "cookie", "api_key"};
-            return std::ranges::any_of(forbidden, [&key](const std::string_view candidate) {
-                return key.find(candidate) != std::string::npos;
-            });
-        }
-
         [[nodiscard]] bool ContainsAbsolutePath(const std::string_view value) noexcept {
             for (std::size_t index = 0; index < value.size(); ++index) {
                 if (const bool boundary = index == 0 || std::isspace(static_cast<unsigned char>(value[index - 1])) ||
@@ -149,7 +139,7 @@ namespace Horo::Diagnostics {
         }
 
         void RedactJson(Json &value, const std::span<const std::string> namespaces, const std::string_view key = {}) {
-            if (!key.empty() && IsSensitiveMetadataKey(std::string{key})) {
+            if (!key.empty() && Detail::IsSensitiveKey(key)) {
                 value = "[REDACTED]";
                 return;
             }
@@ -403,7 +393,7 @@ namespace Horo::Diagnostics {
         [[nodiscard]] Result<void> ValidateMetadata(const std::vector<std::pair<std::string, std::string>> &metadata) {
             TransparentStringSet metadataKeys;
             for (const auto &[key, val] : metadata) {
-                if (key.empty() || IsSensitiveMetadataKey(key) || ContainsAbsolutePath(val) || !metadataKeys.insert(key).second)
+                if (key.empty() || Detail::IsSensitiveKey(key) || ContainsAbsolutePath(val) || !metadataKeys.insert(key).second)
                     return Result<void>::Failure(
                         MakeBundleError(ObservabilityErrors::InvalidBundleRequest, "Diagnostic bundle metadata keys must be unique."));
             }

@@ -157,6 +157,7 @@ TEST_CASE("Asynchronous logger writes structured severity category timestamp and
     Horo::Log::LogContextSnapshot forwarded;
     {
         const Horo::Log::LogContext request("correlation.id", "request-42", "asset.id", "mesh-7");
+        const Horo::Log::LogContext credentials("request.X-API-Key", "private-context-value");
         forwarded = Horo::Log::CaptureLogContext();
     }
     std::thread worker([forwarded] {
@@ -167,6 +168,7 @@ TEST_CASE("Asynchronous logger writes structured severity category timestamp and
             Horo::Telemetry::Field{.key = "duration_ms", .value = 12.5},
             Horo::Telemetry::Field{.key = "detail", .value = std::string{"quote=\" newline=\n"}},
             Horo::Telemetry::Field{.key = "auth.token", .value = std::string{"must-not-persist"}},
+            Horo::Telemetry::Field{.key = "auth.privateKey", .value = std::string{"private-field-value"}},
             Horo::Telemetry::Field{.key = "internal.pointer",
                                    .value = std::string{"forbidden"},
                                    .privacy = Horo::Telemetry::FieldPrivacy::Forbidden},
@@ -193,6 +195,10 @@ TEST_CASE("Asynchronous logger writes structured severity category timestamp and
     REQUIRE(log.find(R"("duration_ms":12.5)") != std::string::npos);
     REQUIRE(log.find("\"detail\":\"quote=\\\" newline=\\n\"") != std::string::npos);
     REQUIRE(log.find(R"("auth.token":"[REDACTED]")") != std::string::npos);
+    CHECK(log.find(R"("request.X-API-Key":"[REDACTED]")") != std::string::npos);
+    CHECK(log.find(R"("auth.privateKey":"[REDACTED]")") != std::string::npos);
+    CHECK(log.find("private-context-value") == std::string::npos);
+    CHECK(log.find("private-field-value") == std::string::npos);
     REQUIRE(log.find("must-not-persist") == std::string::npos);
     REQUIRE(log.find("internal.pointer") == std::string::npos);
 }
@@ -1316,12 +1322,15 @@ TEST_CASE("Diagnostic bundle privacy rejects symlinks secrets absolute paths and
     });
     REQUIRE(unrelated.HasError());
 
-    const auto secret = Horo::Diagnostics::GenerateDiagnosticBundle({
-        .outputPath = temporary.path / "private metadata destination" / "secret.zip",
-        .entries = {{.sourcePath = log, .archivePath = "logs/engine.jsonl"}},
-        .metadata = {{"api_token", "do-not-export"}},
-    });
-    REQUIRE(secret.HasError());
+    for (const auto key : {"api_token", "apiKey", "X-API-Key", "private.key"}) {
+        CAPTURE(key);
+        const auto secret = Horo::Diagnostics::GenerateDiagnosticBundle({
+            .outputPath = temporary.path / "private metadata destination" / "secret.zip",
+            .entries = {{.sourcePath = log, .archivePath = "logs/engine.jsonl"}},
+            .metadata = {{key, "do-not-export"}},
+        });
+        REQUIRE(secret.HasError());
+    }
     CHECK_FALSE(std::filesystem::exists(temporary.path / "private metadata destination"));
 
     const auto absolutePath = Horo::Diagnostics::GenerateDiagnosticBundle({
@@ -1358,7 +1367,10 @@ TEST_CASE("Diagnostic bundle redaction recovers a trailing partial record and re
     const auto recoveredLog = temporary.path / "recovered.jsonl";
     std::string partialRecord = R"({"message":"interrupted"})";
     partialRecord.resize(partialRecord.size() - 2);
-    std::ofstream(recoveredLog) << R"({"message":"failed at /Users/example/project","auth.token":"secret"})" << '\n' << partialRecord;
+    std::ofstream(recoveredLog) << R"({"message":"failed at /Users/example/project","auth.token":"secret",)"
+                                << R"("headers":{"X-API-Key":"private-header","keyName":"public-name"},)"
+                                << R"("config":{"apiKey":"private-option","private_key":"private-material"}})" << '\n'
+                                << partialRecord;
 
     const auto recovered = Horo::Diagnostics::GenerateDiagnosticBundle({
         .outputPath = temporary.path / "recovered.zip",
@@ -1379,6 +1391,10 @@ TEST_CASE("Diagnostic bundle redaction recovers a trailing partial record and re
     REQUIRE(extracted.find("[REDACTED]") != std::string::npos);
     REQUIRE(extracted.find("/Users/example/project") == std::string::npos);
     REQUIRE(extracted.find("secret") == std::string::npos);
+    CHECK(extracted.find(R"("X-API-Key":"[REDACTED]")") != std::string::npos);
+    CHECK(extracted.find(R"("apiKey":"[REDACTED]")") != std::string::npos);
+    CHECK(extracted.find(R"("private_key":"[REDACTED]")") != std::string::npos);
+    CHECK(extracted.find("public-name") != std::string::npos);
     REQUIRE(extracted.find("interrupted") == std::string::npos);
 
     const auto corruptLog = temporary.path / "corrupt.jsonl";
