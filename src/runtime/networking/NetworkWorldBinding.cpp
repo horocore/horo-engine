@@ -28,6 +28,12 @@ namespace Horo::Network {
             return codec && codec->schema == identity.schema && codec->supportedVersions.Contains(identity.version) &&
                    codec->maximumPayloadBytes >= minimum && codec->maximumPayloadBytes <= maximum;
         }
+
+        /** @brief Initial fields require their own negotiated feature and message identity. */
+        bool DistinctInitialRoute(const NetworkInitialStatePolicy &initial, const MessageIdentityDescriptor &control,
+                                  ProtocolFeatureId feature) {
+            return initial.control.id != control.id && initial.feature != feature;
+        }
     }  // namespace
 
     /** @copydoc ValidPrefabLifecycleRoute */
@@ -58,15 +64,25 @@ namespace Horo::Network {
         if (!policy.authoredScene || !policy.prefabLifecycle)
             return false;
         const auto &route = *policy.initialState;
-        if (route.control.id == policy.authoredScene->control.id || route.control.id == policy.prefabLifecycle->control.id)
-            return false;
-        if (route.feature == policy.feature || route.feature == policy.authoredScene->feature ||
-            route.feature == policy.prefabLifecycle->feature)
+        if (!DistinctInitialRoute(route, policy.control, policy.feature) ||
+            !DistinctInitialRoute(route, policy.authoredScene->control, policy.authoredScene->feature) ||
+            !DistinctInitialRoute(route, policy.prefabLifecycle->control, policy.prefabLifecycle->feature))
             return false;
         if (route.maximumWireBytes == 0 || route.maximumWireBytes > MaximumNetworkInitialStateWireBytes)
             return false;
         return ValidExtensionRoute(policy, route.control, route.feature, codecs, NetworkInitialStateSegmentHeaderBytes + 1,
                                    MaximumNetworkInitialStateFrameBytes);
+    }
+
+    /** @copydoc WorldBindingFeaturesSupported */
+    bool WorldBindingFeaturesSupported(const NetworkWorldBindingPolicy &policy, std::span<const ProtocolFeatureId> features) {
+        const auto supports = [features](ProtocolFeatureId feature) {
+            return std::ranges::find(features, feature) != features.end();
+        };
+        if (!supports(policy.feature) || (policy.authoredScene && !supports(policy.authoredScene->feature)))
+            return false;
+        return !policy.initialState ||
+               (policy.prefabLifecycle && supports(policy.prefabLifecycle->feature) && supports(policy.initialState->feature));
     }
 
     /** @copydoc ValidateNetworkWorldBindingPolicy */
@@ -76,22 +92,16 @@ namespace Horo::Network {
         if (const auto codec = codecs.FindCodec(identity.protocol, identity.id);
             !identity.protocol.IsValid() || !identity.id.IsValid() || !identity.schema.IsValid() || !identity.version.IsValid() ||
             identity.optional || !policy.feature.IsValid() || !policy.expectedServer.IsValid() || !policy.expectedProvenance.IsValid() ||
-            !policy.authorityPublisher.IsValid() || identity.protocol != local.compatibility.protocol ||
-            std::ranges::find(local.compatibility.features.required, policy.feature) == local.compatibility.features.required.end() ||
-            !codec || codec->schema != identity.schema || !codec->supportedVersions.Contains(identity.version) ||
+            !policy.authorityPublisher.IsValid() || identity.protocol != local.compatibility.protocol || !codec ||
+            codec->schema != identity.schema || !codec->supportedVersions.Contains(identity.version) ||
             codec->maximumPayloadBytes != NetworkWorldBindingWireBytes)
             return Result<void>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
         if (!ValidPrefabLifecycleRoute(policy, codecs) || !ValidAuthoredSceneRoute(policy, codecs) ||
             !ValidInitialStateRoute(policy, codecs))
             return Result<void>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
-        if (policy.prefabLifecycle && std::ranges::find(local.compatibility.features.required, policy.prefabLifecycle->feature) ==
-                                          local.compatibility.features.required.end())
-            return Result<void>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
-        if (policy.authoredScene && std::ranges::find(local.compatibility.features.required, policy.authoredScene->feature) ==
-                                        local.compatibility.features.required.end())
-            return Result<void>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
-        if (policy.initialState && std::ranges::find(local.compatibility.features.required, policy.initialState->feature) ==
-                                       local.compatibility.features.required.end())
+        if (!WorldBindingFeaturesSupported(policy, local.compatibility.features.required) ||
+            (policy.prefabLifecycle && std::ranges::find(local.compatibility.features.required, policy.prefabLifecycle->feature) ==
+                                           local.compatibility.features.required.end()))
             return Result<void>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
         return Result<void>::Success();
     }

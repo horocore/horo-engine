@@ -109,6 +109,12 @@ namespace Horo::Network {
                    context.generation == authority.generation;
         }
 
+        /** @brief Rejects foreign or invalid session and authority identities before retaining bytes. */
+        bool MatchesWorld(const FrameView &frame, const ReplicationInboundAuthority &authority) {
+            return authority.networkSession.IsValid() && authority.epoch.IsValid() && frame.session == authority.networkSession.Value() &&
+                   frame.epoch == authority.epoch.Value();
+        }
+
         /** @brief Snapshot chunk that borrows only the admitted envelope payload. */
         struct SegmentView final {
             NetworkObjectId object;
@@ -268,8 +274,7 @@ namespace Horo::Network {
         const auto &frame = decoded.Value();
         if (frame.kind == FrameKind::Receipt)
             return Reject<void>();
-        if (frame.session == 0 || frame.epoch == 0 || frame.session != authority_.networkSession.Value() ||
-            frame.epoch != authority_.epoch.Value())
+        if (!MatchesWorld(frame, authority_))
             return Reject<void>(NetworkErrors::ReplicationWorldStale);
         auto accepted = frame.kind == FrameKind::Manifest ? Begin(frame.tick, frame.body) : Append(frame.tick, frame.body);
         if (accepted.HasValue())

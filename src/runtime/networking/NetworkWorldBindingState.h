@@ -11,6 +11,8 @@ namespace Horo::Network {
     [[nodiscard]] bool ValidAuthoredSceneRoute(const NetworkWorldBindingPolicy &policy, const MessageCodecRegistry &codecs);
     /** @brief Verifies the selected field synchronization route and its structural prerequisites. */
     [[nodiscard]] bool ValidInitialStateRoute(const NetworkWorldBindingPolicy &policy, const MessageCodecRegistry &codecs);
+    /** @brief Checks that the world and selected required features are present in either negotiated or required features. */
+    [[nodiscard]] bool WorldBindingFeaturesSupported(const NetworkWorldBindingPolicy &policy, std::span<const ProtocolFeatureId> features);
 
     struct NetworkWorldBindingController::Impl final {
         struct BusyScope final {
@@ -42,6 +44,16 @@ namespace Horo::Network {
                 bool sent{};
                 bool published{};
                 bool confirmed{};
+
+                /** @brief The active authority world is still publishing the retained snapshot. */
+                [[nodiscard]] bool CanSend(const NetworkWorldBindingRecord *current) const noexcept {
+                    return current && current->worldSession == stamp.session && !sent;
+                }
+
+                /** @brief Pending work expires at its original fixed deadline. */
+                [[nodiscard]] bool ExpiredAt(std::uint64_t tick) const noexcept {
+                    return !confirmed && deadline != 0 && tick >= deadline;
+                }
             };
 
             struct PrefabChange final {

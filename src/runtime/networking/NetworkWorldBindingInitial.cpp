@@ -185,7 +185,7 @@ namespace Horo::Network {
         auto &stream = peer.initial;
         if (!peer.sendsWorld)
             return QueueInitialReceipt(peer, tick);
-        if (!current || current->worldSession != stream.stamp.session || stream.sent)
+        if (!stream.CanSend(current))
             return Result<void>::Success();
         if (!stream.snapshot) {
             if (auto captured = CaptureInitial(peer, *current, tick); captured.HasError() || !stream.snapshot)

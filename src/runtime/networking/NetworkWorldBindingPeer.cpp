@@ -10,22 +10,12 @@ namespace Horo::Network {
                                                                    const std::uint64_t tick) const {
         if (auto active = peer.AdmitGameplay(peer.Connection(), generation, tick); active.HasError())
             return active;
-        if (const auto *selection = peer.Negotiation();
-            !selection || selection->protocol != setup.policy.control.protocol || selection->version != version ||
-            selection->schemaFingerprint != setup.schemaFingerprint || !setup.controlChannel.IsWithin(selection->transport.channelCount) ||
-            std::ranges::find(selection->features.Values(), setup.policy.feature) == selection->features.Values().end())
+        const auto *selection = peer.Negotiation();
+        if (!selection || selection->protocol != setup.policy.control.protocol || selection->version != version ||
+            selection->schemaFingerprint != setup.schemaFingerprint || !setup.controlChannel.IsWithin(selection->transport.channelCount))
             return Result<void>::Failure(MakeError(NetworkErrors::ReplicationDescriptorIncompatible));
-        if (setup.policy.authoredScene) {
-            const auto features = peer.Negotiation()->features.Values();
-            if (std::ranges::find(features, setup.policy.authoredScene->feature) == features.end())
-                return Result<void>::Failure(MakeError(NetworkErrors::ReplicationDescriptorIncompatible));
-        }
-        if (setup.policy.initialState) {
-            const auto features = peer.Negotiation()->features.Values();
-            if (std::ranges::find(features, setup.policy.initialState->feature) == features.end() ||
-                std::ranges::find(features, setup.policy.prefabLifecycle->feature) == features.end())
-                return Result<void>::Failure(MakeError(NetworkErrors::ReplicationDescriptorIncompatible));
-        }
+        if (!WorldBindingFeaturesSupported(setup.policy, selection->features.Values()))
+            return Result<void>::Failure(MakeError(NetworkErrors::ReplicationDescriptorIncompatible));
         return Result<void>::Success();
     }
 
@@ -254,7 +244,7 @@ namespace Horo::Network {
                 (void)peer.lifecycle->Expire(nowTick);
             if (peer.lifecycle && peer.lifecycle->AdmitGameplay(peer.connection, peer.generation, nowTick).HasError())
                 impl_->Retire(peer, nowTick);
-            else if (peer.lifecycle && !peer.initial.confirmed && peer.initial.deadline != 0 && nowTick >= peer.initial.deadline) {
+            else if (peer.lifecycle && peer.initial.ExpiredAt(nowTick)) {
                 peer.failure = MakeError(NetworkErrors::SessionTimedOut);
                 impl_->Retire(peer, nowTick);
             }

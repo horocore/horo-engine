@@ -43,6 +43,22 @@ namespace Horo::Network {
                 const std::size_t maximumSessions)
             : binding(handlerBinding), owner(handlerOwner), rates(maximumSessions) {}
 
+        /** @brief Returns the exact peer's rate slot, claiming a vacancy and resetting the tick when needed. */
+        [[nodiscard]] RateState *RateFor(ConnectionHandle connection, std::uint64_t tick) {
+            auto slot = std::ranges::find(rates, connection, &RateState::connection);
+            if (slot == rates.end()) {
+                slot = std::ranges::find(rates, ConnectionHandle{}, &RateState::connection);
+                if (slot == rates.end())
+                    return nullptr;
+                slot->connection = connection;
+            }
+            if (slot->countedTick != tick) {
+                slot->countedTick = tick;
+                slot->count = 0;
+            }
+            return &*slot;
+        }
+
         InboundHandlerBinding binding;
         std::weak_ptr<IInboundMessageHandler> owner;
         std::vector<RateState> rates;
@@ -318,21 +334,9 @@ namespace Horo::Network {
         const auto bound = handler.owner.lock();
         if (bound == nullptr)
             return RejectAndClose(event.connection, MakeError(NetworkErrors::GameplayDispatchRejected));
-        auto rate = std::ranges::find_if(handler.rates, [&](const Handler::RateState &entry) {
-            return entry.connection == event.connection;
-        });
-        if (rate == handler.rates.end()) {
-            rate = std::ranges::find_if(handler.rates, [](const Handler::RateState &entry) {
-                return !entry.connection.IsValid();
-            });
-            if (rate == handler.rates.end())
-                return RejectAndClose(event.connection, MakeError(NetworkErrors::RpcCapacityExceeded));
-            rate->connection = event.connection;
-        }
-        if (rate->countedTick != nowTick) {
-            rate->countedTick = nowTick;
-            rate->count = 0;
-        }
+        auto *rate = handler.RateFor(event.connection, nowTick);
+        if (!rate)
+            return RejectAndClose(event.connection, MakeError(NetworkErrors::RpcCapacityExceeded));
         if (rate->count >= handler.binding.maximumPerTick)
             return RejectAndClose(event.connection, MakeError(NetworkErrors::TransportReliableBackpressure));
         try {
@@ -348,10 +352,6 @@ namespace Horo::Network {
             });
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkIoServiceCapacityExceeded));
-        } catch (const std::invalid_argument &) {
-            return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
-        } catch (const std::out_of_range &) {
-            return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
         } catch (...) {
             // Untrusted handlers may throw non-standard values; none may cross the admitted owner boundary.
             return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
