@@ -467,29 +467,31 @@ namespace Horo::Editor {
     }
 
     /** @copydoc ProjectGameplayRegistry::BuildDecisionAuthoringGeneration */
-    Result<std::shared_ptr<const AI::DecisionNodeGeneration>> ProjectGameplayRegistry::BuildDecisionAuthoringGeneration() const try {
+    Result<std::shared_ptr<const AI::DecisionNodeGeneration>> ProjectGameplayRegistry::BuildDecisionAuthoringGeneration() const {
         using Generation = Result<std::shared_ptr<const AI::DecisionNodeGeneration>>;
-        std::vector<std::shared_ptr<const AI::DecisionNodeGeneration>> parents;
-        parents.reserve(luaDecisionPrograms_.size() + 1);
-        if (nativeDecisionAvailable_) {
-            auto native = nativeModule_->AcquireDecisionNodes();
-            if (native.HasError())
-                return Generation::Failure(native.ErrorValue());
-            parents.push_back(std::move(native).Value());
+        try {
+            std::vector<std::shared_ptr<const AI::DecisionNodeGeneration>> parents;
+            parents.reserve(luaDecisionPrograms_.size() + 1);
+            if (nativeDecisionAvailable_) {
+                auto native = nativeModule_->AcquireDecisionNodes();
+                if (native.HasError())
+                    return Generation::Failure(native.ErrorValue());
+                parents.push_back(std::move(native).Value());
+            }
+            for (const auto &entry : luaDecisionPrograms_) {
+                auto script = entry.program->Acquire();
+                if (script.HasError())
+                    return Generation::Failure(script.ErrorValue());
+                parents.push_back(std::move(script).Value());
+            }
+            if (parents.empty())
+                return Generation::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+            if (parents.size() == 1)
+                return Generation::Success(std::move(parents.front()));
+            return AI::DecisionNodeGeneration::Compose(parents);
+        } catch (const std::bad_alloc &) {
+            return Generation::Failure(MakeError(AI::AIErrors::DecisionAssetStorageUnavailable));
         }
-        for (const auto &entry : luaDecisionPrograms_) {
-            auto script = entry.program->Acquire();
-            if (script.HasError())
-                return Generation::Failure(script.ErrorValue());
-            parents.push_back(std::move(script).Value());
-        }
-        if (parents.empty())
-            return Generation::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
-        if (parents.size() == 1)
-            return Generation::Success(std::move(parents.front()));
-        return AI::DecisionNodeGeneration::Compose(parents);
-    } catch (const std::bad_alloc &) {
-        return Result<std::shared_ptr<const AI::DecisionNodeGeneration>>::Failure(MakeError(AI::AIErrors::DecisionAssetStorageUnavailable));
     }
 
     /** @copydoc ProjectGameplayRegistry::RefreshDecisionAuthoringCatalog */
