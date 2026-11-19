@@ -177,6 +177,28 @@ class AndroidDeployTests(unittest.TestCase):
             with self.subTest(serial=serial, details=details):
                 self.assertEqual(project.adb_connection_mode(serial, details), expected)
 
+    def test_openxr_staged_profile_verifies_signed_artifact_and_never_launches(self):
+        name = project.OPENXR_DEVELOPMENT_PROFILE
+        _, profile = project.load_contract(name, ["arm64-v8a"])
+        artifact = project.VerifiedAndroidArtifact(Path("unused.apk"), profile, DIGEST, PROVENANCE_DIGEST,
+                                                   SOURCE_REVISION, frozenset({"arm64-v8a"}))
+        stdout = io.StringIO()
+        with patch.object(project, "deploy_artifact", return_value=artifact) as verify, \
+                patch.object(project, "android_deploy_host", return_value="linux-x64"), \
+                patch.object(project, "admit_adb_device") as adb, contextlib.redirect_stdout(stdout):
+            status = project.main(["android-deploy", "--artifact", ".", "--profile", name, "--sdk", ".",
+                                   "--device", SERIAL, "--host", "linux-x64", "--connection", "usb", "--runtime", "openxr"])
+        verify.assert_called_once()
+        adb.assert_not_called()
+        report = json.loads(stdout.getvalue())
+        self.assertEqual((status, report["status"], report["stage"]), (1, "partial", "runtime"))
+        self.assertEqual(report["error"], "android_openxr_activity_route_staged")
+        self.assertEqual(report["artifact"]["apkSha256"], DIGEST)
+        self.assertEqual(report["artifact"]["openxr"], profile["openxrProfile"])
+        self.assertEqual(report["qualification"]["runtime"]["status"], "packaged_not_launched")
+        self.assertEqual(report["qualification"]["physicalXrQualification"], "not_run")
+        self.assertNotIn("device", report)
+
     def test_explicit_connection_fails_closed_for_contradictory_inventory(self):
         inventory = f"List of devices attached\n{SERIAL} device usb:1-2 transport_id:{TRANSPORT}"
         status, report, commands = self.execute({("devices", "-l"): inventory}, options=("--connection", "emulator"))

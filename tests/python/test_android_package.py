@@ -14,6 +14,7 @@ import tempfile
 import unittest
 import zipfile
 from unittest.mock import patch
+from xml.etree import ElementTree
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 import project as android_package
@@ -81,7 +82,7 @@ class AndroidPackageTests(unittest.TestCase):
         workflow = (android_package.ROOT / ".github/workflows/android-package.yml").read_text()
         self.assertIn("--only-binary :all:", workflow)
         downloads = [line for line in workflow.splitlines() if "curl --" in line]
-        self.assertEqual(len(downloads), 3)
+        self.assertEqual(len(downloads), 4)
         for line in downloads:
             self.assertIn("--proto =https --proto-redir =https", line)
 
@@ -208,6 +209,75 @@ class AndroidPackageTests(unittest.TestCase):
         profile = dict(self.profile, graphicsProfile={"schema": 1})
         with self.assertRaises(AndroidError):
             android_package.validate_profile(profile, self.tools, ["arm64-v8a"])
+
+    def test_openxr_development_manifest_and_loader_lock_are_profile_scoped(self):
+        name = android_package.OPENXR_DEVELOPMENT_PROFILE
+        tools, profile = load_contract(name, ["arm64-v8a", "x86_64"])
+        self.assertFalse(profile["distributionQualified"])
+        self.assertEqual(profile["renderer"], "none")
+        self.assertEqual(profile["openxrProfile"]["activityRoute"], "staged")
+        self.assertEqual(tools["openxrLoader"]["artifact"], "org.khronos.openxr:openxr_loader_for_android")
+        self.assertNotIn("openxrLoader", self.tools)
+        attr = "{http://schemas.android.com/apk/res/android}"
+        manifest = ElementTree.fromstring(android_package.apk_manifest(profile))
+        self.assertEqual({item.attrib[attr + "name"] for item in manifest.findall("uses-permission")},
+                         set(profile["permissions"][1:]))
+        self.assertEqual(manifest.find("queries/provider").attrib[attr + "authorities"],
+                         "org.khronos.openxr.runtime_broker;org.khronos.openxr.system_runtime_broker")
+        self.assertEqual({item.attrib[attr + "name"] for item in manifest.findall("queries/intent/action")},
+                         {"org.khronos.openxr.OpenXRRuntimeService", "org.khronos.openxr.OpenXRApiLayerService"})
+        self.assertIsNone(ElementTree.fromstring(android_package.apk_manifest(self.profile)).find("queries"))
+        changed = dict(profile, openxrProfile=dict(profile["openxrProfile"], activityRoute="available"))
+        with self.assertRaisesRegex(AndroidError, "future Activity route"):
+            android_package.validate_profile(changed, tools, ["arm64-v8a"])
+
+    def test_openxr_loader_requires_both_archive_and_abi_pins_and_explicit_signing(self):
+        abi = "arm64-v8a"
+        tools, _ = load_contract(android_package.OPENXR_DEVELOPMENT_PROFILE, [abi])
+        image = elf(api=24)
+        license_text = b"fixture loader license"
+        aar = self.root / "loader.aar"
+        with zipfile.ZipFile(aar, "w") as archive:
+            archive.writestr(f"jni/{abi}/{android_package.OPENXR_LOADER_NAME}", image)
+            archive.writestr("META-INF/LICENSE", license_text)
+        read = android_package.read_openxr_loader
+        for source, unsigned in ((None, False), (aar, True)):
+            with self.subTest(source=source, unsigned=unsigned), self.assertRaisesRegex(AndroidError, "requires signing"):
+                read(source, tools, [abi], unsigned)
+        with self.assertRaisesRegex(AndroidError, "only accepted"):
+            read(aar, self.tools, [abi], False)
+        with self.assertRaisesRegex(AndroidError, "AAR digest mismatch"):
+            read(aar, tools, [abi], False)
+        lock = tools["openxrLoader"]
+        lock["sha256"] = hashlib.sha256(aar.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(AndroidError, f"digest mismatch for {abi}"):
+            read(aar, tools, [abi], False)
+        lock["abiSha256"][abi] = hashlib.sha256(image).hexdigest()
+        with self.assertRaisesRegex(AndroidError, "license digest mismatch"):
+            read(aar, tools, [abi], False)
+        lock["licenseSha256"] = hashlib.sha256(license_text).hexdigest()
+        self.assertEqual(read(aar, tools, [abi], False), android_package.AndroidOpenXRLoader({abi: image}, license_text))
+
+    def test_final_apk_rejects_loader_digest_substitution_even_with_matching_provenance(self):
+        abi = "arm64-v8a"
+        tools, profile = load_contract(android_package.OPENXR_DEVELOPMENT_PROFILE, [abi])
+        locked = tools["openxrLoader"]["abiSha256"]
+        image = elf(api=24)
+        record = {"name": android_package.OPENXR_LOADER_NAME, "sha256": hashlib.sha256(image).hexdigest()}
+        evidence = {"abis": {abi: [record]}, "assets": [], "profile": profile, "toolchain": tools}
+        package = self.root / "openxr.apk"
+        with zipfile.ZipFile(package, "w") as archive:
+            archive.writestr("AndroidManifest.xml", b"manifest")
+            archive.writestr("classes.dex", b"dex")
+            archive.writestr("assets/horo-package-provenance.json", canonical_json(evidence))
+            archive.writestr(f"lib/{abi}/{record['name']}", image)
+        with self.assertRaisesRegex(AndroidError, "differs from the locked"):
+            inspect_package(package, evidence)
+        locked[abi] = record["sha256"]
+        with zipfile.ZipFile(package) as archive:
+            android_package.verify_native_contents(archive, evidence)
+            with self.assertRaisesRegex(AndroidError, "differs from the locked license"):
+                android_package.verify_assets(archive, evidence)
 
     def test_provenance_binds_exact_runtime_dependency_lock(self):
         with patch.object(android_package, "version_output", return_value="abc123"):
@@ -397,7 +467,8 @@ class AndroidAssemblyTests(unittest.TestCase):
         return argparse.Namespace(profile="qualification-debug", abi=["arm64-v8a"],
                                   sdk=self.root / "sdk", ndk=self.root / "ndk",
                                   gradle=self.root / "gradle", game_activity=self.root / "activity.aar",
-                                  output=self.root / "output", native_root=self.root / "prebuilt", unsigned=True)
+                                  output=self.root / "output", native_root=self.root / "prebuilt", unsigned=True,
+                                  openxr_loader=None)
 
     def badging(self):
         return ("package: name='org.horocore.packagequalification' versionCode='1' versionName='0.2.0'\n"
@@ -457,6 +528,45 @@ class AndroidAssemblyTests(unittest.TestCase):
             self.assertTrue(json.loads((arguments.output / "inspection.json").read_text())["signed"])
             with self.assertRaisesRegex(AndroidError, "Output already exists"):
                 android_package.assemble(arguments)
+
+    def test_openxr_signed_assembly_stages_pinned_abi_loader_in_the_real_package_pipeline(self):
+        arguments = self.arguments()
+        arguments.profile = android_package.OPENXR_DEVELOPMENT_PROFILE
+        arguments.unsigned = False
+        arguments.openxr_loader = self.root / "openxr-loader.aar"
+        abi = arguments.abi[0]
+        image = elf(api=24)
+        license_text = b"fixture loader license"
+        loader_name = android_package.OPENXR_LOADER_NAME
+        with zipfile.ZipFile(arguments.openxr_loader, "w") as archive:
+            archive.writestr(f"jni/{abi}/{loader_name}", image)
+            archive.writestr("META-INF/LICENSE", license_text)
+        tools = self.prepare(arguments)
+        locked, profile = load_contract(arguments.profile, arguments.abi)
+        tools["openxrLoader"] = dict(locked["openxrLoader"],
+                                     sha256=android_package.digest(arguments.openxr_loader),
+                                     licenseSha256=hashlib.sha256(license_text).hexdigest(),
+                                     abiSha256={abi: hashlib.sha256(image).hexdigest()})
+        badging = self.badging().replace(self.profile["applicationId"], profile["applicationId"])
+        badging += "".join(f"uses-permission: name='{name}'\n" for name in android_package.OPENXR_PERMISSIONS)
+        capability = {"commands": {name: name for name in ("zipalign", "apksigner", "aapt2")},
+                      "signing": {"keystore": "external.p12", "alias": "qualification"}}
+        with patch.object(android_package, "load_contract", return_value=(tools, profile)), \
+             patch.object(android_package, "tools_preflight", return_value=capability), \
+             patch.object(android_package, "android_run", side_effect=self.command), \
+             patch.object(android_package, "version_output", side_effect=lambda argv: badging if "badging" in argv else "abc123"):
+            android_package.assemble(arguments)
+        output = arguments.output
+        inspection = json.loads((output / "inspection.json").read_text())
+        evidence = json.loads((output / "provenance.json").read_text())
+        self.assertTrue(inspection["signed"])
+        self.assertEqual(evidence["profile"]["openxrProfile"]["activityRoute"], "staged")
+        with zipfile.ZipFile(output / "signed.apk") as archive:
+            entry = archive.getinfo(f"lib/{abi}/{loader_name}")
+            self.assertEqual(entry.compress_type, zipfile.ZIP_STORED)
+            self.assertEqual(archive.read(entry), image)
+            self.assertEqual(archive.read("assets/" + android_package.OPENXR_LOADER_LICENSE), license_text)
+        self.assertFalse((arguments.native_root / abi / loader_name).exists())
 
     def test_kotlin_runtime_alignment_is_locked_before_assembly(self):
         template = (Path(__file__).resolve().parents[2] / "android/gradle/build.gradle").read_text()

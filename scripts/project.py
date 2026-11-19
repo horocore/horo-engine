@@ -30,6 +30,10 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 MAXIMUM_FILE = 256 * 1024 * 1024
+OPENXR_DEVELOPMENT_PROFILE = "qualification-openxr-development"
+OPENXR_LOADER_NAME = "libopenxr_loader.so"
+OPENXR_LOADER_LICENSE = "licenses/openxr-loader.txt"
+OPENXR_PERMISSIONS = ("org.khronos.openxr.permission.OPENXR", "org.khronos.openxr.permission.OPENXR_SYSTEM")
 
 
 # D203 and D211 conflict; retain the PEP-257 no-blank class docstring style.
@@ -89,6 +93,11 @@ def android_profile(profile_name: str) -> tuple[dict, dict]:
     profile = profiles["profiles"].get(profile_name)
     if profile is None:
         raise AndroidError("Select a declared Android profile.")
+    if profile_name == OPENXR_DEVELOPMENT_PROFILE:
+        loader = json.loads(bounded_bytes(ROOT / "android/openxr-loader-lock.json", 65536))
+        if loader.get("schema") != 1:
+            raise AndroidError("Unsupported Android OpenXR loader lock schema.")
+        tools["openxrLoader"] = loader
     return tools, profile
 
 
@@ -106,6 +115,7 @@ def validate_profile(profile: dict, tools: dict, abis: list[str]) -> None:
     if not tools["minimumApi"] <= profile["minimumApi"] <= profile["targetApi"] <= tools["sdkApi"]:
         raise AndroidError("Incompatible min/target/compile API levels; select the declared API 29/36 tuple.")
     validate_profile_identity(profile)
+    validate_openxr_profile(profile, tools, abis)
     validate_asset_names(profile)
     for target, source in profile["assets"].items():
         relative_name(target)
@@ -118,11 +128,13 @@ def validate_asset_names(profile: dict) -> None:
     if generated != expected:
         raise AndroidError("Generated assets must match the declared Gradle baseline-profile producer contract.")
     reserved = set(generated) | {"horo-package-provenance.json", JAVA_DEPENDENCIES_ASSET}
+    if "openxrProfile" in profile:
+        reserved.add(OPENXR_LOADER_LICENSE)
     if set(profile["assets"]) & reserved:
         raise AndroidError("Source assets cannot overwrite owned provenance or generated package metadata.")
 
 
-def exact_graphics_profile(actual: object, expected: dict) -> bool:
+def exact_profile_fields(actual: object, expected: dict) -> bool:
     """Require the closed profile's exact field types as well as values."""
     if not isinstance(actual, dict) or actual.keys() != expected.keys():
         return False
@@ -140,7 +152,7 @@ def validate_renderer_profile(profile: dict) -> None:
     expected = {"schema": 2, "api": "Vulkan1.1", "presentMode": "Fifo",
                 "swapchainMaintenance1Required": True, "singleGraphicsPresentQueue": True,
                 "compositeAlphaPolicy": "prefer-opaque-else-inherit-alpha-one"}
-    if profile["renderer"] != "vulkan-android" or not exact_graphics_profile(profile.get("graphicsProfile"), expected):
+    if profile["renderer"] != "vulkan-android" or not exact_profile_fields(profile.get("graphicsProfile"), expected):
         raise AndroidError("Unsupported Android development graphics profile; select the declared effective Vulkan tuple.")
     if profile["preset"] != "android-vulkan-development" or profile["configuration"] != "Debug":
         raise AndroidError("Android Vulkan qualification requires its explicit development preset.")
@@ -150,13 +162,29 @@ def validate_renderer_profile(profile: dict) -> None:
 
 def validate_profile_identity(profile: dict) -> None:
     validate_renderer_profile(profile)
-    if profile["permissions"] != [profile["applicationId"] + ".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
-                                   "android.permission.ACTIVITY_RECOGNITION"] or profile["features"]:
-        raise AndroidError("Qualification profiles admit only AndroidX receiver and optional Activity Recognition permissions; no required hardware features.")
+    permissions = [profile["applicationId"] + ".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION", "android.permission.ACTIVITY_RECOGNITION"]
+    if "openxrProfile" in profile:
+        permissions.extend(OPENXR_PERMISSIONS)
+    if profile["permissions"] != permissions or profile["features"]:
+        raise AndroidError("Qualification profile permissions differ from its declared capability policy or require hardware features.")
     if not re.fullmatch(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+", profile["applicationId"]):
         raise AndroidError("Invalid Android application identity.")
     if not re.fullmatch(r"[a-z][a-z0-9-]*", profile["nativeLibrary"]):
         raise AndroidError("Invalid native library identity.")
+
+
+def validate_openxr_profile(profile: dict, tools: dict, abis: list[str]) -> None:
+    lock = tools.get("openxrLoader")
+    if lock is None:
+        if "openxrProfile" in profile or OPENXR_LOADER_NAME in profile["nativeLibraries"]:
+            raise AndroidError("Only the declared OpenXR profile may include an OpenXR loader.")
+        return
+    expected = {"schema": 1, "runtime": "openxr", "loaderSource": "bundled", "activityRoute": "staged"}
+    if (not exact_profile_fields(profile.get("openxrProfile"), expected) or profile["preset"] != "android-debug"
+            or profile["configuration"] != "Debug" or profile["renderer"] != "none"):
+        raise AndroidError("The Android OpenXR development profile only stages a loader for a future Activity route.")
+    if profile["nativeLibraries"].count(OPENXR_LOADER_NAME) != 1 or any(abi not in lock["abiSha256"] for abi in abis):
+        raise AndroidError("OpenXR loader packaging requires one pinned image for every selected ABI.")
 
 
 def admitted_command(command: list[str]) -> list[str]:
@@ -502,12 +530,60 @@ def copy_assets(profile: dict, destination: Path) -> list[dict]:
     return records
 
 
-def stage_native(native_root: Path, stage: Path, tools: dict, profile: dict, abis: list[str]) -> dict:
+@dataclass(frozen=True)
+class AndroidOpenXRLoader:
+    images: dict[str, bytes]
+    license: bytes
+
+
+def read_openxr_loader(source: Path | None, tools: dict, abis: list[str], unsigned: bool) -> AndroidOpenXRLoader | None:
+    lock = tools.get("openxrLoader")
+    if lock is None:
+        if source is not None:
+            raise AndroidError("The OpenXR loader AAR is only accepted by the explicit OpenXR profile.")
+        return None
+    if unsigned or source is None:
+        raise AndroidError("The OpenXR development profile requires signing and the explicit locked loader AAR.")
+    data = bounded_bytes(source, 8 * 1024 * 1024)
+    if hashlib.sha256(data).hexdigest() != lock["sha256"]:
+        raise AndroidError("Android OpenXR loader AAR digest mismatch.")
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        archive_limits(archive)
+        loaders = {abi: archive.read(f"jni/{abi}/{OPENXR_LOADER_NAME}") for abi in abis}
+        license_text = archive.read("META-INF/LICENSE")
+    for abi, image in loaders.items():
+        if hashlib.sha256(image).hexdigest() != lock["abiSha256"][abi]:
+            raise AndroidError(f"Android OpenXR loader digest mismatch for {abi}.")
+    if hashlib.sha256(license_text).hexdigest() != lock["licenseSha256"]:
+        raise AndroidError("Android OpenXR loader license digest mismatch.")
+    return AndroidOpenXRLoader(loaders, license_text)
+
+
+def stage_openxr_loader(destination: Path, image: bytes, tools: dict, abi: str) -> dict:
+    path = destination / OPENXR_LOADER_NAME
+    path.write_bytes(image)
+    record = inspect_elf(path, tools["abis"][abi], tools["minimumApi"])
+    if record["sha256"] != tools["openxrLoader"]["abiSha256"][abi]:
+        raise AndroidError(f"Staged Android OpenXR loader digest mismatch for {abi}.")
+    validate_dependency_closure([record], set(tools["systemLibraries"]))
+    return record
+
+
+def stage_native(native_root: Path, stage: Path, tools: dict, profile: dict, abis: list[str],
+                 openxr_loaders: dict[str, bytes] | None = None) -> dict:
+    openxr_loaders = openxr_loaders or {}
+    expected = set(profile["nativeLibraries"])
+    if OPENXR_LOADER_NAME in expected:
+        if set(openxr_loaders) != set(abis):
+            raise AndroidError("The staged OpenXR loader images must cover the selected ABI set exactly.")
+        expected.remove(OPENXR_LOADER_NAME)
+    elif openxr_loaders:
+        raise AndroidError("The selected Android profile does not permit a loader.")
     result = {}
     for abi in abis:
         source = native_root / abi
         records = native_closure(source, abi, tools, profile["nativeLibrary"])
-        if {record["name"] for record in records} != set(profile["nativeLibraries"]):
+        if {record["name"] for record in records} != expected:
             raise AndroidError("Native inputs differ from the explicitly declared library set.")
         destination = stage / "native" / abi
         destination.mkdir(parents=True)
@@ -515,16 +591,26 @@ def stage_native(native_root: Path, stage: Path, tools: dict, profile: dict, abi
             shutil.copyfile(source / record["name"], destination / record["name"])
             if digest(destination / record["name"]) != record["sha256"]:
                 raise AndroidError("Native input changed during staging; retry with stable files.")
-        result[abi] = records
+        if abi in openxr_loaders:
+            records.append(stage_openxr_loader(destination, openxr_loaders[abi], tools, abi))
+        result[abi] = sorted(records, key=lambda record: record["name"])
     return result
 
 
 def apk_manifest(profile: dict) -> str:
     application = profile["applicationId"]  # Validated restricted identifier; cannot contain XML metacharacters.
     library = profile["nativeLibrary"]
+    openxr = "" if "openxrProfile" not in profile else """
+  <uses-permission android:name="org.khronos.openxr.permission.OPENXR" />
+  <uses-permission android:name="org.khronos.openxr.permission.OPENXR_SYSTEM" />
+  <queries>
+    <provider android:authorities="org.khronos.openxr.runtime_broker;org.khronos.openxr.system_runtime_broker" />
+    <intent><action android:name="org.khronos.openxr.OpenXRRuntimeService" /></intent>
+    <intent><action android:name="org.khronos.openxr.OpenXRApiLayerService" /></intent>
+  </queries>"""
     return f'''<manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
-  <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+  <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />{openxr}
   <application android:label="Horo Package Qualification" android:theme="@style/Theme.AppCompat.NoActionBar"
                android:extractNativeLibs="false" android:allowBackup="false">
     <activity android:name="{application}.{PACKAGE_ACTIVITY}" android:exported="true" android:configChanges="orientation|screenSize|keyboardHidden">
@@ -665,6 +751,13 @@ def verify_native_contents(archive: zipfile.ZipFile, expected: dict) -> None:
     for name, record in admitted.items():
         if hashlib.sha256(archive.read(name)).hexdigest() != record["sha256"]:
             raise AndroidError("APK native library changed after its preflight inspection.")
+    if "openxrProfile" in expected.get("profile", {}):
+        lock = expected["toolchain"]["openxrLoader"]
+        for abi in expected["abis"]:
+            name = f"lib/{abi}/{OPENXR_LOADER_NAME}"
+            entry = archive.getinfo(name)
+            if (entry.compress_type != zipfile.ZIP_STORED or admitted[name]["sha256"] != lock["abiSha256"][abi]):
+                raise AndroidError(f"APK OpenXR loader differs from the locked stored image for {abi}.")
 
 
 def verify_assets(archive: zipfile.ZipFile, expected: dict) -> None:
@@ -675,10 +768,16 @@ def verify_assets(archive: zipfile.ZipFile, expected: dict) -> None:
     for name, record in admitted.items():
         if hashlib.sha256(archive.read(name)).hexdigest() != record["sha256"]:
             raise AndroidError("APK runtime asset changed after admission.")
+    if "openxrProfile" in expected.get("profile", {}):
+        license_record = admitted.get(ASSET_PREFIX + OPENXR_LOADER_LICENSE)
+        if (license_record is None
+                or license_record["sha256"] != expected["toolchain"]["openxrLoader"]["licenseSha256"]):
+            raise AndroidError("APK OpenXR loader license differs from the locked license.")
 
 
 def assemble(arguments: argparse.Namespace) -> None:
     tools, profile = load_contract(arguments.profile, arguments.abi)
+    openxr_loader = read_openxr_loader(arguments.openxr_loader, tools, arguments.abi, arguments.unsigned)
     capability = tools_preflight(tools, arguments.sdk, arguments.ndk, arguments.gradle, not arguments.unsigned)
     workspace = arguments.output.resolve()
     if workspace.exists():
@@ -689,8 +788,13 @@ def assemble(arguments: argparse.Namespace) -> None:
     native_root = build_native(arguments, profile, activity_root, workspace)
     stage = workspace / "gradle-project"
     stage.mkdir()
-    native = stage_native(native_root, stage, tools, profile, arguments.abi)
+    native = stage_native(native_root, stage, tools, profile, arguments.abi, openxr_loader.images if openxr_loader else None)
     assets = copy_assets(profile, stage / "assets")
+    if openxr_loader is not None:
+        license_asset = stage / ASSET_PREFIX / OPENXR_LOADER_LICENSE
+        license_asset.parent.mkdir(parents=True, exist_ok=True)
+        license_asset.write_bytes(openxr_loader.license)
+        assets.append({"name": OPENXR_LOADER_LICENSE, "sha256": digest(license_asset), "size": license_asset.stat().st_size})
     apk_write_project(stage, tools, profile, arguments.abi, arguments.game_activity)
     os.environ["ANDROID_HOME"] = str(arguments.sdk.resolve())
     os.environ["SOURCE_DATE_EPOCH"] = "315532800"
@@ -743,7 +847,10 @@ def complete_package(stage: Path, workspace: Path, profile: dict, tools: dict, c
     inspection["signed"] = not unsigned
     (workspace / "inspection.json").write_bytes(canonical_json(inspection))
     (workspace / "provenance.json").write_bytes(canonical_json(evidence))
-    print(json.dumps({"package": package.name, "sha256": inspection["apkSha256"], "signed": not unsigned}))
+    summary = {"package": package.name, "sha256": inspection["apkSha256"], "signed": not unsigned}
+    if "openxrProfile" in profile:
+        summary["openxr"] = profile["openxrProfile"]
+    print(json.dumps(summary))
 
 
 def verify_api_badging(badging: str, field: str, expected: int) -> None:
@@ -768,11 +875,12 @@ def verify_manifest(badging: str, profile: dict) -> None:
 
 def apk_main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", choices=("qualification-debug", "qualification-release", "qualification-vulkan-development"), required=True)
+    parser.add_argument("--profile", required=True, help="Exact name from android/package-profiles.json.")
     parser.add_argument("--abi", action="append", required=True)
     for name in ("sdk", "ndk", "gradle", "game-activity", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--native-root", type=Path, help="Explicit prebuilt ABI directories; complete closure is inspected before assembly.")
+    parser.add_argument("--openxr-loader", type=Path, help="Explicit pinned Khronos loader AAR for the signed OpenXR development profile.")
     parser.add_argument("--unsigned", action="store_true", help="Produce an unsigned qualification candidate; no install/signing claim.")
     arguments = parser.parse_args(argv)
     try:
@@ -875,9 +983,11 @@ def deploy_artifact(artifact: Path, stage: Path, sdk: Path, profile_name: str,
             or inspection.get("signed") is not True):
         raise AndroidDeployError("artifact_contract_mismatch")
     names = sorted(profile["nativeLibraries"])
-    assets = sorted([*profile["assets"], *profile["generatedAssets"], JAVA_DEPENDENCIES_ASSET])
+    assets = [*profile["assets"], *profile["generatedAssets"], JAVA_DEPENDENCIES_ASSET]
+    if "openxrProfile" in profile:
+        assets.append(OPENXR_LOADER_LICENSE)
     if (any(sorted(record["name"] for record in declared["abis"][abi]) != names for abi in abis)
-            or sorted(record["name"] for record in declared["assets"]) != assets):
+            or sorted(record["name"] for record in declared["assets"]) != sorted(assets)):
         raise AndroidDeployError("artifact_contract_mismatch")
     revision = declared.get("sourceRevision")
     if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
@@ -1235,12 +1345,15 @@ def android_deploy_main(argv=None) -> int:
         if arguments.runtime == "openxr":
             if not arguments.host or not arguments.connection:
                 raise AndroidDeployError("xr_target_selection_incomplete")
-            report["stage"] = "artifact"
-            android_profile(arguments.profile)
-            report["stage"] = "runtime"
-            report["qualification"]["profile"] = arguments.profile
-            runtime["status"] = "unsupported"
-            raise AndroidDeployError("android_openxr_route_unavailable")
+            if arguments.profile != OPENXR_DEVELOPMENT_PROFILE:
+                report["stage"] = "artifact"
+                android_profile(arguments.profile)
+                report["stage"] = "runtime"
+                report["qualification"]["profile"] = arguments.profile
+                runtime["status"] = "unsupported"
+                raise AndroidDeployError("android_openxr_route_unavailable")
+        elif arguments.profile == OPENXR_DEVELOPMENT_PROFILE:
+            raise AndroidDeployError("explicit_openxr_intent_required")
         report["stage"] = "artifact"
         with tempfile.TemporaryDirectory(prefix="horo-android-deploy-") as directory:
             artifact = deploy_artifact(
@@ -1251,6 +1364,12 @@ def android_deploy_main(argv=None) -> int:
                                   "apkSha256": artifact.apk_sha256, "provenanceSha256": artifact.provenance_sha256,
                                   "sourceRevision": artifact.source_revision, "declaredRenderer": profile["renderer"],
                                   "abis": sorted(artifact.abis)}
+            if "openxrProfile" in profile:
+                report["stage"] = "runtime"
+                report["artifact"]["openxr"] = profile["openxrProfile"]
+                report["qualification"]["profile"] = arguments.profile
+                runtime["status"] = "packaged_not_launched"
+                raise AndroidDeployError("android_openxr_activity_route_staged")
             report["stage"] = "device"
             device = admit_adb_device(deploy_tool(arguments.sdk / "platform-tools", "adb"), arguments.device, deadline)
             connection["observed"] = device.connection
