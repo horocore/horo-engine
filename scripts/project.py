@@ -638,6 +638,16 @@ def apk_write_project(stage: Path, tools: dict, profile: dict, abis: list[str], 
               "public final class PackageActivity extends org.horocore.platform.HoroInputActivity {\n"
               f"    static {{ System.loadLibrary(\"{profile['nativeLibrary']}\"); }}\n"
               "    private static boolean activityCreated;\n"
+              "    private static String processStartTicks() {\n"
+              "        try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.FileReader(\"/proc/self/stat\"))) {\n"
+              "            String stat = reader.readLine();\n"
+              "            int end = stat == null ? -1 : stat.lastIndexOf(\") \");\n"
+              "            if (end < 0) return null;\n"
+              "            String[] fields = stat.substring(end + 2).split(\" +\", 21);\n"
+              "            if (fields.length > 19 && fields[19].matches(\"[1-9][0-9]{0,19}\")) return fields[19];\n"
+              "        } catch (java.io.IOException ignored) { }\n"
+              "        return null;\n"
+              "    }\n"
               "    @Override public void onCreate(android.os.Bundle state) {\n"
               "        boolean firstActivity = !activityCreated;\n"
               "        activityCreated = true;\n"
@@ -646,7 +656,10 @@ def apk_write_project(stage: Path, tools: dict, profile: dict, abis: list[str], 
               f"        intent.removeExtra(\"{DEPLOY_LAUNCH_EXTRA}\");\n"
               "        super.onCreate(state);\n"
               "        if (firstActivity && state == null && nonce != null && nonce.matches(\"[0-9a-f]{32}\")) {\n"
-              f"            android.util.Log.i(\"HoroPackageQualification\", \"{DEPLOY_LAUNCH_MARKER}\" + nonce);\n"
+              "            String started = processStartTicks();\n"
+              "            if (started != null) {\n"
+              f"                android.util.Log.i(\"HoroPackageQualification\", \"{DEPLOY_LAUNCH_MARKER}\" + nonce + \" startTicks=\" + started);\n"
+              "            }\n"
               "        }\n"
               "    }\n}\n")
     (java_root / "PackageActivity.java").write_text(source, encoding="utf-8")
@@ -1379,7 +1392,7 @@ class AndroidPackageLaunch:
                 or states not in ([], ["COLD"]) or "Warning: Activity not started" in launched):
             self.recovery = None
             raise AndroidDeployError("launch_unconfirmed")
-        self.process = deployed_process(self.device, self.application, uid)
+        self.process = self.recover_process(self.device, uid)
         return self.process, start
 
     def recover_process(self, device: AdmittedAdbDevice, uid: int) -> DeployedProcess:
@@ -1389,11 +1402,13 @@ class AndroidPackageLaunch:
             raise AndroidDeployError("launch_process_unattributed")
         process = deployed_process(device, self.application, uid)
         log, through = read_deployed_process_log(device, process, recovery.started)
-        marker = DEPLOY_LAUNCH_MARKER + recovery.nonce
+        marker = f"{DEPLOY_LAUNCH_MARKER}{recovery.nonce} startTicks={process.start_ticks}"
         matches = sum(priority == "I" and tag == "HoroPackageQualification" and message == marker
                       for _, priority, tag, message in process_log_entries(log, process, recovery.started.nanoseconds, through))
         if matches != 1:
             raise AndroidDeployError("launch_process_unattributed")
+        if deployed_process(device, self.application, uid) != process:
+            raise AndroidDeployError("application_process_changed")
         return process
 
     def rollback(self) -> dict:
@@ -1411,8 +1426,9 @@ class AndroidPackageLaunch:
                 return {"status": "already_exited"}
             deploy_verified_install(device, self.application, self.user, self.digest)
             uid = deployed_uid(device, self.application, self.user)
-            process = self.process or self.recover_process(device, uid)
-            if uid != process.uid or deployed_process(device, self.application, process.uid) != process:
+            if self.process is None:
+                self.recover_process(device, uid)
+            elif uid != self.process.uid or deployed_process(device, self.application, uid) != self.process:
                 raise AndroidDeployError("application_process_changed")
             device.run("shell", "am", "force-stop", "--user", self.user, self.application)
             if device.process_id(self.application) is not None:

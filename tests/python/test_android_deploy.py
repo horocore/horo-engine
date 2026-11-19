@@ -33,7 +33,7 @@ OPENXR = "host-openxr abi=arm64-v8a stage=discovered result=0 runtimeMajor=1 run
 ENTRY = project.DEPLOY_ENTRY_MARKER
 OPENXR_OPTIONS = ("--host", "linux-x64", "--connection", "emulator", "--runtime", "openxr")
 LAUNCH_NONCE = "d" * 32
-LAUNCH_MARKER = project.DEPLOY_LAUNCH_MARKER + LAUNCH_NONCE
+LAUNCH_MARKER = f"{project.DEPLOY_LAUNCH_MARKER}{LAUNCH_NONCE} startTicks=123456"
 DEVICE_CLOCK = ("shell", "toybox", "date", "+%s.%N")
 UID_QUERY = ("shell", "toybox", "ps", "-p", "123", "-o", "UID")
 STAT_QUERY = ("shell", "toybox", "cat", "/proc/123/stat")
@@ -59,7 +59,7 @@ def launch_command(application):
 
 
 class AndroidDeployTests(unittest.TestCase):
-    def execute(self, override=None, options=(), profile_name=PROFILE, *, launch_reached_device=False):
+    def execute(self, override=None, options=(), profile_name=PROFILE, *, launch_reached_device=False, launch_receipt=None):
         """Run the real CLI orchestration against an exact scripted ADB transport."""
         _, profile = project.load_contract(profile_name, ["arm64-v8a"])
         application = profile["applicationId"]
@@ -89,6 +89,7 @@ class AndroidDeployTests(unittest.TestCase):
         replies.update(override or {})
         commands = []
         running = False
+        awaiting_receipt = False
         now = 0.0
 
         def sleep(seconds):
@@ -96,7 +97,7 @@ class AndroidDeployTests(unittest.TestCase):
             now += seconds
 
         def run(command, deadline):
-            nonlocal running
+            nonlocal running, awaiting_receipt
             if command[1:] == ["devices", "-l"]:
                 args = tuple(command[1:])
             else:
@@ -109,11 +110,15 @@ class AndroidDeployTests(unittest.TestCase):
                 return 0, "Performing Streamed Install\nSuccess"
             if args == ("shell", "pidof", application) and not running and (not override or args not in override):
                 return 1, ""
+            if args == LOGCAT and awaiting_receipt:
+                awaiting_receipt = False
+                return 0, log_line(LAUNCH_MARKER) if launch_receipt is None else launch_receipt
             response = replies[args]
             if isinstance(response, list):
                 response = response.pop(0)
             if args == launch and (launch_reached_device or not isinstance(response, BaseException)):
                 running = True
+                awaiting_receipt = not isinstance(response, BaseException)
             if isinstance(response, BaseException):
                 raise response
             if args == stop and not isinstance(response, tuple):
@@ -165,7 +170,7 @@ class AndroidDeployTests(unittest.TestCase):
             with self.subTest(profile=profile):
                 status, report, commands = self.execute(
                     {LOGCAT: [log_line(marker) for marker in markers]}, profile_name=profile)
-                self.assertEqual((status, report["status"], commands.count(LOGCAT)), (0, "complete", len(markers)))
+                self.assertEqual((status, report["status"], commands.count(LOGCAT)), (0, "complete", len(markers) + 1))
                 self.assertEqual(set(report["observed"]), {"crashObserved"} | expected)
                 self.assertFalse(any("force-stop" in cmd for cmd in commands))
 
@@ -178,7 +183,7 @@ class AndroidDeployTests(unittest.TestCase):
     def test_pending_capture_can_cancel_without_accepting_unrelated_evidence(self):
         status, report, commands = self.execute({LOGCAT: [log_line(LIFECYCLE), KeyboardInterrupt()]})
         self.assertEqual((status, report["error"], report["cleanup"]), (130, "cancelled", {"status": "stopped"}))
-        self.assertEqual(commands.count(LOGCAT), 2)
+        self.assertEqual(commands.count(LOGCAT), 3)
 
     def test_requested_zip_contains_exact_projected_report_and_its_digest(self):
         for result, expected in ((log_line(ENTRY), 0),
@@ -358,7 +363,7 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertFalse(any("install" in cmd or "start" in cmd or "force-stop" in cmd for cmd in commands))
 
     def test_replaced_process_is_never_stopped(self):
-        status, report, commands = self.execute({STAT_QUERY: [proc_stat()] * 2 + [proc_stat(123457)] * 4})
+        status, report, commands = self.execute({STAT_QUERY: [proc_stat()] * 4 + [proc_stat(123457)] * 4})
         self.assertEqual((status, report["error"]), (1, "application_process_changed"))
         self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": "application_process_changed"})
         self.assertFalse(any("force-stop" in cmd for cmd in commands))
@@ -397,13 +402,13 @@ class AndroidDeployTests(unittest.TestCase):
                                 ("1795000000.111000001", "device_log_clock_changed"),
                                 ("1795000000.%N", "device_log_clock_unavailable")):
             with self.subTest(final=final):
-                status, report, _ = self.execute({DEVICE_CLOCK: [START, final]})
+                status, report, _ = self.execute({DEVICE_CLOCK: [START, END, final]})
                 self.assertEqual((status, report["error"], report["cleanup"]), (1, expected, {"status": "stopped"}))
                 self.assertNotIn("observed", report)
 
     def test_replacement_cannot_claim_a_matching_buffered_crash(self):
         status, report, _ = self.execute({
-            STAT_QUERY: [proc_stat()] * 2 + [proc_stat(123457)] * 4,
+            STAT_QUERY: [proc_stat()] * 4 + [proc_stat(123457)] * 4,
             LOGCAT: log_line("FATAL EXCEPTION: replaced process", tag="E/AndroidRuntime"),
         })
         self.assertEqual((status, report["error"]), (1, "application_process_changed"))
@@ -423,6 +428,26 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual((status, report["error"]), (1, "launch_unconfirmed"))
         self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": "launch_process_unattributed"})
         self.assertFalse(any("force-stop" in cmd or "logcat" in cmd for cmd in commands))
+
+    def test_successful_start_still_requires_one_exact_private_cold_receipt(self):
+        for receipt in ("", log_line(LAUNCH_MARKER, stamp=START), log_line(LAUNCH_MARKER, uid="10200"),
+                        log_line(LAUNCH_MARKER, pid=999), log_line(LAUNCH_MARKER) * 2,
+                        log_line(LAUNCH_MARKER.replace("startTicks=123456", "startTicks=123455"))):
+            with self.subTest(receipt=receipt):
+                status, report, commands = self.execute(launch_receipt=receipt)
+                self.assertEqual((status, report["stage"], report["error"]), (1, "launch", "launch_process_unattributed"))
+                self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": "launch_process_unattributed"})
+                self.assertNotIn("observed", report)
+                self.assertNotIn(LAUNCH_NONCE, json.dumps(report))
+                self.assertNotIn("startTicks", json.dumps(report))
+                self.assertFalse(any("force-stop" in cmd for cmd in commands))
+
+    def test_cold_receipt_qualifies_adb_without_a_launch_state_field(self):
+        accepted = f"Status: ok\nActivity: {APPLICATION}/.PackageActivity"
+        status, report, _ = self.execute({launch_command(APPLICATION): accepted})
+        self.assertEqual((status, report["status"]), (0, "complete"))
+        self.assertNotIn(LAUNCH_NONCE, json.dumps(report))
+        self.assertNotIn("startTicks", json.dumps(report))
 
     def test_timed_out_launch_stops_only_the_process_with_its_private_receipt(self):
         status, report, commands = self.execute({
@@ -460,6 +485,16 @@ class AndroidDeployTests(unittest.TestCase):
         }, launch_reached_device=True)
         self.assertEqual((status, report["error"]), (130, "cancelled"))
         self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": "application_process_changed"})
+        self.assertFalse(any("force-stop" in cmd for cmd in commands))
+
+    def test_recycled_pid_cannot_reuse_the_old_cold_receipt_on_cleanup(self):
+        status, report, commands = self.execute({
+            launch_command(APPLICATION): KeyboardInterrupt(),
+            LOGCAT: log_line(LAUNCH_MARKER),
+            STAT_QUERY: proc_stat(123457),
+        }, launch_reached_device=True)
+        self.assertEqual((status, report["error"]), (130, "cancelled"))
+        self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": "launch_process_unattributed"})
         self.assertFalse(any("force-stop" in cmd for cmd in commands))
 
     def test_package_bytes_manifest_and_signature_are_verified_before_adb(self):

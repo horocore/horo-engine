@@ -367,13 +367,14 @@ After an attributed launch, failure gives cleanup its own five-second deadline.
 Cleanup checks the selected transport, installed digest and process identity
 before requesting a stop for the exact package and user. The JSON reports
 stopped, already_exited or unconfirmed alongside the deployment error.
-If the start response or its process lookup was interrupted, the first Activity
-can attest to the launch using a single-use random marker. Cleanup accepts one
-matching record from the candidate UID and PID inside the same device clock
-window, then rechecks the process incarnation before stopping it. The marker
-is never included in the deployment report. An explicitly warm or ambiguous
-response, an older APK without the marker or a disconnected transport can leave
-cleanup unconfirmed.
+The first Activity attests to a cold launch with a single-use random marker
+and the process's kernel start ticks. Ordinary launch and recovery after an
+interrupted start both require one matching record from the candidate UID and PID
+inside the device clock window. The host rechecks the live process incarnation
+after reading the receipt and before stopping it. An older APK that emits only
+the nonce needs a rebuild before it can produce attributable launch evidence.
+The receipt is never included in the deployment report. Warm or ambiguous
+responses and disconnected transports can leave cleanup unconfirmed.
 A successful operation leaves the app running. The renderer declaration
 comes from the package. Renderer counters describe
 observed acceptance, with GPU and physical presentation completion outside
