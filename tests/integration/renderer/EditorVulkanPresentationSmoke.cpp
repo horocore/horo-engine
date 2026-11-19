@@ -377,10 +377,11 @@ namespace Horo::Tests::VulkanEditor {
             REQUIRE(initialOutput.HasError());
             CHECK(initialOutput.ErrorValue().code.Value() == RenderPresentationErrors::OutputUnsupported.code.Value());
         }
-        const std::array passes{RenderPassDescriptor{.kind = RenderPassKind::Graphics, .primaryOutput = PrimaryOutputAttachment{}}};
+        host.CreateViewport();
         {
+            host.PrepareScene();
             auto initial = host.Frame(1);
-            Check(initial.Execute(passes), "record initial SDR output");
+            host.ExecuteSceneAndGui(initial);
             Check(initial.Present(), "present initial SDR output");
         }
         constexpr FramebufferExtent logical{512, 384};
@@ -433,8 +434,9 @@ namespace Horo::Tests::VulkanEditor {
             const auto retiredExtent = host.frontend->PollPresentationAvailability(host.extent);
             Check(retiredExtent, "poll the superseded pixel extent");
             CHECK_FALSE(retiredExtent.Value());
+            host.PrepareScene();
             auto resumed = host.Frame(3, output);
-            Check(resumed.Execute(passes), "record SDR output at realized pixel extent");
+            host.ExecuteSceneAndGui(resumed);
             Check(resumed.Present(), "present the resized SDR output");
         }
         REQUIRE(host.Drain());
