@@ -4,6 +4,7 @@
 /** @file EditorProjectSceneHostOwner.h
  * @brief Target-private single Scene lifetime owner and project resource capture contract.
  */
+#include "EditorPlaySaveAi.h"
 #include "EditorPlaySavePhysicsServices.h"
 #include "EditorPlaySavePrefabServices.h"
 #include "EditorProjectSceneHost.h"
@@ -348,7 +349,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             if (physics.HasError())
                 return Result<void>::Failure(physics.ErrorValue());
             auto composed = saves_.saveFactory_(saves_.saveProject_, *scenes_, *saves_.saveBaseline_, std::move(bindings),
-                                                std::move(behaviorOwner), prefab_.services, std::move(physics).Value());
+                                                std::move(behaviorOwner), prefab_.services, std::move(physics).Value(), aiSave_);
             if (composed.HasError())
                 return Result<void>::Failure(composed.ErrorValue());
             saves_.save_ = std::move(composed).Value();
@@ -372,9 +373,18 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             auto ai = AI::AiSceneRuntime::Create(policy.aiSettings);
             if (ai.HasError())
                 return Result<void>::Failure(ai.ErrorValue());
-            ai_ = std::make_unique<AI::AiSceneRuntime>(std::move(ai).Value());
+            ai_ = std::make_shared<AI::AiSceneRuntime>(std::move(ai).Value());
+            AI::AiSceneRestoreSource restore;
+            if (policy.saveFactory) {
+                aiSave_ = std::make_shared<PlaySaveAiServices>(*scenes_, ai_);
+                restore = [weak = std::weak_ptr{aiSave_}](const Runtime::RuntimeSceneView &scene) {
+                    const auto owner = weak.lock();
+                    return owner ? owner->Take(scene) : Result<AI::AiSceneRestoredPopulation>::Success({});
+                };
+            }
             controllers_ = policy.aiControllers;
-            if (auto added = scenes_->AddActivationParticipant(std::make_unique<AI::AiSceneActivationParticipant>(*ai_, controllers_));
+            if (auto added = scenes_->AddActivationParticipant(
+                    std::make_unique<AI::AiSceneActivationParticipant>(*ai_, controllers_, std::nullopt, std::move(restore)));
                 added.HasError())
                 return added;
             if (auto added = scenes_->AddStructuralParticipant(ai_->MakeStructuralParticipant(controllers_)); added.HasError())
@@ -597,7 +607,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         Physics::PhysicsSceneActivationAuthority authority_;
         ScenePhysicsHost native_;
         std::vector<AI::AiControllerDescriptor> controllers_;
-        std::unique_ptr<AI::AiSceneRuntime> ai_;
+        std::shared_ptr<AI::AiSceneRuntime> ai_;
+        std::shared_ptr<PlaySaveAiServices> aiSave_;
         CancellationSource animationLifetime_;
         std::unique_ptr<Runtime::SceneAnimationRuntime> animation_;
         std::unique_ptr<ProjectSceneNavigationWorld> navigation_;

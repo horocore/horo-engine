@@ -1,3 +1,5 @@
+#include "../runtime/ai/AiSceneTestSupport.h"
+#include "EditorPlaySaveAi.h"
 #include "EditorPlaySaveHost.h"
 #include "Horo/Platform/SecureRandom.h"
 #include "Horo/Runtime/Save/SaveDiagnostics.h"
@@ -24,10 +26,14 @@ namespace {
     }
 
     /** @brief Builds real camera state, not a synthetic archive or a fixture-only production serializer. */
-    RuntimeSceneDefinition Definition() {
+    RuntimeSceneDefinition Definition(const AI::TestSupport::ActivationFixture *ai = nullptr) {
         SceneDefinitionBuilder builder({41}, {3});
         RuntimeEntityDefinition camera{.object = {1}};
         camera.components.camera = CameraComponent{};
+        if (ai) {
+            camera.components.aiAgent = ai->agent.agent;
+            camera.components.aiController = ai->agent.controller;
+        }
         builder.Add(std::move(camera));
         return Value(std::move(builder).Build());
     }
@@ -96,14 +102,18 @@ namespace {
         CancellationSource lifetime;
         CancellationToken frameToken{lifetime.Token()};
         Gameplay::BehaviorRegistry behaviors;
+        std::shared_ptr<AI::AiSceneRuntime> aiRuntime;
+        std::optional<AI::TestSupport::ActivationFixture> aiFixture;
         RuntimeSceneService scenes{SceneRuntimeId{701}};
+        std::shared_ptr<PlaySaveAiServices> ai;
         std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner;
         std::shared_ptr<PlaySaveStorageSchema> schema{std::make_shared<PlaySaveStorageSchema>(PlaySaveStorageSchema{Definition(), {}, {}})};
         std::filesystem::path blockedRoot;
         std::unique_ptr<EditorPlaySaveHost> host;
         std::uint64_t frame{};
+        bool acceptAiRestore{true};
 
-        explicit Fixture(bool failOpen = false, bool sceneOwnedGameplay = false) {
+        explicit Fixture(bool failOpen = false, bool sceneOwnedGameplay = false, bool sceneOwnedAi = false) {
             schema->identities = {{Value(PersistentEntityId::Parse("7d00b1e9-ec8b-407b-a132-d349f5ccaf76")),
                                    {1},
                                    AuthoredPersistentEntityProvenance{{41}, {1}},
@@ -114,6 +124,8 @@ namespace {
                 REQUIRE(scenes.AddActivationParticipant(behaviorOwner->MakeActivationParticipant()).HasValue());
                 schema->lifecycle = Gameplay::BehaviorLifecycleParticipant();
             }
+            if (sceneOwnedAi)
+                BindAi();
             REQUIRE(scenes.Startup(frameToken).HasValue());
             REQUIRE(scenes.QueuePreparation(schema->baseline).HasValue());
             REQUIRE(scenes.OnPhase(RuntimePhase::CommitDeferredLifecycleChanges, {.frameNumber = ++frame, .cancellation = frameToken})
@@ -129,9 +141,39 @@ namespace {
                 REQUIRE(blocker.good());
                 blocker << "Fixture-owned file blocks the real namespace root.";
             }
-            host = Value(EditorPlaySaveHost::Create(scenes, {jobs, operations, clock, wall, std::move(config)}, schema, {}, behaviorOwner));
+            host = Value(
+                EditorPlaySaveHost::Create(scenes, {jobs, operations, clock, wall, std::move(config), ai}, schema, {}, behaviorOwner));
             if (!failOpen)
                 Ready();
+        }
+
+        /** @brief Composes actual AI lifecycle and the same product capture/restore handoff. */
+        void BindAi() {
+            aiFixture = AI::TestSupport::MakeFixture(1, 701, 701, 0, 2);
+            schema->baseline = Definition(&*aiFixture);
+            aiRuntime = std::make_shared<AI::AiSceneRuntime>(Value(AI::AiSceneRuntime::Create()));
+            ai = std::make_shared<PlaySaveAiServices>(scenes, aiRuntime);
+            schema->ai = Value(ai->BindCapture()).descriptor;
+            auto restore = [this, weak = std::weak_ptr{ai}](const RuntimeSceneView &scene) {
+                const auto owner = weak.lock();
+                return owner && acceptAiRestore ? owner->Take(scene) : Result<AI::AiSceneRestoredPopulation>::Success({});
+            };
+            REQUIRE(scenes
+                        .AddActivationParticipant(std::make_unique<AI::AiSceneActivationParticipant>(*aiRuntime,
+                                                                                                     std::span{&aiFixture->descriptor, 1},
+                                                                                                     std::nullopt, std::move(restore)))
+                        .HasValue());
+        }
+
+        /** @brief Mutates one Blackboard through the existing Play capture barrier and owner capability. */
+        void SetAiValue(AI::AgentHandle agent, bool value) {
+            REQUIRE(host->BeginMutation().HasValue());
+            const auto owner = aiRuntime->CapabilityAtSafePoint();
+            auto batch = Value(owner.BeginBlackboardWrite(agent));
+            const auto key = aiFixture->schema->Keys().front().key;
+            REQUIRE(batch.Stage({key, AI::BlackboardValue{AI::BlackboardScalarValue{value}}}).HasValue());
+            REQUIRE(owner.CommitBlackboardWrite(agent, std::move(batch)).HasValue());
+            REQUIRE(host->EndMutation().HasValue());
         }
 
         ~Fixture() {
@@ -169,6 +211,20 @@ namespace {
                 std::this_thread::yield();
             }
             FAIL("Actual Play save owner did not settle before fixture deadline");
+        }
+
+        /** @brief Waits for the actual rejected operation, then returns its redacted owner projection. */
+        std::shared_ptr<const Editor::PlaySaveSnapshot> Rejected() {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+            while (std::chrono::steady_clock::now() < deadline) {
+                Pump();
+                const auto snapshot = host->Snapshot();
+                if (snapshot && !snapshot->operationPending && snapshot->error)
+                    return snapshot;
+                std::this_thread::yield();
+            }
+            FAIL("The rejected Play operation did not settle before the fixture deadline.");
+            return {};
         }
 
         /** @brief Mutates the real Scene under the same actual capture barrier used by Play callbacks. */
@@ -229,6 +285,42 @@ TEST_CASE("Play sandbox rejects stale slot consent and does not replace "
     CHECK(f.host->Request({.kind = Editor::PlaySaveCommandKind::Load, .selection = old}).HasError());
     CHECK(f.Page().rows.size() == 1);
     CHECK(f.scenes.ActiveScene()->RuntimeId() == SceneRuntimeId{701});
+}
+
+TEST_CASE("Play slot Save and Load replace the AI Scene owner with its saved Blackboard", "[editor][play][save][host][ai]") {
+    Fixture f{false, false, true};
+    const auto original = f.scenes.ActiveScene();
+    REQUIRE(original);
+    const auto agent = Value(f.aiRuntime->Snapshot()).Agents().front().handle;
+    f.SetAiValue(agent, true);
+    const auto saved = Value(f.aiRuntime->CaptureCanonicalState(*original));
+    REQUIRE(f.host->Request({.kind = Editor::PlaySaveCommandKind::SaveNew, .displayName = "AI checkpoint"}).HasValue());
+    f.Ready();
+    const auto page = f.Page();
+    REQUIRE(page.rows.size() == 1);
+    const auto command = Value(f.host->Snapshot()->manager->Command(SaveManagerCommandKind::Load, page.rows.front().slot));
+    f.SetAiValue(agent, false);
+    const auto live = Value(f.aiRuntime->CaptureCanonicalState(*original));
+    CHECK(live != saved);
+    REQUIRE(f.aiRuntime->StartTaskAtSafePoint(agent, AI::TestSupport::MakeIdentity<AI::TaskId>(71)).HasValue());
+    SECTION("a fully consumed AI record publishes alongside its reconstructed Scene") {
+        REQUIRE(f.host->Request({.kind = Editor::PlaySaveCommandKind::Load, .selection = command}).HasValue());
+        f.Ready();
+        const auto restored = f.scenes.ActiveScene();
+        REQUIRE(restored);
+        CHECK_FALSE(restored->SameIncarnation(*original));
+        CHECK(f.aiRuntime->Find(agent).HasError());
+        CHECK(Value(f.aiRuntime->CaptureCanonicalState(*restored)) == saved);
+        CHECK_FALSE(Value(f.aiRuntime->Snapshot()).Agents().front().hasRunningTask);
+    }
+    SECTION("a participant which omits AI restore cannot publish its Scene") {
+        f.acceptAiRestore = false;
+        REQUIRE(f.host->Request({.kind = Editor::PlaySaveCommandKind::Load, .selection = command}).HasValue());
+        REQUIRE(f.Rejected());
+        CHECK(f.scenes.ActiveScene()->SameIncarnation(*original));
+        CHECK(Value(f.aiRuntime->CaptureCanonicalState(*original)) == live);
+        CHECK(Value(f.aiRuntime->Find(agent)).hasRunningTask);
+    }
 }
 
 TEST_CASE("Play retirement retains actual accepted worker until scheduler "

@@ -1,3 +1,4 @@
+#include "EditorPlaySaveAi.h"
 #include "EditorPlaySaveFailurePublication.h"
 #include "EditorPlaySaveHostRestore.h"
 #include "EditorPlaySavePrefabServices.h"
@@ -20,6 +21,9 @@ namespace Horo::Application::Internal {
                                              inside this bundle. */
             SceneRuntimeId candidate;
             std::shared_ptr<PlaySavePrefabServices> prefabs;
+            std::shared_ptr<PlaySaveAiServices> ai;
+            RuntimeSceneView candidateView;
+            CancellationToken cancellation;
             std::shared_ptr<Prefab::PrefabRestoreEntities> dynamic;
             std::shared_ptr<const PlaySaveSceneState> decoded;
         };
@@ -115,13 +119,24 @@ namespace Horo::Application::Internal {
             Result<void> PrepareScene(RuntimeScene &scene) override {
                 if (auto prepared = bundle_->PrepareScene(scene); prepared.HasError())
                     return RecordFailure(std::move(prepared));
-                return RecordFailure(PrepareGameplay(scene));
+                return RecordFailure(PreparePeers(scene));
             }
 
             Result<void> PrepareScene(RuntimeScene &scene, SceneRestoreCandidateCommands &commands) override {
                 if (auto prepared = bundle_->PrepareScene(scene, commands); prepared.HasError())
                     return RecordFailure(std::move(prepared));
-                return RecordFailure(PrepareGameplay(scene));
+                return RecordFailure(PreparePeers(scene));
+            }
+
+            /** @brief Gives reconstructed peers to their owning activation participants. */
+            Result<void> PreparePeers(RuntimeScene &scene) const {
+                if (const auto gameplay = PrepareGameplay(scene); gameplay.HasError())
+                    return gameplay;
+                if (!control_->ai)
+                    return control_->decoded->ai ? Result<void>::Failure(MakeError(SaveErrors::ParticipantAdapterMissing))
+                                                 : Result<void>::Success();
+                control_->candidateView = scene.View();
+                return control_->ai->Stage(control_->candidateView, control_->decoded->ai, control_->cancellation);
             }
 
             Result<void> PrepareGameplay(RuntimeScene &scene) const {
@@ -147,6 +162,11 @@ namespace Horo::Application::Internal {
 
             /** @copydoc SceneAggregateRestore::ValidatePublication */
             Result<void> ValidatePublication(const RuntimeSceneView *active) const override {
+                if (control_->ai) {
+                    const auto consumed = control_->ai->ValidateConsumption(control_->candidateView);
+                    if (consumed.HasError())
+                        return consumed;
+                }
                 return bundle_->ValidatePublication(active);
             }
 
@@ -166,6 +186,8 @@ namespace Horo::Application::Internal {
             /** @copydoc SceneAggregateRestore::Rollback */
             void Rollback() noexcept override {
                 bundle_->Rollback();
+                if (control_->ai)
+                    control_->ai->Cancel(control_->candidateView);
                 if (control_->behaviorOwner)
                     control_->behaviorOwner->CancelPrepared(control_->candidate);
                 if (!state_->published && control_->prefabs)
@@ -223,9 +245,9 @@ namespace Horo::Application::Internal {
     PlaySaveSceneHandoff::PlaySaveSceneHandoff(Runtime::RuntimeSceneService &scenes, std::shared_ptr<PlaySaveRestoreSource> source,
                                                std::shared_ptr<const Runtime::ISceneRestoreGenerationAuthority> authority,
                                                std::shared_ptr<PlaySaveSceneHandoffState> state, Runtime::SaveWorldId world,
-                                               std::shared_ptr<PlaySavePrefabServices> prefabs)
+                                               std::shared_ptr<PlaySavePrefabServices> prefabs, std::shared_ptr<PlaySaveAiServices> ai)
         : scenes_(scenes), source_(std::move(source)), authority_(std::move(authority)), state_(std::move(state)), world_(world),
-          prefabs_(std::move(prefabs)) {}
+          prefabs_(std::move(prefabs)), ai_(std::move(ai)) {}
 
     PlaySaveSceneHandoff::~PlaySaveSceneHandoff() = default;
 
@@ -242,6 +264,8 @@ namespace Horo::Application::Internal {
         pending->control->source = source_;
         pending->control->behaviorOwner = source_->BehaviorOwner();
         pending->control->prefabs = prefabs_;
+        pending->control->ai = ai_;
+        pending->control->cancellation = pending->cancellation.Token();
         pending->control->decoded = decoded;
         const auto count = decoded->prefabs ? decoded->prefabs->instances.size() : 0;
         pending->loads.resize(count);

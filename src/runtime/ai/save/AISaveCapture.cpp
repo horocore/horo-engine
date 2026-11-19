@@ -14,6 +14,17 @@ namespace Horo::AI {
         using RecordBytes = Result<std::vector<std::uint8_t>>;
         constexpr std::uint32_t SaveSchemaVersion = 1;
 
+        /** @brief Counts live Scene components so an incomplete runtime inventory cannot enter a required record. */
+        std::size_t SceneAgentCount(const RuntimeSceneView &scene) noexcept {
+            std::size_t count{};
+            for (std::size_t slot = 0; slot < scene.SlotCount(); ++slot) {
+                const auto entity = scene.EntityAt(slot);
+                if (entity && (entity->components->aiAgent || entity->components->aiController))
+                    ++count;
+            }
+            return count;
+        }
+
         /** @brief Copies the base-agent record into the current aggregate capture. */
         class CaptureAdapter final : public ICanonicalStateAdapter {
         public:
@@ -62,6 +73,9 @@ namespace Horo::AI {
                 const auto state = owner->CaptureCanonicalState(*scene, budget);
                 if (state.HasError())
                     return RecordBytes::Failure(state.ErrorValue());
+                if (state.Value().agents.size() != SceneAgentCount(*scene))
+                    return RecordBytes::Failure(
+                        MakeError(AIErrors::CanonicalStateInvalid, "AI capture requires the complete Scene population."));
                 return EncodeAiCanonicalStateRecord(state.Value(), budget);
             }
 

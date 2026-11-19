@@ -11,12 +11,12 @@ namespace Horo::Application::Internal {
         Result<void> ValidatePhysicsSelection(const PlaySaveStorageSchema &schema,
                                               std::span<const Editor::PlaySaveGameplayBinding> gameplay,
                                               const std::shared_ptr<PlaySavePhysicsServices> &physics,
-                                              const Runtime::RuntimeSceneView &scene) {
+                                              const Runtime::RuntimeSceneView &scene, bool aiRecord) {
             if (!schema.physics || !physics)
                 return Result<void>::Failure(MakeError(Runtime::SaveErrors::ParticipantAdapterMissing));
             if (*schema.physics != Physics::Detail::PhysicsStateSaveDescriptor())
                 return Result<void>::Failure(MakeError(Runtime::SaveErrors::CaptureRegistryStale));
-            return ValidatePlaySaveCurrentScope(scene, gameplay, PlaySavePhysicsReadPolicy::CanonicalRecordRequired);
+            return ValidatePlaySaveCurrentScope(scene, gameplay, PlaySavePhysicsReadPolicy::CanonicalRecordRequired, aiRecord);
         }
 
         /** @brief Admits only a real active Play epoch and its complete actual typed state inventory. */
@@ -30,9 +30,12 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(MakeError(Runtime::SaveErrors::RestoreContextInvalid));
             const auto gameplay = liveBindings ? std::span<const Editor::PlaySaveGameplayBinding>{*liveBindings}
                                                : std::span<const Editor::PlaySaveGameplayBinding>{};
+            if (schema->ai.has_value() != static_cast<bool>(environment.ai))
+                return Result<void>::Failure(MakeError(Runtime::SaveErrors::ParticipantAdapterMissing));
             if (schema->physics || physics)
-                return ValidatePhysicsSelection(*schema, gameplay, physics, *active);
-            const auto captured = CapturePlaySaveScene(*active, schema->baseline, schema->identities, gameplay);
+                return ValidatePhysicsSelection(*schema, gameplay, physics, *active, schema->ai.has_value());
+            const auto captured =
+                CapturePlaySaveScene(*active, schema->baseline, schema->identities, gameplay, nullptr, nullptr, schema->ai.has_value());
             return captured.HasError() ? Result<void>::Failure(captured.ErrorValue()) : Result<void>::Success();
         }
     }  // namespace

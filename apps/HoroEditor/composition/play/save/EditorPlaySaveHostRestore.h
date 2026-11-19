@@ -11,6 +11,7 @@
 #include <mutex>
 
 namespace Horo::Application::Internal {
+    class PlaySaveAiServices;
     class PlaySavePrefabServices;
     class PlaySavePhysicsServices;
     class PlaySavePhysicsRestoreFence;
@@ -89,7 +90,7 @@ namespace Horo::Application::Internal {
         PlaySaveSceneHandoff(Runtime::RuntimeSceneService &scenes, std::shared_ptr<PlaySaveRestoreSource> source,
                              std::shared_ptr<const Runtime::ISceneRestoreGenerationAuthority> authority,
                              std::shared_ptr<PlaySaveSceneHandoffState> state, Runtime::SaveWorldId world,
-                             std::shared_ptr<PlaySavePrefabServices> prefabs = {});
+                             std::shared_ptr<PlaySavePrefabServices> prefabs = {}, std::shared_ptr<PlaySaveAiServices> ai = {});
         ~PlaySaveSceneHandoff() override;
         /** @brief Advances bounded actual prefab loads and queues the sole original packet only when its inputs are ready.
          * Called only by the existing safe-point pump, never by Snapshot or a worker.
@@ -109,6 +110,7 @@ namespace Horo::Application::Internal {
         std::shared_ptr<PlaySaveSceneHandoffState> state_;
         Runtime::SaveWorldId world_;
         std::shared_ptr<PlaySavePrefabServices> prefabs_;
+        std::shared_ptr<PlaySaveAiServices> ai_;
         std::unique_ptr<Pending> pending_;
         /** @brief Retains the original failure while cooperatively draining actual accepted loads. */
         void RejectPending(Error error);

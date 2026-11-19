@@ -1,5 +1,6 @@
 #include "EditorPlaySaveHostStorage.h"
 
+#include "EditorPlaySaveAi.h"
 #include "EditorPlaySaveIdentityIssuing.h"
 #include "EditorPlaySavePhysicsArchive.h"
 #include "EditorPlaySavePrefabCapture.h"
@@ -49,6 +50,8 @@ namespace Horo::Application::Internal {
                 policy.compatibility.participants.push_back(Compatibility(*schema.lifecycle));
             if (schema.physics)
                 policy.compatibility.participants.push_back(Compatibility(*schema.physics));
+            if (schema.ai)
+                policy.compatibility.participants.push_back(Compatibility(*schema.ai));
             for (const auto &declaration : schema.gameplay)
                 policy.compatibility.participants.push_back(Compatibility(declaration.descriptor.participant));
             std::ranges::sort(policy.compatibility.participants, {}, &SaveParticipantCompatibility::participant);
@@ -117,7 +120,11 @@ namespace Horo::Application::Internal {
             const auto physics = ValidatePlaySavePhysicsArchive(archive, *schema);
             if (physics.HasError())
                 return Result<void>::Failure(physics.ErrorValue());
-            if (const auto core = DecodePlaySaveSceneStructure(*bytes.Value(), schema->baseline, schema->identities, physics.Value());
+            const auto ai = DecodePlaySaveAi(archive, schema->ai);
+            if (ai.HasError())
+                return Result<void>::Failure(ai.ErrorValue());
+            if (const auto core = DecodePlaySaveSceneStructure(*bytes.Value(), schema->baseline, schema->identities, physics.Value(),
+                                                               static_cast<bool>(ai.Value()));
                 core.HasError()) {
                 return Result<void>::Failure(core.ErrorValue());
             } else {

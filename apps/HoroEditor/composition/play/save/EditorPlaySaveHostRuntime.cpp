@@ -1,3 +1,4 @@
+#include "EditorPlaySaveAi.h"
 #include "EditorPlaySaveHostInternal.h"
 #include "EditorPlaySaveIdentityIssuing.h"
 #include "EditorPlaySavePrefabCapture.h"
@@ -130,9 +131,10 @@ namespace Horo::Application::Internal {
 
     /** @copydoc EditorPlaySaveHost::State::RegisterCoreCapture */
     Result<void> EditorPlaySaveHost::State::RegisterCoreCapture() {
-        if (const auto core = registry.Register(PlaySaveSceneDescriptor(),
-                                                std::make_shared<PlaySaveSceneCapture>(scenes, schema->baseline, schema->identities,
-                                                                                       liveBindings, prefabs, physics));
+        if (const auto core =
+                registry.Register(PlaySaveSceneDescriptor(),
+                                  std::make_shared<PlaySaveSceneCapture>(scenes, schema->baseline, schema->identities, liveBindings,
+                                                                         prefabs, physics, schema->ai.has_value()));
             core.HasError())
             return Result<void>::Failure(core.ErrorValue());
         if (prefabs) {
@@ -140,7 +142,18 @@ namespace Horo::Application::Internal {
             if (added.HasError())
                 return Result<void>::Failure(added.ErrorValue());
         }
-        return RegisterPhysicsCapture();
+        if (const auto physical = RegisterPhysicsCapture(); physical.HasError())
+            return physical;
+        if (!environment.ai)
+            return Result<void>::Success();
+        auto bound = environment.ai->BindCapture();
+        if (bound.HasError())
+            return Result<void>::Failure(bound.ErrorValue());
+        if (bound.Value().descriptor != *schema->ai)
+            return Result<void>::Failure(MakeError(SaveErrors::CaptureRegistryStale));
+        auto binding = std::move(bound).Value();
+        const auto registered = registry.Register(binding.descriptor, std::move(binding.adapter));
+        return registered.HasError() ? Result<void>::Failure(registered.ErrorValue()) : Result<void>::Success();
     }
 
     /** @copydoc EditorPlaySaveHost::State::Compose */
@@ -255,7 +268,7 @@ namespace Horo::Application::Internal {
                                                                   lifecycle, physics);
             auto preparedHandoff =
                 std::make_shared<PlaySaveSceneHandoff>(scenes, source, authority, std::make_shared<PlaySaveSceneHandoffState>(),
-                                                       environment.storage.world, prefabs);
+                                                       environment.storage.world, prefabs, environment.ai);
             auto admitted = runtime->Load(descriptor, std::move(source), preparedHandoff);
             if (admitted.HasError())
                 return Result<void>::Failure(admitted.ErrorValue());

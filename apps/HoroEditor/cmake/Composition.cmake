@@ -194,11 +194,12 @@ target_link_libraries(HoroAnimationSceneHostInternal INTERFACE HoroAnimationHost
 set(HORO_EDITOR_PLAY_SAVE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_play_save_headers")
 file(MAKE_DIRECTORY "${HORO_EDITOR_PLAY_SAVE_HEADERS}")
 foreach(header EditorPlaySaveHostCapture.h EditorPlaySaveHostArchive.h
-        EditorPlaySaveHostStorage.h EditorPlaySaveHostRestore.h EditorPlaySaveHost.h)
+        EditorPlaySaveHostStorage.h EditorPlaySaveHostRestore.h EditorPlaySaveHost.h EditorPlaySaveAi.h)
     file(GENERATE OUTPUT "${HORO_EDITOR_PLAY_SAVE_HEADERS}/${header}"
         CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/HoroEditor/composition/play/save/${header}\"\n")
 endforeach()
 add_library(HoroEditorPlaySaveHostInternal STATIC
+    HoroEditor/composition/play/save/EditorPlaySaveAi.cpp
     HoroEditor/composition/play/save/EditorPlaySaveHostCapture.cpp
     HoroEditor/composition/play/save/EditorPlaySaveHostCodec.cpp
     HoroEditor/composition/play/save/EditorPlaySaveHostArchive.cpp
@@ -228,7 +229,7 @@ target_link_libraries(HoroEditorPlaySaveHostInternal PUBLIC HoroEngine::PrefabRu
 target_include_directories(HoroEditorPlaySaveHostInternal PUBLIC "${HORO_EDITOR_PLAY_SAVE_HEADERS}")
 target_link_libraries(HoroEditorPlaySaveHostInternal PUBLIC
     HoroEditorPlaySceneHostInternal HoroEngine::Runtime HoroEngine::RuntimeScene
-    HoroEngine::SceneCook HoroEngine::GameplayRuntime HoroEngine::GameplayModuleHost HoroEngine::Security)
+    HoroEngine::SceneCook HoroEngine::GameplayRuntime HoroEngine::GameplayModuleHost HoroEngine::Security HoroEngine::AISaveIntegration)
 target_link_libraries(HoroEditorPlaySaveHostInternal PRIVATE HoroEngine::Application HoroEngine::Platform)
 
 set(HORO_EDITOR_PROJECT_SCENE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_project_scene_headers")

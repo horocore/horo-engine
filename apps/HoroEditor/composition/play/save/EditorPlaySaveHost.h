@@ -12,6 +12,8 @@
 #include <functional>
 
 namespace Horo::Application::Internal {
+    class PlaySaveAiServices;
+
     /** @brief Actual process services and immutable scope selected before activation; every service outlives settlement. */
     struct EditorPlaySaveEnvironment final {
         JobSystem &jobs;
@@ -19,17 +21,18 @@ namespace Horo::Application::Internal {
         Clock &clock;
         WallClock &wallClock;
         PlaySaveStorageConfig storage;
+        std::shared_ptr<PlaySaveAiServices> ai;
     };
 
     class PlaySavePrefabServices;
     class PlaySavePhysicsServices;
     class EditorPlaySaveHost;
     /** @brief Cold host factory; every invocation issues a new sandbox namespace and actual authored identity inventory. */
-    using EditorPlaySaveFactory = std::function<
-        Result<std::unique_ptr<EditorPlaySaveHost>>(Runtime::SaveProjectId, Runtime::RuntimeSceneService &,
-                                                    const Runtime::RuntimeSceneDefinition &, std::vector<Editor::PlaySaveGameplayBinding>,
-                                                    std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner>,
-                                                    std::shared_ptr<PlaySavePrefabServices>, std::shared_ptr<PlaySavePhysicsServices>)>;
+    using EditorPlaySaveFactory = std::function<Result<
+        std::unique_ptr<EditorPlaySaveHost>>(Runtime::SaveProjectId, Runtime::RuntimeSceneService &,
+                                             const Runtime::RuntimeSceneDefinition &, std::vector<Editor::PlaySaveGameplayBinding>,
+                                             std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner>, std::shared_ptr<PlaySavePrefabServices>,
+                                             std::shared_ptr<PlaySavePhysicsServices>, std::shared_ptr<PlaySaveAiServices>)>;
 
     /** @brief Single owner-lane runtime save composition. Workers never retain this object or a live Scene borrow. */
     class EditorPlaySaveHost final : public Editor::EditorPlaySaveSession {

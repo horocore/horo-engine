@@ -1,3 +1,4 @@
+#include "EditorPlaySaveAi.h"
 #include "EditorPlaySaveHost.h"
 #include "EditorPlaySaveIdentityIssuing.h"
 #include "EditorPlaySavePhysicsServices.h"
@@ -75,12 +76,12 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(root.ErrorValue());
         return Outcome::Success(
             [&jobs, &operations, &clock, &wallClock, root = std::move(root).Value(),
-             entropy =
-                 std::move(entropy)](SaveProjectId project, RuntimeSceneService &scenes, const RuntimeSceneDefinition &definition,
-                                     std::vector<Editor::PlaySaveGameplayBinding> bindings,
-                                     std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner,
-                                     std::shared_ptr<PlaySavePrefabServices> prefabs,
-                                     std::shared_ptr<PlaySavePhysicsServices> physics) -> Result<std::unique_ptr<EditorPlaySaveHost>> {
+             entropy = std::move(entropy)](SaveProjectId project, RuntimeSceneService &scenes, const RuntimeSceneDefinition &definition,
+                                           std::vector<Editor::PlaySaveGameplayBinding> bindings,
+                                           std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner,
+                                           std::shared_ptr<PlaySavePrefabServices> prefabs,
+                                           std::shared_ptr<PlaySavePhysicsServices> physics,
+                                           std::shared_ptr<PlaySaveAiServices> ai) -> Result<std::unique_ptr<EditorPlaySaveHost>> {
             using Host = Result<std::unique_ptr<EditorPlaySaveHost>>;
             auto scope = Scope(root, entropy, project);
             if (scope.HasError())
@@ -92,16 +93,25 @@ namespace Horo::Application::Internal {
             declarations.reserve(bindings.size());
             for (const auto &binding : bindings)
                 declarations.push_back(binding.declaration);
+            std::optional<Runtime::CanonicalStateParticipantDescriptor> aiDescriptor;
+            if (ai) {
+                auto binding = ai->BindCapture();
+                if (binding.HasError())
+                    return Host::Failure(binding.ErrorValue());
+                aiDescriptor = std::move(binding).Value().descriptor;
+            }
             auto schema =
                 std::make_shared<PlaySaveStorageSchema>(definition, std::move(identities).Value(), std::move(declarations),
                                                         behaviorOwner ? std::optional{Gameplay::BehaviorLifecycleParticipant()}
                                                                       : std::nullopt,
                                                         prefabs ? std::optional{prefabs->Provider().LimitProfile()} : std::nullopt,
                                                         physics ? std::optional{Physics::Detail::PhysicsStateSaveDescriptor()}
-                                                                : std::nullopt);
+                                                                : std::nullopt,
+                                                        std::move(aiDescriptor));
             auto live = std::make_shared<const std::vector<Editor::PlaySaveGameplayBinding>>(std::move(bindings));
-            return EditorPlaySaveHost::Create(scenes, {jobs, operations, clock, wallClock, std::move(scope).Value()}, std::move(schema),
-                                              std::move(live), std::move(behaviorOwner), std::move(prefabs), std::move(physics));
+            return EditorPlaySaveHost::Create(scenes, {jobs, operations, clock, wallClock, std::move(scope).Value(), std::move(ai)},
+                                              std::move(schema), std::move(live), std::move(behaviorOwner), std::move(prefabs),
+                                              std::move(physics));
         });
     }
 }  // namespace Horo::Application::Internal

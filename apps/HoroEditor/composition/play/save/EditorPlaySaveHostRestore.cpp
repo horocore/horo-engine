@@ -1,5 +1,6 @@
 #include "EditorPlaySaveHostRestore.h"
 
+#include "EditorPlaySaveAi.h"
 #include "EditorPlaySavePhysicsArchive.h"
 #include "EditorPlaySavePhysicsServices.h"
 #include "EditorPlaySavePrefabCapture.h"
@@ -137,7 +138,11 @@ namespace Horo::Application::Internal {
         const auto physics = ValidatePlaySavePhysicsArchive(archive, *schema_);
         if (physics.HasError())
             return Outcome::Failure(physics.ErrorValue());
-        auto decoded = DecodePlaySaveScene(*bytes.Value(), schema_->baseline, schema_->identities, bindings, physics.Value());
+        auto ai = DecodePlaySaveAi(archive, schema_->ai);
+        if (ai.HasError())
+            return Outcome::Failure(ai.ErrorValue());
+        auto decoded = DecodePlaySaveScene(*bytes.Value(), schema_->baseline, schema_->identities, bindings, physics.Value(),
+                                           static_cast<bool>(ai.Value()));
         if (decoded.HasError())
             return Outcome::Failure(decoded.ErrorValue());
         auto prefabs = DecodePlaySavePrefabs(archive, schema_->prefabProfile, schema_->identities.size());
@@ -145,6 +150,7 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(prefabs.ErrorValue());
         auto scene = std::move(decoded).Value();
         scene.prefabs = std::move(prefabs).Value();
+        scene.ai = std::move(ai).Value();
         return Outcome::Success(std::move(scene));
     }
 

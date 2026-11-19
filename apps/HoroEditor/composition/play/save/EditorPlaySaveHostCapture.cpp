@@ -18,11 +18,16 @@ namespace Horo::Application::Internal {
             return c.rigidBody || !c.colliders.empty() || !c.physicsConstraints.empty();
         }
 
-        /** @brief Rejects navigation and AI runtime state rather than persisting only its authored descriptors. */
-        bool AgentState(const RuntimeComponentSet &c) noexcept {
-            return c.navigationSurface || c.navigationRegion || c.navigationModifier || c.navigationLink || c.navigationAgent ||
-                   c.aiAgent || c.aiController;
+        /** @brief Recognizes fields requiring the Navigation owner. */
+        bool NavigationState(const RuntimeComponentSet &c) noexcept {
+            return c.navigationSurface || c.navigationRegion || c.navigationModifier || c.navigationLink || c.navigationAgent;
         }
+
+        /** @brief Exact declaration of separately covered peer state for a core Scene operation. */
+        struct PeerCoverage final {
+            bool physics{};
+            bool ai{};
+        };
 
         /** @brief Compares every immutable durable descriptor field without substituting a digest for identity. */
         bool SameDescriptor(const GameplayPersistenceDescriptor &a, const GameplayPersistenceDescriptor &b) noexcept {
@@ -49,15 +54,16 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Rejects native peer fields for which this host profile has no canonical adapter; no metadata grants coverage. */
-        bool UnsupportedPeerState(const RuntimeComponentSet &c, bool physics = false) {
-            return c.characterController || (!physics && PhysicalState(c)) || AgentState(c) || c.animation || c.audioSource ||
-                   c.audioListener || c.uiCanvas || !c.gameplayComponents.empty();
+        bool UnsupportedPeerState(const RuntimeComponentSet &c, PeerCoverage coverage) {
+            return c.characterController || (!coverage.physics && PhysicalState(c)) || NavigationState(c) ||
+                   (!coverage.ai && (c.aiAgent || c.aiController)) || c.animation || c.audioSource || c.audioListener || c.uiCanvas ||
+                   !c.gameplayComponents.empty();
         }
 
         /** @brief Required peer state cannot disappear behind a successful core Scene record. */
         bool UnregisteredState(const RuntimeComponentSet &c, std::span<const Editor::PlaySaveGameplayBinding> gameplay,
-                               bool physics = false) {
-            return UnsupportedPeerState(c, physics) || !BehaviorsCovered(c, gameplay);
+                               PeerCoverage coverage) {
+            return UnsupportedPeerState(c, coverage) || !BehaviorsCovered(c, gameplay);
         }
 
         /** @brief Identifies unsupported content without claiming that a source descriptor is live subsystem state. */
@@ -86,11 +92,11 @@ namespace Horo::Application::Internal {
 
         /** @brief Copies one real entity and translates its parent through current authored provenance. */
         Result<RuntimeEntityDefinition> CaptureEntity(const RuntimeSceneView &scene, const RuntimeEntityView &entity,
-                                                      std::span<const Editor::PlaySaveGameplayBinding> gameplay, bool physics) {
+                                                      std::span<const Editor::PlaySaveGameplayBinding> gameplay, PeerCoverage coverage) {
             using Outcome = Result<RuntimeEntityDefinition>;
             if (!HasCoreValues(entity))
                 return Outcome::Failure(Unsupported());
-            if (UnregisteredState(*entity.components, gameplay, physics) || !entity.groupReferences.empty() ||
+            if (UnregisteredState(*entity.components, gameplay, coverage) || !entity.groupReferences.empty() ||
                 !entity.groupSpawnLineage.empty())
                 return Outcome::Failure(Unsupported());
             std::optional<SceneObjectId> parent;
@@ -107,14 +113,14 @@ namespace Horo::Application::Internal {
 
         /** @brief Dynamic existence is owned by the same canonical inventory and all subsystem state still requires actual adapters. */
         Result<void> CaptureDynamic(const RuntimeEntityView &entity, const PersistentEntityIdentityMap &inventory,
-                                    std::span<const Editor::PlaySaveGameplayBinding> gameplay, bool physics) {
+                                    std::span<const Editor::PlaySaveGameplayBinding> gameplay, PeerCoverage coverage) {
             auto identity = inventory.Find(entity.entity);
             if (identity.HasError())
                 return Result<void>::Failure(identity.ErrorValue());
             const auto records = inventory.Records();
             if (const auto record = std::ranges::find(records, identity.Value(), &PersistentEntityRecord::identity);
                 record == records.end() || !std::holds_alternative<SpawnedPersistentEntityProvenance>(record->provenance) ||
-                !entity.components || UnregisteredState(*entity.components, gameplay, physics))
+                !entity.components || UnregisteredState(*entity.components, gameplay, coverage))
                 return Result<void>::Failure(Unsupported());
             return Result<void>::Success();
         }
@@ -122,18 +128,18 @@ namespace Horo::Application::Internal {
         /** @brief Freezes current typed values only after bounds and actual Scene identity have been admitted. */
         Result<RuntimeSceneDefinition> CaptureDefinition(const RuntimeSceneView &scene, const RuntimeSceneDefinition &baseline,
                                                          std::span<const Editor::PlaySaveGameplayBinding> gameplay,
-                                                         const PersistentEntityIdentityMap *inventory, bool physics) {
+                                                         const PersistentEntityIdentityMap *inventory, PeerCoverage coverage) {
             SceneDefinitionBuilder builder(baseline.Id(), baseline.Revision());
             for (std::size_t index = 0; index < scene.SlotCount(); ++index) {
                 const auto entity = scene.EntityAt(index);
                 if (!entity)
                     continue;
                 if (!entity->authoredObject && inventory) {
-                    if (auto admitted = CaptureDynamic(*entity, *inventory, gameplay, physics); admitted.HasError())
+                    if (auto admitted = CaptureDynamic(*entity, *inventory, gameplay, coverage); admitted.HasError())
                         return Result<RuntimeSceneDefinition>::Failure(admitted.ErrorValue());
                     continue;
                 }
-                auto captured = CaptureEntity(scene, *entity, gameplay, physics);
+                auto captured = CaptureEntity(scene, *entity, gameplay, coverage);
                 if (captured.HasError())
                     return Result<RuntimeSceneDefinition>::Failure(captured.ErrorValue());
                 builder.Add(std::move(captured).Value());
@@ -209,14 +215,14 @@ namespace Horo::Application::Internal {
         if (definition.Entities().size() > MaximumEntities)
             return Result<void>::Failure(MakeError(Runtime::SaveErrors::CaptureBudgetExceeded));
         for (const auto &entity : definition.Entities())
-            if (UnregisteredState(entity.components, gameplay, physics && physics->Matches(scene)))
+            if (UnregisteredState(entity.components, gameplay, {.physics = physics && physics->Matches(scene)}))
                 return Result<void>::Failure(Unsupported());
         return Result<void>::Success();
     }
 
     /** @copydoc ValidatePlaySaveCurrentScope */
     Result<void> ValidatePlaySaveCurrentScope(Runtime::RuntimeSceneView scene, std::span<const Editor::PlaySaveGameplayBinding> gameplay,
-                                              PlaySavePhysicsReadPolicy physics) {
+                                              PlaySavePhysicsReadPolicy physics, bool aiRecord) {
         using enum Horo::Application::Internal::PlaySavePhysicsReadPolicy;
         if (physics != Unavailable && physics != CanonicalRecordRequired)
             return Result<void>::Failure(Unsupported());
@@ -228,7 +234,7 @@ namespace Horo::Application::Internal {
                 continue;
             if (!entity->components)
                 return Result<void>::Failure(Unsupported());
-            if (UnregisteredState(*entity->components, gameplay, physics == CanonicalRecordRequired))
+            if (UnregisteredState(*entity->components, gameplay, {physics == CanonicalRecordRequired, aiRecord}))
                 return Result<void>::Failure(Unsupported());
         }
         return Result<void>::Success();
@@ -236,28 +242,29 @@ namespace Horo::Application::Internal {
 
     /** @copydoc ValidatePlaySaveCoreReadState */
     Result<void> ValidatePlaySaveCoreReadState(const Runtime::RuntimeSceneDefinition &definition,
-                                               std::span<const Editor::PlaySaveGameplayBinding> gameplay,
-                                               PlaySavePhysicsReadPolicy physics) {
+                                               std::span<const Editor::PlaySaveGameplayBinding> gameplay, PlaySavePhysicsReadPolicy physics,
+                                               bool aiRecord) {
         using enum Horo::Application::Internal::PlaySavePhysicsReadPolicy;
         if (physics != Unavailable && physics != CanonicalRecordRequired)
             return Result<void>::Failure(Unsupported());
         if (definition.Entities().size() > MaximumEntities)
             return Result<void>::Failure(Unsupported());
         for (const auto &entity : definition.Entities())
-            if (UnregisteredState(entity.components, gameplay, physics == CanonicalRecordRequired))
+            if (UnregisteredState(entity.components, gameplay, {physics == CanonicalRecordRequired, aiRecord}))
                 return Result<void>::Failure(Unsupported());
         return Result<void>::Success();
     }
 
     /** @copydoc ValidatePlaySaveCoreStructure */
-    Result<void> ValidatePlaySaveCoreStructure(const Runtime::RuntimeSceneDefinition &definition, PlaySavePhysicsReadPolicy physics) {
+    Result<void> ValidatePlaySaveCoreStructure(const Runtime::RuntimeSceneDefinition &definition, PlaySavePhysicsReadPolicy physics,
+                                               bool aiRecord) {
         using enum Horo::Application::Internal::PlaySavePhysicsReadPolicy;
         if (physics != Unavailable && physics != CanonicalRecordRequired)
             return Result<void>::Failure(Unsupported());
         if (definition.Entities().size() > MaximumEntities)
             return Result<void>::Failure(MakeError(Runtime::SaveErrors::CaptureBudgetExceeded));
         for (const auto &entity : definition.Entities())
-            if (UnsupportedPeerState(entity.components, physics == CanonicalRecordRequired))
+            if (UnsupportedPeerState(entity.components, {physics == CanonicalRecordRequired, aiRecord}))
                 return Result<void>::Failure(Unsupported());
         return Result<void>::Success();
     }
@@ -282,13 +289,13 @@ namespace Horo::Application::Internal {
                                                     std::span<const Runtime::PersistentEntityRecord> identities,
                                                     std::span<const Editor::PlaySaveGameplayBinding> gameplay,
                                                     const Runtime::PersistentEntityIdentityMap *inventory,
-                                                    const PlaySavePhysicsCaptureCoverage *physics) {
+                                                    const PlaySavePhysicsCaptureCoverage *physics, bool aiRecord) {
         using Outcome = Result<PlaySaveSceneState>;
         if (!scene.IsCurrent() || scene.DefinitionId() != baseline.Id() || scene.DefinitionRevision() != baseline.Revision())
             return Outcome::Failure(MakeError(Runtime::SaveErrors::CaptureContextInvalid));
         if (scene.SlotCount() > MaximumEntities || scene.BaselineCount() != 0)
             return Outcome::Failure(Unsupported());
-        auto definition = CaptureDefinition(scene, baseline, gameplay, inventory, physics && physics->Matches(scene));
+        auto definition = CaptureDefinition(scene, baseline, gameplay, inventory, {physics && physics->Matches(scene), aiRecord});
         if (definition.HasError())
             return Outcome::Failure(definition.ErrorValue());
         const auto map = CaptureIdentities(scene, baseline, identities, definition.Value().Entities().size());
@@ -302,9 +309,9 @@ namespace Horo::Application::Internal {
                                                std::vector<Runtime::PersistentEntityRecord> identities,
                                                std::weak_ptr<const std::vector<Editor::PlaySaveGameplayBinding>> gameplay,
                                                std::shared_ptr<PlaySavePrefabServices> prefabs,
-                                               std::shared_ptr<PlaySavePhysicsServices> physics)
+                                               std::shared_ptr<PlaySavePhysicsServices> physics, bool aiRecord)
         : scenes_(scenes), baseline_(std::move(baseline)), identities_(std::move(identities)), gameplay_(std::move(gameplay)),
-          prefabs_(std::move(prefabs)), physics_(std::move(physics)) {}
+          prefabs_(std::move(prefabs)), physics_(std::move(physics)), aiRecord_(aiRecord) {}
 
     /** @copydoc PlaySaveSceneCapture::CompleteIdentities */
     Result<std::optional<Runtime::PersistentEntityIdentityMap>> PlaySaveSceneCapture::CompleteIdentities() const {
@@ -348,7 +355,7 @@ namespace Horo::Application::Internal {
         if (auto coverage = PhysicsCoverage(context, physicsCoverage); coverage.HasError())
             return Outcome::Failure(coverage.ErrorValue());
         const auto state = CapturePlaySaveScene(scene, baseline_, identities_, bindings, complete.Value() ? &*complete.Value() : nullptr,
-                                                physicsCoverage ? &*physicsCoverage : nullptr);
+                                                physicsCoverage ? &*physicsCoverage : nullptr, aiRecord_);
         return state;
     }
 
