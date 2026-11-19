@@ -728,8 +728,7 @@ the paired motion/depth producer. The GPU counts only pixels inside each eye's
 active rectangle. Cleared, missing, occluded and unknown samples are unresolved.
 Play observes the result on its existing retirement poll, before releasing the
 auxiliary image references. Incomplete or absent tallies leave ordinary
-projection available. Provider-specific compositor encoding and its native
-acquisition contract remain separate prerequisites for admission.
+projection available.
 
 For an eligible D32 writer, the selected viewport prepares both paired history
 slots before the Play Scene activates its canonical session. The canonical
@@ -745,9 +744,11 @@ adopts those same views once into the exact issued session and preplanned slot.
 An unissued image cannot be acquired or imported. Partial failure destroys the
 views before the swapchain, retaining any native destroy debt for retry.
 When the private Play viewport has the paired reducer, the unpublished Scene
-stages both writers before issuing the canonical session. The active frame owner
-then takes the same pair after ordinary color preparation. If staging fails,
-Play continues with ordinary projection and the Scene retains any unfinished
+stages both writers and seals the native dispatch for their negotiated route.
+The immutable session plan admits synthesis only for that prepared pair. The
+active frame owner adopts the same two allocations after ordinary color
+preparation and registers their sealed dispatch. If staging fails, Play
+continues with ordinary projection and the Scene retains any unfinished
 cleanup ahead of native session retirement.
 Play holds the exact projected texture, publication and reserved graphics signal
 through GUI recording. The native backend must accept that signal before Play
@@ -760,6 +761,14 @@ fit both periods. That prior projection must also carry the same tracked
 Local or Stage to World reference as the current projection before an identity
 application-space delta can be submitted. A missing period, missing reference
 or changed transform leaves ordinary projection available.
+
+The Play frame coordinator imports both optional images only when there is
+adjacent committed projection history. It registers them with the frame only
+after the same accepted Vulkan signal finishes and both eyes report complete
+coverage at the negotiated extents. Those exact releases and counts can then
+feed the selected native synthesis chain. An incomplete acquire remains an
+optional wait and release obligation, so ordinary color projection can finish
+while the coordinator drains it and prevents auxiliary image reuse.
 
 See the [Khronos space-warp layer contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrCompositionLayerSpaceWarpInfoFB.html)
 for the distinction between runtime motion inputs and internal Renderer UV history.

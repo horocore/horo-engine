@@ -281,6 +281,29 @@ namespace Horo::XR {
         return XRFrameStatus::Ok;
     }
 
+    /** @copydoc XRFrameLifecycle::ObserveReprojectionHistory */
+    std::optional<XRObservedReprojectionHistory> XRFrameLifecycle::ObserveReprojectionHistory(const XRFrameId &frame,
+                                                                                              const XRViewRenderPlan &plan) const noexcept {
+        if (ValidateCurrent(frame) != XRFrameStatus::Ok || !reprojection_ ||
+            reprojection_->cadence != XRReprojectionCadenceMode::ObservedNativePeriods || !previousProjection_ ||
+            lastEnded_.session != frame.session || frame.sequence <= 1 || lastEnded_.sequence != frame.sequence - 1)
+            return std::nullopt;
+        using enum XRFramePhase;
+        if (current_.phase != ImagesAcquired && current_.phase != RendererSubmitted && current_.phase != ImagesReleased)
+            return std::nullopt;
+        const auto &previous = *previousProjection_;
+        const auto prediction = plan.PredictedDisplayTime();
+        if (prediction != current_.predictedDisplayTime || !CompatibleHistory(plan, previous.plan) ||
+            !UnchangedReference(plan, currentReference_, previous.plan, previous.reference))
+            return std::nullopt;
+        const auto interval = prediction.Nanoseconds() - previous.plan.PredictedDisplayTime().Nanoseconds();
+        if (interval <= 0 || interval > std::min(currentPeriod_, previous.period).ToNanoseconds())
+            return std::nullopt;
+        return XRObservedReprojectionHistory{lastEnded_.sequence,
+                                             previous.plan.PredictedDisplayTime(),
+                                             {currentReference_->Source(), {}, Math::Quaternion::Identity()}};
+    }
+
     /** @copydoc XRFrameLifecycle::MatchesReprojectionImage */
     bool XRFrameLifecycle::MatchesReprojectionImage(const XRFrameId &frame, const XRReprojectionSubImage &input,
                                                     const XRReprojectionImageKind kind,
@@ -306,13 +329,15 @@ namespace Horo::XR {
             inputs.previousPrediction != previousProjection_->plan.PredictedDisplayTime())
             return HistoryUnavailable;
         const bool observedCadence = reprojection_->cadence == XRReprojectionCadenceMode::ObservedNativePeriods;
-        const auto maximumInterval = observedCadence ? std::min(currentPeriod_, previousProjection_->period).ToNanoseconds()
-                                                     : reprojection_->maximumPredictionIntervalNanoseconds;
-        const auto interval = plan.PredictedDisplayTime().Nanoseconds() - inputs.previousPrediction.Nanoseconds();
-        if (interval <= 0 || interval > maximumInterval || !CompatibleHistory(plan, previousProjection_->plan))
-            return HistoryUnavailable;
-        if (observedCadence && !UnchangedReference(plan, currentReference_, previousProjection_->plan, previousProjection_->reference))
-            return HistoryUnavailable;
+        if (observedCadence) {
+            if (!ObserveReprojectionHistory(frame, plan))
+                return HistoryUnavailable;
+        } else {
+            const auto interval = plan.PredictedDisplayTime().Nanoseconds() - inputs.previousPrediction.Nanoseconds();
+            if (interval <= 0 || interval > reprojection_->maximumPredictionIntervalNanoseconds ||
+                !CompatibleHistory(plan, previousProjection_->plan))
+                return HistoryUnavailable;
+        }
         if (!ValidApplicationDelta(inputs.applicationDelta) || inputs.views.size() != plan.Views().size() ||
             inputs.views.size() != reprojection_->viewCount)
             return InputsInvalid;

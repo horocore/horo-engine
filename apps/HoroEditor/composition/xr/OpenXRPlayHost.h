@@ -376,9 +376,9 @@ namespace Horo::Application::Internal {
             [[nodiscard]] Result<void> PrepareResources(OpenXRPlayHost &host,
                                                         const XR::OpenXRInternal::NativeTrackingSpaceRequest &tracking);
             /** @brief Warms the exact staged reducer and paired graph while the Scene and native session are still private. */
-            [[nodiscard]] Result<void> PrewarmRenderer(OpenXRPlayHost &host);
+            [[nodiscard]] Result<void> PrewarmRenderer(OpenXRPlayHost &host, OpenXRProjectionDraft &draft);
             /** @brief Stages both auxiliary images on the exact native preparation following real viewport admission. */
-            [[nodiscard]] Result<void> StageWriter(OpenXRPlayHost &host);
+            [[nodiscard]] Result<void> StageWriter(OpenXRPlayHost &host, OpenXRProjectionDraft &draft);
             /** @brief Prepares the existing normal graph, or checks the already warmed graph in the canonical stage. */
             [[nodiscard]] Result<void> PrepareRenderer(OpenXRPlayHost &host, const XR::XRFeaturePlan &plan);
             /** @brief Seals mounted placement only after the exact native relation and origin lease agree. */

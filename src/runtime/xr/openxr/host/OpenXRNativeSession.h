@@ -18,6 +18,8 @@
 #include <utility>
 
 namespace Horo::XR::OpenXRInternal {
+    class OpenXRSwapchain;
+
     /** @brief Fixed native discovery limits; oversized publications fail, never truncate. */
     inline constexpr std::size_t MaximumNativeExtensions = 128;
     inline constexpr std::size_t MaximumNativeLayers = 32;
@@ -125,6 +127,23 @@ namespace Horo::XR::OpenXRInternal {
         NativeFeatureProviderHandle handle_;
         XRLoaderPreflightAttempt attempt_;
         NativeReprojectionOffer offer_;
+    };
+
+    /** @brief Non-callable proof of the selected dispatch and both private native allocations. */
+    class NativePreparedReprojectionProvider final {
+        friend class OpenXRNativeSession;
+
+        NativePreparedReprojectionProvider(XRLoaderPreflightAttempt attempt, std::uint64_t incarnation, NativeReprojectionOffer offer,
+                                           std::array<const OpenXRSwapchain *, 2> owners, std::array<XrSwapchain, 2> allocations,
+                                           PFN_xrVoidFunction end) noexcept
+            : attempt_(attempt), incarnation_(incarnation), offer_(offer), owners_(owners), allocations_(allocations), end_(end) {}
+
+        XRLoaderPreflightAttempt attempt_;
+        std::uint64_t incarnation_;
+        NativeReprojectionOffer offer_;
+        std::array<const OpenXRSwapchain *, 2> owners_;
+        std::array<XrSwapchain, 2> allocations_;
+        PFN_xrVoidFunction end_;
     };
 
     /** @brief Synchronous typed dispatch and exact native eye limits from the registered synthesis provider. */
@@ -314,6 +333,22 @@ namespace Horo::XR::OpenXRInternal {
          */
         [[nodiscard]] Result<NativeReprojectionProvider> RegisterReprojectionProvider(const XRSessionId &session,
                                                                                       XRLoaderPreflightAttempt attempt);
+        /** @brief Seals the native route and dispatch for both exact staged auxiliary swapchains.
+         * @param request Same private native session. @param motion Staged motion owner. @param depth Staged depth owner.
+         * @return Dispatch and allocation proof, or typed failure. Does not admit the capability or register a provider.
+         * @pre The caller retains both supplied owners through adoption or canceled preparation.
+         */
+        [[nodiscard]] Result<NativePreparedReprojectionProvider> PrepareReprojectionProvider(const NativeSessionPreparation &request,
+                                                                                             const OpenXRSwapchain &motion,
+                                                                                             const OpenXRSwapchain &depth) const;
+        /** @brief Registers the sealed dispatch after the exact staged allocations have been adopted.
+         * @param session Issued session. @param prepared Sealed route. @param motion Same adopted motion owner.
+         * @param depth Same adopted depth owner.
+         * @return One registered provider or typed rejection. No rediscovery or dispatch lookup occurs.
+         */
+        [[nodiscard]] Result<NativeReprojectionProvider> RegisterPreparedReprojectionProvider(
+            const XRSessionId &session, const NativePreparedReprojectionProvider &prepared, const OpenXRSwapchain &motion,
+            const OpenXRSwapchain &depth);
         /** @brief Obtains typed xrEndFrame dispatch and exact native bounds for a synchronous call.
          * @param provider Owner-issued registration. @return Borrow or its original stale or native owner error.
          */

@@ -170,10 +170,9 @@ namespace Horo::Application::Internal {
         };
 
         /** @brief Forms immutable capability evidence from validated native census and exact target support. */
-        Result<XRCapabilitySnapshot> ProjectionCapabilities(const NativeSystemCensus &observed, const NativeSessionCensus &session,
-                                                            const ProjectionTargets &targets, XRSystemId system,
-                                                            XRCapabilityRevision revision, const XRSystemLimits &budget,
-                                                            OptionalProjectionEvidence optional) {
+        XRCapabilityDescriptor ProjectionCapabilities(const NativeSystemCensus &observed, const NativeSessionCensus &session,
+                                                      const ProjectionTargets &targets, XRSystemId system, XRCapabilityRevision revision,
+                                                      const XRSystemLimits &budget, OptionalProjectionEvidence optional) {
             const auto spaces = std::span{session.spaces}.first(session.spaceCount);
             const auto hasSpace = [&](XrReferenceSpaceType space) {
                 return std::ranges::find(spaces, space) != spaces.end();
@@ -203,7 +202,7 @@ namespace Horo::Application::Internal {
             descriptor.states[static_cast<std::size_t>(XRCapability::HandTracking)] = optional.hands;
             descriptor.states[static_cast<std::size_t>(XRCapability::SpaceWarp)] = optional.reprojection;
             descriptor.states[static_cast<std::size_t>(XRCapability::EyeGaze)] = optional.eyeGaze;
-            return XRCapabilitySnapshot::Create(descriptor);
+            return descriptor;
         }
     }  // namespace
 
@@ -270,10 +269,10 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc OpenXRApplicationSession::PrepareProjection */
-    Result<OpenXRApplicationProjection> OpenXRApplicationSession::PrepareProjection(const Render::RenderFrontend &frontend,
-                                                                                    Editor::EditorViewportRendererVulkan &viewport,
-                                                                                    const OpenXRApplicationBindings &bindings) {
-        using Outcome = Result<OpenXRApplicationProjection>;
+    Result<OpenXRProjectionDraft> OpenXRApplicationSession::PrepareProjection(const Render::RenderFrontend &frontend,
+                                                                              Editor::EditorViewportRendererVulkan &viewport,
+                                                                              const OpenXRApplicationBindings &bindings) {
+        using Outcome = Result<OpenXRProjectionDraft>;
         const auto observedSystem = ValidateProjectionPreparation(viewport);
         if (observedSystem.HasError())
             return Outcome::Failure(observedSystem.ErrorValue());
@@ -295,25 +294,42 @@ namespace Horo::Application::Internal {
         if (reprojection.HasError())
             return Outcome::Failure(reprojection.ErrorValue());
         optional.reprojection = reprojection.Value().observed;
-        auto capabilities =
-            ProjectionCapabilities(observed, session, targets.Value(), observedSystem.Value(), revision.Value(), budget, optional);
-        if (capabilities.HasError())
-            return Outcome::Failure(capabilities.ErrorValue());
-        auto plan = AdmitXRProjectSettings(settings_, {authorities_.configuration.Snapshot().Revision(), *preflight_, selection_,
-                                                       XRRendererCompatibility::Compatible, capabilities.Value(), observedSystem.Value(),
-                                                       revision.Value()});
-        if (plan.HasError())
-            return Outcome::Failure(plan.ErrorValue());
-        if (auto current = Current(); current.HasError())
-            return Outcome::Failure(current.ErrorValue());
-        ++lastCapabilityRevision_;
-        OpenXRApplicationProjection output{std::move(capabilities).Value(), std::move(plan).Value(), targets.Value().color};
-        output.writer = reprojection.Value().writer;
+        OpenXRProjectionDraft output{ProjectionCapabilities(observed, session, targets.Value(), observedSystem.Value(), revision.Value(),
+                                                            budget, optional),
+                                     targets.Value().color,
+                                     {},
+                                     {},
+                                     reprojection.Value().writer};
         for (std::size_t eye = 0; eye < output.recommended.size(); ++eye) {
             output.recommended[eye] = {observed.primaryViews[eye].recommendedImageRectWidth,
                                        observed.primaryViews[eye].recommendedImageRectHeight};
             output.maximum[eye] = {observed.primaryViews[eye].maxImageRectWidth, observed.primaryViews[eye].maxImageRectHeight};
         }
         return Outcome::Success(std::move(output));
+    }
+
+    /** @copydoc OpenXRApplicationSession::FinalizeProjection */
+    Result<OpenXRApplicationProjection> OpenXRApplicationSession::FinalizeProjection(OpenXRProjectionDraft draft,
+                                                                                     const NativePreparedReprojectionProvider *provider) {
+        using Outcome = Result<OpenXRApplicationProjection>;
+        if (const auto current = Current(); current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        if (!preflight_ || draft.capabilities.revision.Value() != lastCapabilityRevision_ + 1)
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+        if (provider && draft.writer)
+            draft.capabilities.states[static_cast<std::size_t>(XRCapability::SpaceWarp)] = XRCapabilityState::Available;
+        auto capabilities = XRCapabilitySnapshot::Create(draft.capabilities);
+        if (capabilities.HasError())
+            return Outcome::Failure(capabilities.ErrorValue());
+        auto plan = AdmitXRProjectSettings(settings_, {authorities_.configuration.Snapshot().Revision(), *preflight_, selection_,
+                                                       XRRendererCompatibility::Compatible, capabilities.Value(), draft.capabilities.system,
+                                                       draft.capabilities.revision});
+        if (plan.HasError())
+            return Outcome::Failure(plan.ErrorValue());
+        if (auto current = Current(); current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        ++lastCapabilityRevision_;
+        return Outcome::Success({std::move(capabilities).Value(), std::move(plan).Value(), draft.color, draft.recommended, draft.maximum,
+                                 std::move(draft.writer)});
     }
 }  // namespace Horo::Application::Internal

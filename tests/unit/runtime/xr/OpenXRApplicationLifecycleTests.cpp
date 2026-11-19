@@ -2625,18 +2625,41 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(fixture.script.swapchain.destroys == (rejectDepth ? 1 : 0));
         CHECK(fixture.script.swapchain.created.format == (reject ? VK_FORMAT_D32_SFLOAT : VK_FORMAT_R8G8B8A8_UNORM));
         fixture.script.clock.sample = 1;
-        REQUIRE(RequireValue(fixture.play->PrepareRenderFrame(1)));
-        auto frame = RequireValue(fixture.frontend->BeginFrame({1, {8, 8}}));
-        RequireValue(fixture.play->ExecuteRenderFrame(frame, {}));
-        RequireValue(frame.Present());
-        RequireValue(fixture.play->FinishGui(true));
-        fixture.vulkan->native.commandState.state.Complete();
-        RequireValue(fixture.play->ProgressRenderTail());
+        const auto submit = [&](const std::uint64_t sequence) {
+            CAPTURE(sequence);
+            REQUIRE(RequireValue(fixture.play->PrepareRenderFrame(sequence)));
+            auto frame = RequireValue(fixture.frontend->BeginFrame({sequence, {8, 8}}));
+            RequireValue(fixture.play->ExecuteRenderFrame(frame, {}));
+            RequireValue(frame.Present());
+            RequireValue(fixture.play->FinishGui(true));
+            fixture.vulkan->native.commandState.state.Complete();
+            RequireValue(fixture.play->ProgressRenderTail());
+            fixture.script.frames.prediction += 1'000'000;
+        };
+        submit(1);
         CHECK(fixture.script.frames.ends == 1);
         CHECK(fixture.script.frames.layers == 1);
         CHECK(std::ranges::none_of(fixture.script.frames.ext, [](const auto &view) {
             return view.type == XR_TYPE_FRAME_SYNTHESIS_INFO_EXT;
         }));
+        if (outcome == ColdOutcome::Prepared) {
+            // The actual coordinated path must not block ordinary native ends while its staged depth owner owes a wait.
+            fixture.script.swapchain.timeoutSwapchain = OpenXR::NativeHandle<XrSwapchain>(2);
+            submit(2);
+            CHECK(fixture.script.frames.ends == 2);
+            CHECK(fixture.script.frames.layers == 1);
+            CHECK(fixture.script.swapchain.releases == 3);
+            const auto acquires = std::ranges::count(fixture.script.swapchain.calls, "acquire");
+            CHECK(acquires == 4);
+            submit(3);
+            CHECK(fixture.script.frames.ends == 3);
+            CHECK(fixture.script.frames.layers == 1);
+            CHECK(std::ranges::count(fixture.script.swapchain.calls, "acquire") == acquires + 1);
+            CHECK(fixture.script.swapchain.releases == 4);
+            fixture.script.swapchain.timeoutSwapchain = XR_NULL_HANDLE;
+            RequireValue(fixture.play->ProgressRenderTail());
+            CHECK(fixture.script.swapchain.releases == 5);
+        }
         scene->Shutdown();
         REQUIRE(RequireValue(fixture.ClosePlay()));
         CHECK(fixture.script.swapchain.destroys == fixture.script.swapchain.creates);

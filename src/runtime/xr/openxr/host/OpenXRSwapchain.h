@@ -327,6 +327,7 @@ namespace Horo::XR::OpenXRInternal {
 
     private:
         friend class OpenXRFrameCompositor;
+        friend class OpenXRNativeSession;
         friend class OpenXRReprojectionFrameImages;
         [[nodiscard]] Result<void> CheckThread() const;
         [[nodiscard]] Result<void> CheckCurrent() const;

@@ -28,8 +28,13 @@ namespace Horo::Application::Internal {
 
         Target motion;
         Target depth;
+        std::optional<XR::OpenXRInternal::NativePreparedReprojectionProvider> preparedProvider;
+        std::optional<XR::OpenXRInternal::NativeReprojectionProvider> provider;
+        std::optional<XR::OpenXRInternal::OpenXRReprojectionFrameImages> coordinated;
+        std::optional<XR::OpenXRInternal::NativeReprojectionFramePair> nativePair;
         XR::XRFrameId frame;
         std::optional<Editor::EditorVulkanXrViewportAccess::AuxiliaryImages> ready;
+        bool nativeSubmitted{};
         bool available{};
 
         WriterPair(OpenXRPlayHost &host, XR::OpenXRInternal::OpenXRSelectedVulkanBinding &graphics,
@@ -47,6 +52,11 @@ namespace Horo::Application::Internal {
         Result<std::optional<Editor::EditorVulkanXrViewportAccess::AuxiliaryImages>> Acquire(Render::RenderFrontend &frontend,
                                                                                              const XR::XRFrameId &candidate,
                                                                                              const OpenXRProjectionWriter &plan);
+        /** @brief Imports the canonical pair and creates only the frontend eye-view borrows. */
+        Result<std::optional<Editor::EditorVulkanXrViewportAccess::AuxiliaryImages>> AcquireCoordinated(
+            Render::RenderFrontend &frontend, const XR::XRFrameId &candidate, const XR::XRSwapchainImageId &projection);
+        /** @brief Progresses omitted native debts without delaying an ordinary projection. */
+        void PollOmitted(Render::RenderFrontend &frontend);
         /** @brief Retires all touched auxiliary images before the ordinary projection may finish. */
         Result<bool> Retire(Render::RenderFrontend &frontend);
         /** @brief Closes every native child; only a supplied lost session allows destructive lost retirement. */
@@ -82,6 +92,8 @@ namespace Horo::Application::Internal {
         std::optional<Render::MultiviewMotionFrame> motionFrame;
         std::optional<XR::XRFrameId> coverageFrame;
         OpenXRPlayCoverageStatus coverageStatus{OpenXRPlayCoverageStatus::Unobserved};
+        std::optional<Editor::EditorVulkanXrViewportAccess::CoverageReduction> reduction;
+        std::optional<XR::XRObservedReprojectionHistory> synthesisHistory;
         std::optional<XR::OpenXRInternal::NativePresentationViews> views;
         std::optional<Editor::EditorVulkanXrViewportAccess::ProjectionSubmission> encoded;
         std::uint64_t hostFrameNumber{}; /**< Exact successful bind receipt, not another frame issuer. */
@@ -120,6 +132,8 @@ namespace Horo::Application::Internal {
             plan.reset();
             passthrough.reset();
             motionFrame.reset();
+            reduction.reset();
+            synthesisHistory.reset();
             const auto waited = compositor.Wait();
             if (waited.HasError())
                 return Output::Failure(waited.ErrorValue());
@@ -236,8 +250,8 @@ namespace Horo::Application::Internal {
                                                  {},
                                                  publication,
                                                  Math::ClipDepthRange::ZeroToOne,
-                                                 0.1F,
-                                                 1000.0F,
+                                                 ProjectionDepth.nearMeters,
+                                                 ProjectionDepth.farMeters,
                                                  Render::MultiviewExecutionPolicy::Multipass,
                                                  {}},
                                                 owner);
@@ -265,6 +279,13 @@ namespace Horo::Application::Internal {
         /** @brief Converts the same encoded projection into a canonical submission only after native queue acceptance. */
         [[nodiscard]] Result<bool> AdmitRecordedProjection(const XR::XRFrameId &frame);
 
+        /** @brief Registers the actual current pair only with complete same-signal coverage and committed history. */
+        [[nodiscard]] bool SubmitSynthesis(const XR::XRFrameId &frame, std::span<const XR::XRSwapchainImageId> projection);
+
+        /** @brief Compiles exact released subimages and renderer counts into one native End. */
+        [[nodiscard]] Result<void> EndSynthesis(const XR::XRFrameId &frame,
+                                                std::span<const XR::OpenXRInternal::NativeProjectionTarget> projection);
+
         /** @brief Consumes exact queue-observed coverage before this frame's paired writer releases its image references. */
         void ObserveCoverage(const XR::XRFrameId &frame) noexcept;
 
@@ -282,6 +303,8 @@ namespace Horo::Application::Internal {
          * @return False while recording remains open, original poll/release error or successful view revocation.
          */
         [[nodiscard]] Result<bool> RetireViewsAfterLoss();
+
+        static constexpr XR::OpenXRInternal::NativeProjectionDepth ProjectionDepth{};
     };
 
 }  // namespace Horo::Application::Internal

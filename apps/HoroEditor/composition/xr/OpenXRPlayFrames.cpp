@@ -290,11 +290,63 @@ namespace Horo::Application::Internal {
         return Outcome::Success(ready);
     }
 
+    /** @copydoc OpenXRPlayHost::WriterPair::AcquireCoordinated */
+    Result<std::optional<Editor::EditorVulkanXrViewportAccess::AuxiliaryImages>> OpenXRPlayHost::WriterPair::AcquireCoordinated(
+        Render::RenderFrontend &frontend, const XRFrameId &candidate, const XRSwapchainImageId &projection) {
+        using Outcome = Result<std::optional<Editor::EditorVulkanXrViewportAccess::AuxiliaryImages>>;
+        using enum Render::RenderTextureAspect;
+        if (frame == candidate)
+            return Outcome::Success(ready);
+        const auto prepared = coordinated->Prepare(candidate, std::span{&projection, 1});
+        if (prepared.HasError())
+            return Outcome::Failure(prepared.ErrorValue());
+        if (!prepared.Value())
+            return Outcome::Success(std::nullopt);
+
+        nativePair = prepared.Value();
+        frame = candidate;
+        const auto prepare = [&](const NativeReprojectionAcquisition &source, Target &target, const Render::RenderTextureAspect aspect) {
+            return FrameState::PrepareEyeViews(frontend, {source.evidence.image, source.texture}, source.evidence.allocation, aspect,
+                                               target.views);
+        };
+        if (auto views = prepare(nativePair->motion, motion, Color); views.HasError())
+            return Outcome::Failure(views.ErrorValue());
+        if (auto views = prepare(nativePair->depth, depth, Depth); views.HasError())
+            return Outcome::Failure(views.ErrorValue());
+        ready.emplace(nativePair->motion.texture, nativePair->depth.texture, motion.views, depth.views);
+        return Outcome::Success(ready);
+    }
+
+    /** @copydoc OpenXRPlayHost::WriterPair::PollOmitted */
+    void OpenXRPlayHost::WriterPair::PollOmitted(Render::RenderFrontend &frontend) {
+        if (!coordinated || nativePair)
+            return;
+        for (auto *target : {&motion, &depth})
+            if (FrameState::ReleaseEyeViews(frontend, target->views).HasError())
+                return;
+        // An unreferenced image remains the coordinator's debt. It cannot be reused until it retires, and Close retries it.
+        static_cast<void>(coordinated->PollRetirement());
+    }
+
     /** @copydoc OpenXRPlayHost::WriterPair::Retire */
     Result<bool> OpenXRPlayHost::WriterPair::Retire(Render::RenderFrontend &frontend) {
         if (!frame.IsValid())
             return Result<bool>::Success(true);
         ready.reset();
+        if (coordinated) {
+            if (nativeSubmitted) {
+                for (auto *target : {&motion, &depth})
+                    if (auto views = FrameState::ReleaseEyeViews(frontend, target->views); views.HasError())
+                        return Result<bool>::Failure(views.ErrorValue());
+                return coordinated->PollRetirement();
+            }
+            if (auto omitted = coordinated->Omit(frame); omitted.HasError())
+                return Result<bool>::Failure(omitted.ErrorValue());
+            nativePair.reset();
+            frame = {};
+            PollOmitted(frontend);
+            return Result<bool>::Success(true);
+        }
         for (auto *target : {&motion, &depth}) {
             const auto retired = FrameState::RetireImage(frontend, target->owner, target->views);
             if (retired.HasError() || !retired.Value())
@@ -322,13 +374,15 @@ namespace Horo::Application::Internal {
             target->acquisition.reset();
         }
         frame = {};
+        nativePair.reset();
+        nativeSubmitted = false;
         return Result<bool>::Success(true);
     }
 
     /** @copydoc OpenXRPlayHost::SceneState::StageWriter */
-    Result<void> OpenXRPlayHost::SceneState::StageWriter(OpenXRPlayHost &host) {
+    Result<void> OpenXRPlayHost::SceneState::StageWriter(OpenXRPlayHost &host, OpenXRProjectionDraft &draft) {
         using Viewport = Editor::EditorVulkanXrViewportAccess;
-        if (!projection->writer || !prewarmedRenderer || !Viewport::HasPreparedReduction(host.composition_.viewport, *prewarmedRenderer))
+        if (!draft.writer || !prewarmedRenderer || !Viewport::HasPreparedReduction(host.composition_.viewport, *prewarmedRenderer))
             return Result<void>::Success();
         const auto graphics = host.composition_.session.BorrowPreparedGraphics();
         if (graphics.HasError())
@@ -339,12 +393,18 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(selected.ErrorValue());
         preparedWriter =
             std::make_shared<WriterPair>(host, prepared.graphics, prepared.binding, selected.Value().device, selected.Value().views);
-        if (auto staged = preparedWriter->Stage(prepared.session, *projection->writer, host.getProc_); staged.HasError()) {
-            projection->writer.reset();
-            const auto closed = preparedWriter->Close(host.composition_.frontend);
-            if (closed.HasValue() && closed.Value())
-                preparedWriter.reset();
+        if (auto staged = preparedWriter->Stage(prepared.session, *draft.writer, host.getProc_); staged.HasValue()) {
+            auto route =
+                host.native_.PrepareReprojectionProvider(prepared.session, preparedWriter->motion.owner, preparedWriter->depth.owner);
+            if (route.HasValue()) {
+                preparedWriter->preparedProvider.emplace(std::move(route).Value());
+                return Result<void>::Success();
+            }
         }
+        draft.writer.reset();
+        const auto closed = preparedWriter->Close(host.composition_.frontend);
+        if (closed.HasValue() && closed.Value())
+            preparedWriter.reset();
         return Result<void>::Success();
     }
 
@@ -370,17 +430,25 @@ namespace Horo::Application::Internal {
         if (auto created = render_->color.Create({{candidate, {.index = 0, .generation = 1}}, color}, getProc_); created.HasError())
             return created;
         if (scene_->projection->writer) {
-            const auto prepared = [&]() -> Result<void> {
-                if (scene_->preparedWriter) {
-                    render_->writer = std::exchange(scene_->preparedWriter, {});
-                    return render_->writer->Adopt(candidate);
-                }
+            if (scene_->preparedWriter) {
+                render_->writer = std::exchange(scene_->preparedWriter, {});
+                auto &pair = *render_->writer;
+                if (auto adopted = pair.Adopt(candidate); adopted.HasError())
+                    return adopted;
+                auto registered =
+                    native_.RegisterPreparedReprojectionProvider(candidate, *pair.preparedProvider, pair.motion.owner, pair.depth.owner);
+                if (registered.HasError())
+                    return Result<void>::Failure(registered.ErrorValue());
+                pair.provider.emplace(std::move(registered).Value());
+                pair.preparedProvider.reset();
+                pair.coordinated.emplace(frames_, pair.motion.owner, pair.depth.owner);
+            } else {
                 render_->writer = std::make_shared<WriterPair>(*this, *graphics.Value(), *binding.Value(), device, views);
-                return render_->writer->Prepare(candidate, *scene_->projection->writer, getProc_);
-            }();
-            // Optional preparation can leave a native prefix. The same Scene owner keeps it until explicit close.
-            if (prepared.HasError())
-                scene_->projection->writer.reset();
+                const auto prepared = render_->writer->Prepare(candidate, *scene_->projection->writer, getProc_);
+                // Optional preparation can leave a native prefix. The same Scene owner keeps it until explicit close.
+                if (prepared.HasError())
+                    scene_->projection->writer.reset();
+            }
         }
         return Result<void>::Success();
     }
@@ -390,8 +458,20 @@ namespace Horo::Application::Internal {
         if (!render_ || render_->session != candidate || sessions_.Snapshot().session != candidate || events_)
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         const std::uint32_t layerLimit = scene_ && scene_->passthroughGrant ? 2U : 1U;
-        if (const auto configured = frames_.BindConfiguration({candidate, {.index = 0, .generation = 1}}, capabilities,
-                                                              {.maximumViews = 2, .maximumImages = 1, .maximumLayers = layerLimit});
+        std::optional<XRReprojectionPolicy> reprojection;
+        if (render_->writer && render_->writer->provider) {
+            const auto &writer = *scene_->projection->writer;
+            reprojection.emplace(XRReprojectionPolicy{.motionFormat = writer.motion.format,
+                                                      .depthFormat = writer.depth.format,
+                                                      .viewCount = static_cast<std::uint32_t>(writer.selection.eyeExtents.size()),
+                                                      .motion = XRReprojectionMotionConvention::CurrentNdcMinusPreviousNdcXYZ,
+                                                      .cadence = XRReprojectionCadenceMode::ObservedNativePeriods});
+            std::ranges::copy(writer.selection.eyeExtents, reprojection->viewExtents.begin());
+        }
+        if (const auto configured =
+                frames_.BindConfiguration({candidate, {.index = 0, .generation = 1}}, capabilities,
+                                          {.maximumViews = 2, .maximumImages = reprojection ? 3U : 1U, .maximumLayers = layerLimit},
+                                          reprojection);
             configured != XRFrameStatus::Ok)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
         if (auto bound = render_->compositor.Bind({getProc_}, {}); bound.HasError())
@@ -521,6 +601,8 @@ namespace Horo::Application::Internal {
             render_->ConvertScene(plan.Value(), configuration, revision.Value(), input_.origin, reference.Value(), publication);
         if (converted.HasError())
             return Result<void>::Failure(converted.ErrorValue());
+        if (render_->writer && render_->writer->coordinated)
+            static_cast<void>(frames_.RecordReprojectionReference(frame.frame, reference.Value()));
         const bool prepareMotion = WantsMotionHistory(scene_->projection->plan);
         const Editor::EditorVulkanXrViewportAccess::MotionInput motion{{publication, frame.frame.sequence,
                                                                         frame.predictedDisplayTime.Nanoseconds()},
@@ -539,16 +621,19 @@ namespace Horo::Application::Internal {
         if (auto baseline = bind(nullptr); baseline.HasError())
             return baseline;
         if (render_->writer && scene_->projection->writer && Viewport::PreviousDepth(composition_.viewport)) {
-            const auto pair = render_->writer->Acquire(composition_.frontend, frame.frame, *scene_->projection->writer);
-            // Incomplete optional images still retire through the normal queue/native tail. The baseline binding stays usable.
-            if (pair.HasValue() && pair.Value() && bind(&*pair.Value()).HasError())
-                if (auto baseline = bind(nullptr); baseline.HasError())
-                    return baseline;
+            auto &writer = *render_->writer;
+            if (!writer.coordinated || (!render_->passthrough && frames_.ObserveReprojectionHistory(frame.frame, plan.Value()))) {
+                const auto pair = writer.coordinated
+                                      ? writer.AcquireCoordinated(composition_.frontend, frame.frame, render_->acquisition->image)
+                                      : writer.Acquire(composition_.frontend, frame.frame, *scene_->projection->writer);
+                // Incomplete optional images retain their own cleanup. The baseline binding stays usable.
+                if (pair.HasValue() && pair.Value() && bind(&*pair.Value()).HasError())
+                    if (auto baseline = bind(nullptr); baseline.HasError())
+                        return baseline;
+            }
         }
         if (prepareMotion)
             render_->motionFrame = motion.frame;
-        // Optional calibration is useful only when the canonical reprojection policy requested the same observation.
-        static_cast<void>(frames_.RecordReprojectionReference(frame.frame, reference.Value()));
         render_->plan.emplace(std::move(plan).Value());
         render_->hostFrameNumber = frameNumber;
         return Result<void>::Success();
@@ -628,6 +713,8 @@ namespace Horo::Application::Internal {
     Result<void> OpenXRPlayHost::ProgressTail() {
         if (auto retired = composition_.session.ProgressPlaneRetirement(); retired.HasError())
             return retired;
+        if (render_ && render_->writer && !eventsPending_ && sessions_.Snapshot().state != XRSessionState::Lost)
+            render_->writer->PollOmitted(composition_.frontend);
         if (eventsPending_ || !render_ || frames_.Snapshot().phase == XRFramePhase::Idle)
             return Result<void>::Success();
         if (sessions_.Snapshot().state == XRSessionState::Lost)
@@ -671,6 +758,11 @@ namespace Horo::Application::Internal {
         if (ended.HasError())
             return ended;
         render_->CompleteMotion(projected);
+        if (render_->writer && render_->writer->nativeSubmitted) {
+            render_->writer->nativePair.reset();
+            render_->writer->nativeSubmitted = false;
+            render_->writer->frame = {};
+        }
         render_->encoded.reset();
         render_->acquisition.reset();
         render_->plan.reset();
@@ -704,6 +796,15 @@ namespace Horo::Application::Internal {
             return aborted.HasError() ? Outcome::Failure(aborted.ErrorValue()) : Outcome::Success(true);
         }
         const std::array images{acquisition->image};
+        if (writer && writer->nativePair) {
+            if (auto polled = Viewport::Poll(host.composition_.viewport); polled.HasError())
+                return Outcome::Failure(polled.ErrorValue());
+            if (!Viewport::SubmissionCompleted(host.composition_.viewport, *encoded))
+                return Outcome::Success(false);
+            ObserveCoverage(frame);
+            if (SubmitSynthesis(frame, images))
+                return Outcome::Success(true);
+        }
         if (host.frames_.Submit(frame, images) != XRFrameStatus::Ok)
             return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
         return Outcome::Success(true);
@@ -722,7 +823,29 @@ namespace Horo::Application::Internal {
             actual.depthViews != expected.depthViews)
             return;
         coverageFrame = frame;
-        coverageStatus = reduction->Complete() ? OpenXRPlayCoverageStatus::Complete : OpenXRPlayCoverageStatus::Incomplete;
+        const bool complete = reduction->Complete();
+        coverageStatus = complete ? OpenXRPlayCoverageStatus::Complete : OpenXRPlayCoverageStatus::Incomplete;
+        if (complete)
+            this->reduction = reduction;
+    }
+
+    /** @copydoc OpenXRPlayHost::FrameState::SubmitSynthesis */
+    bool OpenXRPlayHost::FrameState::SubmitSynthesis(const XRFrameId &frame, const std::span<const XRSwapchainImageId> projection) {
+        if (!reduction || !plan || !writer->provider || host.native_.BorrowReprojectionProvider(*writer->provider).HasError())
+            return false;
+        const auto history = host.frames_.ObserveReprojectionHistory(frame, *plan);
+        if (!history || reduction->predecessor.projectionSequence != history->previousFrameSequence ||
+            reduction->predecessor.predictedDisplayTimeNanoseconds != history->previousPrediction.Nanoseconds())
+            return false;
+        const auto &extents = writer->nativePair->motion.eyeExtents;
+        for (std::size_t eye = 0; eye < extents.size(); ++eye)
+            if (reduction->rectangles[eye] != Render::MultiviewRenderRectangle{0, 0, extents[eye].width, extents[eye].height})
+                return false;
+        if (writer->coordinated->Submit(frame, projection).HasError())
+            return false;
+        synthesisHistory = history;
+        writer->nativeSubmitted = true;
+        return true;
     }
 
     /** @copydoc OpenXRPlayHost::FrameState::EndRenderedProjection */
@@ -741,7 +864,39 @@ namespace Horo::Application::Internal {
                 return compositor.EndPassthroughProjection(frame, *plan, targets,
                                                            {frame, passthrough->scope, passthrough->referenceToWorld});
         }
+        if (writer && writer->nativeSubmitted)
+            return EndSynthesis(frame, targets);
         return compositor.EndProjection(frame, *plan, targets);
+    }
+
+    /** @copydoc OpenXRPlayHost::FrameState::EndSynthesis */
+    Result<void> OpenXRPlayHost::FrameState::EndSynthesis(const XRFrameId &frame,
+                                                          const std::span<const NativeProjectionTarget> projection) {
+        const auto &history = *synthesisHistory;
+        const auto &acquired = *writer->nativePair;
+        std::array<XRReprojectionViewInput, 2> inputs{};
+        std::array<XRReprojectionViewCoverage, 2> coverage{};
+        for (std::size_t eye = 0; eye < inputs.size(); ++eye) {
+            const auto [x, y, width, height] = reduction->rectangles[eye];
+            const XRRenderRectangle rectangle{x, y, width, height};
+            const auto layer = static_cast<std::uint32_t>(eye);
+            auto &input = inputs[eye];
+            input = {plan->Views()[eye].id,
+                     {acquired.motion.evidence.image, rectangle, layer},
+                     {acquired.depth.evidence.image, rectangle, layer},
+                     ProjectionDepth.minimumDepth,
+                     ProjectionDepth.maximumDepth,
+                     ProjectionDepth.nearMeters,
+                     ProjectionDepth.farMeters};
+            const auto &tally = reduction->tallies[eye];
+            coverage[eye] = {input.view, input.motion, input.depth, tally.visited, tally.unresolved};
+        }
+        const XRReprojectionInputs evidence{history.previousPrediction, history.previousFrameSequence, history.applicationDelta, inputs,
+                                            XRReprojectionCoverage{frame.session, frame.sequence, plan->PredictedDisplayTime(),
+                                                                   history.previousFrameSequence, history.previousPrediction, coverage}};
+        const auto ended = compositor.EndReprojectedProjection(frame, *plan, projection,
+                                                               {*writer->provider, writer->motion.owner, writer->depth.owner, evidence});
+        return ended.HasError() ? Result<void>::Failure(ended.ErrorValue()) : Result<void>::Success();
     }
 
     /** @copydoc OpenXRPlayHost::FrameState::CompleteMotion */
@@ -810,6 +965,10 @@ namespace Horo::Application::Internal {
                     return retired;
             }
             if (host.render_->writer) {
+                if (auto &provider = host.render_->writer->provider) {
+                    host.native_.RevokeReprojectionProvider(*provider);
+                    provider.reset();
+                }
                 const auto closed =
                     host.render_->writer->Close(host.composition_.frontend, lost ? std::optional{host.render_->session} : std::nullopt);
                 if (closed.HasError() || !closed.Value())

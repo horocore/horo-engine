@@ -237,6 +237,9 @@ namespace Horo::Editor {
         /** @brief Resolves native acceptance for this exact recording and discards a closed unissued signal. */
         [[nodiscard]] static Result<SubmissionState> ResolveSubmission(EditorViewportRendererVulkan &viewport,
                                                                        const ProjectionSubmission &submission);
+        /** @brief Returns true only after Poll observes completion of this exact live queue-accepted recording. */
+        [[nodiscard]] static bool SubmissionCompleted(const EditorViewportRendererVulkan &viewport,
+                                                      const ProjectionSubmission &submission) noexcept;
         /** @brief Borrow only the current admitted sampled left-eye view, never a desktop-camera fallback.
          * @param viewport Exact selected owner. @param frame Same successfully bound App frame.
          * @param expected Exact retained acquired first-eye generation. @return Full matching GUI binding or empty.

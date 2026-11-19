@@ -266,6 +266,12 @@ namespace Horo::XR {
          * @details Only a successful native projection End promotes this observation to predecessor evidence.
          */
         [[nodiscard]] XRFrameStatus RecordReprojectionReference(const XRFrameId &frame, const XRPoseSample &reference) noexcept;
+        /** @brief Borrows proved cadence and unchanged reference for the current projection before optional registration.
+         * @param frame Exact acquired/submitted frame. @param plan Its current projection plan.
+         * @return Adjacent committed history, or absence. Image completion and coverage still require native End validation.
+         */
+        [[nodiscard]] std::optional<XRObservedReprojectionHistory> ObserveReprojectionHistory(const XRFrameId &frame,
+                                                                                              const XRViewRenderPlan &plan) const noexcept;
 
         /** @brief Checks optional provider inputs at the runtime-owned submission cutoff.
          * @param frame Exact begun/rendered frame. @param plan Independently valid baseline projection intent.

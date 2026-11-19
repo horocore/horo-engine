@@ -1613,6 +1613,13 @@ namespace Horo::Editor {
         return Outcome::Success(SubmissionState::Rejected);
     }
 
+    /** @copydoc EditorVulkanXrViewportAccess::SubmissionCompleted */
+    bool EditorVulkanXrViewportAccess::SubmissionCompleted(const EditorViewportRendererVulkan &viewport,
+                                                           const ProjectionSubmission &submission) noexcept {
+        return viewport.owner_ == std::this_thread::get_id() && viewport.initialized_ && viewport.xrGraph_ &&
+               viewport.xrGraph_->encoded == submission && viewport.xrGraph_->observed == submission.signal;
+    }
+
     /** @copydoc EditorViewportRendererVulkan::CompleteXrMotion */
     void EditorViewportRendererVulkan::CompleteXrMotion(const std::optional<MultiviewMotionFrame> &frame, const bool projected) noexcept {
         if (owner_ != std::this_thread::get_id() || !xrGraph_)

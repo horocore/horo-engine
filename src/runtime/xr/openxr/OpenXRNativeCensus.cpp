@@ -1,4 +1,5 @@
 #include "host/OpenXRNativeSession.h"
+#include "host/OpenXRSwapchain.h"
 
 #include <algorithm>
 #include <bit>
@@ -466,6 +467,86 @@ namespace Horo::XR::OpenXRInternal {
         if (registered.HasError())
             return Outcome::Failure(registered.ErrorValue());
         return Outcome::Success(NativeReprojectionProvider{std::move(registered).Value(), attempt, offer});
+    }
+
+    /** @copydoc OpenXRNativeSession::PrepareReprojectionProvider */
+    Result<NativePreparedReprojectionProvider> OpenXRNativeSession::PrepareReprojectionProvider(const NativeSessionPreparation &request,
+                                                                                                const OpenXRSwapchain &motion,
+                                                                                                const OpenXRSwapchain &depth) const {
+        using Outcome = Result<NativePreparedReprojectionProvider>;
+        const auto owner = BorrowPreparedSession(request);
+        if (owner.HasError())
+            return Outcome::Failure(owner.ErrorValue());
+        const auto discovered = DiscoverReprojection(request.activeAttempt);
+        if (discovered.HasError())
+            return Outcome::Failure(discovered.ErrorValue());
+        const auto &offer = discovered.Value();
+        const auto &session = owner.Value();
+        const NativeReprojectionAllocation selected{request.activeAttempt, offer.route, offer.extents};
+        const auto matches = [&](const OpenXRSwapchain &chain, const NativeSwapchainRole role) {
+            if (chain.session_ != this || chain.phase_ != NativeSwapchainPhase::Prepared || !chain.stagedReprojection_ ||
+                chain.stagedReprojection_->incarnation != session.incarnation)
+                return false;
+            const auto &allocation = chain.stagedReprojection_->allocation;
+            return allocation.role == role && allocation.selection == selected;
+        };
+        if (offer.availabilityWithoutProducer != XRCapabilityState::DependencyMissing || !matches(motion, NativeSwapchainRole::Motion) ||
+            !matches(depth, NativeSwapchainRole::ReprojectionDepth) || motion.native_ == depth.native_ ||
+            motion.stagedReprojection_->allocation.slot.index == depth.stagedReprojection_->allocation.slot.index)
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+        const std::array allocations{motion.native_, depth.native_};
+
+        const auto discovery = BorrowDiscovery(request.activeAttempt);
+        if (discovery.HasError())
+            return Outcome::Failure(discovery.ErrorValue());
+        const auto end = Resolve<PFN_xrEndFrame>(discovery.Value(), "xrEndFrame");
+        if (end.HasError())
+            return Outcome::Failure(end.ErrorValue());
+        const auto current = BorrowPreparedSession(request);
+        if (current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        if (current.Value().incarnation != session.incarnation || allocations != std::array{motion.native_, depth.native_} ||
+            !matches(motion, NativeSwapchainRole::Motion) || !matches(depth, NativeSwapchainRole::ReprojectionDepth))
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+        return Outcome::Success(NativePreparedReprojectionProvider{request.activeAttempt,
+                                                                   session.incarnation,
+                                                                   offer,
+                                                                   {&motion, &depth},
+                                                                   allocations,
+                                                                   std::bit_cast<PFN_xrVoidFunction>(end.Value())});
+    }
+
+    /** @copydoc OpenXRNativeSession::RegisterPreparedReprojectionProvider */
+    Result<NativeReprojectionProvider> OpenXRNativeSession::RegisterPreparedReprojectionProvider(
+        const XRSessionId &session, const NativePreparedReprojectionProvider &prepared, const OpenXRSwapchain &motion,
+        const OpenXRSwapchain &depth) {
+        using Outcome = Result<NativeReprojectionProvider>;
+        if (const auto discovery = BorrowFeatureDiscovery(prepared.attempt_, session); discovery.HasError())
+            return Outcome::Failure(discovery.ErrorValue());
+        const auto current = Borrow(session);
+        if (current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        if (prepared.incarnation_ != current.Value().incarnation ||
+            prepared.owners_ != std::array<const OpenXRSwapchain *, 2>{&motion, &depth} ||
+            prepared.allocations_ != std::array{motion.native_, depth.native_})
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+        const NativeReprojectionAllocation selected{prepared.attempt_, prepared.offer_.route, prepared.offer_.extents};
+        const auto adopted = [&](const OpenXRSwapchain &chain, const NativeSwapchainRole role) {
+            return chain.phase_ == NativeSwapchainPhase::Available && chain.request_.target.session == session &&
+                   chain.request_.role == role && chain.request_.reprojection == selected;
+        };
+        if (!adopted(motion, NativeSwapchainRole::Motion) || !adopted(depth, NativeSwapchainRole::ReprojectionDepth))
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+        if (retainedPlan_->Decision(XRCapability::SpaceWarp).state != XRFeatureDecisionState::OptionalEnabled)
+            return Outcome::Failure(MakeError(XRErrors::OperationUnsupported));
+        const auto route = std::ranges::find(ReprojectionRoutes, prepared.offer_.route, &ReprojectionRoute::kind);
+        if (route == ReprojectionRoutes.end())
+            return Outcome::Failure(MakeError(XRErrors::OperationUnsupported));
+        auto registered = RegisterFeatureProvider(session, {route->extension, "xrEndFrame"},
+                                                  PreparedFeatureDispatch{prepared.incarnation_, prepared.end_});
+        if (registered.HasError())
+            return Outcome::Failure(registered.ErrorValue());
+        return Outcome::Success(NativeReprojectionProvider{std::move(registered).Value(), prepared.attempt_, prepared.offer_});
     }
 
     /** @copydoc OpenXRNativeSession::BorrowReprojectionProvider */

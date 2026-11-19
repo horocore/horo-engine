@@ -34,3 +34,9 @@ Horo::XR::XRFrameWaitOutcome ObserveXRFrameWait(Horo::XR::XRFrameLifecycle &fram
                                                 const Horo::Duration period) {
     return frames.RecordWaitWithNativePeriod(prediction, true, period);
 }
+
+std::optional<Horo::XR::XRObservedReprojectionHistory> ObserveXRReprojectionHistory(const Horo::XR::XRFrameLifecycle &frames,
+                                                                                    const Horo::XR::XRFrameId &frame,
+                                                                                    const Horo::XR::XRViewRenderPlan &views) {
+    return frames.ObserveReprojectionHistory(frame, views);
+}

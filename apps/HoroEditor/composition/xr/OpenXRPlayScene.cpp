@@ -254,10 +254,10 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc OpenXRPlayHost::SceneState::PrewarmRenderer */
-    Result<void> OpenXRPlayHost::SceneState::PrewarmRenderer(OpenXRPlayHost &host) {
+    Result<void> OpenXRPlayHost::SceneState::PrewarmRenderer(OpenXRPlayHost &host, OpenXRProjectionDraft &draft) {
         using Viewport = Editor::EditorVulkanXrViewportAccess;
         auto &viewport = host.composition_.viewport;
-        const auto &writer = projection->writer;
+        const auto &writer = draft.writer;
         if (!writer || !Viewport::CanPrepareReduction(viewport, writer->depth.format))
             return Result<void>::Success();
         if (auto source = geometry->ValidateSource(); source.HasError())
@@ -266,14 +266,14 @@ namespace Horo::Application::Internal {
         if (device.HasError())
             return Result<void>::Failure(device.ErrorValue());
         const auto acquired = ProjectionAcquired(device.Value().graphicsIdentity);
-        auto ready = Viewport::PreparePairedTargets(viewport, geometry->Resources(), projection->color, acquired, NativeRelease(acquired),
+        auto ready = Viewport::PreparePairedTargets(viewport, geometry->Resources(), draft.color, acquired, NativeRelease(acquired),
                                                     PairedTargets(*writer, acquired), geometry->Instances().size());
         if (ready.HasValue()) {
             prewarmedRenderer.emplace(std::move(ready).Value());
             return Result<void>::Success();
         }
         // A failed paired allocation uses ordinary preparation; this private owner still retires every partial allocation.
-        projection->writer.reset();
+        draft.writer.reset();
         return Viewport::Retire(viewport);
     }
 
@@ -439,15 +439,20 @@ namespace Horo::Application::Internal {
                                                                               *host.composition_.bindings);
         if (preparedProjection.HasError())
             return Result<void>::Failure(preparedProjection.ErrorValue());
-        projection.emplace(std::move(preparedProjection).Value());
+        auto draft = std::move(preparedProjection).Value();
         if (geometry->mounted)
-            projection->writer.reset();  // Mounted geometry has no issued per-draw history identity.
+            draft.writer.reset();  // Mounted geometry has no issued per-draw history identity.
         if (cancellation.IsCancellationRequested())
             return Result<void>::Failure(MakeError(XRSessionErrors::ActivationCancelled));
-        if (auto warmed = PrewarmRenderer(host); warmed.HasError())
+        if (auto warmed = PrewarmRenderer(host, draft); warmed.HasError())
             return warmed;
-        if (auto staged = StageWriter(host); staged.HasError())
+        if (auto staged = StageWriter(host, draft); staged.HasError())
             return staged;
+        const auto *provider = preparedWriter && preparedWriter->preparedProvider ? &*preparedWriter->preparedProvider : nullptr;
+        auto finalized = host.composition_.session.FinalizeProjection(std::move(draft), provider);
+        if (finalized.HasError())
+            return Result<void>::Failure(finalized.ErrorValue());
+        projection.emplace(std::move(finalized).Value());
         const auto &facts = *projection;
         auto activatedSession = host.sessions_.Activate(facts.capabilities, facts.capabilities.System(), facts.capabilities.Revision(),
                                                         facts.plan, cancellation);

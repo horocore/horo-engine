@@ -70,6 +70,15 @@ namespace Horo::Application::Internal {
         Render::RenderTextureDescriptor depth;
     };
 
+    /** @brief Private projection facts awaiting the selected renderer and auxiliary allocation transaction. */
+    struct OpenXRProjectionDraft final {
+        XR::XRCapabilityDescriptor capabilities;
+        Render::RenderTextureDescriptor color;
+        std::array<Render::FramebufferExtent, 2> recommended;
+        std::array<Render::FramebufferExtent, 2> maximum;
+        std::optional<OpenXRProjectionWriter> writer;
+    };
+
     /** @brief Actual same-owner projection admission, captured before the lifecycle issues its candidate.
      * @details Contains observed capability facts and admitted native allocation intent, never Ready/frame evidence.
      * The selected resource stages still create the native swapchain and cold graph before Scene publication.
@@ -228,9 +237,16 @@ namespace Horo::Application::Internal {
          * a native format, another camera/device or a default-valid tracking sample. Each successful publication
          * receives a monotonic private capability revision; no per-frame discovery or allocation is introduced.
          */
-        [[nodiscard]] Result<OpenXRApplicationProjection> PrepareProjection(const Render::RenderFrontend &frontend,
-                                                                            Editor::EditorViewportRendererVulkan &viewport,
-                                                                            const OpenXRApplicationBindings &bindings);
+        [[nodiscard]] Result<OpenXRProjectionDraft> PrepareProjection(const Render::RenderFrontend &frontend,
+                                                                      Editor::EditorViewportRendererVulkan &viewport,
+                                                                      const OpenXRApplicationBindings &bindings);
+        /** @brief Freezes the exact next capability revision only after private projection resources settle.
+         * @param draft Same prepared native/graphics facts.
+         * @param provider Sealed exact auxiliary route when the selected renderer and native pair are ready.
+         * @return Immutable canonical candidate with the admitted provider or ordinary projection.
+         */
+        [[nodiscard]] Result<OpenXRApplicationProjection> FinalizeProjection(
+            OpenXRProjectionDraft draft, const XR::OpenXRInternal::NativePreparedReprojectionProvider *provider);
         /** @brief Activates the SAME prepared session during canonical lifecycle resource preparation.
          * @param candidate Exact identity issued by that lifecycle, never an App-predicted ordinal.
          * @param capabilities Actual observed capability publication used to negotiate the plan.

@@ -77,6 +77,13 @@ namespace Horo::XR {
         Math::Quaternion rotation;
     };
 
+    /** @brief Exact successfully projected predecessor and proved unchanged app reference. */
+    struct XRObservedReprojectionHistory final {
+        std::uint64_t previousFrameSequence{};
+        XRRenderPredictionTime previousPrediction;
+        XRReprojectionSpaceDelta applicationDelta;
+    };
+
     /** @brief Completed per-eye classification over the exact output subresources.
      * @details An unresolved sample is any submitted
      * pixel for which motion/depth still lack a
