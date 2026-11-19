@@ -3,6 +3,7 @@
 #include "Horo/Network/ReplicationWorldLifecycle.h"
 #include "NetworkTestUtils.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 
@@ -90,6 +91,57 @@ namespace Horo::Network {
         REQUIRE(lifecycle.AcquireFor(FixedWork(client), ReplicationWorldCapability::ApplyAuthoritativeState).HasValue());
         RequireError(lifecycle.AcquireFor(FixedWork(client), ReplicationWorldCapability::PublishAuthority),
                      NetworkErrors::ReplicationAuthorityDenied);
+    }
+
+    TEST_CASE("Authored object activation orders mappings and fences cancelled world replacements",
+              "[unit][network][replication][lifecycle]") {
+        auto lifecycle = ReplicationWorldLifecycle::Create({.maximumObjects = 2}).Value();
+        const auto world = World();
+        const auto replacement = World(11, 2, 2);
+        const auto schema = Object().provenance.schema;
+        const std::array objects{ReplicationAuthoredSceneObject{{world.scene, {7, 3}}, {schema, {1, 0}, Runtime::SceneObjectId{20}}},
+                                 ReplicationAuthoredSceneObject{{world.scene, {8, 9}}, {schema, {1, 0}, Runtime::SceneObjectId{10}}}};
+        REQUIRE(lifecycle.StageAuthoredScene(world, objects).HasValue());
+        CHECK(lifecycle.Acquire(FixedWork(world)).HasError());
+        REQUIRE(lifecycle.CommitAtSafePoint(world.scene, world.session).HasValue());
+        const auto lease = lifecycle.Acquire(FixedWork(world)).Value();
+        const auto rows = lease.Mapping().Entries();
+        REQUIRE(rows.size() == 2);
+        CHECK(rows[0].object.Slot() == 1);
+        CHECK(rows[0].entity == objects[1].entity);
+        CHECK(rows[1].object.Slot() == 2);
+        CHECK(rows[1].entity == objects[0].entity);
+
+        auto next = objects;
+        for (auto &object : next)
+            object.entity.runtime = replacement.scene;
+        SECTION("duplicate provenance rolls back the detached candidate") {
+            auto duplicate = next;
+            duplicate[0].provenance.authoredObject = duplicate[1].provenance.authoredObject;
+            RequireError(lifecycle.StageAuthoredScene(replacement, duplicate), NetworkErrors::NetworkObjectMappingConflict);
+        }
+        SECTION("stale Scene entities do not resolve against a new world") {
+            RequireError(lifecycle.StageAuthoredScene(replacement, objects), NetworkErrors::NetworkObjectMappingInvalid);
+        }
+        SECTION("local client cannot assign authority-issued slots") {
+            auto client = replacement;
+            client.role = ReplicationExecutionRole::SimulatedClient;
+            RequireError(lifecycle.StageAuthoredScene(client, next), NetworkErrors::ReplicationAuthorityDenied);
+        }
+        SECTION("cancellation after staging still prevents publication") {
+            CancellationSource source;
+            REQUIRE(lifecycle.StageAuthoredScene(replacement, next, source.Token()).HasValue());
+            source.RequestCancellation();
+            RequireError(lifecycle.CommitAtSafePoint(replacement.scene, replacement.session), NetworkErrors::ReplicationWorldCancelled);
+        }
+        CHECK_FALSE(lifecycle.HasStagedCandidate());
+        CHECK_FALSE(lease.IsRevoked());
+        CHECK(lifecycle.ActiveDescriptor().Value() == world);
+        REQUIRE(lifecycle.StageAuthoredScene(replacement, next).HasValue());
+        REQUIRE(lifecycle.CommitAtSafePoint(replacement.scene, replacement.session).HasValue());
+        CHECK(lease.IsRevoked());
+        const auto current = lifecycle.Acquire(FixedWork(replacement)).Value();
+        CHECK(current.Mapping().Entries().front().object.Epoch() == replacement.authority);
     }
 
     TEST_CASE("Replication world pause, cancellation, loss, duplication, and stale object identity are bounded",

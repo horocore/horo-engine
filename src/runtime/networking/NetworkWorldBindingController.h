@@ -36,7 +36,7 @@ namespace Horo::Network {
         NetworkWorldBindingController &operator=(const NetworkWorldBindingController &) = delete;
 
         /** @brief Stage the selected local server occurrence before any role publication. */
-        [[nodiscard]] Result<void> Prepare();
+        [[nodiscard]] Result<void> Prepare(const NetworkAuthoredSceneProjection &authored = {});
         /** @brief Install the exact weak admitted handler before native listeners; caller detaches before transport destruction. */
         [[nodiscard]] Result<void> Attach(INetworkTransport &transport, InboundMessageDispatcher &dispatcher,
                                           const std::shared_ptr<NetworkWorldBindingController> &owner);
@@ -68,7 +68,8 @@ namespace Horo::Network {
         /** @brief Flush bounded control debt only in NetworkFlush, retaining sequence on backpressure. */
         [[nodiscard]] Result<void> Flush(std::uint64_t nowTick);
         /** @brief Prepare host-selected local travel candidates; never read a local Scene/path from a packet. */
-        [[nodiscard]] Result<void> PrepareTravel(std::span<const NetworkModeWorld> worlds);
+        [[nodiscard]] Result<void> PrepareTravel(std::span<const NetworkModeWorld> worlds,
+                                                 const NetworkAuthoredSceneProjection &authored = {});
         /** @brief Whether one finite local travel candidate still exists; false after expiry/cancel/teardown. */
         [[nodiscard]] bool TravelPending() const noexcept;
         /** @brief Query pending status or its original canonical retirement reason. */

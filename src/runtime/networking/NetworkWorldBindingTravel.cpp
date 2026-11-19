@@ -4,7 +4,8 @@
 
 namespace Horo::Network {
     /** @copydoc NetworkWorldBindingController::PrepareTravel */
-    Result<void> NetworkWorldBindingController::PrepareTravel(const std::span<const NetworkModeWorld> worlds) {
+    Result<void> NetworkWorldBindingController::PrepareTravel(const std::span<const NetworkModeWorld> worlds,
+                                                              const NetworkAuthoredSceneProjection &authored) {
         if (auto checked = Reconcile(impl_->nowTick); checked.HasError())
             return checked;
         for (const auto &peer : impl_->peers) {
@@ -13,7 +14,7 @@ namespace Horo::Network {
                 return Result<void>::Failure(
                     MakeError(NetworkErrors::NetworkModeUnavailable, "A cancelled remote prepare retains its finite expiry fence."));
         }
-        return impl_->worlds.PrepareTravel(worlds, impl_->nowTick, impl_->setup.maximumPendingTicks);
+        return impl_->worlds.PrepareTravel(worlds, impl_->nowTick, impl_->setup.maximumPendingTicks, authored);
     }
 
     /** @copydoc NetworkWorldBindingController::TravelPending */

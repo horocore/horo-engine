@@ -20,10 +20,10 @@ namespace Horo::Network::Detail {
         NetworkModeWorldState &operator=(const NetworkModeWorldState &) = delete;
 
         /** @brief Stage the selected server occurrence without publishing a role. */
-        [[nodiscard]] Result<void> Prepare();
+        [[nodiscard]] Result<void> Prepare(const NetworkAuthoredSceneProjection &authored);
         /** @brief Prepare only host-selected local travel Scenes; old publication remains unchanged. */
         [[nodiscard]] Result<void> PrepareTravel(std::span<const NetworkModeWorld> worlds, std::uint64_t nowTick,
-                                                 std::uint64_t maximumPendingTicks);
+                                                 std::uint64_t maximumPendingTicks, const NetworkAuthoredSceneProjection &authored);
 
         [[nodiscard]] bool TravelPending() const noexcept {
             return !stopped_ && travelPending_;
@@ -80,7 +80,8 @@ namespace Horo::Network::Detail {
         /** @brief Stage only the host-selected local Scene, checking a listen server's exact occurrence first. */
         [[nodiscard]] Result<void> StageClient(const NetworkWorldBindingRecord &record, std::size_t index, std::uint64_t nowTick);
         [[nodiscard]] Result<std::unique_ptr<World>> Stage(Runtime::SceneRuntimeId scene, ReplicationExecutionRole role,
-                                                           const NetworkWorldBindingRecord &record) const;
+                                                           const NetworkWorldBindingRecord &record,
+                                                           const NetworkAuthoredSceneProjection &authored = {}) const;
 
         NetworkModePlan plan_;
         const NetworkWorldBindingPolicy policy_;

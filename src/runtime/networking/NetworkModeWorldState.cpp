@@ -28,14 +28,16 @@ namespace Horo::Network::Detail {
         return plan_.worldCount;
     }
 
-    Result<std::unique_ptr<NetworkModeWorldState::World>> NetworkModeWorldState::Stage(const Runtime::SceneRuntimeId scene,
-                                                                                       const ReplicationExecutionRole role,
-                                                                                       const NetworkWorldBindingRecord &record) const {
+    Result<std::unique_ptr<NetworkModeWorldState::World>> NetworkModeWorldState::Stage(
+        const Runtime::SceneRuntimeId scene, const ReplicationExecutionRole role, const NetworkWorldBindingRecord &record,
+        const NetworkAuthoredSceneProjection &authored) const {
         auto created = ReplicationWorldLifecycle::Create();
         if (created.HasError())
             return Result<std::unique_ptr<World>>::Failure(created.ErrorValue());
         auto lifecycle = std::move(created).Value();
-        if (auto staged = lifecycle.Stage({scene, record.worldSession, record.remoteEpoch, role}); staged.HasError())
+        if (auto staged = lifecycle.StageAuthoredScene({scene, record.worldSession, record.remoteEpoch, role}, authored.objects,
+                                                       authored.cancellation);
+            staged.HasError())
             return Result<std::unique_ptr<World>>::Failure(staged.ErrorValue());
         try {
             return Result<std::unique_ptr<World>>::Success(std::make_unique<World>(std::move(lifecycle), record));
@@ -44,7 +46,7 @@ namespace Horo::Network::Detail {
         }
     }
 
-    Result<void> NetworkModeWorldState::Prepare() {
+    Result<void> NetworkModeWorldState::Prepare(const NetworkAuthoredSceneProjection &authored) {
         if (auto owner = CheckOwner(); owner.HasError())
             return owner;
         const auto server = Index(NetworkModeWorldKind::AuthorityServer);
@@ -55,8 +57,9 @@ namespace Horo::Network::Detail {
         auto issued = issuer_.Issue(plan_.worlds[server].scene);
         if (issued.HasError())
             return Result<void>::Failure(issued.ErrorValue());
-        auto staged = Stage(issued.Value().scene, issued.Value().role,
-                            {NetworkWorldBindingKind::Initial, issued.Value().session, issued.Value().authority, schemaFingerprint_, {}});
+        auto staged =
+            Stage(issued.Value().scene, issued.Value().role,
+                  {NetworkWorldBindingKind::Initial, issued.Value().session, issued.Value().authority, schemaFingerprint_, {}}, authored);
         if (staged.HasError())
             return Result<void>::Failure(staged.ErrorValue());
         candidate_[server] = std::move(staged).Value();
@@ -64,7 +67,8 @@ namespace Horo::Network::Detail {
     }
 
     Result<void> NetworkModeWorldState::PrepareTravel(const std::span<const NetworkModeWorld> worlds, const std::uint64_t nowTick,
-                                                      const std::uint64_t maximumPendingTicks) {
+                                                      const std::uint64_t maximumPendingTicks,
+                                                      const NetworkAuthoredSceneProjection &authored) {
         if (auto owner = CheckOwner(); owner.HasError())
             return owner;
         if (travelPending_ || worlds.size() != plan_.worldCount || nowTick < nowTick_ || maximumPendingTicks == 0 ||
@@ -84,7 +88,8 @@ namespace Horo::Network::Detail {
                 return Result<void>::Failure(prior.ErrorValue());
             auto staged = Stage(worlds[server].scene, ReplicationExecutionRole::AuthorityServer,
                                 {NetworkWorldBindingKind::PrepareTravel, issued.Value().session, issued.Value().authority,
-                                 schemaFingerprint_, prior.Value()});
+                                 schemaFingerprint_, prior.Value()},
+                                authored);
             if (staged.HasError())
                 return Result<void>::Failure(staged.ErrorValue());
             candidate_[server] = std::move(staged).Value();

@@ -17,6 +17,7 @@
 #include <initializer_list>
 #include <memory>
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace Horo::Network {
@@ -125,6 +126,12 @@ namespace Horo::Network {
         std::uint32_t maximumRetiredWorlds{64};
     };
 
+    /** @brief One declared authored object from an exact committed Scene, before the authority assigns a network identity. */
+    struct ReplicationAuthoredSceneObject final {
+        Runtime::EntityRef entity;          /**< Live entity occurrence in the selected Scene generation. */
+        NetworkObjectProvenance provenance; /**< Stable schema and required authored Scene object identity. */
+    };
+
     /** @brief Exact Scene/session/phase identity supplied by a caller requesting replication work. */
     struct ReplicationWorldWorkRequest final {
         Runtime::SceneRuntimeId scene;
@@ -223,6 +230,18 @@ namespace Horo::Network {
         /** @brief Stages a complete world candidate without changing the active world. */
         [[nodiscard]] Result<void> Stage(const ReplicationWorldActivationDescriptor &descriptor,
                                          const CancellationToken &cancellation = {});
+        /**
+         * @brief Stages an authority world with all of its authored mappings unpublished.
+         * @param descriptor Exact world occurrence being activated.
+         * @param objects Admitted declarations resolved against one committed Scene generation.
+         * @param cancellation Owner activation token, rechecked before publication.
+         * @return Success or a typed failure with no partial candidate.
+         * @details The owner assigns slots in stable authored-object order. Clients receive authority-issued
+         * identities through admitted network state and cannot originate these mappings.
+         */
+        [[nodiscard]] Result<void> StageAuthoredScene(const ReplicationWorldActivationDescriptor &descriptor,
+                                                      std::span<const ReplicationAuthoredSceneObject> objects,
+                                                      const CancellationToken &cancellation = {});
         /** @brief Publishes the staged candidate at the declared lifecycle safe point. */
         [[nodiscard]] Result<void> CommitAtSafePoint(Runtime::SceneRuntimeId expectedScene, NetworkSessionGeneration expectedSession);
         /** @brief Explicit phase-bearing commit overload used by runtime integrations. */

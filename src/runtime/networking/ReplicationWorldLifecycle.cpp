@@ -14,12 +14,15 @@ namespace Horo::Network {
         /** @brief Immutable identity/capability record retained by world leases after logical revocation. */
         struct ReplicationWorldRecord final {
             ReplicationWorldRecord(const ReplicationWorldActivationDescriptor &activation,
-                                   const ReplicationWorldCapabilities worldCapabilities, NetworkObjectMapping worldMapping) noexcept
-                : descriptor(activation), capabilities(worldCapabilities), mapping(std::move(worldMapping)) {}
+                                   const ReplicationWorldCapabilities worldCapabilities, NetworkObjectMapping worldMapping,
+                                   CancellationToken activationToken) noexcept
+                : descriptor(activation), capabilities(worldCapabilities), mapping(std::move(worldMapping)),
+                  activationCancellation(std::move(activationToken)) {}
 
             ReplicationWorldActivationDescriptor descriptor;
             ReplicationWorldCapabilities capabilities;
             NetworkObjectMapping mapping;
+            CancellationToken activationCancellation;
             CancellationSource cancellation;
             std::atomic<bool> revoked{false};
             std::atomic<std::uint64_t> mappingRevision{1};
@@ -67,6 +70,50 @@ namespace Horo::Network {
             return std::ranges::any_of(records, [&descriptor](const auto &record) {
                 return record->descriptor.scene == descriptor.scene && record->descriptor.session == descriptor.session;
             });
+        }
+
+        /** @brief Registers the complete sorted declaration set into a mapping that is still private. */
+        Result<void> MapAuthoredObjects(NetworkObjectMapping &mapping, ReplicationAuthorityEpoch authority,
+                                        std::vector<ReplicationAuthoredSceneObject> objects, const CancellationToken &cancellation) {
+            std::ranges::sort(objects, {}, [](const auto &row) {
+                return row.provenance.authoredObject;
+            });
+            std::optional<Runtime::SceneObjectId> previous;
+            std::uint64_t slot = 1;
+            for (const auto &row : objects) {
+                if (cancellation.IsCancellationRequested())
+                    return Failure<void>(NetworkErrors::ReplicationWorldCancelled);
+                if (!row.provenance.authoredObject)
+                    return Failure<void>(NetworkErrors::NetworkObjectMappingInvalid);
+                if (previous == row.provenance.authoredObject)
+                    return Failure<void>(NetworkErrors::NetworkObjectMappingConflict);
+                auto identity = NetworkObjectId::Create(authority, slot++, 1);
+                if (identity.HasError())
+                    return Result<void>::Failure(identity.ErrorValue());
+                if (auto registered = mapping.Register({identity.Value(), row.entity, row.provenance}); registered.HasError())
+                    return registered;
+                previous = row.provenance.authoredObject;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Constructs the detached authority-only mapping, including admission of the declared object budget. */
+        Result<NetworkObjectMapping> PrepareWorldMapping(const ReplicationWorldActivationDescriptor &descriptor,
+                                                         ReplicationWorldCapabilities capabilities, std::size_t maximumObjects,
+                                                         std::span<const ReplicationAuthoredSceneObject> objects,
+                                                         const CancellationToken &cancellation) {
+            if (!objects.empty() && !capabilities.publishAuthority)
+                return Failure<NetworkObjectMapping>(NetworkErrors::ReplicationAuthorityDenied);
+            if (objects.size() > maximumObjects)
+                return Failure<NetworkObjectMapping>(NetworkErrors::ReplicationWorldCapacityExceeded);
+            auto created = NetworkObjectMapping::Create(descriptor.authority, descriptor.scene, maximumObjects);
+            if (created.HasError())
+                return created;
+            auto mapping = std::move(created).Value();
+            if (auto mapped = MapAuthoredObjects(mapping, descriptor.authority, {objects.begin(), objects.end()}, cancellation);
+                mapped.HasError())
+                return Result<NetworkObjectMapping>::Failure(mapped.ErrorValue());
+            return Result<NetworkObjectMapping>::Success(std::move(mapping));
         }
     }  // namespace
 
@@ -150,6 +197,13 @@ namespace Horo::Network {
     /** @copydoc ReplicationWorldLifecycle::Stage */
     Result<void> ReplicationWorldLifecycle::Stage(const ReplicationWorldActivationDescriptor &descriptor,
                                                   const CancellationToken &cancellation) {
+        return StageAuthoredScene(descriptor, {}, cancellation);
+    }
+
+    /** @copydoc ReplicationWorldLifecycle::StageAuthoredScene */
+    Result<void> ReplicationWorldLifecycle::StageAuthoredScene(const ReplicationWorldActivationDescriptor &descriptor,
+                                                               const std::span<const ReplicationAuthoredSceneObject> objects,
+                                                               const CancellationToken &cancellation) {
         using enum ReplicationWorldLifecycleState;
         if (state_ == ShuttingDown || state_ == Closed)
             return Failure<void>(NetworkErrors::ReplicationWorldShuttingDown);
@@ -165,11 +219,14 @@ namespace Horo::Network {
         const auto capabilities = CapabilitiesForRole(descriptor.role);
         if (capabilities.HasError())
             return Result<void>::Failure(capabilities.ErrorValue());
-        auto mapping = NetworkObjectMapping::Create(descriptor.authority, descriptor.scene, limits_.maximumObjects);
-        if (mapping.HasError())
-            return Result<void>::Failure(mapping.ErrorValue());
         try {
-            staged_ = std::make_shared<Detail::ReplicationWorldRecord>(descriptor, capabilities.Value(), std::move(mapping).Value());
+            auto mapping = PrepareWorldMapping(descriptor, capabilities.Value(), limits_.maximumObjects, objects, cancellation);
+            if (mapping.HasError())
+                return Result<void>::Failure(mapping.ErrorValue());
+            if (cancellation.IsCancellationRequested())
+                return Failure<void>(NetworkErrors::ReplicationWorldCancelled);
+            staged_ = std::make_shared<Detail::ReplicationWorldRecord>(descriptor, capabilities.Value(), std::move(mapping).Value(),
+                                                                       cancellation);
             return Result<void>::Success();
         } catch (const std::bad_alloc &) {
             return Failure<void>(NetworkErrors::ReplicationWorldCapacityExceeded);
@@ -195,9 +252,14 @@ namespace Horo::Network {
             return Failure<void>(NetworkErrors::ReplicationWorldUnavailable);
         if (!expectedScene.IsValid() || !expectedSession.IsValid() || !SameWorld(staged_->descriptor, expectedScene, expectedSession))
             return Failure<void>(NetworkErrors::ReplicationWorldStale);
+        if (staged_->activationCancellation.IsCancellationRequested()) {
+            staged_.reset();
+            return Failure<void>(NetworkErrors::ReplicationWorldCancelled);
+        }
         if (!CanRetireActive())
             return Failure<void>(NetworkErrors::ReplicationWorldCapacityExceeded);
 
+        staged_->activationCancellation = {};
         if (active_)
             RetireActive();
         active_ = std::move(staged_);

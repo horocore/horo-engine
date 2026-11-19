@@ -207,6 +207,10 @@ namespace Horo::Application::Internal {
         void UnloadModule() noexcept;
         /** @brief Borrow the immutable Physics execution context for integrated host diagnostics. */
         [[nodiscard]] std::shared_ptr<const Gameplay::GameplayPhysicsContext> PhysicsContext() const noexcept;
+
+        /** @brief Borrows the installed immutable replication descriptors on the world owner lane.
+         * @return Snapshot pinned by the active module lease, or null when unavailable. */
+        [[nodiscard]] const Network::ReplicationDescriptorSnapshot *ReplicationDescriptors() const noexcept;
         /** @brief Reads the selected module Character scope, including typed unavailable diagnostics. @return Owned holder. */
         [[nodiscard]] std::shared_ptr<const Gameplay::GameplayCharacterContext> CharacterContext() const noexcept;
         /** @brief Borrows this active runner for an aggregate Scene group transaction.

@@ -246,10 +246,6 @@ namespace Horo::Network {
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkModeShuttingDown, "Mode composition has stopped."));
         if (started_)
             return Invalid("Mode composition has already started.");
-        if (binding_) {
-            if (auto staged = binding_->Prepare(); staged.HasError())
-                return staged;
-        }
         if (auto built = BuildEntries(); built.HasError()) {
             Shutdown();
             return built;
@@ -268,8 +264,24 @@ namespace Horo::Network {
                 return activated;
             }
         }
+        if (binding_) {
+            auto authored = CaptureAuthorityScene({entries_.data(), entryCount_});
+            auto staged = authored.HasError() ? Result<void>::Failure(authored.ErrorValue()) : binding_->Prepare(authored.Value());
+            if (staged.HasError()) {
+                Shutdown();
+                return staged;
+            }
+        }
         started_ = true;
         return Result<void>::Success();
+    }
+
+    /** @copydoc NetworkModeComposition::CaptureAuthorityScene */
+    Result<NetworkAuthoredSceneProjection> NetworkModeComposition::CaptureAuthorityScene(std::span<const Entry> entries) {
+        const auto scene = std::ranges::find_if(entries, [](const Entry &entry) {
+            return entry.request.service == NetworkModeServiceKind::Scene && entry.request.world == NetworkModeWorldKind::AuthorityServer;
+        });
+        return scene != entries.end() ? scene->service->CaptureAuthoredScene() : Result<NetworkAuthoredSceneProjection>::Success({});
     }
 
     /** @copydoc NetworkModeComposition::RunPhase */

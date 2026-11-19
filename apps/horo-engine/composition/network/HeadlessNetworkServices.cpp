@@ -100,7 +100,60 @@ namespace Horo::Application::Internal {
             slot->reset();
             return Result<std::shared_ptr<WorldRecord>>::Success(std::move(selected));
         }
+
+        /** @brief Resolves one object against the committed Scene and the admitted live schema registry. */
+        Result<Network::ReplicationAuthoredSceneObject> ResolveAuthoredObject(const Runtime::RuntimeSceneView &scene,
+                                                                              const Network::NetworkObjectProvenance &binding,
+                                                                              std::span<const Network::ReplicationDeclaration> declarations,
+                                                                              const Network::ReplicationDescriptorSnapshot &installed) {
+            using Row = Result<Network::ReplicationAuthoredSceneObject>;
+            if (!binding.IsValid() || !binding.authoredObject)
+                return Row::Failure(MakeError(Network::NetworkErrors::NetworkObjectMappingInvalid));
+            const auto schema = installed.Find(binding.schema);
+            if (schema.HasError() || schema.Value()->version != binding.schemaVersion ||
+                std::ranges::none_of(declarations, [&](const auto &declaration) {
+                return declaration.schema.id == binding.schema && declaration.schema.version == binding.schemaVersion;
+            }))
+                return Row::Failure(MakeError(Network::NetworkErrors::ReplicationDescriptorIncompatible));
+            const auto entity = scene.Find(*binding.authoredObject);
+            if (!entity)
+                return Row::Failure(MakeError(Network::NetworkErrors::ReplicationWorldStale));
+            return Row::Success({*entity, binding});
+        }
     }  // namespace
+
+    /** @copydoc HeadlessNetworkDetail::WorldService::CaptureAuthoredScene */
+    Result<Network::NetworkAuthoredSceneProjection> WorldService::CaptureAuthoredScene() const {
+        using Outcome = Result<Network::NetworkAuthoredSceneProjection>;
+        if (!owners_->configured || owners_->configured->replicatedSceneObjects.empty())
+            return Outcome::Success({});
+        const auto scene = ActiveScene();
+        if (!scene || request_.service != Network::NetworkModeServiceKind::Scene ||
+            request_.world != Network::NetworkModeWorldKind::AuthorityServer)
+            return Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationWorldUnavailable));
+        if (record_->sceneCancellation.IsCancellationRequested())
+            return Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationWorldCancelled));
+        const auto &bindings = owners_->configured->replicatedSceneObjects;
+        if (bindings.size() > Network::ReplicationWorldLimits{}.maximumObjects)
+            return Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationWorldCapacityExceeded));
+        const auto *installed = record_->activeGameplay ? record_->activeGameplay->ReplicationDescriptors() : nullptr;
+        if (!owners_->replicationAdmission || !installed)
+            return Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationDescriptorIncompatible));
+        const auto &inventory = owners_->replicationAdmission->inventory.declarations;
+        try {
+            Network::NetworkAuthoredSceneProjection projection{.cancellation = record_->sceneCancellation};
+            projection.objects.reserve(bindings.size());
+            for (const auto &binding : bindings) {
+                auto row = ResolveAuthoredObject(*scene, binding, inventory, *installed);
+                if (row.HasError())
+                    return Outcome::Failure(row.ErrorValue());
+                projection.objects.push_back(std::move(row).Value());
+            }
+            return Outcome::Success(std::move(projection));
+        } catch (const std::bad_alloc &) {
+            return Outcome::Failure(MakeError(Network::NetworkErrors::ReplicationWorldCapacityExceeded));
+        }
+    }
 
     namespace {
         /** @brief Registers the same exact pair factories for synthetic and explicit project compositions. */

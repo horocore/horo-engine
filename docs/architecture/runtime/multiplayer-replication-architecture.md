@@ -51,6 +51,27 @@ objects, find a service locator or mutate state during construction.
 
 ## Execution Roles and Authority
 
+On authenticated mode startup and travel, the composition asks the selected
+authority Scene service for its declared authored object and schema bindings
+after Scene, Physics, and Gameplay activation. The configured headless adapter
+resolves those stable Scene object identities against the exact committed Scene
+and checks each schema against both the admitted inventory and the installed
+module's immutable descriptor snapshot. Declarations are explicit host inputs.
+The adapter does not infer replication from component presence.
+
+The authority world assigns the initial slots in stable authored object order
+and stages the complete mapping privately. The normal lifecycle safe point
+publishes the mapping with its world role. Duplicate or stale bindings and
+activation cancellation discard the candidate without replacing the old world.
+An authored object identity is retained as provenance. Clients do not derive
+network identities from local object order and require the authenticated
+initial state synchronization path for receiving mappings.
+
+Existing mode services have an empty authored projection by default. A service
+wrapper around an opted-in authority Scene forwards the projection method to
+retain the same declarations. Existing world staging without authored objects
+continues through `Stage`.
+
 ```cpp
 enum class ReplicationExecutionRole : std::uint8_t {
     Standalone,

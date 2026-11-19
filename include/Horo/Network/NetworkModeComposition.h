@@ -100,6 +100,12 @@ namespace Horo::Network {
         Runtime::SceneRuntimeId scene{};
     };
 
+    /** @brief Copy of the declared authored mappings from a committed authority Scene. */
+    struct NetworkAuthoredSceneProjection final {
+        std::vector<ReplicationAuthoredSceneObject> objects;
+        CancellationToken cancellation;
+    };
+
     /** @brief A borrowed host service facade; concrete backend and gameplay types stay at the host boundary. */
     class INetworkModeService {
     public:
@@ -108,6 +114,17 @@ namespace Horo::Network {
         [[nodiscard]] virtual Result<void> Prepare() = 0;
         /** @brief Activate after all services prepared; world publication remains host-controlled. */
         [[nodiscard]] virtual Result<void> Activate() = 0;
+
+        /**
+         * @brief Copies authored mappings after the selected Scene and all dependent owners activate.
+         * @return Exact committed Scene projection, or the error that prevents world publication.
+         * @details Called on the owner lane only for the authority Scene service during startup or travel.
+         * The default supplies an empty declaration set for existing products.
+         */
+        [[nodiscard]] virtual Result<NetworkAuthoredSceneProjection> CaptureAuthoredScene() const {
+            return Result<NetworkAuthoredSceneProjection>::Success({});
+        }
+
         /** @brief Participate in a canonical non-fixed runtime phase without defining an alternate schedule. */
         [[nodiscard]] virtual Result<void> RunPhase(Runtime::RuntimePhase phase) = 0;
         /** @brief Advance one exact host-issued fixed tick. */
@@ -204,6 +221,8 @@ namespace Horo::Network {
         [[nodiscard]] static NetworkModeServiceRequest Request(const NetworkModePlan &plan, NetworkModeServiceKind service,
                                                                const NetworkModeWorld *world = nullptr) noexcept;
         [[nodiscard]] Result<void> BuildEntries();
+        /** @brief Selects the exact authority Scene service from a complete, activated set. */
+        [[nodiscard]] static Result<NetworkAuthoredSceneProjection> CaptureAuthorityScene(std::span<const Entry> entries);
         void ReleaseEntries() noexcept;
         [[nodiscard]] std::size_t WorldIndex(NetworkModeWorldKind kind) const noexcept;
         [[nodiscard]] Result<void> AppendTravelEntry(std::array<Entry, 5> &prepared, std::size_t &count,

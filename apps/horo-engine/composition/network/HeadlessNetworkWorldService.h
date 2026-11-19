@@ -13,6 +13,9 @@
 namespace Horo::Application::Internal::HeadlessNetworkDetail {
     class WorldService final : public Network::INetworkModeService {
     public:
+        /** @copydoc Network::INetworkModeService::CaptureAuthoredScene */
+        [[nodiscard]] Result<Network::NetworkAuthoredSceneProjection> CaptureAuthoredScene() const override;
+
         [[nodiscard]] std::shared_ptr<const Gameplay::GameplayPhysicsContext> PhysicsContext() const noexcept {
             return gameplay_ ? gameplay_->PhysicsContext() : nullptr;
         }

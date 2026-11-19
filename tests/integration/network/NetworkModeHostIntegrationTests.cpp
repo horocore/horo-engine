@@ -1,6 +1,117 @@
+#include "../../unit/runtime/physics/PhysicsSceneActivationTestSupport.h"
+#include "Horo/Assets/AssetProvider.h"
 #include "NetworkModeHostTestSupport.h"
 
+#include <chrono>
+
 namespace Horo::Network {
+    TEST_CASE("Authority host publishes one committed authored Scene mapping per world generation",
+              "[integration][network][mode][replication]") {
+        if constexpr (!HORO_TEST_PHYSICS_NATIVE)
+            SKIP("Canonical Physics is required for actual product world activation.");
+        using namespace Application::Internal;
+        Application::Internal::TestSupport::ReplicatedScriptFixture script;
+        const auto &admission = *script.selection.replicationAdmission;
+        const auto &schema = admission.inventory.declarations.front().schema;
+        Runtime::SceneDefinitionBuilder builder{{19}, {1}};
+        builder.Add({.object = {10}});
+        builder.Add({.object = {20}, .parent = Runtime::SceneObjectId{10}});
+        builder.Add({.object = {30}});
+        auto definition = std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(builder).Build().Value());
+
+        JobSystem jobs{{1, 8}};
+        Assets::AssetRegistry registry;
+        Assets::MemoryAssetProvider bytes;
+        Assets::AssetLoadService loads{jobs, bytes};
+        HeadlessSceneLoadBoundary load{{}, std::chrono::steady_clock::now() + std::chrono::seconds{5}};
+        HeadlessSceneActivationInput selection{.mode = Physics::PhysicsRuntimeMode::Canonical,
+                                               .settings = Physics::Settings(),
+                                               .registry = registry,
+                                               .loads = loads,
+                                               .load = load,
+                                               .replicatedSceneObjects = {{schema.id, schema.version, Runtime::SceneObjectId{20}},
+                                                                          {schema.id, schema.version, Runtime::SceneObjectId{10}}}};
+        bool duplicate{};
+        SECTION("the authored hierarchy publishes at the actual world safe point and travel replaces it") {}
+        SECTION("duplicate object declarations fail startup without a published role") {
+            selection.replicatedSceneObjects.back() = selection.replicatedSceneObjects.front();
+            duplicate = true;
+        }
+        auto projectInput = DefaultNetworkProjectSettings(Id<NetworkProjectSettingsId>(10)).Value();
+        projectInput.supportedRoles = NetworkProjectRoleSet::Standalone | NetworkProjectRoleSet::DedicatedServer;
+        projectInput.transport.requirement = NetworkProjectTransportRequirement::Required;
+        projectInput.transport.capabilities.requiredDelivery[static_cast<std::size_t>(DeliveryPolicy::ReliableOrdered)] = true;
+        projectInput.transport.capabilities.requiredChannels = 2;
+        projectInput.transport.capabilities.requiredMaximumMessageBytes = 1024;
+        projectInput.replication = admission.inventory;
+        const auto project = NetworkProjectSettings::Create(projectInput).Value();
+        const auto mode = NetworkProjectRole::DedicatedServer;
+        const auto kind = NetworkModeWorldKind::AuthorityServer;
+        const std::array worlds{World(kind, 5)};
+        const auto facts = ProductFacts(project, mode, false);
+        const auto owners = std::make_shared<ProductOwners>();
+        auto factories = ComposeHeadlessSceneNetworkServices(std::move(definition), std::move(selection), ProductFactories(owners),
+                                                             script.selection, admission);
+        REQUIRE(factories.HasValue());
+        DeterministicClock clock;
+        auto created = NetworkProductHost::Create(clock,
+                                                  {project,
+                                                   facts.product,
+                                                   facts.inventory,
+                                                   facts.host,
+                                                   facts.requirements,
+                                                   facts.selection,
+                                                   6,
+                                                   worlds,
+                                                   {},
+                                                   owners->sessions,
+                                                   NetworkWorldCompositionPurpose::Gameplay,
+                                                   owners->worldSetup},
+                                                  std::move(factories).Value().factories);
+        REQUIRE(created.HasValue());
+        auto host = std::move(created).Value();
+        const auto started = host->Startup();
+        if (started.HasError())
+            UNSCOPED_INFO(started.ErrorValue().message);
+        CHECK(host->Role(kind, worlds.front().scene).HasError());
+        if (duplicate) {
+            REQUIRE(started.HasError());
+            CHECK(started.ErrorValue().code.Value() == NetworkErrors::NetworkObjectMappingConflict.code.Value());
+            return;
+        }
+        REQUIRE(started.HasValue());
+        const auto capture = [&](const NetworkModeWorld world) {
+            const auto role = host->Role(kind, world.scene);
+            REQUIRE(role.HasValue());
+            REQUIRE(role.Value().worldSession);
+            auto read = host->AcquireReplication(kind, {world.scene, *role.Value().worldSession, Runtime::RuntimePhase::NetworkFlush, 1},
+                                                 ReplicationWorldCapability::CaptureCanonicalState);
+            REQUIRE(read.HasValue());
+            const auto entries = read.Value().Mapping().Entries();
+            REQUIRE(entries.size() == 2);
+            CHECK(entries[0].provenance.authoredObject == Runtime::SceneObjectId{10});
+            CHECK(entries[1].provenance.authoredObject == Runtime::SceneObjectId{20});
+            CHECK(entries[0].entity.runtime == world.scene);
+            CHECK(entries[1].entity.runtime == world.scene);
+            return std::move(read).Value();
+        };
+        REQUIRE(host->RunFrame().HasValue());
+        const auto initial = capture(worlds.front());
+        const std::array next{World(kind, 105)};
+        REQUIRE(host->RequestTravel(next).HasValue());
+        CHECK_FALSE(initial.IsRevoked());
+        CHECK(host->Role(kind, next.front().scene).HasError());
+        REQUIRE(host->RunFrame().HasValue());
+        CHECK_FALSE(initial.IsRevoked());
+        CHECK(host->Role(kind, next.front().scene).HasError());
+        REQUIRE(host->RunFrame().HasValue());
+        REQUIRE_FALSE(host->TakeTravelFailure());
+        const auto replacement = capture(next.front());
+        CHECK(initial.IsRevoked());
+        CHECK(replacement.Mapping().Epoch() != initial.Mapping().Epoch());
+        host->Shutdown();
+    }
+
     TEST_CASE("Real loaded replication generations reject travel without replacing either active listen world",
               "[integration][network][mode][replication]") {
         if constexpr (!HORO_TEST_PHYSICS_NATIVE)

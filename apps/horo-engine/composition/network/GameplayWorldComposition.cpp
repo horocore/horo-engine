@@ -593,6 +593,11 @@ namespace Horo::Application::Internal {
         return physics_;
     }
 
+    /** @copydoc GameplayWorldComposition::ReplicationDescriptors */
+    const Network::ReplicationDescriptorSnapshot *GameplayWorldComposition::ReplicationDescriptors() const noexcept {
+        return replicationLease_ ? replicationLease_->Descriptors().get() : nullptr;
+    }
+
     /** @copydoc GameplayWorldComposition::CharacterContext */
     std::shared_ptr<const Gameplay::GameplayCharacterContext> GameplayWorldComposition::CharacterContext() const noexcept {
         return native_ ? native_->CharacterContext() : character_;

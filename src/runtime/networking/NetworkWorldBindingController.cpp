@@ -40,11 +40,11 @@ namespace Horo::Network {
     }
 
     /** @copydoc NetworkWorldBindingController::Prepare */
-    Result<void> NetworkWorldBindingController::Prepare() {
+    Result<void> NetworkWorldBindingController::Prepare(const NetworkAuthoredSceneProjection &authored) {
         if (auto checked = impl_->CheckOwner(); checked.HasError())
             return checked;
         const Impl::BusyScope busy{impl_->busy};
-        return impl_->worlds.Prepare();
+        return impl_->worlds.Prepare(authored);
     }
 
     /** @copydoc NetworkWorldBindingController::Attach */

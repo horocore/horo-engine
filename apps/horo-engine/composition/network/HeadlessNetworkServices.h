@@ -103,6 +103,8 @@ namespace Horo::Application::Internal {
         std::optional<HeadlessPerceptionProjectAdmission>
             perceptionProject; /**< Explicit project-backed endpoint and coordinate policy for the selected cooked definition. */
         std::shared_ptr<const CommittedWorldSelection> mountedWorld; /**< Optional exact standalone World cook selection. */
+        std::vector<Network::NetworkObjectProvenance>
+            replicatedSceneObjects; /**< Explicit stable object/schema bindings for this definition. */
     };
 
     /** @brief Composes actual project Scene services and their sole aggregate-owned Physics/Character pair.
