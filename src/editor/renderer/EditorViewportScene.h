@@ -28,6 +28,12 @@ namespace Horo::Editor {
         std::uint64_t admissionGeneration{};
     };
 
+    /** @brief Observable reserved-view capacity from the selected private viewport owner. */
+    struct EditorViewportCrossFadeCapacity final {
+        std::uint64_t generation{};
+        std::uint8_t availableViews{};
+    };
+
     /** @brief Non-owning immutable editor scene view consumed synchronously by Render. */
     struct EditorViewportSceneView {
         EditorViewportCamera camera{};

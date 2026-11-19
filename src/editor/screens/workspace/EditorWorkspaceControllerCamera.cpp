@@ -3,12 +3,22 @@
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 #include <limits>
+#include <utility>
 
 namespace Horo::Editor {
     namespace {
         /** @brief The baseline preview surface admits camera tracks without inventing other owner bindings. */
         bool EligiblePreview(const Cinematic::SequencePlaybackActivation &activation, const bool playActive) noexcept {
             return !playActive && activation.plan.TrackCount() == 0 && activation.plan.EventCount() == 0;
+        }
+
+        /** @brief Distinguishes an authored transition refusal from ordinary preview binding loss. */
+        bool IsCameraTransitionRefusal(const Error &error) noexcept {
+            using namespace Runtime::CameraErrors;
+            return error.domain.Value() == UnsupportedTransition.domain.Value() &&
+                   (error.code.Value() == UnsupportedTransition.code.Value() ||
+                    error.code.Value() == TransitionBudgetExceeded.code.Value() ||
+                    error.code.Value() == IncompatibleTransition.code.Value());
         }
 
         /** @brief Copies the current editor owner's base camera; never captures a pre-cinematic value. */
@@ -156,8 +166,9 @@ namespace Horo::Editor {
         SynchronizeRuntimeScenePreview();
     }
 
+    /** @copydoc EditorWorkspaceController::ResolveCameraCutPreview */
     Result<EditorWorkspaceController::CameraPreviewFrame> EditorWorkspaceController::ResolveCameraCutPreview(
-        const Runtime::RuntimeSceneView scene) {
+        const Runtime::RuntimeSceneView scene, const std::optional<EditorViewportCrossFadeCapacity> capacity) {
         const auto &base = m_viewport.Current().camera;
         if (!m_cameraPreview)
             return Result<CameraPreviewFrame>::Success({base, std::nullopt});
@@ -165,9 +176,21 @@ namespace Horo::Editor {
             m_cameraPreview.reset();
             return Result<CameraPreviewFrame>::Success({base, std::nullopt});
         }
-        if (const auto published = m_cameraPreview->playback->Publish(scene); published.HasError()) {
-            LOG_ERROR("editor.viewport", "Camera preview released after binding loss: %s", published.ErrorValue().message.c_str());
+        if (capacity) {
+            const auto admission = capacity->generation == 0
+                                       ? std::nullopt
+                                       : std::optional{Runtime::CameraCrossFadeAdmission{m_cameraPreview->camera.Context(),
+                                                                                         capacity->generation, capacity->availableViews}};
+            if (auto refreshed = m_cameraPreview->camera.RefreshCrossFadeAdmission(admission); refreshed.HasError())
+                return Result<CameraPreviewFrame>::Failure(std::move(refreshed).ErrorValue());
+        }
+        if (auto published = m_cameraPreview->playback->Publish(scene); published.HasError()) {
             m_cameraPreview.reset();
+            if (IsCameraTransitionRefusal(published.ErrorValue())) {
+                m_activeRuntimeRevision = {};
+                return Result<CameraPreviewFrame>::Failure(std::move(published).ErrorValue());
+            }
+            LOG_ERROR("editor.viewport", "Camera preview released after binding loss: %s", published.ErrorValue().message.c_str());
             return Result<CameraPreviewFrame>::Success({base, std::nullopt});
         }
         if (m_cameraPreview->frame == std::numeric_limits<std::uint64_t>::max())

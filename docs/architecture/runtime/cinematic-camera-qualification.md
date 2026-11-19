@@ -1,17 +1,14 @@
 # Cinematic camera qualification
 
-Evidence scope is the CIN-003 delivery branch based on
-`139f8a5ed63ca8698bb3852c9e0cb1eff421dc8d`, verified against the published
-`codex/editor-improvements` remote on 2026-11-13. The delivery commits rebased
-without conflicts. The complete tracker audit ran on 2026-11-11; the open
-implementation tickets and delivery identity were rechecked on 2026-11-13.
-Tracking status is recorded without changing external work items.
+The current matrix includes the Windows MSVC and native Vulkan and OpenGL
+evidence collected for [PR #3566](https://github.com/horocore/horo-engine/pull/3566)
+on 2026-11-19. The original November 13 qualification record follows the matrix.
 
 | Child | GitHub / Jira | Tracking status | Implementation and acceptance evidence |
 |---|---|---|---|
 | CIN-003.1 | #1700 / HORO-1659 | Closed / Done | ADR-119 authority contract is present in the normative cinematic architecture. Existing context, arbitration, handoff and frame-immutability tests are retained. |
 | CIN-003.2 | #1723 / HORO-1682 | Closed / In Review | Existing runtime and editor hard-cut entry points are reused. Four-field camera keys retain their original hard-cut behavior. |
-| CIN-003.3 | #1724 / HORO-1683 | Open / To Do | Authored integer duration, Linear/SmoothStep curve, Camera-owned quaternion/position/lens blend, explicit host capability admission and typed incompatibility/unsupported results are implemented. Required dual-view rendering remains unavailable pending frontend compositor and budget support. |
+| CIN-003.3 | #1724 / HORO-1683 | Delivered for PR #3566 | Authored duration and curve, Camera-owned pose/lens interpolation, capability admission and live degradation are verified. Windows OpenGL and Vulkan produce the authored dual-view blend. Vulkan also presents the single-view fallback when live resource pressure removes the prior capacity. |
 | CIN-003.4 | #1725 / HORO-1684 | Open / To Do | Publication resolves both endpoints from one current scene borrow. Added integration coverage uses existing CIN-001.5 transform sampling and a committed scene update for a root camera and parented camera during a blend. Native presentation transition qualification is pending. |
 | CIN-003.5 | #1726 / HORO-1685 | Open / To Do | Runtime/editor parity, capability/fallback, malformed input, lens compatibility, cancellation and rebase regressions are added. Execution and native matrix evidence are pending. |
 
@@ -23,19 +20,20 @@ integrated acceptance needs the blend and presentation outcomes.
 
 | Scenario | Evidence target | Current result |
 |---|---|---|
-| Hard cut, boundaries, stop, scene replacement, invalid targets, immutable frame | HoroCameraCutRuntimeTests | Pending execution |
-| Linear and SmoothStep duration, tick/seek parity, reverse seek | HoroCameraCutRuntimeTests | Pending execution |
-| Host denies single-view blend, explicit hard fallback, required dual-view denial | HoroCameraCutRuntimeTests | Pending execution |
-| Compatible lens interpolation and rotation, incompatible projection rejection | HoroCameraCutRuntimeTests | Pending execution |
-| Anchor-relative root/child scene publication during a blend | HoroCameraCutRuntimeTests | Pending execution |
-| Actual editor controller extraction versus runtime selection | HoroCameraCutEditorIntegrationTests | Linear and SmoothStep pose/lens parity and refreshed poses with an unchanged definition revision are covered in source. Pending execution. |
-| Public header boundary and legacy initializer compatibility | HoroCameraCutPublicHeaderConsumer | Pending execution |
+| Hard cut, boundaries, stop, scene replacement, invalid targets, immutable frame | HoroCameraCutRuntimeTests | Passed on Windows |
+| Linear and SmoothStep duration, tick/seek parity, reverse seek | HoroCameraCutRuntimeTests | Passed on Windows |
+| Host denies single-view blend, explicit hard fallback, required dual-view denial | HoroCameraCutRuntimeTests | Passed on Windows |
+| Compatible lens interpolation and rotation, incompatible projection rejection | HoroCameraCutRuntimeTests | Passed on Windows |
+| Anchor-relative root/child scene publication during a blend | HoroCameraCutRuntimeTests | Passed on Windows |
+| Actual editor controller extraction versus runtime selection | HoroCameraCutEditorIntegrationTests | Linear and SmoothStep parity and same-position fallback passed on Windows. |
+| Public header boundary and legacy initializer compatibility | HoroCameraCutPublicHeaderConsumer | Passed on Windows |
 | Windows OpenGL camera blend and viewport resize rendering | HoroEditorViewportOpenGLSmoke | The retained Linear/SmoothStep player advances once across resize. Readback checks the new camera silhouette and a non-empty destination image. Pending execution. |
 | Windows OpenGL native surface resize/suspension | HoroOpenGLSurfaceLifecycleSmoke | Existing real SDL surface test; pending execution |
 | Windows Vulkan camera blend rendering | HoroEditorVulkanPresentationSmoke | Windows registration is added for the supported SDL host. The retained player advances across presented/cancelled frames. Execution and packaged shader inputs are pending. |
 | Native display change and fullscreen during cinematic playback | HoroEditorViewportOpenGLSmoke | Added actual SDL fullscreen and second-display movement before rendering the advanced camera and reading its viewport silhouette. Second-display qualification explicitly skips when fewer than two displays exist. Pending execution. |
 | Metal/macOS | Native GPU smoke | Requires a macOS host and Metal device |
-| Admitted dual-view cross-fade and budget exhaustion | Frontend/native composition | Requires an implemented two-view camera compositor and budget contract; CIN-003.3 remains open for this acceptance |
+| Admitted dual-view cross-fade and budget exhaustion | HoroEditorViewportOpenGLSmoke, HoroEditorVulkanPresentationSmoke | On Windows at `91f931272`, both native cross-fade cases passed. The Vulkan case proved bounded rejection/recovery and read the exact GUI-sampled RGBA8 texture. Both cases verified the 50/50 mix of distinct camera rasters. |
+| Live dual-view loss and recovery | HoroCameraCutRuntimeTests, HoroCameraCutEditorIntegrationTests, HoroEditorVulkanPresentationSmoke | Windows runtime and editor tests passed same-position fallback, strict refusal, immutable committed frames and generation fences. The real Vulkan viewport presented and read back the single-view frame at the original authored time after resource pressure reduced native capacity. |
 
 ## Presentation source evidence
 
@@ -55,7 +53,7 @@ tick 8 and the destination Z position 5. The OpenGL host observes the actual
 native output transition before publishing this next camera. These are source
 assertions awaiting execution, not recorded native passes.
 
-## Local validation
+## November 13 historical validation
 
 ### Outstanding acceptance and required owners
 
@@ -70,14 +68,13 @@ composition. No child or parent acceptance is declared complete by this report.
 | Display migration and fullscreen during playback | Physical lock acquisition and an available display configuration | Run the native OpenGL window-transition scenarios, which briefly show the test window. Record the actual display/extent and camera readback. A skipped second-display case leaves that acceptance unqualified. |
 | Vulkan cinematic execution | Verified cooked viewport/shadow shaders, the required validation layer and physical lock acquisition | Run the production Vulkan presentation smoke without weakening validation or cook provenance. |
 | Metal matrix | macOS/Metal validation host | Run the same authored camera scenarios on the native peer. Windows cannot establish this evidence. |
-| Real dual-view cross-fade and budget exhaustion | Frontend compositor/capability/budget implementation under CIN-003.3 | Admit and qualify two actual views before claiming cross-fade acceptance. Current typed unsupported/fallback coverage does not establish this capability. |
 | Final source quality | A camera compilation database and authenticated/trusted managed IDE and Codacy configuration | Run the full final-base preflight. Report Sonar IDE, CLI secrets and Codacy separately. |
 
-GitHub search found no separate camera compositor issue in this audit. The
-unimplemented dual-view acceptance remains recorded against existing
-[CIN-003.3](https://github.com/horocore/horo-engine/issues/1724) /
-[HORO-1683](https://horo-engine.atlassian.net/browse/HORO-1683), without creating
-or changing external work items.
+The Windows OpenGL and Vulkan fixtures use distinct scenes and each checks the
+same per-channel blend equation against its own source and destination rasters.
+This evidence covers both native compositors on those fixtures. Identical-scene
+pixel comparison across backends and Metal native presentation require separate
+qualification.
 
 Formatting and `git diff --check` have run. The 2026-11-13 restart removes the
 old named-grant scheduling gate. The first nonblocking physical lock attempt

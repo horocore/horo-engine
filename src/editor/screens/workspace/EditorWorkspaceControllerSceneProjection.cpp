@@ -119,31 +119,36 @@ namespace Horo::Editor {
         m_queuedDefinitionRevision = Runtime::SceneDefinitionRevision{snapshot.state.value};
     }
 
+    /** @copydoc EditorWorkspaceController::SynchronizeRuntimeScenePreview() */
     void EditorWorkspaceController::SynchronizeRuntimeScenePreview() {
+        if (const auto synced = SynchronizeRuntimeScenePreview(std::nullopt); synced.HasError())
+            LOG_ERROR("editor.viewport", "Camera authority commit failed: %s", synced.ErrorValue().message.c_str());
+    }
+
+    /** @copydoc EditorWorkspaceController::SynchronizeRuntimeScenePreview(std::optional<EditorViewportCrossFadeCapacity>) */
+    Result<void> EditorWorkspaceController::SynchronizeRuntimeScenePreview(const std::optional<EditorViewportCrossFadeCapacity> capacity) {
         if (m_playSession.IsActive()) {
             ExtractPlayViewportScene();
-            return;
+            return Result<void>::Success();
         }
         if (std::optional<Error> operationError = m_runtimeScene.TakeOperationError())
             LOG_ERROR("editor.runtime_scene", "Runtime scene operation failed: %s", operationError->message.c_str());
 
         const std::optional<Runtime::RuntimeSceneView> active = m_runtimeScene.ActiveScene();
         if (!active || (!m_cameraPreview && active->DefinitionRevision() == m_activeRuntimeRevision))
-            return;
+            return Result<void>::Success();
 
         LoadDocumentAssetMeshes();
         const SceneDocumentSnapshot document = m_document.Snapshot();
-        const auto camera = ResolveCameraCutPreview(*active);
-        if (camera.HasError()) {
-            LOG_ERROR("editor.viewport", "Camera authority commit failed: %s", camera.ErrorValue().message.c_str());
-            return;
-        }
+        auto camera = ResolveCameraCutPreview(*active, capacity);
+        if (camera.HasError())
+            return Result<void>::Failure(std::move(camera).ErrorValue());
         Result<EditorViewportSceneSnapshot> extracted =
             ExtractEditorViewportScene(*active, m_queuedRuntimeRevision, camera.Value().destination, m_primitiveMeshCache, &document,
                                        &m_assetMeshCache);
         if (extracted.HasError()) {
             LOG_ERROR("editor.viewport", "Runtime scene extraction failed: %s", extracted.ErrorValue().message.c_str());
-            return;
+            return Result<void>::Success();
         }
         m_viewportScene = std::move(extracted).Value();
         m_viewportScene.cameraCrossFade = camera.Value().crossFade;
@@ -172,6 +177,7 @@ namespace Horo::Editor {
             m_deferredRuntimeSnapshot.reset();
             QueueRuntimeScene(std::move(deferred));
         }
+        return Result<void>::Success();
     }
 
 }  // namespace Horo::Editor

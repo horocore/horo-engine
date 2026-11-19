@@ -16,6 +16,7 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace Horo::Editor {
@@ -99,6 +100,26 @@ namespace Horo::Editor {
         void Clear() noexcept;
         [[nodiscard]] EditorViewportSceneView View() const noexcept;
 
+        /** @brief Copies the selected frontend capability after cold preparation, before preview camera publication. */
+        void SetCameraCrossFadeCapacity(EditorViewportCrossFadeCapacity capacity) noexcept {
+            m_cameraCrossFadeCapacity = capacity;
+        }
+
+        /** @brief Returns the last host observation, if the composition has published one. */
+        [[nodiscard]] std::optional<EditorViewportCrossFadeCapacity> CameraCrossFadeCapacity() const noexcept {
+            return m_cameraCrossFadeCapacity;
+        }
+
+        /** @brief Carries the workspace camera publication failure to the next desktop extraction. */
+        void SetCameraPreviewError(Error error) noexcept {
+            m_cameraPreviewError = std::move(error);
+        }
+
+        /** @brief Consumes the exact typed failure before admitting any viewport work. */
+        [[nodiscard]] std::optional<Error> TakeCameraPreviewError() noexcept {
+            return std::exchange(m_cameraPreviewError, std::nullopt);
+        }
+
         /** @brief Returns the document revision represented by the current handoff snapshot. */
         [[nodiscard]] DocumentRevision Revision() const noexcept {
             return m_snapshot.documentRevision;
@@ -122,6 +143,8 @@ namespace Horo::Editor {
     private:
         EditorViewportSceneSnapshot m_snapshot{};
         std::uint64_t m_meshResourceGeneration{};
+        std::optional<EditorViewportCrossFadeCapacity> m_cameraCrossFadeCapacity;
+        std::optional<Error> m_cameraPreviewError;
     };
 
     /** @brief Resolved object and parent world matrices used by editor manipulation tools. */

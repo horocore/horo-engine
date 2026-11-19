@@ -225,6 +225,85 @@ namespace Horo::Cinematic {
         }
     }
 
+    TEST_CASE("An active cross-fade republishes at the same authored time after capacity loss and recovery",
+              "[unit][cinematic][camera][cross-fade]") {
+        Fixture fixture;
+        const auto scene = fixture.scene->View();
+        const auto context = fixture.camera.Context();
+        const CameraCrossFadeAdmission admitted{context, 13, 2};
+        auto camera = Take(CameraService::Create(context, CameraTransitionSupport::SingleViewBlend, admitted));
+        auto activation = TransitionActivation(CameraTransitionTier::DualViewCrossFade, CameraBlendCurve::SmoothStep,
+                                               CameraTransitionFallback::LinearThenHardCut, 3);
+        auto playback = Take(CinematicCameraPlayback::Activate(fixture.runtime, camera, std::move(activation), fixture.Settings(), scene));
+        REQUIRE(fixture.runtime.Play(playback.Player()).HasValue());
+        REQUIRE(fixture.runtime.Seek(playback.Player(), 6).HasValue());
+        REQUIRE(playback.Publish(scene).HasValue());
+        const auto original = Take(camera.Commit(1, scene, std::nullopt));
+        REQUIRE(original.crossFade);
+        CHECK(original.crossFade->destinationWeight == Catch::Approx(7.0F / 27.0F));
+
+        REQUIRE(camera.RefreshCrossFadeAdmission(CameraCrossFadeAdmission{context, 13, 1}).HasValue());
+        const auto previouslyCommitted = Take(camera.Commit(1, scene, std::nullopt));
+        REQUIRE(previouslyCommitted.crossFade);
+        CHECK(previouslyCommitted.crossFade->destinationWeight == original.crossFade->destinationWeight);
+        CHECK(camera.Commit(2, scene, std::nullopt).HasError());
+        REQUIRE(camera.RefreshCrossFadeAdmission(admitted).HasValue());
+        CHECK(camera.Commit(2, scene, std::nullopt).HasError());
+        REQUIRE(camera.RefreshCrossFadeAdmission(CameraCrossFadeAdmission{context, 13, 1}).HasValue());
+        REQUIRE(playback.Publish(scene).HasValue());
+        const auto linear = Take(camera.Commit(2, scene, std::nullopt));
+        CHECK_FALSE(linear.crossFade);
+        CHECK(linear.selected.values.position.x == Catch::Approx(40.0F / 3.0F));
+        CHECK(linear.selected.transitionResolution == CameraTransitionResolution::LinearFallback);
+        CHECK(linear.selectionEpoch == original.selectionEpoch + 1);
+        REQUIRE(playback.Publish(scene).HasValue());
+        CHECK(Take(camera.Commit(3, scene, std::nullopt)).selectionEpoch == linear.selectionEpoch);
+
+        REQUIRE(camera.RefreshCrossFadeAdmission(CameraCrossFadeAdmission{context, 14, 2}).HasValue());
+        REQUIRE(playback.Publish(scene).HasValue());
+        const auto recovered = Take(camera.Commit(4, scene, std::nullopt));
+        REQUIRE(recovered.crossFade);
+        CHECK(recovered.crossFade->admissionGeneration == 14);
+        CHECK(recovered.crossFade->destinationWeight == original.crossFade->destinationWeight);
+        CHECK(recovered.selectionEpoch == linear.selectionEpoch + 1);
+        CHECK(Take(fixture.runtime.Snapshot(playback.Player())).position == 6);
+        CHECK(camera.RefreshCrossFadeAdmission(admitted).HasError());
+        REQUIRE(camera.RefreshCrossFadeAdmission(std::nullopt).HasValue());
+        CHECK(camera.RefreshCrossFadeAdmission(CameraCrossFadeAdmission{context, 14, 2}).HasError());
+        const CameraCrossFadeAdmission foreign{{{2, 1}, context.scene, context.domain}, 15, 2};
+        CHECK(camera.RefreshCrossFadeAdmission(foreign).HasError());
+        REQUIRE(camera.RefreshCrossFadeAdmission(CameraCrossFadeAdmission{context, 15, 2}).HasValue());
+    }
+
+    TEST_CASE("Live dual-view loss reports a required transition or uses its authored hard fallback",
+              "[unit][cinematic][camera][cross-fade]") {
+        const auto fallback =
+            GENERATE(CameraTransitionFallback::Fail, CameraTransitionFallback::HardCut, CameraTransitionFallback::LinearThenHardCut);
+        Fixture fixture;
+        const auto scene = fixture.scene->View();
+        const auto context = fixture.camera.Context();
+        auto camera = Take(CameraService::Create(context, CameraTransitionSupport::HardCutOnly, CameraCrossFadeAdmission{context, 13, 2}));
+        auto activation = TransitionActivation(CameraTransitionTier::DualViewCrossFade, CameraBlendCurve::SmoothStep, fallback);
+        auto playback = Take(CinematicCameraPlayback::Activate(fixture.runtime, camera, std::move(activation), fixture.Settings(), scene));
+        REQUIRE(fixture.runtime.Play(playback.Player()).HasValue());
+        REQUIRE(fixture.runtime.Seek(playback.Player(), 6).HasValue());
+        REQUIRE(playback.Publish(scene).HasValue());
+        REQUIRE(Take(camera.Commit(1, scene, std::nullopt)).crossFade);
+        REQUIRE(camera.RefreshCrossFadeAdmission(CameraCrossFadeAdmission{context, 13, 1}).HasValue());
+        const auto updated = playback.Publish(scene);
+        if (fallback == CameraTransitionFallback::Fail) {
+            REQUIRE(updated.HasError());
+            CHECK(updated.ErrorValue().code.Value() == CameraErrors::TransitionBudgetExceeded.code.Value());
+            CHECK(camera.Commit(2, scene, std::nullopt).HasError());
+        } else {
+            REQUIRE(updated.HasValue());
+            const auto selection = Take(camera.Commit(2, scene, std::nullopt));
+            CHECK_FALSE(selection.crossFade);
+            CHECK(selection.selected.values.position.x == 20.0F);
+            CHECK(selection.selected.transitionResolution == CameraTransitionResolution::HardCutFallback);
+        }
+    }
+
     TEST_CASE("Dual view pressure refuses required playback and admits only the authored hard cut",
               "[unit][cinematic][camera][cross-fade]") {
         Fixture fixture;

@@ -47,12 +47,6 @@ namespace Horo::Editor {
         std::optional<Render::RenderLight> selectedLight;
     };
 
-    /** @brief Observable reserved-view capacity from the selected private viewport owner. */
-    struct EditorViewportCrossFadeCapacity final {
-        std::uint64_t generation{};
-        std::uint8_t availableViews{};
-    };
-
     /**
      * @brief Editor-private adapter that renders one viewport image with the selected graphics backend.
      *

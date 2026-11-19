@@ -548,6 +548,10 @@ namespace Horo::Editor {
         void FlushAutosave();
         /** @brief Publishes a newly activated runtime scene to the cached viewport snapshot. */
         void SynchronizeRuntimeScenePreview();
+        /** @brief Refreshes the active preview against the cold-prepared viewport in the same extraction update.
+         * @param capacity Observed viewport capacity, absent for compositions without a frontend observation.
+         * @return Success or typed preview camera failure, with no replacement snapshot on a rejected camera. */
+        [[nodiscard]] Result<void> SynchronizeRuntimeScenePreview(std::optional<EditorViewportCrossFadeCapacity> capacity);
         /** @brief Advances gameplay presentation callbacks without changing authoring state. */
         void UpdatePlayPresentation(float elapsedSeconds);
         /** @brief Advances one play-mode fixed tick with already-routed semantic actions. */
@@ -1235,7 +1239,8 @@ namespace Horo::Editor {
             std::optional<EditorViewportCameraCrossFade> crossFade;
         };
 
-        [[nodiscard]] Result<CameraPreviewFrame> ResolveCameraCutPreview(Runtime::RuntimeSceneView scene);
+        [[nodiscard]] Result<CameraPreviewFrame> ResolveCameraCutPreview(Runtime::RuntimeSceneView scene,
+                                                                         std::optional<EditorViewportCrossFadeCapacity> capacity);
         void HandleCreatePrimitive(Runtime::PrimitiveId primitive, std::optional<SceneObjectId> parent);
         [[nodiscard]] bool ApplyAssetViewportPlacement(const AssetSceneDropRequest &request, const Math::Aabb &localBounds,
                                                        Math::Transform &localTransform, bool publishFailure = true) const;

@@ -71,6 +71,7 @@ namespace Horo::Cinematic {
         /** @brief Restricts authored fallback to transition capability or representation failures. */
         bool CanUseAuthoredFallback(const CameraTransitionFallback fallback, const Error &error) noexcept {
             return fallback != CameraTransitionFallback::Fail &&
+                   error.domain.Value() == Runtime::CameraErrors::UnsupportedTransition.domain.Value() &&
                    (error.code.Value() == Runtime::CameraErrors::IncompatibleTransition.code.Value() ||
                     error.code.Value() == Runtime::CameraErrors::UnsupportedTransition.code.Value() ||
                     error.code.Value() == Runtime::CameraErrors::TransitionBudgetExceeded.code.Value());
@@ -335,20 +336,28 @@ namespace Horo::Cinematic {
         const auto source = Runtime::ResolveSceneCamera(scene, cuts_[key - 1].camera);
         if (source.HasError())
             return Result<void>::Failure(source.ErrorValue());
-        auto weight = static_cast<double>(elapsed) / static_cast<double>(cut.duration);
+        const auto linearWeight = static_cast<double>(elapsed) / static_cast<double>(cut.duration);
+        auto weight = linearWeight;
         if (cut.curve == CameraBlendCurve::SmoothStep)
             weight = weight * weight * (3.0 - 2.0 * weight);
         const auto blended = cut.tier == CameraTransitionTier::DualViewCrossFade
                                  ? camera_->SubmitCrossFade(*lease_, source.Value(), destination, static_cast<float>(weight))
                                  : camera_->SubmitBlend(*lease_, source.Value(), destination, static_cast<float>(weight));
         if (blended.HasError() && CanUseAuthoredFallback(cut.fallback, blended.ErrorValue()))
-            return SubmitFallback(destination);
+            return SubmitFallback(cut, source.Value(), destination, static_cast<float>(linearWeight));
         return blended;
     }
 
     /** @copydoc CinematicCameraPlayback::SubmitFallback */
-    Result<void> CinematicCameraPlayback::SubmitFallback(const Runtime::CameraProposal &destination) {
+    Result<void> CinematicCameraPlayback::SubmitFallback(const BoundCut &cut, const Runtime::CameraProposal &source,
+                                                         const Runtime::CameraProposal &destination, const float linearWeight) {
         auto fallback = destination;
+        if (cut.tier == CameraTransitionTier::DualViewCrossFade && cut.fallback == CameraTransitionFallback::LinearThenHardCut) {
+            fallback.transitionResolution = Runtime::CameraTransitionResolution::LinearFallback;
+            const auto blended = camera_->SubmitBlend(*lease_, source, fallback, linearWeight);
+            if (!blended.HasError() || !CanUseAuthoredFallback(cut.fallback, blended.ErrorValue()))
+                return blended;
+        }
         fallback.transitionResolution = Runtime::CameraTransitionResolution::HardCutFallback;
         return camera_->Submit(*lease_, fallback);
     }

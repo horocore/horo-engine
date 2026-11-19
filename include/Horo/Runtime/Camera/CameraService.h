@@ -52,6 +52,7 @@ namespace Horo::Runtime {
         CameraViewContext context;     /**< Context whose frontend retains the composition capacity. */
         std::uint64_t generation{};    /**< Non-zero frontend reservation generation. */
         std::uint8_t availableViews{}; /**< Concurrent views admitted by that reservation. */
+        constexpr bool operator==(const CameraCrossFadeAdmission &) const noexcept = default;
     };
 
     /** @brief Copied camera values with no mutable scene or backend pointer. */
@@ -118,7 +119,7 @@ namespace Horo::Runtime {
         /** @brief Creates a generation-scoped owner with explicit frontend cross-fade capacity.
          * @param context Complete host fence. @param transitions Host-admitted one-view capability.
          * @param crossFade Capacity from the exact consuming frontend; absent if it cannot execute two-view composition.
-         * The host must retain its reservation for this owner and submitted frames, or retire the owner when it changes.
+         * The host retains resources for already submitted frames and refreshes the reservation before new camera publication.
          * @return Owner or typed invalid/unsupported context failure. */
         [[nodiscard]] static Result<CameraService> Create(const CameraViewContext &context, CameraTransitionSupport transitions,
                                                           std::optional<CameraCrossFadeAdmission> crossFade);
@@ -146,6 +147,12 @@ namespace Horo::Runtime {
          * without partial replacement. */
         [[nodiscard]] Result<void> SubmitBlend(const CameraOverrideLease &lease, const CameraProposal &from, const CameraProposal &to,
                                                float weight);
+        /** @brief Refreshes the selected frontend reservation before publishing new camera proposals.
+         * @param admission Exact owning context and non-zero generation, or absence if the frontend reservation was retired.
+         * A live generation may gain or lose capacity. A retired or older generation cannot be reattached.
+         * @return Success or typed context, stale-generation or lifecycle failure. Committed frames remain immutable.
+         * @details An unpublished dual-view proposal must be resubmitted after any reservation change. */
+        [[nodiscard]] Result<void> RefreshCrossFadeAdmission(std::optional<CameraCrossFadeAdmission> admission);
         /** @brief Checks current two-view capability before activating a required transition.
          * @return Success, typed missing support or insufficient concurrent view capacity. */
         [[nodiscard]] Result<void> CheckCrossFadeAdmission() const;
@@ -186,6 +193,7 @@ namespace Horo::Runtime {
         struct OverrideProposal final {
             CameraProposal selected;
             std::optional<CameraCrossFadeView> crossFade;
+            bool staleCrossFade{};
         };
 
         struct Slot final {
@@ -196,7 +204,8 @@ namespace Horo::Runtime {
 
         explicit CameraService(const CameraViewContext &context, CameraTransitionSupport transitions,
                                std::optional<CameraCrossFadeAdmission> crossFade) noexcept
-            : context_(context), transitions_(transitions), crossFade_(crossFade) {}
+            : context_(context), transitions_(transitions), crossFade_(crossFade),
+              crossFadeGeneration_(crossFade ? crossFade->generation : 0) {}
 
         [[nodiscard]] Result<std::size_t> Resolve(const CameraOverrideLease &lease) const;
         [[nodiscard]] bool ValidProposal(const CameraProposal &proposal, bool isOverride) const noexcept;
@@ -224,6 +233,7 @@ namespace Horo::Runtime {
         CameraViewContext context_;
         CameraTransitionSupport transitions_;
         std::optional<CameraCrossFadeAdmission> crossFade_;
+        std::uint64_t crossFadeGeneration_{};
         std::array<Slot, MaximumOverrides> slots_{};
         std::optional<CameraSelectionSnapshot> committed_;
         bool admissionOpen_{true};

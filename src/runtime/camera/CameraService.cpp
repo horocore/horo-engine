@@ -39,7 +39,7 @@ namespace Horo::Runtime {
                                  const std::optional<CameraCrossFadeView> &next) noexcept {
             if (!previous || !next)
                 return previous.has_value() == next.has_value();
-            return previous->sourceCamera == next->sourceCamera;
+            return previous->sourceCamera == next->sourceCamera && previous->admissionGeneration == next->admissionGeneration;
         }
     }  // namespace
 
@@ -60,8 +60,9 @@ namespace Horo::Runtime {
     }
 
     CameraService::CameraService(CameraService &&other) noexcept
-        : context_(other.context_), transitions_(other.transitions_), crossFade_(other.crossFade_), slots_(std::move(other.slots_)),
-          committed_(std::move(other.committed_)), admissionOpen_(other.admissionOpen_) {
+        : context_(other.context_), transitions_(other.transitions_), crossFade_(other.crossFade_),
+          crossFadeGeneration_(other.crossFadeGeneration_), slots_(std::move(other.slots_)), committed_(std::move(other.committed_)),
+          admissionOpen_(other.admissionOpen_) {
         other.Shutdown();
     }
 
@@ -168,6 +169,27 @@ namespace Horo::Runtime {
         return Result<void>::Success();
     }
 
+    /** @copydoc CameraService::RefreshCrossFadeAdmission */
+    Result<void> CameraService::RefreshCrossFadeAdmission(const std::optional<CameraCrossFadeAdmission> admission) {
+        if (!admissionOpen_)
+            return Result<void>::Failure(MakeError(CameraErrors::Closed));
+        if (admission) {
+            if (admission->context != context_ || admission->generation == 0)
+                return Result<void>::Failure(MakeError(CameraErrors::InvalidContext));
+            if (admission->generation < crossFadeGeneration_ || (!crossFade_ && admission->generation == crossFadeGeneration_))
+                return Result<void>::Failure(MakeError(CameraErrors::StaleFrame));
+        }
+        if (admission == crossFade_)
+            return Result<void>::Success();
+        crossFade_ = admission;
+        if (admission)
+            crossFadeGeneration_ = admission->generation;
+        for (auto &slot : slots_)
+            if (slot.proposal && slot.proposal->crossFade)
+                slot.proposal->staleCrossFade = true;
+        return Result<void>::Success();
+    }
+
     /** @copydoc CameraService::CheckCrossFadeAdmission */
     Result<void> CameraService::CheckCrossFadeAdmission() const {
         if (!admissionOpen_)
@@ -185,10 +207,10 @@ namespace Horo::Runtime {
         const auto index = Resolve(lease);
         if (index.HasError())
             return Result<void>::Failure(index.ErrorValue());
-        if (const auto admitted = CheckCrossFadeAdmission(); admitted.HasError())
-            return admitted;
         if (const auto valid = ValidateTransitionInputs(from, to, weight); valid.HasError())
             return valid;
+        if (const auto admitted = CheckCrossFadeAdmission(); admitted.HasError())
+            return admitted;
         const CameraCrossFadeView view{from.camera, from.values, weight, crossFade_->generation};
         slots_[index.Value()].proposal.emplace(to, view);
         return Result<void>::Success();
@@ -282,6 +304,8 @@ namespace Horo::Runtime {
         if (selected.sceneRevision != sceneRevision)
             return Result<CameraSelectionSnapshot>::Failure(MakeError(CameraErrors::StaleFrame));
         const auto crossFade = winner ? winner->proposal->crossFade : std::nullopt;
+        if (winner && winner->proposal->staleCrossFade)
+            return Result<CameraSelectionSnapshot>::Failure(MakeError(CameraErrors::StaleFrame));
         const bool changed = ChangesSelection(selected, claim, crossFade);
         if (!CanAdvanceEpoch(changed))
             return Result<CameraSelectionSnapshot>::Failure(MakeError(CameraErrors::InvalidFrame));

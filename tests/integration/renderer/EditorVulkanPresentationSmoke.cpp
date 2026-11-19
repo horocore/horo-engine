@@ -298,6 +298,66 @@ namespace Horo::Tests::VulkanEditor {
         return readback.ReadViewportColor(sample.Value().view);
     }
 
+    /** @brief Authors the two real orthographic viewpoints used by the native image oracle. */
+    std::unique_ptr<Runtime::RuntimeScene> CapacityCameraScene(const RenderCameraView &source, const RenderCameraView &destination) {
+        Runtime::SceneDefinitionBuilder builder{{1}, {1}};
+        const std::array views{source, destination};
+        for (std::size_t index = 0; index < views.size(); ++index) {
+            Runtime::RuntimeEntityDefinition entity;
+            entity.object = {index + 1};
+            entity.localTransform.translation = views[index].position;
+            entity.components.camera = Runtime::CameraComponent{.projection = Runtime::CameraProjection::Orthographic,
+                                                                .orthographicHeight = views[index].projection.orthographicHeight,
+                                                                .nearPlane = views[index].projection.nearPlane,
+                                                                .farPlane = views[index].projection.farPlane};
+            builder.Add(entity);
+        }
+        return CameraCuts::Take(Runtime::RuntimeScene::Create(CameraCuts::Take(std::move(builder).Build()), {1}));
+    }
+
+    /** @brief Uses the current renderer budget to publish and present a live fallback at the original sequence position. */
+    void PresentCameraAfterCapacityLoss(Host &host, const RenderCameraView &source, RenderSceneView pressure,
+                                        const RenderSamplerHandle sampler) {
+        using namespace Cinematic;
+        const auto scene = CapacityCameraScene(source, pressure.camera);
+        const Runtime::CameraViewContext context{{1, 1}, scene->View().RuntimeId(), Runtime::CameraViewDomain::Runtime};
+        const auto admission = [&] {
+            const auto capacity = host.viewport->CameraCrossFadeCapacity();
+            return Runtime::CameraCrossFadeAdmission{context, capacity.generation, capacity.availableViews};
+        };
+        auto camera =
+            CameraCuts::Take(Runtime::CameraService::Create(context, Runtime::CameraTransitionSupport::SingleViewBlend, admission()));
+        auto runtime = CameraCuts::Take(CinematicRuntimeService::Create({{1, 1}}));
+        const std::array bindings{CameraCutBinding{{1, 1}, {1}}, CameraCutBinding{{2, 1}, {2}}};
+        auto activation = CameraCuts::TransitionActivation(CameraTransitionTier::DualViewCrossFade, CameraBlendCurve::SmoothStep,
+                                                           CameraTransitionFallback::LinearThenHardCut, 3);
+        auto playback = CameraCuts::Take(
+            CinematicCameraPlayback::Activate(runtime, camera, std::move(activation),
+                                              {bindings, 8, CameraCutEndPolicy::HoldLastUntilPlayerEnd, 0, {1, 1}}, scene->View()));
+        Check(runtime.Play(playback.Player()));
+        Check(runtime.Seek(playback.Player(), 6));
+        Check(playback.Publish(scene->View()));
+        const auto before = CameraCuts::Take(camera.Commit(1, scene->View(), std::nullopt));
+        REQUIRE(before.crossFade);
+
+        host.SynchronizeViewport(pressure, Host::CameraQualificationExtent);
+        REQUIRE(admission().availableViews == 1);
+        Check(camera.RefreshCrossFadeAdmission(admission()));
+        Check(playback.Publish(scene->View()));
+        const auto after = CameraCuts::Take(camera.Commit(2, scene->View(), std::nullopt));
+        CHECK_FALSE(after.crossFade);
+        CHECK(after.selected.transitionResolution == Runtime::CameraTransitionResolution::LinearFallback);
+        CHECK(after.selected.values.position.x == Catch::Approx(-1.0F / 3.0F));
+        CHECK(CameraCuts::Take(runtime.Snapshot(playback.Player())).position == 6);
+        pressure.camera = after.selected.values;
+        Check(host.viewport->PrepareCameraCrossFadeFrame(std::nullopt));
+        const auto pixels = PresentCameraColor(host, pressure, 4, sampler);
+        std::size_t visiblePixels{};
+        for (std::size_t index = 0; index < pixels.size(); index += 4)
+            visiblePixels += pixels[index] >= 240 && pixels[index + 1] <= 8 && pixels[index + 2] >= 240;
+        CHECK(visiblePixels > 16);
+    }
+
     TEST_CASE("Native Vulkan camera cross-fade composes both real viewport rasters before GUI sampling",
               "[native-smoke][vulkan][gui][viewport][cross-fade]") {
         const auto *root = std::getenv("HORO_EDITOR_VULKAN_ASSET_ROOT");
@@ -338,7 +398,6 @@ namespace Horo::Tests::VulkanEditor {
         const auto b = PresentCameraColor(host, destination, 2, sampler.Value().handle);
         Check(host.viewport->PrepareCameraCrossFadeFrame(EditorViewportCameraCrossFade{source.camera, 0.5F, capacity.generation}));
         const auto blend = PresentCameraColor(host, destination, 3, sampler.Value().handle);
-        Check(host.frontend->ReleaseSampler(sampler.Value().handle), "release readback sampler");
         REQUIRE(a.size() == b.size());
         REQUIRE(a.size() == blend.size());
         std::size_t sourceTint{}, destinationTint{};
@@ -357,6 +416,8 @@ namespace Horo::Tests::VulkanEditor {
         CHECK(destinationTint > 16);
         CHECK(distinguishable > 16);
         CHECK(maximumError <= 2);
+        PresentCameraAfterCapacityLoss(host, source.camera, pressure, sampler.Value().handle);
+        Check(host.frontend->ReleaseSampler(sampler.Value().handle), "release readback sampler");
         CHECK(host.Drain());
     }
 

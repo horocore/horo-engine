@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <imgui.h>
+#include <utility>
 
 namespace Horo::Editor::WorkspaceScreenDetail {
     /** @copydoc EditorWorkspaceScreen::EditorWorkspaceScreen */
@@ -167,7 +168,10 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             controller_->UpdateWorldBake();
             controller_->UpdateTerrainCook();
             controller_->UpdateContentBrowser();
-            controller_->SynchronizeRuntimeScenePreview();
+            if (auto preview = controller_->SynchronizeRuntimeScenePreview(viewportSceneState_.CameraCrossFadeCapacity());
+                preview.HasError()) {
+                viewportSceneState_.SetCameraPreviewError(std::move(preview).ErrorValue());
+            }
             controller_->UpdateEnvironmentQueryPreview();
             controller_->UpdateFps(ImGui::GetIO().Framerate);
         }

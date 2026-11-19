@@ -2,6 +2,7 @@
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "support/CameraCutTestSupport.h"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
 namespace Horo::Editor {
@@ -159,6 +160,53 @@ namespace Horo::Editor {
         fixture.controller.StopCameraCutPreview();
         CHECK_FALSE(fixture.controller.ViewportScene().View().cameraCrossFade);
         CHECK(retained.cameraCrossFade->source.position.x == 10.0F);
+    }
+
+    TEST_CASE("Prepared viewport capacity changes republish the active camera preview without advancing its clock",
+              "[unit][cinematic][camera][editor][cross-fade]") {
+        const auto policy = GENERATE(Cinematic::CameraTransitionFallback::Fail, Cinematic::CameraTransitionFallback::LinearThenHardCut);
+        PreviewFixture fixture;
+        const auto scene = *fixture.scene.ActiveScene();
+        const Runtime::CameraViewContext context{{1, 1}, scene.RuntimeId(), Runtime::CameraViewDomain::EditorPreview};
+        const Runtime::CameraCrossFadeAdmission admission{context, 9, 2};
+        auto activation =
+            TransitionActivation(Cinematic::CameraTransitionTier::DualViewCrossFade, Cinematic::CameraBlendCurve::SmoothStep, policy, 3);
+        REQUIRE(fixture.controller
+                    .StartCameraCutPreview(std::move(activation), fixture.Settings(), context.view,
+                                           Runtime::CameraTransitionSupport::SingleViewBlend, admission)
+                    .HasValue());
+        REQUIRE(fixture.controller.SeekCameraCutPreview(6).HasValue());
+        const auto first = fixture.controller.ViewportScene();
+        REQUIRE(first.cameraCrossFade);
+        CHECK(first.cameraCrossFade->destinationWeight == Catch::Approx(7.0F / 27.0F));
+
+        EditorViewportSceneState presentation;
+        presentation.SetCameraCrossFadeCapacity({9, 1});
+        const auto synchronized = fixture.controller.SynchronizeRuntimeScenePreview(presentation.CameraCrossFadeCapacity());
+        if (policy == Cinematic::CameraTransitionFallback::Fail) {
+            REQUIRE(synchronized.HasError());
+            CHECK(synchronized.ErrorValue().code.Value() == Runtime::CameraErrors::TransitionBudgetExceeded.code.Value());
+            presentation.SetCameraPreviewError(synchronized.ErrorValue());
+            const auto failure = presentation.TakeCameraPreviewError();
+            REQUIRE(failure);
+            CHECK(failure->code.Value() == Runtime::CameraErrors::TransitionBudgetExceeded.code.Value());
+            CHECK_FALSE(presentation.TakeCameraPreviewError());
+            REQUIRE(fixture.controller.ViewportScene().cameraCrossFade);
+            CHECK(fixture.controller.ViewportScene().cameraCrossFade->destinationWeight == first.cameraCrossFade->destinationWeight);
+            return;
+        }
+        REQUIRE(synchronized.HasValue());
+        presentation.Replace(fixture.controller.ViewportScene());
+        CHECK_FALSE(presentation.View().cameraCrossFade);
+        CHECK(presentation.View().camera.position.x == Catch::Approx(40.0F / 3.0F));
+
+        presentation.SetCameraCrossFadeCapacity({10, 2});
+        REQUIRE(fixture.controller.SynchronizeRuntimeScenePreview(presentation.CameraCrossFadeCapacity()).HasValue());
+        presentation.Replace(fixture.controller.ViewportScene());
+        const auto recovered = presentation.View();
+        REQUIRE(recovered.cameraCrossFade);
+        CHECK(recovered.cameraCrossFade->admissionGeneration == 10);
+        CHECK(recovered.cameraCrossFade->destinationWeight == first.cameraCrossFade->destinationWeight);
     }
 
     TEST_CASE("Controller extraction uses runtime hard cuts and hands off to the current authoring owner",

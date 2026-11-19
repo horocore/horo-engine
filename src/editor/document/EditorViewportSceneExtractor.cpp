@@ -284,6 +284,7 @@ namespace Horo::Editor {
     void EditorViewportSceneState::Clear() noexcept {
         const bool hadMeshResources = !m_snapshot.meshResources.empty();
         m_snapshot = {};
+        m_cameraPreviewError.reset();
         if (hadMeshResources)
             ++m_meshResourceGeneration;
     }

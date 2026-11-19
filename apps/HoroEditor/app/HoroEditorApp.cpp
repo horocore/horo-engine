@@ -2528,6 +2528,7 @@ namespace Horo::Editor {
                     // Consume the preceding viewport request before Draw captures its current image identity.
                     if (const auto prepared = PrepareViewportResources(); prepared.HasError())
                         return prepared;
+                    viewportSceneState_->SetCameraCrossFadeCapacity(p_->presentation.viewportRenderer.CameraCrossFadeCapacity());
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                     qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::GuiBegin);
 #endif
@@ -2614,6 +2615,8 @@ namespace Horo::Editor {
                 p_->modalHost.Draw(liveGui_.Registry());
                 ImGui::Render();
                 frameState_.guiFrameStarted = false;
+                if (auto failure = viewportSceneState_->TakeCameraPreviewError())
+                    return Result<void>::Failure(std::move(*failure));
                 // Draw may synchronously start Play; its cold Scene/UI preparation still precedes native admission.
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                 qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::Extraction);

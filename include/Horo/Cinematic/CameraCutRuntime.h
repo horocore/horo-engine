@@ -105,7 +105,7 @@ namespace Horo::Cinematic {
         };
 
         /** @brief Resolves and admits a complete detached track before acquiring live player or camera state.
-         * @param camera Final view owner and its immutable capability.
+         * @param camera Final view owner and its activation-time capability.
          * @param keys Validated canonical camera keys. @param settings Required bindings and track end.
          * @param scene Current activation scene. @param output Detached storage with one slot per key.
          * @return Success or exact binding/transition failure; partial output is never published. */
@@ -127,10 +127,14 @@ namespace Horo::Cinematic {
          * @return Owner submission outcome or typed interpolation failure after the authored fallback is considered. */
         [[nodiscard]] Result<void> SubmitPosition(Runtime::RuntimeSceneView scene, std::size_t key, SequenceTime position,
                                                   const Runtime::CameraProposal &destination);
-        /** @brief Publishes an authored hard-cut fallback with copied outcome evidence for camera history invalidation.
+        /** @brief Resolves a permitted downgrade at the current position, preserving its selection outcome.
+         * @param cut Original bound transition and authored fallback policy.
+         * @param source Current validated source camera at the same Scene revision as the destination.
          * @param destination Current validated destination and producer revision.
+         * @param linearWeight Uneased elapsed fraction of the exact authored duration.
          * @return Exact final owner submission outcome. */
-        [[nodiscard]] Result<void> SubmitFallback(const Runtime::CameraProposal &destination);
+        [[nodiscard]] Result<void> SubmitFallback(const BoundCut &cut, const Runtime::CameraProposal &source,
+                                                  const Runtime::CameraProposal &destination, float linearWeight);
         [[nodiscard]] bool IsSeekDiscontinuity(const SequencePlayerSnapshot &state) const noexcept;
         CinematicRuntimeService *runtime_{};
         Runtime::CameraService *camera_{};

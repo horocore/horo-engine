@@ -169,11 +169,13 @@ namespace Horo::Render::Test::VfxInstanced {
         /** @brief Starts a bounded observation window without changing any driver command or resource state. */
         void ResetDraws() noexcept {
             drawCount_ = 0;
+            drawCountOverflow_ = false;
         }
 
         /** @brief Returns actual forwarded indexed command counts, checked outside every native callback. */
         std::array<std::uint32_t, 3> DrawCounts() const {
             REQUIRE_FALSE(invalid_);
+            REQUIRE_FALSE(drawCountOverflow_);
             std::array<std::uint32_t, 3> counts{0, static_cast<std::uint32_t>(drawCount_), 0};
             for (const auto &draw : std::span{draws_}.first(drawCount_)) {
                 REQUIRE(draw.indices == 6);
@@ -248,7 +250,7 @@ namespace Horo::Render::Test::VfxInstanced {
             auto &self = *active_;
             self.drawIndexed_(command, indices, instances, firstIndex, vertexOffset, firstInstance);
             if (self.drawCount_ == self.draws_.size()) {
-                self.invalid_ = true;
+                self.drawCountOverflow_ = true;
                 return;
             }
             self.draws_[self.drawCount_++] = {indices, instances};
@@ -385,6 +387,7 @@ namespace Horo::Render::Test::VfxInstanced {
         Attachments rendered_;
         std::array<Draw, 32> draws_;
         std::size_t drawCount_{};
+        bool drawCountOverflow_{};
         bool invalid_{};
     };
 

@@ -424,7 +424,12 @@ two-view frontend capability and budget. An authored `LinearThenHardCut` policy
 preserves the window and uses linear single-view interpolation when two views
 are denied and the single-view owner and projection pair can support it. It uses
 a hard cut when that intermediate mode is unavailable. The existing direct
-`HardCut` and `Fail` choices keep their meaning. Rendering consumes the resulting
+`HardCut` and `Fail` choices keep their meaning. The Editor refreshes the exact
+viewport capacity after resource preparation and before publishing the camera.
+When an active dual-view transition loses capacity, the authored fallback
+evaluates at the current sequence position without seeking or advancing playback.
+The Camera owner fences unpublished proposals across capacity changes and keeps
+already committed frames immutable. Rendering consumes the resulting
 camera snapshot, selection epoch and generic discontinuity evidence without choosing
 camera authority or exposing backend APIs to Cinematic Runtime. ADR-119 owns the
 complete contract.
