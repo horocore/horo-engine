@@ -270,6 +270,83 @@ namespace Horo::Tests::RenderFrontendTesting {
         REQUIRE(f.topology->Bind(*f.frontend, 0, textures).Value()->Usages().size() == 3);
     }
 
+    TEST_CASE("Template selects shared optional reads separately in both graphics passes", "[renderer][render-graph][template]") {
+        bool duplicate = false;
+        SECTION("exact read per pass") {}
+        SECTION("one pass cannot declare the same read twice") {
+            duplicate = true;
+        }
+        lifecycleState = {};
+        auto frontend = CreateTrackingFrontend();
+        auto limits = Render::Test::SmallLimits();
+        limits.maxResources = 3;
+        limits.maxUsages = 5;
+        auto builder = Render::Test::RequireBuilder(limits);
+        const auto color = Render::Test::RequirePass(builder, RenderPassKind::Graphics, RenderQueueRole::Graphics);
+        const auto auxiliary = Render::Test::RequirePass(builder, RenderPassKind::Graphics, RenderQueueRole::Graphics);
+        REQUIRE(builder.AddDependency({color, auxiliary}).HasValue());
+        const std::array passes{color, auxiliary};
+        const auto device = frontend->Capabilities().support.deviceIncarnation;
+        std::array<RenderGraphExternalTextureSlot, 2> slots;
+        std::array<RenderGraphExternalTextureBinding, 2> bindings;
+        for (std::size_t index = 0; index < passes.size(); ++index) {
+            auto source = std::make_shared<ExternalSource>(device);
+            const auto imported = RenderExternalTextureAccess::Import(*frontend, source);
+            REQUIRE(imported.HasValue());
+            auto slot = PreparedRenderGraphTemplate::DeclareTexture(builder, source->Descriptor(), source->AcquiredState(),
+                                                                    source->RequiredFinalState(), device);
+            REQUIRE(slot.HasValue());
+            slots[index] = slot.Value();
+            bindings[index] = {slot.Value().resource, imported.Value()};
+            Render::Test::RequireUsage(builder, {passes[index], slots[index].resource, RenderGraphAccess::Write,
+                                                 RenderGraphUsageKind::ColorAttachment});
+        }
+
+        const std::array<std::byte, 16> bytes{};
+        const auto created = frontend->CreateBuffer({bytes.size(), RenderBufferUsage::Vertex, RenderBufferAccess::HostVisible}, bytes);
+        REQUIRE(created.HasValue());
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        const auto resource = builder.ImportBuffer(created.Value().handle, RenderGraphResourceClass::Persistent);
+        REQUIRE(resource.HasValue());
+        constexpr auto role = RenderGraphUsageKind::VertexBuffer;
+        for (const auto pass : passes)
+            Render::Test::RequireUsage(builder, {pass, resource.Value(), RenderGraphAccess::Read, role});
+        if (duplicate)
+            Render::Test::RequireUsage(builder, {color, resource.Value(), RenderGraphAccess::Read, role});
+        const std::array selected{RenderGraphOptionalRead{resource.Value(), role}};
+        const std::array inputs{RenderGraphImportedState{resource.Value(),
+                                                         {RenderGraphSynchronizationAccess::Read,
+                                                          RenderGraphSynchronizationOperation::GraphicsInputBuffer,
+                                                          RenderGraphPipelineScope::Graphics,
+                                                          RenderGraphTextureLayout::NotApplicable,
+                                                          {1}}}};
+        auto topology = PreparedRenderGraphTemplate::Prepare(Render::Test::RequireGraph(builder), slots, inputs, Queues, 1, selected);
+        if (duplicate) {
+            REQUIRE(topology.HasError());
+            return;
+        }
+        REQUIRE(topology.HasValue());
+        auto prepared = std::move(topology).Value();
+        for (const std::size_t count : {0U, 1U, 0U, 1U}) {
+            const auto before = AllocationProbe::Count();
+            const auto bound = prepared.Bind(*frontend, 0, bindings, std::span{selected}.first(count));
+            const auto after = AllocationProbe::Count();
+            REQUIRE(bound.HasValue());
+            CHECK(before == after);
+            REQUIRE(bound.Value()->Passes().size() == passes.size());
+            REQUIRE(bound.Value()->Usages().size() == passes.size() * (1 + count));
+            for (std::size_t index = 0; index < passes.size(); ++index) {
+                const auto range = bound.Value()->Passes()[index].usages;
+                REQUIRE(range.offset == index * (1 + count));
+                REQUIRE(range.count == 1 + count);
+                const auto uses = bound.Value()->Usages().subspan(range.offset, range.count);
+                CHECK(uses.front().resource == slots[index].resource);
+                if (count)
+                    CHECK(uses.back().resource == resource.Value());
+            }
+        }
+    }
+
     TEST_CASE("Template optional read rejection preserves queued storage and rejects stale unselected barriers",
               "[renderer][render-graph][template]") {
         TemplateFixture f{true};

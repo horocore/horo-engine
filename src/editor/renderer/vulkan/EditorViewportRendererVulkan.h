@@ -11,7 +11,7 @@
 #include "VulkanEditorGraphicsBridge.h"
 #include "editor/renderer/EditorViewportResources.h"
 #include "editor/renderer/grid/ViewportOverlayTriangles.h"
-#include "host/EditorVulkanXrProjectionAlpha.h"
+#include "host/EditorVulkanXrViewportAccess.h"
 
 #include <array>
 #include <thread>
@@ -74,6 +74,7 @@ namespace Horo::Editor {
          * @param acquired Exact native acquisition state. @param requiredFinal Exact native release state.
          * @param
          * retainPreviousDepth Current optional feature policy requests the compatible depth predecessor.
+         * @param auxiliary Optional exact acquired/release shapes for the native motion and depth passes.
          * @return Success or original resource/graph/tuple failure; partial cold resources remain owned for teardown.
          * @pre The previous XR scene, scene/UI/GUI references and native acquisitions have retired. This operation
          * must finish before interactive admission; no first-frame compilation or allocation fallback is allowed.
@@ -81,13 +82,15 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> PrepareXrGraph(std::span<const EditorViewportMeshResourceView> meshes,
                                                   const Render::RenderTextureDescriptor &color,
                                                   const Render::RenderGraphLogicalState &acquired,
-                                                  const Render::RenderGraphLogicalState &requiredFinal, bool retainPreviousDepth = false);
+                                                  const Render::RenderGraphLogicalState &requiredFinal, bool retainPreviousDepth = false,
+                                                  const EditorVulkanXrViewportAccess::AuxiliaryPlan *auxiliary = nullptr);
         /** @brief Binds a fresh native eye acquisition to the cold graph before the SAME RenderFrameScope begins.
          * @param color Fresh imported acquisition. @param eyeViews Exact current per-layer frontend views.
          * @param publication Canonical Scene/frame/origin/view and actual device/capability evidence.
          * @param views Complete actual runtime-ordered view matrices. @param instances SAME canonical geometry projection.
          * @param motion Optional exact native prediction. @param motionObjects Stable object IDs aligned with instances.
          * @param alpha Explicit color policy for the selected canonical XR program.
+         * @param auxiliary Exact auxiliary imports, when the selected frame has compatible history.
          * @return Success or original stale/capacity/tuple failure; no compilation, heap allocation or native wait.
          * @pre Previous acquisition's scene AND GUI tail references have retired. A failed bind cannot be executed.
          */
@@ -97,7 +100,8 @@ namespace Horo::Editor {
                                                std::span<const Render::MultiviewSceneView> views,
                                                std::span<const Render::RenderStaticMeshInstance> instances,
                                                const Render::MultiviewMotionFrame *motion,
-                                               std::span<const Render::RenderMotionObjectId> motionObjects, EditorXrProjectionAlpha alpha);
+                                               std::span<const Render::RenderMotionObjectId> motionObjects, EditorXrProjectionAlpha alpha,
+                                               const EditorVulkanXrViewportAccess::AuxiliaryImages *auxiliary = nullptr);
         /** @brief Ends current projection evidence and admits exact native projection into transform history.
          * @pre Same frame's successful native compositor end on the render owner lane.
          */
@@ -176,6 +180,8 @@ namespace Horo::Editor {
         /** @copydoc EditorVulkanXrViewportAccess::TakePremultipliedProjection */
         [[nodiscard]] std::optional<EditorXrPremultipliedProjection> TakeXrPremultipliedProjection(
             const Render::MultiviewPublication &publication, Render::RenderTextureHandle color) noexcept;
+        /** @brief Uploads exact adjacent motion matrices to the selected signed pass's cold uniform slots. */
+        [[nodiscard]] Result<void> WriteXrMotionDraws(Render::FrameToken frame, const XrGraph &graph);
         /** @brief Drops only cold scene graph/depth resources after their canonical scene/GUI lease has drained. */
         void ReleaseXrGraph() noexcept;
         /** @brief Retires cold graph/depth storage with retryable typed errors and exact successful-prefix bookkeeping.
@@ -364,6 +370,7 @@ namespace Horo::Editor {
         ShaderResources xrShader_;
         std::optional<EditorVulkanMultiviewCook> xrMotionCook_;
         ShaderResources xrMotionShader_;
+        std::array<DrawSlot, Render::RenderMaterialPass::MaximumDraws> xrMotionDrawSlots_;
         std::optional<std::pair<Render::RenderTextureFormat, Render::RenderTextureFormat>> xrMotionFormats_;
         std::shared_ptr<XrGraph> xrGraph_;
         std::array<std::array<DrawSlot, Render::RenderMaterialPass::MaximumDraws>, 8> xrDrawSlots_;

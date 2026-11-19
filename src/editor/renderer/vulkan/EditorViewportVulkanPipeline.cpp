@@ -277,7 +277,13 @@ namespace Horo::Editor {
         if (admitted.HasError())
             return Outcome::Failure(admitted.ErrorValue());
         ShaderResources candidate{.payload = std::move(admitted).Value().payload, .metadata = xrMotionCook_->metadata};
+        std::array<DrawSlot, RenderMaterialPass::MaximumDraws> slots;
+        const auto retireSlots = [&] {
+            for (auto &draw : slots)
+                RetireDraw(draw);
+        };
         const auto retireFailure = [&](const Error &error) {
+            retireSlots();
             RetireProgram(candidate, {});
             return Outcome::Failure(error);
         };
@@ -292,8 +298,14 @@ namespace Horo::Editor {
         if (const auto layout = ProgramResources::CreateMaterialLayout(frontend_, candidate, candidate.metadata.reflection, device_.frames);
             layout.HasError())
             return retireFailure(layout.ErrorValue());
+        for (std::size_t index = 0; index < slots.size(); ++index)
+            if (auto allocated = ProgramResources::CreateUniformSlot(frontend_, candidate, slots[index], index + 1, candidate.pipeline);
+                allocated.HasError())
+                return retireFailure(allocated.ErrorValue());
         std::swap(xrMotionShader_, candidate);
+        xrMotionDrawSlots_.swap(slots);
         xrMotionFormats_ = formats;
+        retireSlots();
         RetireProgram(candidate, {});
         return Outcome::Success(true);
     }

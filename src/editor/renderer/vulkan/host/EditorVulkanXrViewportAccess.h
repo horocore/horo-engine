@@ -29,6 +29,28 @@ namespace Horo::Editor {
             std::span<const Render::RenderMotionObjectId> objects;
         };
 
+        /** @brief Exact allocation and synchronization tuples supplied by the selected acquisition owner. */
+        struct AuxiliaryTexture final {
+            Render::RenderTextureDescriptor allocation;
+            Render::RenderGraphLogicalState acquired;
+            Render::RenderGraphLogicalState requiredFinal;
+        };
+
+        /** @brief Cold motion/depth tuple plus the ordered native active rectangles. */
+        struct AuxiliaryPlan final {
+            AuxiliaryTexture motion;
+            AuxiliaryTexture depth;
+            std::array<Render::FramebufferExtent, 2> viewExtents;
+        };
+
+        /** @brief Fresh exact imports, with one single-layer view for each eye on both images. */
+        struct AuxiliaryImages final {
+            Render::RenderTextureHandle motion;
+            Render::RenderTextureHandle depth;
+            std::array<Render::RenderTextureViewHandle, 2> motionViews;
+            std::array<Render::RenderTextureViewHandle, 2> depthViews;
+        };
+
         /** @brief Borrow the actual selected native device; no creation or selection occurs. */
         [[nodiscard]] static Result<Render::Detail::VulkanEditorDevice> Device(const EditorViewportRendererVulkan &viewport);
         /** @brief Cold-prepares the staged optional motion pipeline for the selected format pair.
@@ -43,28 +65,33 @@ namespace Horo::Editor {
          * @param viewport Existing selected owner. @param meshes Complete immutable canonical mesh resource projection.
          * @param color Native allocation. @param acquired Actual acquisition state. @param requiredFinal Required native release state.
 
-         * * @param retainPreviousDepth Current optional policy admits retaining sampled predecessor depth.
+         * @param retainPreviousDepth Current optional policy admits retaining sampled predecessor depth.
+         * @param auxiliary Exact optional producer tuple; absent keeps the ordinary graph.
          * @return Original owner/resource/graph error or successful preparation before interactive admission.
          */
         [[nodiscard]] static Result<void> Prepare(EditorViewportRendererVulkan &viewport,
                                                   std::span<const Render::RenderMeshResourceView> meshes,
                                                   const Render::RenderTextureDescriptor &color,
                                                   const Render::RenderGraphLogicalState &acquired,
-                                                  const Render::RenderGraphLogicalState &requiredFinal, bool retainPreviousDepth);
+                                                  const Render::RenderGraphLogicalState &requiredFinal, bool retainPreviousDepth,
+                                                  const AuxiliaryPlan *auxiliary = nullptr);
         /** @brief Bind one real acquisition before BeginFrame, using fixed owner storage and exact live publications.
          * @param viewport Existing owner. @param color Fresh native import. @param views Exact layer views.
          * @param publication Current Scene/frame/origin/device evidence. @param cameras Actual native view matrices.
          * @param instances Canonical scene instance values.
          * @param motion Optional exact compositor prediction and stable object IDs for the selected frame-synthesis route.
          * @param alpha Explicit projection color policy for this acquisition.
-         * @return Original typed validation/binding outcome.
+         * @param auxiliary Fresh optional motion/depth acquisitions. They require a complete adjacent predecessor.
+         * @return Original typed validation/binding outcome. On optional failure the acquisition owner may omit
+         * its pair and bind the ordinary projection with no auxiliary images.
          */
         [[nodiscard]] static Result<void> Bind(EditorViewportRendererVulkan &viewport, Render::RenderTextureHandle color,
                                                const std::array<Render::RenderTextureViewHandle, 2> &views,
                                                const Render::MultiviewPublication &publication,
                                                std::span<const Render::MultiviewSceneView> cameras,
                                                std::span<const Render::RenderStaticMeshInstance> instances, const MotionInput *motion,
-                                               EditorXrProjectionAlpha alpha = EditorXrProjectionAlpha::Opaque);
+                                               EditorXrProjectionAlpha alpha = EditorXrProjectionAlpha::Opaque,
+                                               const AuxiliaryImages *auxiliary = nullptr);
         /** @brief Takes the renderer's one-shot premultiplied scene evidence after observing the actual queue.
          * @param viewport Same selected renderer owner. @param publication Exact staged Scene/frame/origin/view/device.
          * @param color Exact acquired color target generation. @return Completed evidence or empty.

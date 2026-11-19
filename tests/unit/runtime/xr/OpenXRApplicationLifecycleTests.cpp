@@ -6,6 +6,8 @@
 #include "OpenXRApplicationSession.h"
 #include "OpenXRApplicationVulkanTestSupport.h"
 #include "OpenXRPlayHost.h"
+#include "RenderExternalImages.h"
+#include "VulkanExternalImages.h"
 #include "editor/renderer/vulkan/EditorViewportRendererVulkan.h"
 #include "support/OpenXRApplicationNativeTestSupport.h"
 #include "support/OpenXRInstalledProductTestFixture.h"
@@ -2257,6 +2259,186 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(vulkan.commandState.state.waitCalls == 0);
         scene->Shutdown();
         REQUIRE(RequireValue(fixture.ClosePlay()));
+    }
+
+    namespace {
+        /** @brief Scripted external allocation accepted by the actual selected Vulkan registry and command recorder. */
+        struct ViewportWriterImage final : RenderNative::IVulkanExternalTextureSource {
+            RenderNative::VulkanEditorDevice device;
+            std::uint64_t incarnation{};
+            std::uintptr_t id{};
+            Render::RenderTextureDescriptor allocation;
+            bool depth{};
+
+            Result<void> Validate() const override {
+                return Result<void>::Success();
+            }
+
+            std::uint64_t DeviceIncarnation() const noexcept override {
+                return incarnation;
+            }
+
+            const Render::RenderTextureDescriptor &Descriptor() const noexcept override {
+                return allocation;
+            }
+
+            VkDevice NativeDevice() const noexcept override {
+                return device.device;
+            }
+
+            VkImage NativeImage() const noexcept override {
+                return OpenXR::NativeHandle<VkImage>(id);
+            }
+
+            std::uint32_t NativeQueueFamily() const noexcept override {
+                return device.graphicsFamily;
+            }
+
+            void RecordNativeRetirement(const Render::RenderGraphLogicalState &, bool) const noexcept override {}
+
+            Render::RenderGraphLogicalState AcquiredState() const noexcept override {
+                using namespace Render;
+                return {RenderGraphSynchronizationAccess::ReadWrite,
+                        depth ? RenderGraphSynchronizationOperation::DepthStencilAttachment
+                              : RenderGraphSynchronizationOperation::ColorAttachment,
+                        RenderGraphPipelineScope::Graphics,
+                        depth ? RenderGraphTextureLayout::DepthStencilAttachment : RenderGraphTextureLayout::ColorAttachment,
+                        device.graphicsIdentity};
+            }
+
+            Render::RenderGraphLogicalState RequiredFinalState() const noexcept override {
+                auto state = AcquiredState();
+                state.scope = Render::RenderGraphPipelineScope::External;
+                return state;
+            }
+        };
+
+        /** @brief Owns fixture handles for one exact external acquisition before it is queued. */
+        struct ViewportWriterImport final {
+            Render::RenderTextureHandle texture;
+            std::array<Render::RenderTextureViewHandle, 2> views;
+        };
+
+        ViewportWriterImport ImportWriterImage(Render::RenderFrontend &frontend, std::shared_ptr<const ViewportWriterImage> source) {
+            using namespace Render;
+            const auto texture = RequireValue(RenderNative::RenderExternalTextureAccess::Import(frontend, source));
+            ViewportWriterImport imported{texture};
+            for (std::uint32_t eye = 0; eye < imported.views.size(); ++eye) {
+                const auto view = RequireValue(
+                    frontend.CreateTextureView({.texture = texture,
+                                                .format = source->allocation.format,
+                                                .aspect = source->depth ? RenderTextureAspect::Depth : RenderTextureAspect::Color,
+                                                .baseLayer = eye,
+                                                .layerCount = 1}));
+                RequireValue(frontend.ProcessResourceRequests());
+                RequireValue(frontend.ResourceOperationResult(view.operation));
+                imported.views[eye] = view.handle;
+            }
+            return imported;
+        }
+    }  // namespace
+
+    TEST_CASE("Selected Vulkan viewport records asymmetric motion depth only after completed projection history",
+              "[xr][application][play][reprojection][renderer]") {
+        using namespace Render;
+        using Viewport = Editor::EditorVulkanXrViewportAccess;
+        ApplicationFixture fixture{true};
+        auto &frontend = *fixture.frontend;
+        auto &viewport = *fixture.viewport;
+        auto &vulkan = fixture.vulkan->native;
+        const auto device = RequireValue(Viewport::Device(viewport));
+        const auto &support = frontend.Capabilities().support;
+        const auto cook = ApplicationVulkanFixture::CookMotion();
+        viewport.StageXrMotionProgram(
+            RequireValue(Editor::LoadEditorVulkanMultiviewMotionCook(cook.compiled.payload,
+                                                                     RequireValue(EncodeReflectedShaderArtifact(cook.reflected)))));
+        REQUIRE(
+            RequireValue(Viewport::PrepareMotionPipeline(viewport, RenderTextureFormat::Rgba16Float, RenderTextureFormat::Depth32Float)));
+        auto geometry = RequireValue(fixture.source.Port().Capture(fixture.definition.Revision(), fixture.scene->View()));
+        const auto instances = RequireValue(geometry->Update(fixture.scene->View()));
+        REQUIRE(instances.size() == 1);
+        const auto makeImage = [&](const std::uintptr_t native, const FramebufferExtent extent, const RenderTextureFormat format,
+                                   const bool isDepth) {
+            auto source = std::make_shared<ViewportWriterImage>();
+            source->device = device;
+            source->incarnation = support.deviceIncarnation;
+            source->id = native;
+            source->allocation = {.extent = extent,
+                                  .format = format,
+                                  .layerCount = 2,
+                                  .usage = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment};
+            source->depth = isDepth;
+            return source;
+        };
+        const auto firstSource = makeImage(900, {8, 8}, RenderTextureFormat::Rgba8Unorm, false);
+        const auto secondSource = makeImage(901, {8, 8}, RenderTextureFormat::Rgba8Unorm, false);
+        const auto motionSource = makeImage(902, {8, 8}, RenderTextureFormat::Rgba16Float, false);
+        const auto depthSource = makeImage(903, {8, 8}, RenderTextureFormat::Depth32Float, true);
+        const Viewport::AuxiliaryPlan plan{{motionSource->allocation, motionSource->AcquiredState(), motionSource->RequiredFinalState()},
+                                           {depthSource->allocation, depthSource->AcquiredState(), depthSource->RequiredFinalState()},
+                                           {{{6, 8}, {8, 5}}}};
+        RequireValue(Viewport::Prepare(viewport, geometry->Resources(), firstSource->allocation, firstSource->AcquiredState(),
+                                       firstSource->RequiredFinalState(), true, &plan));
+        const auto first = ImportWriterImage(frontend, firstSource);
+        const auto second = ImportWriterImage(frontend, secondSource);
+        const auto motion = ImportWriterImage(frontend, motionSource);
+        const auto depth = ImportWriterImage(frontend, depthSource);
+        const Viewport::AuxiliaryImages pair{motion.texture, depth.texture, motion.views, depth.views};
+
+        auto clip = Math::Mat4::Identity();
+        clip.values[12] = -2.0F;
+        clip.values[13] = -3.0F;
+        clip.values[14] = 0.5F;
+        std::array eyes{MultiviewSceneView{0, clip}, MultiviewSceneView{1, clip}};
+        MultiviewPublication publication{1, 1, 1, 1, support.deviceIncarnation, support.capabilityRevision};
+        Viewport::MotionInput motionFrame{{publication, 1, 1'000'000}, geometry->MotionObjects()};
+        CHECK(Viewport::Bind(viewport, first.texture, first.views, publication, eyes, instances, &motionFrame,
+                             Editor::EditorXrProjectionAlpha::Opaque, &pair)
+                  .HasError());
+        RequireValue(Viewport::Bind(viewport, first.texture, first.views, publication, eyes, instances, &motionFrame));
+        const auto submit = [&](const std::uint64_t sequence) {
+            auto frame = RequireValue(frontend.BeginFrame({sequence, {8, 8}}));
+            RequireValue(Viewport::Execute(viewport, frame, {}));
+            RequireValue(frame.Present());
+            vulkan.commandState.state.Complete();
+            RequireValue(Viewport::Poll(viewport));
+            // This is the fixture's caller-supplied projection result, independent of any GPU coverage claim.
+            Viewport::CompleteMotion(viewport, motionFrame.frame, true);
+        };
+        submit(1);
+        const auto previousDraws = vulkan.encoded.drawCalls.size();
+        REQUIRE(previousDraws == 2);
+        CHECK(fixture.vulkan->port.motionUniformWrites == 0);
+        const auto begins = vulkan.encoded.renderingCalls.size();
+        ++publication.frame;
+        ++motionFrame.frame.projectionSequence;
+        motionFrame.frame.predictedDisplayTimeNanoseconds += 1'000'000;
+        motionFrame.frame.publication = publication;
+        eyes.back().worldToClip.values[12] += 0.125F;
+        RequireValue(Viewport::Bind(viewport, second.texture, second.views, publication, eyes, instances, &motionFrame,
+                                    Editor::EditorXrProjectionAlpha::Opaque, &pair));
+        submit(2);
+        CHECK(vulkan.encoded.drawCalls.size() == previousDraws + 4);
+        REQUIRE(vulkan.encoded.renderingCalls.size() == begins + 4);
+        const auto commands = std::span{vulkan.encoded.renderingCalls}.subspan(begins);
+        CHECK(commands[2].extent.width == 6);
+        CHECK(commands[2].extent.height == 8);
+        CHECK(commands[3].extent.width == 8);
+        CHECK(commands[3].extent.height == 5);
+        CHECK(commands[2].depth);
+        CHECK(commands[3].depth);
+        CHECK(commands[2].colorClear.color.float32[3] == 0.0F);
+        CHECK(commands[3].colorClear.color.float32[3] == 0.0F);
+        CHECK(fixture.vulkan->port.motionUniformWrites == 1);
+        CHECK(vulkan.commandState.state.accepted.size() == 2);
+        CHECK(vulkan.commandState.state.waitCalls == 0);
+        RequireValue(Viewport::Retire(viewport));
+        for (const auto &image : {first, second, motion, depth}) {
+            for (const auto view : image.views)
+                RequireValue(frontend.ReleaseTextureView(view));
+            RequireValue(frontend.ReleaseTexture(image.texture));
+        }
+        RequireValue(frontend.ProcessResourceRequests());
     }
 
     TEST_CASE("Real installed Play suspends XR admission while the bounded event poll has unread work", "[xr][application][play][events]") {

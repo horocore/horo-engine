@@ -50,16 +50,39 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
+    namespace {
+        /** @brief Forbids mixed roles, writes and duplicate uses within one pass. */
+        bool MatchesOptionalRead(const RenderGraph &graph, const RenderGraphOptionalRead &read,
+                                 const std::span<std::uint32_t> resourceByPass) {
+            bool found = false;
+            for (const auto &use : graph.Usages()) {
+                if (use.resource != read.resource)
+                    continue;
+                auto &seen = resourceByPass[use.pass.id.value - 1];
+                if (seen == read.resource.value || use.kind != read.role || use.access != RenderGraphAccess::Read)
+                    return false;
+                seen = read.resource.value;
+                found = true;
+            }
+            return found;
+        }
+    }  // namespace
+
     /** @copydoc PreparedRenderGraphTemplate::ValidateOptionalReads */
     Result<void> PreparedRenderGraphTemplate::ValidateOptionalReads(const RenderGraph &graph,
                                                                     std::span<const RenderGraphOptionalRead> reads) {
         using enum RenderGraphUsageKind;
         if (reads.empty())
             return Result<void>::Success();
-        if (graph.Passes().size() != 1 || graph.Passes().front().kind != RenderPassKind::Graphics ||
-            reads.size() > graph.Resources().size())
+        if (graph.Passes().empty() || reads.size() > graph.Resources().size())
+            return Result<void>::Failure(MakeError(RenderGraphErrors::InvalidImport));
+        const auto queue = graph.Passes().front().queue;
+        if (!std::ranges::all_of(graph.Passes(), [queue](const auto &pass) {
+            return pass.kind == RenderPassKind::Graphics && pass.queue == queue;
+        }))
             return Result<void>::Failure(MakeError(RenderGraphErrors::InvalidImport));
         std::array<std::uint8_t, RenderGraphLimits::HardMaxResources> selected{};
+        std::array<std::uint32_t, RenderGraphLimits::HardMaxPasses> resourceByPass{};
         for (const auto &read : reads) {
             if (read.resource.owner != graph.Owner() || read.resource.value == 0 || read.resource.value > graph.Resources().size() ||
                 (read.role != VertexBuffer && read.role != IndexBuffer && read.role != UniformBuffer))
@@ -70,11 +93,7 @@ namespace Horo::Render::Detail {
                                                                  !std::holds_alternative<RenderBufferHandle>(resource.binding))
                 return Result<void>::Failure(MakeError(RenderGraphErrors::InvalidImport));
             selected[index] = 1;
-            if (std::ranges::count_if(graph.Usages(),
-                                      [&](const RenderGraphResourceUsage &use) {
-                return use.resource == read.resource && use.kind == read.role && use.access == RenderGraphAccess::Read;
-            }) != 1 ||
-                std::ranges::count(graph.Usages(), read.resource, &RenderGraphResourceUsage::resource) != 1)
+            if (!MatchesOptionalRead(graph, read, resourceByPass))
                 return Result<void>::Failure(MakeError(RenderGraphErrors::InvalidImport));
         }
         return Result<void>::Success();
@@ -137,6 +156,9 @@ namespace Horo::Render::Detail {
             if (!optionalReads.empty()) {
                 result.reads_.declarations.assign(optionalReads.begin(), optionalReads.end());
                 result.reads_.completeUses = compiled.Value().usages_;
+                result.reads_.completePassUses.reserve(compiled.Value().Passes().size());
+                for (const auto &pass : compiled.Value().Passes())
+                    result.reads_.completePassUses.push_back(pass.usages);
                 result.reads_.roles.resize(graph.Resources().size(), -1);
                 result.reads_.selected.resize(graph.Resources().size(), 0);
                 for (const auto &read : optionalReads)

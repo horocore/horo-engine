@@ -317,6 +317,8 @@ namespace Horo::Editor {
         if (xrShader_.materials)
             static_cast<void>(xrShader_.materials->Shutdown());
         xrShader_.materials.reset();
+        for (auto &draw : xrMotionDrawSlots_)
+            draw.material.reset();
         if (xrMotionShader_.materials)
             static_cast<void>(xrMotionShader_.materials->Shutdown());
         xrMotionShader_.materials.reset();
@@ -344,6 +346,8 @@ namespace Horo::Editor {
         shader_.payload = std::move(source);
         shader_.metadata = std::move(metadata);
         RetireXrProgram();
+        for (auto &draw : xrMotionDrawSlots_)
+            RetireDraw(draw);
         RetireProgram(xrMotionShader_, {});
         xrMotionFormats_.reset();
         xrMotionCook_.reset();

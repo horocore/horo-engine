@@ -34,6 +34,7 @@ namespace Horo::Tests::OpenXRApplication {
     class GraphGraphicsPort final : public PreparedGraphicsPort {
     public:
         std::size_t multiviewUniformWrites{};
+        std::size_t motionUniformWrites{};
 
         explicit GraphGraphicsPort(Render::VulkanGraphTest::NativeGraphFixture &native) : native_(native) {}
 
@@ -58,7 +59,9 @@ namespace Horo::Tests::OpenXRApplication {
                                       const std::span<const std::byte> bytes) override {
             if (!native_.graph.CanWriteFrameInputs(frame))
                 return Result<void>::Failure(MakeError(XR::XRErrors::OperationIncompatible));
-            REQUIRE((bytes.size() == 1744 || bytes.size() == 64 || bytes.size() == 2624));
+            REQUIRE((bytes.size() == 1744 || bytes.size() == 64 || bytes.size() == 2624 || bytes.size() == 4096));
+            if (bytes.size() == 4096)
+                ++motionUniformWrites;
             if (bytes.size() == 2624) {
                 CHECK(std::ranges::all_of(bytes.subspan(2612), [](const std::byte value) {
                     return value == std::byte{};
