@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <catch2/generators/catch_generators.hpp>
 #include <format>
+#include <optional>
 #include <ranges>
 
 namespace {
@@ -811,18 +812,30 @@ namespace {
             NativeDurableFileSystem files;
             Editor::ProjectMutationCoordinator mutations{files};
             const auto &root = query.project.source.path;
-            const auto lease = mutations.TryAcquire({root, Editor::ProjectMutationOwner::Asset, "blackboard-migration-fence-test"});
-            REQUIRE(lease.HasValue());
+            auto acquired = mutations.TryAcquire({root, Editor::ProjectMutationOwner::Asset, "blackboard-migration-fence-test"});
+            REQUIRE(acquired.HasValue());
+            auto lease = std::move(acquired).Value();
             auto currentMetadata = metadata.Value();
             auto currentNodes = environment.nodes;
             CancellationSource cancellation;
             const auto verify = [&] {
-                return VerifyBlackboardUsageCommitFence(root, query.project.registry, lease.Value(), report.Value(), currentMetadata,
-                                                        currentNodes, cancellation.Token());
+                return VerifyBlackboardUsageCommitFence(root, query.project.registry, lease, report.Value(), currentMetadata, currentNodes,
+                                                        cancellation.Token());
             };
             REQUIRE(verify().HasValue());
 
             const auto *expected = &DecisionCookErrors::Stale;
+            std::optional<Editor::ProjectMutationLease> displacedLease;
+            SECTION("a moved-from lease cannot authorize revalidation") {
+                displacedLease.emplace(std::move(lease));
+            }
+            SECTION("a live lease for another project cannot authorize revalidation") {
+                auto unrelated = mutations.TryAcquire(
+                    {query.project.cache.path, Editor::ProjectMutationOwner::Asset, "blackboard-migration-unrelated-test"});
+                REQUIRE(unrelated.HasValue());
+                displacedLease.emplace(std::move(lease));
+                lease = std::move(unrelated).Value();
+            }
             SECTION("Decision closure inputs change while the registry revision stays fixed") {
                 query.WriteQuery(query.SourcePath, query.output.query, 2);
             }

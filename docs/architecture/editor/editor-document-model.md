@@ -760,8 +760,9 @@ canonical source and observed provider evidence. The owner thread detaches the
 loaded native gameplay image's declared Decision requirements through its
 existing metadata admission. The usage scan relies on copied declarations and
 never starts a provider. A closed opening, newer document revision, replaced
-registry or different native
-declaration owner cannot publish an older worker result. The review also
+registry or different native declaration owner cannot publish an older worker
+result. Revalidating the captured bytes for publication requires a live mutation
+lease for the exact canonical project root. The review also
 reports direct saved Scene and concrete Prefab controller bindings through the
 existing typed codecs and exact source registrations. These rows identify
 schema associations. Decision requirements and authored query result bindings

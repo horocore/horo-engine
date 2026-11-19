@@ -43,6 +43,12 @@ namespace Horo::Editor {
         ProjectMutationLease &operator=(ProjectMutationLease &&) noexcept;
         ~ProjectMutationLease();
 
+        /** @brief Checks whether this live lease protects the exact canonical project root.
+         * @param canonicalRoot Absolute canonical project root selected by the caller's project host.
+         * @return True only while this lease holds the native project mutation lock for that root.
+         */
+        [[nodiscard]] bool ProtectsProject(const std::filesystem::path &canonicalRoot) const;
+
     private:
         friend class ProjectMutationCoordinator;
         explicit ProjectMutationLease(std::unique_ptr<State> state) noexcept;

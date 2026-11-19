@@ -460,7 +460,7 @@ namespace Horo::Application {
 
     /** @copydoc VerifyBlackboardUsageCommitFence */
     Result<void> VerifyBlackboardUsageCommitFence(const std::filesystem::path &root, const Assets::AssetRegistry &registry,
-                                                  const Editor::ProjectMutationLease &, const BlackboardUsageReview &review,
+                                                  const Editor::ProjectMutationLease &lease, const BlackboardUsageReview &review,
                                                   const std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> &currentProviders,
                                                   const std::shared_ptr<const AI::DecisionNodeGeneration> &currentNodes,
                                                   const CancellationToken &cancellation) {
@@ -469,6 +469,8 @@ namespace Horo::Application {
         };
         if (cancellation.IsCancellationRequested())
             return Result<void>::Failure(MakeError(DecisionCookErrors::Cancelled));
+        if (!lease.ProtectsProject(root))
+            return stale();
         if (!review.commitEvidence || !review.decisionValidation)
             return Result<void>::Failure(MakeError(DecisionCookErrors::Invalid));
         const auto &evidence = *review.commitEvidence;
