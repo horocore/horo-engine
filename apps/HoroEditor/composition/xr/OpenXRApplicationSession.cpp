@@ -370,6 +370,22 @@ namespace Horo::Application::Internal {
         return Outcome::Success({settings_, *preflight_, selection_, *system_, *sessionCensus_, *native_, discovery.Value().getProc});
     }
 
+    /** @copydoc OpenXRApplicationSession::BorrowPreparedGraphics */
+    Result<OpenXRApplicationPreparedGraphics> OpenXRApplicationSession::BorrowPreparedGraphics() {
+        using Output = Result<OpenXRApplicationPreparedGraphics>;
+        const auto preparation = BorrowPreparation();
+        if (preparation.HasError())
+            return Output::Failure(preparation.ErrorValue());
+        const auto binding = graphics_.BorrowPreparedBinding();
+        if (binding.HasError())
+            return Output::Failure(binding.ErrorValue());
+        const auto &facts = preparation.Value();
+        const NativeSessionPreparation session{facts.preflight, facts.selection.attempt};
+        if (const auto current = native_->BorrowPreparedSession(session); current.HasError())
+            return Output::Failure(current.ErrorValue());
+        return Output::Success({session, graphics_, *binding.Value()});
+    }
+
     /** @copydoc OpenXRApplicationSession::ActivateSession */
     Result<void> OpenXRApplicationSession::ActivateSession(const XRSessionId &candidate, const XRCapabilitySnapshot &capabilities,
                                                            const XRFeaturePlan &plan) {

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <optional>
 
 #if defined(XR_USE_GRAPHICS_API_VULKAN)
 #include <vulkan/vulkan.h>
@@ -19,6 +20,7 @@ namespace Horo::Tests::OpenXR {
         static inline SwapchainScript *active{};
         std::vector<std::string_view> calls;
         std::string_view fail;
+        std::optional<std::int64_t> rejectCreateFormat;
         XrResult failure{XR_ERROR_RUNTIME_FAILURE};
         std::uint32_t formatCount{1};
         std::int64_t format{37};
@@ -53,6 +55,8 @@ namespace Horo::Tests::OpenXR {
 
         static XRAPI_ATTR XrResult XRAPI_CALL Create(XrSession, const XrSwapchainCreateInfo *info, XrSwapchain *swapchain) {
             const auto result = Record("create");
+            if (active->rejectCreateFormat == info->format)
+                return active->failure;
             if (XR_SUCCEEDED(result)) {
                 active->created = *info;
                 *swapchain = NativeHandle<XrSwapchain>(++active->creates);

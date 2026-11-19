@@ -56,6 +56,13 @@ namespace Horo::Application::Internal {
         PFN_xrGetInstanceProcAddr getProc;
     };
 
+    /** @brief Synchronous borrow of the actual prepared native session and its selected graphics binding. */
+    struct OpenXRApplicationPreparedGraphics final {
+        XR::OpenXRInternal::NativeSessionPreparation session;
+        XR::OpenXRInternal::OpenXRSelectedVulkanBinding &graphics;
+        const XrGraphicsBindingVulkanKHR &binding;
+    };
+
     /** @brief Exact selected runtime offer and signed Editor writer allocation, without compositor admission. */
     struct OpenXRProjectionWriter final {
         XR::OpenXRInternal::NativeReprojectionAllocation selection;
@@ -210,6 +217,8 @@ namespace Horo::Application::Internal {
          * @pre PrepareSession succeeded; no borrow survives another owner operation.
          */
         [[nodiscard]] Result<OpenXRApplicationPreparation> BorrowPreparation() const;
+        /** @brief Borrows the selected prepared binding before the canonical XR session has been assigned. */
+        [[nodiscard]] Result<OpenXRApplicationPreparedGraphics> BorrowPreparedGraphics();
         /** @brief Produces the real bounded Projection1_0 plan from prepared native/Input and selected renderer evidence.
          * @param frontend SAME actual selected frontend. @param viewport SAME cold-admitted multiview shader owner.
          * @param bindings SAME installed declaration whose native sets/spaces and Input reservation were prepared.

@@ -36,6 +36,8 @@ namespace Horo::XR::OpenXRInternal {
          * @pre Owner lane. The borrow ends at Release/retirement; native image translators must drain first.
          */
         [[nodiscard]] Result<const XrGraphicsBindingVulkanKHR *> BorrowBinding(const XRSessionId &candidate) const;
+        /** @brief Borrows the real stable graphics binding while its native session remains private. */
+        [[nodiscard]] Result<const XrGraphicsBindingVulkanKHR *> BorrowPreparedBinding() const;
         /** @brief Captures private device identity while the exact preflight's native session binding is live. */
         [[nodiscard]] Result<Render::VulkanApiVersion> CaptureCompatibilityDevice();
         /** @brief Rejects replacement or retirement of the exact preflighted renderer before qualification consumes it. */

@@ -83,6 +83,16 @@ namespace Horo::XR::OpenXRInternal {
         return Result<const XrGraphicsBindingVulkanKHR *>::Success(&binding_);
     }
 
+    /** @copydoc OpenXRSelectedVulkanBinding::BorrowPreparedBinding */
+    Result<const XrGraphicsBindingVulkanKHR *> OpenXRSelectedVulkanBinding::BorrowPreparedBinding() const {
+        using Output = Result<const XrGraphicsBindingVulkanKHR *>;
+        if (auto current = ValidatePreparation(); current.HasError())
+            return Output::Failure(current.ErrorValue());
+        if (!bound_)
+            return Output::Failure(MakeError(XRErrors::OperationUnavailable));
+        return Output::Success(&binding_);
+    }
+
     /** @copydoc OpenXRSelectedVulkanBinding::Preflight */
     Result<void> OpenXRSelectedVulkanBinding::Preflight(const NativeDiscoveryBorrow &owner) {
         if (const auto lane = CheckLane(); lane.HasError())

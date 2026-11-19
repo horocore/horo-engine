@@ -101,6 +101,32 @@ namespace Horo::Application::Internal {
             return XRViewRenderPlan::Create({configuration, displayTime, views, targets, images}, configuration.session, configuration.id,
                                             configuration.revision, origin, viewCount, {});
         }
+
+        /** @brief Real device/view dispatch selected by this exact native binding. */
+        struct SwapchainGraphics final {
+            Render::Detail::VulkanEditorDevice device;
+            Render::Detail::VulkanExternalViewDispatch views;
+        };
+
+        /** @brief Resolves view ownership on the selected device for both cold and active native allocations. */
+        Result<SwapchainGraphics> PrepareSwapchainGraphics(const Editor::EditorViewportRendererVulkan &viewport,
+                                                           const XrGraphicsBindingVulkanKHR &binding) {
+            using Output = Result<SwapchainGraphics>;
+            const auto device = Editor::EditorVulkanXrViewportAccess::Device(viewport);
+            if (device.HasError())
+                return Output::Failure(device.ErrorValue());
+            const auto &selected = device.Value();
+            if (!selected.deviceResolver || selected.device != binding.device || selected.instance != binding.instance ||
+                selected.physical != binding.physicalDevice || selected.graphicsFamily != binding.queueFamilyIndex)
+                return Output::Failure(MakeError(XRErrors::CapabilityStale));
+            const Render::Detail::VulkanExternalViewDispatch views{std::bit_cast<PFN_vkCreateImageView>(
+                                                                       selected.deviceResolver(selected.device, "vkCreateImageView")),
+                                                                   std::bit_cast<PFN_vkDestroyImageView>(
+                                                                       selected.deviceResolver(selected.device, "vkDestroyImageView"))};
+            if (!views.create || !views.destroy)
+                return Output::Failure(MakeError(XRErrors::OperationUnavailable));
+            return Output::Success({selected, views});
+        }
     }  // namespace
 
     /** @copydoc OpenXRPlayHost::FrameState::WaitAndImport */
@@ -172,21 +198,49 @@ namespace Horo::Application::Internal {
     }
 
     /** @brief Constructs one native auxiliary owner from the selected session's same graphics binding. */
-    OpenXRPlayHost::FrameState::WriterPair::Target::Target(OpenXRPlayHost &host, OpenXRSelectedVulkanBinding &graphics,
-                                                           const XrGraphicsBindingVulkanKHR &binding, Render::RenderQueueId queue,
-                                                           Render::Detail::VulkanExternalViewDispatch dispatch)
+    OpenXRPlayHost::WriterPair::Target::Target(OpenXRPlayHost &host, OpenXRSelectedVulkanBinding &graphics,
+                                               const XrGraphicsBindingVulkanKHR &binding, Render::RenderQueueId queue,
+                                               Render::Detail::VulkanExternalViewDispatch dispatch)
         : images(host.composition_.frontend, graphics, binding, queue, dispatch), owner(host.native_, images) {}
 
     /** @brief Retains both native targets together until their exact frame and graphics obligations drain. */
-    OpenXRPlayHost::FrameState::WriterPair::WriterPair(OpenXRPlayHost &host, OpenXRSelectedVulkanBinding &graphics,
-                                                       const XrGraphicsBindingVulkanKHR &binding,
-                                                       const Render::Detail::VulkanEditorDevice &device,
-                                                       Render::Detail::VulkanExternalViewDispatch views)
+    OpenXRPlayHost::WriterPair::WriterPair(OpenXRPlayHost &host, OpenXRSelectedVulkanBinding &graphics,
+                                           const XrGraphicsBindingVulkanKHR &binding, const Render::Detail::VulkanEditorDevice &device,
+                                           Render::Detail::VulkanExternalViewDispatch views)
         : motion(host, graphics, binding, device.graphicsIdentity, views), depth(host, graphics, binding, device.graphicsIdentity, views) {}
 
-    /** @copydoc OpenXRPlayHost::FrameState::WriterPair::Prepare */
-    Result<void> OpenXRPlayHost::FrameState::WriterPair::Prepare(const XRSessionId &session, const OpenXRProjectionWriter &plan,
-                                                                 PFN_xrGetInstanceProcAddr getProc) {
+    /** @copydoc OpenXRPlayHost::WriterPair::Stage */
+    Result<void> OpenXRPlayHost::WriterPair::Stage(const NativeSessionPreparation &session, const OpenXRProjectionWriter &plan,
+                                                   PFN_xrGetInstanceProcAddr getProc) {
+        if (auto bound = motion.images.Bind(motion.owner); bound.HasError())
+            return bound;
+        if (auto bound = depth.images.Bind(depth.owner); bound.HasError())
+            return bound;
+        const NativePreparedReprojectionSwapchain motionAllocation{{.index = 1, .generation = 1},
+                                                                   plan.motion,
+                                                                   NativeSwapchainRole::Motion,
+                                                                   plan.selection};
+        const NativePreparedReprojectionSwapchain depthAllocation{{.index = 2, .generation = 1},
+                                                                  plan.depth,
+                                                                  NativeSwapchainRole::ReprojectionDepth,
+                                                                  plan.selection};
+        if (auto staged = motion.owner.StageReprojection(session, motionAllocation, getProc); staged.HasError())
+            return staged;
+        return depth.owner.StageReprojection(session, depthAllocation, getProc);
+    }
+
+    /** @copydoc OpenXRPlayHost::WriterPair::Adopt */
+    Result<void> OpenXRPlayHost::WriterPair::Adopt(const XRSessionId &session) {
+        if (auto adopted = motion.owner.AdoptReprojection(session); adopted.HasError())
+            return adopted;
+        auto adopted = depth.owner.AdoptReprojection(session);
+        available = adopted.HasValue();
+        return adopted;
+    }
+
+    /** @copydoc OpenXRPlayHost::WriterPair::Prepare */
+    Result<void> OpenXRPlayHost::WriterPair::Prepare(const XRSessionId &session, const OpenXRProjectionWriter &plan,
+                                                     PFN_xrGetInstanceProcAddr getProc) {
         const auto prepare = [&](Target &target, const std::uint32_t index, const Render::RenderTextureDescriptor &descriptor,
                                  const NativeSwapchainRole role) -> Result<void> {
             if (auto bound = target.images.Bind(target.owner); bound.HasError())
@@ -204,8 +258,8 @@ namespace Horo::Application::Internal {
         return ready;
     }
 
-    /** @copydoc OpenXRPlayHost::FrameState::WriterPair::Acquire */
-    Result<std::optional<Editor::EditorVulkanXrViewportAccess::AuxiliaryImages>> OpenXRPlayHost::FrameState::WriterPair::Acquire(
+    /** @copydoc OpenXRPlayHost::WriterPair::Acquire */
+    Result<std::optional<Editor::EditorVulkanXrViewportAccess::AuxiliaryImages>> OpenXRPlayHost::WriterPair::Acquire(
         Render::RenderFrontend &frontend, const XRFrameId &candidate, const OpenXRProjectionWriter &plan) {
         using Outcome = Result<std::optional<Editor::EditorVulkanXrViewportAccess::AuxiliaryImages>>;
         using enum Render::RenderTextureAspect;
@@ -215,10 +269,10 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
         frame = candidate;
         const auto acquire = [&](Target &entry, const Render::RenderTextureDescriptor &descriptor, Render::RenderTextureAspect aspect) {
-            const auto imported = WaitAndImport(entry.owner, entry.acquisition);
+            const auto imported = FrameState::WaitAndImport(entry.owner, entry.acquisition);
             if (imported.HasError() || !imported.Value())
                 return imported;
-            if (auto views = PrepareEyeViews(frontend, *entry.acquisition, descriptor, aspect, entry.views); views.HasError())
+            if (auto views = FrameState::PrepareEyeViews(frontend, *entry.acquisition, descriptor, aspect, entry.views); views.HasError())
                 return Result<bool>::Failure(views.ErrorValue());
             return Result<bool>::Success(true);
         };
@@ -236,13 +290,13 @@ namespace Horo::Application::Internal {
         return Outcome::Success(ready);
     }
 
-    /** @copydoc OpenXRPlayHost::FrameState::WriterPair::Retire */
-    Result<bool> OpenXRPlayHost::FrameState::WriterPair::Retire(Render::RenderFrontend &frontend) {
+    /** @copydoc OpenXRPlayHost::WriterPair::Retire */
+    Result<bool> OpenXRPlayHost::WriterPair::Retire(Render::RenderFrontend &frontend) {
         if (!frame.IsValid())
             return Result<bool>::Success(true);
         ready.reset();
         for (auto *target : {&motion, &depth}) {
-            const auto retired = RetireImage(frontend, target->owner, target->views);
+            const auto retired = FrameState::RetireImage(frontend, target->owner, target->views);
             if (retired.HasError() || !retired.Value())
                 return retired;
             target->acquisition.reset();
@@ -251,24 +305,47 @@ namespace Horo::Application::Internal {
         return Result<bool>::Success(true);
     }
 
-    /** @copydoc OpenXRPlayHost::FrameState::WriterPair::Close */
-    Result<bool> OpenXRPlayHost::FrameState::WriterPair::Close(Render::RenderFrontend &frontend, const XRSessionId &session,
-                                                               const bool lost) {
+    /** @copydoc OpenXRPlayHost::WriterPair::Close */
+    Result<bool> OpenXRPlayHost::WriterPair::Close(Render::RenderFrontend &frontend, const std::optional<XRSessionId> lostSession) {
         using enum NativeSwapchainPhase;
         available = false;
         ready.reset();
         for (auto *target : {&motion, &depth}) {
-            if (auto views = ReleaseEyeViews(frontend, target->views); views.HasError())
+            if (auto views = FrameState::ReleaseEyeViews(frontend, target->views); views.HasError())
                 return Result<bool>::Failure(views.ErrorValue());
             const auto phase = target->owner.Phase();
-            const auto closed =
-                lost && phase != Empty && phase != Closing ? target->owner.CloseAfterSessionLoss(session) : target->owner.Close();
+            const auto closed = lostSession && phase != Empty && phase != Closing && phase != Prepared
+                                    ? target->owner.CloseAfterSessionLoss(*lostSession)
+                                    : target->owner.Close();
             if (closed.HasError() || !closed.Value())
                 return closed;
             target->acquisition.reset();
         }
         frame = {};
         return Result<bool>::Success(true);
+    }
+
+    /** @copydoc OpenXRPlayHost::SceneState::StageWriter */
+    Result<void> OpenXRPlayHost::SceneState::StageWriter(OpenXRPlayHost &host) {
+        using Viewport = Editor::EditorVulkanXrViewportAccess;
+        if (!projection->writer || !prewarmedRenderer || !Viewport::HasPreparedReduction(host.composition_.viewport, *prewarmedRenderer))
+            return Result<void>::Success();
+        const auto graphics = host.composition_.session.BorrowPreparedGraphics();
+        if (graphics.HasError())
+            return Result<void>::Failure(graphics.ErrorValue());
+        const auto &prepared = graphics.Value();
+        const auto selected = PrepareSwapchainGraphics(host.composition_.viewport, prepared.binding);
+        if (selected.HasError())
+            return Result<void>::Failure(selected.ErrorValue());
+        preparedWriter =
+            std::make_shared<WriterPair>(host, prepared.graphics, prepared.binding, selected.Value().device, selected.Value().views);
+        if (auto staged = preparedWriter->Stage(prepared.session, *projection->writer, host.getProc_); staged.HasError()) {
+            projection->writer.reset();
+            const auto closed = preparedWriter->Close(host.composition_.frontend);
+            if (closed.HasValue() && closed.Value())
+                preparedWriter.reset();
+        }
+        return Result<void>::Success();
     }
 
     /** @copydoc OpenXRPlayHost::PrepareFrameResources */
@@ -281,21 +358,11 @@ namespace Horo::Application::Internal {
         auto binding = graphics.Value()->BorrowBinding(candidate);
         if (binding.HasError())
             return Result<void>::Failure(binding.ErrorValue());
-        auto device = Editor::EditorVulkanXrViewportAccess::Device(composition_.viewport);
-        if (device.HasError())
-            return Result<void>::Failure(device.ErrorValue());
-        const auto &selected = device.Value();
-        if (!selected.deviceResolver || selected.device != binding.Value()->device || selected.instance != binding.Value()->instance ||
-            selected.physical != binding.Value()->physicalDevice || selected.graphicsFamily != binding.Value()->queueFamilyIndex)
-            return Result<void>::Failure(MakeError(XRErrors::CapabilityStale));
-        // Device functions are resolved ONLY through the actual selected device resolver.
-        const Render::Detail::VulkanExternalViewDispatch views{std::bit_cast<PFN_vkCreateImageView>(
-                                                                   selected.deviceResolver(selected.device, "vkCreateImageView")),
-                                                               std::bit_cast<PFN_vkDestroyImageView>(
-                                                                   selected.deviceResolver(selected.device, "vkDestroyImageView"))};
-        if (!views.create || !views.destroy)
-            return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
-        render_ = std::make_shared<FrameState>(*this, candidate, *graphics.Value(), *binding.Value(), selected, views, color);
+        const auto selected = PrepareSwapchainGraphics(composition_.viewport, *binding.Value());
+        if (selected.HasError())
+            return Result<void>::Failure(selected.ErrorValue());
+        const auto &[device, views] = selected.Value();
+        render_ = std::make_shared<FrameState>(*this, candidate, *graphics.Value(), *binding.Value(), device, views, color);
         if (auto bound = render_->images.Bind(render_->color); bound.HasError())
             return bound;
         // This is the single actual color allocation for this issued session. The session generation
@@ -303,8 +370,14 @@ namespace Horo::Application::Internal {
         if (auto created = render_->color.Create({{candidate, {.index = 0, .generation = 1}}, color}, getProc_); created.HasError())
             return created;
         if (scene_->projection->writer) {
-            auto &writer = render_->writer.emplace(*this, *graphics.Value(), *binding.Value(), selected, views);
-            const auto prepared = writer.Prepare(candidate, *scene_->projection->writer, getProc_);
+            const auto prepared = [&]() -> Result<void> {
+                if (scene_->preparedWriter) {
+                    render_->writer = std::exchange(scene_->preparedWriter, {});
+                    return render_->writer->Adopt(candidate);
+                }
+                render_->writer = std::make_shared<WriterPair>(*this, *graphics.Value(), *binding.Value(), device, views);
+                return render_->writer->Prepare(candidate, *scene_->projection->writer, getProc_);
+            }();
             // Optional preparation can leave a native prefix. The same Scene owner keeps it until explicit close.
             if (prepared.HasError())
                 scene_->projection->writer.reset();
@@ -687,7 +760,8 @@ namespace Horo::Application::Internal {
                     return Output::Failure(retired.ErrorValue());
             }
             if (host.render_->writer) {
-                const auto closed = host.render_->writer->Close(host.composition_.frontend, host.render_->session, lost);
+                const auto closed =
+                    host.render_->writer->Close(host.composition_.frontend, lost ? std::optional{host.render_->session} : std::nullopt);
                 if (closed.HasError() || !closed.Value())
                     return closed;
             }

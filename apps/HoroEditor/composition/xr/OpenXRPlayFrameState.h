@@ -13,6 +13,46 @@
 #include "VulkanEditorGraphicsBridge.h"
 
 namespace Horo::Application::Internal {
+    /** @brief Physically owned pair of auxiliary swapchains, transferable from the private Scene to its frame owner. */
+    struct OpenXRPlayHost::WriterPair final {
+        struct Target final {
+            XR::OpenXRInternal::OpenXRVulkanSwapchainImages images;
+            XR::OpenXRInternal::OpenXRSwapchain owner;
+            std::optional<XR::OpenXRInternal::NativeSwapchainAcquisition> acquisition;
+            std::array<Render::RenderTextureViewHandle, 2> views{};
+
+            Target(OpenXRPlayHost &host, XR::OpenXRInternal::OpenXRSelectedVulkanBinding &graphics,
+                   const XrGraphicsBindingVulkanKHR &binding, Render::RenderQueueId queue,
+                   Render::Detail::VulkanExternalViewDispatch dispatch);
+        };
+
+        Target motion;
+        Target depth;
+        XR::XRFrameId frame;
+        std::optional<Editor::EditorVulkanXrViewportAccess::AuxiliaryImages> ready;
+        bool available{};
+
+        WriterPair(OpenXRPlayHost &host, XR::OpenXRInternal::OpenXRSelectedVulkanBinding &graphics,
+                   const XrGraphicsBindingVulkanKHR &binding, const Render::Detail::VulkanEditorDevice &device,
+                   Render::Detail::VulkanExternalViewDispatch views);
+
+        /** @brief Stages both actual auxiliary allocations without issuing session/target ownership. */
+        Result<void> Stage(const XR::OpenXRInternal::NativeSessionPreparation &session, const OpenXRProjectionWriter &plan,
+                           PFN_xrGetInstanceProcAddr getProc);
+        /** @brief Adopts the exact prepared allocations once into the issued session. */
+        Result<void> Adopt(const XR::XRSessionId &session);
+        /** @brief Creates the same allocations directly for a writer without a prepared reducer. */
+        Result<void> Prepare(const XR::XRSessionId &session, const OpenXRProjectionWriter &plan, PFN_xrGetInstanceProcAddr getProc);
+        /** @brief Acquires both images at zero timeout; an incomplete pair retains exact retirement debt. */
+        Result<std::optional<Editor::EditorVulkanXrViewportAccess::AuxiliaryImages>> Acquire(Render::RenderFrontend &frontend,
+                                                                                             const XR::XRFrameId &candidate,
+                                                                                             const OpenXRProjectionWriter &plan);
+        /** @brief Retires all touched auxiliary images before the ordinary projection may finish. */
+        Result<bool> Retire(Render::RenderFrontend &frontend);
+        /** @brief Closes every native child; only a supplied lost session allows destructive lost retirement. */
+        Result<bool> Close(Render::RenderFrontend &frontend, std::optional<XR::XRSessionId> lostSession = {});
+    };
+
     /** @brief Candidate-owned physical image/compositor children of the SAME selected native and render owners.
      * @details Native failures keep this storage retained by the App. Scene Shutdown may revoke its typed
      * publication, but cannot drop these children, outgoing native dependencies or queued image leases.
@@ -25,42 +65,7 @@ namespace Horo::Application::Internal {
         XR::OpenXRInternal::OpenXRSwapchain color;
         XR::OpenXRInternal::OpenXRFrameCompositor compositor;
 
-        /** @brief Native writer-only acquisitions retire through the canonical scene/GUI queue lease. */
-        struct WriterPair final {
-            struct Target final {
-                XR::OpenXRInternal::OpenXRVulkanSwapchainImages images;
-                XR::OpenXRInternal::OpenXRSwapchain owner;
-                std::optional<XR::OpenXRInternal::NativeSwapchainAcquisition> acquisition;
-                std::array<Render::RenderTextureViewHandle, 2> views{};
-
-                Target(OpenXRPlayHost &host, XR::OpenXRInternal::OpenXRSelectedVulkanBinding &graphics,
-                       const XrGraphicsBindingVulkanKHR &binding, Render::RenderQueueId queue,
-                       Render::Detail::VulkanExternalViewDispatch dispatch);
-            };
-
-            Target motion;
-            Target depth;
-            XR::XRFrameId frame;
-            std::optional<Editor::EditorVulkanXrViewportAccess::AuxiliaryImages> ready;
-            bool available{};
-
-            WriterPair(OpenXRPlayHost &host, XR::OpenXRInternal::OpenXRSelectedVulkanBinding &graphics,
-                       const XrGraphicsBindingVulkanKHR &binding, const Render::Detail::VulkanEditorDevice &device,
-                       Render::Detail::VulkanExternalViewDispatch views);
-
-            /** @brief Creates the exact session's auxiliary swapchains without registering a compositor provider. */
-            Result<void> Prepare(const XR::XRSessionId &session, const OpenXRProjectionWriter &plan, PFN_xrGetInstanceProcAddr getProc);
-            /** @brief Acquires both images at zero timeout; an incomplete pair retains exact retirement debt. */
-            Result<std::optional<Editor::EditorVulkanXrViewportAccess::AuxiliaryImages>> Acquire(Render::RenderFrontend &frontend,
-                                                                                                 const XR::XRFrameId &candidate,
-                                                                                                 const OpenXRProjectionWriter &plan);
-            /** @brief Retires all touched auxiliary images before the ordinary projection may finish. */
-            Result<bool> Retire(Render::RenderFrontend &frontend);
-            /** @brief Retires the candidate's native children, including incomplete cold prefixes. */
-            Result<bool> Close(Render::RenderFrontend &frontend, const XR::XRSessionId &session, bool lost);
-        };
-
-        std::optional<WriterPair> writer;
+        std::shared_ptr<WriterPair> writer;
         Render::RenderTextureDescriptor allocation;
         std::optional<XR::OpenXRInternal::NativeSwapchainAcquisition> acquisition;
         std::array<Render::RenderTextureViewHandle, 2> eyeViews{};

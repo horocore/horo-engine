@@ -446,6 +446,8 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XRSessionErrors::ActivationCancelled));
         if (auto warmed = PrewarmRenderer(host); warmed.HasError())
             return warmed;
+        if (auto staged = StageWriter(host); staged.HasError())
+            return staged;
         const auto &facts = *projection;
         auto activatedSession = host.sessions_.Activate(facts.capabilities, facts.capabilities.System(), facts.capabilities.Revision(),
                                                         facts.plan, cancellation);
@@ -546,6 +548,11 @@ namespace Horo::Application::Internal {
         if (!host.scene_->nativeRetired) {
             if (const auto resources = FrameState::RetireResources(host, candidate); resources.HasError() || !resources.Value())
                 return resources;
+            if (auto &writer = host.scene_->preparedWriter) {
+                if (const auto closed = writer->Close(host.composition_.frontend); closed.HasError() || !closed.Value())
+                    return closed;
+                writer.reset();
+            }
             const auto retained = host.composition_.session.RetainedSession();
             if (auto retired =
                     retained ? host.composition_.session.RetireSession(candidate) : host.composition_.session.RetirePreparation();

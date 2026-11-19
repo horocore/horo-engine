@@ -744,6 +744,11 @@ actual Vulkan array and eye views before any Horo target is published. Promotion
 adopts those same views once into the exact issued session and preplanned slot.
 An unissued image cannot be acquired or imported. Partial failure destroys the
 views before the swapchain, retaining any native destroy debt for retry.
+When the private Play viewport has the paired reducer, the unpublished Scene
+stages both writers before issuing the canonical session. The active frame owner
+then takes the same pair after ordinary color preparation. If staging fails,
+Play continues with ordinary projection and the Scene retains any unfinished
+cleanup ahead of native session retirement.
 
 See the [Khronos space-warp layer contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrCompositionLayerSpaceWarpInfoFB.html)
 for the distinction between runtime motion inputs and internal Renderer UV history.

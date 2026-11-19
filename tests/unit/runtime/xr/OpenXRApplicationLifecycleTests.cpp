@@ -2581,11 +2581,20 @@ namespace Horo::Tests::OpenXRApplication {
 
         struct ScriptedColdKernel final : IResidentStereoCoverageReducer {};
 
-        const bool reject = GENERATE(false, true);
+        enum class ColdOutcome {
+            Prepared,
+            MissingReducer,
+            RejectedDepth
+        };
+        const auto outcome = GENERATE(ColdOutcome::Prepared, ColdOutcome::MissingReducer, ColdOutcome::RejectedDepth);
+        const bool reject = outcome == ColdOutcome::MissingReducer;
+        const bool rejectDepth = outcome == ColdOutcome::RejectedDepth;
         ApplicationFixture fixture{true, 5, Unrequested, Unrequested, Unrequested, true};
         constexpr std::array<std::int64_t, 3> formats{VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT};
         fixture.script.census.formats = formats.size();
         fixture.script.census.formatPublication = formats;
+        if (rejectDepth)
+            fixture.script.swapchain.rejectCreateFormat = VK_FORMAT_D32_SFLOAT;
         const auto motion = ApplicationVulkanFixture::CookMotion();
         const auto coverage = ApplicationVulkanFixture::CookCoverage();
         fixture.viewport->StageXrMotionProgram(
@@ -2612,7 +2621,9 @@ namespace Horo::Tests::OpenXRApplication {
         auto scene = PublishPlay(fixture);
         REQUIRE(coldPreparations == 1);
         CHECK(reducer.expired() == reject);
-        REQUIRE(fixture.script.swapchain.creates == 3);
+        REQUIRE(fixture.script.swapchain.creates == (rejectDepth ? 2 : 3));
+        CHECK(fixture.script.swapchain.destroys == (rejectDepth ? 1 : 0));
+        CHECK(fixture.script.swapchain.created.format == (reject ? VK_FORMAT_D32_SFLOAT : VK_FORMAT_R8G8B8A8_UNORM));
         fixture.script.clock.sample = 1;
         REQUIRE(RequireValue(fixture.play->PrepareRenderFrame(1)));
         auto frame = RequireValue(fixture.frontend->BeginFrame({1, {8, 8}}));
@@ -2628,6 +2639,7 @@ namespace Horo::Tests::OpenXRApplication {
         }));
         scene->Shutdown();
         REQUIRE(RequireValue(fixture.ClosePlay()));
+        CHECK(fixture.script.swapchain.destroys == fixture.script.swapchain.creates);
         CHECK(reducer.expired());
     }
 

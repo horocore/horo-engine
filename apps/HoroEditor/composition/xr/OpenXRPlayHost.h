@@ -316,6 +316,7 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<void> AdmitReferenceReplacement() const;
         struct FrameState;
+        struct WriterPair;
         /** @brief Drives one cold activation/retirement step on the actual native event cutoff. */
         void ProgressPassthrough();
         /** @brief Checks the exact local grant, Play and World ownership without calling platform authority.
@@ -357,8 +358,9 @@ namespace Horo::Application::Internal {
             std::optional<SceneGeometry> geometry;
             std::optional<OpenXRApplicationProjection> projection;
             std::optional<Editor::EditorVulkanXrViewportAccess::PreparedTargets> prewarmedRenderer;
-            XR::XRReferenceSpaceSnapshot references; /**< Same cold native preparation as this Scene candidate. */
-            XR::XRCoordinateSpace worldReference;    /**< Exact calibrated native World child from the same candidate. */
+            std::shared_ptr<WriterPair> preparedWriter; /**< Owns the unpublished pair, including any failed native cleanup prefix. */
+            XR::XRReferenceSpaceSnapshot references;    /**< Same cold native preparation as this Scene candidate. */
+            XR::XRCoordinateSpace worldReference;       /**< Exact calibrated native World child from the same candidate. */
             std::optional<XR::OpenXRInternal::NativeReferenceCalibrationObservation> mountedCalibration;
             XR::XRSessionId session;
             std::optional<XR::XRPassthroughGrant> passthroughGrant;
@@ -375,6 +377,8 @@ namespace Horo::Application::Internal {
                                                         const XR::OpenXRInternal::NativeTrackingSpaceRequest &tracking);
             /** @brief Warms the exact staged reducer and paired graph while the Scene and native session are still private. */
             [[nodiscard]] Result<void> PrewarmRenderer(OpenXRPlayHost &host);
+            /** @brief Stages both auxiliary images on the exact native preparation following real viewport admission. */
+            [[nodiscard]] Result<void> StageWriter(OpenXRPlayHost &host);
             /** @brief Prepares the existing normal graph, or checks the already warmed graph in the canonical stage. */
             [[nodiscard]] Result<void> PrepareRenderer(OpenXRPlayHost &host, const XR::XRFeaturePlan &plan);
             /** @brief Seals mounted placement only after the exact native relation and origin lease agree. */
