@@ -42,6 +42,7 @@ namespace Horo::Prefab::Detail {
 
         std::vector<SourceMember> members;
         std::shared_ptr<IPrefabPersistencePublication> persistence;
+        std::shared_ptr<const Runtime::SceneGroupPublication> publication;
     };
 
     /** @brief Bounded owned request, cancellation and Scene receipt; observation
@@ -452,6 +453,17 @@ namespace Horo::Prefab::Detail {
             return Result<void>::Success();
         }
 
+        /** @brief Binds the exact cooked occurrence before handing off to the Scene transaction. */
+        Result<void> BindGroupPublication(PrefabSpawnOperation &operation, std::span<const Runtime::RuntimeComponentSet> projected) const {
+            if (!groupPublicationOwner)
+                return Result<void>::Success();
+            auto bound = groupPublicationOwner->Bind(*operation.preparedTemplate, operation.request, projected, operation.creator);
+            if (bound.HasError())
+                return Result<void>::Failure(bound.ErrorValue());
+            operation.prepared->publication = std::move(bound).Value();
+            return Result<void>::Success();
+        }
+
         /** @brief Queues one fully prepared transaction; Scene retains artifacts and
          * repeats all admission fences. */
         [[nodiscard]] Result<void> Queue(PrefabSpawnOperation &operation) {
@@ -463,6 +475,10 @@ namespace Horo::Prefab::Detail {
                                                          retirement.Token(), operation.scopeCancellation});
                     queued.HasError())
                     return queued;
+                if (const auto &publication = operation.instance.state_->publication) {
+                    if (auto bound = commands.BindGroupPublication(publication); bound.HasError())
+                        return bound;
+                }
                 auto receipt = scenes->QueueTrackedStructuralCommands(std::move(commands));
                 if (receipt.HasError())
                     return Result<void>::Failure(receipt.ErrorValue());
@@ -487,6 +503,8 @@ namespace Horo::Prefab::Detail {
                 operation.prepared->SortMembers();
                 if (auto staged = StagePersistence(operation, projected.Value().components); staged.HasError())
                     return staged;
+                if (auto bound = BindGroupPublication(operation, projected.Value().components); bound.HasError())
+                    return bound;
                 auto projection = std::move(projected).Value();
                 auto queued = provider->QueuePreparedGroup(*operation.preparedTemplate, std::move(projection.components),
                                                            operation.cancellation.Token(),
@@ -498,7 +516,8 @@ namespace Horo::Prefab::Detail {
                                                             .members = std::move(projection.members),
                                                             .references = std::move(projection.references),
                                                             .spawnLineage = operation.lineage,
-                                                            .primitiveMeshes = std::move(projection.primitiveMeshes)});
+                                                            .primitiveMeshes = std::move(projection.primitiveMeshes),
+                                                            .publication = operation.prepared->publication});
                 if (queued.HasError())
                     return Result<void>::Failure(queued.ErrorValue());
                 operation.creations.emplace(std::move(queued).Value());
@@ -587,6 +606,7 @@ namespace Horo::Prefab::Detail {
         std::uint64_t lastBehaviorId{};
         std::uint64_t nextScope{1};
         std::shared_ptr<IPrefabPersistenceOwner> persistence;
+        std::shared_ptr<const IPrefabGroupPublicationOwner> groupPublicationOwner;
         std::shared_ptr<const PrefabValueSchemaSnapshot> schemas;
         bool hasQueuedStructure{};
         bool closed{};

@@ -260,6 +260,17 @@ namespace Horo::Prefab {
         return Result<void>::Success();
     }
 
+    /** @copydoc PrefabSpawnService::InstallGroupPublicationOwner */
+    Result<void> PrefabSpawnService::InstallGroupPublicationOwner(std::shared_ptr<const IPrefabGroupPublicationOwner> owner) {
+        if (auto current = state_->Check(); current.HasError())
+            return current;
+        if (!owner || state_->hasQueuedStructure || state_->groupPublicationOwner)
+            return Result<void>::Failure(
+                MakeError(PrefabErrors::AdmissionRejected, "A Prefab group publication owner must be installed before Scene submission."));
+        state_->groupPublicationOwner = std::move(owner);
+        return Result<void>::Success();
+    }
+
     /** @copydoc PrefabSpawnService::Acquire */
     Result<std::shared_ptr<Gameplay::GameplayPrefabContext>> PrefabSpawnService::Acquire(GameplayPrefabBinding binding) const {
         using Context = std::shared_ptr<Gameplay::GameplayPrefabContext>;

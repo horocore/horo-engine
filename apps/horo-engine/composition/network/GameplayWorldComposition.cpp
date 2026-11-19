@@ -274,6 +274,25 @@ namespace Horo::Application::Internal {
         return CreateServiceBacked(scenes, templates, &world, sceneGeneration, selection, nullptr, &character, &prepared);
     }
 
+    /** @copydoc GameplayWorldComposition::BindPrefab */
+    Result<void> GameplayWorldComposition::BindPrefab(const GameplayWorldSelection &selection, Runtime::RuntimeSceneService &scenes,
+                                                      Runtime::SceneRuntimeId scene, Prefab::PrefabTemplateProvider *templates,
+                                                      const Gameplay::ComponentRegistry *components) {
+        if (selection.prefabPermission != GameplayPrefabPermission::Granted)
+            return Result<void>::Success();
+        prefabs_ = std::make_unique<Prefab::PrefabSpawnService>(*templates, scenes, components ? components : &prefabComponents_,
+                                                                &builtinProjector_);
+        if (selection.prefabGroupPublication) {
+            if (auto installed = prefabs_->InstallGroupPublicationOwner(selection.prefabGroupPublication); installed.HasError())
+                return installed;
+        }
+        auto admitted = prefabs_->Acquire({selection.moduleId, scene, true, true});
+        if (admitted.HasError())
+            return Result<void>::Failure(admitted.ErrorValue());
+        prefabContext_ = std::move(admitted).Value();
+        return Result<void>::Success();
+    }
+
     /** @copydoc GameplayWorldComposition::CreateServiceBacked */
     Result<std::unique_ptr<GameplayWorldComposition>> GameplayWorldComposition::CreateServiceBacked(
         Runtime::RuntimeSceneService &scenes, Prefab::PrefabTemplateProvider *templates, Physics::PhysicsWorld *world,
@@ -304,15 +323,8 @@ namespace Horo::Application::Internal {
         if (selectedCharacter.HasError())
             return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(selectedCharacter.ErrorValue());
         composition->character_ = std::move(selectedCharacter).Value();
-        if (selection.prefabPermission == GameplayPrefabPermission::Granted) {
-            composition->prefabs_ =
-                std::make_unique<Prefab::PrefabSpawnService>(*templates, scenes, components ? components : &composition->prefabComponents_,
-                                                             &composition->builtinProjector_);
-            auto admitted = composition->prefabs_->Acquire({selection.moduleId, active->RuntimeId(), true, true});
-            if (admitted.HasError())
-                return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(admitted.ErrorValue());
-            composition->prefabContext_ = std::move(admitted).Value();
-        }
+        if (auto admitted = composition->BindPrefab(selection, scenes, active->RuntimeId(), templates, components); admitted.HasError())
+            return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(admitted.ErrorValue());
         if (auto registered = composition->RegisterModule(selection, prepared); registered.HasError())
             return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(registered.ErrorValue());
         if (prepared) {

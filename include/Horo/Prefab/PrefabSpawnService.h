@@ -18,6 +18,23 @@
 namespace Horo::Prefab {
     class PrefabSpawnService;
 
+    /** @brief Host owner of optional state published with an exact cooked Prefab occurrence. */
+    class IPrefabGroupPublicationOwner {
+    public:
+        virtual ~IPrefabGroupPublicationOwner() = default;
+        /**
+         * @brief Binds verified recipe provenance to an occurrence before structural submission.
+         * @param recipe Prepared cooked template and ordered member provenance, borrowed for this call.
+         * @param request Exact admitted spawn intent, borrowed for this call.
+         * @param projected Typed projected components in cooked entity order, borrowed for this call.
+         * @param creator Authenticated local capability principal selected by the Prefab service.
+         * @return Owner for spawn and later despawn, null to omit, or typed failure. No state is published here.
+         */
+        [[nodiscard]] virtual Result<std::shared_ptr<const Runtime::SceneGroupPublication>> Bind(
+            const PreparedPrefabSpawn &recipe, const PrefabSpawnRequest &request, std::span<const Runtime::RuntimeComponentSet> projected,
+            std::string_view creator) const = 0;
+    };
+
     /** @brief Explicit host-owned inert codec for built-in cooked members.
      * @details Borrowed only synchronously on the Scene owner lane during bounded
      * preparation. The host outlives the spawn service; neither a queued
@@ -314,6 +331,13 @@ namespace Horo::Prefab {
          * Existing ephemeral groups are never assigned reconstructed IDs after publication.
          */
         [[nodiscard]] Result<void> InstallPersistenceOwner(std::shared_ptr<IPrefabPersistenceOwner> persistence);
+        /**
+         * @brief Installs an optional host publication owner for future cooked group transactions.
+         * @param owner Explicit owner scoped to this service, retained until retirement.
+         * @return Success or typed late, foreign, or closed rejection.
+         * @pre No structural Prefab group has been submitted to this service.
+         */
+        [[nodiscard]] Result<void> InstallGroupPublicationOwner(std::shared_ptr<const IPrefabGroupPublicationOwner> owner);
         /** @brief Admits an explicitly permitted module to this exact active Scene.
          * @param binding Trusted host policy and routing; never inferred from a
          * service locator.

@@ -220,7 +220,8 @@ namespace Horo::Application::PrefabAtomicTest {
                          std::optional<AI::AiScenePerceptionGroupInput> perception = std::nullopt,
                          const AI::TestSupport::ActivationFixture *cookedController = nullptr,
                          const AI::AiTaskSchedulerSettings &schedulerSettings = {},
-                         std::optional<AI::AiScenePerceptionActivationInput> perceptionActivation = std::nullopt)
+                         std::optional<AI::AiScenePerceptionActivationInput> perceptionActivation = std::nullopt,
+                         std::shared_ptr<const Prefab::IPrefabGroupPublicationOwner> groupPublication = {})
             : ai(std::move(cookedController
                                ? AI::AiSceneRuntime::Create(aiSettings, AI::AiSceneCookedDecisionExecution{jobs, schedulerSettings, {}})
                                : AI::AiSceneRuntime::Create(aiSettings))
@@ -245,7 +246,7 @@ namespace Horo::Application::PrefabAtomicTest {
             Pump();
             REQUIRE(scenes.ActiveScene().has_value());
             REQUIRE(templates.Startup(cancellation.Token()).HasValue());
-            ActivateGameplay();
+            ActivateGameplay(std::move(groupPublication));
         }
 
         ~Fixture() {
@@ -435,7 +436,7 @@ namespace Horo::Application::PrefabAtomicTest {
             return std::move(builder).Build().Value();
         }
 
-        void ActivateGameplay() {
+        void ActivateGameplay(std::shared_ptr<const Prefab::IPrefabGroupPublicationOwner> groupPublication = {}) {
             auto scope = native.Borrow();
             REQUIRE(scope.HasValue());
             GameplayWorldSelection selection{.moduleId = "game.tests",
@@ -443,7 +444,8 @@ namespace Horo::Application::PrefabAtomicTest {
                                              .descriptorRevision = Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH),
                                              .physicsPermission = GameplayPhysicsPermission::Granted,
                                              .prefabPermission = GameplayPrefabPermission::Granted,
-                                             .moduleRetirements = retirements};
+                                             .moduleRetirements = retirements,
+                                             .prefabGroupPublication = std::move(groupPublication)};
             auto composed = GameplayWorldComposition::Create(scenes, templates, &scope.Value().physics, 1, selection, nullptr,
                                                              &scope.Value().character);
             REQUIRE(composed.HasValue());

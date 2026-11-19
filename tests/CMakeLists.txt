@@ -2973,6 +2973,7 @@ add_executable(HoroGameplayPhysicsTests unit/gameplay/GameplayPhysicsContextTest
     integration/gameplay/GameplayRetirementHostTests.cpp
     integration/gameplay/PrefabGameplayHostTests.cpp
     integration/gameplay/PrefabAtomicOwnerTests.cpp
+    integration/gameplay/PrefabNetworkPublicationTests.cpp
     integration/gameplay/GameplayCharacterSlopeTests.cpp
     integration/gameplay/GameplayCharacterAirborneTests.cpp
     integration/gameplay/GameplayCharacterGeometryTests.cpp

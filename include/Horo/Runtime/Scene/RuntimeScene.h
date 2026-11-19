@@ -30,6 +30,8 @@ namespace Horo::Runtime {
     class RuntimeSceneView;
     class SceneRestoreCandidateCommands;
     class SceneCommandBuffer;
+    class SceneStructuralCandidate;
+    class SceneGroupPublication;
     class IStagedRestoreAggregatePublication;
 
     namespace Detail {
@@ -630,6 +632,13 @@ namespace Horo::Runtime {
          * @return Success or rejection without queued work. Missing/reused entities and foreign children fail atomically.
          */
         [[nodiscard]] Result<void> DestroyGroup(std::vector<EntityRef> entities, const SceneStructuralAdmission &admission);
+        /**
+         * @brief Associates an external owner with one exact ordinary group creation or destruction.
+         * @param publication Owner retained through commit or rollback.
+         * @return Success for a buffer containing exactly one group, or a typed rejection.
+         * @pre A bound buffer must remain a single ordinary group until it is committed.
+         */
+        [[nodiscard]] Result<void> BindGroupPublication(std::shared_ptr<const SceneGroupPublication> publication);
         /** @brief Queues an independent baseline or an exact revision replacement in the receiving scene.
          * @param definition Owned validated flattened input; authored IDs must be unique in the final scene.
          * @param resources Complete exact named dependency closure, already prepared by the asset owner.
@@ -746,8 +755,10 @@ namespace Horo::Runtime {
         using Command = std::variant<CreateCommand, DestroyCommand, SetLocalTransformCommand, CreateGroupCommand, DestroyGroupCommand,
                                      AttachBaselineCommand, DetachBaselineCommand>;
         [[nodiscard]] Result<void> ValidateAdmission(SceneRuntimeId scene, Assets::AssetRegistryRevision registry) const;
+        [[nodiscard]] bool HasSingleOrdinaryGroup() const noexcept;
         [[nodiscard]] Result<void> ValidateBaselineResources(const Assets::AssetRegistry *registry) const;
         std::vector<Command> commands_;
+        std::shared_ptr<const SceneGroupPublication> groupPublication_;
         std::uint64_t nextDeferred_{1};
     };
 
@@ -807,6 +818,23 @@ namespace Horo::Runtime {
          * @return Notification result; failure leaves the already committed structural result available.
          */
         [[nodiscard]] virtual Result<void> AfterPublication() = 0;
+    };
+
+    /** @brief Optional command-scoped owner of state published with one complete Scene group. */
+    class SceneGroupPublication {
+    public:
+        virtual ~SceneGroupPublication() = default;
+        /**
+         * @brief Prepares additional owner state using the complete group in its original member order.
+         * @param active Existing committed Scene, borrowed only for this call.
+         * @param members Exact reserved identities for creation or the exact live identities for retirement.
+         * @param creating True for creation and false for retirement.
+         * @return Unpublished owner state, or a typed error rolling back the complete group.
+         * @details Runs after reference fixups and ordinary owner preparation. It cannot mutate live Scene or other owners.
+         */
+        [[nodiscard]] virtual Result<std::unique_ptr<SceneStructuralCandidate>> Prepare(const RuntimeSceneView &active,
+                                                                                        std::span<const EntityRef> members,
+                                                                                        bool creating) const = 0;
     };
 
     /** @brief Borrowed exact baseline inputs retained by one structural command batch; never stored by a participant. */
@@ -977,6 +1005,8 @@ namespace Horo::Runtime {
             Ordinary,
             RestoreMaterialization
         };
+        [[nodiscard]] Result<void> PrepareGroupPublication(const SceneCommandBuffer &commands, const StructuralCommitResult &result,
+                                                           std::vector<std::unique_ptr<SceneStructuralCandidate>> &owners) const;
         /** @brief Publishes the structural aggregate and makes any tracked result visible before notifying owners.
          * @param commands Structural intent to prepare and validate.
          * @param registry Optional current registry owner used by resource admission.

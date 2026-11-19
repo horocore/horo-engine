@@ -62,6 +62,7 @@ namespace Horo::Application::Internal {
         std::shared_ptr<Gameplay::GameplayNavigationContext> navigationContext; /**< Exact private Scene grant, prepared by the host. */
         std::shared_ptr<Gameplay::GameplayVfxScene>
             vfxScene; /**< Explicit Scene owner; configured factories clone its original cold policy per WorldRecord. */
+        std::shared_ptr<const Prefab::IPrefabGroupPublicationOwner> prefabGroupPublication; /**< Optional host-owned Scene binding. */
     };
 
     /** @brief Explicit asset authorities and bounds for a composition-owned cooked prefab provider.
@@ -222,6 +223,13 @@ namespace Horo::Application::Internal {
         [[nodiscard]] std::unique_ptr<Runtime::SceneStructuralParticipant> MakeStructuralParticipant();
 
     private:
+        /** @brief Installs the optional host owner before granting the module access to cooked Prefabs.
+         * @pre The selected host supplies a template provider whenever Prefab access is granted.
+         */
+        [[nodiscard]] Result<void> BindPrefab(const GameplayWorldSelection &selection, Runtime::RuntimeSceneService &scenes,
+                                              Runtime::SceneRuntimeId scene, Prefab::PrefabTemplateProvider *templates,
+                                              const Gameplay::ComponentRegistry *components);
+
         /** @brief Captures native component metadata before activating any service-backed behavior callbacks.
          * @param scenes Published Scene authority, outliving this composition.
          * @param components Explicit optional frozen project metadata; otherwise the loaded module supplies the owned snapshot.

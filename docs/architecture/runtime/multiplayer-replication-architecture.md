@@ -90,6 +90,14 @@ batch from becoming visible. Metrics run after the Scene and its owners
 publish. Existing single-object entry points retain their bounded,
 allocation-free update path.
 
+Gameplay host composition can supply a Prefab group publication owner before
+activating a module. Prefab passes the verified cooked recipe, projected
+components in recipe order, and admitted creator to that owner. The resulting
+binding prepares its candidate using Scene-assigned entity references in the
+same order, and stays with the occurrence for retirement. Spawn and despawn
+publish with the other Scene owners. A rejected mapping leaves the entire
+group unchanged.
+
 ```cpp
 enum class ReplicationExecutionRole : std::uint8_t {
     Standalone,
