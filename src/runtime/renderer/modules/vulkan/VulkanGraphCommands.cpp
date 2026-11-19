@@ -7,6 +7,24 @@
 
 namespace Horo::Render::Detail {
     namespace {
+        /** @brief Checks the scalar stereo attachment shape supported by the Vulkan copy command. */
+        bool IsStereoCoverageAttachment(const RenderTextureDescriptor &texture, const std::size_t eyeCount) {
+            return texture.format == RenderTextureFormat::R32Float && texture.layerCount == eyeCount && texture.sampleCount == 1 &&
+                   texture.mipCount == 1 &&
+                   HasTextureUsage(texture.usage, RenderTextureUsage::RenderAttachment | RenderTextureUsage::CopySource);
+        }
+
+        /** @brief Checks an exact tightly packed host staging allocation for both eyes. */
+        bool IsCoverageStaging(const RenderBufferDescriptor &buffer, const std::size_t bytes) {
+            return buffer.access == RenderBufferAccess::HostVisible && buffer.usage == RenderBufferUsage::CopyDestination &&
+                   buffer.byteSize == bytes;
+        }
+
+        /** @brief Verifies both image bounds and Vulkan's signed native image offset range. */
+        bool FitsCoverageCopy(const MultiviewRenderRectangle &tile, const FramebufferExtent extent) {
+            return tile.Fits(extent) && std::in_range<std::int32_t>(tile.x) && std::in_range<std::int32_t>(tile.y);
+        }
+
         /** @brief Updates only admitted multiview attachment contents in the existing transactional scratch journal. */
         void PrepareMultiviewContents(const RenderGraphMultiview &workload, const std::span<const VulkanGraphResource> bindings,
                                       const std::span<VulkanGraphResourceState> states) {
@@ -75,20 +93,17 @@ namespace Horo::Render::Detail {
         const auto &source = bindings[copy.source.value - 1];
         const auto &destination = bindings[copy.destination.value - 1];
         const auto &texture = source.textureDescriptor;
-        const auto &buffer = destination.bufferDescriptor;
-        if (!source.image || !destination.buffer || texture.format != RenderTextureFormat::R32Float ||
-            texture.layerCount != copy.tiles.size() || texture.sampleCount != 1 || texture.mipCount != 1 ||
-            !HasTextureUsage(texture.usage, RenderTextureUsage::RenderAttachment | RenderTextureUsage::CopySource) ||
-            buffer.access != RenderBufferAccess::HostVisible || buffer.usage != RenderBufferUsage::CopyDestination ||
-            buffer.byteSize != copy.PackedBytes())
+        const auto bytes = copy.PackedBytes();
+        if (!source.image || !destination.buffer || !IsStereoCoverageAttachment(texture, copy.tiles.size()) ||
+            !IsCoverageStaging(destination.bufferDescriptor, bytes))
             return Result<void>::Failure(Invalid("Coverage readback resident formats, usage or coherent staging extent differ."));
         if (!std::ranges::all_of(copy.tiles, [&](const auto &tile) {
-            return tile.Fits(texture.extent) && std::in_range<std::int32_t>(tile.x) && std::in_range<std::int32_t>(tile.y);
+            return FitsCoverageCopy(tile, texture.extent);
         }))
             return Result<void>::Failure(Invalid("Coverage readback rectangle exceeds its exact eye attachment."));
         auto &state = states[copy.destination.value - 1];
         state.contentsDefined = true;
-        state.coverageReadbackBytes = copy.PackedBytes();
+        state.coverageReadbackBytes = bytes;
         return Result<void>::Success();
     }
 

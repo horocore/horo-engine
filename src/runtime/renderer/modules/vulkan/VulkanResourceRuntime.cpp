@@ -18,6 +18,12 @@
 
 namespace Horo::Render::Detail {
     namespace {
+        /** @brief Verifies that a successful native copy published this exact coherent readback receipt. */
+        bool IsCompletedCoverageCopy(const VulkanGraphResourceState &state, const RenderTimelinePoint completion, const std::size_t bytes) {
+            return completion.IsValid() && state.completion == completion && state.hasNativeState && state.contentsDefined &&
+                   state.logical.operation == RenderGraphSynchronizationOperation::CopyDestination && state.coverageReadbackBytes == bytes;
+        }
+
         [[nodiscard]] Error ResourceError(const ErrorCodeDescriptor &code, std::string message) {
             return MakeError(code, std::move(message));
         }
@@ -577,10 +583,8 @@ namespace Horo::Render::Detail {
         if (found == impl_->buffers.end())
             return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
         auto &buffer = *found->second;
-        const auto &state = buffer.graphState;
-        if (!completion.IsValid() || state.completion != completion || !state.hasNativeState || !state.contentsDefined ||
-            state.logical.operation != RenderGraphSynchronizationOperation::CopyDestination || destination.empty() ||
-            state.coverageReadbackBytes != destination.size() || buffer.descriptor.byteSize != destination.size())
+        if (destination.empty() || buffer.descriptor.byteSize != destination.size() ||
+            !IsCompletedCoverageCopy(buffer.graphState, completion, destination.size()))
             return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
         if (const auto mapped = impl_->MapCoherentBuffer(buffer); mapped.HasError())
             return mapped;

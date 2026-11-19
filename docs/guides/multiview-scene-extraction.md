@@ -196,6 +196,18 @@ program. EXT ignores the engine validity alpha, and FB consumes the RGB
 vector.
 [OpenXR frame synthesis contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrFrameSynthesisInfoEXT.html)
 
+The Linux native coverage regression uses the regular Vulkan backend and
+finite readback after graphics completion. Cook `multiview_mesh.hlsl` with
+`--multiview` and `multiview_motion.hlsl` with `--multiview-coverage`.
+Point `HORO_NATIVE_MULTIVIEW_PAYLOAD` and `HORO_NATIVE_MULTIVIEW_REFLECTION`
+at the first cook's stage package and reflection. Set
+`HORO_NATIVE_COVERAGE_PAYLOAD` and `HORO_NATIVE_COVERAGE_REFLECTION` to the
+second cook's equivalent files. In the Vulkan and OpenXR Editor test build, run
+`HoroRenderVulkanTests '[vulkan][multiview][coverage][native-smoke]'`.
+The regression checks packed pixels from two eyes at known depths and rejects
+a stale completion. Full-image reduction and runtime-specific encoding
+remain separate from this bounded probe.
+
 ## Public contract migration and evidence
 
 The additive headers are owned by RenderApi or XRApi in the ownership registry.

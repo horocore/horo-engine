@@ -96,21 +96,28 @@ namespace Horo::Render {
             return source && destination;
         }
 
+        /** @brief Resolves only a compiled graph's own persistent resource of the expected kind. */
+        bool IsPersistentResource(const CompiledRenderGraphExecution &graph, const RenderGraphResourceId id,
+                                  const RenderGraphResourceKind kind) {
+            if (id.value == 0 || id.value > graph.Resources().size())
+                return false;
+            const auto &resource = graph.Resources()[id.value - 1];
+            return resource.id == id && resource.kind == kind && resource.resourceClass == RenderGraphResourceClass::Persistent;
+        }
+
         /** @brief Only retained renderer storage can participate in the closed coverage readback workload. */
         bool MatchesStereoCoverageCopy(const CompiledRenderGraphExecution &graph, const RenderGraphExecutionPass &pass,
                                        std::span<const RenderGraphResourceUsage> uses, const RenderGraphStereoCoverageCopy &copy) {
-            const auto resident = [&](RenderGraphResourceId id, RenderGraphResourceKind kind) {
-                return id.owner == graph.Owner() && id.value != 0 && id.value <= graph.Resources().size() &&
-                       graph.Resources()[id.value - 1].kind == kind &&
-                       graph.Resources()[id.value - 1].resourceClass == RenderGraphResourceClass::Persistent;
-            };
-            return pass.kind == RenderPassKind::Copy && uses.size() == 2 && copy.PackedBytes() != 0 &&
-                   resident(copy.source, RenderGraphResourceKind::Texture) && resident(copy.destination, RenderGraphResourceKind::Buffer) &&
-                   std::ranges::any_of(uses, [&](const auto &use) {
-                return MatchesCopyUse(use, copy.source, RenderGraphUsageKind::CopySource, RenderGraphAccess::Read);
-            }) && std::ranges::any_of(uses, [&](const auto &use) {
-                return MatchesCopyUse(use, copy.destination, RenderGraphUsageKind::CopyDestination, RenderGraphAccess::Write);
-            });
+            if (pass.kind != RenderPassKind::Copy || uses.size() != 2 || copy.PackedBytes() == 0)
+                return false;
+            if (!IsPersistentResource(graph, copy.source, RenderGraphResourceKind::Texture) ||
+                !IsPersistentResource(graph, copy.destination, RenderGraphResourceKind::Buffer))
+                return false;
+            const auto source = std::ranges::find(uses, copy.source, &RenderGraphResourceUsage::resource);
+            const auto destination = std::ranges::find(uses, copy.destination, &RenderGraphResourceUsage::resource);
+            return source != uses.end() && destination != uses.end() &&
+                   MatchesCopyUse(*source, copy.source, RenderGraphUsageKind::CopySource, RenderGraphAccess::Read) &&
+                   MatchesCopyUse(*destination, copy.destination, RenderGraphUsageKind::CopyDestination, RenderGraphAccess::Write);
         }
 
         bool ExternallyValidated(const RenderGraphWorkload &workload) {
@@ -384,14 +391,18 @@ namespace Horo::Render {
             return std::ranges::equal(projection.scene->Draws(), coverage.scene->Draws(), equivalent);
         }
 
-        /** @brief Requires exact ordered eye subresources and one producer/copy graphics submission. */
-        bool CoverageCopyProven(const RenderGraphExecutionRequest &request, const RenderGraphMultiview &coverage,
-                                const RenderGraphStereoCoverageCopy &copy, std::size_t producer, std::size_t consumer) {
-            if (producer >= consumer || !std::ranges::any_of(request.submissions, [&](const auto &submission) {
-                return submission.passes.IsValidFor(request.workloads.size()) && producer >= submission.passes.offset &&
-                       consumer - submission.passes.offset < submission.passes.count;
-            }))
+        /** @brief Enforces producer and consumer order within one validated submission range. */
+        bool SharesOrderedSubmission(const RenderGraphExecutionRequest &request, const std::size_t producer, const std::size_t consumer) {
+            if (producer >= consumer)
                 return false;
+            return std::ranges::any_of(request.submissions, [&](const auto &submission) {
+                const auto [offset, count] = submission.passes;
+                return submission.passes.IsValidFor(request.workloads.size()) && offset <= producer && consumer < offset + count;
+            });
+        }
+
+        /** @brief Every requested tile must be inside its exact written eye view. */
+        bool CoverageTilesWrittenBy(const RenderGraphStereoCoverageCopy &copy, const RenderGraphMultiview &coverage) {
             for (std::size_t eye = 0; eye < copy.tiles.size(); ++eye) {
                 const auto &target = coverage.targets[eye];
                 const auto &tile = copy.tiles[eye];
@@ -400,10 +411,20 @@ namespace Horo::Render {
                     !MultiviewRenderRectangle{tile.x - rect.x, tile.y - rect.y, tile.width, tile.height}.Fits({rect.width, rect.height}))
                     return false;
             }
+            return true;
+        }
+
+        /** @brief The observed content and staging receipt have no second writer. */
+        bool CoverageCopyProven(const RenderGraphExecutionRequest &request, const RenderGraphMultiview &coverage,
+                                const RenderGraphStereoCoverageCopy &copy, const std::size_t producer, const std::size_t consumer) {
+            if (!SharesOrderedSubmission(request, producer, consumer) || !CoverageTilesWrittenBy(copy, coverage))
+                return false;
+            const auto coveragePass = request.workloads[producer].pass;
+            const auto readbackPass = request.workloads[consumer].pass;
             return std::ranges::none_of(request.graph.Usages(), [&](const auto &use) {
-                return (use.resource == copy.source && use.access != RenderGraphAccess::Read &&
-                        use.pass != request.workloads[producer].pass) ||
-                       (use.resource == copy.destination && use.pass != request.workloads[consumer].pass);
+                if (use.resource == copy.destination)
+                    return use.pass != readbackPass;
+                return use.resource == copy.source && use.access != RenderGraphAccess::Read && use.pass != coveragePass;
             });
         }
 
