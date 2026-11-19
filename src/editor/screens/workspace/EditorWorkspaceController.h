@@ -917,6 +917,7 @@ namespace Horo::Editor {
             JobHandle job;
             BlackboardDocumentFence fence;
             std::shared_ptr<std::shared_ptr<const Application::BlackboardUsageReview>> result;
+            std::optional<BlackboardReferenceEditPreview> preview;
         };
 
         std::optional<BlackboardUsageWork> m_blackboardUsageWork;

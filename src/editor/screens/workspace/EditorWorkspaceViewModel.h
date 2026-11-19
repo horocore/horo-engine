@@ -643,6 +643,7 @@ namespace Horo::Editor {
         bool usageReviewAvailable{};
         bool reviewingUsages{};
         std::shared_ptr<const Application::BlackboardUsageReview> usageReview;
+        std::optional<BlackboardReferenceEditPreview> referencePreview;
         AI::BlackboardKeyId diagnosticKey;
         std::uint64_t diagnosticKeyRequest{};
     };

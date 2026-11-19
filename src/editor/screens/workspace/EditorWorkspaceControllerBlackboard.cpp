@@ -158,6 +158,7 @@ namespace Horo::Editor {
         if (snapshot.HasValue()) {
             if (snapshot.Value().revision != found->snapshot.revision) {
                 found->usageReview.reset();
+                found->referencePreview.reset();
                 if (m_blackboardUsageWork && m_blackboardUsageWork->fence.instance == document.Identity().instance)
                     static_cast<void>(m_blackboardUsageWork->job.RequestCancel());
             }
@@ -204,8 +205,10 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::StartBlackboardUsageReview */
     Result<void> EditorWorkspaceController::StartBlackboardUsageReview(const BlackboardWorkspaceRequest &request,
                                                                        const BlackboardSchemaDocument &document) {
-        if (!request.reviewKey || !m_mutableAssetRegistry || !m_mutations || !m_sourceRecoveryJobs)
+        if (!m_mutableAssetRegistry || !m_mutations || !m_sourceRecoveryJobs)
             return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Authority));
+        if (request.reviewKey.has_value() == request.edit.has_value())
+            return Result<void>::Failure(MakeError(BlackboardDocumentErrors::InvalidEdit));
         if (m_blackboardUsageWork)
             return Result<void>::Failure(MakeError(BlackboardDocumentErrors::Busy));
         const auto current = document.Snapshot();
@@ -216,12 +219,20 @@ namespace Horo::Editor {
             return Result<void>::Failure(MakeError(BlackboardDocumentErrors::StaleRevision));
         if (snapshot.dirty || snapshot.conflict || !snapshot.sourceDigest)
             return Result<void>::Failure(MakeError(BlackboardDocumentErrors::Dirty));
-        if (!std::ranges::binary_search(snapshot.durableSchema->Keys(), *request.reviewKey, {}, &AI::BlackboardKeyDescriptor::key))
+        auto key = request.reviewKey;
+        std::optional<BlackboardReferenceEditPreview> preview;
+        if (request.edit) {
+            auto candidate = document.PreviewReferenceEdit(request.fence.revision, *request.edit);
+            if (candidate.HasError())
+                return Result<void>::Failure(candidate.ErrorValue());
+            preview = std::move(candidate).Value();
+            key = preview->key;
+        }
+        if (!std::ranges::binary_search(snapshot.durableSchema->Keys(), *key, {}, &AI::BlackboardKeyDescriptor::key))
             return Result<void>::Failure(MakeError(BlackboardDocumentErrors::InvalidEdit));
 
         const Application::BlackboardUsageSelection selection{snapshot.source->asset, snapshot.durableSchema->Identity(),
-                                                              snapshot.durableSchema->Version(), *request.reviewKey,
-                                                              *snapshot.sourceDigest};
+                                                              snapshot.durableSchema->Version(), *key, *snapshot.sourceDigest};
         std::optional<Assets::AssetRegistryRevision> complete;
         if (m_collisionInventory && m_collisionInventory->status == Assets::AssetRegistryBuildStatus::Complete)
             complete = m_collisionInventory->revision;
@@ -240,13 +251,14 @@ namespace Horo::Editor {
         });
         if (job.HasError())
             return Result<void>::Failure(job.ErrorValue());
-        m_blackboardUsageWork.emplace(BlackboardUsageWork{std::move(job).Value(), request.fence, std::move(result)});
+        m_blackboardUsageWork.emplace(BlackboardUsageWork{std::move(job).Value(), request.fence, std::move(result), std::move(preview)});
         const auto view = std::ranges::find_if(m_viewModel.blackboardDocuments, [&](const auto &entry) {
             return entry.snapshot.document.instance == request.fence.instance;
         });
         if (view != m_viewModel.blackboardDocuments.end()) {
             view->reviewingUsages = true;
             view->usageReview.reset();
+            view->referencePreview.reset();
         }
         return Result<void>::Success();
     }
@@ -255,8 +267,10 @@ namespace Horo::Editor {
     void EditorWorkspaceController::UpdateBlackboardUsageReview() {
         const auto providerMetadata = m_gameplayRegistry ? m_gameplayRegistry->DecisionUsageMetadata() : nullptr;
         for (auto &view : m_viewModel.blackboardDocuments) {
-            if (view.usageReview && !HasSameProviderMetadata(*view.usageReview, providerMetadata))
+            if (view.usageReview && !HasSameProviderMetadata(*view.usageReview, providerMetadata)) {
                 view.usageReview.reset();
+                view.referencePreview.reset();
+            }
         }
         if (!m_blackboardUsageWork)
             return;
@@ -279,10 +293,12 @@ namespace Horo::Editor {
         }
         auto result = std::move(*work.result);
         if (result && result->registry == m_mutableAssetRegistry->Snapshot().Revision() &&
-            HasSameProviderMetadata(*result, providerMetadata))
+            HasSameProviderMetadata(*result, providerMetadata)) {
             view->usageReview = std::move(result);
-        else
+            view->referencePreview = std::move(work.preview);
+        } else {
             view->diagnostic = MakeError(Application::DecisionCookErrors::Stale);
+        }
     }
 
     /** @copydoc EditorWorkspaceController::StopBlackboardUsageReview */

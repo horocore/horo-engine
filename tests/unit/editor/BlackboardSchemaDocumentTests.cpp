@@ -4,6 +4,7 @@
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Editor/SourceFileOpenService.h"
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <fstream>
@@ -109,6 +110,36 @@ namespace {
         }
         CHECK(document->Snapshot().Value().source == begin.source);
         CHECK(document->Undo(begin.revision).HasError());
+    }
+
+    TEST_CASE("Blackboard reference preview validates a durable edit without publishing", "[editor][blackboard]") {
+        auto document = Open();
+        const auto begin = document->Snapshot().Value();
+        auto changed = begin.source->rows[0].descriptor;
+        changed.access = BlackboardKeyAccess::ReadOnly;
+        const auto proposed = document->PreviewReferenceEdit(begin.revision, EditBlackboardKey{changed});
+        REQUIRE(proposed.HasValue());
+        CHECK(proposed.Value().fence.instance == begin.document.instance);
+        CHECK(proposed.Value().fence.revision == begin.revision);
+        CHECK(proposed.Value().key == changed.key);
+        CHECK(proposed.Value().source->rows.front().descriptor == changed);
+        CHECK(std::ranges::find(proposed.Value().schema->Keys(), changed) != proposed.Value().schema->Keys().end());
+
+        const auto deletion = document->PreviewReferenceEdit(begin.revision, RemoveBlackboardKey{changed.key});
+        REQUIRE(deletion.HasValue());
+        CHECK(deletion.Value().source->rows.size() == begin.source->rows.size() - 1);
+        CHECK(deletion.Value().schema->Keys().size() == begin.schema->Keys().size() - 1);
+        changed.cardinality = BlackboardValueCardinality::Collection;
+        changed.maximumCollectionElements = 0;
+        CHECK(document->PreviewReferenceEdit(begin.revision, EditBlackboardKey{changed}).HasError());
+        CHECK(document->PreviewReferenceEdit(begin.revision + 1, RemoveBlackboardKey{changed.key}).HasError());
+
+        const auto after = document->Snapshot().Value();
+        CHECK(after.revision == begin.revision);
+        CHECK(after.source == begin.source);
+        CHECK(after.schema == begin.schema);
+        CHECK_FALSE(after.dirty);
+        CHECK_FALSE(after.canUndo);
     }
 
     TEST_CASE("Blackboard document rejects invalid initial source before publication", "[editor][blackboard]") {

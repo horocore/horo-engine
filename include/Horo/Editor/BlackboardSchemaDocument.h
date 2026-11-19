@@ -91,6 +91,14 @@ namespace Horo::Editor {
         std::uint64_t revision{};
     };
 
+    /** @brief Validated, detached candidate for explicit durable-key reference resolution. */
+    struct BlackboardReferenceEditPreview final {
+        BlackboardDocumentFence fence;
+        AI::BlackboardKeyId key;
+        std::shared_ptr<const BlackboardSchemaSource> source;
+        std::shared_ptr<const AI::BlackboardSchema> schema;
+    };
+
     /** @brief Immutable capture of the exact authored rows and last valid runtime projection for a document revision. */
     struct BlackboardSchemaDocumentSnapshot final {
         DocumentIdentity document;
@@ -162,6 +170,16 @@ namespace Horo::Editor {
          * @post No identity advances until an Add command successfully publishes.
          */
         [[nodiscard]] Result<AI::BlackboardKeyId> NextKeyId() const;
+        /** @brief Validates a durable key change before the host reviews its references.
+         * @param expectedRevision Current document revision.
+         * @param edit Proposed typed replacement or removal.
+         * @param cancellation Synchronous validation fence.
+         * @return Detached candidate or the original edit or schema validation error.
+         * @post Source, history and file state are unchanged.
+         */
+        [[nodiscard]] Result<BlackboardReferenceEditPreview> PreviewReferenceEdit(std::uint64_t expectedRevision,
+                                                                                  const BlackboardSchemaEdit &edit,
+                                                                                  CancellationToken cancellation = {}) const;
         /** @brief Validates an edit and publishes one semantic delta, or preserves every current value on failure.
          * @param expectedRevision Current snapshot revision.
          * @param edit One exact typed operation.

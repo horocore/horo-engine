@@ -769,8 +769,10 @@ identify individual keys. The review resolves each query result binding by its
 query identity and result contract against the saved sources in the same
 capture. Malformed sources and missing, ambiguous or incompatible bindings
 leave explicit gaps. Unsupported component owners, unresolved placements,
-variants, overrides and Perception also limit coverage. Changing a durable key
-requires a separate multi-document reference-resolution transaction.
+variants, overrides and Perception also limit coverage. The workspace can validate
+a proposed replacement or removal against the current schema and display its
+candidate together with the reference review. Applying that candidate requires a
+separate multi-document reference-resolution transaction.
 
 ## Cinematic Sequence Asset Documents
 

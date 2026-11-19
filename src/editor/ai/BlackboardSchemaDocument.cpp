@@ -68,6 +68,18 @@ namespace Horo::Editor {
             std::size_t bytes{};
         };
 
+        /** @brief Builds detached authored rows for one exact edit or replay. */
+        std::shared_ptr<const BlackboardSchemaSource> ApplyRowDelta(const BlackboardSchemaSource &source,
+                                                                    const std::optional<PositionedRow> &before,
+                                                                    const std::optional<PositionedRow> &after) {
+            auto candidate = std::make_shared<BlackboardSchemaSource>(source);
+            if (before)
+                candidate->rows.erase(candidate->rows.begin() + static_cast<std::ptrdiff_t>(before->index));
+            if (after)
+                candidate->rows.insert(candidate->rows.begin() + static_cast<std::ptrdiff_t>(after->index), after->row);
+            return candidate;
+        }
+
         /** @brief Captures all descriptors through the existing immutable runtime validator. */
         Result<Schema> CaptureSchema(const BlackboardSchemaSource &source) {
             if (source.rows.size() > MaximumBlackboardKeys)
@@ -223,12 +235,7 @@ namespace Horo::Editor {
             if (ResolvesDurableKey(before, after))
                 return Result<void>::Failure(MakeError(ReferenceResolutionRequired));
 
-            auto next = std::make_shared<BlackboardSchemaSource>(*source);
-            if (before)
-                next->rows.erase(next->rows.begin() + static_cast<std::ptrdiff_t>(before->index));
-            if (after)
-                next->rows.insert(next->rows.begin() + static_cast<std::ptrdiff_t>(after->index), after->row);
-
+            auto next = ApplyRowDelta(*source, before, after);
             auto schema = runtime;
             if (affectsSchema) {
                 auto validated = CaptureSchema(*next);
@@ -355,6 +362,31 @@ namespace Horo::Editor {
         if (state_->issuedKey == std::numeric_limits<std::uint64_t>::max())
             return Result<BlackboardKeyId>::Failure(MakeError(IdentityExhausted));
         return BlackboardKeyId::Create(state_->issuedKey + 1);
+    }
+
+    /** @copydoc BlackboardSchemaDocument::PreviewReferenceEdit */
+    Result<BlackboardReferenceEditPreview> BlackboardSchemaDocument::PreviewReferenceEdit(std::uint64_t expectedRevision,
+                                                                                          const BlackboardSchemaEdit &edit,
+                                                                                          CancellationToken cancellation) const {
+        using Preview = Result<BlackboardReferenceEditPreview>;
+        if (auto valid = state_->Check(expectedRevision, cancellation); valid.HasError())
+            return Preview::Failure(valid.ErrorValue());
+        const auto delta = MakeDelta(*state_->source, edit, state_->issuedKey);
+        if (delta.HasError())
+            return Preview::Failure(delta.ErrorValue());
+        const auto &prepared = delta.Value();
+        if (!state_->ResolvesDurableKey(prepared.before, prepared.after))
+            return Preview::Failure(MakeError(InvalidEdit));
+        auto candidate = ApplyRowDelta(*state_->source, prepared.before, prepared.after);
+        auto schema = CaptureSchema(*candidate);
+        if (schema.HasError())
+            return Preview::Failure(schema.ErrorValue());
+        if (cancellation.IsCancellationRequested())
+            return Preview::Failure(MakeError(Cancelled));
+        return Preview::Success({{state_->document.instance, expectedRevision},
+                                 prepared.before->row.descriptor.key,
+                                 std::move(candidate),
+                                 std::move(schema).Value()});
     }
 
     /** @copydoc BlackboardSchemaDocument::Execute */

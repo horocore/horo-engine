@@ -2245,10 +2245,12 @@ TEST_CASE("Blackboard workspace publishes a Project usage review only for an unc
                                           .jobs = &jobs});
     controller.ProcessCommand(project.Open());
     const auto issued = project.Current(controller);
-    controller.ProcessCommand({.command = EditorWorkspaceViewCommand::BlackboardDocument,
-                               .blackboard = BlackboardWorkspaceRequest{.fence = issued,
-                                                                        .operation = BlackboardDocumentOperation::ReviewUsages,
-                                                                        .reviewKey = project.key}});
+    auto replacement = project.Snapshot(controller).schema->Keys().front();
+    replacement.access = AI::BlackboardKeyAccess::ReadOnly;
+    BlackboardWorkspaceRequest request{.fence = issued,
+                                       .operation = BlackboardDocumentOperation::ReviewUsages,
+                                       .edit = EditBlackboardKey{replacement}};
+    controller.ProcessCommand({.command = EditorWorkspaceViewCommand::BlackboardDocument, .blackboard = std::move(request)});
     REQUIRE(controller.ViewModel().blackboardDocuments.front().reviewingUsages);
     bool changed = false;
     SECTION("review publishes on the normal workspace owner lane") {}
@@ -2273,6 +2275,13 @@ TEST_CASE("Blackboard workspace publishes a Project usage review only for an unc
     const auto diagnostic = view.diagnostic ? std::format("{} {}", view.diagnostic->code.Value(), view.diagnostic->message) : std::string{};
     INFO(diagnostic);
     CHECK(static_cast<bool>(view.usageReview) == !changed);
+    CHECK(view.referencePreview.has_value() == !changed);
+    if (view.referencePreview) {
+        CHECK(view.referencePreview->key == project.key);
+        REQUIRE(view.referencePreview->schema->Keys().size() == 1);
+        CHECK(view.referencePreview->schema->Keys().front() == replacement);
+        CHECK(view.snapshot.schema->Keys().front() != replacement);
+    }
     CHECK_FALSE(view.diagnostic);
 }
 

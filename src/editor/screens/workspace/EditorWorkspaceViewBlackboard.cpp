@@ -303,9 +303,10 @@ namespace Horo::Editor {
         }
 
         /** @brief Displays scoped review evidence for the selected durable key. */
-        void DrawUsages(const BlackboardFrame &frame, const BlackboardWorkspaceDocument &document, AI::BlackboardKeyId key,
-                        Assets::AssetRegistryRevision currentRegistry, std::size_t &page) {
+        void DrawUsages(const BlackboardFrame &frame, const BlackboardWorkspaceDocument &document,
+                        const AI::BlackboardKeyDescriptor &proposed, Assets::AssetRegistryRevision currentRegistry, std::size_t &page) {
             const auto &snapshot = document.snapshot;
+            const auto key = proposed.key;
             if (frame.Button("usage_review",
                              document.usageReviewAvailable && !document.reviewingUsages && !snapshot.dirty && !snapshot.conflict) &&
                 frame.command.command == EditorWorkspaceViewCommand::None) {
@@ -323,6 +324,14 @@ namespace Horo::Editor {
             if (review->registry != currentRegistry) {
                 frame.Caption("usage_stale");
                 return;
+            }
+            if (const auto &preview = document.referencePreview) {
+                const auto keys = preview->schema->Keys();
+                const auto found = std::ranges::lower_bound(keys, key, {}, &AI::BlackboardKeyDescriptor::key);
+                if (found == keys.end() || found->key != key)
+                    frame.Caption("usage_preview_removal");
+                else if (*found == proposed)
+                    frame.Caption("usage_preview_change");
             }
             DrawUsageSummary(frame, *review);
             DrawUsagePage(frame, *review, page);
@@ -382,6 +391,7 @@ namespace Horo::Editor {
             const auto &selectedRow = rows[static_cast<std::size_t>(index)];
             draft.selected = selectedRow.descriptor.key;
             draft.name = selectedRow.displayName.value_or("");
+            draft.proposed = selectedRow.descriptor;
             draft.numericDefault = BlackboardNumericDefaultText(selectedRow.descriptor.defaultValue);
             draft.usagePage = 0;
         };
@@ -438,13 +448,23 @@ namespace Horo::Editor {
         if (draftKey) {
             if (frame.Button("remove"))
                 frame.Edit(RemoveBlackboardKey{draft.selected});
+            auto changed = DrawTypeFields(frame, row.descriptor, draft.numericDefault, true);
+            if (changed != row.descriptor)
+                frame.Edit(EditBlackboardKey{std::move(changed)});
         } else {
             frame.Caption("reference_required");
-            DrawUsages(frame, *document, draft.selected, viewModel.assetRegistryRevision, draft.usagePage);
+            const bool canReview = document->usageReviewAvailable && !document->reviewingUsages && !snapshot.dirty && !snapshot.conflict;
+            draft.proposed = DrawTypeFields(frame, draft.proposed, draft.numericDefault, canReview);
+            if (frame.Button("review_change", canReview && draft.proposed != row.descriptor)) {
+                frame.Request(BlackboardDocumentOperation::ReviewUsages, EditBlackboardKey{draft.proposed});
+                draft.usagePage = 0;
+            }
+            if (frame.Button("review_removal", canReview && rows.size() > 1)) {
+                frame.Request(BlackboardDocumentOperation::ReviewUsages, RemoveBlackboardKey{draft.selected});
+                draft.usagePage = 0;
+            }
+            DrawUsages(frame, *document, draft.proposed, viewModel.assetRegistryRevision, draft.usagePage);
         }
-        auto changed = DrawTypeFields(frame, row.descriptor, draft.numericDefault, draftKey);
-        if (changed != row.descriptor)
-            frame.Edit(EditBlackboardKey{std::move(changed)});
         ImGui::PopID();
         return true;
     }
