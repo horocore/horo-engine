@@ -16,7 +16,8 @@ namespace Horo::Render {
         /** @brief Where the final graph pass writes canvas color. */
         enum class UiPaintRootTarget : std::uint8_t {
             PrimaryOutput,
-            CanvasSurface
+            CanvasSurface,
+            SceneCanvas
         };
 
         inline constexpr std::uint32_t NoPaintRole = UINT32_MAX;
@@ -119,6 +120,8 @@ namespace Horo::Render {
             std::vector<std::vector<RenderGraphResourceId>> sampled;
             std::optional<CompiledRenderGraphExecution> graph;
             std::vector<RenderGraphPassWorkload> workloads;
+            std::vector<RenderGraphPassWorkload> sceneExecution; /**< Combined execution inventory reserved at preparation. */
+            bool sceneExecuting{}; /**< Owner-lane fence protecting borrowed workload storage during recording. */
             std::array<UiPaintCpuFrame, 2> frames;
             std::uint32_t accepted{};
             std::uint64_t revision{};
@@ -162,8 +165,9 @@ namespace Horo::Render {
         [[nodiscard]] Result<std::uint32_t> AddMaskScope(std::uint32_t leaf, std::uint32_t boundary, std::uint32_t depth = 0);
         [[nodiscard]] bool IsMaskAncestor(std::uint32_t ancestor, std::uint32_t leaf) const noexcept;
         [[nodiscard]] Result<void> CreateSlot(RenderFrontend &renderer, std::uint32_t slot, const UiPaintFrameBuffers &buffers,
-                                              RenderTextureFormat stencilFormat);
-        [[nodiscard]] Result<void> CompileSlot(std::uint32_t slot, const UiPaintFrameBuffers &buffers);
+                                              RenderTextureFormat stencilFormat, const UiPaintSceneCanvasGraph *scene);
+        [[nodiscard]] Result<void> CompileSlot(std::uint32_t slot, const UiPaintFrameBuffers &buffers,
+                                               const UiPaintSceneCanvasGraph *scene);
         [[nodiscard]] Result<void> ValidateSource(const UiRenderSubmission &submission) const;
         [[nodiscard]] Result<void> BuildFrame(Detail::UiPaintSlotProgram &slot, Detail::UiPaintCpuFrame &candidate,
                                               const UiRenderSubmission &submission);

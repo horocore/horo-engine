@@ -392,6 +392,7 @@ namespace Horo::Render {
 
     private:
         friend class RenderFrontend;
+        friend class UiPaintProgram;
 
         RenderFrameScope(RenderFrontend &owner, IRenderBackend &backend, FrameToken frame, std::uint64_t hostFrame) noexcept;
         /** @brief Common graph admission preserving one authoritative native completion lease. */

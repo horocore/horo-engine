@@ -6,7 +6,12 @@
 #include "Horo/Runtime/Render/UiPaintKernel.h"
 #include "Horo/Runtime/Render/UiRenderSubmission.h"
 
+#include <functional>
+#include <vector>
+
 namespace Horo::Render {
+    struct RenderGraphImportedState;
+
     namespace Detail {
         struct UiPaintProgramIdentity;
         enum class UiPaintRootTarget : std::uint8_t;
@@ -31,6 +36,24 @@ namespace Horo::Render {
     struct UiPaintCanvasSurface final {
         RenderTextureHandle color;
         FramebufferExtent extent;
+    };
+
+    /** @brief Cold graph input for the scene owner that samples one exact resident canvas. */
+    struct UiPaintSceneCanvasSource final {
+        std::uint32_t slot;           /**< Exact producer frame slot. */
+        UiPaintCanvasSurface surface; /**< Resident linear premultiplied color and raster extent. */
+        RenderGraphResourceId color;  /**< Use this graph-local texture rather than importing the handle twice. */
+    };
+
+    /** @brief Authored once per resident slot into the same graph as the canvas writer. */
+    struct UiPaintSceneCanvasGraph final {
+        RenderGraphLimits limits;
+        RenderQueueId graphicsQueue; /**< Actual graphics queue selected by the renderer owner. */
+        /** @return Pass with a declared sampled read of the issued canvas. The callback may add scene passes and post-processing.
+         * Its borrows expire on return. The caller supplies corresponding workload records at execution. */
+        std::function<Result<RenderGraphPassRef>(RenderGraphBuilder &, const UiPaintSceneCanvasSource &,
+                                                 std::vector<RenderGraphImportedState> &)>
+            author;
     };
 
     /** @brief Immutable whole-program admission bounds; observing them grants no execution or resource authority. */
@@ -122,6 +145,20 @@ namespace Horo::Render {
         [[nodiscard]] static Result<std::unique_ptr<UiPaintProgram>> CreateCanvasSurface(
             RenderFrontend &frontend, const UiPaintProgramDescriptor &descriptor, const Runtime::Ui::UiRenderSnapshot &prototype,
             std::span<const RenderTextureHandle> textures, const CookedUiPaintKernel &kernel, const CancellationToken &cancellation = {});
+        /** @brief Prepares the sampled canvas and its consumer in one bounded scene graph per slot.
+         * @param frontend Selected renderer owner.
+         * @param descriptor Exact raster projection and finite frame budgets.
+         * @param prototype Current canonical role snapshot.
+         * @param textures Complete sampled source inventory.
+         * @param kernel Verified cooked paint program and stencil format.
+         * @param scene Borrowed cold author with explicit graph bounds and one declared canvas read per slot.
+         * @param cancellation Superseded source fence.
+         * @return Complete preparation or original typed failure with the candidate retired.
+         * @pre Renderer owner lane outside an active frame. */
+        [[nodiscard]] static Result<std::unique_ptr<UiPaintProgram>> CreateSceneCanvas(
+            RenderFrontend &frontend, const UiPaintProgramDescriptor &descriptor, const Runtime::Ui::UiRenderSnapshot &prototype,
+            std::span<const RenderTextureHandle> textures, const CookedUiPaintKernel &kernel, const UiPaintSceneCanvasGraph &scene,
+            const CancellationToken &cancellation = {});
         /** @brief Closes owner-thread admission and releases residents after callers are quiescent; GPU pins drain independently. */
         ~UiPaintProgram();
         UiPaintProgram(const UiPaintProgram &) = delete;
@@ -161,6 +198,14 @@ namespace Horo::Render {
          * @param source Exact corresponding submission, transferring its sealed atlas lease on admission.
          * @return Canonical ComposeUi outcome; successful encoding alone does not prove presentation or authorize input. */
         [[nodiscard]] Result<void> Submit(RenderFrameScope &frame, const UiPaintPreparedFrame &prepared, UiRenderSubmission source);
+        /** @brief Executes the exact prepared sampled-canvas scene with its native completion lease.
+         * @param frame Active renderer scope before ordinary scene execution.
+         * @param prepared Current slot of this scene preparation.
+         * @param source Corresponding geometry and resource provenance.
+         * @param sceneWorkloads Workloads for the authored scene passes in compiled order, after the canvas producer.
+         * @return Exact graph execution status. Successful encoding alone confers no presentation or input rights. */
+        [[nodiscard]] Result<void> ExecuteSceneCanvas(RenderFrameScope &frame, const UiPaintPreparedFrame &prepared,
+                                                      UiRenderSubmission source, std::span<const RenderGraphPassWorkload> sceneWorkloads);
         /** @brief Validates every exact source/slot before submitting all canvases as one ordered native UI phase.
          * @param frame Same active scene/GUI frame owner. @param sources Bounded complete paint-order inventory, consumed synchronously.
          * @return Typed failure before encoding for any malformed entry, or canonical batch/native outcome. Duplicate program-slot
@@ -176,14 +221,16 @@ namespace Horo::Render {
         [[nodiscard]] static Result<std::unique_ptr<UiPaintProgram>> CreateForTarget(
             RenderFrontend &frontend, const UiPaintProgramDescriptor &descriptor, const Runtime::Ui::UiRenderSnapshot &prototype,
             std::span<const RenderTextureHandle> textures, const CookedUiPaintKernel &kernel, const CancellationToken &cancellation,
-            Detail::UiPaintRootTarget target);
+            Detail::UiPaintRootTarget target, const UiPaintSceneCanvasGraph *scene = nullptr);
         /** @brief Requires exact immutable slot/source correspondence before any batch member reaches the native frame. */
         [[nodiscard]] Result<UiPaintGraphComposition> ValidateSubmission(const UiPaintPreparedFrame &prepared, UiRenderSubmission source);
         /** @brief Realizes finite native residents under the factory candidate's rollback ownership.
          * @param frontend Actual selected owner. @param kernel Exact cooked interface and formats.
-         * @param cancellation Source preparation fence. @return Complete native preparation or original failure. */
+         * @param cancellation Source preparation fence.
+         * @param scene Optional cold author, borrowed for scene preparation only.
+         * @return Complete native preparation or original failure. */
         [[nodiscard]] Result<void> PrepareNative(RenderFrontend &frontend, const CookedUiPaintKernel &kernel,
-                                                 const CancellationToken &cancellation);
+                                                 const CancellationToken &cancellation, const UiPaintSceneCanvasGraph *scene);
         std::unique_ptr<Storage> storage_;
     };
 }  // namespace Horo::Render
