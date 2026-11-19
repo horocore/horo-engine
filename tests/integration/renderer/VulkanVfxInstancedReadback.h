@@ -34,6 +34,7 @@ namespace Horo::Render::Test::VfxInstanced {
             VkImage image{};
             VkFormat format{};
             VkImageUsageFlags usage{};
+            VkExtent3D extent{};
         };
 
         struct View final {
@@ -74,6 +75,16 @@ namespace Horo::Render::Test::VfxInstanced {
         /** @copydoc IVulkanLoaderPort::RequiredPresentationExtensions */
         Result<std::vector<std::string>> RequiredPresentationExtensions() override {
             return delegate_.RequiredPresentationExtensions();
+        }
+
+        /** @copydoc IVulkanLoaderPort::CreatePresentationSurface */
+        Result<VkSurfaceKHR> CreatePresentationSurface(VkInstance instance) override {
+            return delegate_.CreatePresentationSurface(instance);
+        }
+
+        /** @copydoc IVulkanLoaderPort::DestroyPresentationSurface */
+        void DestroyPresentationSurface(VkInstance instance, VkSurfaceKHR surface) noexcept override {
+            delegate_.DestroyPresentationSurface(instance, surface);
         }
 
         /** @copydoc IVulkanLoaderPort::SupportsPresentation */
@@ -118,6 +129,17 @@ namespace Horo::Render::Test::VfxInstanced {
             REQUIRE((rendered_.color.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0);
             REQUIRE((rendered_.depth.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0);
             return rendered_;
+        }
+
+        /** @brief Borrows the actual viewport GUI sample through its live native view. */
+        Image ViewportColor(VkImageView sampledView) const {
+            REQUIRE_FALSE(invalid_);
+            REQUIRE(sampledView);
+            const auto image = Attachment(sampledView);
+            REQUIRE(image.image);
+            REQUIRE(image.format == VK_FORMAT_R8G8B8A8_UNORM);
+            REQUIRE((image.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0);
+            return image;
         }
 
         /** @brief Returns the only captured reconstruction storage output of the exact format marked for transfer. */
@@ -258,7 +280,8 @@ namespace Horo::Render::Test::VfxInstanced {
         void RecordImage(VkImage image, const VkImageCreateInfo &info) noexcept {
             if (info.extent.width != 64 || info.extent.height != 32 || info.samples != VK_SAMPLE_COUNT_1_BIT)
                 return;
-            if (info.format != VK_FORMAT_R16G16B16A16_SFLOAT && info.format != VK_FORMAT_D32_SFLOAT &&
+            const bool viewportColor = info.format == VK_FORMAT_R8G8B8A8_UNORM && (info.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
+            if (!viewportColor && info.format != VK_FORMAT_R16G16B16A16_SFLOAT && info.format != VK_FORMAT_D32_SFLOAT &&
                 info.format != VK_FORMAT_R32G32B32A32_SFLOAT && info.format != VK_FORMAT_R32_SFLOAT)
                 return;
             const auto free = std::ranges::find(images_, VkImage{}, &Image::image);
@@ -266,7 +289,7 @@ namespace Horo::Render::Test::VfxInstanced {
                 invalid_ = true;
                 return;
             }
-            *free = {image, info.format, info.usage};
+            *free = {image, info.format, info.usage, info.extent};
         }
 
         /** @brief Forwards creation first and records only a genuine successful result. */
@@ -372,7 +395,8 @@ namespace Horo::Render::Test::VfxInstanced {
         enum class Capture {
             VfxAttachments,
             ReconstructionColor,
-            ReconstructionDepth
+            ReconstructionDepth,
+            ViewportColor
         };
 
         explicit NativeReadback(const ObservedLoader &loader, Capture capture = Capture::VfxAttachments) noexcept
@@ -439,7 +463,7 @@ namespace Horo::Render::Test::VfxInstanced {
 
         /** @brief Reads native color or depth floats after canonical graph completion and restores General layout. */
         std::vector<float> ReadReconstructed() {
-            REQUIRE(capture_ != Capture::VfxAttachments);
+            REQUIRE((capture_ == Capture::ReconstructionColor || capture_ == Capture::ReconstructionDepth));
             const auto format = capture_ == Capture::ReconstructionColor ? VK_FORMAT_R32G32B32A32_SFLOAT : VK_FORMAT_R32_SFLOAT;
             const auto image = loader_.ReconstructedImage(format);
             Begin();
@@ -447,6 +471,26 @@ namespace Horo::Render::Test::VfxInstanced {
                  VK_ACCESS_SHADER_WRITE_BIT);
             Submit();
             std::vector<float> result(byteCount_ / sizeof(float));
+            void *mapped{};
+            REQUIRE(loader_.DeviceFunction<PFN_vkMapMemory>("vkMapMemory")(loader_.Device(), memory_, 0, VK_WHOLE_SIZE, 0, &mapped) ==
+                    VK_SUCCESS);
+            std::memcpy(result.data(), mapped, byteCount_);
+            loader_.DeviceFunction<PFN_vkUnmapMemory>("vkUnmapMemory")(loader_.Device(), memory_);
+            return result;
+        }
+
+        /** @brief Observes the real RGBA8 image after its GUI sampled queue use and restores that layout. */
+        std::vector<std::uint8_t> ReadViewportColor(VkImageView sampledView) {
+            REQUIRE(capture_ == Capture::ViewportColor);
+            const auto image = loader_.ViewportColor(sampledView);
+            REQUIRE(image.extent.width == Extent.width);
+            REQUIRE(image.extent.height == Extent.height);
+            REQUIRE(image.extent.depth == Extent.depth);
+            Begin();
+            Copy(image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 0, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                 VK_ACCESS_SHADER_READ_BIT);
+            Submit();
+            std::vector<std::uint8_t> result(byteCount_);
             void *mapped{};
             REQUIRE(loader_.DeviceFunction<PFN_vkMapMemory>("vkMapMemory")(loader_.Device(), memory_, 0, VK_WHOLE_SIZE, 0, &mapped) ==
                     VK_SUCCESS);
@@ -485,16 +529,20 @@ namespace Horo::Render::Test::VfxInstanced {
             REQUIRE(Wait() == VK_SUCCESS);
         }
 
-        static constexpr VkDeviceSize ColorBytes = 64 * 32 * 8, TotalBytes = ColorBytes + 64 * 32 * 4;
+        static constexpr VkExtent3D Extent{64, 32, 1};
+        static constexpr VkDeviceSize PixelCount = Extent.width * Extent.height;
+        static constexpr VkDeviceSize ColorBytes = PixelCount * 8, TotalBytes = ColorBytes + PixelCount * 4;
 
         static constexpr VkDeviceSize ByteCount(Capture capture) noexcept {
             switch (capture) {
                 case Capture::VfxAttachments:
                     return TotalBytes;
                 case Capture::ReconstructionColor:
-                    return 64 * 32 * 4 * sizeof(float);
+                    return PixelCount * 4 * sizeof(float);
                 case Capture::ReconstructionDepth:
-                    return 64 * 32 * sizeof(float);
+                    return PixelCount * sizeof(float);
+                case Capture::ViewportColor:
+                    return PixelCount * 4;
             }
             return 0;
         }
@@ -529,7 +577,7 @@ namespace Horo::Render::Test::VfxInstanced {
                                          .subresourceRange = {aspect, 0, 1, 0, 1}};
             const auto transition = loader_.DeviceFunction<PFN_vkCmdPipelineBarrier>("vkCmdPipelineBarrier");
             transition(commands_, stage, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-            const VkBufferImageCopy copy{.bufferOffset = offset, .imageSubresource = {aspect, 0, 0, 1}, .imageExtent = {64, 32, 1}};
+            const VkBufferImageCopy copy{.bufferOffset = offset, .imageSubresource = {aspect, 0, 0, 1}, .imageExtent = Extent};
             loader_.DeviceFunction<PFN_vkCmdCopyImageToBuffer>(
                 "vkCmdCopyImageToBuffer")(commands_, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer_, 1, &copy);
             std::swap(barrier.oldLayout, barrier.newLayout);
@@ -541,8 +589,8 @@ namespace Horo::Render::Test::VfxInstanced {
         /** @brief Copies only after actual coherent staging completion; bytes remain owned by the test result. */
         Pixels Mapped() {
             Pixels result;
-            result.color.resize(64 * 32 * 4);
-            result.depth.resize(64 * 32);
+            result.color.resize(PixelCount * 4);
+            result.depth.resize(PixelCount);
             void *mapped{};
             REQUIRE(loader_.DeviceFunction<PFN_vkMapMemory>("vkMapMemory")(loader_.Device(), memory_, 0, VK_WHOLE_SIZE, 0, &mapped) ==
                     VK_SUCCESS);

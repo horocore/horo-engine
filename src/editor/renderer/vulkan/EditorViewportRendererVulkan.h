@@ -43,6 +43,9 @@ namespace Horo::Editor {
         /** @copydoc IEditorViewportRenderer::ColorDiagnostics */
         [[nodiscard]] EditorViewportColorDiagnostics ColorDiagnostics() const noexcept override;
         [[nodiscard]] Result<void> Initialize();
+        [[nodiscard]] Result<void> EnableCameraCrossFade() override;
+        [[nodiscard]] EditorViewportCrossFadeCapacity CameraCrossFadeCapacity() const noexcept override;
+        [[nodiscard]] Result<void> PrepareCameraCrossFadeFrame(const std::optional<EditorViewportCameraCrossFade> &crossFade) override;
         /** @brief Cold-prepares the actual canonical multiview program before selected XR can publish Ready.
          * @param cooked Same admitted compiler/reflection output loaded from the explicit packaged asset root.
          * @return Exact interface/native/material error, without changing ordinary desktop pipeline selection.
@@ -177,7 +180,8 @@ namespace Horo::Editor {
         /** @brief Records the one cold graph matching this actual native slot and frozen viewport resources. */
         [[nodiscard]] Result<void> ExecuteViewportRasterGraph(Render::RenderFrameScope &frame, const Render::StaticMeshPassDescriptor &pass,
                                                               std::uint32_t slot, bool hasOverlay,
-                                                              const Render::DirectionalShadowFrame *shadow);
+                                                              const Render::DirectionalShadowFrame *shadow,
+                                                              const std::optional<Render::DirectionalShadowFrame> *sourceShadow = nullptr);
         std::shared_ptr<ViewportRasterGraphs> viewportRasterGraphs_;
         struct XrGraph;
         /** @copydoc EditorVulkanXrViewportAccess::TakePremultipliedProjection */
@@ -223,6 +227,9 @@ namespace Horo::Editor {
             std::array<std::array<DrawSlot, Render::RenderMaterialPass::MaximumDraws>, Render::MaximumDirectionalShadowCascades> shadows;
         };
 
+        static constexpr std::uint32_t CrossFadeShadowPasses = (Render::RenderGraphMaterialRaster::MaximumRetainedPasses - 3) / 2;
+        using FrameSlots = std::array<FrameSlot, 8>;
+
         struct EmptyGraph {
             Render::CompiledRenderGraphExecution graph;
             std::array<Render::RenderGraphPassWorkload, 1> workloads;
@@ -241,6 +248,25 @@ namespace Horo::Editor {
             std::size_t parameterBytes{}; /**< Exact logical packing extent, excluding native block tail padding. */
             std::size_t uniformBytes{};   /**< Selected backend's allocation, binding and full-upload extent. */
         };
+
+        /** @brief Owns the distinct sampled fullscreen program and immutable resources used by the cross-fade pass. */
+        struct CameraCrossFadeProgram final {
+            ShaderResources shader;
+            Render::RenderBufferHandle vertices, indices;
+            Render::RenderMeshHandle mesh;
+            std::array<DrawSlot, 8> draws;
+            Render::RenderTextureViewHandle boundSource;
+        };
+
+        [[nodiscard]] Result<void> PrepareCameraCrossFadeProgram(CameraCrossFadeProgram &program);
+        [[nodiscard]] Result<void> CreateCameraCrossFadeTriangle(CameraCrossFadeProgram &program);
+        [[nodiscard]] Result<void> BindCameraCrossFadeSource();
+        [[nodiscard]] Result<void> PrepareCameraCrossFadeScene(std::size_t draws);
+        void RetireCameraCrossFadeProgram(CameraCrossFadeProgram &program) noexcept;
+        [[nodiscard]] Result<void> PrepareCameraCrossFadeSlots(std::span<FrameSlot> slots, const ShaderResources &scene,
+                                                               const ShaderResources &shadow, std::size_t first, std::size_t count);
+        void RetireCameraCrossFadeSlots(std::span<FrameSlot> slots, std::size_t first, std::size_t count,
+                                        const ShaderResources *scene = nullptr, const ShaderResources *shadow = nullptr) noexcept;
 
         /** @brief Stateless cold program construction and reflected packing; all owned storage stays in this viewport. */
         struct ProgramResources final {
@@ -316,6 +342,7 @@ namespace Horo::Editor {
         struct ProgramGeneration;
         [[nodiscard]] Result<void> PrepareProgram(ProgramGeneration &candidate);
         [[nodiscard]] Result<void> PrepareShadowProgram(ShaderResources &program, std::span<FrameSlot> slots);
+        [[nodiscard]] Result<void> CreateShadowSlots(const ShaderResources &program, std::span<FrameSlot> slots, std::uint32_t cascades);
         [[nodiscard]] Result<void> BindShadowAtlas();
         [[nodiscard]] Result<void> PrepareShadowDraws(Render::FrameToken frame, std::uint32_t slot, const Render::RenderSceneView &scene,
                                                       const Render::DirectionalShadowFrame &shadow);
@@ -352,12 +379,19 @@ namespace Horo::Editor {
                                                                  const Render::StaticMeshPassDescriptor &pass);
         [[nodiscard]] Result<void> PrepareViewportDraws(Render::FrameToken frame, std::uint32_t slot,
                                                         const Render::StaticMeshPassDescriptor &pass);
+        [[nodiscard]] Result<void> PrepareCameraCrossFadeDraws(Render::FrameToken frame, std::uint32_t slot,
+                                                               const Render::RenderSceneView &scene,
+                                                               const std::optional<Render::DirectionalShadowFrame> &shadow,
+                                                               float destinationWeight);
+        [[nodiscard]] Result<void> ExecuteCameraCrossFade(Render::RenderFrameScope &frame, const Render::StaticMeshPassDescriptor &pass,
+                                                          std::uint32_t slot, bool hasOverlay, const EditorViewportCameraCrossFade &fade);
         [[nodiscard]] Result<void> ExecuteViewport(Render::RenderFrameScope &frame, const Render::StaticMeshPassDescriptor &pass);
         [[nodiscard]] Result<void> PrepareViewportOutput(Render::RenderFrameScope &frame, const Render::PrimaryOutputAttachment &output,
                                                          const Render::StaticMeshPassDescriptor *viewport) const;
 
         [[nodiscard]] Result<void> WriteForwardDraw(Render::FrameToken frame, const DrawSlot &draw,
-                                                    const Render::RenderStaticMeshInstance &instance, const Render::RenderSceneView &scene);
+                                                    const Render::RenderStaticMeshInstance &instance, const Render::RenderSceneView &scene,
+                                                    const std::optional<Render::DirectionalShadowFrame> &shadow);
         std::array<Render::RenderLight, Render::MaximumForwardLights> forwardDrawLights_;
         EditorViewportForwardLighting forwardLighting_;
         const std::thread::id owner_{std::this_thread::get_id()};
@@ -377,6 +411,21 @@ namespace Horo::Editor {
         float colorFrameDelta_{};
         ShaderResources sceneLinearShader_;
         ShaderResources shader_;
+        std::optional<EditorVulkanCameraCrossFadeCook> crossFadeCook_;
+        CameraCrossFadeProgram crossFadeProgram_;
+        std::unique_ptr<FrameSlots> crossFadeSourceSlots_;
+
+        struct PreparedCameraCrossFade final {
+            EditorViewportCameraCrossFade fade;
+            Render::RenderTargetHandle target;
+        };
+
+        std::optional<PreparedCameraCrossFade> preparedCrossFade_;
+        std::uint64_t crossFadeGeneration_{};
+        std::uint32_t crossFadeShadowBudget_{};
+        std::size_t crossFadeDrawCount_{};
+        std::optional<std::size_t> declinedCrossFadeDrawCount_;
+        bool crossFadeSceneReady_{};
         ShaderResources shadowShader_;
         ShaderResources xrShader_;
         std::optional<EditorVulkanMultiviewCook> xrMotionCook_;

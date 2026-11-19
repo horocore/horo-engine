@@ -38,17 +38,18 @@ namespace Horo::Editor {
 
     Result<void> EditorViewportRendererVulkan::WriteForwardDraw(Render::FrameToken frame, const DrawSlot &draw,
                                                                 const Render::RenderStaticMeshInstance &instance,
-                                                                const Render::RenderSceneView &scene) {
+                                                                const Render::RenderSceneView &scene,
+                                                                const std::optional<Render::DirectionalShadowFrame> &shadow) {
         const auto selection = forwardLighting_.SelectDraw(scene, instance, forwardDrawLights_);
         if (selection.HasError())
             return Result<void>::Failure(selection.ErrorValue());
-        const auto remapped = forwardLighting_.RemapShadow(preparedShadow_, selection.Value(), scene);
+        const auto remapped = forwardLighting_.RemapShadow(shadow, selection.Value(), scene);
         if (remapped.HasError())
             return Result<void>::Failure(remapped.ErrorValue());
         auto drawScene = scene;
         drawScene.lights = std::span{forwardDrawLights_}.first(selection.Value().count);
-        const auto &shadow = remapped.Value();
+        const auto &drawShadow = remapped.Value();
         return ProgramResources::WriteDraw(bridge_, SceneProgram(), resources_.AllocatedExtent(), frame, draw, instance, drawScene,
-                                           shadow ? &*shadow : nullptr);
+                                           drawShadow ? &*drawShadow : nullptr);
     }
 }  // namespace Horo::Editor

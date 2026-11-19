@@ -6,6 +6,8 @@
 #include "Horo/Runtime/Render/ShaderArtifact.h"
 #include "Horo/Runtime/Render/ShaderReflectionErrors.h"
 
+#include <algorithm>
+
 namespace Horo::Editor {
     /** @copydoc EditorVulkanViewportShaderTarget */
     Render::ShaderTargetRequirement EditorVulkanViewportShaderTarget() {
@@ -130,6 +132,49 @@ namespace Horo::Editor {
     Result<EditorVulkanViewportCook> LoadEditorVulkanViewportCook(std::span<const std::uint8_t> payload,
                                                                   std::span<const std::uint8_t> metadata) {
         return LoadViewportProgram<EditorVulkanViewportCook>(EditorVulkanViewportShaderManifest(), payload, metadata);
+    }
+
+    /** @copydoc EditorVulkanCameraCrossFadeShaderManifest */
+    Render::ShaderManifest EditorVulkanCameraCrossFadeShaderManifest() {
+        using namespace Render;
+        return {.schemaVersion = 1,
+                .sourceIdentity = "assets/shaders/editor/viewport_cross_fade.hlsl",
+                .sourceRevision = 1,
+                .entryPoints = {{ShaderStage::Vertex, "VSMain"}, {ShaderStage::Fragment, "PSMain"}},
+                .bindings = {{{1}, ShaderResourceKind::UniformBuffer, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment},
+                             {{2}, ShaderResourceKind::SampledTexture, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment}},
+                .parameters = {{{1}, {1}, ShaderValueType::Float32, 1, 4, 1}},
+                .targets = {EditorVulkanViewportShaderTarget()}};
+    }
+
+    /** @copydoc EditorVulkanCameraCrossFadeReflectionNames */
+    std::vector<Render::ShaderReflectionBindingName> EditorVulkanCameraCrossFadeReflectionNames() {
+        return {{{1}, "type.CameraCrossFadeParameters", {{{1}, "DestinationWeight"}}}, {{2}, "SourceColor", {}}};
+    }
+
+    /** @copydoc LoadEditorVulkanCameraCrossFadeCook */
+    Result<EditorVulkanCameraCrossFadeCook> LoadEditorVulkanCameraCrossFadeCook(std::span<const std::uint8_t> payload,
+                                                                                std::span<const std::uint8_t> metadata) {
+        using namespace Render;
+        using Outcome = Result<EditorVulkanCameraCrossFadeCook>;
+        const auto manifest = EditorVulkanCameraCrossFadeShaderManifest();
+        const auto target = EditorVulkanViewportShaderTarget();
+        if (const auto valid = ValidateViewportStageEntries(manifest, target, payload); valid.HasError())
+            return Outcome::Failure(valid.ErrorValue());
+        auto decoded = DecodeReflectedShaderArtifact(manifest, target, payload, metadata);
+        if (decoded.HasError())
+            return Outcome::Failure(decoded.ErrorValue());
+        const auto attributes = std::span{decoded.Value().reflection.stageInterface};
+        const auto exact = [&](ShaderStage stage, ShaderInterfaceDirection direction, std::uint32_t columns) {
+            return std::ranges::count_if(attributes, [=](const auto &value) {
+                return value.stage == stage && value.direction == direction && value.location == 0 && value.rows == 1 &&
+                       value.columns == columns && value.type == ShaderValueType::Float32 && value.arrayCount == 1;
+            }) == 1;
+        };
+        if (attributes.size() != 2 || !exact(ShaderStage::Vertex, ShaderInterfaceDirection::Input, 3) ||
+            !exact(ShaderStage::Fragment, ShaderInterfaceDirection::Output, 4))
+            return Outcome::Failure(MakeError(ShaderReflectionErrors::StageInterfaceMismatch));
+        return Outcome::Success({{payload.begin(), payload.end()}, std::move(decoded).Value()});
     }
 
     /** @copydoc EditorVulkanSceneLinearShaderManifest */

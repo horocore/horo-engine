@@ -9,6 +9,22 @@ namespace Horo::Editor {
     [[nodiscard]] Render::ShaderManifest EditorVulkanViewportShaderManifest();
     [[nodiscard]] std::vector<Render::ShaderReflectionBindingName> EditorVulkanViewportReflectionNames();
 
+    /** @brief Exact cooked program for the opaque RGBA8 desktop camera compositor. */
+    struct EditorVulkanCameraCrossFadeCook final {
+        std::vector<std::uint8_t> payload;
+        Render::ReflectedShaderArtifact metadata;
+    };
+
+    /** @brief Returns the cross-fade program's exact vertex, source texture and weight contract. */
+    [[nodiscard]] Render::ShaderManifest EditorVulkanCameraCrossFadeShaderManifest();
+    /** @brief Returns compiler-visible names for the actual weight and unfiltered source texture. */
+    [[nodiscard]] std::vector<Render::ShaderReflectionBindingName> EditorVulkanCameraCrossFadeReflectionNames();
+    /** @brief Validates actual same-operation Vulkan shader bytes and reflected material interface.
+     * @param payload Exact cooked Vulkan stages. @param metadata Canonical reflection from the same cook.
+     * @return Owned compositor cook or typed payload/interface failure. */
+    [[nodiscard]] Result<EditorVulkanCameraCrossFadeCook> LoadEditorVulkanCameraCrossFadeCook(std::span<const std::uint8_t> payload,
+                                                                                              std::span<const std::uint8_t> metadata);
+
     /** @brief Separate actual cooked depth artifact from the canonical shared shadow source. */
     struct EditorVulkanShadowCook {
         std::vector<std::uint8_t> payload;
@@ -25,6 +41,7 @@ namespace Horo::Editor {
         std::vector<std::uint8_t> payload;
         Render::ReflectedShaderArtifact metadata;
         std::optional<EditorVulkanShadowCook> shadow;
+        std::optional<EditorVulkanCameraCrossFadeCook> cameraCrossFade;
     };
 
     /** @brief Rejects altered/mismatched cooked payload/layout before any native shader object is created. */

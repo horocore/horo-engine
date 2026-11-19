@@ -508,6 +508,20 @@ namespace Horo::Editor {
         return viewportTarget_.crossFade.target;
     }
 
+    /** @copydoc EditorViewportResources::CameraCrossFadeImages */
+    std::optional<EditorViewportResources::CameraCrossFadeAttachments> EditorViewportResources::CameraCrossFadeImages() const noexcept {
+        const auto &source = viewportTarget_.crossFade;
+        if (!source.target.IsValid())
+            return std::nullopt;
+        return CameraCrossFadeAttachments{source.color, source.depth, source.colorView, source.depthView};
+    }
+
+    /** @copydoc EditorViewportResources::IsSubmissionPinCapacityFailure */
+    bool EditorViewportResources::IsSubmissionPinCapacityFailure(const Error &error) noexcept {
+        const auto &capacity = Render::FrontendErrors::ResourceSubmissionCapacityExceeded;
+        return error.domain.Value() == capacity.domain.Value() && error.code.Value() == capacity.code.Value();
+    }
+
     /** @copydoc EditorViewportResources::CameraCrossFadeColorView */
     Render::RenderTextureViewHandle EditorViewportResources::CameraCrossFadeColorView() const noexcept {
         return viewportTarget_.crossFade.colorView;
@@ -556,7 +570,7 @@ namespace Horo::Editor {
         using enum Render::RenderTextureUsage;
         return {.extent = extent,
                 .format = colorPipeline_ ? Render::RenderTextureFormat::Rgba16Float : Render::RenderTextureFormat::Rgba8Unorm,
-                .usage = colorPipeline_ ? Sampled | RenderAttachment | CopySource : Sampled | RenderAttachment};
+                .usage = colorPipeline_ || cameraCrossFade_ ? Sampled | RenderAttachment | CopySource : Sampled | RenderAttachment};
     }
 
     /** @copydoc EditorViewportResources::SpatialColorDescriptor */

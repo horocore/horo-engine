@@ -8,9 +8,11 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "VulkanBackendModule.h"
 #include "VulkanEditorGraphicsBridge.h"
+#include "VulkanVfxInstancedReadback.h"
 #include "editor/renderer/vulkan/EditorGuiRendererVulkan.h"
 #include "editor/renderer/vulkan/EditorViewportRendererVulkan.h"
 #include "editor/renderer/vulkan/SdlVulkanPresentationPort.h"
+#include "runtime/renderer/frontend/RenderFrontendResourceAccess.h"
 
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -59,6 +61,7 @@ namespace Horo::Tests::VulkanEditor {
         SdlContext sdl;
         std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window{nullptr, &SDL_DestroyWindow};
         std::unique_ptr<SdlVulkanPresentationPort> port;
+        std::unique_ptr<Test::VfxInstanced::ObservedLoader> viewportObservation;
         std::unique_ptr<Render::Detail::VulkanEditorGraphicsBridge> bridge;
         std::unique_ptr<RenderBackendRegistry> registry;
         std::unique_ptr<RenderFrontend> frontend;
@@ -67,15 +70,19 @@ namespace Horo::Tests::VulkanEditor {
         bool drained{};
         RenderTargetHandle target;
         const FramebufferExtent extent{640, 480};
+        static constexpr EditorViewportExtent CameraQualificationExtent{64, 32};
 
-        explicit Host(bool compute = false) {
+        explicit Host(bool compute = false, bool captureViewportColor = false) {
             window.reset(
                 SDL_CreateWindow("Horo Vulkan qualification", extent.width, extent.height, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE));
             REQUIRE(window);
             port = std::make_unique<SdlVulkanPresentationPort>(*window);
+            if (captureViewportColor)
+                viewportObservation = std::make_unique<Test::VfxInstanced::ObservedLoader>(*port);
             bridge = std::make_unique<Render::Detail::VulkanEditorGraphicsBridge>();
             registry = std::make_unique<RenderBackendRegistry>();
-            Check(RegisterVulkanRenderBackend(*registry, *port, bridge.get()));
+            auto &loader = viewportObservation ? static_cast<IVulkanLoaderPort &>(*viewportObservation) : *port;
+            Check(RegisterVulkanRenderBackend(*registry, loader, bridge.get()));
             Check(registry->Seal());
             RenderBackendConfig config{.requirePresentation = true, .enableValidation = true, .maxFramesInFlight = 2};
             if (compute) {
@@ -128,6 +135,7 @@ namespace Horo::Tests::VulkanEditor {
             // Registration factories also retain the native runtime in this test host.
             registry.reset();
             bridge.reset();
+            viewportObservation.reset();
             port.reset();
             window.reset();
         }
@@ -157,13 +165,25 @@ namespace Horo::Tests::VulkanEditor {
         }
 
         void CreateViewport(const RenderSceneView &scene = {}, const EditorViewportColorInputs *color = nullptr,
-                            const EditorSignedSpatialProvider *spatial = nullptr) {
+                            const EditorSignedSpatialProvider *spatial = nullptr, bool crossFade = false) {
             const char *root = std::getenv("HORO_EDITOR_VULKAN_ASSET_ROOT");
             REQUIRE(root);
             auto cooked = LoadPackagedVulkanViewportShader(std::filesystem::path{root});
             Check(cooked);
-            viewport = std::make_unique<EditorViewportRendererVulkan>(*frontend, *bridge, std::move(cooked).Value());
-            Check(viewport->Initialize());
+            auto viewportCook = std::move(cooked).Value();
+            if (crossFade) {
+                auto blend = LoadPackagedVulkanCameraCrossFadeShader(std::filesystem::path{root});
+                Check(blend, "load exact camera cross-fade material");
+                viewportCook.cameraCrossFade.emplace(std::move(blend).Value());
+            }
+            viewport = std::make_unique<EditorViewportRendererVulkan>(*frontend, *bridge, std::move(viewportCook));
+            Check(viewport->Initialize(), "initialize viewport");
+            if (crossFade) {
+                auto shadow = DirectionalShadowProfile{};
+                shadow.cascadeCount = 1;
+                Check(viewport->RequestDirectionalShadowProfile(shadow), "select bounded cross-fade shadow profile");
+                Check(viewport->EnableCameraCrossFade(), "enable cooked camera cross-fade");
+            }
             if (color) {
                 auto linear = spatial ? LoadEditorVulkanSceneLinearCook(spatial->scenePayload, spatial->sceneReflection)
                                       : LoadPackagedVulkanSceneLinearShader(std::filesystem::path{root});
@@ -179,15 +199,16 @@ namespace Horo::Tests::VulkanEditor {
             const auto selected = frontend->ResolveLightPreparation(lighting.requested, lighting.fallback, {});
             Check(selected);
             Check(viewport->RequestLightingProfile(lighting, selected.Value()));
-            viewport->RequestExtent({320, 240});
+            const auto size = crossFade ? CameraQualificationExtent : EditorViewportExtent{320, 240};
+            viewport->RequestExtent(size);
             viewport->RequestGrid({.visible = false});
-            SynchronizeViewport(scene);
+            SynchronizeViewport(scene, size);
         }
 
         void SynchronizeViewport(const RenderSceneView &scene, const EditorViewportExtent requested = {320, 240}) {
             for (std::size_t attempt = 0; attempt < 8; ++attempt) {
                 const auto prepared = viewport->PrepareResources(*frontend, scene);
-                Check(prepared);
+                Check(prepared, "prepare exact viewport resources");
                 Check(frontend->ProcessResourceRequests());
                 if (prepared.Value().has_value() && viewport->RequestedExtent() == requested) {
                     target = *prepared.Value();
@@ -242,6 +263,90 @@ namespace Horo::Tests::VulkanEditor {
             Check(frame.ComposeGui(*gui));
         }
     };
+
+    /** @brief Uses the ordinary scene and GUI tail, then reads the exact production color attachment. */
+    std::vector<std::uint8_t> PresentCameraColor(Host &host, const RenderSceneView &scene, const std::uint64_t frameId,
+                                                 const RenderSamplerHandle readbackSampler) {
+        REQUIRE(host.viewportObservation);
+        host.viewportObservation->ResetDraws();
+        host.PrepareScene(scene);
+        auto frame = host.Frame(frameId);
+        host.ExecuteSceneAndGui(frame, scene);
+        Check(frame.Present());
+        using ResourceAccess = Render::Detail::RenderFrontendResourceAccess;
+        const auto view = ResourceAccess::BackendInstance(*host.frontend, host.viewport->TextureView().sampledView);
+        const auto sampler = ResourceAccess::BackendInstance(*host.frontend, readbackSampler);
+        Check(view, "resolve viewport GUI texture");
+        Check(sampler, "resolve readback sampler");
+        const auto sample = host.bridge->Port()->BorrowSample({view.Value(), sampler.Value(), 0});
+        Check(sample, "borrow exact native viewport GUI sample");
+        using Readback = Test::VfxInstanced::NativeReadback;
+        Readback readback{*host.viewportObservation, Readback::Capture::ViewportColor};
+        readback.Prepare();
+        return readback.ReadViewportColor(sample.Value().view);
+    }
+
+    TEST_CASE("Native Vulkan camera cross-fade composes both real viewport rasters before GUI sampling",
+              "[native-smoke][vulkan][gui][viewport][cross-fade]") {
+        const auto *root = std::getenv("HORO_EDITOR_VULKAN_ASSET_ROOT");
+        if (!root || !std::filesystem::exists(std::filesystem::path{root} / "shaders/editor/viewport-cross-fade-vulkan.horoshdr"))
+            SKIP("Supply the locked viewport and camera cross-fade shader packages.");
+        const std::array vertices{MeshVertex{{-1, -1, 0}, {0, 0, 1}, {}}, MeshVertex{{1, -1, 0}, {0, 0, 1}, {}},
+                                  MeshVertex{{0, 1, 0}, {0, 0, 1}, {}}};
+        const std::array<std::uint32_t, 3> indices{0, 1, 2};
+        const RenderMeshSourceHandle mesh{{1}, 1};
+        const std::array meshes{RenderMeshResourceView{mesh, vertices, indices, {{-1, -1, 0}, {1, 1, 0}}}};
+        const std::array instances{RenderStaticMeshInstance{.mesh = mesh, .presentation = {.tint = {1, 0, 1}, .tintStrength = 1}}};
+        const std::array lights{RenderLight{.direction = {0, 0, -1}, .stableIdentity = 1}};
+        RenderSceneView destination{.camera = {.position = {1, 0, 5},
+                                               .target = {1, 0, 0},
+                                               .projection = {.kind = RenderProjectionKind::Orthographic, .orthographicHeight = 4}},
+                                    .meshResources = meshes,
+                                    .instances = instances,
+                                    .lights = lights,
+                                    .lightSceneDomain = 1,
+                                    .lightSnapshotRevision = 1};
+        auto source = destination;
+        source.camera.position.x = -1;
+        source.camera.target.x = -1;
+        Host host{false, true};
+        host.CreateViewport(destination, nullptr, nullptr, true);
+        auto pressure = destination;
+        const std::vector<RenderStaticMeshInstance> pressureInstances(RenderMaterialPass::MaximumDraws - 8, instances.front());
+        pressure.instances = pressureInstances;
+        host.SynchronizeViewport(pressure, Host::CameraQualificationExtent);
+        CHECK(host.viewport->CameraCrossFadeCapacity().availableViews == 1);
+        host.SynchronizeViewport(destination, Host::CameraQualificationExtent);
+        const auto capacity = host.viewport->CameraCrossFadeCapacity();
+        REQUIRE(capacity.availableViews == 2);
+        const auto sampler = host.frontend->CreateSampler({});
+        Check(sampler, "create native readback sampler");
+        Check(host.frontend->ProcessResourceRequests(), "prepare native readback sampler");
+        const auto a = PresentCameraColor(host, source, 1, sampler.Value().handle);
+        const auto b = PresentCameraColor(host, destination, 2, sampler.Value().handle);
+        Check(host.viewport->PrepareCameraCrossFadeFrame(EditorViewportCameraCrossFade{source.camera, 0.5F, capacity.generation}));
+        const auto blend = PresentCameraColor(host, destination, 3, sampler.Value().handle);
+        Check(host.frontend->ReleaseSampler(sampler.Value().handle), "release readback sampler");
+        REQUIRE(a.size() == b.size());
+        REQUIRE(a.size() == blend.size());
+        std::size_t sourceTint{}, destinationTint{};
+        std::size_t distinguishable{};
+        int maximumError{};
+        for (std::size_t index = 0; index < blend.size(); index += 4) {
+            sourceTint += a[index] >= 240 && a[index + 1] <= 8 && a[index + 2] >= 240;
+            destinationTint += b[index] >= 240 && b[index + 1] <= 8 && b[index + 2] >= 240;
+        }
+        for (std::size_t index = 0; index < blend.size(); ++index) {
+            distinguishable += std::abs(int{a[index]} - int{b[index]}) >= 16;
+            maximumError = std::max(maximumError, std::abs(int{blend[index]} * 2 - int{a[index]} - int{b[index]}));
+        }
+        CAPTURE(sourceTint, destinationTint, distinguishable, maximumError);
+        CHECK(sourceTint > 16);
+        CHECK(destinationTint > 16);
+        CHECK(distinguishable > 16);
+        CHECK(maximumError <= 2);
+        CHECK(host.Drain());
+    }
 
     TEST_CASE("Native Vulkan partial GUI preparation releases native children before SDL parents", "[native-smoke][vulkan][gui]") {
         Host host;

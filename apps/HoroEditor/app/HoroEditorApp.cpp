@@ -362,6 +362,7 @@ namespace Horo::Editor {
             std::vector<Runtime::SceneObjectId> playWorldMeshes;
             bool playNavigationSceneValid{true};
             std::optional<Render::DirectionalShadowProfile> directionalShadows;
+            bool cameraPreviewCrossFade{};
             std::optional<EditorViewportLightingProfile> lighting;
             Detail::EditorColorOptions color;
             std::optional<std::filesystem::path> lightingRoot;
@@ -788,6 +789,8 @@ namespace Horo::Editor {
             opts.textPreview = true;
         else if (argument == "--exit-after-first-frame")
             opts.exitAfterFirstFrame = true;
+        else if (argument == "--camera-preview-cross-fade")
+            opts.cameraPreviewCrossFade = true;
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
         else if (argument == "--qualify-opengl-surface-lifecycle")
             opts.qualifySurfaceLifecycle = true;
@@ -1485,8 +1488,12 @@ namespace Horo::Editor {
                     initialized.HasError()) {
                     return Result<void>::Failure(initialized.ErrorValue());
                 }
+                if (options.cameraPreviewCrossFade)
+                    return composition.viewportRenderer->EnableCameraCrossFade();
 #endif
             } else if (options.rendererBackend == "metal") {
+                if (options.cameraPreviewCrossFade)
+                    return Result<void>::Failure(MakeError(RendererErrors::ViewportCrossFadeUnsupported));
 #if defined(HORO_HAS_RENDER_METAL)
                 return InstallEditorMetalRenderers(window, options, composition);
 #endif
@@ -1495,14 +1502,26 @@ namespace Horo::Editor {
                 auto cooked = LoadPackagedVulkanViewportShader(EditorAssetRoot());
                 if (cooked.HasError())
                     return Result<void>::Failure(cooked.ErrorValue());
+                auto viewportCook = std::move(cooked).Value();
+                if (options.cameraPreviewCrossFade) {
+                    auto fade = LoadPackagedVulkanCameraCrossFadeShader(EditorAssetRoot());
+                    if (fade.HasError())
+                        return Result<void>::Failure(fade.ErrorValue());
+                    viewportCook.cameraCrossFade.emplace(std::move(fade).Value());
+                }
                 auto &bridge = *composition.vulkanGraphicsBridge;
                 const auto prepare = [&options](EditorViewportRendererVulkan &viewport, Render::RenderFrontend &frontend,
                                                 const EditorViewportLightingProfile &) {
-                    return PrepareVulkanEditorColor(viewport, frontend, options);
+                    auto prepared = PrepareVulkanEditorColor(viewport, frontend, options);
+                    if (prepared.HasError() || !options.cameraPreviewCrossFade)
+                        return prepared;
+                    if (const auto fade = viewport.EnableCameraCrossFade(); fade.HasError())
+                        return decltype(prepared)::Failure(fade.ErrorValue());
+                    return prepared;
                 };
                 return InstallEditorRenderers(composition, std::make_unique<EditorGuiRendererVulkan>(window, *composition.frontend, bridge),
                                               std::make_unique<EditorViewportRendererVulkan>(*composition.frontend, bridge,
-                                                                                             std::move(cooked).Value()),
+                                                                                             std::move(viewportCook)),
                                               *options.directionalShadows, *options.lighting, prepare);
 #endif
             }
@@ -1514,6 +1533,8 @@ namespace Horo::Editor {
                                                                       EditorRenderComposition &composition) {
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
             if (composition.xrSession) {
+                if (options.cameraPreviewCrossFade)
+                    return Result<void>::Failure(MakeError(RendererErrors::ViewportCrossFadeUnsupported));
                 if ((options.imageProviderInspection && options.imageProviderInspection->activateSpatial) || options.color.root ||
                     options.color.lookRoot || options.color.settingsRequested || options.lightingRoot)
                     return Result<void>::Failure(MakeError(Render::ExposureGpuErrors::Unsupported));

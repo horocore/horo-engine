@@ -8,6 +8,8 @@
 namespace Horo::Editor {
     /** @brief Reads the exact payload/metadata pair under the host's packaged asset root; never invokes a compiler. */
     [[nodiscard]] Result<EditorVulkanViewportCook> LoadPackagedVulkanViewportShader(const std::filesystem::path &assetRoot);
+    /** @brief Loads the explicit opaque camera compositor from the installed Vulkan shader root. */
+    [[nodiscard]] Result<EditorVulkanCameraCrossFadeCook> LoadPackagedVulkanCameraCrossFadeShader(const std::filesystem::path &assetRoot);
     /** @brief Explicitly loads the separate FP16 opaque scene raster pair from the installed asset root.
      * @param assetRoot Host-selected installed shader root.
      * @return Exact scene-linear recipe or typed missing, altered or foreign-program failure.

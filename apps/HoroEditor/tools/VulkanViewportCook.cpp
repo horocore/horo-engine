@@ -22,6 +22,7 @@ namespace {
 
     enum class CookMode {
         Viewport,
+        CameraCrossFade,
         SceneLinear,
         Multiview,
         Shadow,
@@ -45,6 +46,8 @@ namespace {
             using enum CookMode;
             case Viewport:
                 return Editor::EditorVulkanViewportShaderManifest();
+            case CameraCrossFade:
+                return Editor::EditorVulkanCameraCrossFadeShaderManifest();
             case SceneLinear:
                 return {};  // The signed release and standalone route use their shared complete request.
             case Multiview:
@@ -67,6 +70,8 @@ namespace {
             using enum CookMode;
             case Viewport:
                 return Editor::EditorVulkanViewportReflectionNames();
+            case CameraCrossFade:
+                return Editor::EditorVulkanCameraCrossFadeReflectionNames();
             case SceneLinear:
                 return {};
             case Multiview:
@@ -89,6 +94,8 @@ namespace {
             using enum CookMode;
             case Viewport:
                 return "viewport";
+            case CameraCrossFade:
+                return "camera-cross-fade";
             case SceneLinear:
                 return "scene-linear";
             case Multiview:
@@ -185,6 +192,8 @@ namespace {
             using enum CookMode;
             case Viewport:
                 return Admit(Editor::LoadEditorVulkanViewportCook(artifact.payload, metadata));
+            case CameraCrossFade:
+                return Admit(Editor::LoadEditorVulkanCameraCrossFadeCook(artifact.payload, metadata));
             case SceneLinear:
                 return Admit(Editor::LoadEditorVulkanSceneLinearCook(artifact.payload, metadata));
             case Multiview:
@@ -344,6 +353,8 @@ namespace {
             return Multiview;
         if (std::string_view{argv[7]} == "--shadow")
             return Shadow;
+        if (std::string_view{argv[7]} == "--camera-cross-fade")
+            return CameraCrossFade;
         if (std::string_view{argv[7]} == "--multiview-motion")
             return MultiviewMotion;
         if (std::string_view{argv[7]} == "--multiview-coverage")
@@ -367,7 +378,7 @@ int main(int argc, char **argv) {
     if (!mode && !reconstruction && !manualColorOutput) {
         std::cerr << "Usage: HoroEditorVulkanShaderCook source.hlsl output-prefix scratch-root dxc spirv-val spirv-cross "
                      "[--scene-linear|--multiview|--multiview-motion|--multiview-coverage|--shadow|--temporal-linear-depth|"
-                     "--temporal-motion]\n"
+                     "--temporal-motion|--camera-cross-fade]\n"
                      "       HoroEditorVulkanShaderCook source.hlsl absolute-new-stage scratch-root dxc spirv-val spirv-cross "
                      "--native-reconstruction candidate-id [--scene-linear-source viewport.hlsl]\n"
                      "       HoroEditorVulkanShaderCook repository absolute-new-stage scratch-root dxc spirv-val spirv-cross "

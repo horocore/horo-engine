@@ -2,6 +2,8 @@
 #include "RenderFrontendResourceAccess.h"
 #include "editor/renderer/EditorRendererErrors.h"
 
+#include <limits>
+
 namespace Horo::Editor {
     /** @copydoc EditorViewportRendererVulkan::ProgramResources::CreatePipeline */
     Result<void> EditorViewportRendererVulkan::ProgramResources::CreatePipeline(Render::RenderFrontend &frontend, ShaderResources &program,
@@ -216,6 +218,198 @@ namespace Horo::Editor {
             static_cast<void>(program.materials->Release(draw.material->Id()));
         draw.material = acquired.Value();
         return Result<void>::Success();
+    }
+
+    /** @copydoc IEditorViewportRenderer::EnableCameraCrossFade */
+    Result<void> EditorViewportRendererVulkan::EnableCameraCrossFade() {
+        if (crossFadeSourceSlots_)
+            return Result<void>::Success();
+        const auto &profile = resources_.RequestedDirectionalShadowProfile();
+        const auto shadows = profile.enabled ? profile.cascadeCount : 0;
+        if (!initialized_ || !crossFadeCook_ || color_ || recordedEver_ || !frontend_.Capabilities().supportsMaterialRasterGraph ||
+            shadows > CrossFadeShadowPasses || crossFadeGeneration_ == std::numeric_limits<std::uint64_t>::max())
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportCrossFadeUnsupported));
+        if (const auto boundary = Render::Detail::RenderFrontendResourceAccess::RequirePreparationBoundary(frontend_); boundary.HasError())
+            return Result<void>::Failure(boundary.ErrorValue());
+        CameraCrossFadeProgram program;
+        program.shader.payload = crossFadeCook_->payload;
+        program.shader.metadata = crossFadeCook_->metadata;
+        auto slots = std::make_unique<FrameSlots>();
+        if (const auto prepared = PrepareCameraCrossFadeProgram(program); prepared.HasError()) {
+            RetireCameraCrossFadeProgram(program);
+            return prepared;
+        }
+        if (const auto enabled = resources_.EnableCameraCrossFade(); enabled.HasError()) {
+            RetireCameraCrossFadeProgram(program);
+            return enabled;
+        }
+        crossFadeProgram_ = std::move(program);
+        crossFadeSourceSlots_ = std::move(slots);
+        crossFadeShadowBudget_ = shadows;
+        ++crossFadeGeneration_;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareCameraCrossFadeProgram */
+    Result<void> EditorViewportRendererVulkan::PrepareCameraCrossFadeProgram(CameraCrossFadeProgram &program) {
+        using namespace Render;
+        auto &shader = program.shader;
+        const auto encoded = EncodeReflectedShaderArtifact(shader.metadata);
+        if (encoded.HasError())
+            return Result<void>::Failure(encoded.ErrorValue());
+        if (const auto checked = LoadEditorVulkanCameraCrossFadeCook(shader.payload, encoded.Value()); checked.HasError())
+            return Result<void>::Failure(checked.ErrorValue());
+        if (const auto stages = ProgramResources::CreateProgramStages(frontend_, shader); stages.HasError())
+            return stages;
+        const RenderGraphicsPipelineState state{.cull = RenderCullMode::None,
+                                                .blend = RenderBlendMode::Alpha,
+                                                .depthTest = false,
+                                                .depthWrite = false,
+                                                .depthFormat = std::nullopt};
+        const auto pipeline = ProgramResources::CreatePipelineState(frontend_, shader, EditorVulkanCameraCrossFadeShaderManifest(), state);
+        if (pipeline.HasError())
+            return Result<void>::Failure(pipeline.ErrorValue());
+        shader.pipeline = pipeline.Value();
+        if (const auto layout = ProgramResources::CreateMaterialLayout(frontend_, shader, shader.metadata.reflection, device_.frames);
+            layout.HasError())
+            return layout;
+        return CreateCameraCrossFadeTriangle(program);
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::CreateCameraCrossFadeTriangle */
+    Result<void> EditorViewportRendererVulkan::CreateCameraCrossFadeTriangle(CameraCrossFadeProgram &program) {
+        using namespace Render;
+        using enum RenderBufferUsage;
+        constexpr std::array<MeshVertex, 3> vertices{MeshVertex{{-1, -1, 0}}, MeshVertex{{3, -1, 0}}, MeshVertex{{-1, 3, 0}}};
+        constexpr std::array<std::uint32_t, 3> indices{0, 1, 2};
+        const auto vertex =
+            frontend_.CreateBuffer({sizeof(vertices), Vertex, RenderBufferAccess::HostVisible}, std::as_bytes(std::span{vertices}));
+        if (vertex.HasError())
+            return Result<void>::Failure(vertex.ErrorValue());
+        program.vertices = vertex.Value().handle;
+        const auto index =
+            frontend_.CreateBuffer({sizeof(indices), Index, RenderBufferAccess::HostVisible}, std::as_bytes(std::span{indices}));
+        if (index.HasError())
+            return Result<void>::Failure(index.ErrorValue());
+        program.indices = index.Value().handle;
+        if (auto processed = frontend_.ProcessResourceRequests(); processed.HasError())
+            return Result<void>::Failure(processed.ErrorValue());
+        const auto mesh = frontend_.CreateMesh({.vertexBuffer = program.vertices,
+                                                .indexBuffer = program.indices,
+                                                .vertexStride = sizeof(MeshVertex),
+                                                .vertexCount = 3,
+                                                .indexCount = 3,
+                                                .localBounds = {{-1, -1, 0}, {3, 3, 0}}});
+        if (mesh.HasError())
+            return Result<void>::Failure(mesh.ErrorValue());
+        program.mesh = mesh.Value().handle;
+        if (auto processed = frontend_.ProcessResourceRequests(); processed.HasError())
+            return Result<void>::Failure(processed.ErrorValue());
+        return frontend_.ResourceOperationResult(mesh.Value().operation);
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::BindCameraCrossFadeSource */
+    Result<void> EditorViewportRendererVulkan::BindCameraCrossFadeSource() {
+        const auto view = resources_.CameraCrossFadeColorView();
+        if (!crossFadeSourceSlots_ || !view.IsValid() || crossFadeProgram_.boundSource == view)
+            return Result<void>::Success();
+        const auto &shader = crossFadeProgram_.shader;
+        const std::array sampled{Render::MaterialResourceBinding{{2}, 0, view}};
+        for (std::uint32_t slot = 0; slot < device_.frames; ++slot) {
+            auto &draw = crossFadeProgram_.draws[slot];
+            const auto bound = draw.buffer.IsValid()
+                                   ? ProgramResources::BindUniformSlot(shader, draw, shader.pipeline, {}, sampled)
+                                   : ProgramResources::CreateUniformSlot(frontend_, shader, draw, slot + 1, shader.pipeline, {}, sampled);
+            if (bound.HasError())
+                return bound;
+        }
+        crossFadeProgram_.boundSource = view;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareCameraCrossFadeScene */
+    Result<void> EditorViewportRendererVulkan::PrepareCameraCrossFadeScene(const std::size_t draws) {
+        if (!crossFadeSourceSlots_ || !crossFadeProgram_.boundSource.IsValid())
+            return Result<void>::Success();
+        crossFadeSceneReady_ = draws <= crossFadeDrawCount_;
+        if (crossFadeSceneReady_) {
+            declinedCrossFadeDrawCount_.reset();
+            return Result<void>::Success();
+        }
+        if (declinedCrossFadeDrawCount_ == draws || draws > Render::RenderMaterialPass::MaximumDraws)
+            return Result<void>::Success();
+        const auto growth = draws - crossFadeDrawCount_;
+        auto &slots = *crossFadeSourceSlots_;
+        if (const auto prepared = PrepareCameraCrossFadeSlots(slots, shader_, shadowShader_, crossFadeDrawCount_, growth);
+            prepared.HasError()) {
+            RetireCameraCrossFadeSlots(slots, crossFadeDrawCount_, growth, &shader_, &shadowShader_);
+            if (EditorViewportResources::IsSubmissionPinCapacityFailure(prepared.ErrorValue())) {
+                declinedCrossFadeDrawCount_ = draws;
+                return Result<void>::Success();
+            }
+            return prepared;
+        }
+        crossFadeDrawCount_ = draws;
+        declinedCrossFadeDrawCount_.reset();
+        crossFadeSceneReady_ = true;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::RetireCameraCrossFadeProgram */
+    void EditorViewportRendererVulkan::RetireCameraCrossFadeProgram(CameraCrossFadeProgram &program) noexcept {
+        for (auto &draw : program.draws)
+            RetireDraw(draw);
+        if (program.mesh.IsValid())
+            static_cast<void>(frontend_.ReleaseMesh(program.mesh));
+        for (const auto buffer : {program.vertices, program.indices})
+            if (buffer.IsValid())
+                static_cast<void>(frontend_.ReleaseBuffer(buffer));
+        RetireProgram(program.shader, {});
+        program = {};
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareCameraCrossFadeSlots */
+    Result<void> EditorViewportRendererVulkan::PrepareCameraCrossFadeSlots(std::span<FrameSlot> slots, const ShaderResources &scene,
+                                                                           const ShaderResources &shadow, const std::size_t first,
+                                                                           const std::size_t count) {
+        using Render::MaximumDirectionalShadowCascades;
+        constexpr auto draws = Render::RenderMaterialPass::MaximumDraws;
+        const auto atlas = resources_.ShadowTextureView();
+        for (std::uint32_t frame = 0; frame < device_.frames; ++frame)
+            for (std::size_t index = first; index < first + count; ++index) {
+                auto &slot = slots[frame];
+                const auto forward = (device_.frames + frame) * (draws + 1) + index + 1;
+                if (const auto source =
+                        ProgramResources::CreateUniformSlot(frontend_, scene, slot.draws[index], forward, scene.pipeline, atlas);
+                    source.HasError())
+                    return source;
+                for (std::uint32_t cascade = 0; cascade < crossFadeShadowBudget_; ++cascade) {
+                    const auto depth = ((device_.frames + frame) * MaximumDirectionalShadowCascades + cascade) * draws + index + 1;
+                    if (const auto source =
+                            ProgramResources::CreateUniformSlot(frontend_, shadow, slot.shadows[cascade][index], depth, shadow.pipeline);
+                        source.HasError())
+                        return source;
+                }
+            }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::RetireCameraCrossFadeSlots */
+    void EditorViewportRendererVulkan::RetireCameraCrossFadeSlots(std::span<FrameSlot> slots, const std::size_t first,
+                                                                  const std::size_t count, const ShaderResources *scene,
+                                                                  const ShaderResources *shadow) noexcept {
+        const auto release = [&](DrawSlot &draw, const ShaderResources *owner) {
+            if (owner && owner->materials && draw.material)
+                static_cast<void>(owner->materials->Release(draw.material->Id()));
+            RetireDraw(draw);
+        };
+        for (auto &slot : slots) {
+            for (auto &draw : std::span{slot.draws}.subspan(first, count))
+                release(draw, scene);
+            for (auto &cascade : slot.shadows)
+                for (auto &draw : std::span{cascade}.subspan(first, count))
+                    release(draw, shadow);
+        }
     }
 
     /** @copydoc EditorViewportRendererVulkan::PrepareXrProgram */

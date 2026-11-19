@@ -117,6 +117,13 @@ of the same outcome retains that epoch and the committed frame stays immutable.
 The editor viewport controller owns a distinct preview context and stable-address
 session state. Its programmatic Start/Advance/Seek/Stop camera-preview entry points
 feed the same adapter into `ExtractEditorViewportScene`; no new UI is introduced.
+Editor hosts can request two-view preview with `--camera-preview-cross-fade`.
+The Vulkan path requires the cooked `viewport-cross-fade-vulkan` shader and
+reflection under `shaders/editor`, the opaque RGBA8 viewport and an admitted
+shadow recipe. The Vulkan qualification job cooks that pair with the locked
+shader tools and stages it alongside the viewport fixtures.
+When scene growth exceeds the second view's resource budget, the viewport
+reports one-view capacity and keeps ordinary projection available.
 The authoring camera remains current during preview navigation and supplies the
 before-first and released-lease base. Preview admission is camera-only; additional
 property/event tracks require their own explicit owner bindings. Entering PIE

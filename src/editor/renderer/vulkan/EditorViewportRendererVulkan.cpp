@@ -54,6 +54,8 @@ namespace Horo::Editor {
         explicit ProgramGeneration(EditorViewportRendererVulkan &target) noexcept : owner(target) {}
 
         ~ProgramGeneration() {
+            if (crossFadeSlots)
+                owner.RetireCameraCrossFadeSlots(*crossFadeSlots, 0, owner.crossFadeDrawCount_);
             owner.RetireProgram(program, slots);
             owner.RetireProgram(shadowProgram, {});
             owner.RetireProgram(sceneLinearProgram, {});
@@ -65,6 +67,7 @@ namespace Horo::Editor {
         ShaderResources shadowProgram;
         ShaderResources sceneLinearProgram;
         std::array<FrameSlot, 8> slots;
+        std::unique_ptr<FrameSlots> crossFadeSlots;
     };
 
     Result<void> EditorViewportRendererVulkan::PrepareProgram(ProgramGeneration &candidate) {
@@ -83,7 +86,13 @@ namespace Horo::Editor {
             return slots;
         if (auto overlay = CreateOverlaySlots(candidate.program, candidate.slots); overlay.HasError())
             return overlay;
-        return PrepareShadowProgram(candidate.shadowProgram, candidate.slots);
+        if (auto shadow = PrepareShadowProgram(candidate.shadowProgram, candidate.slots); shadow.HasError())
+            return shadow;
+        if (crossFadeSourceSlots_) {
+            candidate.crossFadeSlots = std::make_unique<FrameSlots>();
+            return PrepareCameraCrossFadeSlots(*candidate.crossFadeSlots, sceneProgram, candidate.shadowProgram, 0, crossFadeDrawCount_);
+        }
+        return Result<void>::Success();
     }
 
     /** @copydoc EditorViewportRendererVulkan::PrepareManualColor */
@@ -124,6 +133,7 @@ namespace Horo::Editor {
         std::swap(shadowShader_, candidate.shadowProgram);
         std::swap(sceneLinearShader_, candidate.sceneLinearProgram);
         std::swap(slots_, candidate.slots);
+        std::swap(crossFadeSourceSlots_, candidate.crossFadeSlots);
         boundShadowAtlas_ = resources_.ShadowTextureView();
     }
 
@@ -174,6 +184,7 @@ namespace Horo::Editor {
                                                                Render::Detail::VulkanEditorGraphicsBridge &bridge,
                                                                EditorVulkanViewportCook cooked) noexcept
         : frontend_(frontend), bridge_(bridge), shader_{.payload = std::move(cooked.payload), .metadata = std::move(cooked.metadata)},
+          crossFadeCook_(std::move(cooked.cameraCrossFade)),
           resources_(frontend, {.resolveImage = &ViewportImage,
                                 .meshBufferAccess = Render::RenderBufferAccess::HostVisible,
                                 .prepareDirectionalShadow = true}) {
@@ -292,6 +303,14 @@ namespace Horo::Editor {
         if (owner_ != std::this_thread::get_id())
             std::terminate();
         viewportRasterGraphs_.reset();
+        preparedCrossFade_.reset();
+        if (crossFadeSourceSlots_)
+            ProgramResources::ReleaseMaterials(*crossFadeSourceSlots_);
+        for (auto &draw : crossFadeProgram_.draws)
+            draw.material.reset();
+        if (crossFadeProgram_.shader.materials)
+            static_cast<void>(crossFadeProgram_.shader.materials->Shutdown());
+        crossFadeProgram_.shader.materials.reset();
         for (auto &draw : preparedDraws_)
             draw = {};
         for (auto &cascade : preparedShadowDraws_)
@@ -339,6 +358,15 @@ namespace Horo::Editor {
         emptyGraph_.reset();
         emptyGraphTexture_ = {};
         resources_.Shutdown();
+        RetireCameraCrossFadeProgram(crossFadeProgram_);
+        if (crossFadeSourceSlots_) {
+            RetireCameraCrossFadeSlots(*crossFadeSourceSlots_, 0, crossFadeDrawCount_);
+            crossFadeSourceSlots_.reset();
+        }
+        crossFadeDrawCount_ = 0;
+        crossFadeShadowBudget_ = 0;
+        declinedCrossFadeDrawCount_.reset();
+        crossFadeSceneReady_ = false;
         auto source = std::move(shader_.payload);
         auto metadata = std::move(shader_.metadata);
         RetireProgram(shader_, slots_);
@@ -388,6 +416,10 @@ namespace Horo::Editor {
         if (prepared.Value()) {
             if (auto bound = BindShadowAtlas(); bound.HasError())
                 return Result<std::optional<Render::RenderTargetHandle>>::Failure(bound.ErrorValue());
+            if (auto bound = BindCameraCrossFadeSource(); bound.HasError())
+                return Result<std::optional<Render::RenderTargetHandle>>::Failure(bound.ErrorValue());
+            if (auto budget = PrepareCameraCrossFadeScene(scene.instances.size()); budget.HasError())
+                return Result<std::optional<Render::RenderTargetHandle>>::Failure(budget.ErrorValue());
         }
         return prepared;
     }

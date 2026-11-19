@@ -55,6 +55,12 @@ namespace Horo::Editor {
         /** @brief Requests one validated quality profile; publication waits for a complete replacement atlas. */
         [[nodiscard]] Result<void> RequestDirectionalShadowProfile(const Render::DirectionalShadowProfile &profile);
         [[nodiscard]] const Render::DirectionalShadowProfile &ActiveDirectionalShadowProfile() const noexcept;
+
+        /** @brief Returns the explicitly requested profile before the first atlas has been allocated. */
+        [[nodiscard]] const Render::DirectionalShadowProfile &RequestedDirectionalShadowProfile() const noexcept {
+            return requestedShadowProfile_;
+        }
+
         [[nodiscard]] EditorViewportExtent ShadowExtent() const noexcept;
         [[nodiscard]] std::uint64_t ShadowGeneration() const noexcept;
         [[nodiscard]] Render::RenderTextureHandle ShadowDepthTexture() const noexcept;
@@ -73,6 +79,17 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> EnableColorPipeline(bool spatial = false);
         /** @brief Reserves the paired legacy viewport target policy before the first allocation. */
         [[nodiscard]] Result<void> EnableCameraCrossFade();
+
+        /** @brief Returns the exact copied source attachments for portable graph admission. */
+        struct CameraCrossFadeAttachments final {
+            Render::RenderTextureHandle color, depth;
+            Render::RenderTextureViewHandle colorView, depthView;
+            bool operator==(const CameraCrossFadeAttachments &) const noexcept = default;
+        };
+
+        [[nodiscard]] std::optional<CameraCrossFadeAttachments> CameraCrossFadeImages() const noexcept;
+        /** @brief Identifies exact exhaustion of the shared frontend pin budget without exposing its private error domain. */
+        [[nodiscard]] static bool IsSubmissionPinCapacityFailure(const Error &error) noexcept;
         /** @brief Returns the source attachment from the same ready generation as Target(). */
         [[nodiscard]] Render::RenderTargetHandle CameraCrossFadeTarget() const noexcept;
         /** @brief Returns the sampled color view of the Ready cross-fade source target. */

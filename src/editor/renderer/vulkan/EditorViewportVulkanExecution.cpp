@@ -3,8 +3,35 @@
 #include "editor/renderer/EditorViewportMeshReadiness.h"
 
 #include <algorithm>
+#include <cmath>
+#include <utility>
 
 namespace Horo::Editor {
+    /** @copydoc IEditorViewportRenderer::CameraCrossFadeCapacity */
+    EditorViewportCrossFadeCapacity EditorViewportRendererVulkan::CameraCrossFadeCapacity() const noexcept {
+        if (!crossFadeSourceSlots_ || !crossFadeProgram_.shader.pipeline.IsValid())
+            return {};
+        const auto source = resources_.CameraCrossFadeColorView();
+        const bool paired = crossFadeSceneReady_ && source.IsValid() && source == crossFadeProgram_.boundSource && resources_.IsReady();
+        const std::uint8_t views = paired ? 2 : (resources_.Target().IsValid() ? 1 : 0);
+        return {crossFadeGeneration_, views};
+    }
+
+    /** @copydoc IEditorViewportRenderer::PrepareCameraCrossFadeFrame */
+    Result<void> EditorViewportRendererVulkan::PrepareCameraCrossFadeFrame(const std::optional<EditorViewportCameraCrossFade> &fade) {
+        preparedCrossFade_.reset();
+        if (!fade)
+            return Result<void>::Success();
+        const auto capacity = CameraCrossFadeCapacity();
+        if (capacity.generation == 0)
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportCrossFadeUnsupported));
+        if (capacity.availableViews != 2 || fade->admissionGeneration != capacity.generation || !fade->source.IsValid() ||
+            !std::isfinite(fade->destinationWeight) || fade->destinationWeight < 0.0F || fade->destinationWeight > 1.0F)
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportCrossFadeStale));
+        preparedCrossFade_.emplace(*fade, resources_.Target());
+        return Result<void>::Success();
+    }
+
     /** @copydoc EditorViewportRendererVulkan::CreateEmptyGraph */
     Result<void> EditorViewportRendererVulkan::CreateEmptyGraph() {
         using namespace Render;
@@ -145,21 +172,69 @@ namespace Horo::Editor {
             if (!mesh)
                 return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleMeshResource));
             const auto &draw = slots_[slot].draws[index];
-            if (const auto written = WriteForwardDraw(frame, draw, instance, pass.scene); written.HasError())
+            if (const auto written = WriteForwardDraw(frame, draw, instance, pass.scene, preparedShadow_); written.HasError())
                 return written;
             preparedDraws_[index] = {mesh->mesh, draw.material};
         }
         return Result<void>::Success();
     }
 
+    /** @copydoc EditorViewportRendererVulkan::PrepareCameraCrossFadeDraws */
+    Result<void> EditorViewportRendererVulkan::PrepareCameraCrossFadeDraws(Render::FrameToken frame, std::uint32_t slot,
+                                                                           const Render::RenderSceneView &scene,
+                                                                           const std::optional<Render::DirectionalShadowFrame> &shadow,
+                                                                           const float destinationWeight) {
+        const auto &draws = (*crossFadeSourceSlots_)[slot];
+        for (std::size_t index = 0; index < scene.instances.size(); ++index) {
+            const auto &instance = scene.instances[index];
+            if (const auto written = WriteForwardDraw(frame, draws.draws[index], instance, scene, shadow); written.HasError())
+                return written;
+            if (shadow)
+                for (std::uint32_t cascade = 0; cascade < shadow->cascadeCount; ++cascade)
+                    if (const auto written = WriteShadowDraw(frame, draws.shadows[cascade][index], instance, *shadow, cascade);
+                        written.HasError())
+                        return written;
+        }
+        const auto &program = crossFadeProgram_.shader;
+        std::array<std::byte, MaximumUniformBytes> storage{};
+        const auto bytes = std::span{storage}.first(program.uniformBytes);
+        const std::array parameters{destinationWeight, 0.0F, 0.0F, 0.0F};
+        if (const auto written = ProgramResources::WriteParameter(program.layout, bytes, {1}, parameters); written.HasError())
+            return written;
+        return bridge_.Port()->WriteFrameBuffer(frame, crossFadeProgram_.draws[slot].instance, bytes);
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::ExecuteCameraCrossFade */
+    Result<void> EditorViewportRendererVulkan::ExecuteCameraCrossFade(Render::RenderFrameScope &frame,
+                                                                      const Render::StaticMeshPassDescriptor &pass, std::uint32_t slot,
+                                                                      const bool hasOverlay, const EditorViewportCameraCrossFade &fade) {
+        auto source = pass.scene;
+        source.camera = fade.source;
+        const auto aspect = static_cast<float>(pass.extent.width) / pass.extent.height;
+        const auto shadow = Render::BuildDirectionalShadowFrame(source, aspect, Math::ClipDepthRange::ZeroToOne,
+                                                                resources_.ActiveDirectionalShadowProfile());
+        if (shadow.HasError())
+            return Result<void>::Failure(shadow.ErrorValue());
+        if ((shadow.Value() && shadow.Value()->cascadeCount > crossFadeShadowBudget_) || pass.clearColor.alpha != 1.0F ||
+            !crossFadeSourceSlots_ || source.instances.size() > crossFadeDrawCount_)
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportCrossFadeStale));
+        const auto written = PrepareCameraCrossFadeDraws(frame.Token(), slot, source, shadow.Value(), fade.destinationWeight);
+        if (written.HasError())
+            return written;
+        return ExecuteViewportRasterGraph(frame, pass, slot, hasOverlay, preparedShadow_ ? &*preparedShadow_ : nullptr, &shadow.Value());
+    }
+
     /** @copydoc EditorViewportRendererVulkan::ExecuteViewport */
     Result<void> EditorViewportRendererVulkan::ExecuteViewport(Render::RenderFrameScope &frame,
                                                                const Render::StaticMeshPassDescriptor &pass) {
+        const auto fade = std::exchange(preparedCrossFade_, std::nullopt);
         const auto slot = PrepareViewportSlot(frame.Token(), pass);
         if (slot.HasError())
             return Result<void>::Failure(slot.ErrorValue());
         if (auto ready = ValidateEditorViewportMeshReadiness(resources_, pass.scene.instances); ready.HasError())
             return ready;
+        if (fade && fade->target != pass.target)
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportCrossFadeStale));
         if (auto lighting = forwardLighting_.Prepare(pass.scene); lighting.HasError())
             return lighting;
         if (auto shadows = PrepareShadowFrame(frame.Token(), slot.Value(), pass); shadows.HasError())
@@ -167,10 +242,12 @@ namespace Horo::Editor {
         const auto count = PrepareViewportOverlay(frame.Token(), slot.Value(), pass);
         if (count.HasError())
             return Result<void>::Failure(count.ErrorValue());
-        if (count.Value() == 0 && !color_)
+        if (count.Value() == 0 && !color_ && !fade)
             return ExecuteEmptyViewport(frame, pass.clearColor);
         if (auto draws = PrepareViewportDraws(frame.Token(), slot.Value(), pass); draws.HasError())
             return draws;
+        if (fade)
+            return ExecuteCameraCrossFade(frame, pass, slot.Value(), count.Value() > pass.scene.instances.size(), fade->fade);
         const auto *shadow = preparedShadow_ ? &*preparedShadow_ : nullptr;
         if (frontend_.Capabilities().supportsMaterialRasterGraph)
             return ExecuteViewportRasterGraph(frame, pass, slot.Value(), count.Value() > pass.scene.instances.size(), shadow);

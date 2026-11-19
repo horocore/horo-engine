@@ -7,8 +7,8 @@ inputs:
   asset-root:
     description: Absolute destination for the data-only bundle
     required: true
-  coverage-root:
-    description: Optional absolute destination for private native stereo coverage fixtures
+  qualification-root:
+    description: Optional absolute destination for private Vulkan qualification shader fixtures
     default: ''
 runs:
   using: composite
@@ -18,7 +18,7 @@ runs:
       env:
         COOK_BUILD_DIR: ${{ inputs.build-directory }}
         COOK_ASSET_ROOT: ${{ inputs.asset-root }}
-        COOK_COVERAGE_ROOT: ${{ inputs.coverage-root }}
+        COOK_QUALIFICATION_ROOT: ${{ inputs.qualification-root }}
       run: |
         set -euo pipefail
         tool_root="$RUNNER_TEMP/viewport-cook-tools"
@@ -53,14 +53,17 @@ runs:
         "$COOK_BUILD_DIR/apps/HoroEditorVulkanShaderCook" assets/shaders/editor/viewport_shadow.hlsl \
           "$asset_root/shaders/editor/viewport-shadow-vulkan" "$RUNNER_TEMP/viewport-shadow-cook-scratch" \
           "${executables[0]}" "${executables[1]}" "${executables[2]}" --shadow
-        if [[ -n "$COOK_COVERAGE_ROOT" ]]; then
-          mkdir -p "$COOK_COVERAGE_ROOT"
+        if [[ -n "$COOK_QUALIFICATION_ROOT" ]]; then
+          mkdir -p "$COOK_QUALIFICATION_ROOT"
           "$COOK_BUILD_DIR/apps/HoroEditorVulkanShaderCook" assets/shaders/runtime/multiview_mesh.hlsl \
-            "$COOK_COVERAGE_ROOT/multiview" "$RUNNER_TEMP/multiview-cook-scratch" \
+            "$COOK_QUALIFICATION_ROOT/multiview" "$RUNNER_TEMP/multiview-cook-scratch" \
             "${executables[0]}" "${executables[1]}" "${executables[2]}" --multiview
           "$COOK_BUILD_DIR/apps/HoroEditorVulkanShaderCook" assets/shaders/runtime/multiview_motion.hlsl \
-            "$COOK_COVERAGE_ROOT/coverage" "$RUNNER_TEMP/multiview-coverage-cook-scratch" \
+            "$COOK_QUALIFICATION_ROOT/coverage" "$RUNNER_TEMP/multiview-coverage-cook-scratch" \
             "${executables[0]}" "${executables[1]}" "${executables[2]}" --multiview-coverage
+          "$COOK_BUILD_DIR/apps/HoroEditorVulkanShaderCook" assets/shaders/editor/viewport_cross_fade.hlsl \
+            "$COOK_QUALIFICATION_ROOT/viewport-cross-fade-vulkan" "$RUNNER_TEMP/viewport-cross-fade-cook-scratch" \
+            "${executables[0]}" "${executables[1]}" "${executables[2]}" --camera-cross-fade
         fi
         cp "$tool_root/catalog.tsv" "$asset_root/catalog.tsv"
         [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]

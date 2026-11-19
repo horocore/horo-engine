@@ -208,7 +208,7 @@ jobs:
         uses: ./.github/actions/cook-vulkan-viewport
         with:
           asset-root: ${{ github.workspace }}/build/ci/native-editor-assets
-          coverage-root: ${{ runner.temp }}/viewport-coverage
+          qualification-root: ${{ runner.temp }}/viewport-qualification
       - name: Produce private canonical UI Metal qualification handoff
         if: runner.os == 'Linux'
         run: >-
@@ -229,6 +229,8 @@ jobs:
           asset_root="$GITHUB_WORKSPACE/build/ci/native-editor-assets"
           editor_asset_root="$(cat build/ci/apps/HoroEditorAssetRoot-Debug.txt)"
           cmake -E copy_directory "$asset_root" "$editor_asset_root"
+          cp "$RUNNER_TEMP/viewport-qualification"/viewport-cross-fade-vulkan.{horoshdr,reflection.json} \
+            "$editor_asset_root/shaders/editor/"
           printf 'HORO_EDITOR_VULKAN_ASSET_ROOT=%s\n' "$editor_asset_root" >> "$GITHUB_ENV"
       - name: Build Vulkan command smoke
         run: cmake --build build/ci --target HoroVulkanCommandExecutionSmoke --parallel 2
@@ -275,7 +277,7 @@ jobs:
       - name: Qualify stereo coverage pixels on lavapipe
         if: runner.os == 'Linux'
         run: |
-          coverage_root="$RUNNER_TEMP/viewport-coverage"
+          coverage_root="$RUNNER_TEMP/viewport-qualification"
           HORO_NATIVE_MULTIVIEW_PAYLOAD="$coverage_root/multiview.horoshdr" \
           HORO_NATIVE_MULTIVIEW_REFLECTION="$coverage_root/multiview.reflection.json" \
           HORO_NATIVE_COVERAGE_PAYLOAD="$coverage_root/coverage.horoshdr" \
