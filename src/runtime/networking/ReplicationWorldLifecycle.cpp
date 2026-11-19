@@ -4,6 +4,7 @@
 #include "Horo/Network/NetworkMetrics.h"
 
 #include <algorithm>
+#include <exception>
 #include <limits>
 #include <new>
 #include <thread>
@@ -27,12 +28,88 @@ namespace Horo::Network {
             std::atomic<bool> revoked{false};
             std::atomic<std::uint64_t> mappingRevision{1};
             std::thread::id owner{std::this_thread::get_id()};
+            bool paused{}; /**< Owner-lane structural admission. Worker capture pins never access this field. */
         };
     }  // namespace Detail
 
     namespace {
         template <typename T> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor) {
             return Result<T>::Failure(MakeError(descriptor));
+        }
+
+        /** @brief Keeps an unpublished mapping candidate bound to one exact active world revision. */
+        class ObjectBatchCandidate final : public Runtime::SceneStructuralCandidate {
+        public:
+            ObjectBatchCandidate(const std::shared_ptr<Detail::ReplicationWorldRecord> &world, NetworkObjectMapping mapping,
+                                 const CancellationToken &cancellation, std::size_t added, std::size_t retired, NetworkMetrics *metrics)
+                : world_(world), replacement_(std::move(mapping)), cancellation_(cancellation), revision_(world->mappingRevision.load()),
+                  added_(added), retired_(retired), metrics_(metrics) {}
+
+            /** @brief Checks identity, owner lane, and revocation before any participant publishes. */
+            Result<void> ValidatePublication() const override {
+                const auto world = ActiveWorld();
+                if (!world || !replacement_ || world->mappingRevision.load() != revision_)
+                    return Failure<void>(NetworkErrors::ReplicationWorldStale);
+                if (world->paused)
+                    return Failure<void>(NetworkErrors::ReplicationWorldUnavailable);
+                if (cancellation_.IsCancellationRequested())
+                    return Failure<void>(NetworkErrors::ReplicationWorldCancelled);
+                return Result<void>::Success();
+            }
+
+            /** @brief Swaps both mapping indexes without callbacks while Scene publishes its owner aggregate. */
+            void Publish() noexcept override {
+                const auto world = ActiveWorld();
+                if (!world || !replacement_ || world->paused || world->mappingRevision.load() != revision_)
+                    std::terminate();
+                world->mapping = std::move(*replacement_);
+                world->mappingRevision.store(revision_ + 1);
+                replacement_.reset();
+                published_ = true;
+            }
+
+            /** @brief Reports the committed batch only after all Scene entities and owners are visible. */
+            Result<void> AfterPublication() override {
+                if (!std::exchange(published_, false))
+                    return Failure<void>(NetworkErrors::ReplicationWorldStale);
+                if (metrics_ && ActiveWorld()) {
+                    if (added_ != 0)
+                        (void)metrics_->RecordReplication(NetworkMetricReplication::ObjectRegistered, added_);
+                    if (retired_ != 0)
+                        (void)metrics_->RecordReplication(NetworkMetricReplication::ObjectRetired, retired_);
+                }
+                return Result<void>::Success();
+            }
+
+        private:
+            /** @brief Borrows the live epoch only on its owner lane. */
+            std::shared_ptr<Detail::ReplicationWorldRecord> ActiveWorld() const noexcept {
+                auto world = world_.lock();
+                if (!world || world->owner != std::this_thread::get_id() || world->revoked.load())
+                    return {};
+                return world;
+            }
+
+            std::weak_ptr<Detail::ReplicationWorldRecord> world_;
+            std::optional<NetworkObjectMapping> replacement_;
+            CancellationToken cancellation_;
+            std::uint64_t revision_;
+            std::size_t added_;
+            std::size_t retired_;
+            NetworkMetrics *metrics_;
+            bool published_{};
+        };
+
+        /** @brief Performs fallible delta work exclusively on private mapping storage. */
+        Result<void> ApplyObjectDelta(NetworkObjectMapping &mapping, std::span<const NetworkObjectMappingEntry> added,
+                                      std::span<const NetworkObjectId> retired) {
+            for (const auto object : retired)
+                if (auto removed = mapping.Retire(object); removed.HasError())
+                    return removed;
+            for (const auto &entry : added)
+                if (auto inserted = mapping.Register(entry); inserted.HasError())
+                    return inserted;
+            return Result<void>::Success();
         }
 
         [[nodiscard]] Result<ReplicationWorldCapabilities> CapabilitiesForRole(const ReplicationExecutionRole role) {
@@ -282,6 +359,7 @@ namespace Horo::Network {
         if (state_ != Active && state_ != Paused)
             return Failure<void>(NetworkErrors::ReplicationWorldUnavailable);
         state_ = Paused;
+        active_->paused = true;
         return Result<void>::Success();
     }
 
@@ -293,6 +371,7 @@ namespace Horo::Network {
         if (state_ != Paused)
             return Failure<void>(NetworkErrors::ReplicationWorldUnavailable);
         state_ = Active;
+        active_->paused = false;
         return Result<void>::Success();
     }
 
@@ -347,6 +426,47 @@ namespace Horo::Network {
         if (result.HasValue() && metrics_)
             (void)metrics_->RecordReplication(NetworkMetricReplication::ObjectRetired);
         return result;
+    }
+
+    /** @copydoc ReplicationWorldLifecycle::ValidateObjectBatch */
+    Result<void> ReplicationWorldLifecycle::ValidateObjectBatch(const ReplicationWorldWorkRequest &request) const {
+        if (auto active = RequireActive(request.scene, request.session); active.HasError())
+            return active;
+        if (active_->owner != std::this_thread::get_id() || active_->paused)
+            return Failure<void>(NetworkErrors::ReplicationWorldUnavailable);
+        if (request.phase != Runtime::RuntimePhase::CommitDeferredLifecycleChanges || !active_->descriptor.phases.Contains(request.phase))
+            return Failure<void>(NetworkErrors::ReplicationWorldPhaseInvalid);
+        if (!active_->capabilities.publishAuthority)
+            return Failure<void>(NetworkErrors::ReplicationAuthorityDenied);
+        if (request.cancellation.IsCancellationRequested())
+            return Failure<void>(NetworkErrors::ReplicationWorldCancelled);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ReplicationWorldLifecycle::PrepareObjectBatch */
+    Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> ReplicationWorldLifecycle::PrepareObjectBatch(
+        const ReplicationWorldWorkRequest &request, const std::span<const NetworkObjectMappingEntry> added,
+        const std::span<const NetworkObjectId> retired) const {
+        using Prepared = Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>;
+        if (auto valid = ValidateObjectBatch(request); valid.HasError())
+            return Prepared::Failure(valid.ErrorValue());
+        if (added.empty() && retired.empty())
+            return Failure<std::unique_ptr<Runtime::SceneStructuralCandidate>>(NetworkErrors::ReplicationWorldInvalid);
+        if (std::max(added.size(), retired.size()) > limits_.maximumObjects ||
+            active_->mappingRevision.load() == std::numeric_limits<std::uint64_t>::max())
+            return Failure<std::unique_ptr<Runtime::SceneStructuralCandidate>>(NetworkErrors::ReplicationWorldCapacityExceeded);
+        try {
+            auto copied = active_->mapping.CloneForPublication();
+            if (copied.HasError())
+                return Prepared::Failure(copied.ErrorValue());
+            auto replacement = std::move(copied).Value();
+            if (auto applied = ApplyObjectDelta(replacement, added, retired); applied.HasError())
+                return Prepared::Failure(applied.ErrorValue());
+            return Prepared::Success(std::make_unique<ObjectBatchCandidate>(active_, std::move(replacement), request.cancellation,
+                                                                            added.size(), retired.size(), metrics_));
+        } catch (const std::bad_alloc &) {
+            return Failure<std::unique_ptr<Runtime::SceneStructuralCandidate>>(NetworkErrors::ReplicationWorldCapacityExceeded);
+        }
     }
 
     /** @copydoc ReplicationWorldLifecycle::Acquire */

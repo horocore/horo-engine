@@ -263,6 +263,20 @@ namespace Horo::Network {
         /** @brief Retires one exact object occurrence without affecting a newer generation. */
         [[nodiscard]] Result<void> RetireObject(Runtime::SceneRuntimeId scene, NetworkSessionGeneration session, NetworkObjectId object);
 
+        /**
+         * @brief Reserves a complete authority mapping change for the same structural transaction as its Scene entities.
+         * @param request Exact active Scene and session, lifecycle safe point, and operation cancellation.
+         * @param added Exact object-to-entity associations for the detached Scene candidate.
+         * @param retired Exact live object generations retired by that candidate.
+         * @return Detached Scene participant result, or a typed failure preserving all live mappings.
+         * @details Retirements occur before additions in the detached copy. Dropping the candidate
+         * leaves live mappings, slot tombstones, capture revisions, and metrics untouched.
+         * @pre The owner submits at most one mapping candidate for an aggregate Scene publication.
+         */
+        [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareObjectBatch(
+            const ReplicationWorldWorkRequest &request, std::span<const NetworkObjectMappingEntry> added,
+            std::span<const NetworkObjectId> retired) const;
+
         /** @brief Acquires an immutable capability only for an active matching world and declared phase. */
         [[nodiscard]] Result<ReplicationWorldReadLease> Acquire(const ReplicationWorldWorkRequest &request) const;
         /** @brief Acquires an immutable capability and checks one role-derived permission. */
@@ -302,6 +316,8 @@ namespace Horo::Network {
                                                                         const ReplicationWorldCapability *capability) const;
         [[nodiscard]] Result<void> RequireWorldIdentity(Runtime::SceneRuntimeId scene, NetworkSessionGeneration session) const;
         [[nodiscard]] Result<void> RequireActive(Runtime::SceneRuntimeId scene, NetworkSessionGeneration session) const;
+        /** @brief Validates structural mapping admission before allocating a detached copy. */
+        [[nodiscard]] Result<void> ValidateObjectBatch(const ReplicationWorldWorkRequest &request) const;
         static void RevokeRecord(const std::shared_ptr<Detail::ReplicationWorldRecord> &record) noexcept;
         void RetireActive() noexcept;
 

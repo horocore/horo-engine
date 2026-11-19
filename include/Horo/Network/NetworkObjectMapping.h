@@ -168,6 +168,11 @@ namespace Horo::Network {
         NetworkObjectMapping &operator=(const NetworkObjectMapping &) = delete;
 
     private:
+        friend class ReplicationWorldLifecycle;
+
+        /** @brief Clones live indexes and tombstones into detached capacity for an owner transaction. */
+        [[nodiscard]] Result<NetworkObjectMapping> CloneForPublication() const;
+
         struct SlotRecord final {
             std::uint64_t slot{};
             std::uint32_t generation{};

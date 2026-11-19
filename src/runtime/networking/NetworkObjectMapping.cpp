@@ -40,6 +40,18 @@ namespace Horo::Network {
         }
     }
 
+    /** @copydoc NetworkObjectMapping::CloneForPublication */
+    Result<NetworkObjectMapping> NetworkObjectMapping::CloneForPublication() const {
+        auto allocated = Create(epoch_, scene_, maximumSlots_);
+        if (allocated.HasError())
+            return allocated;
+        auto candidate = std::move(allocated).Value();
+        candidate.slots_.assign(slots_.begin(), slots_.end());
+        candidate.entityIndex_.assign(entityIndex_.begin(), entityIndex_.end());
+        candidate.liveCount_ = liveCount_;
+        return Result<NetworkObjectMapping>::Success(std::move(candidate));
+    }
+
     std::vector<NetworkObjectMapping::SlotRecord>::iterator NetworkObjectMapping::LowerBound(const std::uint64_t slot) noexcept {
         return std::ranges::lower_bound(slots_, slot, {}, &SlotRecord::slot);
     }

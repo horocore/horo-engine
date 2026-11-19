@@ -1,3 +1,5 @@
+#include "Horo/Assets/AssetProvider.h"
+#include "Horo/Foundation/JobSystem.h"
 #include "Horo/Network/NetworkErrors.h"
 #include "Horo/Network/NetworkMetrics.h"
 #include "Horo/Network/ReplicationWorldLifecycle.h"
@@ -40,6 +42,60 @@ namespace Horo::Network {
         ReplicationWorldWorkRequest FixedWork(const ReplicationWorldActivationDescriptor &world, const std::uint64_t tick = 1) {
             return {world.scene, world.session, Runtime::RuntimePhase::FixedUpdate, tick, {}};
         }
+
+        ReplicationWorldWorkRequest StructuralWork(const ReplicationWorldActivationDescriptor &world, CancellationToken token = {}) {
+            return {world.scene, world.session, Runtime::RuntimePhase::CommitDeferredLifecycleChanges, 1, std::move(token)};
+        }
+
+        /** @brief Supplies two object identities to the real Scene group transaction from its detached member handles. */
+        class GroupMappingParticipant final : public Runtime::SceneStructuralParticipant {
+        public:
+            GroupMappingParticipant(ReplicationWorldLifecycle &world, ReplicationWorldActivationDescriptor descriptor)
+                : world_(world), descriptor_(descriptor) {}
+
+            Runtime::SceneStructuralOwner Owner() const noexcept override {
+                return Runtime::SceneStructuralOwner::Gameplay;
+            }
+
+            Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(const Runtime::RuntimeSceneView &active,
+                                                                               std::span<const Runtime::RuntimeEntityView> created,
+                                                                               std::span<const Runtime::EntityRef> destroyed) override {
+                REQUIRE(active.RuntimeId() == descriptor_.scene);
+                if (created.empty()) {
+                    REQUIRE(destroyed.size() == 2);
+                    const std::array retired{Object(1, 1).object, Object(1, 2).object};
+                    return world_.PrepareObjectBatch(StructuralWork(descriptor_), {}, retired);
+                }
+                REQUIRE(created.size() == 2);
+                REQUIRE(destroyed.empty());
+                auto root = Object(1, 1);
+                auto child = Object(1, 2);
+                root.entity = created[0].entity;
+                child.entity = created[1].entity;
+                REQUIRE(created[1].parent == root.entity);
+                const std::array added{root, child};
+                return world_.PrepareObjectBatch(StructuralWork(descriptor_), added, {});
+            }
+
+        private:
+            ReplicationWorldLifecycle &world_;
+            ReplicationWorldActivationDescriptor descriptor_;
+        };
+
+        /** @brief Rejects a later owner after mapping preparation, so the Scene drops both candidates. */
+        class RejectGroupParticipant final : public Runtime::SceneStructuralParticipant {
+        public:
+            Runtime::SceneStructuralOwner Owner() const noexcept override {
+                return Runtime::SceneStructuralOwner::Physics;
+            }
+
+            Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(const Runtime::RuntimeSceneView &,
+                                                                               std::span<const Runtime::RuntimeEntityView>,
+                                                                               std::span<const Runtime::EntityRef>) override {
+                return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
+                    MakeError(NetworkErrors::ReplicationWorldInvalid));
+            }
+        };
     }  // namespace
 
     TEST_CASE("Replication world publication is transactional and generation exact", "[unit][network][replication][lifecycle]") {
@@ -142,6 +198,110 @@ namespace Horo::Network {
         CHECK(lease.IsRevoked());
         const auto current = lifecycle.Acquire(FixedWork(replacement)).Value();
         CHECK(current.Mapping().Entries().front().object.Epoch() == replacement.authority);
+    }
+
+    TEST_CASE("Network mappings and Scene parent-child groups publish and retire together", "[unit][network][replication][scene]") {
+        using namespace Runtime;
+        const auto world = World();
+        auto lifecycle = ReplicationWorldLifecycle::Create({.maximumObjects = 2}).Value();
+        REQUIRE(lifecycle.Stage(world).HasValue());
+        REQUIRE(lifecycle.CommitAtSafePoint(world.scene, world.session).HasValue());
+        const ReplicationWorldWorkRequest captureWork{world.scene, world.session, RuntimePhase::NetworkFlush, 1};
+        const auto initial = lifecycle.AcquireCaptureRead(captureWork).Value();
+
+        Assets::AssetRegistry registry;
+        Assets::MemoryAssetProvider bytes;
+        JobSystem jobs{{1, 4}};
+        Assets::AssetLoadService loads{jobs, bytes};
+        RuntimeSceneService scenes{registry, loads, {}, world.scene};
+        REQUIRE(registry.Publish(std::vector<Assets::AssetRecord>{}).status == Assets::AssetRegistryBuildStatus::Complete);
+        REQUIRE(scenes.AddStructuralParticipant(std::make_unique<GroupMappingParticipant>(lifecycle, world)).HasValue());
+        bool reject{};
+        SECTION("successful spawn and despawn share the same structural safe point") {}
+        SECTION("failure of a later owner drops staged mappings and entities") {
+            REQUIRE(scenes.AddStructuralParticipant(std::make_unique<RejectGroupParticipant>()).HasValue());
+            reject = true;
+        }
+        const CancellationToken cancellation;
+        REQUIRE(scenes.Startup(cancellation).HasValue());
+        std::uint64_t frame{};
+        const auto commit = [&] {
+            REQUIRE(scenes.OnPhase(RuntimePhase::CommitDeferredLifecycleChanges, {.frameNumber = ++frame, .cancellation = cancellation})
+                        .HasValue());
+        };
+        SceneDefinitionBuilder builder{{91}, {1}};
+        REQUIRE(scenes.QueuePreparation(std::move(builder).Build().Value()).HasValue());
+        commit();
+
+        SceneCommandBuffer commands;
+        const SceneStructuralAdmission admission{world.scene, registry.Snapshot().Revision(), {}};
+        REQUIRE(commands.CreateGroup({{}, {.parentInGroup = 0}}, {}, admission).HasValue());
+        const auto receipt = scenes.QueueTrackedStructuralCommands(std::move(commands)).Value();
+        REQUIRE(initial.IsCurrent());
+        REQUIRE(lifecycle.Acquire(FixedWork(world)).Value().Mapping().Entries().empty());
+        commit();
+        if (reject) {
+            REQUIRE(receipt->Failure());
+            CHECK_FALSE(receipt->ResultValue());
+            CHECK(scenes.ActiveScene()->SlotCount() == 0);
+            CHECK(initial.IsCurrent());
+            CHECK(lifecycle.Acquire(FixedWork(world)).Value().Mapping().Entries().empty());
+            return;
+        }
+
+        REQUIRE(receipt->ResultValue());
+        const auto committed = lifecycle.Acquire(FixedWork(world)).Value();
+        const auto rows = committed.Mapping().Entries();
+        REQUIRE(rows.size() == 2);
+        CHECK_FALSE(initial.IsCurrent());
+        CHECK(scenes.ActiveScene()->Get(rows[1].entity).Value().parent == rows[0].entity);
+        SceneCommandBuffer despawn;
+        REQUIRE(despawn.DestroyGroup({rows[0].entity, rows[1].entity}, admission).HasValue());
+        const auto removal = scenes.QueueTrackedStructuralCommands(std::move(despawn)).Value();
+        commit();
+        REQUIRE(removal->ResultValue());
+        CHECK(scenes.ActiveScene()->Get(rows[0].entity).HasError());
+        CHECK(scenes.ActiveScene()->Get(rows[1].entity).HasError());
+        CHECK(lifecycle.Acquire(FixedWork(world)).Value().Mapping().Entries().empty());
+    }
+
+    TEST_CASE("A rejected object batch preserves the old mapping and capture revision", "[unit][network][replication][lifecycle]") {
+        const auto world = World();
+        auto lifecycle = ReplicationWorldLifecycle::Create({.maximumObjects = 2}).Value();
+        REQUIRE(lifecycle.Stage(world).HasValue());
+        REQUIRE(lifecycle.CommitAtSafePoint(world.scene, world.session).HasValue());
+        const auto old = Object();
+        REQUIRE(lifecycle.RegisterObject(world.scene, world.session, old).HasValue());
+        const auto pin = lifecycle.AcquireCaptureRead({world.scene, world.session, Runtime::RuntimePhase::NetworkFlush, 1}).Value();
+        const std::array retired{old.object};
+        const std::array replacement{Object(1, 1, 2, 10, 2)};
+        SECTION("a late duplicate rolls back earlier changes in the same batch") {
+            const std::array duplicate{replacement.front(), replacement.front()};
+            RequireError(lifecycle.PrepareObjectBatch(StructuralWork(world), duplicate, retired),
+                         NetworkErrors::NetworkObjectMappingConflict);
+        }
+        SECTION("cancellation after preparation rejects the pending transaction") {
+            CancellationSource cancel;
+            auto prepared = lifecycle.PrepareObjectBatch(StructuralWork(world, cancel.Token()), replacement, retired).Value();
+            cancel.RequestCancellation();
+            RequireError(prepared->ValidatePublication(), NetworkErrors::ReplicationWorldCancelled);
+        }
+        SECTION("paused worlds reject pending mapping publication") {
+            auto prepared = lifecycle.PrepareObjectBatch(StructuralWork(world), replacement, retired).Value();
+            REQUIRE(lifecycle.Pause(world.scene, world.session).HasValue());
+            RequireError(prepared->ValidatePublication(), NetworkErrors::ReplicationWorldUnavailable);
+            REQUIRE(lifecycle.Resume(world.scene, world.session).HasValue());
+        }
+        REQUIRE(pin.IsCurrent());
+        CHECK(pin.Resolve(old.object).Value() == old);
+        CHECK(pin.Resolve(replacement.front().object).HasError());
+        auto prepared = lifecycle.PrepareObjectBatch(StructuralWork(world), replacement, retired).Value();
+        const auto unrelated = Object(1, 2);
+        REQUIRE(lifecycle.RegisterObject(world.scene, world.session, unrelated).HasValue());
+        RequireError(prepared->ValidatePublication(), NetworkErrors::ReplicationWorldStale);
+        auto pending = lifecycle.PrepareObjectBatch(StructuralWork(world), replacement, retired).Value();
+        lifecycle.BeginShutdown();
+        RequireError(pending->ValidatePublication(), NetworkErrors::ReplicationWorldStale);
     }
 
     TEST_CASE("Replication world pause, cancellation, loss, duplication, and stale object identity are bounded",

@@ -78,6 +78,18 @@ wrapper around an opted-in authority Scene forwards the projection method to
 retain the same declarations. Existing world staging without authored objects
 continues through `Stage`.
 
+NetworkRuntime can prepare an authority-only mapping batch through
+`ReplicationWorldLifecycle::PrepareObjectBatch`. A Scene structural
+participant supplies the exact new and retired entity associations while
+their group is still private. The batch retains tombstones and validates all
+retirements before additions, including legal reuse of a slot by its next
+generation. It revokes the previous capture revision in one swap at the
+structural safe point. Cancellation, another mapping publication, pause,
+world replacement, or a rejected Scene participant prevents the detached
+batch from becoming visible. Metrics run after the Scene and its owners
+publish. Existing single-object entry points retain their bounded,
+allocation-free update path.
+
 ```cpp
 enum class ReplicationExecutionRole : std::uint8_t {
     Standalone,
