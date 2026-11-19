@@ -72,8 +72,8 @@ namespace Horo::Render {
         friend class UiPaintProgram;
         /** @brief Reserves the same exact buffers for an already admitted scene kernel or canonical primary paint capability. */
         [[nodiscard]] static Result<std::unique_ptr<UiPaintFrameBufferPool>> CreateInternal(RenderFrontend &frontend,
-                                                                                           UiPaintFrameBudget budget,
-                                                                                           std::uint32_t slots, bool exactSceneKernel);
+                                                                                            UiPaintFrameBudget budget, std::uint32_t slots,
+                                                                                            bool exactSceneKernel);
         std::weak_ptr<Detail::UiPaintFrontendState> frontendState_;
         std::shared_ptr<Detail::UiPaintOwnerRetirement> retirement_;
         UiPaintFrameBudget budget_;
