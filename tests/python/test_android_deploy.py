@@ -26,6 +26,23 @@ LIFECYCLE = ("host-state lifecycleRevision=3 activity=1 state=2 process=1 window
              "attempts=2 presentAccepted=1")
 FRAME = ("host-frame stage=present outcome=accepted attempts=2 presentAccepted=1 beginPending=0 "
          "executePending=0 presentPending=0 completion=unobserved")
+DEVICE_CLOCK = ("shell", "toybox", "date", "+%s.%N")
+UID_QUERY = ("shell", "toybox", "ps", "-p", "123", "-o", "UID")
+STAT_QUERY = ("shell", "toybox", "cat", "/proc/123/stat")
+LOGCAT = ("logcat", "--pid=123", "-v", "time,epoch,nsec,uid", "-t", "200", "-s",
+          "HoroPackageQualification:I", "AndroidRuntime:E")
+START = "1795000000.100000000"
+LOG_TIME = "1795000000.105000000"
+END = "1795000000.110000000"
+
+
+def log_line(message, stamp=LOG_TIME, uid="1010200", pid=123, tag="I/HoroPackageQualification"):
+    return f" {stamp} {tag}({uid}: {pid}): {message}\n"
+
+
+def proc_stat(start_ticks=123456):
+    # The kernel allows whitespace and ')' in comm, so the numeric fields begin after the closing delimiter.
+    return f"123 (probe ) main) S {'0 ' * 18}{start_ticks} 0"
 
 
 class AndroidDeployTests(unittest.TestCase):
@@ -38,6 +55,7 @@ class AndroidDeployTests(unittest.TestCase):
             ("devices", "-l"): f"List of devices attached\n{SERIAL} device product:probe transport_id:{TRANSPORT}",
             ("get-serialno",): SERIAL,
             ("get-state",): "device",
+            DEVICE_CLOCK: [START, END],
             ("shell", "am", "get-current-user"): "10",
             ("shell", "getprop", "ro.build.version.sdk"): "36",
             ("shell", "getprop", "ro.product.cpu.abi"): "arm64-v8a",
@@ -48,11 +66,10 @@ class AndroidDeployTests(unittest.TestCase):
             ("shell", "cmd", "package", "list", "packages", "--user", "10", "-U", APPLICATION):
                 f"package:{APPLICATION} uid:1010200",
             ("shell", "pidof", APPLICATION): "123",
-            ("shell", "toybox", "ps", "-p", "123", "-o", "UID,STIME:19"): "UID STIME\n1010200 2026-11-18 10:30:01",
-            ("logcat", "--pid=123", "-v", "brief", "-t", "200", "-s", "HoroPackageQualification:I", "AndroidRuntime:E"):
-                f"I/HoroPackageQualification( 123): {LIFECYCLE}\nI/HoroPackageQualification( 123): {FRAME}\n"
-                "I/HoroPackageQualification( 123): ignored secret=/sdcard/personal\n"
-                "E/AndroidRuntime( 999): FATAL EXCEPTION: unrelated-thread\n",
+            UID_QUERY: "UID\n1010200",
+            STAT_QUERY: proc_stat(),
+            LOGCAT: (log_line(LIFECYCLE) + log_line(FRAME) + log_line("ignored secret=/sdcard/personal")
+                     + log_line("FATAL EXCEPTION: unrelated-thread", pid=999, tag="E/AndroidRuntime")),
         }
         replies.update(override or {})
         commands = []
@@ -86,7 +103,9 @@ class AndroidDeployTests(unittest.TestCase):
         stdout = io.StringIO()
         with patch.object(project, "deploy_artifact",
                           return_value=(Path("a package ü.apk"), profile, DIGEST, {"arm64-v8a"})), \
-                patch.object(project, "deploy_process", side_effect=run), contextlib.redirect_stdout(stdout):
+                patch.object(project, "deploy_process", side_effect=run), \
+                patch.object(project.time, "monotonic_ns", side_effect=[100_000_000, 101_000_000, 109_000_000, 111_000_000]), \
+                contextlib.redirect_stdout(stdout):
             status = project.main(["android-deploy", "--artifact", ".", "--profile", PROFILE, "--sdk", ".",
                                    "--device", SERIAL, "--timeout", "30"])
         return status, json.loads(stdout.getvalue()), commands
@@ -102,7 +121,7 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertFalse(report["observed"]["crashObserved"])
         self.assertLess(next(i for i, cmd in enumerate(commands) if "sha256sum" in cmd),
                         next(i for i, cmd in enumerate(commands) if "start" in cmd))
-        for denied in (SERIAL, PACKAGE, "personal", "unrelated-thread", "1010200"):
+        for denied in (SERIAL, PACKAGE, "personal", "unrelated-thread", "1010200", START, LOG_TIME, END):
             self.assertNotIn(denied, json.dumps(report))
 
     def test_rejects_stale_installation_before_launch(self):
@@ -130,23 +149,21 @@ class AndroidDeployTests(unittest.TestCase):
                 self.assertEqual(commands, [("devices", "-l"), ("get-serialno",), ("get-state",)])
 
     def test_refuses_another_users_process_before_logcat(self):
-        status, report, commands = self.execute({("shell", "toybox", "ps", "-p", "123", "-o", "UID,STIME:19"): "UID STIME\n10200 2026-11-18 10:30:01"})
+        status, report, commands = self.execute({UID_QUERY: "UID\n10200"})
         self.assertEqual((status, report["error"]), (1, "application_process_identity_mismatch"))
         self.assertFalse(any(cmd[0] == "logcat" for cmd in commands))
 
     def test_crash_survives_partial_capture_without_raw_details(self):
-        command = ("logcat", "--pid=123", "-v", "brief", "-t", "200", "-s", "HoroPackageQualification:I", "AndroidRuntime:E")
-        status, report, _ = self.execute({command: "E/AndroidRuntime( 123): FATAL EXCEPTION: personal-thread-name"})
+        status, report, _ = self.execute({LOGCAT: log_line("FATAL EXCEPTION: personal-thread-name", tag="E/AndroidRuntime")})
         self.assertEqual((status, report["status"], report["error"]), (1, "partial", "application_crashed"))
         self.assertTrue(report["observed"]["crashObserved"])
         self.assertNotIn("personal-thread-name", json.dumps(report))
 
     def test_failed_capture_retires_only_the_attributed_launch(self):
-        command = ("logcat", "--pid=123", "-v", "brief", "-t", "200", "-s", "HoroPackageQualification:I", "AndroidRuntime:E")
-        for failure, error in (("I/HoroPackageQualification( 123): ignored room=data", "application_evidence_unavailable"),
+        for failure, error in ((log_line("ignored room=data"), "application_evidence_unavailable"),
                                (project.AndroidDeployError("deadline_exceeded"), "deadline_exceeded")):
             with self.subTest(error=error):
-                status, report, commands = self.execute({command: failure})
+                status, report, commands = self.execute({LOGCAT: failure})
                 self.assertEqual((status, report["error"], report["cleanup"]), (1, error, {"status": "stopped"}))
                 self.assertIn(("shell", "am", "force-stop", "--user", "10", APPLICATION), commands)
                 self.assertNotIn("room=data", json.dumps(report))
@@ -158,26 +175,60 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertFalse(any("install" in cmd or "start" in cmd or "force-stop" in cmd for cmd in commands))
 
     def test_replaced_process_is_never_stopped(self):
-        query = ("shell", "toybox", "ps", "-p", "123", "-o", "UID,STIME:19")
-        status, report, commands = self.execute({query: [
-            "UID STIME\n1010200 2026-11-18 10:30:01",
-            "UID STIME\n1010200 2026-11-18 10:30:02",
-            "UID STIME\n1010200 2026-11-18 10:30:02",
-        ]})
+        status, report, commands = self.execute({STAT_QUERY: [proc_stat()] * 2 + [proc_stat(123457)] * 4})
         self.assertEqual((status, report["error"]), (1, "application_process_changed"))
         self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": "application_process_changed"})
         self.assertFalse(any("force-stop" in cmd for cmd in commands))
 
     def test_disconnected_transport_never_reselects_target(self):
-        command = ("logcat", "--pid=123", "-v", "brief", "-t", "200", "-s", "HoroPackageQualification:I", "AndroidRuntime:E")
         status, report, commands = self.execute({
-            command: (1, "error: device disconnected"),
+            LOGCAT: (1, "error: device disconnected"),
             ("get-serialno",): [SERIAL, (1, "error: device not found")],
         })
         self.assertEqual((status, report["error"]), (1, "device_disconnected"))
         self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": "device_disconnected"})
         self.assertFalse(any("force-stop" in cmd for cmd in commands))
         self.assertEqual(commands.count(("devices", "-l")), 1)
+
+    def test_buffered_records_with_reused_pid_or_foreign_uid_cannot_supply_evidence(self):
+        stale = log_line(LIFECYCLE, stamp=START)
+        stale += log_line("FATAL EXCEPTION: old process", stamp="1795000000.099999999", tag="E/AndroidRuntime")
+        stale += log_line(FRAME, uid="10200")
+        stale += log_line(FRAME, stamp="1795000000.110000001")
+        status, report, _ = self.execute({LOGCAT: stale})
+        self.assertEqual((status, report["error"]), (1, "application_evidence_unavailable"))
+        self.assertEqual(report["observed"], {"crashObserved": False})
+
+    def test_latest_matching_marker_survives_out_of_order_buffer_records(self):
+        log = log_line(LIFECYCLE, stamp=END, uid="u10_a200")
+        log += log_line(LIFECYCLE.replace("lifecycleRevision=3", "lifecycleRevision=2"))
+        status, report, _ = self.execute({LOGCAT: log})
+        self.assertEqual(status, 0)
+        self.assertEqual(report["observed"]["lifecycle"]["lifecycleRevision"], 3)
+        self.assertNotIn("u10_a200", json.dumps(report))
+
+    def test_device_clock_discontinuity_or_malformed_clock_cannot_supply_evidence(self):
+        for final, expected in ((START, "device_log_clock_changed"),
+                                ("1795000000.111000001", "device_log_clock_changed"),
+                                ("1795000000.%N", "device_log_clock_unavailable")):
+            with self.subTest(final=final):
+                status, report, _ = self.execute({DEVICE_CLOCK: [START, final]})
+                self.assertEqual((status, report["error"], report["cleanup"]), (1, expected, {"status": "stopped"}))
+                self.assertNotIn("observed", report)
+
+    def test_replacement_cannot_claim_a_matching_buffered_crash(self):
+        status, report, _ = self.execute({
+            STAT_QUERY: [proc_stat()] * 2 + [proc_stat(123457)] * 4,
+            LOGCAT: log_line("FATAL EXCEPTION: replaced process", tag="E/AndroidRuntime"),
+        })
+        self.assertEqual((status, report["error"]), (1, "application_process_changed"))
+        self.assertNotIn("observed", report)
+
+    def test_process_incarnation_changes_during_uid_observation(self):
+        status, report, commands = self.execute({STAT_QUERY: [proc_stat(), proc_stat(123457)]})
+        self.assertEqual((status, report["error"]), (1, "application_process_changed"))
+        self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": "launch_process_unattributed"})
+        self.assertFalse(any("force-stop" in cmd or "logcat" in cmd for cmd in commands))
 
     def test_ambiguous_activity_start_is_not_attributed(self):
         launch = ("shell", "am", "start", "-W", "--user", "10", "-n", f"{APPLICATION}/{APPLICATION}.PackageActivity")

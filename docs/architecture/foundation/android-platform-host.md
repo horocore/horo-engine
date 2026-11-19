@@ -301,9 +301,13 @@ unauthorized, disconnected or incompatible targets return portable failure
 codes and no automatic device retry or downgrade.
 
 The command emits one JSON record. Process evidence is restricted to the
-matching package UID and PID. Its bounded log query projects Horo lifecycle
-and renderer counters and a crash marker without writing raw message text,
-serials, personal paths or unrelated logs. Cancellation, unverifiable
+matching package UID, PID and kernel start ticks. The log query accepts only
+entries timestamped after the device clock sample immediately before launch and
+through the sample after capture. The host's monotonic interval bounds both
+samples. Unavailable timestamps or a detected clock discontinuity yield a
+partial result. The process identity is rechecked before accepting the capture.
+Only Horo lifecycle and renderer counters and a crash marker leave the tool.
+Cancellation, unverifiable
 installation, missing evidence and crashes retain a partial result. Before
 replacing an APK, the command checks whether its package already has a process.
 After an attributed launch, failure gives cleanup its own five-second deadline.

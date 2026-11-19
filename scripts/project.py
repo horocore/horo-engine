@@ -984,22 +984,74 @@ FRAME_LINE = re.compile(
     + " ".join(fr"{name}=(?P<{name}>[0-9]{{1,20}})" for name in FRAME_FIELDS) + r" completion=unobserved")
 
 
-def package_log_evidence(log: str, pid: int) -> dict:
-    """Project only exact numeric Horo telemetry and a fatal-exception marker; discard all free text."""
+LOG_ENTRY_TIME = re.compile(
+    r"\s*([0-9]{1,12}\.[0-9]{9}) ([IWEF])/(HoroPackageQualification|AndroidRuntime)\s*"
+    r"\(\s*([0-9]{1,10}|u[0-9]{1,5}_a[0-9]{1,5}):\s*([0-9]{1,10})\): (.*)")
+
+
+def log_epoch_nanoseconds(value: str) -> int:
+    if not re.fullmatch(r"[0-9]{1,12}\.[0-9]{9}", value):
+        raise AndroidDeployError("device_log_clock_unavailable")
+    seconds, nanos = value.split(".")
+    return int(seconds) * 1_000_000_000 + int(nanos)
+
+
+@dataclass(frozen=True)
+class AndroidLogClock:
+    """One device realtime sample bracketed by the host's monotonic clock."""
+
+    nanoseconds: int
+    host_before: int
+    host_after: int
+
+    @classmethod
+    def read(cls, device: AdmittedAdbDevice) -> AndroidLogClock:
+        before = time.monotonic_ns()
+        sampled = device.run("shell", "toybox", "date", "+%s.%N")
+        return cls(log_epoch_nanoseconds(sampled), before, time.monotonic_ns())
+
+    def require_continuity(self, initial: AndroidLogClock) -> None:
+        elapsed = self.nanoseconds - initial.nanoseconds
+        lower = max(0, self.host_before - initial.host_after)
+        upper = self.host_after - initial.host_before
+        if elapsed <= 0 or not lower <= elapsed <= upper:
+            raise AndroidDeployError("device_log_clock_changed")
+
+
+@dataclass(frozen=True)
+class DeployedProcess:
+    pid: int
+    uid: int
+    start_ticks: int
+
+
+def package_log_evidence(log: str, process: DeployedProcess, after: int, through: int) -> dict:
+    """Project named telemetry only from the exact UID, PID and admitted time interval."""
     evidence = {"crashObserved": False}
+    latest = {}
+    user, app = divmod(process.uid, 100_000)
+    accepted_uids = {str(process.uid)}
+    if app >= 10_000:
+        accepted_uids.add(f"u{user}_a{app - 10_000}")
     for line in log.splitlines():
-        header = re.fullmatch(r"([IWEF])/(HoroPackageQualification|AndroidRuntime)\s*\(\s*([0-9]{1,10})\): (.*)", line)
-        if not header or int(header.group(3)) != pid:
+        header = LOG_ENTRY_TIME.fullmatch(line)
+        if not header:
             continue
-        _, tag, _, message = header.groups()
+        stamp, priority, tag, uid, pid, message = header.groups()
+        if uid not in accepted_uids or int(pid) != process.pid:
+            continue
+        logged = log_epoch_nanoseconds(stamp)
+        if not after < logged <= through:
+            continue
         if tag == "AndroidRuntime":
-            evidence["crashObserved"] |= message.startswith("FATAL EXCEPTION:")
+            evidence["crashObserved"] |= priority in ("E", "F") and message.startswith("FATAL EXCEPTION:")
             continue
         for category, pattern in (("lifecycle", STATE_LINE), ("renderer", FRAME_LINE)):
-            if match := pattern.fullmatch(message):
+            if logged >= latest.get(category, 0) and (match := pattern.fullmatch(message)):
                 fields = {name: (int(value) if value.isdecimal() else value) for name, value in match.groupdict().items()}
                 if all(not isinstance(value, int) or value < 2**64 for value in fields.values()):
                     evidence[category] = fields
+                    latest[category] = logged
     return evidence
 
 
@@ -1011,11 +1063,14 @@ def deployed_uid(device: AdmittedAdbDevice, application: str, user: str) -> int:
     return deploy_number(matches[0], 2**32 - 1, "installed_identity_unverifiable")
 
 
-@dataclass(frozen=True)
-class DeployedProcess:
-    pid: int
-    uid: int
-    started: str
+def process_start_ticks(device: AdmittedAdbDevice, pid: int) -> int:
+    """Read Linux stat field 22 after separating the parenthesized process name."""
+    observed = device.run("shell", "toybox", "cat", f"/proc/{pid}/stat")
+    prefix, _, remainder = observed.rpartition(") ")
+    fields = remainder.split()
+    if not prefix.startswith(f"{pid} (") or len(fields) <= 19:
+        raise AndroidDeployError("application_process_unavailable")
+    return deploy_number(fields[19], 2**64 - 1, "application_process_unavailable")
 
 
 def deployed_process(device: AdmittedAdbDevice, application: str, uid: int) -> DeployedProcess:
@@ -1023,21 +1078,26 @@ def deployed_process(device: AdmittedAdbDevice, application: str, uid: int) -> D
     pid = device.process_id(application)
     if not pid:
         raise AndroidDeployError("application_process_unavailable")
-    identity = device.run("shell", "toybox", "ps", "-p", str(pid), "-o", "UID,STIME:19")
-    matched = re.fullmatch(r"UID\s+STIME\n\s*([0-9]{1,10})\s+([0-9-]{10} [0-9:]{8})", identity)
+    started = process_start_ticks(device, pid)
+    identity = device.run("shell", "toybox", "ps", "-p", str(pid), "-o", "UID")
+    matched = re.fullmatch(r"UID\n\s*([0-9]{1,10})", identity)
     if not matched:
         raise AndroidDeployError("application_process_unavailable")
     if uid != int(matched.group(1)):
         raise AndroidDeployError("application_process_identity_mismatch")
-    return DeployedProcess(pid, uid, matched.group(2))
+    if process_start_ticks(device, pid) != started:
+        raise AndroidDeployError("application_process_changed")
+    return DeployedProcess(pid, uid, started)
 
 
-def deploy_diagnostics(device: AdmittedAdbDevice, application: str, process: DeployedProcess) -> dict:
+def deploy_diagnostics(device: AdmittedAdbDevice, application: str, process: DeployedProcess, start: AndroidLogClock) -> dict:
     """Collect bounded markers from the exact process captured by this launch."""
-    raw = device.run("logcat", f"--pid={process.pid}", "-v", "brief", "-t", "200", "-s",
+    raw = device.run("logcat", f"--pid={process.pid}", "-v", "time,epoch,nsec,uid", "-t", "200", "-s",
                      "HoroPackageQualification:I", "AndroidRuntime:E")
-    facts = package_log_evidence(raw, process.pid)
-    if facts["crashObserved"]:
+    end = AndroidLogClock.read(device)
+    end.require_continuity(start)
+    facts = package_log_evidence(raw, process, start.nanoseconds, end.nanoseconds)
+    if facts["crashObserved"] and device.process_id(application) is None:
         return facts
     if deployed_process(device, application, process.uid) != process:
         raise AndroidDeployError("application_process_changed")
@@ -1055,11 +1115,12 @@ class AndroidPackageLaunch:
     process: DeployedProcess | None = None
     attempted: bool = False
 
-    def start(self) -> DeployedProcess:
+    def start(self) -> tuple[DeployedProcess, AndroidLogClock]:
         uid = deployed_uid(self.device, self.application, self.user)
         if self.device.process_id(self.application) is not None:
             raise AndroidDeployError("application_already_running")
         component = f"{self.application}/{self.application}.{PACKAGE_ACTIVITY}"
+        start = AndroidLogClock.read(self.device)
         self.attempted = True
         launched = self.device.run("shell", "am", "start", "-W", "--user", self.user, "-n", component)
         allowed_components = {component, f"{self.application}/.{PACKAGE_ACTIVITY}"}
@@ -1070,7 +1131,7 @@ class AndroidPackageLaunch:
                 or states not in ([], ["COLD"]) or "Warning: Activity not started" in launched):
             raise AndroidDeployError("launch_unconfirmed")
         self.process = deployed_process(self.device, self.application, uid)
-        return self.process
+        return self.process, start
 
     def rollback(self) -> dict:
         """Use a separate bounded deadline to stop only the already attributed package process."""
@@ -1135,9 +1196,9 @@ def android_deploy_main(argv=None) -> int:
             deploy_verified_install(device, application, user, digest_value)
             report["stage"] = "launch"
             launch = AndroidPackageLaunch(device, application, user, digest_value)
-            process = launch.start()
+            process, launch_time = launch.start()
             report["stage"] = "diagnostics"
-            observed = deploy_diagnostics(device, application, process)
+            observed = deploy_diagnostics(device, application, process, launch_time)
             report["observed"] = observed
             if observed["crashObserved"]:
                 raise AndroidDeployError("application_crashed")
