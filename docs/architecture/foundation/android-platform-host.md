@@ -294,6 +294,15 @@ It retains the Context through loader unload and the Activity through native
 instance retirement. Activity replacement requires a new native owner after the
 old instance has retired.
 
+The platform-private `AcquireGameActivityJniApplication` operation reads the
+active GameActivity on its native control thread and acquires separate JNI
+global reference owners for the application Context and Activity. The GameActivity
+input bridge shares the same scoped thread attachment. Application composition
+can retain the Context independently if the loader remains loaded after an
+Activity exits. Final reference release obtains a JNI environment on the
+releasing thread. The current Input and Vulkan profiles request no XR
+application references during startup.
+
 The native owner resolves `xrInitializeLoaderKHR` from the verified package
 loader and passes the application Context before enumerating layers or
 extensions. The selected Android product must require
@@ -306,8 +315,9 @@ These contracts qualify separately from Android deployment. Compile the
 `HoroXROpenXR` target with the pinned OpenXR SDK headers and the Android NDK
 for each ABI enabled in the product. The current package qualification profiles
 omit this target. Product qualification also needs an explicit XR package
-profile, a verified ABI-specific loader, the GameActivity composition that
-issues the JNI references, and device evidence for discovery and shutdown.
+profile, a verified ABI-specific loader, a composition that hands the
+GameActivity references to that selected native owner, and device evidence for
+discovery and shutdown.
 
 Developer deployment selects a device explicitly. Install, launch, log capture,
 termination, timeout, and disconnect use argv-based process APIs and bounded

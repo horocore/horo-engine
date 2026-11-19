@@ -77,6 +77,32 @@ class OpenXRCIContractTests(unittest.TestCase):
         self.assertLess(create.index("NativeExtensionState::Enabled"), create.index("info.next = &androidInfo"))
         self.assertLess(create.index("info.next = &androidInfo"), create.index("dispatch_.createInstance"))
 
+    def test_game_activity_jni_owner_is_built_and_used_by_the_existing_android_host(self):
+        platform = ROOT / "src/platform/android"
+        package = (ROOT / "cmake/HoroAndroidPackageQualification.cmake").read_text(encoding="utf-8")
+        self.assertIn("/src/platform/android/AndroidGameActivityJni.cpp", package)
+        entry = (ROOT / "apps/android-package-qualification/NativeEntry.cpp").read_text(encoding="utf-8")
+        self.assertIn("GameActivityInput input{*app", entry)
+        input_bindings = (platform / "AndroidGameActivityInput.cpp").read_text(encoding="utf-8")
+        self.assertIn("jni_.Environment()", input_bindings)
+        self.assertNotIn("AttachCurrentThread", input_bindings)
+        self.assertNotIn("AcquireGameActivityJniApplication", entry)
+
+    def test_game_activity_producer_keeps_the_context_and_activity_independently_owned(self):
+        platform = ROOT / "src/platform/android"
+        header = (platform / "AndroidGameActivityJni.h").read_text(encoding="utf-8")
+        self.assertIn("GameActivityGlobalRef applicationContext;", header)
+        self.assertIn("GameActivityGlobalRef activity;", header)
+        source = (platform / "AndroidGameActivityJni.cpp").read_text(encoding="utf-8")
+        acquire = source.split("AcquireGameActivityJniApplication(const android_app &app)", 1)[1]
+        self.assertIn("app.destroyRequested", acquire)
+        self.assertIn("FindApplicationContext(*env, activity)", acquire)
+        self.assertIn('getApplicationContext", "()Landroid/content/Context;"', source)
+        self.assertLess(acquire.index("PromoteReference(*env, vm, context.get())"),
+                        acquire.index("PromoteReference(*env, vm, activity)"))
+        self.assertIn("env.NewGlobalRef(reference)", source)
+        self.assertIn("env->DeleteGlobalRef(reference)", source)
+
     def test_off_composition_stays_off_and_checks_real_target_population(self):
         values = self.variables("ci-xr-disabled")
         self.assertEqual(values["HORO_BUILD_XR_OPENXR"], "OFF")

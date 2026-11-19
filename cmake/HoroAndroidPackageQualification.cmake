@@ -39,6 +39,7 @@ endif()
 add_library(HoroAndroidPackageQualification SHARED
     "${CMAKE_CURRENT_SOURCE_DIR}/apps/android-package-qualification/NativeEntry.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/android/AndroidGameActivityInput.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/android/AndroidGameActivityJni.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/android/AndroidGameActivityEvents.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/android/AndroidGameActivitySensors.cpp")
 target_compile_features(HoroAndroidPackageQualification PRIVATE cxx_std_20)
