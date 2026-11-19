@@ -300,6 +300,20 @@ replacement connection requires a new invocation. Missing,
 unauthorized, disconnected or incompatible targets return portable failure
 codes and no automatic device retry or downgrade.
 
+Deployment can require the expected host and connection explicitly. The
+report separates the requested mode from the selected ADB inventory's USB,
+emulator or TCP/IP classification. Ambiguous inventory cannot satisfy an
+explicit connection request. The signed APK, its embedded provenance digest
+and source revision, the renderer declaration and packaged ABIs identify the
+artifact. The provenance includes the producer's Java dependency inventory
+and the checked-in dependency lock digest.
+
+The runtime selection is explicit for OpenXR and requires both host and
+connection. The current Android qualification profiles provide the platform
+probe only. An OpenXR request reports an unsupported route before package
+verification or device access. The report reserves physical XR qualification
+for a separate, measured headset operation.
+
 The command emits one JSON record. Process evidence is restricted to the
 matching package UID, PID and kernel start ticks. The log query accepts only
 entries timestamped after the device clock sample immediately before launch and

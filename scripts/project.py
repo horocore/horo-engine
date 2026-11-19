@@ -81,13 +81,20 @@ def input_path(root: Path, name: str) -> Path:
     return result
 
 
-def load_contract(profile_name: str, abis: list[str]) -> tuple[dict, dict]:
+def android_profile(profile_name: str) -> tuple[dict, dict]:
     tools = json.loads(bounded_bytes(ROOT / "android/toolchain-lock.json", 65536))
     profiles = json.loads(bounded_bytes(ROOT / "android/package-profiles.json", 65536))
     if tools.get("schema") != 1 or profiles.get("schema") != 1:
         raise AndroidError("Unsupported Android contract schema; migrate the declared profile.")
     profile = profiles["profiles"].get(profile_name)
-    if profile is None or not abis or len(set(abis)) != len(abis):
+    if profile is None:
+        raise AndroidError("Select a declared Android profile.")
+    return tools, profile
+
+
+def load_contract(profile_name: str, abis: list[str]) -> tuple[dict, dict]:
+    tools, profile = android_profile(profile_name)
+    if not abis or len(set(abis)) != len(abis):
         raise AndroidError("Select a declared profile and a unique nonempty ABI set.")
     validate_profile(profile, tools, abis)
     return tools, profile
@@ -110,7 +117,7 @@ def validate_asset_names(profile: dict) -> None:
     expected = ["dexopt/baseline.prof", "dexopt/baseline.profm"] if profile["configuration"] == "Release" else []
     if generated != expected:
         raise AndroidError("Generated assets must match the declared Gradle baseline-profile producer contract.")
-    reserved = set(generated) | {"horo-package-provenance.json", "horo-java-dependencies.json"}
+    reserved = set(generated) | {"horo-package-provenance.json", JAVA_DEPENDENCIES_ASSET}
     if set(profile["assets"]) & reserved:
         raise AndroidError("Source assets cannot overwrite owned provenance or generated package metadata.")
 
@@ -481,6 +488,7 @@ def extract_entry(source: zipfile.ZipFile, entry: zipfile.ZipInfo, target: Path)
 
 ASSET_PREFIX = "assets/"
 PROVENANCE_ASSET = ASSET_PREFIX + "horo-package-provenance.json"
+JAVA_DEPENDENCIES_ASSET = "horo-java-dependencies.json"
 
 
 def copy_assets(profile: dict, destination: Path) -> list[dict]:
@@ -687,7 +695,7 @@ def assemble(arguments: argparse.Namespace) -> None:
     os.environ["ANDROID_HOME"] = str(arguments.sdk.resolve())
     os.environ["SOURCE_DATE_EPOCH"] = "315532800"
     run_gradle_task(arguments.gradle, "writeDependencyProvenance", stage, workspace / "java-dependencies.log")
-    dependencies = stage / "assets/horo-java-dependencies.json"
+    dependencies = stage / ASSET_PREFIX / JAVA_DEPENDENCIES_ASSET
     assets.append({"name": dependencies.name, "sha256": digest(dependencies), "size": dependencies.stat().st_size})
     evidence = provenance(tools, profile, native, assets)
     (stage / PROVENANCE_ASSET).write_bytes(canonical_json(evidence))
@@ -780,6 +788,7 @@ def apk_main(argv=None) -> int:
 PACKAGE_ACTIVITY = "PackageActivity"
 DEPLOY_CAPTURE_BYTES = 256 * 1024
 DEPLOY_CLEANUP_SECONDS = 5
+ADB_CONNECTION_MODES = ("usb", "emulator", "tcpip")
 
 
 class AndroidDeployError(AndroidError):
@@ -845,21 +854,36 @@ def deploy_tool(sdk: Path, name: str) -> str:
     return str((sdk / (name + (".exe" if os.name == "nt" else ""))).absolute())
 
 
+@dataclass(frozen=True)
+class VerifiedAndroidArtifact:
+    path: Path
+    profile: dict
+    apk_sha256: str
+    provenance_sha256: str
+    source_revision: str
+    abis: frozenset[str]
+
+
 def deploy_artifact(artifact: Path, stage: Path, sdk: Path, profile_name: str,
-                    java: str, deadline: float) -> tuple[Path, dict, str, set[str]]:
+                    java: str, deadline: float) -> VerifiedAndroidArtifact:
     """Recheck the exact signed package bytes and expected launch component before touching a device."""
     declared = json.loads(bounded_bytes(input_path(artifact, "provenance.json"), 1024 * 1024))
     inspection = json.loads(bounded_bytes(input_path(artifact, "inspection.json"), 8 * 1024 * 1024))
-    abis = set(declared["abis"])
+    abis = frozenset(declared["abis"])
     tools, profile = load_contract(profile_name, sorted(abis))
     if (declared["schema"] != 1 or declared["profile"] != profile or declared.get("toolchain") != tools
             or inspection.get("signed") is not True):
         raise AndroidDeployError("artifact_contract_mismatch")
     names = sorted(profile["nativeLibraries"])
-    assets = sorted([*profile["assets"], *profile["generatedAssets"]])
+    assets = sorted([*profile["assets"], *profile["generatedAssets"], JAVA_DEPENDENCIES_ASSET])
     if (any(sorted(record["name"] for record in declared["abis"][abi]) != names for abi in abis)
             or sorted(record["name"] for record in declared["assets"]) != assets):
         raise AndroidDeployError("artifact_contract_mismatch")
+    revision = declared.get("sourceRevision")
+    if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise AndroidDeployError("artifact_source_revision_unavailable")
+    if declared.get("javaDependencyLockSha256") != digest(ROOT / "android/gradle/gradle.lockfile"):
+        raise AndroidDeployError("artifact_dependency_lock_stale")
     package = stage / "signed.apk"
     package.write_bytes(bounded_bytes(input_path(artifact, "signed.apk")))
     actual = inspect_package(package, declared)
@@ -878,7 +902,7 @@ def deploy_artifact(artifact: Path, stage: Path, sdk: Path, profile_name: str,
     activity = profile["applicationId"] + "." + PACKAGE_ACTIVITY
     if re.findall(r"^launchable-activity: name='([^']+)'", badging, re.MULTILINE) != [activity]:
         raise AndroidDeployError("artifact_activity_mismatch")
-    return package, profile, actual["apkSha256"], abis
+    return VerifiedAndroidArtifact(package, profile, actual["apkSha256"], actual["provenanceSha256"], revision, abis)
 
 
 @dataclass(frozen=True)
@@ -889,6 +913,7 @@ class AdmittedAdbDevice:
     serial: str
     transport: int
     deadline: float
+    connection: str
 
     def run(self, *arguments: str, missing_process: bool = False) -> str:
         status, output = deploy_process([self.executable, "-t", str(self.transport), *arguments], self.deadline)
@@ -915,6 +940,20 @@ class AdmittedAdbDevice:
         return pid
 
 
+def adb_connection_mode(serial: str, details: list[str]) -> str:
+    """Classify the selected ADB inventory row without exporting raw device identifiers."""
+    modes = []
+    if any(field.startswith("usb:") and field != "usb:" for field in details):
+        modes.append("usb")
+    if re.fullmatch(r"emulator-[0-9]{1,5}", serial):
+        modes.append("emulator")
+    tcp = re.fullmatch(r"(?:[A-Za-z0-9][A-Za-z0-9.-]*|\[[a-fA-F0-9:%.]+\]):([0-9]{1,5})", serial)
+    if ((tcp and 0 < int(tcp.group(1)) <= 65535)
+            or re.fullmatch(r"adb-[A-Za-z0-9-]+\._adb-tls-connect\._tcp(?:\.local)?", serial)):
+        modes.append("tcpip")
+    return modes[0] if len(modes) == 1 else "unknown"
+
+
 def admit_adb_device(executable: str, serial: str, deadline: float) -> AdmittedAdbDevice:
     """Resolve a serial to one current ADB transport. Reconnects require a new operation."""
     status, output = deploy_process([executable, "devices", "-l"], deadline)
@@ -933,7 +972,7 @@ def admit_adb_device(executable: str, serial: str, deadline: float) -> AdmittedA
     transport = deploy_number(identities[0], 2**63 - 1, "device_transport_unavailable")
     if transport == 0:
         raise AndroidDeployError("device_transport_unavailable")
-    device = AdmittedAdbDevice(executable, serial, transport, deadline)
+    device = AdmittedAdbDevice(executable, serial, transport, deadline, adb_connection_mode(serial, matches[0][2:]))
     if device.run("get-serialno") != serial:
         raise AndroidDeployError("device_transport_changed")
     return device
@@ -946,7 +985,7 @@ def deploy_number(output: str, maximum: int, code: str) -> int:
     return int(output)
 
 
-def deploy_device_identity(device: AdmittedAdbDevice, minimum_api: int, abis: set[str]) -> tuple[int, int, str]:
+def deploy_device_identity(device: AdmittedAdbDevice, minimum_api: int, abis: frozenset[str]) -> tuple[int, int, str]:
     if device.run("get-state") != "device":
         raise AndroidDeployError("device_unavailable")
     user = deploy_number(device.run("shell", "am", "get-current-user"), 2**31 - 1, "device_user_unavailable")
@@ -1138,7 +1177,7 @@ class AndroidPackageLaunch:
         if self.process is None:
             return {"status": "unconfirmed", "reason": "launch_process_unattributed"}
         device = AdmittedAdbDevice(self.device.executable, self.device.serial, self.device.transport,
-                                   time.monotonic() + DEPLOY_CLEANUP_SECONDS)
+                                   time.monotonic() + DEPLOY_CLEANUP_SECONDS, self.device.connection)
         try:
             if device.run("get-serialno") != device.serial:
                 raise AndroidDeployError("device_transport_changed")
@@ -1158,6 +1197,13 @@ class AndroidPackageLaunch:
             return {"status": "unconfirmed", "reason": "cleanup_interrupted"}
 
 
+def android_deploy_host() -> str:
+    """Return the closed host OS/architecture identity used in deployment evidence."""
+    system, machine = host_platform.system(), host_platform.machine().lower()
+    return next((name for name, (os_name, machines) in HOSTS.items()
+                 if os_name == system and machine in {value.lower() for value in machines}), "unknown")
+
+
 def android_deploy_main(argv=None) -> int:
     """Install and launch one declared signed Android artifact, then emit a redacted JSON result."""
     parser = argparse.ArgumentParser(description=android_deploy_main.__doc__)
@@ -1165,37 +1211,66 @@ def android_deploy_main(argv=None) -> int:
     parser.add_argument("--profile", required=True, help="Exact profile used to assemble the artifact.")
     parser.add_argument("--sdk", required=True, type=Path, help="Explicit Android SDK root.")
     parser.add_argument("--device", required=True, help="Explicit connected ADB serial; no default selection.")
+    parser.add_argument("--host", choices=PLATFORMS, help="Expected deployment host OS and architecture.")
+    parser.add_argument("--connection", choices=ADB_CONNECTION_MODES, help="Expected connection mode for the selected serial.")
+    parser.add_argument("--runtime", choices=("none", "openxr"), default="none",
+                        help="Explicit runtime intent. OpenXR requires host and connection selections.")
     parser.add_argument("--java", default="java", help="Native Java executable for the locked signature verifier.")
     parser.add_argument("--timeout", type=int, default=120, help="Total host command deadline in seconds (1-300).")
     arguments = parser.parse_args(argv)
     if not re.fullmatch(r"[A-Za-z0-9\[][A-Za-z0-9_.:@%+\[\]-]{0,127}", arguments.device) or not 1 <= arguments.timeout <= 300:
         parser.error("Supply a valid explicit ADB serial and a deadline of 1-300 seconds.")
     deadline = time.monotonic() + arguments.timeout
-    report = {"schema": 1, "status": "partial", "stage": "artifact"}
+    host = android_deploy_host()
+    runtime = {"requested": arguments.runtime, "status": "not_requested" if arguments.runtime == "none" else "not_observed"}
+    connection = {"requested": arguments.connection, "observed": "not_observed"}
+    report = {"schema": 1, "status": "partial", "stage": "selection",
+              "qualification": {"host": {"requested": arguments.host, "observed": host},
+                                "connection": connection, "runtime": runtime, "physicalXrQualification": "not_run"}}
     exit_code = 1
     launch = None
     try:
+        if arguments.host and arguments.host != host:
+            raise AndroidDeployError("deployment_host_mismatch")
+        if arguments.runtime == "openxr":
+            if not arguments.host or not arguments.connection:
+                raise AndroidDeployError("xr_target_selection_incomplete")
+            report["stage"] = "artifact"
+            android_profile(arguments.profile)
+            report["stage"] = "runtime"
+            report["qualification"]["profile"] = arguments.profile
+            runtime["status"] = "unsupported"
+            raise AndroidDeployError("android_openxr_route_unavailable")
+        report["stage"] = "artifact"
         with tempfile.TemporaryDirectory(prefix="horo-android-deploy-") as directory:
-            package, profile, digest_value, abis = deploy_artifact(
+            artifact = deploy_artifact(
                 arguments.artifact, Path(directory), arguments.sdk, arguments.profile, arguments.java, deadline)
+            profile = artifact.profile
             application = profile["applicationId"]
             report["artifact"] = {"profile": arguments.profile, "applicationId": application,
-                                  "apkSha256": digest_value, "declaredRenderer": profile["renderer"]}
+                                  "apkSha256": artifact.apk_sha256, "provenanceSha256": artifact.provenance_sha256,
+                                  "sourceRevision": artifact.source_revision, "declaredRenderer": profile["renderer"],
+                                  "abis": sorted(artifact.abis)}
             report["stage"] = "device"
             device = admit_adb_device(deploy_tool(arguments.sdk / "platform-tools", "adb"), arguments.device, deadline)
-            current_user, api, abi = deploy_device_identity(device, profile["minimumApi"], abis)
+            connection["observed"] = device.connection
+            if arguments.connection and device.connection == "unknown":
+                raise AndroidDeployError("device_connection_unverifiable")
+            if arguments.connection and arguments.connection != device.connection:
+                raise AndroidDeployError("device_connection_mismatch")
+            current_user, api, abi = deploy_device_identity(device, profile["minimumApi"], artifact.abis)
             report["device"] = {"androidApi": api, "abi": abi}
             user = str(current_user)
             report["stage"] = "install"
             if device.process_id(application) is not None:
                 raise AndroidDeployError("application_already_running")
-            installed = device.run("install", "-r", "--user", user, str(package)).splitlines()
+            installed = device.run("install", "-r", "--user", user, str(artifact.path)).splitlines()
             if installed not in (["Success"], ["Performing Streamed Install", "Success"], ["Performing Push Install", "Success"]):
                 raise AndroidDeployError("install_unconfirmed")
             report["stage"] = "verify_install"
-            deploy_verified_install(device, application, user, digest_value)
+            deploy_verified_install(device, application, user, artifact.apk_sha256)
             report["stage"] = "launch"
-            launch = AndroidPackageLaunch(device, application, user, digest_value)
+            launch = AndroidPackageLaunch(device, application, user, artifact.apk_sha256)
             process, launch_time = launch.start()
             report["stage"] = "diagnostics"
             observed = deploy_diagnostics(device, application, process, launch_time)

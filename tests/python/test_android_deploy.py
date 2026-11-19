@@ -20,6 +20,8 @@ APPLICATION = "org.horocore.packagequalification"
 SERIAL = "emulator-5554"
 TRANSPORT = "37"
 DIGEST = "a" * 64
+PROVENANCE_DIGEST = "b" * 64
+SOURCE_REVISION = "c" * 40
 PACKAGE = "/data/app/~~hash/example==/base.apk"
 LIFECYCLE = ("host-state lifecycleRevision=3 activity=1 state=2 process=1 window=5 presentation=8 "
              "factsRevision=5 extent=1280x720 nativeAvailable=1 ready=1 hasWindow=1 hasPresentation=1 "
@@ -46,7 +48,7 @@ def proc_stat(start_ticks=123456):
 
 
 class AndroidDeployTests(unittest.TestCase):
-    def execute(self, override=None):
+    def execute(self, override=None, options=()):
         """Run the real CLI orchestration against an exact scripted ADB transport."""
         _, profile = project.load_contract(PROFILE, ["arm64-v8a"])
         launch = ("shell", "am", "start", "-W", "--user", "10", "-n", f"{APPLICATION}/{APPLICATION}.PackageActivity")
@@ -101,13 +103,15 @@ class AndroidDeployTests(unittest.TestCase):
             return response if isinstance(response, tuple) else (0, response)
 
         stdout = io.StringIO()
-        with patch.object(project, "deploy_artifact",
-                          return_value=(Path("a package ü.apk"), profile, DIGEST, {"arm64-v8a"})), \
+        artifact = project.VerifiedAndroidArtifact(Path("a package ü.apk"), profile, DIGEST, PROVENANCE_DIGEST, SOURCE_REVISION,
+                                                   frozenset({"arm64-v8a"}))
+        with patch.object(project, "deploy_artifact", return_value=artifact), \
+                patch.object(project, "android_deploy_host", return_value="linux-x64"), \
                 patch.object(project, "deploy_process", side_effect=run), \
                 patch.object(project.time, "monotonic_ns", side_effect=[100_000_000, 101_000_000, 109_000_000, 111_000_000]), \
                 contextlib.redirect_stdout(stdout):
             status = project.main(["android-deploy", "--artifact", ".", "--profile", PROFILE, "--sdk", ".",
-                                   "--device", SERIAL, "--timeout", "30"])
+                                   "--device", SERIAL, "--timeout", "30", *options])
         return status, json.loads(stdout.getvalue()), commands
 
     def test_scopes_install_launch_process_and_reports_only_typed_facts(self):
@@ -115,14 +119,70 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(report["status"], "complete")
         self.assertEqual(report["artifact"]["apkSha256"], DIGEST)
+        self.assertEqual(report["artifact"]["provenanceSha256"], PROVENANCE_DIGEST)
+        self.assertEqual(report["artifact"]["sourceRevision"], SOURCE_REVISION)
         self.assertEqual(report["device"], {"androidApi": 36, "abi": "arm64-v8a"})
         self.assertEqual(report["observed"]["renderer"]["presentAccepted"], 1)
         self.assertEqual(report["observed"]["lifecycle"]["window"], 5)
         self.assertFalse(report["observed"]["crashObserved"])
+        self.assertEqual(report["qualification"], {
+            "host": {"requested": None, "observed": "linux-x64"},
+            "connection": {"requested": None, "observed": "emulator"},
+            "runtime": {"requested": "none", "status": "not_requested"},
+            "physicalXrQualification": "not_run",
+        })
         self.assertLess(next(i for i, cmd in enumerate(commands) if "sha256sum" in cmd),
                         next(i for i, cmd in enumerate(commands) if "start" in cmd))
         for denied in (SERIAL, PACKAGE, "personal", "unrelated-thread", "1010200", START, LOG_TIME, END):
             self.assertNotIn(denied, json.dumps(report))
+
+    def test_explicit_host_and_connection_match_the_selected_target(self):
+        status, report, _ = self.execute(options=("--host", "linux-x64", "--connection", "emulator", "--runtime", "none"))
+        self.assertEqual(status, 0)
+        self.assertEqual(report["qualification"]["host"], {"requested": "linux-x64", "observed": "linux-x64"})
+        self.assertEqual(report["qualification"]["connection"], {"requested": "emulator", "observed": "emulator"})
+
+    def test_host_or_connection_mismatch_never_installs(self):
+        status, report, commands = self.execute(options=("--host", "windows-x64"))
+        self.assertEqual((status, report["stage"], report["error"]), (1, "selection", "deployment_host_mismatch"))
+        self.assertEqual(commands, [])
+        status, report, commands = self.execute(options=("--connection", "usb"))
+        self.assertEqual((status, report["stage"], report["error"]), (1, "device", "device_connection_mismatch"))
+        self.assertEqual(report["qualification"]["connection"], {"requested": "usb", "observed": "emulator"})
+        self.assertEqual(commands, [("devices", "-l"), ("get-serialno",)])
+
+    def test_openxr_requires_exact_intent_and_static_profile_admission_before_device_use(self):
+        status, report, commands = self.execute(options=("--runtime", "openxr"))
+        self.assertEqual((status, report["error"]), (1, "xr_target_selection_incomplete"))
+        self.assertEqual(commands, [])
+        status, report, commands = self.execute(options=("--runtime", "openxr", "--host", "linux-x64", "--connection", "usb"))
+        self.assertEqual((status, report["stage"], report["error"]), (1, "runtime", "android_openxr_route_unavailable"))
+        self.assertEqual(report["qualification"]["runtime"], {"requested": "openxr", "status": "unsupported"})
+        self.assertEqual(report["qualification"]["profile"], PROFILE)
+        self.assertEqual(report["qualification"]["physicalXrQualification"], "not_run")
+        self.assertNotIn("artifact", report)
+        self.assertNotIn("device", report)
+        self.assertEqual(commands, [])
+
+    def test_connection_modes_only_classify_supported_adb_inventory_forms(self):
+        for serial, details, expected in (
+            ("AB123", ["usb:1-2"], "usb"),
+            ("127.0.0.1:5555", [], "tcpip"),
+            ("[::1]:5555", [], "tcpip"),
+            ("adb-foobar-q7dQub._adb-tls-connect._tcp", [], "tcpip"),
+            ("AB123", [], "unknown"),
+            ("emulator-5554", ["usb:1-2"], "unknown"),
+            ("127.0.0.1:99999", [], "unknown"),
+        ):
+            with self.subTest(serial=serial, details=details):
+                self.assertEqual(project.adb_connection_mode(serial, details), expected)
+
+    def test_explicit_connection_fails_closed_for_contradictory_inventory(self):
+        inventory = f"List of devices attached\n{SERIAL} device usb:1-2 transport_id:{TRANSPORT}"
+        status, report, commands = self.execute({("devices", "-l"): inventory}, options=("--connection", "emulator"))
+        self.assertEqual((status, report["error"]), (1, "device_connection_unverifiable"))
+        self.assertEqual(report["qualification"]["connection"], {"requested": "emulator", "observed": "unknown"})
+        self.assertEqual(commands, [("devices", "-l"), ("get-serialno",)])
 
     def test_rejects_stale_installation_before_launch(self):
         status, report, commands = self.execute({
@@ -255,10 +315,14 @@ class AndroidDeployTests(unittest.TestCase):
             stage.mkdir()
             payload = b"fixture payload"
             digest = hashlib.sha256(payload).hexdigest()
+            dependencies = project.canonical_json([{"group": "androidx.core", "module": "core", "version": "1.13.1", "sha256": DIGEST}])
             declared = {
                 "schema": 1, "profile": profile, "toolchain": tools,
+                "sourceRevision": SOURCE_REVISION,
+                "javaDependencyLockSha256": project.digest(project.ROOT / "android/gradle/gradle.lockfile"),
                 "abis": {"arm64-v8a": [{"name": name, "sha256": digest} for name in profile["nativeLibraries"]]},
-                "assets": [{"name": name, "sha256": digest} for name in profile["assets"]],
+                "assets": [{"name": name, "sha256": digest} for name in profile["assets"]]
+                          + [{"name": project.JAVA_DEPENDENCIES_ASSET, "sha256": hashlib.sha256(dependencies).hexdigest()}],
             }
             package = artifact / "signed.apk"
             with zipfile.ZipFile(package, "w") as archive:
@@ -268,6 +332,7 @@ class AndroidDeployTests(unittest.TestCase):
                     archive.writestr("lib/arm64-v8a/" + name, payload)
                 for name in profile["assets"]:
                     archive.writestr("assets/" + name, payload)
+                archive.writestr("assets/" + project.JAVA_DEPENDENCIES_ASSET, dependencies)
                 archive.writestr(project.PROVENANCE_ASSET, project.canonical_json(declared))
             (artifact / "provenance.json").write_bytes(project.canonical_json(declared))
             inspection = project.inspect_package(package, declared) | {"signed": True}
@@ -280,17 +345,27 @@ class AndroidDeployTests(unittest.TestCase):
             ])
             deadline = time.monotonic() + 10
             with patch.object(project, "deploy_process", side_effect=[(0, ""), (0, badging)]) as run:
-                staged, _, verified, _ = project.deploy_artifact(artifact, stage, sdk, PROFILE, "java", deadline)
-                self.assertEqual(staged.read_bytes(), package.read_bytes())
-                self.assertEqual(verified, inspection["apkSha256"])
-                self.assertEqual(run.call_args_list[0].args[0], ["java", "-jar", str(signer), "verify", str(staged)])
-                self.assertEqual(run.call_args_list[1].args[0][1:], ["dump", "badging", str(staged)])
+                verified = project.deploy_artifact(artifact, stage, sdk, PROFILE, "java", deadline)
+                self.assertEqual(verified.path.read_bytes(), package.read_bytes())
+                self.assertEqual(verified.apk_sha256, inspection["apkSha256"])
+                self.assertEqual(verified.provenance_sha256, inspection["provenanceSha256"])
+                self.assertEqual(verified.source_revision, SOURCE_REVISION)
+                self.assertEqual(run.call_args_list[0].args[0], ["java", "-jar", str(signer), "verify", str(verified.path)])
+                self.assertEqual(run.call_args_list[1].args[0][1:], ["dump", "badging", str(verified.path)])
             changed = inspection | {"apkSha256": "0" * 64}
             (artifact / "inspection.json").write_bytes(project.canonical_json(changed))
             with patch.object(project, "deploy_process") as run, self.assertRaisesRegex(
                     project.AndroidDeployError, "artifact_inspection_mismatch"):
                 project.deploy_artifact(artifact, stage, sdk, PROFILE, "java", deadline)
             run.assert_not_called()
+            for mutation, error in (({"javaDependencyLockSha256": "0" * 64}, "artifact_dependency_lock_stale"),
+                                    ({"sourceRevision": "private local path"}, "artifact_source_revision_unavailable"),
+                                    ({"assets": declared["assets"][:-1]}, "artifact_contract_mismatch")):
+                with self.subTest(error=error):
+                    (artifact / "provenance.json").write_bytes(project.canonical_json(declared | mutation))
+                    with patch.object(project, "deploy_process") as run, self.assertRaisesRegex(project.AndroidDeployError, error):
+                        project.deploy_artifact(artifact, stage, sdk, PROFILE, "java", deadline)
+                    run.assert_not_called()
 
     def test_process_output_and_time_are_bounded(self):
         self.assertEqual(project.deploy_process([sys.executable, "-c", "print('ready')"], time.monotonic() + 5),
