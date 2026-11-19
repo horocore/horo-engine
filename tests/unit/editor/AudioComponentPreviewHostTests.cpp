@@ -172,6 +172,95 @@ namespace {
         CHECK(next->closedAtDestruction);
     }
 
+    TEST_CASE("Output loss during inspector restart honors the admitted policy and exact retirement",
+              "[audio][editor][preview][headless][switch]") {
+        using enum AudioComponentPreviewSwitchStatus;
+        ClipProject project;
+        const auto sourceEvidence = std::make_shared<OutputEvidence>();
+        const auto targetEvidence = std::make_shared<OutputEvidence>();
+        Audio::Backend::NullAudioBackend *sourceBackend{};
+        std::size_t peers{};
+        EditorAudioPreviewHost host{[&](const auto owner) {
+            if (peers++ == 0) {
+                auto prepared = ObservedOutput(sourceEvidence)(owner);
+                sourceBackend = static_cast<ObservedNull *>(prepared.Value().output.get())->output.get();
+                return prepared;
+            }
+            CHECK(sourceEvidence->closedAtDestruction);
+            return ObservedOutput(targetEvidence)(owner);
+        }};
+        const auto request = project.Request();
+        REQUIRE(host.Start(request).HasValue());
+        Pump(host);
+        const auto source = *host.Snapshot().output;
+        REQUIRE(source.phase == Audio::AudioFrontendPhase::Active);
+        auto intent = request;
+        intent.outputSwitch = {source.device, Audio::AudioDefaultDeviceRole::Communications, AudioComponentPreviewSwitchPolicy::Restart};
+
+        enum class Scenario {
+            Restart,
+            Unapproved,
+            Revoked,
+            Interrupted
+        };
+        auto scenario = Scenario::Restart;
+        SECTION("already admitted restart survives old output loss") {}
+        SECTION("unapproved loss retires without reopening") {
+            scenario = Scenario::Unapproved;
+        }
+        SECTION("revoked restart retires without reopening") {
+            scenario = Scenario::Revoked;
+        }
+        SECTION("an independent interruption in the same drain still fails the switch") {
+            scenario = Scenario::Interrupted;
+        }
+        if (scenario != Scenario::Unapproved)
+            REQUIRE(host.Start(intent).HasValue());
+        if (scenario == Scenario::Revoked)
+            host.Stop(project.workspace);
+        REQUIRE(sourceBackend->InjectDeviceLoss(Audio::Backend::DeviceLossCause::Disconnected).HasValue());
+        if (scenario == Scenario::Interrupted)
+            REQUIRE(sourceBackend->InjectInterruption(Audio::Backend::InterruptionState::Began).HasValue());
+
+        if (scenario == Scenario::Restart) {
+            const auto id = host.Snapshot().outputSwitch->id;
+            Pump(host);
+            const auto applied = host.Snapshot();
+            REQUIRE(applied.outputSwitch);
+            CHECK(applied.outputSwitch->id == id);
+            CHECK(applied.outputSwitch->status == Applied);
+            CHECK(applied.outputSwitch->target == applied.output->device);
+            CHECK(applied.output->device != source.device);
+            CHECK_FALSE(applied.failure);
+            CHECK(peers == 2);
+            CHECK(targetEvidence->peak > 0.01F);
+            host.Stop(project.workspace);
+            Pump(host);
+            return;
+        }
+        const auto expected =
+            MakeError(scenario == Scenario::Interrupted ? Audio::AudioErrors::DeviceUnavailable : Audio::AudioErrors::DeviceLost);
+        const auto observed = host.Pump();
+        REQUIRE(observed.HasError());
+        RequireOriginalError(observed.ErrorValue(), expected);
+        for (std::size_t i = 0; i < 20; ++i)
+            static_cast<void>(host.Pump());
+        const auto retired = host.Snapshot();
+        REQUIRE(retired.output);
+        CHECK(retired.output->phase == Audio::AudioFrontendPhase::Closed);
+        REQUIRE(retired.failure);
+        RequireOriginalError(*retired.failure, expected);
+        CHECK(peers == 1);
+        CHECK(sourceEvidence->closedAtDestruction);
+        if (scenario != Scenario::Unapproved) {
+            REQUIRE(retired.outputSwitch);
+            CHECK(retired.outputSwitch->status == (scenario == Scenario::Revoked ? Cancelled : Failed));
+            CHECK_FALSE(retired.outputSwitch->target);
+        } else {
+            CHECK_FALSE(retired.outputSwitch);
+        }
+    }
+
     TEST_CASE("Inspector output switch preserves live playback on rejected intent and publishes one cancellation or failure",
               "[audio][editor][preview][headless][switch]") {
         using enum AudioComponentPreviewSwitchStatus;

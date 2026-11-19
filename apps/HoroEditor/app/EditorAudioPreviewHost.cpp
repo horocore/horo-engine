@@ -1,10 +1,12 @@
 #include "EditorAudioPreviewHost.h"
 
 #include "EditorAudioPreviewPreparation.h"
+#include "Horo/Audio/AudioDeviceTiming.h"
 #include "Horo/Audio/Internal/NullAudioBackend.h"
 #if HORO_EDITOR_AUDIO_SDL3
 #include "Horo/Audio/Internal/Sdl3AudioBackend.h"
 #endif
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <limits>
@@ -70,7 +72,20 @@ namespace Horo::Editor {
             }
 
             std::size_t DrainEvents(std::span<Audio::Backend::Event> events) noexcept override {
-                return selected_.output->DrainEvents(events);
+                const auto count = selected_.output->DrainEvents(events);
+                if (!switchSource_ || count > events.size())
+                    return count;
+                const auto drained = events.first(count);
+                const auto consumed = std::ranges::remove_if(drained, [this](const auto &event) {
+                    const auto *lost = std::get_if<Audio::Backend::DeviceLost>(&event.fact);
+                    return event.owner == Owner() && lost && Audio::MatchesAudioDeviceEpoch(lost->epoch, *switchSource_);
+                });
+                return static_cast<std::size_t>(consumed.begin() - drained.begin());
+            }
+
+            /** @brief Keeps exact source loss within native retirement during an admitted restart. */
+            void ExpectSwitchSourceRetirement(std::optional<Audio::AudioDeviceEpoch> source) noexcept {
+                switchSource_ = source;
             }
 
             Audio::Backend::AudioCallbackViolationDrain DrainSafetyViolations(
@@ -95,6 +110,7 @@ namespace Horo::Editor {
         private:
             EditorAudioPreviewBackend selected_;
             std::optional<Audio::Backend::OperationId> operation_;
+            std::optional<Audio::AudioDeviceEpoch> switchSource_;
         };
 
         /** @brief Reconciles an accepted closed-peer discovery operation before its backend can be destroyed.
@@ -172,7 +188,7 @@ namespace Horo::Editor {
         /** @brief Detached prepared output and its control driver, adopted together only after composition succeeds. */
         struct PreparedLane final {
             std::unique_ptr<Audio::AudioFrontend> frontend;
-            std::function<Result<void>()> advance;
+            DrivenOutput *driver;
             Audio::AudioBackendKind backend;
         };
 
@@ -202,9 +218,6 @@ namespace Horo::Editor {
             auto prepared = std::move(preparation).Value();
             const Audio::AudioDeviceEpoch epoch{selected.device, 1, 1};
             auto *driver = backend.get();
-            const auto advance = [driver] {
-                return driver->Advance();
-            };
             Audio::Internal::AudioFrontendOutput
                 output{std::move(backend),
                        {epoch,
@@ -216,7 +229,7 @@ namespace Horo::Editor {
                 AudioPreviewHostDetail::RetireDetached(prepared);
                 return Result<PreparedLane>::Failure(frontend.ErrorValue());
             }
-            return Result<PreparedLane>::Success({std::move(frontend).Value(), advance, kind});
+            return Result<PreparedLane>::Success({std::move(frontend).Value(), driver, kind});
         }
 
         /** @brief Rejects unsupported policies and malformed roles before disturbing the currently playing lane. */
@@ -275,7 +288,7 @@ namespace Horo::Editor {
         AudioComponentPreviewSnapshot snapshot;
         std::unique_ptr<Audio::AudioFrontend> frontend;
         EditorAudioPreviewOutputFactory factory;
-        std::function<Result<void>()> advance;  // Borrows only the backend retained by frontend; cleared after Closed.
+        DrivenOutput *driver{};  // Borrows only the backend retained by frontend; cleared before releasing it.
         std::optional<AudioPreviewHostDetail::CapturedSource> source;
         std::optional<Audio::AudioBackendKind> backend;
         std::optional<std::uint64_t> acceptedStart;
@@ -292,7 +305,7 @@ namespace Horo::Editor {
             auto lane = std::move(prepared).Value();
             backend = lane.backend;
             frontend = std::move(lane.frontend);
-            advance = std::move(lane.advance);
+            driver = lane.driver;
             auto started = frontend->Start(Deadline());
             startVoice = started.HasValue();
             if (started.HasError())
@@ -324,6 +337,7 @@ namespace Horo::Editor {
             if (nextSwitch == std::numeric_limits<std::uint64_t>::max())
                 return Result<void>::Failure(MakeError(AudioComponentPreviewErrors::ProviderUnavailable));
             snapshot.outputSwitch = AudioComponentPreviewSwitchReceipt{nextSwitch++, intent};
+            driver->ExpectSwitchSourceRetirement(intent.source);
             frontend->Close();
             return Result<void>::Success();
         }
@@ -336,8 +350,10 @@ namespace Horo::Editor {
                 pending->status = AudioComponentPreviewSwitchStatus::Failed;
                 pending->failure = error;
                 startVoice = false;
-                if (frontend)
+                if (frontend) {
+                    driver->ExpectSwitchSourceRetirement(std::nullopt);
                     frontend->Close();
+                }
             }
         }
 
@@ -389,7 +405,7 @@ namespace Horo::Editor {
 
         /** @brief Releases the detached lane and continues only an accepted replacement of its exact epoch. */
         Result<void> RetireClosedLane(const Audio::AudioDeviceEpoch closed) {
-            advance = {};
+            driver = nullptr;
             frontend.reset();
             acceptedStart.reset();
             if (const auto *pending = PendingSwitch(); pending && !pending->target && closed == pending->intent.source) {
@@ -464,8 +480,10 @@ namespace Horo::Editor {
     /** @copydoc IAudioComponentPreview::Stop */
     void EditorAudioPreviewHost::Stop(const Assets::AssetId workspace) noexcept {
         if (state_->frontend && state_->snapshot.workspace == workspace) {
-            if (auto *pending = state_->PendingSwitch())
+            if (auto *pending = state_->PendingSwitch()) {
                 pending->status = AudioComponentPreviewSwitchStatus::Cancelled;
+                state_->driver->ExpectSwitchSourceRetirement(std::nullopt);
+            }
             state_->startVoice = false;
             state_->acceptedStart.reset();
             state_->frontend->Close();
@@ -476,7 +494,7 @@ namespace Horo::Editor {
     Result<void> EditorAudioPreviewHost::Pump() {
         if (!state_->frontend)
             return Result<void>::Success();
-        const auto advanced = state_->advance();
+        const auto advanced = state_->driver->Advance();
         if (advanced.HasError()) {
             state_->RecordFailure(advanced.ErrorValue());
             state_->frontend->Close();

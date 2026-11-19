@@ -2669,7 +2669,10 @@ replacement callback's exact Start receipt. The workspace can revoke a pending
 switch through its normal preview stop or selection/revision invalidation. An
 unsupported preserve policy leaves current playback running, since this
 composition has no exact fractional cursor transfer contract. A native device
-notification alone does not authorize a replacement.
+notification alone does not authorize a replacement. If the exact source reports
+device loss while an admitted restart is retiring it, the restart waits for
+the same native detachment and closure proof. Other retirement failures still
+fail the switch, and revoking it prevents replacement.
 
 ## Platform Focus And Suspension Policy
 
