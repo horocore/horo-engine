@@ -1,5 +1,6 @@
 #pragma once
 
+#include "EditorPlaySceneHost.h"
 #include "EditorPlayState.h"
 #include "Horo/AI/AISceneComponents.h"
 #include "Horo/AI/DecisionControl.h"
@@ -196,6 +197,7 @@ namespace Horo::Editor {
         UndoScene,
         RedoScene,
         StartPlay,
+        NavigatePlayDecisionProblem,
         PausePlay,
         ResumePlay,
         StepPlay,
@@ -677,6 +679,13 @@ namespace Horo::Editor {
         AI::BlackboardKeyId key;
     };
 
+    /** @brief Exact typed entity navigation issued for the on-screen Decision problem. */
+    struct PlayDecisionNavigationRequest final {
+        std::uint64_t tick{};
+        AI::AgentId agent;
+        Runtime::EntityRef entity;
+    };
+
     struct EditorWorkspaceViewCommandData {  // NOSONAR(cpp:S1820) Command payload variant container
         EditorWorkspaceViewCommand command = EditorWorkspaceViewCommand::None;
         std::optional<GyroscopeBindingEditRequest> gyroscopeBinding;
@@ -687,6 +696,7 @@ namespace Horo::Editor {
         std::shared_ptr<const TerrainToolCommand> terrainTool;
         std::optional<WorldLayerOutlinerIntent> worldLayerIntent;
         std::optional<DocumentInstanceId> documentInstance;
+        std::optional<PlayDecisionNavigationRequest> playDecisionNavigation;
         std::optional<DocumentInstanceId> documentMoveBefore;
         std::optional<PrefabDocumentFence> prefabFence;
         std::shared_ptr<const DocumentRecoveryRecord> prefabRecovery;
@@ -942,6 +952,8 @@ namespace Horo::Editor {
         EditorPlayViewSource playViewSource{EditorPlayViewSource::AuthoredCamera}; /**< Actual host-selected private projection. */
         bool simulatorPreviewAvailable{}; /**< Actual current consumed simulator view; false forbids stale texture display. */
         std::string playError;
+        std::optional<EditorPlayDecisionProblem> playDecisionProblem;
+        bool playDecisionObjectAvailable{};
         float fps = 0.0F;
 
         std::string activeLeftPanelId = "horo.hierarchy";

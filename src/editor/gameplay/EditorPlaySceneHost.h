@@ -5,6 +5,7 @@
  * @brief Non-installed app-injected ownership boundary for isolated Editor Play Scene services.
  */
 #include "EditorPlaySaveSession.h"
+#include "Horo/AI/AIIdentity.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Gameplay/BehaviorRuntimeRestore.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
@@ -67,6 +68,22 @@ namespace Horo::Editor {
         Sha256Digest sourceDigest;
     };
 
+    /** @brief Runtime stage reported by an exact completed Decision tick. */
+    enum class EditorPlayDecisionPhase : std::uint8_t {
+        Evaluate,
+        Commit
+    };
+
+    /** @brief Detached runtime Problem from the selected Play scene. */
+    struct EditorPlayDecisionProblem final {
+        Runtime::SceneRuntimeId scene;
+        std::uint64_t tick{};
+        AI::AgentId agent;
+        EditorPlayDecisionPhase phase{};
+        Error error;
+        std::optional<Runtime::EntityRef> entity; /**< Available only when the runtime verified the original entity generation. */
+    };
+
     class EditorPlaySceneHost {
     public:
         /** @brief Identifies the actual selected XR participant in this factory composition.
@@ -93,6 +110,13 @@ namespace Horo::Editor {
          * @return Service owned by this host until shutdown/destruction.
          */
         [[nodiscard]] virtual Runtime::RuntimeSceneService &Scenes() noexcept = 0;
+
+        /** @brief Copies one current Decision problem on the Play owner lane.
+         * @return Last completed failure or absence for unconfigured/healthy hosts. No runtime ownership escapes.
+         */
+        [[nodiscard]] virtual std::optional<EditorPlayDecisionProblem> ReadDecisionProblem() const {
+            return std::nullopt;
+        }
 
         /** @brief Queues the initial Scene using an explicitly selected installed child-aware host when required.
          * @param definition Existing immutable authored parent conversion. @param source Exact source evidence for child-bearing roots.

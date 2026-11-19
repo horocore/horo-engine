@@ -1204,6 +1204,12 @@ namespace Horo::Editor {
         [[nodiscard]] bool HasNativeGameplaySources() const;
         void StopPlaySession();
         void RefreshPlayStateProjection();
+        /** @brief Projects the latest exact runtime failure while its Play scene remains active. */
+        void RefreshPlayDecisionProblem();
+        /** @brief Resolves a reported entity to the unchanged authored clone source, when it exists. */
+        [[nodiscard]] std::optional<SceneObjectId> ResolvePlayDecisionProblemObject(const EditorPlayDecisionProblem &problem) const;
+        /** @brief Revalidates the visible problem and its entity before changing selection. */
+        void NavigatePlayDecisionProblem(const PlayDecisionNavigationRequest &request);
         [[nodiscard]] EditorViewportCamera ResolvePlayViewportCamera(const Runtime::RuntimeSceneView &runtimeView) const;
         void ExtractPlayViewportScene();
         /** @brief Clear unavailable simulated evidence before publishing another viewport revision. */

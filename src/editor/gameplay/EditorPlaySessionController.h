@@ -161,6 +161,8 @@ namespace Horo::Editor {
          * @return Read-only current view or absence. Never transfers mutable Scene ownership.
          */
         [[nodiscard]] std::optional<Runtime::RuntimeSceneView> SceneView() const noexcept;
+        /** @brief Reads the selected ready host's completed Decision problem. */
+        [[nodiscard]] std::optional<EditorPlayDecisionProblem> ReadDecisionProblem() const;
         /** @brief Indicates whether legacy viewport extraction is outside the selected Play composition. */
         [[nodiscard]] bool UsesMountedViewport() const noexcept;
         /** @brief Borrows the actual Play host receipt synchronously; absence never implies no Physics. */

@@ -213,6 +213,7 @@ namespace {
 
     struct PlayOwnerObservations final {
         std::vector<Runtime::SceneRuntimeId> admitted;
+        std::optional<Editor::EditorPlayDecisionProblem> decisionProblem;
         std::size_t ticks{};
         std::size_t closed{};
         bool failTick{};
@@ -247,6 +248,11 @@ namespace {
             ++observations_->ticks;
             return observations_->failTick ? Result<void>::Failure(MakeError(Gameplay::GameplayErrors::PhysicsUnavailable))
                                            : Result<void>::Success();
+        }
+
+        /** @brief Supplies an owned report for the session projection test. */
+        std::optional<Editor::EditorPlayDecisionProblem> ReadDecisionProblem() const override {
+            return observations_->decisionProblem;
         }
 
         Result<void> OnRuntimeFixedUpdate(const Runtime::FixedStepContext &context) override {
@@ -545,6 +551,35 @@ TEST_CASE("Play injects one Scene owner and steps it only at admitted fixed quan
     CHECK(observations->admitted.size() == 2);
     play.Stop();
     CHECK(observations->closed == 2);
+}
+
+TEST_CASE("Play exposes the owned Decision problem while playing and paused", "[editor][play][ai]") {
+    const auto observations = std::make_shared<PlayOwnerObservations>();
+    auto registry = Registry();
+    Editor::EditorPlaySessionController play;
+    CHECK_FALSE(play.ReadDecisionProblem());
+
+    REQUIRE(play.Start(AuthoringScene(), registry, ObservePlayOwner(observations)).HasValue());
+    REQUIRE(play.SceneView());
+    CHECK_FALSE(play.ReadDecisionProblem());
+    const auto error = MakeError(Gameplay::GameplayErrors::PhysicsUnavailable);
+    const auto agent = AI::AgentId::Create(7).Value();
+    observations->decisionProblem = Editor::EditorPlayDecisionProblem{.scene = play.SceneView()->RuntimeId(),
+                                                                      .tick = 2,
+                                                                      .agent = agent,
+                                                                      .phase = Editor::EditorPlayDecisionPhase::Evaluate,
+                                                                      .error = error,
+                                                                      .entity = std::nullopt};
+
+    const auto captured = play.ReadDecisionProblem();
+    REQUIRE(captured);
+    CHECK(captured->tick == 2);
+    CHECK(captured->agent == agent);
+    REQUIRE(play.Pause().HasValue());
+    REQUIRE(play.ReadDecisionProblem());
+    play.Stop();
+    CHECK_FALSE(play.ReadDecisionProblem());
+    CHECK(captured->error.code.Value() == error.code.Value());
 }
 
 TEST_CASE("Play injected-owner failure preserves cause and closes the single Scene service", "[editor][play][ownership]") {

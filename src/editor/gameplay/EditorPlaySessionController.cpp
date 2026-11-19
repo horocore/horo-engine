@@ -732,6 +732,13 @@ namespace Horo::Editor {
         return sceneHost_ ? sceneHost_->Scenes().ActiveScene() : std::nullopt;
     }
 
+    /** @copydoc EditorPlaySessionController::ReadDecisionProblem */
+    std::optional<EditorPlayDecisionProblem> EditorPlaySessionController::ReadDecisionProblem() const {
+        if (!sceneHost_ || (state_ != EditorPlaySessionState::Playing && state_ != EditorPlaySessionState::Paused))
+            return std::nullopt;
+        return sceneHost_->ReadDecisionProblem();
+    }
+
     std::optional<EditorSceneCollisionReceipt> EditorPlaySessionController::CollisionReceipt() const noexcept {
         return sceneHost_ ? sceneHost_->CollisionReceipt() : std::nullopt;
     }

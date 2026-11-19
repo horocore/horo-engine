@@ -428,6 +428,21 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             return *scenes_;
         }
 
+        /** @copydoc Editor::EditorPlaySceneHost::ReadDecisionProblem */
+        std::optional<Editor::EditorPlayDecisionProblem> ReadDecisionProblem() const override {
+            const auto scene = scenes_ ? scenes_->ActiveScene() : std::nullopt;
+            if (!scene || !ai_)
+                return std::nullopt;
+            auto captured = ai_->ReadDecisionFailureAtSafePoint(*scene);
+            if (captured.HasError() || !captured.Value())
+                return std::nullopt;
+            auto report = std::move(captured).Value();
+            const auto phase = report->origin.phase == AI::AiSchedulingFailurePhase::Evaluate ? Editor::EditorPlayDecisionPhase::Evaluate
+                                                                                              : Editor::EditorPlayDecisionPhase::Commit;
+            return Editor::EditorPlayDecisionProblem{scene->RuntimeId(),       report->tick,  report->origin.identity, phase,
+                                                     std::move(report->error), report->entity};
+        }
+
         Result<std::shared_ptr<Gameplay::GameplayPrefabContext>> PrefabServices(const Gameplay::BehaviorRegistry &registry,
                                                                                 const Gameplay::ComponentRegistry &components) override {
             if (!prefab_.templates)

@@ -5,6 +5,7 @@
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 #include <algorithm>
+#include <array>
 #include <cinttypes>
 #include <cmath>
 #include <cstddef>
@@ -250,6 +251,60 @@ namespace Horo::Editor {
                 break;
         }
         m_viewModel.playError = m_playSession.LastError().has_value() ? m_playSession.LastError()->message : std::string{};
+        RefreshPlayDecisionProblem();
+    }
+
+    /** @copydoc EditorWorkspaceController::ResolvePlayDecisionProblemObject */
+    std::optional<SceneObjectId> EditorWorkspaceController::ResolvePlayDecisionProblemObject(
+        const EditorPlayDecisionProblem &problem) const {
+        if (!problem.entity || !problem.entity->IsValid() || problem.entity->runtime != problem.scene ||
+            m_viewModel.playViewSource == EditorPlayViewSource::MountedWorld || m_playSession.AuthoringRevision() != m_document.Revision())
+            return std::nullopt;
+        const auto scene = m_playSession.SceneView();
+        if (!scene || !scene->IsCurrent() || scene->RuntimeId() != problem.scene)
+            return std::nullopt;
+        const auto entity = scene->Get(*problem.entity);
+        if (entity.HasError() || !entity.Value().authoredObject || !entity.Value().components || !entity.Value().components->aiAgent ||
+            entity.Value().components->aiAgent->agent != problem.agent)
+            return std::nullopt;
+        return SceneObjectId{entity.Value().authoredObject->value};
+    }
+
+    /** @copydoc EditorWorkspaceController::RefreshPlayDecisionProblem */
+    void EditorWorkspaceController::RefreshPlayDecisionProblem() {
+        auto &problem = m_viewModel.playDecisionProblem;
+        const auto scene = m_playSession.SceneView();
+        const bool playing = m_viewModel.playState == EditorPlayState::Playing || m_viewModel.playState == EditorPlayState::Paused;
+        if (!playing || !scene || !scene->IsCurrent()) {
+            problem.reset();
+            m_viewModel.playDecisionObjectAvailable = false;
+            return;
+        }
+        if (problem && problem->scene != scene->RuntimeId())
+            problem.reset();
+        if (auto captured = m_playSession.ReadDecisionProblem(); captured && captured->scene == scene->RuntimeId() && captured->tick > 0 &&
+                                                                 captured->agent.IsValid() && (!problem || captured->tick > problem->tick))
+            problem = std::move(captured);
+        m_viewModel.playDecisionObjectAvailable = problem && ResolvePlayDecisionProblemObject(*problem).has_value();
+    }
+
+    /** @copydoc EditorWorkspaceController::NavigatePlayDecisionProblem */
+    void EditorWorkspaceController::NavigatePlayDecisionProblem(const PlayDecisionNavigationRequest &request) {
+        const auto &problem = m_viewModel.playDecisionProblem;
+        const auto state = m_playSession.State();
+        if ((state != EditorPlaySessionState::Playing && state != EditorPlaySessionState::Paused) || !problem || !problem->entity ||
+            request.tick != problem->tick || request.agent != problem->agent || request.entity != *problem->entity)
+            return;
+        const auto object = ResolvePlayDecisionProblemObject(*problem);
+        if (!object) {
+            m_viewModel.playDecisionObjectAvailable = false;
+            return;
+        }
+        if (m_selection.SetObjects({*object}, object).HasError()) {
+            m_viewModel.playDecisionObjectAvailable = false;
+            return;
+        }
+        RefreshSelectionProjection();
     }
 
     void EditorWorkspaceController::UpdatePlayPresentation(const float elapsedSeconds) {

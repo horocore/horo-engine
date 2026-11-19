@@ -6,9 +6,40 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <format>
 
 namespace Horo::Editor {
     namespace {
+        /** @brief Displays an owner-correlated runtime diagnostic and emits a typed selection intent. */
+        void DrawDecisionProblem(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
+                                 const EditorGuiContext &context) {
+            const auto &problem = viewModel.playDecisionProblem;
+            if (!problem)
+                return;
+            const auto text = [&](std::string_view key) -> const std::string & {
+                return GamePanel::kTextScope.Text(context.localization, key);
+            };
+            const auto &fonts = context.theme.fonts;
+            const auto color = problem->error.severity >= ErrorSeverity::Error ? Theme::Err() : Theme::Warn();
+            const auto &phase = text(problem->phase == EditorPlayDecisionPhase::Evaluate ? "ai_problem_evaluate" : "ai_problem_commit");
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x,
+                            std::format("{} · {} · {} {} · {} · {}", text("ai_problem"), phase, text("ai_problem_tick"), problem->tick,
+                                        problem->error.code.Value(), problem->error.message),
+                            color, fonts);
+            if (!problem->entity || !viewModel.playDecisionObjectAvailable) {
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("ai_problem_object_unavailable"), Theme::Muted(), fonts);
+                return;
+            }
+            if (Ui::Button({.label = text("ai_problem_select_object").c_str(),
+                            .variant = Ui::ButtonVariant::Secondary,
+                            .font = fonts.sans,
+                            .componentSize = Ui::ComponentSize::Small}) &&
+                command.command == EditorWorkspaceViewCommand::None) {
+                command.command = EditorWorkspaceViewCommand::NavigatePlayDecisionProblem;
+                command.playDecisionNavigation = PlayDecisionNavigationRequest{problem->tick, problem->agent, *problem->entity};
+            }
+        }
+
         /** @brief Opens the existing project Input Mapping surface from paused Play. */
         void DrawPausedInputMapping(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                                     const EditorGuiContext &context) {
@@ -89,6 +120,7 @@ namespace Horo::Editor {
             ImGui::TextWrapped("%s", kTextScope.Text(context.localization, key).c_str());
         }
         DrawPausedInputMapping(viewModel, command, context);
+        DrawDecisionProblem(viewModel, command, context);
         const auto origin = ImGui::GetCursorScreenPos();
         const float height = std::max(0.0F, ImGui::GetContentRegionAvail().y);
         RequestViewport(size.x, height);
