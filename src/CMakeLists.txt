@@ -1095,6 +1095,7 @@ add_library(HoroNetworkRuntime STATIC
         runtime/networking/NetworkPrefabLifecycle.cpp
         runtime/networking/NetworkWorldBindingController.cpp
         runtime/networking/NetworkWorldBindingPeer.cpp
+        runtime/networking/NetworkWorldBindingPrefab.cpp
         runtime/networking/NetworkWorldBindingTravel.cpp
         runtime/networking/NetworkWorldOccurrenceIssuer.cpp
         runtime/networking/NetworkModeWorldState.cpp

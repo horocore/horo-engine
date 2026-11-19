@@ -242,26 +242,37 @@ namespace Horo::Network::Detail {
         const auto features = client_->Negotiation()->features.Values();
         if (!policy_.prefabLifecycle || std::ranges::find(features, policy_.prefabLifecycle->feature) == features.end())
             return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
-        constexpr auto client = NetworkModeWorldKind::Client;
-        const auto index = Index(client);
-        if (index == plan_.worldCount || !Ready(client, plan_.worlds[index].scene))
-            return Result<void>::Failure(MakeError(NetworkErrors::NetworkModeUnavailable));
-        auto &world = *current_[index];
         auto decoded = DecodeNetworkPrefabLifecycle(payload);
         if (decoded.HasError())
             return Result<void>::Failure(decoded.ErrorValue());
-        const auto &record = decoded.Value();
-        if (record.session != world.binding.worldSession || record.occurrence.Epoch() != world.binding.remoteEpoch)
+        auto *world = PrefabReceiver(decoded.Value());
+        if (!world)
             return Result<void>::Failure(MakeError(NetworkErrors::ReplicationWorldStale));
         constexpr std::size_t maximumPending = 16;
-        if (world.prefabInbox.size() == maximumPending)
+        if (world->prefabInbox.size() == maximumPending)
             return Result<void>::Failure(MakeError(NetworkErrors::TransportReliableBackpressure));
         try {
-            world.prefabInbox.push_back({std::move(decoded).Value(), context.cancellation});
+            world->prefabInbox.push_back({std::move(decoded).Value(), context.cancellation});
             return Result<void>::Success();
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(MakeError(NetworkErrors::ReplicationWorldCapacityExceeded));
         }
+    }
+
+    /** @copydoc NetworkModeWorldState::PrefabReceiver */
+    NetworkModeWorldState::World *NetworkModeWorldState::PrefabReceiver(const NetworkPrefabLifecycleRecord &record) {
+        constexpr auto client = NetworkModeWorldKind::Client;
+        const auto index = Index(client);
+        if (index == plan_.worldCount)
+            return nullptr;
+        const auto matches = [&record](const std::unique_ptr<World> &world) {
+            return world && record.session == world->binding.worldSession && record.occurrence.Epoch() == world->binding.remoteEpoch;
+        };
+        if (matches(current_[index]) && Ready(client, plan_.worlds[index].scene))
+            return current_[index].get();
+        if (matches(candidate_[index]) && (!travelPending_ || remoteCommit_))
+            return candidate_[index].get();
+        return nullptr;
     }
 
     /** @copydoc NetworkModeWorldState::TakePrefab */
@@ -470,6 +481,32 @@ namespace Horo::Network::Detail {
                                                .phase = Runtime::RuntimePhase::CommitDeferredLifecycleChanges,
                                                .cancellation = cancellation};
         return current_[Index(kind)]->lifecycle.PrepareDynamicObjectBatch(work, added, retired);
+    }
+
+    /** @copydoc NetworkModeWorldState::CaptureAuthorityPrefabs */
+    Result<AuthorityPrefabView> NetworkModeWorldState::CaptureAuthorityPrefabs() {
+        using Outcome = Result<AuthorityPrefabView>;
+        const auto index = Index(NetworkModeWorldKind::AuthorityServer);
+        if (stopped_ || index == plan_.worldCount || !current_[index])
+            return Outcome::Failure(MakeError(NetworkErrors::ReplicationWorldUnavailable));
+        auto &world = *current_[index];
+        const auto revision = world.lifecycle.ObjectMappingRevision();
+        if (revision == 0)
+            return Outcome::Failure(MakeError(NetworkErrors::ReplicationWorldUnavailable));
+        if (world.prefabRevision == revision)
+            return Outcome::Success({revision, world.authorityPrefabs});
+        const ReplicationWorldWorkRequest request{.scene = plan_.worlds[index].scene,
+                                                  .session = world.binding.worldSession,
+                                                  .phase = Runtime::RuntimePhase::NetworkFlush};
+        auto lease = world.lifecycle.AcquireFor(request, ReplicationWorldCapability::PublishAuthority);
+        if (lease.HasError())
+            return Outcome::Failure(lease.ErrorValue());
+        auto records = CaptureNetworkPrefabSpawns(lease.Value());
+        if (records.HasError())
+            return Outcome::Failure(records.ErrorValue());
+        world.authorityPrefabs = std::move(records).Value();
+        world.prefabRevision = revision;
+        return Outcome::Success({revision, world.authorityPrefabs});
     }
 
     const NetworkWorldBindingRecord *NetworkModeWorldState::ServerBinding() const noexcept {

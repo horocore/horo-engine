@@ -23,6 +23,11 @@ namespace Horo::Network {
         };
 
         struct Peer final {
+            struct PrefabChange final {
+                NetworkObjectId occurrence;
+                bool spawn;
+            };
+
             std::shared_ptr<PeerSessionLifecycle> lifecycle;
             ConnectionHandle connection;
             NetworkOperationGeneration generation;
@@ -30,7 +35,13 @@ namespace Horo::Network {
             std::uint32_t sequence{};
             std::optional<NetworkWorldBindingRecord> sent;
             std::optional<NetworkWorldBindingRecord> pending;
+            NetworkSessionGeneration establishedWorld; /**< Last native-accepted Initial or Commit session. */
             std::array<std::byte, 256> frame{};
+            std::vector<std::byte> prefabFrame;
+            std::optional<PrefabChange> prefabPending;
+            std::vector<NetworkObjectId> knownPrefabs;
+            NetworkSessionGeneration prefabSession;
+            std::uint64_t prefabRevision{};
             std::size_t frameBytes{};
             std::uint64_t deadline{};          // Current queued frame's bounded send deadline.
             std::uint64_t preparedDeadline{};  // Native-accepted PREPARE fence; unrelated traffic cannot extend it.
@@ -48,10 +59,19 @@ namespace Horo::Network {
         [[nodiscard]] Result<void> ValidatePeer(const PeerSessionLifecycle &peer, NetworkOperationGeneration generation,
                                                 std::uint64_t nowTick) const;
         [[nodiscard]] Result<void> Queue(Peer &peer, const NetworkWorldBindingRecord &record, std::uint64_t nowTick) const;
-        [[nodiscard]] Result<void> QueueFrame(Peer &peer, MessageEnvelopePayloadView message, std::uint64_t nowTick) const;
+        [[nodiscard]] Result<void> QueueFrame(Peer &peer, MessageEnvelopePayloadView message, std::uint64_t nowTick,
+                                              std::span<std::byte> prefabStorage = {}) const;
         /** @brief Queue only an advancing server publication, preserving pending traffic and late-join initial identity. */
         [[nodiscard]] Result<void> QueueWorldUpdate(Peer &peer, const NetworkWorldBindingRecord *prepared,
                                                     const NetworkWorldBindingRecord *current, std::uint64_t nowTick) const;
+        /** @brief Queues the next structural delta after the exact world binding was accepted by native send. */
+        [[nodiscard]] Result<void> QueuePrefabUpdate(Peer &peer, const NetworkWorldBindingRecord *prepared,
+                                                     const NetworkWorldBindingRecord *current, std::uint64_t nowTick);
+        /** @brief Serializes one occurrence into the shared reliable sequence slot. */
+        [[nodiscard]] Result<void> QueuePrefabRecord(Peer &peer, const NetworkPrefabLifecycleRecord &record, std::size_t expectedGroups,
+                                                     std::uint64_t nowTick) const;
+        /** @brief Advances the known inventory only after the original frame is accepted. */
+        static void CompletePrefabSend(Peer &peer) noexcept;
         [[nodiscard]] Result<void> Send(Peer &peer, std::uint64_t nowTick);
         void Retire(Peer &peer, std::uint64_t nowTick) noexcept;
         void ClearPending() noexcept;

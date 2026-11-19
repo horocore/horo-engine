@@ -47,6 +47,10 @@ namespace Horo::Network {
      */
     [[nodiscard]] Result<NetworkPrefabLifecycleRecord> CaptureNetworkPrefabSpawn(const ReplicationWorldReadLease &world,
                                                                                  NetworkObjectId occurrence);
+    /** @brief Builds the live authority group inventory in occurrence order.
+     * @param world Immutable committed authority capture.
+     * @return Owned complete groups or a typed invalid, revoked or capacity error. */
+    [[nodiscard]] Result<std::vector<NetworkPrefabLifecycleRecord>> CaptureNetworkPrefabSpawns(const ReplicationWorldReadLease &world);
 
     /**
      * @brief Encodes a validated canonical lifecycle payload in big-endian byte order.

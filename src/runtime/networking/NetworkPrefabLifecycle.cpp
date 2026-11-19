@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <new>
+#include <tuple>
 
 namespace Horo::Network {
     namespace {
@@ -154,6 +155,42 @@ namespace Horo::Network {
             if (world.IsRevoked())
                 return Outcome::Failure(MakeError(NetworkErrors::ReplicationWorldStale));
             return Outcome::Success({world.Descriptor().session, occurrence, std::move(spawn).Value()});
+        } catch (const std::bad_alloc &) {
+            return Outcome::Failure(MakeError(NetworkErrors::MessageEnvelopeCapacityExceeded));
+        }
+    }
+
+    /** @copydoc CaptureNetworkPrefabSpawns */
+    Result<std::vector<NetworkPrefabLifecycleRecord>> CaptureNetworkPrefabSpawns(const ReplicationWorldReadLease &world) {
+        using Outcome = Result<std::vector<NetworkPrefabLifecycleRecord>>;
+        if (!world.IsValid() || world.IsRevoked() || !world.Capabilities().publishAuthority)
+            return Outcome::Failure(MakeError(NetworkErrors::ReplicationWorldUnavailable));
+        try {
+            std::vector<const NetworkObjectMappingEntry *> members;
+            for (const auto &entry : world.Mapping().Entries())
+                if (entry.provenance.prefab)
+                    members.push_back(&entry);
+            std::ranges::sort(members, {}, [](const NetworkObjectMappingEntry *entry) {
+                const auto &origin = *entry->provenance.prefab;
+                return std::tuple{origin.occurrence, origin.source.entitySlot};
+            });
+            std::vector<NetworkPrefabLifecycleRecord> records;
+            for (const auto *entry : members) {
+                const auto &origin = *entry->provenance.prefab;
+                if (records.empty() || records.back().occurrence != origin.occurrence)
+                    records.push_back({world.Descriptor().session, origin.occurrence, NetworkPrefabSpawnRecord{origin.source.recipe, {}}});
+                auto &spawn = *records.back().spawn;
+                if (spawn.recipe != origin.source.recipe || spawn.members.size() == MaximumNetworkPrefabEntities)
+                    return Invalid<std::vector<NetworkPrefabLifecycleRecord>>();
+                spawn.members.push_back(
+                    {origin.source.entitySlot, entry->object, entry->provenance.schema, entry->provenance.schemaVersion});
+            }
+            for (const auto &record : records)
+                if (!ValidMembers(*record.spawn, record.occurrence))
+                    return Invalid<std::vector<NetworkPrefabLifecycleRecord>>();
+            if (world.IsRevoked())
+                return Outcome::Failure(MakeError(NetworkErrors::ReplicationWorldStale));
+            return Outcome::Success(std::move(records));
         } catch (const std::bad_alloc &) {
             return Outcome::Failure(MakeError(NetworkErrors::MessageEnvelopeCapacityExceeded));
         }

@@ -93,8 +93,8 @@ namespace Horo::Network {
         return Result<void>::Success();
     }
 
-    Result<void> NetworkWorldBindingController::Impl::QueueFrame(Peer &peer, MessageEnvelopePayloadView message,
-                                                                 const std::uint64_t tick) const {
+    Result<void> NetworkWorldBindingController::Impl::QueueFrame(Peer &peer, MessageEnvelopePayloadView message, const std::uint64_t tick,
+                                                                 std::span<std::byte> prefabStorage) const {
         if (peer.frameBytes != 0)
             return Result<void>::Failure(MakeError(NetworkErrors::TransportReliableBackpressure));
         if (peer.sequence == std::numeric_limits<std::uint32_t>::max() ||
@@ -105,13 +105,14 @@ namespace Horo::Network {
         if (!transport || !negotiation)
             return Result<void>::Failure(MakeError(NetworkErrors::AdmissionBindingInvalid));
         MessageEnvelopeLimits limits;
+        const auto buffer = prefabStorage.empty() ? std::span<std::byte>{peer.frame} : prefabStorage;
         limits.maximumFrameBytes = static_cast<std::size_t>(std::min<std::uint64_t>(
-            {peer.frame.size(), transport->Capabilities().maximumMessageBytes, negotiation->transport.maximumMessageBytes}));
+            {buffer.size(), transport->Capabilities().maximumMessageBytes, negotiation->transport.maximumMessageBytes}));
         // This writer accepts one synchronous extension-free payload, not the general decoder defaults.
         limits.maximumPayloadBytes = message.payload.size();
         limits.maximumFields = 0;
         limits.maximumExtensionBytes = 0;
-        const auto encoded = EncodeMessageEnvelopePayloadInto(message, *setup.codecs, peer.frame, limits);
+        const auto encoded = EncodeMessageEnvelopePayloadInto(message, *setup.codecs, buffer, limits);
         if (encoded.HasError())
             return Result<void>::Failure(encoded.ErrorValue());
         peer.frameBytes = encoded.Value();
@@ -125,9 +126,13 @@ namespace Horo::Network {
         if (auto checked = impl_->CheckOwner(); checked.HasError())
             return checked;
         const Impl::BusyScope busy{impl_->busy};
+        const auto &policy = impl_->setup.policy;
+        const auto matches = [&message](const MessageIdentityDescriptor &identity) {
+            return message.protocol == identity.protocol && message.message == identity.id;
+        };
         if (!impl_->dispatcher || !impl_->dispatcher->HasLiveHandler(message.protocol, message.message, MessageTrafficClass::Control) ||
-            phase != Runtime::RuntimePhase::NetworkFlush || message.sequence.Value() != 0 ||
-            (message.protocol == impl_->setup.policy.control.protocol && message.message == impl_->setup.policy.control.id))
+            phase != Runtime::RuntimePhase::NetworkFlush || message.sequence.Value() != 0 || matches(policy.control) ||
+            (policy.prefabLifecycle && matches(policy.prefabLifecycle->control)))
             return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
         auto peer = std::ranges::find_if(impl_->peers, [connection, generation](const Impl::Peer &slot) {
             return slot.lifecycle && slot.connection == connection && slot.generation == generation;
@@ -145,8 +150,8 @@ namespace Horo::Network {
         if (tick >= peer.deadline)
             return Result<void>::Failure(MakeError(NetworkErrors::SessionTimedOut));
         const auto sent = Detail::InvokeAdmissionProvider([this, &peer] {
-            return transport->Send(peer.connection, setup.controlChannel, std::span{peer.frame}.first(peer.frameBytes),
-                                   DeliveryPolicy::ReliableOrdered);
+            const auto buffer = peer.prefabPending ? std::span<std::byte>{peer.prefabFrame} : std::span<std::byte>{peer.frame};
+            return transport->Send(peer.connection, setup.controlChannel, buffer.first(peer.frameBytes), DeliveryPolicy::ReliableOrdered);
         });
         if (stopped)
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkModeShuttingDown));
@@ -160,9 +165,13 @@ namespace Horo::Network {
             return Result<void>::Failure(error);
         }
         ++peer.sequence;
+        if (peer.prefabPending)
+            CompletePrefabSend(peer);
         if (peer.pending) {
             if (peer.pending->kind == NetworkWorldBindingKind::PrepareTravel && peer.sent != peer.pending)
                 peer.preparedDeadline = peer.deadline;
+            if (peer.pending->kind != NetworkWorldBindingKind::PrepareTravel)
+                peer.establishedWorld = peer.pending->worldSession;
             peer.sent = peer.pending;
         }
         peer.pending.reset();
@@ -183,6 +192,8 @@ namespace Horo::Network {
         // borrowed peer/dispatcher/outbox; it must not duplicate foreign cleanup.
         peer.lifecycle.reset();
         peer.pending.reset();
+        peer.prefabPending.reset();
+        peer.knownPrefabs.clear();
         peer.frameBytes = 0;
     }
 
@@ -245,6 +256,11 @@ namespace Horo::Network {
                 continue;
             if (auto queued = impl_->QueueWorldUpdate(peer, prepared, current, nowTick); queued.HasError())
                 return queued;  // Local encoding/capacity error precedes any new publication.
+            if (auto queued = impl_->QueuePrefabUpdate(peer, prepared, current, nowTick); queued.HasError()) {
+                peer.failure = queued.ErrorValue();
+                impl_->Retire(peer, nowTick);
+                continue;
+            }
             if (auto sent = impl_->Send(peer, nowTick); sent.HasError()) {
                 if (impl_->stopped)
                     return sent;

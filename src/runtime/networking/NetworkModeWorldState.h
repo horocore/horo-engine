@@ -9,6 +9,12 @@
 #include "NetworkWorldOccurrenceIssuer.h"
 
 namespace Horo::Network::Detail {
+    /** @brief Borrowed authority group inventory, valid until mapping refresh or world replacement. */
+    struct AuthorityPrefabView final {
+        std::uint64_t revision;
+        std::span<const NetworkPrefabLifecycleRecord> records;
+    };
+
     /** @brief One owner-thread identity/publication authority; all external references point to this stable allocation.
      * The composition transfers the owner on move. Shutdown revokes records before any Scene facade is
      * destroyed; borrowed transport/handler owners must detach before this allocation is released.
@@ -69,6 +75,8 @@ namespace Horo::Network::Detail {
             std::span<const Runtime::EntityRef> retired, const CancellationToken &cancellation) const;
         /** @brief Borrow the committed server binding record; absent before actual publication. */
         [[nodiscard]] const NetworkWorldBindingRecord *ServerBinding() const noexcept;
+        /** @brief Refreshes and borrows the authority group inventory at NetworkFlush. */
+        [[nodiscard]] Result<AuthorityPrefabView> CaptureAuthorityPrefabs();
         /** @brief Revoke every published and staged occurrence once before dependent teardown. */
         void Shutdown() noexcept;
 
@@ -85,11 +93,15 @@ namespace Horo::Network::Detail {
             ReplicationWorldLifecycle lifecycle;
             NetworkWorldBindingRecord binding;
             std::vector<PendingPrefab> prefabInbox;
+            std::vector<NetworkPrefabLifecycleRecord> authorityPrefabs;
+            std::uint64_t prefabRevision{};
         };
 
         [[nodiscard]] Result<void> CheckOwner() const;
         [[nodiscard]] std::size_t Index(NetworkModeWorldKind kind) const noexcept;
         [[nodiscard]] Result<void> AuthorizeClient(const InboundMessageContext &context) const;
+        /** @brief Locates the published client or exact authenticated candidate awaiting its safe point. */
+        [[nodiscard]] World *PrefabReceiver(const NetworkPrefabLifecycleRecord &record);
         /** @brief Validate the matching prepared travel occurrence without publishing client authority. */
         [[nodiscard]] Result<void> AcceptTravel(const NetworkWorldBindingRecord &record, const InboundMessageContext &context,
                                                 std::size_t index);

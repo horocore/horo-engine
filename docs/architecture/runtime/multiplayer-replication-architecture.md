@@ -139,6 +139,15 @@ session, and authority epoch. Each client world has a bounded inbox that only
 its Scene factory receives. The owner transfers records at the structural
 safe point. Travel, disconnect and shutdown fence out the previous inbox.
 
+At NetworkFlush the authority rereads grouped Prefab mappings only when
+their committed mapping revision changes. Each peer compares that inventory
+with the occurrences accepted by its native reliable send. Despawn precedes
+any replacement spawn, and backpressure retains the exact encoded frame and
+sequence. Initial and Commit world messages precede that world's Prefab data.
+The matching client candidate can stage ordered data received in the same
+poll, and exposes it only after Scene publication. A packet that cannot fit
+the negotiated codec or transport budget fails that peer's publication.
+
 ```cpp
 enum class ReplicationExecutionRole : std::uint8_t {
     Standalone,

@@ -606,6 +606,11 @@ namespace Horo::Network {
         return record_->mapping.ResolveEntry(object);
     }
 
+    /** @copydoc ReplicationWorldLifecycle::ObjectMappingRevision */
+    std::uint64_t ReplicationWorldLifecycle::ObjectMappingRevision() const noexcept {
+        return state_ == ReplicationWorldLifecycleState::Active && active_ ? active_->mappingRevision.load() : 0;
+    }
+
     /** @copydoc ReplicationWorldLifecycle::AcquireCaptureRead */
     Result<ReplicationWorldCaptureRead> ReplicationWorldLifecycle::AcquireCaptureRead(const ReplicationWorldWorkRequest &request) const {
         if (const auto active = RequireActive(request.scene, request.session); active.HasError())

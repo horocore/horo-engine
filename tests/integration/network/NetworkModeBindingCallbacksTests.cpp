@@ -33,7 +33,8 @@ namespace Horo::Network {
         };
 
         NetworkModeComposition ListenMode(const NetworkWorldBindingSetup &setup, const bool *failScene = nullptr,
-                                          NetworkClientPrefabInbox *clientInbox = nullptr) {
+                                          NetworkClientPrefabInbox *clientInbox = nullptr,
+                                          NetworkAuthorityObjectPublication *authorityObjects = nullptr) {
             NetworkModePlan plan;
             plan.mode = NetworkProjectRole::ListenServer;
             plan.hostGeneration = 1;
@@ -49,12 +50,15 @@ namespace Horo::Network {
             plan.worldCount = 2;
             NetworkModeFactories factories;
             for (auto &factory : factories.services)
-                factory = [failScene, clientInbox](NetworkModeServiceRequest request) -> Result<std::unique_ptr<INetworkModeService>> {
+                factory = [failScene, clientInbox,
+                           authorityObjects](NetworkModeServiceRequest request) -> Result<std::unique_ptr<INetworkModeService>> {
                     if (clientInbox && request.prefabInbox.IsBound()) {
                         CHECK(request.service == NetworkModeServiceKind::Scene);
                         CHECK(request.world == NetworkModeWorldKind::Client);
                         *clientInbox = request.prefabInbox;
                     }
+                    if (authorityObjects && request.authorityObjects.IsBound())
+                        *authorityObjects = request.authorityObjects;
                     return Result<std::unique_ptr<INetworkModeService>>::Success(
                         std::make_unique<BindingService>(request.service, failScene));
                 };
@@ -127,6 +131,7 @@ namespace Horo::Network {
         bool wrongWorld{};
         bool wrongDirection{};
         bool cancelDelivery{};
+        bool delayPublication{};
         SECTION("the exact publisher can stage and transfer a Prefab at the safe point") {}
         SECTION("another world session cannot enqueue work") {
             wrongWorld = true;
@@ -141,6 +146,9 @@ namespace Horo::Network {
         SECTION("revoking delivery cancels already staged records") {
             cancelDelivery = true;
         }
+        SECTION("ordered Prefab data may follow Initial before Scene publication") {
+            delayPublication = true;
+        }
         ModeBindingTests::BindingFixture fixture{setup};
         NetworkClientPrefabInbox inbox;
         auto mode = ListenMode(setup, nullptr, &inbox);
@@ -149,29 +157,30 @@ namespace Horo::Network {
         REQUIRE(inbox.IsBound());
         CHECK(inbox.Take(CommitPhase).HasError());
         const auto client = ModeBindingTests::Active(Connection(), Session());
-        fixture.PublishInitial(mode, client);
-        const auto authority = mode.Role(NetworkModeWorldKind::AuthorityServer, Runtime::SceneRuntimeId{1}).Value();
-        const auto object = NetworkObjectId::Create(authority.authority, 8, 2).Value();
+        fixture.StageInitial(mode, client);
+        const auto initial = DecodeMessageEnvelope(std::span(fixture.transport.sent).first(fixture.transport.size), *setup.codecs).Value();
+        const auto authority = DecodeNetworkWorldBinding(initial.payload).Value();
+        if (!delayPublication)
+            REQUIRE(mode.RunPhase(CommitPhase).HasValue());
+        const auto object = NetworkObjectId::Create(authority.remoteEpoch, 8, 2).Value();
         const auto session =
-            wrongWorld ? NetworkSessionGeneration::Create(authority.worldSession->Value() + 1).Value() : *authority.worldSession;
+            wrongWorld ? NetworkSessionGeneration::Create(authority.worldSession.Value() + 1).Value() : authority.worldSession;
         const NetworkPrefabLifecycleRecord record{session, object,
                                                   NetworkPrefabSpawnRecord{{Assets::AssetId::FromBytes({1}), Sha256Digest{{2}}, 1},
                                                                            {{0, object, ReplicationSchemaId::Create(9).Value(), {1, 0}}}}};
         const auto payload = EncodeNetworkPrefabLifecycle(record).Value();
         auto control = ControlPayload(payload);
-        auto owner = fixture.binding.lock();
-        REQUIRE(owner);
-        InboundDispatchReport received;
         if (wrongDirection) {
             fixture.RegisterClient(fixture.server);
-            control.sequence = MessageSequenceNumber{1};
-            std::array<std::byte, 256> encoded{};
-            const auto size = EncodeMessageEnvelopePayloadInto(control, *setup.codecs, encoded).Value();
-            received = DeliverPrefabFrame(fixture, fixture.server->Connection(), std::span(encoded).first(size));
-        } else {
-            REQUIRE(owner->QueueControl(fixture.server->Connection(), Session(8), control, Runtime::RuntimePhase::NetworkFlush).HasValue());
-            REQUIRE(owner->Flush(22).HasValue());
-            received = DeliverPrefabFrame(fixture, client->Connection(), std::span(fixture.transport.sent).first(fixture.transport.size));
+        }
+        control.sequence = MessageSequenceNumber{wrongDirection ? 1U : 2U};
+        std::array<std::byte, 256> encoded{};
+        const auto size = EncodeMessageEnvelopePayloadInto(control, *setup.codecs, encoded).Value();
+        const auto received = DeliverPrefabFrame(fixture, wrongDirection ? fixture.server->Connection() : client->Connection(),
+                                                 std::span(encoded).first(size));
+        if (delayPublication) {
+            CHECK(inbox.Take(CommitPhase).HasError());
+            REQUIRE(mode.RunPhase(CommitPhase).HasValue());
         }
         CHECK(inbox.Take(Runtime::RuntimePhase::NetworkPoll).HasError());
         if (cancelDelivery)
@@ -195,6 +204,92 @@ namespace Horo::Network {
         }
         mode.Shutdown();
         CHECK(inbox.Take(CommitPhase).HasError());
+    }
+
+    TEST_CASE("Authority flush automatically sends committed Prefab deltas after reliable retry",
+              "[integration][network][mode][binding][prefab]") {
+        auto setup = ModeBindingTests::Setup(1200);
+        setup.policy.prefabLifecycle = NetworkPrefabLifecyclePolicy{{setup.policy.control.protocol,
+                                                                     WireIdentity<MessageTypeId>(12),
+                                                                     WireIdentity<MessageSchemaId>(13),
+                                                                     {1, 0},
+                                                                     false},
+                                                                    setup.policy.feature};
+        ModeBindingTests::BindingFixture fixture{setup};
+        NetworkClientPrefabInbox inbox;
+        NetworkAuthorityObjectPublication publication;
+        auto mode = ListenMode(setup, nullptr, &inbox, &publication);
+        fixture.Attach(mode);
+        REQUIRE(mode.Start().HasValue());
+        const auto client = ModeBindingTests::Active(Connection(), Session());
+        fixture.PublishInitial(mode, client);
+        auto owner = fixture.binding.lock();
+        REQUIRE(owner);
+        REQUIRE(publication.IsBound());
+        const auto scene = Runtime::SceneRuntimeId{1};
+        const NetworkPrefabTemplateIdentity source{Assets::AssetId::FromBytes({1}), Sha256Digest{{2}}, 8};
+        const auto schema = ReplicationSchemaId::Create(9).Value();
+        std::vector<ReplicationDynamicSceneObject> added;
+        std::vector<Runtime::EntityRef> entities;
+        for (std::uint32_t slot = 0; slot < source.entityCount; ++slot) {
+            entities.push_back({scene, {slot + 1, 1}});
+            added.push_back({entities.back(), schema, {1, 0}, NetworkPrefabMemberSource{source, slot}});
+        }
+        const auto commit = [](auto candidate) {
+            REQUIRE(candidate.HasValue());
+            REQUIRE(candidate.Value()->ValidatePublication().HasValue());
+            candidate.Value()->Publish();
+            REQUIRE(candidate.Value()->AfterPublication().HasValue());
+        };
+        const auto flush = [&] {
+            fixture.transport.size = 0;
+            REQUIRE(owner->Flush(22).HasValue());
+            return std::span(fixture.transport.sent).first(fixture.transport.size);
+        };
+        const auto receive = [&](std::uint32_t sequence) {
+            const auto bytes = flush();
+            REQUIRE_FALSE(bytes.empty());
+            const auto frame = DecodeMessageEnvelope(bytes, *setup.codecs).Value();
+            CHECK(frame.sequence == MessageSequenceNumber{sequence});
+            REQUIRE(DeliverPrefabFrame(fixture, client->Connection(), bytes).rejectedPackets == 0);
+            auto messages = inbox.Take(CommitPhase).Value();
+            REQUIRE(messages.size() == 1);
+            return messages.front();
+        };
+        auto pending = publication.Prepare(added, {}, {});
+        REQUIRE(pending.HasValue());
+        CHECK(flush().empty());
+        commit(std::move(pending));
+        fixture.transport.backpressure = true;
+        CHECK(flush().empty());
+        CHECK(inbox.Take(CommitPhase).Value().empty());
+        commit(publication.Prepare({}, entities, {}));
+        fixture.transport.backpressure = false;
+        const auto created = receive(2);
+        REQUIRE(created.spawn);
+        CHECK(created.spawn->recipe == source);
+        CHECK(created.spawn->members.size() == 8);
+        CHECK(fixture.transport.size > 256);
+        const auto retired = receive(3);
+        CHECK_FALSE(retired.spawn);
+        CHECK(retired.occurrence == created.occurrence);
+        CHECK(flush().empty());
+
+        for (std::size_t index = 0; index < entities.size(); ++index) {
+            ++entities[index].entity.generation;
+            added[index].entity = entities[index];
+        }
+        commit(publication.Prepare(added, {}, {}));
+        const auto replacement = receive(4);
+        CHECK(replacement.occurrence == created.occurrence.NextGeneration().Value());
+        auto late = ModeBindingTests::Active(ConnectionHandle::Create(4, 1).Value(), Session(9));
+        REQUIRE(owner->BindPeer(AdmissionEndpoint::Server, late, Session(9), 22).HasValue());
+        const auto lateWorld = DecodeMessageEnvelope(flush(), *setup.codecs).Value();
+        REQUIRE(DecodeNetworkWorldBinding(lateWorld.payload).Value().kind == NetworkWorldBindingKind::Initial);
+        const auto latePrefab = DecodeMessageEnvelope(flush(), *setup.codecs).Value();
+        CHECK(latePrefab.sequence == MessageSequenceNumber{2});
+        CHECK(DecodeNetworkPrefabLifecycle(latePrefab.payload).Value() == replacement);
+        CHECK(flush().empty());
     }
 
     TEST_CASE("Actual product session callbacks admit before canonical worlds are ready", "[integration][network][mode][binding]") {

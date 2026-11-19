@@ -161,7 +161,7 @@ namespace Horo::Network::ModeBindingTests {
             queued = false;
         }
 
-        std::array<std::byte, 256> sent;
+        std::array<std::byte, 8192> sent;
         const std::uint64_t maximumMessageBytes;
         std::size_t size{};
         NetworkTransportEvent event;
@@ -194,6 +194,11 @@ namespace Horo::Network::ModeBindingTests {
         }
 
         void PublishInitial(NetworkModeComposition &mode, const std::shared_ptr<PeerSessionLifecycle> &client) {
+            StageInitial(mode, client);
+            REQUIRE(mode.RunPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges).HasValue());
+        }
+
+        void StageInitial(NetworkModeComposition &mode, const std::shared_ptr<PeerSessionLifecycle> &client) {
             auto owner = binding.lock();
             REQUIRE(owner);
             server = Active(ConnectionHandle::Create(3, 1).Value(), TestSupport::Session(8));
@@ -202,7 +207,6 @@ namespace Horo::Network::ModeBindingTests {
             RegisterClient(client);
             REQUIRE(mode.RunPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges).HasValue());
             Deliver();
-            REQUIRE(mode.RunPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges).HasValue());
         }
 
         void RegisterClient(const std::shared_ptr<PeerSessionLifecycle> &client) {

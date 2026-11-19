@@ -320,6 +320,10 @@ namespace Horo::Network {
 
         /** @brief Returns the active identity or a typed unavailable error. */
         [[nodiscard]] Result<ReplicationWorldActivationDescriptor> ActiveDescriptor() const;
+        /** @brief Reads the active mapping revision without materializing a snapshot.
+         * @pre Caller is the world owner and serializes structural mutation.
+         * @return Active revision or zero when no mapping is active. */
+        [[nodiscard]] std::uint64_t ObjectMappingRevision() const noexcept;
         /** @brief Returns the owner-thread lifecycle state. */
         [[nodiscard]] ReplicationWorldLifecycleState State() const noexcept;
         /** @brief Returns the number of retained revoked worlds. */

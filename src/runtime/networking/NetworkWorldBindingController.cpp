@@ -181,6 +181,8 @@ namespace Horo::Network {
     void NetworkWorldBindingController::Impl::ClearPending() noexcept {
         for (auto &peer : peers) {
             peer.pending.reset();
+            peer.prefabPending.reset();
+            peer.knownPrefabs.clear();
             peer.frameBytes = 0;
         }
     }
