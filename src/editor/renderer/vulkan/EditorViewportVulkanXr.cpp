@@ -669,6 +669,12 @@ namespace Horo::Editor {
         std::optional<MultiviewMotionFrame> motionFrame;
         bool motionSubmitted{};
 
+        /** @brief Checks the exact live frame, retained predecessor and observed graphics submission. */
+        [[nodiscard]] bool ObservedCoverage(const MultiviewMotionFrame &frame) const noexcept {
+            return coverage && coverage->frame == frame && previousDepth && coverage->predecessor == previousDepth->frame &&
+                   motionFrame == frame && coverage->submission.IsValid() && coverage->submission == observed;
+        }
+
         /** @brief Binds each cold material table to the other stable depth slot before a frame can be acquired. */
         Result<void> PrepareCoverage(EditorViewportRendererVulkan &viewport, std::span<const EditorViewportMeshResourceView> meshes,
                                      const RenderTextureDescriptor &color, const RenderGraphLogicalState &acquired,
@@ -764,20 +770,18 @@ namespace Horo::Editor {
         if (viewport.owner_ != std::this_thread::get_id() || !viewport.initialized_ || !viewport.xrGraph_)
             return std::nullopt;
         auto &graph = *viewport.xrGraph_;
-        auto &coverage = graph.coverage;
         const auto &support = viewport.frontend_.Capabilities().support;
-        if (!coverage || coverage->frame != frame || !coverage->predecessor || !graph.previousDepth ||
-            graph.previousDepth->frame != *coverage->predecessor || graph.motionFrame != frame || !coverage->submission.IsValid() ||
-            coverage->submission != graph.observed || frame.publication.deviceIncarnation != support.deviceIncarnation ||
+        if (!graph.ObservedCoverage(frame) || frame.publication.deviceIncarnation != support.deviceIncarnation ||
             frame.publication.capabilityRevision != support.capabilityRevision)
             return std::nullopt;
+        auto &coverage = *graph.coverage;
         const CoverageObservation observation{frame,
-                                              *coverage->predecessor,
-                                              coverage->color.handle,
-                                              {coverage->colorViews.front().handle, coverage->colorViews.back().handle},
+                                              *coverage.predecessor,
+                                              coverage.color.handle,
+                                              {coverage.colorViews.front().handle, coverage.colorViews.back().handle},
                                               graph.extent,
-                                              coverage->submission};
-        coverage->ResetObservation();
+                                              coverage.submission};
+        coverage.ResetObservation();
         return observation;
     }
 
