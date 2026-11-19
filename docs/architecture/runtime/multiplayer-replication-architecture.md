@@ -73,6 +73,15 @@ An authored object identity is retained as provenance. Clients do not derive
 network identities from local object order and require the authenticated
 initial state synchronization path for receiving mappings.
 
+`CaptureReplicationAuthoredScene` extracts an ordered inventory of exact
+authority identities and stable Scene provenance. It omits process-local
+entity handles and dynamic Prefab occurrences. Once a caller has admitted the
+complete inventory for an authenticated world, `StageReplicaAuthoredScene`
+matches every row against the committed local Scene and stages the entire
+mapping. Session, authority epoch, schema version, authored identity, and
+mapping capacity are checked before publication. The client keeps its existing
+mapping until the structural safe point commits the replacement.
+
 Existing mode services have an empty authored projection by default. A service
 wrapper around an opted-in authority Scene forwards the projection method to
 retain the same declarations. Existing world staging without authored objects

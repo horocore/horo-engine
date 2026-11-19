@@ -133,6 +133,20 @@ namespace Horo::Network {
         NetworkObjectProvenance provenance; /**< Stable schema and required authored Scene object identity. */
     };
 
+    /** @brief The authority-issued initial identity for one authored object, without process-local entity handles. */
+    struct ReplicationAuthoredObjectBinding final {
+        NetworkObjectId object;
+        NetworkObjectProvenance provenance;
+        bool operator==(const ReplicationAuthoredObjectBinding &) const noexcept = default;
+    };
+
+    /** @brief Authored-only baseline identities from one exact published authority world. */
+    struct ReplicationAuthoredSceneInventory final {
+        NetworkSessionGeneration session;
+        ReplicationAuthorityEpoch authority;
+        std::vector<ReplicationAuthoredObjectBinding> objects;
+    };
+
     /** @brief A newly reserved Scene entity and its admitted dynamic replication schema. */
     struct ReplicationDynamicSceneObject final {
         Runtime::EntityRef entity;
@@ -186,6 +200,13 @@ namespace Horo::Network {
         std::shared_ptr<const Detail::ReplicationWorldRecord> record_;
         std::optional<NetworkObjectMappingSnapshot> mapping_;
     };
+
+    /**
+     * @brief Copies only initial authored identities from a published authority mapping.
+     * @param world Published authority lease with the exact Scene occurrence.
+     * @return Ordered inventory excluding dynamic groups, or a typed invalid/revoked world error.
+     */
+    [[nodiscard]] Result<ReplicationAuthoredSceneInventory> CaptureReplicationAuthoredScene(const ReplicationWorldReadLease &world);
 
     /** @brief Allocation-free owner-thread capture pin; it never copies the object mapping.
      * Mapping lookup is permitted only synchronously on the lifecycle owner thread. Generation
@@ -252,6 +273,19 @@ namespace Horo::Network {
         [[nodiscard]] Result<void> StageAuthoredScene(const ReplicationWorldActivationDescriptor &descriptor,
                                                       std::span<const ReplicationAuthoredSceneObject> objects,
                                                       const CancellationToken &cancellation = {});
+        /**
+         * @brief Stages a client candidate using the exact authored identities received from its authenticated authority.
+         * @param descriptor Exact local client Scene and authority world occurrence.
+         * @param localObjects Admitted declarations from the client's committed Scene.
+         * @param inventory Complete ordered authority inventory for this occurrence.
+         * @param cancellation Owner activation token, rechecked before publication.
+         * @return Success or a typed failure with the active world and its mapping unchanged.
+         * @details Transport authentication and message admission belong to the calling world owner.
+         */
+        [[nodiscard]] Result<void> StageReplicaAuthoredScene(const ReplicationWorldActivationDescriptor &descriptor,
+                                                             std::span<const ReplicationAuthoredSceneObject> localObjects,
+                                                             const ReplicationAuthoredSceneInventory &inventory,
+                                                             const CancellationToken &cancellation = {});
         /** @brief Publishes the staged candidate at the declared lifecycle safe point. */
         [[nodiscard]] Result<void> CommitAtSafePoint(Runtime::SceneRuntimeId expectedScene, NetworkSessionGeneration expectedSession);
         /** @brief Explicit phase-bearing commit overload used by runtime integrations. */
@@ -357,6 +391,10 @@ namespace Horo::Network {
         /** @brief Checks whether another detached world occurrence may be prepared. */
         [[nodiscard]] Result<void> ValidateStage(const ReplicationWorldActivationDescriptor &descriptor,
                                                  const CancellationToken &cancellation) const;
+        /** @brief Retains complete mapping storage only while the activation token remains live. */
+        [[nodiscard]] Result<void> StoreStagedWorld(const ReplicationWorldActivationDescriptor &descriptor,
+                                                    ReplicationWorldCapabilities capabilities, NetworkObjectMapping mapping,
+                                                    const CancellationToken &cancellation);
         ReplicationWorldLifecycle(ReplicationWorldLimits limits, std::vector<std::shared_ptr<Detail::ReplicationWorldRecord>> retired,
                                   NetworkMetrics *metrics) noexcept;
         [[nodiscard]] bool CanRetireActive() const noexcept;

@@ -200,6 +200,89 @@ namespace Horo::Network {
         CHECK(current.Mapping().Entries().front().object.Epoch() == replacement.authority);
     }
 
+    TEST_CASE("Replica activation matches the authority authored inventory to exact local Scene provenance",
+              "[unit][network][replication][lifecycle]") {
+        const auto authority = World(10, 2, 2);
+        const auto client = World(20, 2, 2, ReplicationExecutionRole::AutonomousClient);
+        auto server = ReplicationWorldLifecycle::Create({.maximumObjects = 4}).Value();
+        auto replica = ReplicationWorldLifecycle::Create({.maximumObjects = 4}).Value();
+        const auto schema = Object().provenance.schema;
+        const std::array authored{ReplicationAuthoredSceneObject{{authority.scene, {9, 3}}, {schema, {1, 0}, Runtime::SceneObjectId{29}}},
+                                  ReplicationAuthoredSceneObject{{authority.scene, {3, 8}}, {schema, {1, 0}, Runtime::SceneObjectId{12}}}};
+        REQUIRE(server.StageAuthoredScene(authority, authored).HasValue());
+        REQUIRE(server.CommitAtSafePoint(authority.scene, authority.session).HasValue());
+
+        auto dynamic = Object(2, 3);
+        dynamic.provenance.prefab =
+            NetworkPrefabMemberProvenance{{{Assets::AssetId::FromBytes({5}), Sha256Digest{{1}}, 1}, 0}, dynamic.object};
+        REQUIRE(server.RegisterObject(authority.scene, authority.session, dynamic).HasValue());
+        const auto authorityLease = server.Acquire(FixedWork(authority)).Value();
+        REQUIRE(authorityLease.Mapping().Entries().size() == 3);
+        const auto complete = CaptureReplicationAuthoredScene(authorityLease).Value();
+        CHECK(complete.session == authority.session);
+        CHECK(complete.authority == authority.authority);
+        REQUIRE(complete.objects.size() == 2);
+        CHECK(complete.objects[0].provenance.authoredObject == Runtime::SceneObjectId{12});
+        CHECK(complete.objects[1].provenance.authoredObject == Runtime::SceneObjectId{29});
+        const std::array local{ReplicationAuthoredSceneObject{{client.scene, {1, 5}}, authored[0].provenance},
+                               ReplicationAuthoredSceneObject{{client.scene, {4, 2}}, authored[1].provenance}};
+
+        SECTION("complete inventory is hidden until the structural safe point") {}
+        SECTION("wrong Scene and incomplete inventory never produce a candidate") {
+            RequireError(replica.StageReplicaAuthoredScene(client, authored, complete), NetworkErrors::NetworkObjectMappingInvalid);
+            RequireError(replica.StageReplicaAuthoredScene(client, std::span{local}.first(1), complete),
+                         NetworkErrors::ReplicationDescriptorIncompatible);
+        }
+        SECTION("exact session and epoch are required") {
+            auto delayed = complete;
+            delayed.session = Session(1);
+            RequireError(replica.StageReplicaAuthoredScene(client, local, delayed), NetworkErrors::ReplicationWorldStale);
+            delayed.session = client.session;
+            delayed.authority = Authority(1);
+            RequireError(replica.StageReplicaAuthoredScene(client, local, delayed), NetworkErrors::ReplicationWorldStale);
+        }
+        SECTION("permuted rows, aliases and schema drift are rejected") {
+            auto incorrect = complete;
+            std::swap(incorrect.objects[0], incorrect.objects[1]);
+            RequireError(replica.StageReplicaAuthoredScene(client, local, incorrect), NetworkErrors::NetworkObjectMappingInvalid);
+            incorrect = complete;
+            incorrect.objects[1].provenance = incorrect.objects[0].provenance;
+            RequireError(replica.StageReplicaAuthoredScene(client, local, incorrect), NetworkErrors::NetworkObjectMappingInvalid);
+            incorrect = complete;
+            incorrect.objects[1].provenance.schemaVersion = {1, 1};
+            RequireError(replica.StageReplicaAuthoredScene(client, local, incorrect), NetworkErrors::ReplicationDescriptorIncompatible);
+        }
+        SECTION("cancellation cannot replace an active world") {
+            const auto prior = World(19, 1, 1, ReplicationExecutionRole::AutonomousClient);
+            REQUIRE(replica.Stage(prior).HasValue());
+            REQUIRE(replica.CommitAtSafePoint(prior.scene, prior.session).HasValue());
+            const auto published = replica.Acquire(FixedWork(prior)).Value();
+            CancellationSource cancellation;
+            REQUIRE(replica.StageReplicaAuthoredScene(client, local, complete, cancellation.Token()).HasValue());
+            cancellation.RequestCancellation();
+            RequireError(replica.CommitAtSafePoint(client.scene, client.session), NetworkErrors::ReplicationWorldCancelled);
+            CHECK_FALSE(published.IsRevoked());
+            CHECK(replica.ActiveDescriptor().Value() == prior);
+        }
+        SECTION("the full inventory must fit the configured world budget") {
+            auto constrained = ReplicationWorldLifecycle::Create({.maximumObjects = 1}).Value();
+            RequireError(constrained.StageReplicaAuthoredScene(client, local, complete), NetworkErrors::ReplicationWorldCapacityExceeded);
+            CHECK_FALSE(constrained.HasStagedCandidate());
+        }
+        CHECK_FALSE(replica.HasStagedCandidate());
+        REQUIRE(replica.StageReplicaAuthoredScene(client, local, complete).HasValue());
+        CHECK(replica.Acquire(FixedWork(client)).HasError());
+        REQUIRE(replica.CommitAtSafePoint(client.scene, client.session).HasValue());
+        const auto published = replica.Acquire(FixedWork(client)).Value();
+        const auto mappings = published.Mapping().Entries();
+        REQUIRE(mappings.size() == 2);
+        CHECK(mappings[0].object == complete.objects[0].object);
+        CHECK(mappings[0].entity == local[1].entity);
+        CHECK(mappings[1].object == complete.objects[1].object);
+        CHECK(mappings[1].entity == local[0].entity);
+        RequireError(CaptureReplicationAuthoredScene(published), NetworkErrors::ReplicationAuthorityDenied);
+    }
+
     TEST_CASE("Network mappings and Scene parent-child groups publish and retire together", "[unit][network][replication][scene]") {
         using namespace Runtime;
         const auto world = World();
