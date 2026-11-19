@@ -203,7 +203,7 @@ namespace Horo::Editor {
         allocatedExtent_ = {};
         declinedCameraCrossFadeExtent_ = {};
         meshesReady_ = false;
-        cameraCrossFade_ = false;
+        cameraCrossFade_.reset();
     }
 
     std::optional<EditorViewportResources::MeshBinding> EditorViewportResources::FindMesh(const std::uint64_t sourceId) const noexcept {
@@ -496,10 +496,10 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorViewportResources::EnableCameraCrossFade */
-    Result<void> EditorViewportResources::EnableCameraCrossFade() {
+    Result<void> EditorViewportResources::EnableCameraCrossFade(const CameraCrossFadeOutput output) {
         if (colorPipeline_ || viewportTarget_.colorTexture.IsValid() || pendingViewportTarget_.colorTexture.IsValid())
             return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
-        cameraCrossFade_ = true;
+        cameraCrossFade_ = output;
         return Result<void>::Success();
     }
 
@@ -570,7 +570,8 @@ namespace Horo::Editor {
         using enum Render::RenderTextureUsage;
         return {.extent = extent,
                 .format = colorPipeline_ ? Render::RenderTextureFormat::Rgba16Float : Render::RenderTextureFormat::Rgba8Unorm,
-                .usage = colorPipeline_ || cameraCrossFade_ ? Sampled | RenderAttachment | CopySource : Sampled | RenderAttachment};
+                .usage = colorPipeline_ || cameraCrossFade_ == CameraCrossFadeOutput::CopySource ? Sampled | RenderAttachment | CopySource
+                                                                                                 : Sampled | RenderAttachment};
     }
 
     /** @copydoc EditorViewportResources::SpatialColorDescriptor */

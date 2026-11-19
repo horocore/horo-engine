@@ -239,7 +239,8 @@ namespace Horo::Editor {
             RetireCameraCrossFadeProgram(program);
             return prepared;
         }
-        if (const auto enabled = resources_.EnableCameraCrossFade(); enabled.HasError()) {
+        if (const auto enabled = resources_.EnableCameraCrossFade(EditorViewportResources::CameraCrossFadeOutput::CopySource);
+            enabled.HasError()) {
             RetireCameraCrossFadeProgram(program);
             return enabled;
         }

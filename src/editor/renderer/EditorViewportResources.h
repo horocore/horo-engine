@@ -4,6 +4,7 @@
 #include "editor/renderer/EditorRenderMemoryScopes.h"
 #include "editor/renderer/EditorViewportRenderer.h"
 
+#include <cstdint>
 #include <optional>
 #include <unordered_map>
 
@@ -77,8 +78,16 @@ namespace Horo::Editor {
          * @param spatial Whether to include the exact same-extent native spatial output in that generation.
          * @return Typed invalid lifecycle failure if resources already exist. */
         [[nodiscard]] Result<void> EnableColorPipeline(bool spatial = false);
-        /** @brief Reserves the paired legacy viewport target policy before the first allocation. */
-        [[nodiscard]] Result<void> EnableCameraCrossFade();
+        /** @brief Output access used by the selected compositor. */
+        enum class CameraCrossFadeOutput : std::uint8_t {
+            Sampled,
+            CopySource
+        };
+
+        /** @brief Reserves the paired viewport policy before allocating attachments.
+         * @param output Whether the composed output also needs explicit copy access.
+         * @return Success or typed failure if viewport resources already exist. */
+        [[nodiscard]] Result<void> EnableCameraCrossFade(CameraCrossFadeOutput output = CameraCrossFadeOutput::Sampled);
 
         /** @brief Returns the exact copied source attachments for portable graph admission. */
         struct CameraCrossFadeAttachments final {
@@ -223,6 +232,6 @@ namespace Horo::Editor {
         bool meshesReady_{false};
         bool colorPipeline_{};
         bool spatialColor_{};
-        bool cameraCrossFade_{};
+        std::optional<CameraCrossFadeOutput> cameraCrossFade_;
     };
 }  // namespace Horo::Editor
