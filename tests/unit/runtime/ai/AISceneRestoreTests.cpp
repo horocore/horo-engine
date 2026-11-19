@@ -173,6 +173,65 @@ namespace Horo::AI {
             }
         }
 
+        TEST_CASE("Restored AI stages against the reconstructed Scene and preserves active work until publication", "[unit][ai][restore]") {
+            RestoreHarness live;
+            live.StartTask();
+            const auto original = live.Capture();
+            auto restored = original;
+            RestoreHarness::Blackboard(restored).entries.front().value = BlackboardValue{BlackboardScalarValue{true}};
+            Runtime::SceneDefinitionBuilder builder{{7}, {1}};
+            for (std::size_t index = 0; index < live.fixtures.size(); ++index) {
+                const auto &agent = live.fixtures[live.fixtures.size() - index - 1].agent;
+                builder.Add({.object = Runtime::SceneObjectId{index + 1},
+                             .components = {.aiAgent = agent.agent, .aiController = agent.controller}});
+            }
+            const auto definition = std::move(builder).Build();
+            REQUIRE(definition.HasValue());
+            auto reconstructed = Runtime::RuntimeScene::Create(definition.Value(), {8});
+            REQUIRE(reconstructed.HasValue());
+            const auto scene = reconstructed.Value()->View();
+            const std::array catalog{live.fixtures.front().descriptor};
+            CancellationSource cancellation;
+            bool publish = true;
+            ExpectError(live.runtime.PrepareRestoredScene(live.scene->View(), catalog, restored), AIErrors::CanonicalRestoreStale);
+            SECTION("a mismatched Blackboard aborts the detached population") {
+                RestoreHarness::Blackboard(restored, 1).entries.clear();
+                ExpectError(live.runtime.PrepareRestoredScene(scene, catalog, restored), AIErrors::CanonicalStateInvalid);
+                publish = false;
+            }
+            SECTION("a missing saved agent cannot silently take the authored defaults") {
+                restored.agents.pop_back();
+                ExpectError(live.runtime.PrepareRestoredScene(scene, catalog, restored), AIErrors::CanonicalStateInvalid);
+                publish = false;
+            }
+            CHECK(live.Capture() == original);
+            CHECK(live.runtime.Find(live.handle).Value().hasRunningTask);
+            if (!publish)
+                return;
+
+            auto candidate = live.runtime.PrepareRestoredScene(scene, catalog, restored, {}, cancellation.Token());
+            REQUIRE(candidate.HasValue());
+            CHECK(live.Capture() == original);
+            CHECK(live.runtime.Find(live.handle).Value().hasRunningTask);
+            SECTION("cancelled candidate leaves the active Scene untouched") {
+                cancellation.RequestCancellation();
+                ExpectError(candidate.Value()->ValidatePublication(), AIErrors::CanonicalRestoreCancelled);
+                return;
+            }
+            SECTION("successful publication replaces the complete population") {
+                REQUIRE(candidate.Value()->ValidatePublication().HasValue());
+                candidate.Value()->Publish();
+                CHECK(live.runtime.Find(live.handle).HasError());
+                const auto canonical = live.runtime.CaptureCanonicalState(scene);
+                REQUIRE(canonical.HasValue());
+                CHECK(canonical.Value() == restored);
+                const auto agents = live.runtime.Snapshot();
+                REQUIRE(agents.HasValue());
+                REQUIRE(agents.Value().Agents().size() == restored.agents.size());
+                CHECK_FALSE(agents.Value().Agents().front().hasRunningTask);
+            }
+        }
+
         TEST_CASE("Canonical AI migration preserves prior state and authored bindings on failure", "[unit][ai][restore][migration]") {
             RestoreHarness harness;
             harness.StartTask();

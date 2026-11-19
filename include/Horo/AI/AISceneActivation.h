@@ -149,6 +149,7 @@ namespace Horo::AI {
 
     namespace Detail {
         struct AiSceneRuntimeState;
+        struct SceneRestoreInput;
         struct PerceptionGroupPublication;
         struct AgentRuntimeState;
         class AiSceneStructuralParticipant;
@@ -220,6 +221,7 @@ namespace Horo::AI {
 
     private:
         friend class AiSceneActivationParticipant;
+        friend class AiSceneRuntime;
         /** @brief Stages exact spatial authority while the whole Scene aggregate is still private. */
         [[nodiscard]] Result<void> PreparePerception(const Runtime::RuntimeSceneView &scene, const AiScenePerceptionActivationInput &input);
 
@@ -227,6 +229,8 @@ namespace Horo::AI {
         AiSceneActivationBinding binding_;
         std::unique_ptr<Detail::PerceptionGroupPublication> perception_;
         std::shared_ptr<Detail::AiSceneRuntimeState> state_;
+        std::optional<Runtime::RuntimeSceneView> restoredScene_;
+        CancellationToken restoreCancellation_;
         std::uint64_t publicationToken_{};
         bool published_{};
     };
@@ -302,6 +306,20 @@ namespace Horo::AI {
         [[nodiscard]] Result<std::unique_ptr<AiSceneActivationCandidate>> PrepareScene(AiSceneActivationBinding binding,
                                                                                        std::span<const AiSceneAgentDescriptor> agents,
                                                                                        std::span<const AiControllerDescriptor> descriptors);
+
+        /**
+         * @brief Prepares the entire AI population against an unpublished, fully reconstructed Scene.
+         * @param scene Exact destination view after the aggregate restores its entity population.
+         * @param descriptors Host-admitted controller catalog.
+         * @param state Complete decoded canonical AI population.
+         * @param migrations Explicit direct schema migrations borrowed during preparation.
+         * @param cancellation Aggregate restore cancellation.
+         * @return Detached activation candidate, or a typed failure with the live population intact.
+         * @pre Called by the owner lane. The destination Scene outlives the candidate.
+         */
+        [[nodiscard]] Result<std::unique_ptr<AiSceneActivationCandidate>> PrepareRestoredScene(
+            const Runtime::RuntimeSceneView &scene, std::span<const AiControllerDescriptor> descriptors, const AiCanonicalState &state,
+            std::span<const BlackboardSchemaMigration> migrations = {}, CancellationToken cancellation = {});
 
         /**
          * @brief Captures the only canonical AI population at the aggregate snapshot safe point.
@@ -485,6 +503,11 @@ namespace Horo::AI {
         /** @brief Composes the opt-in scheduler on the entirely detached initial population. */
         [[nodiscard]] Result<void> PrepareCookedDecisionScheduler(const std::shared_ptr<Detail::AiSceneRuntimeState> &state) const;
 
+        /** @brief Builds detached state and applies optional canonical values before constructing its scheduler. */
+        [[nodiscard]] Result<std::unique_ptr<AiSceneActivationCandidate>> PrepareSceneInternal(
+            AiSceneActivationBinding binding, std::span<const AiSceneAgentDescriptor> agents,
+            std::span<const AiControllerDescriptor> descriptors, const Detail::SceneRestoreInput *restore);
+
         [[nodiscard]] Result<void> ValidateCandidate(const AiSceneActivationBinding &binding) const;
         [[nodiscard]] bool PublishCandidate(std::shared_ptr<Detail::AiSceneRuntimeState> &state, const AiSceneActivationBinding &binding,
                                             std::uint64_t publicationToken) noexcept;
@@ -499,6 +522,15 @@ namespace Horo::AI {
         bool shutdown_{};
     };
 
+    /** @brief Decoded values and cancellation for one exact reconstructed Scene. */
+    struct AiSceneRestoredPopulation final {
+        std::shared_ptr<const AiCanonicalState> state; /**< Empty selects ordinary authored activation. */
+        CancellationToken cancellation;
+    };
+
+    /** @brief Host-owned selection of saved values already reconciled with candidate content. */
+    using AiSceneRestoreSource = std::function<Result<AiSceneRestoredPopulation>(const Runtime::RuntimeSceneView &)>;
+
     /**
      * @brief RuntimeScene activation participant for typed AI agent/controller components.
      * @details It resolves entity generations before publication and never mutates the authoring document.
@@ -510,18 +542,25 @@ namespace Horo::AI {
          * @param runtime Owner-thread AI scene runtime.
          * @param descriptors Immutable controller dependency descriptors.
          * @param perception Explicit optional spatial policy; its publisher outlives the Scene activation and structural adapters.
+         * @param restore Optional owner-lane source of decoded state for the exact candidate Scene.
          */
         AiSceneActivationParticipant(AiSceneRuntime &runtime, std::span<const AiControllerDescriptor> descriptors,
-                                     std::optional<AiScenePerceptionActivationInput> perception = {}) noexcept
-            : runtime_(&runtime), descriptors_(descriptors), perception_(std::move(perception)) {}
+                                     std::optional<AiScenePerceptionActivationInput> perception = {},
+                                     AiSceneRestoreSource restore = {}) noexcept
+            : runtime_(&runtime), descriptors_(descriptors), perception_(std::move(perception)), restore_(std::move(restore)) {}
 
         /** @copydoc Runtime::SceneActivationParticipant::Prepare */
         [[nodiscard]] Result<std::unique_ptr<Runtime::SceneActivationCandidate>> Prepare(const Runtime::RuntimeSceneDefinition &definition,
                                                                                          const Runtime::RuntimeSceneView &scene) override;
 
     private:
+        /** @brief Projects the authored source for normal Scene startup. */
+        [[nodiscard]] Result<std::unique_ptr<AiSceneActivationCandidate>> PrepareAuthoredScene(
+            const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView &scene);
+
         AiSceneRuntime *runtime_{};
         std::span<const AiControllerDescriptor> descriptors_;
         std::optional<AiScenePerceptionActivationInput> perception_;
+        AiSceneRestoreSource restore_;
     };
 }  // namespace Horo::AI

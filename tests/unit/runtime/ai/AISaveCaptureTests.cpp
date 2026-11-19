@@ -76,4 +76,59 @@ namespace Horo::AI {
         REQUIRE(decoded.HasValue());
         CHECK(decoded.Value() == original);
     }
+
+    TEST_CASE("Scene owner publishes decoded AI together with its reconstructed Scene", "[unit][ai][save][restore]") {
+        const auto fixture = TestSupport::MakeFixture(1, 91, 91, 0, 2);
+        const std::array controllers{fixture.descriptor};
+        auto runtime = AiSceneRuntime::Create().Value();
+        RuntimeSceneService scenes{{91}};
+        std::shared_ptr<const AiCanonicalState> selected;
+        auto source = [&selected](const RuntimeSceneView &) {
+            return Result<AiSceneRestoredPopulation>::Success({selected, {}});
+        };
+        REQUIRE(scenes.AddActivationParticipant(std::make_unique<AiSceneActivationParticipant>(runtime, controllers, std::nullopt, source))
+                    .HasValue());
+        CancellationSource cancellation;
+        REQUIRE(scenes.Startup(cancellation.Token()).HasValue());
+        SceneDefinitionBuilder builder{{1}, {1}};
+        builder.Add({.object = {1}, .components = {.aiAgent = fixture.agent.agent, .aiController = fixture.agent.controller}});
+        const auto definition = std::move(builder).Build();
+        REQUIRE(definition.HasValue());
+        const auto commit = [&](std::uint64_t frame) {
+            REQUIRE(scenes.QueuePreparation(definition.Value()).HasValue());
+            REQUIRE(
+                scenes.OnPhase(RuntimePhase::CommitDeferredLifecycleChanges, {.frameNumber = frame, .cancellation = cancellation.Token()})
+                    .HasValue());
+        };
+        commit(1);
+        REQUIRE_FALSE(scenes.TakeOperationError());
+        const auto before = scenes.ActiveScene();
+        REQUIRE(before);
+        const auto handle = runtime.Snapshot().Value().Agents().front().handle;
+        REQUIRE(runtime.StartTaskAtSafePoint(handle, TestSupport::MakeIdentity<TaskId>(42)).HasValue());
+
+        auto changed = runtime.CaptureCanonicalState(*before).Value();
+        auto &value = TestSupport::RestoreHarness::Blackboard(changed).entries.front().value;
+        value = BlackboardValue{BlackboardScalarValue{true}};
+        const auto encoded = EncodeAiCanonicalStateRecord(changed, 4096);
+        REQUIRE(encoded.HasValue());
+        auto decoded = DecodeAiCanonicalStateRecord(encoded.Value(), 4096);
+        REQUIRE(decoded.HasValue());
+        selected = std::make_shared<const AiCanonicalState>();
+        TestSupport::ExpectError(scenes.QueuePreparation(definition.Value()), AIErrors::CanonicalStateInvalid);
+        CHECK(scenes.ActiveScene()->SameIncarnation(*before));
+        CHECK(runtime.Find(handle).Value().hasRunningTask);
+
+        selected = std::make_shared<const AiCanonicalState>(std::move(decoded).Value());
+        commit(3);
+        REQUIRE_FALSE(scenes.TakeOperationError());
+        const auto after = scenes.ActiveScene();
+        REQUIRE(after);
+        CHECK_FALSE(after->SameIncarnation(*before));
+        const auto captured = runtime.CaptureCanonicalState(*after);
+        REQUIRE(captured.HasValue());
+        CHECK(captured.Value() == changed);
+        CHECK(runtime.Find(handle).HasError());
+        scenes.Shutdown();
+    }
 }  // namespace Horo::AI

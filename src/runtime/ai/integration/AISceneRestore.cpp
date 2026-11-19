@@ -193,7 +193,54 @@ namespace Horo::AI {
             }
             return Result<void>::Success();
         }
+
+        /** @brief Finds the saved agent by stable identity and stages its replacement on the exact destination owner. */
+        [[nodiscard]] Result<Detail::RestoreAgent> StagePopulationAgent(const Detail::SceneRestoreInput &input,
+                                                                        const Detail::AgentRuntimeState &slot,
+                                                                        const AiSceneRuntimeSettings &settings) {
+            using Staged = Result<Detail::RestoreAgent>;
+            if (input.cancellation.IsCancellationRequested())
+                return Staged::Failure(MakeError(AIErrors::CanonicalRestoreCancelled));
+            if (const auto valid = ValidateOwner(input.scene, slot.record); valid.HasError())
+                return Staged::Failure(valid.ErrorValue());
+            const auto source = std::ranges::lower_bound(input.state.agents, slot.record.agent.agent, {}, [](const auto &agent) {
+                return agent.authored.agent;
+            });
+            if (source == input.state.agents.end() || source->authored.agent != slot.record.agent.agent)
+                return Staged::Failure(MakeError(AIErrors::CanonicalStateInvalid));
+            return StageAgent(*source, slot, input.scene, input.migrations, settings);
+        }
+
+        /** @brief Transfers fully staged values and releases the previous slot's transient work. */
+        void ApplyRestoredAgent(Detail::AgentRuntimeState &slot, Detail::RestoreAgent &&agent) noexcept {
+            Detail::CancelOwnedWork(slot);
+            slot.cancellation = std::move(agent.cancellation);
+            slot.blackboardBinding = agent.replacementSchema;
+            slot.blackboard = std::move(agent.blackboard);
+            slot.record.state = agent.state;
+            slot.record.hasBlackboard = slot.blackboard != nullptr;
+            if (slot.record.hasBlackboard)
+                slot.record.stagedCapabilities = slot.record.controller->requiredCapabilities;
+        }
     }  // namespace
+
+    /** @copydoc Detail::RestoreDetachedScene */
+    Result<void> Detail::RestoreDetachedScene(AiSceneRuntimeState &destination, const SceneRestoreInput &input,
+                                              const AiSceneRuntimeSettings &settings) {
+        if (input.cancellation.IsCancellationRequested())
+            return Result<void>::Failure(MakeError(AIErrors::CanonicalRestoreCancelled));
+        if (const auto valid = ValidateScene(input.scene, destination.binding); valid.HasError())
+            return valid;
+        if (const auto valid = ValidatePopulation(input.state, destination, settings.maximumAgents); valid.HasError())
+            return valid;
+        for (auto &slot : destination.agents) {
+            auto staged = StagePopulationAgent(input, slot, settings);
+            if (staged.HasError())
+                return Result<void>::Failure(staged.ErrorValue());
+            ApplyRestoredAgent(slot, std::move(staged).Value());
+        }
+        return Result<void>::Success();
+    }
 
     /** @copydoc AiSceneRestoreCandidate::AiSceneRestoreCandidate */
     AiSceneRestoreCandidate::AiSceneRestoreCandidate(const ConstructionKey &, std::unique_ptr<Detail::AiSceneRestoreState> state) noexcept
@@ -274,19 +321,11 @@ namespace Horo::AI {
             staged->revision = active_->revision;
             staged->cancellation = std::move(cancellation);
             staged->agents.reserve(state.agents.size());
+            const Detail::SceneRestoreInput input{scene, state, migrations, staged->cancellation};
             for (const auto &slot : active_->agents) {
                 if (slot.retired)
                     continue;
-                if (staged->cancellation.IsCancellationRequested())
-                    return RestoreResult::Failure(MakeError(AIErrors::CanonicalRestoreCancelled));
-                if (const auto valid = ValidateOwner(scene, slot.record); valid.HasError())
-                    return RestoreResult::Failure(valid.ErrorValue());
-                const auto source = std::ranges::lower_bound(state.agents, slot.record.agent.agent, {}, [](const auto &agent) {
-                    return agent.authored.agent;
-                });
-                if (source == state.agents.end() || source->authored.agent != slot.record.agent.agent)
-                    return RestoreResult::Failure(MakeError(AIErrors::CanonicalStateInvalid));
-                auto agent = StageAgent(*source, slot, scene, migrations, settings_);
+                auto agent = StagePopulationAgent(input, slot, settings_);
                 if (agent.HasError())
                     return RestoreResult::Failure(agent.ErrorValue());
                 staged->agents.push_back(std::move(agent).Value());
@@ -326,14 +365,7 @@ namespace Horo::AI {
         }
         for (auto &agent : staged.agents) {
             auto &slot = *Detail::FindAgent(*active_, agent.handle);
-            Detail::CancelOwnedWork(slot);
-            slot.cancellation = std::move(agent.cancellation);
-            slot.blackboardBinding = agent.replacementSchema;
-            slot.blackboard = std::move(agent.blackboard);
-            slot.record.state = agent.state;
-            slot.record.hasBlackboard = slot.blackboard != nullptr;
-            if (slot.record.hasBlackboard)
-                slot.record.stagedCapabilities = slot.record.controller->requiredCapabilities;
+            ApplyRestoredAgent(slot, std::move(agent));
         }
         ++active_->revision;
         return Result<void>::Success();

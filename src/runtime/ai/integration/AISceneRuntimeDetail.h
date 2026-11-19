@@ -105,6 +105,18 @@ namespace Horo::AI::Detail {
     /** @brief Tears down every owned agent. @param state Detached or active population. */
     void ShutdownStateContents(AiSceneRuntimeState &state) noexcept;
 
+    /** @brief Borrowed restore inputs used only during the detached AI activation preparation. */
+    struct SceneRestoreInput final {
+        const Runtime::RuntimeSceneView &scene;
+        const AiCanonicalState &state;
+        std::span<const BlackboardSchemaMigration> migrations;
+        const CancellationToken &cancellation;
+    };
+
+    /** @brief Applies canonical values to private AI stages before any scheduler is constructed. */
+    [[nodiscard]] Result<void> RestoreDetachedScene(AiSceneRuntimeState &destination, const SceneRestoreInput &input,
+                                                    const AiSceneRuntimeSettings &settings);
+
     /** @brief Stages native factories and aggregate maximum work for exactly the next resident population. */
     [[nodiscard]] Result<void> PreparePerceptionSenses(const AiScenePerceptionExecution &policy,
                                                        std::span<const AgentRuntimeState> residents, std::span<AgentRuntimeState> additions,

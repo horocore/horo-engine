@@ -181,6 +181,42 @@ namespace Horo::AI {
             CHECK(fixture.probe.cleanups == 1);
         }
 
+        TEST_CASE("Restored manual AI receives its saved Blackboard before its cooked scheduler starts",
+                  "[unit][ai][scene][scheduler][restore]") {
+            Fixture fixture;
+            auto source = TaskTree(11);
+            source.executionTask = MakeIdentity<TaskId>(9000);
+            const auto plan = fixture.Compile(std::span{&source, 1}, 11);
+            auto selected = SceneFixture(fixture, *plan);
+            selected.agent.agent.startupPolicy = AiStartupPolicy::Manual;
+            selected.descriptor.cookedPlan = plan;
+            auto blackboard = fixture.blackboard->CaptureCanonical();
+            REQUIRE(blackboard.HasValue());
+            auto values = std::move(blackboard).Value();
+            values.entries.front().value = BlackboardValue{BlackboardScalarValue{false}};
+            const AiCanonicalState saved{.agents = {{selected.agent.agent, AiCanonicalAgentState::Active,
+                                                     AiBaseControllerCanonicalState{*selected.agent.controller, std::move(values)}}}};
+            Runtime::SceneDefinitionBuilder builder{{7}, {1}};
+            builder.Add({.object = {1}, .components = {.aiAgent = selected.agent.agent, .aiController = selected.agent.controller}});
+            const auto definition = std::move(builder).Build();
+            REQUIRE(definition.HasValue());
+            const auto scene = Runtime::RuntimeScene::Create(definition.Value(), {8});
+            REQUIRE(scene.HasValue());
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+            auto runtime = AiSceneRuntime::Create({}, AiSceneCookedDecisionExecution{jobs, {}, {}}).Value();
+            auto candidate = runtime.PrepareRestoredScene(scene.Value()->View(), std::array{selected.descriptor}, saved);
+            REQUIRE(candidate.HasValue());
+            CHECK(fixture.probe.starts == 0);
+            REQUIRE(candidate.Value()->ValidatePublication().HasValue());
+            candidate.Value()->Publish();
+            CHECK(runtime.CaptureCanonicalState(scene.Value()->View()).Value() == saved);
+            const auto scheduler = runtime.TaskSchedulerAtSafePoint();
+            REQUIRE(scheduler.HasValue());
+            REQUIRE(scheduler.Value()->EvaluateAtDecision(1).HasValue());
+            REQUIRE(scheduler.Value()->CommitAtIntentDispatch(1).HasValue());
+            CHECK(fixture.probe.starts == 1);
+        }
+
         /** @brief Uses a real admitted native query and observes the Scene scheduler's exact owner operation. */
         class PointQueryOwner final : public IDecisionQueryTaskBinder, public IDecisionQueryTaskHost {
         public:
