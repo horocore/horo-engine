@@ -304,6 +304,53 @@ namespace Horo::Network {
         RequireError(pending->ValidatePublication(), NetworkErrors::ReplicationWorldStale);
     }
 
+    TEST_CASE("Dynamic network identity issuance reuses retired generations without overwriting authored objects",
+              "[unit][network][replication][lifecycle]") {
+        const auto world = World();
+        auto lifecycle = ReplicationWorldLifecycle::Create({.maximumObjects = 2}).Value();
+        auto authored = Object();
+        authored.provenance.authoredObject = Runtime::SceneObjectId{11};
+        REQUIRE(lifecycle.StageAuthoredScene(world, std::array{ReplicationAuthoredSceneObject{authored.entity, authored.provenance}})
+                    .HasValue());
+        REQUIRE(lifecycle.CommitAtSafePoint(world.scene, world.session).HasValue());
+        const auto schema = authored.provenance.schema;
+        const auto version = authored.provenance.schemaVersion;
+        const auto entity = Object(1, 2).entity;
+        const auto nextEntity = Object(1, 2, 2, 10, 2).entity;
+        const std::array original{ReplicationDynamicSceneObject{entity, schema, version}};
+        const std::array next{ReplicationDynamicSceneObject{nextEntity, schema, version}};
+        const auto work = StructuralWork(world);
+        const auto publish = [](auto prepared) {
+            REQUIRE(prepared.HasValue());
+            REQUIRE(prepared.Value()->ValidatePublication().HasValue());
+            prepared.Value()->Publish();
+            REQUIRE(prepared.Value()->AfterPublication().HasValue());
+        };
+        RequireError(lifecycle.PrepareDynamicObjectBatch(work, original, std::array{authored.entity}),
+                     NetworkErrors::NetworkObjectMappingInvalid);
+        publish(lifecycle.PrepareDynamicObjectBatch(work, original, {}));
+        const auto snapshot = [&] {
+            return lifecycle.Acquire(FixedWork(world)).Value();
+        };
+        const auto first = snapshot();
+        REQUIRE(first.Mapping().Entries().size() == 2);
+        const auto firstDynamic = first.Mapping().Entries()[1];
+        CHECK(firstDynamic.entity == entity);
+        CHECK_FALSE(firstDynamic.provenance.authoredObject);
+
+        const std::array retired{entity};
+        const std::array duplicate{next.front(), next.front()};
+        RequireError(lifecycle.PrepareDynamicObjectBatch(work, duplicate, retired), NetworkErrors::NetworkObjectMappingCapacityExceeded);
+        CHECK(snapshot().Mapping().Entries()[1] == firstDynamic);
+        publish(lifecycle.PrepareDynamicObjectBatch(work, next, retired));
+        const auto replacement = snapshot();
+        REQUIRE(replacement.Mapping().Entries().size() == 2);
+        CHECK(replacement.Mapping().Entries()[0] == authored);
+        CHECK(replacement.Mapping().Entries()[1].object == firstDynamic.object.NextGeneration().Value());
+        CHECK(replacement.Mapping().Entries()[1].entity == nextEntity);
+        RequireError(lifecycle.PrepareDynamicObjectBatch(work, {}, retired), NetworkErrors::NetworkObjectMappingUnknown);
+    }
+
     TEST_CASE("Replication world pause, cancellation, loss, duplication, and stale object identity are bounded",
               "[unit][network][replication][lifecycle]") {
         auto lifecycle = std::move(ReplicationWorldLifecycle::Create({.maximumObjects = 2, .maximumRetiredWorlds = 2})).Value();

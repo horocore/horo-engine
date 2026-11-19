@@ -6,42 +6,39 @@
 namespace Horo::Application::PrefabAtomicTest {
 #if HORO_TEST_PHYSICS_NATIVE
     namespace {
-        /** @brief Binds fixture object IDs to Scene handles in the verified cooked recipe order. */
+        /** @brief Issues network identities for Scene handles in the verified cooked recipe order. */
         class NetworkGroupPublication final : public Runtime::SceneGroupPublication {
         public:
-            NetworkGroupPublication(Network::ReplicationWorldLifecycle &world, Network::ReplicationWorldActivationDescriptor descriptor,
-                                    std::array<Network::NetworkObjectId, 2> objects)
-                : world_(world), descriptor_(descriptor), objects_(objects) {}
+            NetworkGroupPublication(Network::ReplicationWorldLifecycle &world, Network::ReplicationWorldActivationDescriptor descriptor)
+                : world_(world), descriptor_(descriptor) {}
 
             Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(const Runtime::RuntimeSceneView &scene,
                                                                                std::span<const Runtime::EntityRef> members,
                                                                                bool creating) const override {
                 REQUIRE(scene.RuntimeId() == descriptor_.scene);
-                REQUIRE(members.size() == objects_.size());
+                REQUIRE(members.size() == 2);
                 const Network::ReplicationWorldWorkRequest work{descriptor_.scene,
                                                                 descriptor_.session,
                                                                 Runtime::RuntimePhase::CommitDeferredLifecycleChanges,
                                                                 1,
                                                                 {}};
                 if (!creating)
-                    return world_.PrepareObjectBatch(work, {}, objects_);
-                const Network::NetworkObjectProvenance schema{Network::ReplicationSchemaId::Create(7).Value(), {1, 0}, std::nullopt};
-                const std::array added{Network::NetworkObjectMappingEntry{objects_[0], members[0], schema},
-                                       Network::NetworkObjectMappingEntry{objects_[1], members[1], schema}};
-                return world_.PrepareObjectBatch(work, added, {});
+                    return world_.PrepareDynamicObjectBatch(work, {}, members);
+                const auto schema = Network::ReplicationSchemaId::Create(7).Value();
+                const std::array added{Network::ReplicationDynamicSceneObject{members[0], schema, {1, 0}},
+                                       Network::ReplicationDynamicSceneObject{members[1], schema, {1, 0}}};
+                return world_.PrepareDynamicObjectBatch(work, added, {});
             }
 
         private:
             Network::ReplicationWorldLifecycle &world_;
             Network::ReplicationWorldActivationDescriptor descriptor_;
-            std::array<Network::NetworkObjectId, 2> objects_;
         };
 
         /** @brief Test host policy opting in the two-entity cooked occurrence as a whole. */
         class NetworkGroupOwner final : public Prefab::IPrefabGroupPublicationOwner {
         public:
-            NetworkGroupOwner(Network::ReplicationWorldLifecycle &world, std::array<Network::NetworkObjectId, 2> objects)
-                : world_(world), objects_(objects) {}
+            explicit NetworkGroupOwner(Network::ReplicationWorldLifecycle &world) : world_(world) {}
 
             Result<std::shared_ptr<const Runtime::SceneGroupPublication>> Bind(const Prefab::PreparedPrefabSpawn &recipe,
                                                                                const Prefab::PrefabSpawnRequest &request,
@@ -49,19 +46,18 @@ namespace Horo::Application::PrefabAtomicTest {
                                                                                std::string_view creator) const override {
                 REQUIRE(creator == "game.tests");
                 REQUIRE(recipe.Data().assetId == request.source.asset);
-                REQUIRE(recipe.Data().entities.size() == objects_.size());
-                REQUIRE(projected.size() == objects_.size());
+                REQUIRE(recipe.Data().entities.size() == 2);
+                REQUIRE(projected.size() == recipe.Data().entities.size());
                 REQUIRE_FALSE(recipe.Data().entities[0].parent);
                 REQUIRE(recipe.Data().entities[1].parent == Prefab::CookedPrefabEntitySlot{0});
                 const auto descriptor = world_.ActiveDescriptor();
                 REQUIRE(descriptor.HasValue());
                 return Result<std::shared_ptr<const Runtime::SceneGroupPublication>>::Success(
-                    std::make_shared<const NetworkGroupPublication>(world_, descriptor.Value(), objects_));
+                    std::make_shared<const NetworkGroupPublication>(world_, descriptor.Value()));
             }
 
         private:
             Network::ReplicationWorldLifecycle &world_;
-            std::array<Network::NetworkObjectId, 2> objects_;
         };
 
         TEST_CASE("Production cooked Prefab groups publish and retire exact network mappings with Scene",
@@ -77,7 +73,7 @@ namespace Horo::Application::PrefabAtomicTest {
             const auto authority = Network::ReplicationAuthorityEpoch::Create(1).Value();
             const std::array objects{Network::NetworkObjectId::Create(authority, 1, 1).Value(),
                                      Network::NetworkObjectId::Create(authority, 2, 1).Value()};
-            Fixture fixture{false, Fault::None, {}, {}, {}, nullptr, {}, {}, std::make_shared<NetworkGroupOwner>(world, objects)};
+            Fixture fixture{false, Fault::None, {}, {}, {}, nullptr, {}, {}, std::make_shared<NetworkGroupOwner>(world)};
             const auto baseline = *fixture.scenes.ActiveScene();
             const auto baselineRevision = baseline.StructuralRevision();
             using enum Runtime::RuntimePhase;

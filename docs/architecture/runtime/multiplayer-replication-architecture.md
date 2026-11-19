@@ -98,6 +98,13 @@ same order, and stays with the occurrence for retirement. Spawn and despawn
 publish with the other Scene owners. A rejected mapping leaves the entire
 group unchanged.
 
+For runtime-created entities the authority can call
+`PrepareDynamicObjectBatch` with the Scene reservations and their admitted
+schema versions. The mapping assigns slots within its existing budget, reusing
+retired slots only at their next generation. Despawn resolves the exact Scene
+entity generation and rejects authored mappings. Rollback discards the assigned
+identities and preserves the live mapping and its capture revision.
+
 ```cpp
 enum class ReplicationExecutionRole : std::uint8_t {
     Standalone,

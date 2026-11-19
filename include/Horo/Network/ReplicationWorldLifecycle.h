@@ -132,6 +132,13 @@ namespace Horo::Network {
         NetworkObjectProvenance provenance; /**< Stable schema and required authored Scene object identity. */
     };
 
+    /** @brief A newly reserved Scene entity and its admitted dynamic replication schema. */
+    struct ReplicationDynamicSceneObject final {
+        Runtime::EntityRef entity;
+        ReplicationSchemaId schema;
+        ReplicationSchemaVersion version;
+    };
+
     /** @brief Exact Scene/session/phase identity supplied by a caller requesting replication work. */
     struct ReplicationWorldWorkRequest final {
         Runtime::SceneRuntimeId scene;
@@ -277,6 +284,19 @@ namespace Horo::Network {
             const ReplicationWorldWorkRequest &request, std::span<const NetworkObjectMappingEntry> added,
             std::span<const NetworkObjectId> retired) const;
 
+        /**
+         * @brief Issues and retires dynamic occurrences within one detached authority mapping change.
+         * @param request Exact active Scene, session, lifecycle safe point and cancellation.
+         * @param added Entity reservations in canonical group order with admitted schemas.
+         * @param retired Exact Scene entity generations whose dynamic associations should retire.
+         * @return The unpublished candidate or a typed error leaving the live mapping unchanged.
+         * @details Slot selection and generation reuse are private to the candidate. Already authored
+         * mappings cannot be retired through this API.
+         */
+        [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareDynamicObjectBatch(
+            const ReplicationWorldWorkRequest &request, std::span<const ReplicationDynamicSceneObject> added,
+            std::span<const Runtime::EntityRef> retired) const;
+
         /** @brief Acquires an immutable capability only for an active matching world and declared phase. */
         [[nodiscard]] Result<ReplicationWorldReadLease> Acquire(const ReplicationWorldWorkRequest &request) const;
         /** @brief Acquires an immutable capability and checks one role-derived permission. */
@@ -318,6 +338,14 @@ namespace Horo::Network {
         [[nodiscard]] Result<void> RequireActive(Runtime::SceneRuntimeId scene, NetworkSessionGeneration session) const;
         /** @brief Validates structural mapping admission before allocating a detached copy. */
         [[nodiscard]] Result<void> ValidateObjectBatch(const ReplicationWorldWorkRequest &request) const;
+        /** @brief Captures the exact authority indexes and tombstones after batch admission. */
+        [[nodiscard]] Result<NetworkObjectMapping> CopyMappingForBatch(const ReplicationWorldWorkRequest &request, std::size_t added,
+                                                                       std::size_t retired) const;
+        /** @brief Wraps prepared indexes with the no-fail publication and rollback fences. */
+        [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> FinishObjectBatch(NetworkObjectMapping mapping,
+                                                                                                   const CancellationToken &cancellation,
+                                                                                                   std::size_t added,
+                                                                                                   std::size_t retired) const;
         static void RevokeRecord(const std::shared_ptr<Detail::ReplicationWorldRecord> &record) noexcept;
         void RetireActive() noexcept;
 

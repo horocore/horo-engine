@@ -443,27 +443,61 @@ namespace Horo::Network {
         return Result<void>::Success();
     }
 
+    /** @copydoc ReplicationWorldLifecycle::CopyMappingForBatch */
+    Result<NetworkObjectMapping> ReplicationWorldLifecycle::CopyMappingForBatch(const ReplicationWorldWorkRequest &request,
+                                                                                std::size_t added, std::size_t retired) const {
+        if (auto valid = ValidateObjectBatch(request); valid.HasError())
+            return Result<NetworkObjectMapping>::Failure(valid.ErrorValue());
+        if (added == 0 && retired == 0)
+            return Failure<NetworkObjectMapping>(NetworkErrors::ReplicationWorldInvalid);
+        if (std::max(added, retired) > limits_.maximumObjects ||
+            active_->mappingRevision.load() == std::numeric_limits<std::uint64_t>::max())
+            return Failure<NetworkObjectMapping>(NetworkErrors::ReplicationWorldCapacityExceeded);
+        return active_->mapping.CloneForPublication();
+    }
+
+    /** @copydoc ReplicationWorldLifecycle::FinishObjectBatch */
+    Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> ReplicationWorldLifecycle::FinishObjectBatch(
+        NetworkObjectMapping mapping, const CancellationToken &cancellation, std::size_t added, std::size_t retired) const {
+        return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Success(
+            std::make_unique<ObjectBatchCandidate>(active_, std::move(mapping), cancellation, added, retired, metrics_));
+    }
+
     /** @copydoc ReplicationWorldLifecycle::PrepareObjectBatch */
     Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> ReplicationWorldLifecycle::PrepareObjectBatch(
         const ReplicationWorldWorkRequest &request, const std::span<const NetworkObjectMappingEntry> added,
         const std::span<const NetworkObjectId> retired) const {
         using Prepared = Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>;
-        if (auto valid = ValidateObjectBatch(request); valid.HasError())
-            return Prepared::Failure(valid.ErrorValue());
-        if (added.empty() && retired.empty())
-            return Failure<std::unique_ptr<Runtime::SceneStructuralCandidate>>(NetworkErrors::ReplicationWorldInvalid);
-        if (std::max(added.size(), retired.size()) > limits_.maximumObjects ||
-            active_->mappingRevision.load() == std::numeric_limits<std::uint64_t>::max())
-            return Failure<std::unique_ptr<Runtime::SceneStructuralCandidate>>(NetworkErrors::ReplicationWorldCapacityExceeded);
         try {
-            auto copied = active_->mapping.CloneForPublication();
+            auto copied = CopyMappingForBatch(request, added.size(), retired.size());
             if (copied.HasError())
                 return Prepared::Failure(copied.ErrorValue());
             auto replacement = std::move(copied).Value();
             if (auto applied = ApplyObjectDelta(replacement, added, retired); applied.HasError())
                 return Prepared::Failure(applied.ErrorValue());
-            return Prepared::Success(std::make_unique<ObjectBatchCandidate>(active_, std::move(replacement), request.cancellation,
-                                                                            added.size(), retired.size(), metrics_));
+            return FinishObjectBatch(std::move(replacement), request.cancellation, added.size(), retired.size());
+        } catch (const std::bad_alloc &) {
+            return Failure<std::unique_ptr<Runtime::SceneStructuralCandidate>>(NetworkErrors::ReplicationWorldCapacityExceeded);
+        }
+    }
+
+    /** @copydoc ReplicationWorldLifecycle::PrepareDynamicObjectBatch */
+    Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> ReplicationWorldLifecycle::PrepareDynamicObjectBatch(
+        const ReplicationWorldWorkRequest &request, const std::span<const ReplicationDynamicSceneObject> added,
+        const std::span<const Runtime::EntityRef> retired) const {
+        using Prepared = Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>;
+        try {
+            auto copied = CopyMappingForBatch(request, added.size(), retired.size());
+            if (copied.HasError())
+                return Prepared::Failure(copied.ErrorValue());
+            auto replacement = std::move(copied).Value();
+            for (const auto entity : retired)
+                if (auto removed = replacement.RetireDynamic(entity); removed.HasError())
+                    return Prepared::Failure(removed.ErrorValue());
+            for (const auto &entry : added)
+                if (auto inserted = replacement.RegisterDynamic(entry.entity, entry.schema, entry.version); inserted.HasError())
+                    return Prepared::Failure(inserted.ErrorValue());
+            return FinishObjectBatch(std::move(replacement), request.cancellation, added.size(), retired.size());
         } catch (const std::bad_alloc &) {
             return Failure<std::unique_ptr<Runtime::SceneStructuralCandidate>>(NetworkErrors::ReplicationWorldCapacityExceeded);
         }

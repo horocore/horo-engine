@@ -172,6 +172,12 @@ namespace Horo::Network {
 
         /** @brief Clones live indexes and tombstones into detached capacity for an owner transaction. */
         [[nodiscard]] Result<NetworkObjectMapping> CloneForPublication() const;
+        /** @brief Adds one dynamic association using the first available slot and its exact next generation. */
+        [[nodiscard]] Result<void> RegisterDynamic(Runtime::EntityRef entity, ReplicationSchemaId schema, ReplicationSchemaVersion version);
+        /** @brief Retires only a live dynamic association found through its exact Scene entity. */
+        [[nodiscard]] Result<void> RetireDynamic(Runtime::EntityRef entity);
+        /** @brief Selects a reusable tombstone or the first unused slot within the mapping budget. */
+        [[nodiscard]] Result<NetworkObjectId> NextDynamicObject() const;
 
         struct SlotRecord final {
             std::uint64_t slot{};

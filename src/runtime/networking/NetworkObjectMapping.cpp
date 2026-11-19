@@ -118,6 +118,48 @@ namespace Horo::Network {
         return Result<void>::Success();
     }
 
+    /** @copydoc NetworkObjectMapping::NextDynamicObject */
+    Result<NetworkObjectId> NetworkObjectMapping::NextDynamicObject() const {
+        constexpr auto maximumGeneration = std::numeric_limits<std::uint32_t>::max();
+        const auto reusable = std::ranges::find_if(slots_, [](const SlotRecord &slot) {
+            return !slot.live && slot.generation < maximumGeneration;
+        });
+        if (reusable != slots_.end())
+            return NetworkObjectId::Create(epoch_, reusable->slot, reusable->generation + 1);
+        if (slots_.size() == maximumSlots_)
+            return Fail<NetworkObjectId>(NetworkErrors::NetworkObjectMappingCapacityExceeded);
+
+        std::uint64_t unused = 1;
+        for (const auto &slot : slots_) {
+            if (slot.slot != unused)
+                break;
+            if (unused == std::numeric_limits<std::uint64_t>::max())
+                return Fail<NetworkObjectId>(NetworkErrors::NetworkObjectMappingCapacityExceeded);
+            ++unused;
+        }
+        return NetworkObjectId::Create(epoch_, unused, 1);
+    }
+
+    /** @copydoc NetworkObjectMapping::RegisterDynamic */
+    Result<void> NetworkObjectMapping::RegisterDynamic(Runtime::EntityRef entity, ReplicationSchemaId schema,
+                                                       ReplicationSchemaVersion version) {
+        auto object = NextDynamicObject();
+        if (object.HasError())
+            return Result<void>::Failure(object.ErrorValue());
+        return Register({object.Value(), entity, {schema, version, std::nullopt}});
+    }
+
+    /** @copydoc NetworkObjectMapping::RetireDynamic */
+    Result<void> NetworkObjectMapping::RetireDynamic(Runtime::EntityRef entity) {
+        const auto object = Find(entity);
+        if (object.HasError())
+            return Result<void>::Failure(object.ErrorValue());
+        const auto &entry = *LowerBound(object.Value().Slot())->live;
+        if (entry.provenance.authoredObject)
+            return Result<void>::Failure(MakeError(NetworkErrors::NetworkObjectMappingInvalid));
+        return Retire(object.Value());
+    }
+
     /** @copydoc NetworkObjectMapping::Resolve */
     Result<Runtime::EntityRef> NetworkObjectMapping::Resolve(const NetworkObjectId object) const {
         if (const auto active = RequireActive(); active.HasError())
