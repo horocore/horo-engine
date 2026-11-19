@@ -219,12 +219,16 @@ namespace Horo::AI::Detail {
         return value;
     }
 
-    void WriteScalar(DecisionWriter &writer, const BlackboardScalarValue &value) {
+    void WriteScalar(DecisionWriter &writer, const BlackboardScalarValue &value, const WriteBlackboardEntity &entity) {
         if (const auto *scalar = std::get_if<double>(&value); scalar && !std::isfinite(*scalar)) {
             writer.Reject();
             return;
         }
         writer.Unsigned(value.index(), 1);
+        if (const auto *reference = std::get_if<BlackboardStoredEntityReference>(&value); reference && entity) {
+            entity(writer, *reference);
+            return;
+        }
         std::visit([&]<typename VisitedValue>(const VisitedValue &item) {
             using T = std::decay_t<decltype(item)>;
             if constexpr (std::is_same_v<T, bool>)
@@ -240,7 +244,7 @@ namespace Horo::AI::Detail {
         }, value);
     }
 
-    BlackboardScalarValue ReadScalar(DecisionReader &reader) {
+    BlackboardScalarValue ReadScalar(DecisionReader &reader, const ReadBlackboardEntity &entity) {
         const auto kind = reader.Enumeration(BlackboardValueKind::Count);
         using enum BlackboardValueKind;
         switch (kind) {
@@ -255,6 +259,7 @@ namespace Horo::AI::Detail {
                 return value;
             }
             case EntityReference:
+                return entity ? BlackboardScalarValue{entity(reader)} : ReadReference(reader, kind);
             case AssetReference:
                 return ReadReference(reader, kind);
             case WorldCoordinate: {
@@ -270,18 +275,18 @@ namespace Horo::AI::Detail {
     }
 
     /** @copydoc WriteBlackboardValue */
-    void WriteBlackboardValue(DecisionWriter &writer, const BlackboardValue &value) {
+    void WriteBlackboardValue(DecisionWriter &writer, const BlackboardValue &value, const WriteBlackboardEntity &entity) {
         writer.Unsigned(value.index(), 1);
         std::visit([&]<typename VisitedValue>(const VisitedValue &item) {
             using T = std::decay_t<decltype(item)>;
             if constexpr (std::is_same_v<T, BlackboardScalarValue>)
-                WriteScalar(writer, item);
+                WriteScalar(writer, item, entity);
             else if constexpr (std::is_same_v<T, BlackboardCollectionValue>) {
                 writer.Enumeration(item.elementKind);
                 if (!writer.Count(item.count, MaximumBlackboardCollectionElements))
                     return;
                 for (std::size_t index = 0; index < item.count; ++index)
-                    WriteScalar(writer, item.elements[index]);
+                    WriteScalar(writer, item.elements[index], entity);
             } else {
                 writer.Unsigned(item.schemaVersion, 4);
                 writer.Unsigned(item.serializedType, 4);
@@ -293,16 +298,16 @@ namespace Horo::AI::Detail {
     }
 
     /** @copydoc ReadBlackboardValue */
-    BlackboardValue ReadBlackboardValue(DecisionReader &reader) {
+    BlackboardValue ReadBlackboardValue(DecisionReader &reader, const ReadBlackboardEntity &entity) {
         switch (reader.Unsigned(1)) {
             case 0:
-                return ReadScalar(reader);
+                return ReadScalar(reader, entity);
             case 1: {
                 BlackboardCollectionValue value;
                 value.elementKind = reader.Enumeration(BlackboardValueKind::Count);
                 value.count = reader.Count(MaximumBlackboardCollectionElements);
                 for (std::size_t index = 0; index < value.count && reader.Valid(); ++index)
-                    value.elements[index] = ReadScalar(reader);
+                    value.elements[index] = ReadScalar(reader, entity);
                 return value;
             }
             case 2: {

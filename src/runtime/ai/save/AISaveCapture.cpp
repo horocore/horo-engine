@@ -12,7 +12,36 @@ namespace Horo::AI {
         using namespace Runtime;
         using CaptureResult = Result<CanonicalCaptureDisposition>;
         using RecordBytes = Result<std::vector<std::uint8_t>>;
-        constexpr std::uint32_t SaveSchemaVersion = 1;
+
+        /** @brief Resolves the active runtime entity to its durable record and generation. */
+        Result<AiSavedEntityReference> ProjectEntity(const PersistentEntityIdentityMap &identities,
+                                                     const BlackboardStoredEntityReference &reference) {
+            using Projected = Result<AiSavedEntityReference>;
+            const auto id = identities.Find({{reference.sceneIncarnation}, {reference.slot, reference.generation}});
+            if (id.HasError())
+                return Projected::Failure(id.ErrorValue());
+            const auto records = identities.Records();
+            const auto record = std::ranges::lower_bound(records, id.Value(), {}, &PersistentEntityRecord::identity);
+            if (record == records.end() || record->identity != id.Value())
+                return Projected::Failure(MakeError(AIErrors::CanonicalStateInvalid));
+            return Projected::Success({id.Value().Bytes(), record->generation.value});
+        }
+
+        /** @brief Finds the current entity and rejects stale generations and tombstones before AI restore. */
+        Result<BlackboardStoredEntityReference> ResolveEntity(const RuntimeSceneView &scene, const PersistentEntityIdentityMap &identities,
+                                                              const AiSavedEntityReference &reference) {
+            using Resolved = Result<BlackboardStoredEntityReference>;
+            const auto id = PersistentEntityId::FromBytes(reference.identity);
+            if (id.HasError())
+                return Resolved::Failure(id.ErrorValue());
+            const auto entity = identities.Resolve(id.Value(), {reference.generation});
+            if (entity.HasError())
+                return Resolved::Failure(entity.ErrorValue());
+            const auto view = scene.Get(entity.Value());
+            if (view.HasError())
+                return Resolved::Failure(view.ErrorValue());
+            return Resolved::Success({entity.Value().runtime.value, entity.Value().entity.index, entity.Value().entity.generation});
+        }
 
         /** @brief Counts live Scene components so an incomplete runtime inventory cannot enter a required record. */
         std::size_t SceneAgentCount(const RuntimeSceneView &scene) noexcept {
@@ -29,9 +58,10 @@ namespace Horo::AI {
         class CaptureAdapter final : public ICanonicalStateAdapter {
         public:
             CaptureAdapter(SaveParticipantId participant, SaveRecordId record, std::uint64_t maximumBytes,
-                           std::weak_ptr<const AiSceneRuntime> runtime, AiSaveSceneSource scene)
+                           std::weak_ptr<const AiSceneRuntime> runtime, AiSaveSceneSource scene, AiSaveIdentitySource identities)
                 : participant_(std::move(participant)), record_(std::move(record)), maximumBytes_(maximumBytes),
-                  runtime_(std::move(runtime)), scene_(std::move(scene)), owner_(std::this_thread::get_id()) {}
+                  runtime_(std::move(runtime)), scene_(std::move(scene)), identities_(std::move(identities)),
+                  owner_(std::this_thread::get_id()) {}
 
             CaptureResult Capture(const CanonicalCaptureContext &context, ICanonicalCaptureSink &sink) const override {
                 const auto allowance = Admit(context);
@@ -50,7 +80,8 @@ namespace Horo::AI {
             [[nodiscard]] Result<std::size_t> Admit(const CanonicalCaptureContext &context) const {
                 using Allowance = Result<std::size_t>;
                 if (owner_ != std::this_thread::get_id() || context.participant != participant_ ||
-                    context.schemaVersion.Value() != SaveSchemaVersion || context.scope != SaveParticipantScope::RuntimeScene)
+                    context.schemaVersion.Value() != (identities_ ? AiCanonicalReferenceRecordVersion : AiCanonicalRecordVersion) ||
+                    context.scope != SaveParticipantScope::RuntimeScene)
                     return Allowance::Failure(MakeError(SaveErrors::CaptureRegistryStale));
                 const auto &remaining = context.admission;
                 const auto budget = std::min({maximumBytes_, remaining.operationPayloadBytes, remaining.participantPayloadBytes,
@@ -76,7 +107,19 @@ namespace Horo::AI {
                 if (state.Value().agents.size() != SceneAgentCount(*scene))
                     return RecordBytes::Failure(
                         MakeError(AIErrors::CanonicalStateInvalid, "AI capture requires the complete Scene population."));
-                return EncodeAiCanonicalStateRecord(state.Value(), budget);
+                return Encode(state.Value(), *scene, budget);
+            }
+
+            /** @brief Acquires the authoritative mapping once for the whole save operation. */
+            [[nodiscard]] RecordBytes Encode(const AiCanonicalState &state, const RuntimeSceneView &scene, std::size_t budget) const {
+                if (!identities_)
+                    return EncodeAiCanonicalStateRecord(state, budget);
+                auto identities = identities_(scene);
+                if (identities.HasError())
+                    return RecordBytes::Failure(identities.ErrorValue());
+                return EncodeAiCanonicalStateRecord(state, budget, [&](const BlackboardStoredEntityReference &value) {
+                    return ProjectEntity(identities.Value(), value);
+                });
             }
 
             SaveParticipantId participant_;
@@ -84,31 +127,51 @@ namespace Horo::AI {
             std::uint64_t maximumBytes_;
             std::weak_ptr<const AiSceneRuntime> runtime_;
             AiSaveSceneSource scene_;
+            AiSaveIdentitySource identities_;
             std::thread::id owner_;
         };
     }  // namespace
 
+    /** @copydoc AiSaveCaptureDescriptor */
+    Runtime::CanonicalStateParticipantDescriptor AiSaveCaptureDescriptor(Runtime::SaveParticipantId participant,
+                                                                         Runtime::SaveRecordId record, std::size_t maximumBytes,
+                                                                         bool persistentReferences) {
+        return {participant,
+                ParticipantSchemaVersion::Create(persistentReferences ? AiCanonicalReferenceRecordVersion : AiCanonicalRecordVersion)
+                    .Value(),
+                SaveParticipantScope::RuntimeScene,
+                SaveParticipantRole::Capture,
+                true,
+                {maximumBytes, 1, 1},
+                {},
+                {record}};
+    }
+
     /** @copydoc BindAiSaveCapture */
     Result<AiSaveCaptureParticipant> BindAiSaveCapture(Runtime::SaveParticipantId participant, Runtime::SaveRecordId record,
                                                        std::size_t maximumBytes, std::weak_ptr<const AiSceneRuntime> runtime,
-                                                       AiSaveSceneSource scene) {
+                                                       AiSaveSceneSource scene, AiSaveIdentitySource identities) {
         using Bound = Result<AiSaveCaptureParticipant>;
         if (!participant.IsValid() || !record.IsValid() || maximumBytes < 8 || maximumBytes > DefaultRuntimeSaveCopiedRecordBytes ||
             !scene || runtime.expired())
             return Bound::Failure(MakeError(SaveErrors::ParticipantAdapterMissing));
         try {
-            return Bound::Success(
-                {{participant,
-                  ParticipantSchemaVersion::Create(SaveSchemaVersion).Value(),
-                  SaveParticipantScope::RuntimeScene,
-                  SaveParticipantRole::Capture,
-                  true,
-                  {maximumBytes, 1, 1},
-                  {},
-                  {record}},
-                 std::make_shared<CaptureAdapter>(participant, record, maximumBytes, std::move(runtime), std::move(scene))});
+            return Bound::Success({AiSaveCaptureDescriptor(participant, record, maximumBytes, static_cast<bool>(identities)),
+                                   std::make_shared<CaptureAdapter>(participant, record, maximumBytes, std::move(runtime), std::move(scene),
+                                                                    std::move(identities))});
         } catch (const std::bad_alloc &) {
             return Bound::Failure(MakeError(AIErrors::BlackboardStorageUnavailable));
         }
+    }
+
+    /** @copydoc DecodeAiSavePopulation */
+    Result<AiCanonicalState> DecodeAiSavePopulation(std::span<const std::uint8_t> bytes, std::size_t maximumBytes,
+                                                    const Runtime::RuntimeSceneView &scene,
+                                                    const Runtime::PersistentEntityIdentityMap &identities) {
+        if (!scene.IsCurrent())
+            return Result<AiCanonicalState>::Failure(MakeError(AIErrors::CanonicalRestoreStale));
+        return DecodeAiCanonicalStateRecord(bytes, maximumBytes, [&](const AiSavedEntityReference &value) {
+            return ResolveEntity(scene, identities, value);
+        });
     }
 }  // namespace Horo::AI

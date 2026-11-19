@@ -10,10 +10,6 @@
 #include "Horo/Runtime/Scene/PersistentEntityIdentity.h"
 #include "Horo/Scene/CookedSceneDefinition.h"
 
-namespace Horo::AI {
-    struct AiCanonicalState;
-}
-
 namespace Horo::Application::Internal {
     class PlaySavePrefabServices;
     class PlaySavePhysicsServices;
@@ -29,7 +25,7 @@ namespace Horo::Application::Internal {
         Runtime::RuntimeSceneDefinition definition;
         std::vector<Runtime::PersistentEntityRecord> identities;
         std::optional<Prefab::PrefabPersistentState> prefabs; /**< Separate owned recipe state, never flattened into definition. */
-        std::shared_ptr<const AI::AiCanonicalState> ai;       /**< Validated separate AI record consumed only by Scene activation. */
+        std::optional<std::vector<std::byte>> ai; /**< Validated AI record; entity references resolve only in the private Scene. */
     };
 
     /** @brief Stable single core-Scene owner; other subsystem state requires its own registered adapters. */

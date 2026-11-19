@@ -29,12 +29,15 @@ namespace Horo::AI::Detail {
     [[nodiscard]] BehaviorTreeProperty ReadProperty(DecisionReader &reader);
     /** @brief Writes the canonical schema fields used by both standalone assets and environment fingerprints. */
     void WriteBlackboardSchema(DecisionWriter &writer, const BlackboardSchema &schema);
-    void WriteScalar(DecisionWriter &writer, const BlackboardScalarValue &value);
-    [[nodiscard]] BlackboardScalarValue ReadScalar(DecisionReader &reader);
+    /** @brief An optional wire override for the entity scalar. Source assets use their existing representation. */
+    using WriteBlackboardEntity = std::function<void(DecisionWriter &, const BlackboardStoredEntityReference &)>;
+    using ReadBlackboardEntity = std::function<BlackboardStoredEntityReference(DecisionReader &)>;
+    void WriteScalar(DecisionWriter &writer, const BlackboardScalarValue &value, const WriteBlackboardEntity &entity = {});
+    [[nodiscard]] BlackboardScalarValue ReadScalar(DecisionReader &reader, const ReadBlackboardEntity &entity = {});
     /** @brief Writes an owned bounded Blackboard value including its kind. */
-    void WriteBlackboardValue(DecisionWriter &writer, const BlackboardValue &value);
+    void WriteBlackboardValue(DecisionWriter &writer, const BlackboardValue &value, const WriteBlackboardEntity &entity = {});
     /** @brief Reads an owned bounded Blackboard value including its kind. */
-    [[nodiscard]] BlackboardValue ReadBlackboardValue(DecisionReader &reader);
+    [[nodiscard]] BlackboardValue ReadBlackboardValue(DecisionReader &reader, const ReadBlackboardEntity &entity = {});
     void WriteCall(DecisionWriter &writer, const std::optional<DecisionSubplanCall> &value);
     [[nodiscard]] std::optional<DecisionSubplanCall> ReadCall(DecisionReader &reader);
     void WriteTree(DecisionWriter &writer, const BehaviorTreeAsset &tree);

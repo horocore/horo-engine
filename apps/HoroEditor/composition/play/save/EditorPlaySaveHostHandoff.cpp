@@ -135,8 +135,11 @@ namespace Horo::Application::Internal {
                 if (!control_->ai)
                     return control_->decoded->ai ? Result<void>::Failure(MakeError(SaveErrors::ParticipantAdapterMissing))
                                                  : Result<void>::Success();
+                const auto *identities = bundle_->Identities();
+                if (!identities || !control_->decoded->ai)
+                    return Result<void>::Failure(MakeError(SaveErrors::RestoreContextInvalid));
                 control_->candidateView = scene.View();
-                return control_->ai->Stage(control_->candidateView, control_->decoded->ai, control_->cancellation);
+                return control_->ai->Stage(control_->candidateView, *control_->decoded->ai, *identities, control_->cancellation);
             }
 
             Result<void> PrepareGameplay(RuntimeScene &scene) const {

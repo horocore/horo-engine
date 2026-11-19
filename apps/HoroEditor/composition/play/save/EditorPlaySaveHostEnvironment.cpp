@@ -94,12 +94,8 @@ namespace Horo::Application::Internal {
             for (const auto &binding : bindings)
                 declarations.push_back(binding.declaration);
             std::optional<Runtime::CanonicalStateParticipantDescriptor> aiDescriptor;
-            if (ai) {
-                auto binding = ai->BindCapture();
-                if (binding.HasError())
-                    return Host::Failure(binding.ErrorValue());
-                aiDescriptor = std::move(binding).Value().descriptor;
-            }
+            if (ai)
+                aiDescriptor = ai->Descriptor();
             auto schema =
                 std::make_shared<PlaySaveStorageSchema>(definition, std::move(identities).Value(), std::move(declarations),
                                                         behaviorOwner ? std::optional{Gameplay::BehaviorLifecycleParticipant()}

@@ -50,8 +50,11 @@ namespace Horo::Application::Internal {
                 policy.compatibility.participants.push_back(Compatibility(*schema.lifecycle));
             if (schema.physics)
                 policy.compatibility.participants.push_back(Compatibility(*schema.physics));
-            if (schema.ai)
-                policy.compatibility.participants.push_back(Compatibility(*schema.ai));
+            if (schema.ai) {
+                auto compatible = Compatibility(*schema.ai);
+                compatible.versions.direct.minimum = ParticipantSchemaVersion::Create(AI::AiCanonicalRecordVersion).Value();
+                policy.compatibility.participants.push_back(std::move(compatible));
+            }
             for (const auto &declaration : schema.gameplay)
                 policy.compatibility.participants.push_back(Compatibility(declaration.descriptor.participant));
             std::ranges::sort(policy.compatibility.participants, {}, &SaveParticipantCompatibility::participant);
@@ -120,7 +123,7 @@ namespace Horo::Application::Internal {
             const auto physics = ValidatePlaySavePhysicsArchive(archive, *schema);
             if (physics.HasError())
                 return Result<void>::Failure(physics.ErrorValue());
-            const auto ai = DecodePlaySaveAi(archive, schema->ai);
+            const auto ai = ReadPlaySaveAi(archive, schema->ai);
             if (ai.HasError())
                 return Result<void>::Failure(ai.ErrorValue());
             if (const auto core = DecodePlaySaveSceneStructure(*bytes.Value(), schema->baseline, schema->identities, physics.Value(),

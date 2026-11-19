@@ -131,4 +131,51 @@ namespace Horo::AI {
         CHECK(runtime.Find(handle).HasError());
         scenes.Shutdown();
     }
+
+    TEST_CASE("AI Save resolves durable entity generations without trusting the original Scene slots", "[unit][ai][save][restore]") {
+        TestSupport::RestoreHarness source{true};
+        const auto saved = source.Capture();
+        const auto identity = PersistentEntityId::FromBytes({5}).Value();
+        constexpr std::uint64_t generation = 3;
+        const auto encoded = EncodeAiCanonicalStateRecord(saved, 4096, [&](const BlackboardStoredEntityReference &reference) {
+            CHECK(reference.sceneIncarnation == source.scene->View().RuntimeId().value);
+            return Result<AiSavedEntityReference>::Success({identity.Bytes(), generation});
+        });
+        REQUIRE(encoded.HasValue());
+        REQUIRE(ValidateAiCanonicalStateRecord(encoded.Value(), 4096, AiCanonicalReferenceRecordVersion).HasValue());
+        CHECK(ValidateAiCanonicalStateRecord(encoded.Value(), 4096, AiCanonicalRecordVersion).HasError());
+        CHECK(DecodeAiCanonicalStateRecord(encoded.Value(), 4096).HasError());
+
+        SceneDefinitionBuilder builder{{31}, {1}};
+        builder.Add({.object = {9}});
+        const auto definition = std::move(builder).Build();
+        REQUIRE(definition.HasValue());
+        const auto target = RuntimeScene::Create(definition.Value(), {25});
+        REQUIRE(target.HasValue());
+        const auto scene = target.Value()->View();
+        const auto entity = scene.Find({9});
+        REQUIRE(entity);
+        std::uint64_t destinationGeneration = generation;
+        SECTION("remaps the saved reference to the new entity slot") {}
+        SECTION("a retired durable generation rejects the entire record") {
+            ++destinationGeneration;
+        }
+        const std::array records{PersistentEntityRecord{identity,
+                                                        {destinationGeneration},
+                                                        AuthoredPersistentEntityProvenance{{31}, {9}},
+                                                        PersistentEntityDisposition::Live}};
+        const std::array bindings{PersistentEntityRuntimeBinding{identity, {destinationGeneration}, *entity}};
+        const auto map = PersistentEntityIdentityMap::Create(scene.RuntimeId(), records, bindings);
+        REQUIRE(map.HasValue());
+        const auto decoded = DecodeAiSavePopulation(encoded.Value(), 4096, scene, map.Value());
+        if (destinationGeneration != generation) {
+            CHECK(decoded.HasError());
+            return;
+        }
+        REQUIRE(decoded.HasValue());
+        const auto &entry = decoded.Value().agents.front().controller->blackboard->entries.front();
+        REQUIRE(entry.value);
+        const auto expected = BlackboardStoredEntityReference{scene.RuntimeId().value, entity->entity.index, entity->entity.generation};
+        CHECK(std::get<BlackboardStoredEntityReference>(std::get<BlackboardScalarValue>(*entry.value)) == expected);
+    }
 }  // namespace Horo::AI

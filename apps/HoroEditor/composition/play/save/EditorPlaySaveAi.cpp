@@ -9,8 +9,7 @@
 namespace Horo::Application::Internal {
     namespace {
         using namespace Runtime;
-        using Population = std::shared_ptr<const AI::AiCanonicalState>;
-        using Decoded = Result<Population>;
+        using AiRecordRead = Result<std::optional<std::vector<std::byte>>>;
 
         /** @brief Stable record identity for the Play AI canonical population. */
         SaveRecordId AiRecord() {
@@ -27,20 +26,34 @@ namespace Horo::Application::Internal {
     PlaySaveAiServices::PlaySaveAiServices(RuntimeSceneService &scenes, std::shared_ptr<AI::AiSceneRuntime> runtime) noexcept
         : scenes_(scenes), runtime_(std::move(runtime)) {}
 
+    /** @copydoc PlaySaveAiServices::Descriptor */
+    CanonicalStateParticipantDescriptor PlaySaveAiServices::Descriptor() const {
+        return AI::AiSaveCaptureDescriptor(AiParticipant(), AiRecord(), DefaultRuntimeSaveCopiedRecordBytes, true);
+    }
+
     /** @copydoc PlaySaveAiServices::BindCapture */
-    Result<AI::AiSaveCaptureParticipant> PlaySaveAiServices::BindCapture() const {
+    Result<AI::AiSaveCaptureParticipant> PlaySaveAiServices::BindCapture(AI::AiSaveIdentitySource identities) const {
         return AI::BindAiSaveCapture(AiParticipant(), AiRecord(), DefaultRuntimeSaveCopiedRecordBytes, runtime_, [scenes = &scenes_] {
             return scenes->ActiveScene();
-        });
+        }, std::move(identities));
     }
 
     /** @copydoc PlaySaveAiServices::Stage */
-    Result<void> PlaySaveAiServices::Stage(RuntimeSceneView scene, Population state, CancellationToken cancellation) {
-        if (pending_.state || !state || !scene.IsCurrent())
+    Result<void> PlaySaveAiServices::Stage(RuntimeSceneView scene, std::span<const std::byte> record,
+                                           const PersistentEntityIdentityMap &identities, CancellationToken cancellation) {
+        if (pending_.state || !scene.IsCurrent())
             return Result<void>::Failure(MakeError(SaveErrors::RestoreContextInvalid));
-        scene_ = scene;
-        pending_ = {std::move(state), std::move(cancellation)};
-        return Result<void>::Success();
+        auto state = AI::DecodeAiSavePopulation({reinterpret_cast<const std::uint8_t *>(record.data()), record.size()},
+                                                DefaultRuntimeSaveCopiedRecordBytes, scene, identities);
+        if (state.HasError())
+            return Result<void>::Failure(std::move(state).ErrorValue());
+        try {
+            pending_ = {std::make_shared<const AI::AiCanonicalState>(std::move(state).Value()), std::move(cancellation)};
+            scene_ = scene;
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(SaveErrors::RestoreAllocationFailed));
+        }
     }
 
     /** @copydoc PlaySaveAiServices::Take */
@@ -68,29 +81,23 @@ namespace Horo::Application::Internal {
         }
     }
 
-    /** @copydoc DecodePlaySaveAi */
-    Decoded DecodePlaySaveAi(const ValidatedSaveArchive &archive, const std::optional<CanonicalStateParticipantDescriptor> &descriptor) {
+    /** @copydoc ReadPlaySaveAi */
+    AiRecordRead ReadPlaySaveAi(const ValidatedSaveArchive &archive, const std::optional<CanonicalStateParticipantDescriptor> &descriptor) {
         const auto &participants = archive.Manifest().participants;
         const auto row = std::ranges::find(participants, AiParticipant(), &SaveManifestParticipant::participant);
-        const auto bytes = archive.SelectChunk(AiRecord());
+        auto bytes = archive.SelectChunk(AiRecord());
         if (bytes.HasError())
-            return Decoded::Failure(bytes.ErrorValue());
+            return bytes;
         if (!descriptor)
-            return row == participants.end() && !bytes.Value() ? Decoded::Success({})
-                                                               : Decoded::Failure(MakeError(SaveErrors::CompositionUnsupported));
+            return row == participants.end() && !bytes.Value() ? AiRecordRead::Success({})
+                                                               : AiRecordRead::Failure(MakeError(SaveErrors::CompositionUnsupported));
         if (row == participants.end() || !bytes.Value())
-            return Decoded::Failure(MakeError(SaveErrors::CaptureIncomplete));
-        if (row->schemaVersion != descriptor->schemaVersion || !row->required || row->chunks != descriptor->ownedRecords)
-            return Decoded::Failure(MakeError(SaveErrors::CaptureRegistryStale));
-        const auto record = *bytes.Value();
-        auto decoded = AI::DecodeAiCanonicalStateRecord({reinterpret_cast<const std::uint8_t *>(record.data()), record.size()},
-                                                        DefaultRuntimeSaveCopiedRecordBytes);
-        if (decoded.HasError())
-            return Decoded::Failure(decoded.ErrorValue());
-        try {
-            return Decoded::Success(std::make_shared<const AI::AiCanonicalState>(std::move(decoded).Value()));
-        } catch (const std::bad_alloc &) {
-            return Decoded::Failure(MakeError(SaveErrors::RestoreAllocationFailed));
-        }
+            return AiRecordRead::Failure(MakeError(SaveErrors::CaptureIncomplete));
+        if (row->schemaVersion > descriptor->schemaVersion || !row->required || row->chunks != descriptor->ownedRecords)
+            return AiRecordRead::Failure(MakeError(SaveErrors::CaptureRegistryStale));
+        const auto &record = *bytes.Value();
+        const auto validated = AI::ValidateAiCanonicalStateRecord({reinterpret_cast<const std::uint8_t *>(record.data()), record.size()},
+                                                                  DefaultRuntimeSaveCopiedRecordBytes, row->schemaVersion.Value());
+        return validated.HasError() ? AiRecordRead::Failure(validated.ErrorValue()) : std::move(bytes);
     }
 }  // namespace Horo::Application::Internal

@@ -138,7 +138,7 @@ namespace Horo::Application::Internal {
         const auto physics = ValidatePlaySavePhysicsArchive(archive, *schema_);
         if (physics.HasError())
             return Outcome::Failure(physics.ErrorValue());
-        auto ai = DecodePlaySaveAi(archive, schema_->ai);
+        auto ai = ReadPlaySaveAi(archive, schema_->ai);
         if (ai.HasError())
             return Outcome::Failure(ai.ErrorValue());
         auto decoded = DecodePlaySaveScene(*bytes.Value(), schema_->baseline, schema_->identities, bindings, physics.Value(),

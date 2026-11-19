@@ -146,7 +146,9 @@ namespace Horo::Application::Internal {
             return physical;
         if (!environment.ai)
             return Result<void>::Success();
-        auto bound = environment.ai->BindCapture();
+        auto bound = environment.ai->BindCapture([scene = &scenes, values = schema, prefabs = prefabs](const RuntimeSceneView &) {
+            return CurrentPlaySaveIdentities(*scene, *values, prefabs.get());
+        });
         if (bound.HasError())
             return Result<void>::Failure(bound.ErrorValue());
         if (bound.Value().descriptor != *schema->ai)

@@ -11,11 +11,13 @@ namespace Horo::Application::Internal {
     public:
         /** @brief Selects owners which outlive the active Play Save session. */
         PlaySaveAiServices(Runtime::RuntimeSceneService &scenes, std::shared_ptr<AI::AiSceneRuntime> runtime) noexcept;
+        /** @brief Declares the current inert AI record schema used by the Play sandbox. */
+        [[nodiscard]] Runtime::CanonicalStateParticipantDescriptor Descriptor() const;
         /** @brief Provides the capture-only binding; Scene activation owns restore publication. */
-        [[nodiscard]] Result<AI::AiSaveCaptureParticipant> BindCapture() const;
+        [[nodiscard]] Result<AI::AiSaveCaptureParticipant> BindCapture(AI::AiSaveIdentitySource identities) const;
         /** @brief Stages decoded values once for the actual private Scene assembled by Save. */
-        [[nodiscard]] Result<void> Stage(Runtime::RuntimeSceneView scene, std::shared_ptr<const AI::AiCanonicalState> state,
-                                         CancellationToken cancellation);
+        [[nodiscard]] Result<void> Stage(Runtime::RuntimeSceneView scene, std::span<const std::byte> record,
+                                         const Runtime::PersistentEntityIdentityMap &identities, CancellationToken cancellation);
         /** @brief Takes saved state for the exact staged Scene, or selects ordinary activation when none is staged. */
         [[nodiscard]] Result<AI::AiSceneRestoredPopulation> Take(const Runtime::RuntimeSceneView &scene);
         /** @brief Rejects publication if the staged population was never taken by the exact Scene participant. */
@@ -31,6 +33,6 @@ namespace Horo::Application::Internal {
     };
 
     /** @brief Reads the exact optional Play AI record and checks its immutable manifest ownership. */
-    [[nodiscard]] Result<std::shared_ptr<const AI::AiCanonicalState>> DecodePlaySaveAi(
+    [[nodiscard]] Result<std::optional<std::vector<std::byte>>> ReadPlaySaveAi(
         const Runtime::ValidatedSaveArchive &archive, const std::optional<Runtime::CanonicalStateParticipantDescriptor> &descriptor);
 }  // namespace Horo::Application::Internal
