@@ -770,10 +770,11 @@ identify individual keys. The review resolves each query result binding by its
 query identity and result contract against the saved sources in the same
 capture. Malformed sources and missing, ambiguous or incompatible bindings
 leave explicit gaps. Unsupported component owners, unresolved placements,
-variants, overrides and Perception also limit coverage. The workspace can validate
-a proposed replacement or removal against the current schema and display its
-candidate together with the reference review. Applying that candidate requires a
-separate multi-document reference-resolution transaction.
+variants and overrides also limit coverage. Workspace confirmation explicitly
+covers the registered project sources. External SDK Perception bindings remain
+outside that scope and require their owner's review. The workspace can validate
+a proposed typed change or removal against the current schema and display its
+candidate together with the reference review.
 For a proposed key removal, the workspace lists compatible destinations from the
 current schema. An explicit choice stages bounded Decision source candidates for
 authored requirements, query outputs, state guards and Utility considerations.
@@ -783,8 +784,20 @@ The explicit replacement review also overlays the proposed schema and prepared
 sources in memory, then runs the cooker checks for affected roots, callers and
 their query targets. The review records successful admission and a weak provider
 generation stamp, or a typed validation gap. The workspace owner retains the
-revocable generation while the matching review is current. The transaction must
-recheck its publication fences before applying the candidates.
+revocable generation while the matching review or transaction is current.
+
+Applying the reviewed change requires each affected Decision source to have a
+clean, editable workspace opening. The controller rechecks the source witnesses
+and project mutation lease, reserves every participant's typed root and history,
+then publishes them together on the owner lane. Undo and redo coordinate the
+exact group before durable saving begins. The schema tab's explicit **Save
+reviewed changes** action writes Decision sources first. They already accept
+the replacement under the old schema, so a write prefix leaves a valid project
+and can be retried. The schema is published only after a fresh review proves that
+the removed key is unused or a retained key remains compatible. It revalidates
+that evidence with the save lease held.
+Successful save retires the coordinated history boundary. Independent Save,
+reload and close cannot split an applied group.
 
 ## Cinematic Sequence Asset Documents
 

@@ -353,7 +353,8 @@ namespace Horo::Editor {
 
         /** @brief Displays scoped review evidence for the selected durable key. */
         void DrawUsages(const BlackboardFrame &frame, const BlackboardWorkspaceDocument &document,
-                        const AI::BlackboardKeyDescriptor &proposed, Assets::AssetRegistryRevision currentRegistry, std::size_t &page) {
+                        const AI::BlackboardKeyDescriptor &proposed, std::optional<AI::BlackboardKeyId> replacement,
+                        Assets::AssetRegistryRevision currentRegistry, std::size_t &page) {
             const auto &snapshot = document.snapshot;
             const auto key = proposed.key;
             if (frame.Button("usage_review",
@@ -374,23 +375,39 @@ namespace Horo::Editor {
                 frame.Caption("usage_stale");
                 return;
             }
+            bool matchesProposal = false;
             if (const auto &preview = document.referencePreview) {
                 const auto keys = preview->schema->Keys();
                 const auto found = std::ranges::lower_bound(keys, key, {}, &AI::BlackboardKeyDescriptor::key);
-                if (found == keys.end() || found->key != key)
+                if (found == keys.end() || found->key != key) {
+                    matchesProposal = review->selection.replacement == replacement;
                     frame.Caption("usage_preview_removal");
-                else if (*found == proposed)
+                } else if (*found == proposed) {
+                    matchesProposal = true;
                     frame.Caption("usage_preview_change");
+                }
             }
             DrawUsageSummary(frame, *review);
             DrawUsagePage(frame, *review, page);
+            if (matchesProposal && review->commitEvidence && review->gaps.empty()) {
+                frame.Caption("reference_apply_scope");
+                if (!document.referenceEditReady)
+                    frame.Caption("reference_apply_participants");
+                if (frame.Button("reference_apply", document.referenceEditReady) &&
+                    frame.command.command == EditorWorkspaceViewCommand::None) {
+                    frame.command.command = EditorWorkspaceViewCommand::BlackboardDocument;
+                    frame.command.blackboard = BlackboardWorkspaceRequest{.fence = frame.fence,
+                                                                          .operation = BlackboardDocumentOperation::ApplyReviewedEdit,
+                                                                          .expectedReview = review};
+                }
+            }
         }
 
         /** @brief Shows actionable source conflicts alongside shared save and history controls. */
         void DrawSourceTools(const BlackboardFrame &frame, const BlackboardWorkspaceDocument &document) {
             const auto &snapshot = document.snapshot;
             using enum BlackboardDocumentOperation;
-            if (frame.Button("save", snapshot.dirty && !snapshot.conflict))
+            if (frame.Button(document.referenceEditStaged ? "reference_save" : "save", snapshot.dirty && !snapshot.conflict))
                 frame.Request(Save);
             if (frame.Button("reload", !snapshot.dirty))
                 frame.Request(Reload);
@@ -465,6 +482,8 @@ namespace Horo::Editor {
         }
 
         DrawSourceTools(frame, *document);
+        if (document->referenceEditStaged)
+            return true;
         if (frame.Button("add", snapshot.nextKey.has_value() && rows.size() < AI::MaximumBlackboardKeys))
             frame.Edit(AddBlackboardKey{{.descriptor = {.key = *snapshot.nextKey}}, rows.size()});
         if (rows.empty()) {
@@ -515,7 +534,7 @@ namespace Horo::Editor {
                 frame.Request(BlackboardDocumentOperation::ReviewUsages, RemoveBlackboardKey{draft.selected}, draft.replacement);
                 draft.usagePage = 0;
             }
-            DrawUsages(frame, *document, draft.proposed, viewModel.assetRegistryRevision, draft.usagePage);
+            DrawUsages(frame, *document, draft.proposed, draft.replacement, viewModel.assetRegistryRevision, draft.usagePage);
         }
         ImGui::PopID();
         return true;

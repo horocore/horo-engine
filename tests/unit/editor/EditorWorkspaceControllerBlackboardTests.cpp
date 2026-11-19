@@ -2411,6 +2411,153 @@ TEST_CASE("Blackboard workspace pins the selected replacement to a removal propo
     CHECK(view.referencePreview->schema->Keys().front().key == replacement);
     CHECK(view.snapshot.schema->Keys().size() == 2);
     CHECK(view.snapshot.revision == issued.revision);
+    REQUIRE(view.referenceEditReady);
+    controller.ProcessCommand({.command = EditorWorkspaceViewCommand::BlackboardDocument,
+                               .blackboard = BlackboardWorkspaceRequest{.fence = issued,
+                                                                        .operation = BlackboardDocumentOperation::ApplyReviewedEdit,
+                                                                        .expectedReview = view.usageReview}});
+    REQUIRE(view.referenceEditStaged);
+    CHECK(view.snapshot.schema->Keys().size() == 1);
+    controller.ProcessCommand(
+        {.command = EditorWorkspaceViewCommand::BlackboardDocument,
+         .blackboard = BlackboardWorkspaceRequest{.fence = project.Current(controller), .operation = BlackboardDocumentOperation::Save}});
+    REQUIRE_FALSE(view.diagnostic);
+    CHECK_FALSE(view.snapshot.dirty);
+    CHECK(view.snapshot.durableSchema->Keys().size() == 1);
+}
+
+TEST_CASE("Blackboard workspace applies and saves an exact reviewed Decision migration", "[unit][editor][blackboard][workspace]") {
+    using namespace AI::DecisionGraphTestSupport;
+    BlackboardWorkspaceFixture project;
+    const auto replacement = AI::BlackboardKeyId::Create(project.key.Value() + 1).Value();
+    const std::array keys{AI::BlackboardKeyDescriptor{.key = project.key}, AI::BlackboardKeyDescriptor{.key = replacement}};
+    const std::array rows{AI::BlackboardSchemaAuthoringRow{project.key, "Original"},
+                          AI::BlackboardSchemaAuthoringRow{replacement, "Replacement"}};
+    project.WriteSchema(keys, rows);
+    constexpr auto graphPath = "assets/guard_migration.horo_sm";
+    auto graph = TerminalMachine(620);
+    graph.blackboard = project.schema;
+    auto &body = std::get<AI::StateMachineAssetDescriptor>(graph.body);
+    body.states.front().terminal = AI::DecisionStateTerminal::None;
+    body.states.push_back({.id = Node(2), .terminal = AI::DecisionStateTerminal::Succeeded, .source = Location()});
+    body.transitions.push_back({.id = Node(3),
+                                .source = Node(1),
+                                .target = Node(2),
+                                .guards = {{.key = project.key, .operation = AI::StateMachineGuardOperator::Equal, .operand = true}},
+                                .requirements = {{.key = project.key, .kind = AI::BlackboardValueKind::Boolean, .source = Location()}},
+                                .location = Location()});
+    const auto encoded = AI::DecisionPlanCodec::EncodeSource(std::span{&graph, 1}, graph.asset);
+    REQUIRE(encoded.HasValue());
+    {
+        std::ofstream output(project.root / graphPath, std::ios::binary);
+        output.write(reinterpret_cast<const char *>(encoded.Value().data()), static_cast<std::streamsize>(encoded.Value().size()));
+        REQUIRE(static_cast<bool>(output));
+    }
+    project.WriteSidecar(graphPath, Assets::AssetId::FromBytes({17}), Application::DecisionStateMachineSourceType);
+    project.RebuildRegistry();
+    JobSystem jobs{JobSystemConfig{.ioWorkerCount = 1}};
+    const auto registry = project.registry.Snapshot();
+    CollisionInventoryEvidence inventory{registry.Revision(), Assets::AssetRegistryBuildStatus::Complete};
+    EditorWorkspaceController controller(project.root, project.runtime, registry,
+                                         {.assets = {.mutableAssetRegistry = &project.registry},
+                                          .collision = {.inventory = &inventory},
+                                          .mutations = &project.mutations,
+                                          .durableFiles = &project.files,
+                                          .jobs = &jobs});
+    const auto key = [&] {
+        const auto &opened = controller.ViewModel().decisionGraphDocuments.front();
+        return std::get<AI::StateMachineAssetDescriptor>(opened.graph->body).transitions.front().guards.front().key;
+    };
+    const auto selectGraph = [&] {
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::OpenSourceFile,
+                                   .sourceOpenRequest = SourceOpenRequest{.path = graphPath, .origin = SourceOpenOrigin::AssetActivation}});
+    };
+    controller.ProcessCommand(project.Open());
+    const auto issue = project.Current(controller);
+    controller.ProcessCommand({.command = EditorWorkspaceViewCommand::BlackboardDocument,
+                               .blackboard = BlackboardWorkspaceRequest{.fence = issue,
+                                                                        .operation = BlackboardDocumentOperation::ReviewUsages,
+                                                                        .edit = RemoveBlackboardKey{project.key},
+                                                                        .replacement = replacement}});
+    jobs.Shutdown(ShutdownPolicy::Drain);
+    controller.UpdateBlackboardUsageReview();
+    const auto &view = controller.ViewModel().blackboardDocuments.front();
+    REQUIRE(view.usageReview);
+    INFO(view.usageReview->gaps.size());
+    REQUIRE(view.usageReview->decisionValidation);
+    REQUIRE(view.usageReview->decisionRetargets.size() == 1);
+    REQUIRE(view.usageReview->commitEvidence);
+    const auto review = view.usageReview;
+    const auto apply = [&] {
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::BlackboardDocument,
+                                   .blackboard = BlackboardWorkspaceRequest{.fence = issue,
+                                                                            .operation = BlackboardDocumentOperation::ApplyReviewedEdit,
+                                                                            .expectedReview = review}});
+    };
+    CHECK_FALSE(view.referenceEditReady);
+    apply();
+    CHECK(view.snapshot.revision == issue.revision);
+    selectGraph();
+    REQUIRE(controller.ViewModel().decisionGraphDocuments.size() == 1);
+    REQUIRE(controller.ViewModel().decisionGraphDocuments.front().editable);
+    CHECK(key() == project.key);
+    controller.ProcessCommand(project.Open());
+    controller.UpdateBlackboardUsageReview();
+    REQUIRE(view.referenceEditReady);
+    SECTION("a source changed after review leaves both document roots untouched") {
+        std::ofstream changed(project.root / (std::string{graphPath} + ".horo"), std::ios::binary | std::ios::app);
+        changed << '\n';
+        changed.close();
+        apply();
+        CHECK(view.snapshot.revision == issue.revision);
+        CHECK(key() == project.key);
+        CHECK_FALSE(view.referenceEditStaged);
+    }
+    SECTION("the matching group stages, replays, and persists through its schema command") {
+        apply();
+        REQUIRE(view.referenceEditStaged);
+        CHECK(view.snapshot.schema->Keys().size() == 1);
+        CHECK(key() == replacement);
+        const auto command = [&](BlackboardDocumentOperation operation) {
+            controller.ProcessCommand(
+                {.command = EditorWorkspaceViewCommand::BlackboardDocument,
+                 .blackboard = BlackboardWorkspaceRequest{.fence = project.Current(controller), .operation = operation}});
+        };
+        command(BlackboardDocumentOperation::Undo);
+        REQUIRE_FALSE(view.referenceEditStaged);
+        CHECK(view.snapshot.schema->Keys().size() == 2);
+        CHECK(key() == project.key);
+        command(BlackboardDocumentOperation::Redo);
+        REQUIRE(view.referenceEditStaged);
+        CHECK(key() == replacement);
+        CHECK_FALSE(controller.ResolveBlackboardClose(project.Current(controller), SourceCloseDecision::Discard).HasValue());
+        command(BlackboardDocumentOperation::Save);
+        if (view.diagnostic)
+            INFO(std::string{view.diagnostic->code.Value()} + " " + view.diagnostic->message);
+        REQUIRE_FALSE(view.diagnostic);
+        CHECK_FALSE(view.referenceEditStaged);
+        CHECK_FALSE(view.snapshot.dirty);
+        CHECK_FALSE(controller.ViewModel().decisionGraphDocuments.front().dirty);
+        CHECK(view.snapshot.durableSchema->Keys().size() == 1);
+        CHECK(key() == replacement);
+    }
+    SECTION("an external schema change blocks publication before any Decision write") {
+        apply();
+        REQUIRE(view.referenceEditStaged);
+        auto differentRows = rows;
+        differentRows.front().displayName = "Changed outside the editor";
+        project.WriteSchema(keys, differentRows);
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::BlackboardDocument,
+                                   .blackboard = BlackboardWorkspaceRequest{.fence = project.Current(controller),
+                                                                            .operation = BlackboardDocumentOperation::Save}});
+        REQUIRE(view.diagnostic);
+        CHECK(view.diagnostic->code.Value() == Assets::AssetSourceErrors::Conflict.code.Value());
+        const auto durable = Assets::CaptureAssetSource(project.root, project.root / graphPath, AI::DecisionCodecLimits{}.maximumBytes);
+        REQUIRE(durable.HasValue());
+        CHECK(durable.Value().identity.digest == ComputeSha256(std::as_bytes(std::span{encoded.Value()})));
+        CHECK(view.snapshot.dirty);
+        CHECK(controller.ViewModel().decisionGraphDocuments.front().dirty);
+    }
 }
 
 TEST_CASE("Blackboard workspace reviews the loaded native Decision catalog and rejects its retired stamp",

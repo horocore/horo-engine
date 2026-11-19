@@ -139,6 +139,14 @@ namespace Horo::Editor {
             return history_.Next(redo) != nullptr;
         }
 
+        /** @brief Retires history past an unavailable coordinated transition. @param group Exact workspace identity. */
+        void RetireReferenceGroup(std::uint64_t group) noexcept {
+            if (group && history_.RetireUnavailable([group](const Entry &entry, bool) noexcept {
+                return entry.group == group;
+            }))
+                ++serial_;
+        }
+
     private:
         /** @brief Checks root and exact non-exhausted instance/revision authority. */
         static bool Valid(const DecisionGraphHistoryFence &fence) noexcept {

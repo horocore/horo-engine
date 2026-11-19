@@ -1136,7 +1136,7 @@ namespace Horo::Editor {
         }
         const auto &source = captured.Value().Sources().front();
         auto &host = m_viewModel.workspacePanelHost;
-        if (existing != documents.end() && existing->dirty) {
+        if (existing != documents.end() && (existing->dirty || HasPendingBlackboardReferenceEdit(existing->identity.instance))) {
             if (existing->identity != opened.identity || existing->source != source.sourceDigest) {
                 existing->conflict = true;
                 existing->diagnostic = MakeError(Assets::AssetSourceErrors::Conflict);
@@ -1202,8 +1202,11 @@ namespace Horo::Editor {
             fail("workspace.source_open.unavailable");
             return;
         }
-        if (existing != documents.end())
+        if (existing != documents.end()) {
+            if (InBlackboardReferenceEdit(existing->identity.instance))
+                RetireBlackboardReferenceEdit();
             m_decisionGraphDrafts.erase(existing->identity.instance);
+        }
         m_decisionGraphDrafts.merge(prepared);
         if (existing == documents.end()) {
             documents.push_back(std::move(candidate));
@@ -1225,7 +1228,13 @@ namespace Horo::Editor {
         });
         if (opened == documents.end())
             return false;
+        if (HasPendingBlackboardReferenceEdit(instance)) {
+            opened->diagnostic = MakeError(BlackboardDocumentErrors::ReferenceResolutionRequired);
+            return true;
+        }
         if (const auto closed = m_viewModel.workspacePanelHost.CloseDocument(instance); closed.HasValue()) {
+            if (InBlackboardReferenceEdit(instance))
+                RetireBlackboardReferenceEdit();
             m_decisionGraphDrafts.erase(instance);
             documents.erase(opened);
         } else {
@@ -1249,6 +1258,8 @@ namespace Horo::Editor {
         const auto draft = m_decisionGraphDrafts.find(fence.instance);
         if (document == documents.end() || draft == m_decisionGraphDrafts.end())
             return Closed::Failure(MakeError(Application::DecisionCookErrors::Stale));
+        if (HasPendingBlackboardReferenceEdit(fence.instance))
+            return Closed::Failure(MakeError(BlackboardDocumentErrors::ReferenceResolutionRequired));
         if (decision == SourceCloseDecision::Save) {
             const auto saved = SaveDecisionGraphDraft(*document, draft->second);
             if (saved.HasError()) {
@@ -1363,6 +1374,10 @@ namespace Horo::Editor {
     Result<void> EditorWorkspaceController::ReplayDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
                                                                      bool redo) {
         using Replay = Result<void>;
+        if (const auto group = draft.history.NextReferenceGroup(redo))
+            return ReplayBlackboardReferenceEdit(*group, redo);
+        if (HasPendingBlackboardReferenceEdit(document.identity.instance))
+            return Replay::Failure(MakeError(BlackboardDocumentErrors::ReferenceResolutionRequired));
         auto prepared = draft.history.PrepareReplay(CaptureDecisionHistoryFence(document, draft), redo);
         if (prepared.HasError())
             return Replay::Failure(prepared.ErrorValue());
@@ -1448,6 +1463,8 @@ namespace Horo::Editor {
             return SaveDecisionGraphDraft(document, draft);
         if (request.operation == Operation::Undo || request.operation == Operation::Redo)
             return ReplayDecisionGraphDraft(document, draft, request.operation == Operation::Redo);
+        if (HasPendingBlackboardReferenceEdit(document.identity.instance))
+            return Edit::Failure(MakeError(BlackboardDocumentErrors::ReferenceResolutionRequired));
         if constexpr (std::is_same_v<Request, BehaviorTreeEditRequest>)
             if (request.operation == Operation::ReviewSubtree)
                 return ReviewDecisionSubtree(document, draft, request);
@@ -1560,7 +1577,10 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorWorkspaceController::SaveDecisionGraphDraft */
-    Result<void> EditorWorkspaceController::SaveDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft) {
+    Result<void> EditorWorkspaceController::SaveDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
+                                                                   bool saveReferenceParticipant) {
+        if (!saveReferenceParticipant && HasPendingBlackboardReferenceEdit(document.identity.instance))
+            return Result<void>::Failure(MakeError(BlackboardDocumentErrors::ReferenceResolutionRequired));
         document.validation.reset();
         try {
             using Saved = Result<void>;
@@ -1661,12 +1681,20 @@ namespace Horo::Editor {
                 m_viewModel.contentBrowserOperationError.clear();
             document->validation.reset();
             try {
+                const auto originalRevision = document->revision;
+                const bool retireOnChange = InBlackboardReferenceEdit(instance) && !HasPendingBlackboardReferenceEdit(instance);
                 const auto result = [&] {
-                    if constexpr (std::is_same_v<Request, DecisionGraphLayoutRequest>)
+                    if constexpr (std::is_same_v<Request, DecisionGraphLayoutRequest>) {
+                        if (HasPendingBlackboardReferenceEdit(instance))
+                            return Result<void>::Failure(MakeError(BlackboardDocumentErrors::ReferenceResolutionRequired));
                         return ApplyDecisionGraphLayout(*document, draft->second, *request);
-                    else
+                    } else {
                         return ApplyDecisionGraphEdit(*document, draft->second, *request);
+                    }
                 }();
+                if (result.HasValue() && retireOnChange && document->revision != originalRevision &&
+                    !HasPendingBlackboardReferenceEdit(instance))
+                    RetireBlackboardReferenceEdit();
                 document->diagnostic = result.HasError() ? std::optional{result.ErrorValue()} : std::nullopt;
                 if (document->diagnostic)
                     PublishDecisionGraphDiagnostics(*document->diagnostic);

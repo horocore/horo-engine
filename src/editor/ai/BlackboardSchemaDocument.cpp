@@ -489,6 +489,14 @@ namespace Horo::Editor {
         return true;
     }
 
+    /** @copydoc BlackboardSchemaDocument::RetireReferenceGroup */
+    void BlackboardSchemaDocument::RetireReferenceGroup(std::uint64_t group) noexcept {
+        if (group && state_->lane == std::this_thread::get_id() && !state_->fileOperation)
+            state_->history.RetireUnavailable([group](const RowDelta &entry, bool) noexcept {
+                return entry.referenceGroup == group;
+            });
+    }
+
     /** @copydoc BlackboardSchemaDocument::Execute */
     Result<void> BlackboardSchemaDocument::Execute(const std::uint64_t expectedRevision, const BlackboardSchemaEdit &edit,
                                                    const CancellationToken cancellation) {
@@ -527,7 +535,8 @@ namespace Horo::Editor {
     /** @copydoc BlackboardSchemaDocument::Save */
     Result<void> BlackboardSchemaDocument::Save(std::uint64_t expectedRevision, const Assets::AssetRegistrySnapshot &registry,
                                                 ProjectMutationCoordinator &mutations, DurableFileSystem &files,
-                                                const CancellationToken cancellation) {
+                                                const CancellationToken cancellation,
+                                                const std::function<Result<void>(const ProjectMutationLease &)> &validate) {
         if (auto admitted = state_->Check(expectedRevision, cancellation); admitted.HasError())
             return admitted;
         if (!state_->file || !IsRegisteredSource(registry, state_->source->asset, state_->document))
@@ -544,6 +553,11 @@ namespace Horo::Editor {
         const auto project = mutations.TryAcquire({file.root, ProjectMutationOwner::Asset, "blackboard-source-save"});
         if (project.HasError())
             return Result<void>::Failure(project.ErrorValue());
+        if (validate) {
+            const auto proof = validate(project.Value());
+            if (proof.HasError())
+                return proof;
+        }
         const auto lockPath = Assets::AssetSourcePublicationLockPath(file.root, file.path);
         if (lockPath.HasError())
             return Result<void>::Failure(lockPath.ErrorValue());

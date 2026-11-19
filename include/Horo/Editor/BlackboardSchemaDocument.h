@@ -11,6 +11,7 @@
 #include "Horo/Foundation/Sha256.h"
 
 #include <filesystem>
+#include <functional>
 
 namespace Horo::Assets {
     class AssetRegistrySnapshot;
@@ -22,6 +23,7 @@ namespace Horo {
 
 namespace Horo::Editor {
     class ProjectMutationCoordinator;
+    class ProjectMutationLease;
 
     namespace BlackboardDocumentErrors {
         extern const ErrorCodeDescriptor InvalidEdit;
@@ -213,6 +215,10 @@ namespace Horo::Editor {
          * @param prepared Exact previously reserved transition. @return False if its document fence has expired.
          */
         [[nodiscard]] bool PublishReferenceChange(PreparedReferenceChange &prepared) noexcept;
+        /** @brief Retires a coordinated boundary after the host persists or abandons it.
+         * @param group Exact workspace transaction identity.
+         */
+        void RetireReferenceGroup(std::uint64_t group) noexcept;
         /** @brief Validates an edit and publishes one semantic delta, or preserves every current value on failure.
          * @param expectedRevision Current snapshot revision.
          * @param edit One exact typed operation.
@@ -235,11 +241,13 @@ namespace Horo::Editor {
         /** @brief Saves the current source through project mutation and exact source-byte publication.
          * @param expectedRevision Current owner snapshot. @param registry Current project registry.
          * @param mutations Project mutation owner. @param files Shared native durable filesystem. @param cancellation Save fence.
+         * @param validate Optional source-publication proof checked with the live project lease after admission.
          * @return Success only on durable publication (or clean document), or typed error with dirty state retained.
          */
         [[nodiscard]] Result<void> Save(std::uint64_t expectedRevision, const Assets::AssetRegistrySnapshot &registry,
                                         ProjectMutationCoordinator &mutations, DurableFileSystem &files,
-                                        CancellationToken cancellation = {});
+                                        CancellationToken cancellation = {},
+                                        const std::function<Result<void>(const ProjectMutationLease &)> &validate = {});
         /** @brief Reloads an exact registered source and clears history after successful typed validation.
          * @param expectedRevision Current owner snapshot. @param registry Current project registry.
          * @param discardDirty Explicit consent to replace unsaved changes. @param cancellation Read and commit fence.

@@ -627,7 +627,8 @@ namespace Horo::Editor {
         Redo,
         Save,
         Reload,
-        ReviewUsages
+        ReviewUsages,
+        ApplyReviewedEdit
     };
 
     struct BlackboardWorkspaceRequest final {
@@ -636,6 +637,7 @@ namespace Horo::Editor {
         std::optional<BlackboardSchemaEdit> edit;
         std::optional<AI::BlackboardKeyId> reviewKey;
         std::optional<AI::BlackboardKeyId> replacement;
+        std::shared_ptr<const Application::BlackboardUsageReview> expectedReview;
     };
 
     struct BlackboardWorkspaceDocument final {
@@ -645,6 +647,8 @@ namespace Horo::Editor {
         bool reviewingUsages{};
         std::shared_ptr<const Application::BlackboardUsageReview> usageReview;
         std::optional<BlackboardReferenceEditPreview> referencePreview;
+        bool referenceEditReady{};
+        bool referenceEditStaged{};
         AI::BlackboardKeyId diagnosticKey;
         std::uint64_t diagnosticKeyRequest{};
     };

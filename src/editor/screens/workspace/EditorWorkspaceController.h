@@ -580,7 +580,8 @@ namespace Horo::Editor {
 
         std::map<DocumentInstanceId, DecisionGraphDraft> m_decisionGraphDrafts;
         /** @brief Validates the latest schema and publishes the canonical registered source under its native lease. */
-        Result<void> SaveDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft);
+        Result<void> SaveDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
+                                            bool saveReferenceParticipant = false);
         /** @brief Projects structured Decision findings into the workspace's Build Output. */
         void PublishDecisionGraphDiagnostics(const Error &error) const;
         /** @brief Obtains the project metadata generation for the supported authoring family. */
@@ -1374,6 +1375,46 @@ namespace Horo::Editor {
         /** @brief Submits one explicit review of a durable key without blocking the workspace draw path. */
         [[nodiscard]] Result<void> StartBlackboardUsageReview(const BlackboardWorkspaceRequest &request,
                                                               const BlackboardSchemaDocument &document);
+        /** @brief Publishes an exact reviewed migration through the Blackboard and Decision document owners. */
+        [[nodiscard]] Result<void> ApplyBlackboardReferenceEdit(const BlackboardWorkspaceRequest &request,
+                                                                BlackboardSchemaDocument &document);
+        /** @brief Requests a coordinated undo or redo from any participating document. */
+        [[nodiscard]] Result<void> ReplayBlackboardReferenceEdit(std::uint64_t group, bool redo);
+        /** @brief Finds the reviewed documents needed by a new migration without opening or replacing their sessions. */
+        [[nodiscard]] bool CanApplyBlackboardReferenceEdit(const BlackboardWorkspaceDocument &view) const;
+        /** @brief Identifies documents whose individual save would split a staged migration. */
+        [[nodiscard]] bool HasPendingBlackboardReferenceEdit(DocumentInstanceId instance) const;
+        /** @brief Identifies members of the retained group, including an available redo. */
+        [[nodiscard]] bool InBlackboardReferenceEdit(DocumentInstanceId instance) const;
+        /** @brief Persists migrated Decision files before the schema, which is rechecked under the project lease. */
+        [[nodiscard]] Result<void> SaveBlackboardReferenceEdit(BlackboardSchemaDocument &document, std::uint64_t revision);
+        /** @brief Retires a group once its source changes are saved or its unapplied redo is abandoned. */
+        void RetireBlackboardReferenceEdit();
+
+        /** @brief Tracks the participants in a workspace-local history transition. */
+        struct BlackboardReferenceGroup final {
+            std::uint64_t identity{};
+            DocumentInstanceId schema;
+            std::vector<DocumentInstanceId> decisions;
+            std::shared_ptr<const Application::BlackboardUsageReview> review;
+            std::shared_ptr<const AI::DecisionNodeGeneration> nodes;
+            bool applied{true};
+            bool saving{};
+        };
+
+        /** @brief Prepared root and history from one exact current Decision participant. */
+        struct PreparedDecisionReference final {
+            DecisionGraphWorkspaceDocument *document;
+            DecisionGraphDraft *draft;
+            DecisionGraphDocumentHistory::Prepared reservation;
+        };
+
+        /** @brief Checks every participant, then swaps all roots without allocating or notifying between swaps. */
+        [[nodiscard]] bool PublishBlackboardReferenceEdit(BlackboardSchemaDocument &document,
+                                                          BlackboardSchemaDocument::PreparedReferenceChange &schema,
+                                                          std::vector<PreparedDecisionReference> &decisions);
+        std::optional<BlackboardReferenceGroup> m_blackboardReferenceGroup;
+        std::uint64_t m_nextBlackboardReferenceGroup{1};
         /** @brief Revokes and joins an outstanding Project review before borrowed owners leave scope. */
         void StopBlackboardUsageReview();
         /** @brief Looks up the existing authored session by tab identity. */

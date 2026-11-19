@@ -10,6 +10,10 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <limits>
+#include <new>
+#include <utility>
 
 namespace Horo::Editor {
     namespace {
@@ -52,6 +56,12 @@ namespace Horo::Editor {
                 auto generation = gameplay->AcquireDecisionAuthoringGeneration();
                 if (generation.HasValue())
                     validation.nodes = std::move(generation).Value();
+            }
+            if (!validation.nodes) {
+                // Intrinsic graphs can compile without extensions. An empty catalog still rejects unresolved external nodes.
+                auto intrinsic = AI::DecisionNodeGeneration::Capture({}, std::make_shared<const std::atomic_bool>(true));
+                if (intrinsic.HasValue())
+                    validation.nodes = std::move(intrinsic).Value();
             }
             if (queries)
                 validation.queries = std::make_shared<const AI::QuerySchemaRegistry>(*queries);
@@ -163,6 +173,8 @@ namespace Horo::Editor {
     Result<void> EditorWorkspaceController::SaveBlackboardDocument(BlackboardSchemaDocument &document, const std::uint64_t revision) {
         if (!m_mutations)
             return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Authority));
+        if (HasPendingBlackboardReferenceEdit(document.Identity().instance))
+            return SaveBlackboardReferenceEdit(document, revision);
         NativeDurableFileSystem fallback;
         auto &files = m_durableFiles ? *m_durableFiles : fallback;
         return document.Save(revision, m_assetRegistry, *m_mutations, files);
@@ -180,14 +192,253 @@ namespace Horo::Editor {
             if (snapshot.Value().revision != found->snapshot.revision) {
                 found->usageReview.reset();
                 found->referencePreview.reset();
+                found->referenceEditReady = false;
                 m_blackboardReviewGenerations.erase(document.Identity().instance);
                 if (m_blackboardUsageWork && m_blackboardUsageWork->fence.instance == document.Identity().instance)
                     static_cast<void>(m_blackboardUsageWork->job.RequestCancel());
             }
             static_cast<void>(m_viewModel.workspacePanelHost.SetDocumentDirty(document.Identity().instance, snapshot.Value().dirty));
             found->snapshot = std::move(snapshot).Value();
+            found->referenceEditStaged = HasPendingBlackboardReferenceEdit(document.Identity().instance);
         }
         found->diagnostic = result.HasError() ? std::optional{result.ErrorValue()} : std::nullopt;
+    }
+
+    /** @copydoc EditorWorkspaceController::CanApplyBlackboardReferenceEdit */
+    bool EditorWorkspaceController::CanApplyBlackboardReferenceEdit(const BlackboardWorkspaceDocument &view) const {
+        using Scope = Application::BlackboardPerceptionUsageScope;
+        const auto &review = view.usageReview;
+        if (!review || !view.referencePreview || !review->commitEvidence || !review->gaps.empty() ||
+            review->perceptionScope != Scope::RegisteredProjectSources || view.snapshot.dirty || view.snapshot.conflict ||
+            view.reviewingUsages || m_blackboardReferenceGroup)
+            return false;
+        const auto &documents = m_viewModel.decisionGraphDocuments;
+        return std::ranges::all_of(review->decisionRetargets, [&](const auto &candidate) {
+            const auto graph = std::ranges::find(documents, candidate.original.asset, &DecisionGraphWorkspaceDocument::asset);
+            return graph != documents.end() && graph->editable && !graph->dirty && !graph->conflict &&
+                   graph->source == candidate.original.source && m_decisionGraphDrafts.contains(graph->identity.instance);
+        });
+    }
+
+    /** @copydoc EditorWorkspaceController::HasPendingBlackboardReferenceEdit */
+    bool EditorWorkspaceController::HasPendingBlackboardReferenceEdit(DocumentInstanceId instance) const {
+        return m_blackboardReferenceGroup && m_blackboardReferenceGroup->applied && InBlackboardReferenceEdit(instance);
+    }
+
+    /** @copydoc EditorWorkspaceController::InBlackboardReferenceEdit */
+    bool EditorWorkspaceController::InBlackboardReferenceEdit(DocumentInstanceId instance) const {
+        return m_blackboardReferenceGroup &&
+               (m_blackboardReferenceGroup->schema == instance ||
+                std::ranges::find(m_blackboardReferenceGroup->decisions, instance) != m_blackboardReferenceGroup->decisions.end());
+    }
+
+    /** @copydoc EditorWorkspaceController::PublishBlackboardReferenceEdit */
+    bool EditorWorkspaceController::PublishBlackboardReferenceEdit(BlackboardSchemaDocument &document,
+                                                                   BlackboardSchemaDocument::PreparedReferenceChange &schema,
+                                                                   std::vector<PreparedDecisionReference> &decisions) {
+        if (!document.CanPublishReferenceChange(schema) || !std::ranges::all_of(decisions, [](const auto &part) {
+            return part.draft->history.CanPublish(part.reservation, CaptureDecisionHistoryFence(*part.document, *part.draft));
+        }))
+            return false;
+        // Every root and history is fenced on this owner lane. No notification or callbacks run between swaps.
+        static_cast<void>(document.PublishReferenceChange(schema));
+        for (auto &part : decisions)
+            static_cast<void>(PublishDecisionGraphChange(*part.document, *part.draft, part.reservation));
+        return true;
+    }
+
+    /** @copydoc EditorWorkspaceController::ApplyBlackboardReferenceEdit */
+    Result<void> EditorWorkspaceController::ApplyBlackboardReferenceEdit(const BlackboardWorkspaceRequest &request,
+                                                                         BlackboardSchemaDocument &document) {
+        const auto view = std::ranges::find_if(m_viewModel.blackboardDocuments, [&](const auto &entry) {
+            return entry.snapshot.document.instance == request.fence.instance;
+        });
+        if (!m_mutations || !m_mutableAssetRegistry || !request.expectedReview || view == m_viewModel.blackboardDocuments.end() ||
+            view->usageReview != request.expectedReview || view->snapshot.revision != request.fence.revision ||
+            !CanApplyBlackboardReferenceEdit(*view) || m_nextBlackboardReferenceGroup == std::numeric_limits<std::uint64_t>::max())
+            return Result<void>::Failure(MakeError(BlackboardDocumentErrors::StaleRevision));
+        const auto &review = *request.expectedReview;
+        const auto root = ProjectRoot();
+        const auto lease = m_mutations->TryAcquire({root, ProjectMutationOwner::Asset, "blackboard-reference-apply"});
+        if (lease.HasError())
+            return Result<void>::Failure(lease.ErrorValue());
+        const auto providers = m_gameplayRegistry ? m_gameplayRegistry->DecisionUsageMetadata() : nullptr;
+        const auto nodes = review.decisionValidation->nodes.lock();
+        if (const auto verified =
+                Application::VerifyBlackboardUsageCommitFence(root, *m_mutableAssetRegistry, lease.Value(), review, providers, nodes);
+            verified.HasError())
+            return verified;
+
+        const auto key = review.selection.key;
+        const auto keys = view->referencePreview->schema->Keys();
+        const auto descriptor = std::ranges::lower_bound(keys, key, {}, &AI::BlackboardKeyDescriptor::key);
+        BlackboardSchemaEdit edit = RemoveBlackboardKey{key};
+        if (descriptor != keys.end() && descriptor->key == key)
+            edit = EditBlackboardKey{*descriptor};
+        BlackboardReferenceGroup group{m_nextBlackboardReferenceGroup, request.fence.instance, {}, request.expectedReview, nodes};
+        auto schema = document.PrepareReferenceChange(request.fence.revision, edit, group.identity);
+        if (schema.HasError())
+            return Result<void>::Failure(schema.ErrorValue());
+        std::vector<PreparedDecisionReference> decisions;
+        decisions.reserve(review.decisionRetargets.size());
+        group.decisions.reserve(review.decisionRetargets.size());
+        const auto registry = m_mutableAssetRegistry->Snapshot();
+        for (const auto &candidate : review.decisionRetargets) {
+            auto &documents = m_viewModel.decisionGraphDocuments;
+            const auto graph = std::ranges::find(documents, candidate.original.asset, &DecisionGraphWorkspaceDocument::asset);
+            const auto *record = registry.Find(candidate.original.asset);
+            if (!record || graph == documents.end())
+                return Result<void>::Failure(MakeError(BlackboardDocumentErrors::StaleRevision));
+            const auto instance = graph->identity.instance;
+            auto &draft = m_decisionGraphDrafts.at(instance);
+            auto prepared =
+                PrepareDecisionReferenceChange(*graph, draft, graph->revision,
+                                               {*record, candidate.candidate, candidate.original.source, candidate.original.metadata},
+                                               group.identity);
+            if (prepared.HasError())
+                return Result<void>::Failure(prepared.ErrorValue());
+            group.decisions.push_back(instance);
+            decisions.push_back({&*graph, &draft, std::move(prepared).Value()});
+        }
+        if (m_mutableAssetRegistry->Snapshot().Revision() != review.registry || !HasCurrentReviewAuthority(review, providers) ||
+            !PublishBlackboardReferenceEdit(document, *schema.Value(), decisions))
+            return Result<void>::Failure(MakeError(BlackboardDocumentErrors::StaleRevision));
+        m_blackboardReferenceGroup.emplace(std::move(group));
+        ++m_nextBlackboardReferenceGroup;
+        for (const auto &part : decisions)
+            ProjectDecisionGraphDraft(*part.document, *part.draft);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorWorkspaceController::ReplayBlackboardReferenceEdit */
+    Result<void> EditorWorkspaceController::ReplayBlackboardReferenceEdit(std::uint64_t group, bool redo) {
+        if (!m_blackboardReferenceGroup || m_blackboardReferenceGroup->identity != group || m_blackboardReferenceGroup->saving ||
+            m_blackboardReferenceGroup->applied == redo || !m_mutations || !m_mutableAssetRegistry)
+            return Result<void>::Failure(MakeError(BlackboardDocumentErrors::HistoryUnavailable));
+        auto &entry = *m_blackboardReferenceGroup;
+        auto *document = FindBlackboardDocument(entry.schema);
+        if (!document)
+            return Result<void>::Failure(MakeError(BlackboardDocumentErrors::StaleRevision));
+        const auto root = ProjectRoot();
+        const auto lease = m_mutations->TryAcquire({root, ProjectMutationOwner::Asset, "blackboard-reference-replay"});
+        if (lease.HasError())
+            return Result<void>::Failure(lease.ErrorValue());
+        if (redo) {
+            const auto providers = m_gameplayRegistry ? m_gameplayRegistry->DecisionUsageMetadata() : nullptr;
+            if (const auto current = Application::VerifyBlackboardUsageCommitFence(root, *m_mutableAssetRegistry, lease.Value(),
+                                                                                   *entry.review, providers, entry.nodes);
+                current.HasError())
+                return current;
+        }
+        const auto snapshot = document->Snapshot();
+        if (snapshot.HasError())
+            return Result<void>::Failure(snapshot.ErrorValue());
+        auto prepared = document->PrepareReferenceReplay(snapshot.Value().revision, group, redo);
+        if (prepared.HasError())
+            return Result<void>::Failure(prepared.ErrorValue());
+        std::vector<PreparedDecisionReference> decisions;
+        decisions.reserve(entry.decisions.size());
+        for (const auto instance : entry.decisions) {
+            auto &documents = m_viewModel.decisionGraphDocuments;
+            const auto graph = std::ranges::find_if(documents, [instance](const auto &candidate) {
+                return candidate.identity.instance == instance;
+            });
+            const auto draft = m_decisionGraphDrafts.find(instance);
+            if (graph == documents.end() || draft == m_decisionGraphDrafts.end())
+                return Result<void>::Failure(MakeError(BlackboardDocumentErrors::StaleRevision));
+            auto next = draft->second.history.PrepareReplay(CaptureDecisionHistoryFence(*graph, draft->second), redo, group);
+            if (next.HasError())
+                return Result<void>::Failure(next.ErrorValue());
+            decisions.push_back({&*graph, &draft->second, std::move(next).Value()});
+        }
+        if (!PublishBlackboardReferenceEdit(*document, *prepared.Value(), decisions))
+            return Result<void>::Failure(MakeError(BlackboardDocumentErrors::StaleRevision));
+        entry.applied = redo;
+        for (const auto &part : decisions)
+            ProjectDecisionGraphDraft(*part.document, *part.draft);
+        RefreshBlackboardDocument(*document, Result<void>::Success());
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorWorkspaceController::SaveBlackboardReferenceEdit */
+    Result<void> EditorWorkspaceController::SaveBlackboardReferenceEdit(BlackboardSchemaDocument &document, std::uint64_t revision) {
+        auto &group = *m_blackboardReferenceGroup;
+        const auto snapshot = document.Snapshot();
+        if (snapshot.HasError())
+            return Result<void>::Failure(snapshot.ErrorValue());
+        if (!m_mutableAssetRegistry || !m_mutations || group.schema != document.Identity().instance ||
+            snapshot.Value().revision != revision || snapshot.Value().conflict)
+            return Result<void>::Failure(MakeError(BlackboardDocumentErrors::StaleRevision));
+        const auto root = ProjectRoot();
+        const auto schemaPath = root / std::filesystem::u8path(document.Identity().key.source.Value());
+        const auto currentSchema = Assets::CaptureAssetSource(root, schemaPath, AI::BlackboardSchemaSourceCodec::MaximumBytes);
+        if (currentSchema.HasError())
+            return Result<void>::Failure(currentSchema.ErrorValue());
+        if (!currentSchema.Value().identity.exists || currentSchema.Value().identity.digest != group.review->selection.source)
+            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+        auto &documents = m_viewModel.decisionGraphDocuments;
+        // Every replacement key is already valid in the old saved schema. A successful write prefix is safe to retry.
+        for (const auto instance : group.decisions) {
+            const auto graph = std::ranges::find_if(documents, [instance](const auto &candidate) {
+                return candidate.identity.instance == instance;
+            });
+            const auto draft = m_decisionGraphDrafts.find(instance);
+            if (graph == documents.end() || draft == m_decisionGraphDrafts.end() || graph->conflict)
+                return Result<void>::Failure(MakeError(BlackboardDocumentErrors::StaleRevision));
+            if (graph->dirty) {
+                const auto persisted = SaveDecisionGraphDraft(*graph, draft->second, true);
+                if (persisted.HasError()) {
+                    group.saving = group.saving || graph->conflict;
+                    return persisted;
+                }
+                group.saving = true;
+            }
+        }
+        auto selection = group.review->selection;
+        selection.replacement.reset();
+        const auto providers = m_gameplayRegistry ? m_gameplayRegistry->DecisionUsageMetadata() : nullptr;
+        const auto validation = CaptureDecisionValidation({.schema = snapshot.Value().schema}, m_gameplayRegistry.get(), m_querySchema);
+        std::optional<Assets::AssetRegistryRevision> complete;
+        if (m_collisionInventory && m_collisionInventory->status == Assets::AssetRegistryBuildStatus::Complete)
+            complete = m_collisionInventory->revision;
+        const auto afterGraphs =
+            Application::CaptureBlackboardUsageReview(root, *m_mutableAssetRegistry, complete, *m_mutations, selection, providers, {},
+                                                      validation, Application::BlackboardPerceptionUsageScope::RegisteredProjectSources);
+        if (afterGraphs.HasError())
+            return Result<void>::Failure(afterGraphs.ErrorValue());
+        if (!afterGraphs.Value().gaps.empty() || !afterGraphs.Value().commitEvidence)
+            return Result<void>::Failure(MakeError(BlackboardDocumentErrors::ReferenceResolutionRequired));
+        NativeDurableFileSystem fallback;
+        auto &files = m_durableFiles ? *m_durableFiles : fallback;
+        const auto saved =
+            document.Save(revision, m_mutableAssetRegistry->Snapshot(), *m_mutations, files, {}, [&](const ProjectMutationLease &lease) {
+            const auto current = m_gameplayRegistry ? m_gameplayRegistry->DecisionUsageMetadata() : nullptr;
+            const auto nodes = afterGraphs.Value().decisionValidation->nodes.lock();
+            return Application::VerifyBlackboardUsageCommitFence(root, *m_mutableAssetRegistry, lease, afterGraphs.Value(), current, nodes);
+        });
+        if (saved.HasValue())
+            RetireBlackboardReferenceEdit();
+        return saved;
+    }
+
+    /** @copydoc EditorWorkspaceController::RetireBlackboardReferenceEdit */
+    void EditorWorkspaceController::RetireBlackboardReferenceEdit() {
+        const auto group = std::exchange(m_blackboardReferenceGroup, std::nullopt);
+        if (!group)
+            return;
+        if (auto *document = FindBlackboardDocument(group->schema)) {
+            document->RetireReferenceGroup(group->identity);
+            RefreshBlackboardDocument(*document, Result<void>::Success());
+        }
+        for (auto &document : m_viewModel.decisionGraphDocuments) {
+            const auto instance = document.identity.instance;
+            if (std::ranges::find(group->decisions, instance) == group->decisions.end())
+                continue;
+            if (auto draft = m_decisionGraphDrafts.find(instance); draft != m_decisionGraphDrafts.end()) {
+                draft->second.history.RetireReferenceGroup(group->identity);
+                ProjectDecisionGraphDraft(document, draft->second);
+            }
+        }
     }
 
     /** @copydoc EditorWorkspaceController::ProcessBlackboardDocumentCommand */
@@ -201,26 +452,53 @@ namespace Horo::Editor {
         if (!document)
             return true;
         const auto execute = [&]() -> Result<void> {
+            const auto snapshot = document->Snapshot();
+            if (snapshot.HasError())
+                return Result<void>::Failure(snapshot.ErrorValue());
+            if (snapshot.Value().revision != request.fence.revision)
+                return Result<void>::Failure(MakeError(BlackboardDocumentErrors::StaleRevision));
             using enum BlackboardDocumentOperation;
             switch (request.operation) {
                 case Edit:
-                    if (request.edit)
-                        return document->Execute(request.fence.revision, *request.edit);
+                    if (HasPendingBlackboardReferenceEdit(request.fence.instance))
+                        return Result<void>::Failure(MakeError(BlackboardDocumentErrors::ReferenceResolutionRequired));
+                    if (request.edit) {
+                        const auto result = document->Execute(request.fence.revision, *request.edit);
+                        if (result.HasValue() && m_blackboardReferenceGroup && m_blackboardReferenceGroup->schema == request.fence.instance)
+                            RetireBlackboardReferenceEdit();
+                        return result;
+                    }
                     break;
                 case Undo:
+                    if (const auto group = document->NextReferenceGroup(false))
+                        return ReplayBlackboardReferenceEdit(*group, false);
                     return document->Undo(request.fence.revision);
                 case Redo:
+                    if (const auto group = document->NextReferenceGroup(true))
+                        return ReplayBlackboardReferenceEdit(*group, true);
                     return document->Redo(request.fence.revision);
                 case Save:
                     return SaveBlackboardDocument(*document, request.fence.revision);
-                case Reload:
-                    return document->Reload(request.fence.revision, m_assetRegistry);
+                case Reload: {
+                    if (HasPendingBlackboardReferenceEdit(request.fence.instance))
+                        return Result<void>::Failure(MakeError(BlackboardDocumentErrors::ReferenceResolutionRequired));
+                    const auto result = document->Reload(request.fence.revision, m_assetRegistry);
+                    if (result.HasValue() && m_blackboardReferenceGroup && m_blackboardReferenceGroup->schema == request.fence.instance)
+                        RetireBlackboardReferenceEdit();
+                    return result;
+                }
                 case ReviewUsages:
                     return StartBlackboardUsageReview(request, *document);
+                case ApplyReviewedEdit:
+                    return ApplyBlackboardReferenceEdit(request, *document);
             }
             return Result<void>::Failure(MakeError(BlackboardDocumentErrors::InvalidEdit));
         };
-        RefreshBlackboardDocument(*document, execute());
+        try {
+            RefreshBlackboardDocument(*document, execute());
+        } catch (const std::bad_alloc &) {
+            RefreshBlackboardDocument(*document, Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Limit)));
+        }
         return true;
     }
 
@@ -265,16 +543,20 @@ namespace Horo::Editor {
         if (m_collisionInventory && m_collisionInventory->status == Assets::AssetRegistryBuildStatus::Complete)
             complete = m_collisionInventory->revision;
         const auto providerMetadata = m_gameplayRegistry ? m_gameplayRegistry->DecisionUsageMetadata() : nullptr;
-        auto validation = request.replacement ? CaptureDecisionValidation(*preview, m_gameplayRegistry.get(), m_querySchema)
-                                              : Application::BlackboardRetargetValidationInput{};
+        auto validation = preview ? CaptureDecisionValidation(*preview, m_gameplayRegistry.get(), m_querySchema)
+                                  : Application::BlackboardRetargetValidationInput{};
         auto generation = validation.nodes;
         auto result = std::make_shared<std::shared_ptr<const Application::BlackboardUsageReview>>();
         auto job = m_sourceRecoveryJobs->SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Io},
                                                       [root = m_sourceOpenService.ProjectRoot(), assets = m_mutableAssetRegistry,
                                                        mutations = m_mutations, complete, selection, providerMetadata, result,
                                                        validation = std::move(validation)](const CancellationToken &cancellation) {
-            auto capture = Application::CaptureBlackboardUsageReview(root, *assets, complete, *mutations, selection, providerMetadata,
-                                                                     cancellation, validation);
+            auto capture =
+                Application::CaptureBlackboardUsageReview(root, *assets, complete, *mutations, selection, providerMetadata, cancellation,
+                                                          validation,
+                                                          validation.proposedSchema
+                                                              ? Application::BlackboardPerceptionUsageScope::RegisteredProjectSources
+                                                              : Application::BlackboardPerceptionUsageScope::IncludeExternalBindings);
             if (capture.HasError())
                 return Result<void>::Failure(capture.ErrorValue());
             *result = std::make_shared<const Application::BlackboardUsageReview>(std::move(capture).Value());
@@ -292,6 +574,7 @@ namespace Horo::Editor {
             view->reviewingUsages = true;
             view->usageReview.reset();
             view->referencePreview.reset();
+            view->referenceEditReady = false;
         }
         return Result<void>::Success();
     }
@@ -305,8 +588,10 @@ namespace Horo::Editor {
                 (view.usageReview->registry != registry || !HasCurrentReviewAuthority(*view.usageReview, providerMetadata))) {
                 view.usageReview.reset();
                 view.referencePreview.reset();
+                view.referenceEditReady = false;
                 m_blackboardReviewGenerations.erase(view.snapshot.document.instance);
             }
+            view.referenceEditReady = CanApplyBlackboardReferenceEdit(view);
         }
         if (!m_blackboardUsageWork)
             return;
@@ -333,6 +618,7 @@ namespace Horo::Editor {
                 m_blackboardReviewGenerations.emplace(work.fence.instance, std::move(work.generation));
             view->usageReview = std::move(result);
             view->referencePreview = std::move(work.preview);
+            view->referenceEditReady = CanApplyBlackboardReferenceEdit(*view);
         } else {
             view->diagnostic = MakeError(Application::DecisionCookErrors::Stale);
         }
@@ -362,6 +648,8 @@ namespace Horo::Editor {
             return Result<bool>::Failure(current.ErrorValue());
         if (current.Value().revision != fence.revision)
             return Result<bool>::Failure(MakeError(BlackboardDocumentErrors::StaleRevision));
+        if (decision == SourceCloseDecision::Discard && HasPendingBlackboardReferenceEdit(fence.instance))
+            return Result<bool>::Failure(MakeError(BlackboardDocumentErrors::ReferenceResolutionRequired));
         if (decision == SourceCloseDecision::Save && current.Value().dirty) {
             const auto saved = SaveBlackboardDocument(*document, fence.revision);
             RefreshBlackboardDocument(*document, saved);
@@ -371,6 +659,8 @@ namespace Horo::Editor {
         const auto closed = m_viewModel.workspacePanelHost.CloseDocument(fence.instance, WorkspaceDocumentClosePolicy::DiscardChanges);
         if (closed.HasError())
             return Result<bool>::Failure(closed.ErrorValue());
+        if (m_blackboardReferenceGroup && m_blackboardReferenceGroup->schema == fence.instance)
+            RetireBlackboardReferenceEdit();
         if (m_blackboardUsageWork && m_blackboardUsageWork->fence.instance == fence.instance)
             static_cast<void>(m_blackboardUsageWork->job.RequestCancel());
         m_blackboardReviewGenerations.erase(fence.instance);
