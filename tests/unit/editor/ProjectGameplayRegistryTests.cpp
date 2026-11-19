@@ -1,6 +1,7 @@
 #include "GameplayModuleTestSupport.h"
 #include "GameplayRetirementTestSupport.h"
 #include "GameplayRuntimeTestSupport.h"
+#include "Horo/AI/BlackboardUsageInspection.h"
 #include "Horo/Application/ProjectSourceDocument.h"
 #include "Horo/Gameplay/BehaviorRuntime.h"
 #include "Horo/Gameplay/GameModuleRetirement.h"
@@ -8,6 +9,7 @@
 #include "ProjectReplicationTestSupport.h"
 #include "editor/gameplay/ProjectGameplayRegistry.h"
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
@@ -15,6 +17,7 @@
 #include <future>
 #include <iterator>
 #include <memory>
+#include <ranges>
 #include <string_view>
 
 namespace {
@@ -125,6 +128,78 @@ TEST_CASE("project gameplay registry discovers and safely reloads compatible Lua
     REQUIRE_FALSE(timeError);
     REQUIRE(registry->ReloadChangedLuaSources().empty());
     REQUIRE(Tests::FixedUpdateAndReadPosition(*active.scene, *active.runtime, Runtime::SceneObjectId{1}).x == 4.0F);
+}
+
+TEST_CASE("project gameplay registry contributes Lua Decision scripts and safely reloads the same identity", "[editor][decision][lua]") {
+    TemporaryProject project;
+    const auto source = project.root / "assets/scripts/Patrol.horo_script";
+    const auto metadata = project.root / "assets/scripts/Patrol.horo_script.meta";
+    const auto type = AI::DecisionNodeTypeId::Create(701).Value();
+    constexpr auto task = R"(return {
+        role = "task",
+        start = function(self, context) return 2 end,
+        resume = function(self, context) return 2 end,
+        abort = function(self, context) end,
+        cleanup = function(self, context) end
+    })";
+    constexpr auto firstSidecar =
+        R"({"schemaVersion":1,"runtime":"lua","decisionNode":{"typeId":"701","providerId":"702","descriptorVersion":1}})";
+    Write(source, task);
+    Write(metadata, firstSidecar);
+    PrepareNativeLuaProject(project);
+
+    auto registry = Editor::ProjectGameplayRegistry::Discover(project.root);
+    RequireValidRegistry(*registry);
+    const auto original = registry->DecisionUsageMetadata();
+    REQUIRE(original);
+    const auto first = registry->AcquireDecisionAuthoringGeneration();
+    REQUIRE(first.HasValue());
+    const auto exact = std::ranges::find(original->Descriptors(), type, &AI::DecisionNodeDescriptor::type);
+    REQUIRE(exact != original->Descriptors().end());
+    CHECK(exact->origin.kind == AI::DecisionDescriptorSourceKind::Script);
+    CHECK(exact->origin.version == 1);
+    CHECK(exact->source.source == "assets/scripts/Patrol.horo_script");
+    CHECK(first.Value()->HasImplementation(type));
+    CHECK(registry->AcquireDecisionAuthoringGeneration().Value() == first.Value());
+
+    SECTION("runtime behavior and Decision source discovery remain distinct") {
+        CHECK(registry->Registry().Registrations().size() >= 2);
+        const auto cloned = registry->CaptureLuaGeneration();
+        REQUIRE(cloned.HasValue());
+        REQUIRE(cloned.Value().decisions.size() == 1);
+        REQUIRE(cloned.Value().programs.size() == 1);
+    }
+    SECTION("successful reload replaces the actual VM authority and refreshes the metadata") {
+        Write(metadata, R"({"schemaVersion":1,"runtime":"lua","decisionNode":{"typeId":"701","providerId":"702","descriptorVersion":2}})");
+        Tests::AdvanceLastWriteTime(metadata);
+        CHECK(registry->ReloadChangedLuaSources().empty());
+        REQUIRE(registry->DecisionUsageMetadata());
+        CHECK(registry->DecisionUsageMetadata() != original);
+        CHECK_FALSE(first.Value()->CanUse());
+        const auto admitted = registry->AcquireDecisionAuthoringGeneration();
+        REQUIRE(admitted.HasValue());
+        const auto contracts = admitted.Value()->Contracts();
+        const auto replacement = std::ranges::find_if(contracts, [type](const auto &contract) {
+            return contract.descriptor.type == type;
+        });
+        REQUIRE(replacement != contracts.end());
+        CHECK(replacement->descriptor.origin.version == 2);
+    }
+    SECTION("a malformed replacement preserves the last working provider generation") {
+        Write(source, "return nil");
+        Tests::AdvanceLastWriteTime(source);
+        REQUIRE(registry->ReloadChangedLuaSources().size() == 1);
+        CHECK(registry->DecisionUsageMetadata() == original);
+        CHECK(first.Value()->CanUse());
+        CHECK(registry->AcquireDecisionAuthoringGeneration().Value() == first.Value());
+    }
+    SECTION("changing persistent identity requires rediscovery through an explicit migration") {
+        Write(metadata, R"({"schemaVersion":1,"runtime":"lua","decisionNode":{"typeId":"704","providerId":"702","descriptorVersion":1}})");
+        Tests::AdvanceLastWriteTime(metadata);
+        REQUIRE(registry->ReloadChangedLuaSources().size() == 1);
+        CHECK(registry->DecisionUsageMetadata() == original);
+        CHECK(first.Value()->CanUse());
+    }
 }
 
 TEST_CASE("project gameplay registry merges a fingerprinted native module with Lua behaviors") {

@@ -333,9 +333,12 @@ namespace Horo::Editor {
         if (m_gameplaySourceWatchElapsedSeconds < 0.5F)
             return;
         m_gameplaySourceWatchElapsedSeconds = 0.0F;
+        const auto priorDecisionCatalog = m_gameplayRegistry->DecisionUsageMetadata();
         for (const ProjectGameplayDiagnostic &diagnostic : m_gameplayRegistry->ReloadChangedLuaSources())
             LOG_ERROR("editor.gameplay", "Lua reload kept the last working revision for '%s': %s",
                       WorkspacePathText(diagnostic.source).c_str(), diagnostic.error.message.c_str());
+        if (priorDecisionCatalog != m_gameplayRegistry->DecisionUsageMetadata())
+            RefreshAvailableBehaviorProjection();
         if (!m_gameplayRegistry->ConsumeNativeArtifactChange())
             return;
         if (m_playSession.IsActive()) {

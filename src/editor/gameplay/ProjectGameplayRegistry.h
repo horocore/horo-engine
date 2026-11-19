@@ -27,6 +27,10 @@ namespace Horo::AI {
     class DecisionNodeGeneration;
 }  // namespace Horo::AI
 
+namespace Horo::Gameplay {
+    class LuaDecisionNodeProgram;
+}
+
 namespace Horo::Editor {
     /** @brief One gameplay source diagnostic that blocks starting a play session. */
     struct ProjectGameplayDiagnostic {
@@ -69,9 +73,27 @@ namespace Horo::Editor {
         std::uintmax_t metadataSize{};
     };
 
+    /** @brief Watcher observation for one source and its metadata sidecar. */
+    struct ProjectLuaSourceObservation final {
+        std::filesystem::file_time_type sourceWriteTime;
+        std::filesystem::file_time_type metadataWriteTime;
+        std::uintmax_t sourceSize{};
+        std::uintmax_t metadataSize{};
+
+        [[nodiscard]] auto operator<=>(const ProjectLuaSourceObservation &) const = default;
+    };
+
+    /** @brief One admitted Decision script and the observation used to replace it transactionally. */
+    struct ProjectLuaDecisionProgramSnapshot final {
+        std::filesystem::path source;
+        std::shared_ptr<Gameplay::LuaDecisionNodeProgram> program;
+        ProjectLuaSourceObservation observation;
+    };
+
     /** @brief Exact last-good Lua generation retained across one native reload transaction. */
     struct ProjectLuaGenerationSnapshot {
         std::vector<ProjectLuaProgramSnapshot> programs;
+        std::vector<ProjectLuaDecisionProgramSnapshot> decisions;
     };
 
     /** @brief Owns discovered project behavior programs and their frozen registry snapshot. */
@@ -114,12 +136,12 @@ namespace Horo::Editor {
         [[nodiscard]] const Gameplay::GameAssetTypeRegistry &AssetTypes() const noexcept;
         /** @brief Returns current game-owned component metadata or an empty frozen missing-code registry. */
         [[nodiscard]] const Gameplay::ComponentRegistry &Components() const noexcept;
-        /** @brief Borrows the current native image's detached Decision descriptors for source authoring review.
-         * @return Exact immutable metadata, or null when no native authoring catalog was admitted. No executable lease escapes.
+        /** @brief Borrows detached Decision descriptors from the admitted Project catalog.
+         * @return Exact immutable metadata, or null when no authoring catalog was admitted. No executable lease escapes.
          */
         [[nodiscard]] const std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> &DecisionUsageMetadata() const noexcept;
 
-        /** @brief Temporarily acquires the actual current native Decision declarations for source compilation.
+        /** @brief Temporarily acquires the current native and script Decision declarations for source compilation.
          * @return The admitted generation or a typed unavailable result. Callers release it before returning to the workspace. */
         [[nodiscard]] Result<std::shared_ptr<const AI::DecisionNodeGeneration>> AcquireDecisionAuthoringGeneration() const;
 
@@ -169,14 +191,7 @@ namespace Horo::Editor {
         [[nodiscard]] const Error *ReplicationMetadataError() const noexcept;
 
     private:
-        struct LuaSourceStat {
-            std::filesystem::file_time_type sourceWriteTime;
-            std::filesystem::file_time_type metadataWriteTime;
-            std::uintmax_t sourceSize{};
-            std::uintmax_t metadataSize{};
-
-            [[nodiscard]] auto operator<=>(const LuaSourceStat &) const = default;
-        };
+        using LuaSourceStat = ProjectLuaSourceObservation;
 
         [[nodiscard]] static LuaSourceStat ReadLuaSourceStat(const std::filesystem::path &source, std::error_code &error);
 
@@ -189,6 +204,12 @@ namespace Horo::Editor {
 
         void DiscoverLuaPrograms(const std::filesystem::path &projectRoot);
         void InstallLuaGeneration(const ProjectLuaGenerationSnapshot &snapshot);
+        /** @brief Rebuilds detached metadata after initial discovery or coherent source replacement. */
+        [[nodiscard]] Result<void> RefreshDecisionAuthoringCatalog();
+        /** @brief Acquires and composes real leaf owners without altering the admitted catalog. */
+        [[nodiscard]] Result<std::shared_ptr<const AI::DecisionNodeGeneration>> BuildDecisionAuthoringGeneration() const;
+        /** @brief Replaces changed Decision scripts only after catalog validation succeeds. */
+        void ReloadChangedDecisionSources(std::vector<ProjectGameplayDiagnostic> &diagnostics);
         void CaptureReplicationMetadata(const std::filesystem::path &projectRoot);
         [[nodiscard]] Result<Network::ReplicationMetadataCapturePtr> BuildReplicationMetadata(
             const std::filesystem::path &projectRoot, const Gameplay::LuaBehaviorProgram *replacement = nullptr,
@@ -200,11 +221,14 @@ namespace Horo::Editor {
         std::optional<Gameplay::GameModuleRetirementQueue::Reservation> retirementAdmission_;
         std::unique_ptr<Gameplay::LoadedGameModule> nativeModule_;
         std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> decisionUsageMetadata_;
+        mutable std::weak_ptr<const AI::DecisionNodeGeneration> decisionAuthoringGeneration_;
+        bool nativeDecisionAvailable_{};
         Gameplay::GameAssetTypeRegistry missingAssetTypes_{"game.missing"};
         Gameplay::ComponentRegistry missingComponents_;
         std::vector<std::unique_ptr<Gameplay::LuaBehaviorProgram>> luaPrograms_;
         std::vector<std::filesystem::path> luaSources_;
         std::vector<LuaSourceStat> luaSourceStats_;
+        std::vector<ProjectLuaDecisionProgramSnapshot> luaDecisionPrograms_;
         std::filesystem::path nativeManifestPath_;
         std::string nativeModuleId_;
         std::uint64_t nativeDescriptorRevision_{};

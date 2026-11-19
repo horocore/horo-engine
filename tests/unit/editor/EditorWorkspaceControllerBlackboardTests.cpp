@@ -2642,6 +2642,58 @@ TEST_CASE("Blackboard workspace applies and saves an exact reviewed Decision mig
     }
 }
 
+TEST_CASE("registered project Lua tasks can author and reopen a Behavior Tree", "[unit][editor][decision][lua]") {
+    BlackboardWorkspaceFixture project;
+    project.Write("Unused key", AI::BlackboardKeyPresence::Optional);
+    project.RebuildRegistry();
+    Horo::Tests::WriteReplicationProject(project.root);
+    const auto script = project.root / "assets/scripts/Patrol.horo_script";
+    std::filesystem::create_directories(script.parent_path());
+    std::ofstream(script, std::ios::binary) << R"(return {
+        role = "task",
+        start = function(self, context) return 2 end,
+        resume = function(self, context) return 2 end,
+        abort = function(self, context) end,
+        cleanup = function(self, context) end
+    })";
+    auto metadata = script;
+    metadata += ".meta";
+    std::ofstream(metadata, std::ios::binary)
+        << R"({"schemaVersion":1,"runtime":"lua","decisionNode":{"typeId":"701","providerId":"702","descriptorVersion":1}})";
+    EditorWorkspaceController controller(project.root, project.runtime, project.registry.Snapshot(),
+                                         {.assets = {.mutableAssetRegistry = &project.registry},
+                                          .mutations = &project.mutations,
+                                          .durableFiles = &project.files});
+    const auto &model = controller.ViewModel();
+    REQUIRE(model.decisionTaskChoices.size() == 1);
+    const auto &starter = model.decisionTaskChoices.front();
+    CHECK(starter.source == AI::DecisionDescriptorSourceKind::Script);
+    REQUIRE(model.decisionTaskPaletteChoices.size() == 1);
+    CHECK(model.decisionTaskPaletteChoices.front().type == starter.type);
+    controller.ProcessCommand(
+        {.command = EditorWorkspaceViewCommand::CreateTaskDecision,
+         .newTaskDecision = TaskDecisionCreationRequest{WorkspacePathText(project.root / "assets"), "Script patrol", project.asset,
+                                                        AI::DecisionPlanKind::BehaviorTree, starter.type, starter.provider, starter.version,
+                                                        model.availableBehaviorsRevision}});
+    REQUIRE(model.contentBrowserOperationError.empty());
+    REQUIRE(model.decisionGraphDocuments.size() == 1);
+    REQUIRE(model.decisionGraphDocuments.front().editable);
+    const auto instance = model.decisionGraphDocuments.front().identity.instance;
+    const auto assets = project.registry.Snapshot();
+    const auto *record = assets.FindByPath("assets/Script patrol.horo_bt");
+    REQUIRE(record);
+    const auto asset = record->id;
+    controller.ProcessCommand({.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = instance});
+    REQUIRE(model.decisionGraphDocuments.empty());
+    controller.ProcessCommand(
+        {.command = EditorWorkspaceViewCommand::OpenSourceFile,
+         .sourceOpenRequest = SourceOpenRequest{.path = "assets/Script patrol.horo_bt", .origin = SourceOpenOrigin::AssetActivation}});
+    REQUIRE(model.decisionGraphDocuments.size() == 1);
+    CHECK(model.decisionGraphDocuments.front().asset == asset);
+    CHECK(model.decisionGraphDocuments.front().editable);
+    CHECK_FALSE(model.decisionGraphDocuments.front().diagnostic);
+}
+
 TEST_CASE("Blackboard workspace reviews the loaded native Decision catalog and rejects its retired stamp",
           "[unit][editor][blackboard][workspace]") {
     BlackboardWorkspaceFixture project;

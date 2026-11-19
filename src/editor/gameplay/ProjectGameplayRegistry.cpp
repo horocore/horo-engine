@@ -2,13 +2,18 @@
 
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/BlackboardUsageInspection.h"
+#include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Foundation/Paths.h"
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "Horo/Gameplay/LuaDecisionNode.h"
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <format>
 #include <fstream>
+#include <limits>
+#include <new>
 #include <nlohmann/json.hpp>
 #include <ranges>
 #include <system_error>
@@ -18,12 +23,82 @@ namespace Horo::Editor {
     namespace {
         constexpr std::size_t MaximumDiscoveredScripts = 1024;
         constexpr std::uintmax_t MaximumGameplayManifestBytes = 64U * 1024U;
+        constexpr std::size_t MaximumDecisionScriptBytes = 256U * 1024U;
 
         /** @brief Derives a native Lua sidecar without locale-dependent text conversion. */
         std::filesystem::path LuaMetadataPath(const std::filesystem::path &source) {
             auto metadata = source;
             metadata += ".meta";
             return metadata;
+        }
+
+        /** @brief The sidecar's explicit stable identities for a project Decision contribution. */
+        struct DecisionScriptIdentity final {
+            AI::DecisionNodeTypeId type;
+            AI::DecisionProviderId provider;
+            std::uint32_t version{};
+        };
+
+        /** @brief Parses a fixed-width identity without lossy JSON number conversions. */
+        template <typename Id> Result<Id> ParseDecisionScriptId(const nlohmann::json &value) {
+            if (!value.is_string())
+                return Result<Id>::Failure(MakeError(AI::AIErrors::DecisionAssetSchemaInvalid));
+            const auto &text = value.get_ref<const std::string &>();
+            std::uint64_t number{};
+            const auto end = text.data() + text.size();
+            const auto parsed = std::from_chars(text.data(), end, number);
+            if (text.starts_with('0') || parsed.ec != std::errc{} || parsed.ptr != end)
+                return Result<Id>::Failure(MakeError(AI::AIErrors::DecisionAssetSchemaInvalid));
+            return Id::Create(number);
+        }
+
+        /** @brief Routes only an explicit Decision sidecar into the new script authority. */
+        Result<std::optional<DecisionScriptIdentity>> ReadDecisionScriptIdentity(const std::filesystem::path &root,
+                                                                                 const std::filesystem::path &source) {
+            using Identity = Result<std::optional<DecisionScriptIdentity>>;
+            const auto capture = Assets::CaptureAssetSource(root, LuaMetadataPath(source), MaximumGameplayManifestBytes);
+            if (capture.HasError())
+                return Identity::Failure(capture.ErrorValue());
+            if (!capture.Value().identity.exists)
+                return Identity::Success(std::nullopt);
+            const auto &bytes = capture.Value().bytes;
+            const std::string_view text{reinterpret_cast<const char *>(bytes.data()), bytes.size()};
+            const auto metadata = nlohmann::json::parse(text, nullptr, false);
+            if (!metadata.is_object() || !metadata.contains("decisionNode"))
+                return Identity::Success(std::nullopt);
+            const auto &fields = metadata["decisionNode"];
+            if (metadata.size() != 3 || !metadata.contains("schemaVersion") || !metadata["schemaVersion"].is_number_unsigned() ||
+                metadata["schemaVersion"] != 1 || !metadata.contains("runtime") || metadata["runtime"] != "lua" || !fields.is_object() ||
+                fields.size() != 3 || !fields.contains("typeId") || !fields.contains("providerId") ||
+                !fields.contains("descriptorVersion") || !fields["descriptorVersion"].is_number_unsigned())
+                return Identity::Failure(MakeError(AI::AIErrors::DecisionAssetSchemaInvalid, "Invalid project Decision script sidecar."));
+            const auto version = fields["descriptorVersion"].get<std::uint64_t>();
+            const auto type = ParseDecisionScriptId<AI::DecisionNodeTypeId>(fields["typeId"]);
+            const auto provider = ParseDecisionScriptId<AI::DecisionProviderId>(fields["providerId"]);
+            if (type.HasError() || provider.HasError() || version == 0 || version > std::numeric_limits<std::uint32_t>::max())
+                return Identity::Failure(MakeError(AI::AIErrors::DecisionAssetSchemaInvalid, "Invalid project Decision script identity."));
+            return Identity::Success(DecisionScriptIdentity{type.Value(), provider.Value(), static_cast<std::uint32_t>(version)});
+        }
+
+        /** @brief Compiles bounded source bytes from the Project's physically contained script asset. */
+        Result<std::shared_ptr<Gameplay::LuaDecisionNodeProgram>> LoadDecisionScript(const std::filesystem::path &root,
+                                                                                     const std::filesystem::path &source,
+                                                                                     const DecisionScriptIdentity identity) {
+            using Program = Result<std::shared_ptr<Gameplay::LuaDecisionNodeProgram>>;
+            const auto capture = Assets::CaptureAssetSource(root, source, MaximumDecisionScriptBytes);
+            if (capture.HasError())
+                return Program::Failure(capture.ErrorValue());
+            if (!capture.Value().identity.exists || capture.Value().bytes.empty())
+                return Program::Failure(MakeError(AI::AIErrors::DecisionAssetSchemaInvalid, "Decision script source is missing."));
+            const auto &bytes = capture.Value().bytes;
+            const auto path = source.lexically_relative(root).generic_u8string();
+            auto compiled =
+                Gameplay::LuaDecisionNodeProgram::Compile(std::string{reinterpret_cast<const char *>(bytes.data()), bytes.size()},
+                                                          identity.type, identity.provider, identity.version,
+                                                          {std::string{path.begin(), path.end()}, 0, 0});
+            if (compiled.HasError())
+                return Program::Failure(compiled.ErrorValue());
+            return Program::Success(std::shared_ptr<Gameplay::LuaDecisionNodeProgram>{std::move(compiled).Value()});
         }
 
         struct NativeArtifactManifest {
@@ -153,6 +228,8 @@ namespace Horo::Editor {
         auto result = std::make_unique<ProjectGameplayRegistry>(ConstructionToken{}, std::move(retirements));
         result->DiscoverNativeModule(projectRoot);
         result->DiscoverLuaPrograms(projectRoot);
+        if (const auto catalog = result->RefreshDecisionAuthoringCatalog(); catalog.HasError())
+            result->diagnostics_.emplace_back(ProjectLayout::ScriptsRoot(projectRoot), catalog.ErrorValue());
         result->CaptureReplicationMetadata(projectRoot);
         return result;
     }
@@ -170,6 +247,8 @@ namespace Horo::Editor {
         }
         result->LoadNativeModule(projectRoot, artifact.path, artifact.moduleId, artifact.descriptorRevision);
         result->InstallLuaGeneration(luaGeneration);
+        if (const auto catalog = result->RefreshDecisionAuthoringCatalog(); catalog.HasError())
+            result->diagnostics_.emplace_back(ProjectLayout::ScriptsRoot(projectRoot), catalog.ErrorValue());
         result->CaptureReplicationMetadata(projectRoot);
         return result;
     }
@@ -181,6 +260,8 @@ namespace Horo::Editor {
         auto result = std::make_unique<ProjectGameplayRegistry>(ConstructionToken{}, std::move(retirements));
         result->DiscoverNativeModule(projectRoot);
         result->InstallLuaGeneration(luaGeneration);
+        if (const auto catalog = result->RefreshDecisionAuthoringCatalog(); catalog.HasError())
+            result->diagnostics_.emplace_back(ProjectLayout::ScriptsRoot(projectRoot), catalog.ErrorValue());
         result->CaptureReplicationMetadata(projectRoot);
         return result;
     }
@@ -267,12 +348,7 @@ namespace Horo::Editor {
             diagnostics_.emplace_back(artifactPath, contributed.ErrorValue());
             return;
         }
-        const auto generation = nativeModule_->AcquireDecisionNodes();
-        if (generation.HasValue()) {
-            auto metadata = AI::DecisionBlackboardProviderMetadata::Capture(*generation.Value());
-            if (metadata.HasValue())
-                decisionUsageMetadata_ = std::move(metadata).Value();
-        }
+        nativeDecisionAvailable_ = true;
     }
 
     void ProjectGameplayRegistry::DiscoverLuaPrograms(const std::filesystem::path &projectRoot) {
@@ -303,6 +379,32 @@ namespace Horo::Editor {
 
         std::ranges::sort(sources);
         for (const std::filesystem::path &source : sources) {
+            filesystemError.clear();
+            const auto observed = ReadLuaSourceStat(source, filesystemError);
+            const auto decision = ReadDecisionScriptIdentity(projectRoot, source);
+            if (decision.HasError()) {
+                diagnostics_.emplace_back(source, decision.ErrorValue());
+                continue;
+            }
+            if (decision.Value()) {
+                if (luaDecisionPrograms_.size() == AI::DecisionNodeGeneration::MaximumNodes) {
+                    diagnostics_.emplace_back(source, MakeError(AI::AIErrors::DecisionAssetStorageUnavailable,
+                                                                "Project Decision script inventory exceeds its supported limit."));
+                    continue;
+                }
+                auto loaded = LoadDecisionScript(projectRoot, source, *decision.Value());
+                if (loaded.HasError()) {
+                    diagnostics_.emplace_back(source, loaded.ErrorValue());
+                    continue;
+                }
+                if (filesystemError || ReadLuaSourceStat(source, filesystemError) != observed || filesystemError) {
+                    diagnostics_.emplace_back(source, MakeError(Assets::AssetSourceErrors::Conflict));
+                    filesystemError.clear();
+                    continue;
+                }
+                luaDecisionPrograms_.push_back({source, std::move(loaded).Value(), observed});
+                continue;
+            }
             auto loaded = Gameplay::LuaBehaviorProgram::LoadFiles(source, LuaMetadataPath(source));
             if (loaded.HasError()) {
                 diagnostics_.emplace_back(source, loaded.ErrorValue());
@@ -324,6 +426,7 @@ namespace Horo::Editor {
     }
 
     void ProjectGameplayRegistry::InstallLuaGeneration(const ProjectLuaGenerationSnapshot &snapshot) {
+        luaDecisionPrograms_ = snapshot.decisions;
         for (const ProjectLuaProgramSnapshot &entry : snapshot.programs) {
             auto cloned = entry.program->Clone();
             if (cloned.HasError()) {
@@ -363,6 +466,89 @@ namespace Horo::Editor {
         return diagnostics_;
     }
 
+    /** @copydoc ProjectGameplayRegistry::BuildDecisionAuthoringGeneration */
+    Result<std::shared_ptr<const AI::DecisionNodeGeneration>> ProjectGameplayRegistry::BuildDecisionAuthoringGeneration() const try {
+        using Generation = Result<std::shared_ptr<const AI::DecisionNodeGeneration>>;
+        std::vector<std::shared_ptr<const AI::DecisionNodeGeneration>> parents;
+        parents.reserve(luaDecisionPrograms_.size() + 1);
+        if (nativeDecisionAvailable_) {
+            auto native = nativeModule_->AcquireDecisionNodes();
+            if (native.HasError())
+                return Generation::Failure(native.ErrorValue());
+            parents.push_back(std::move(native).Value());
+        }
+        for (const auto &entry : luaDecisionPrograms_) {
+            auto script = entry.program->Acquire();
+            if (script.HasError())
+                return Generation::Failure(script.ErrorValue());
+            parents.push_back(std::move(script).Value());
+        }
+        if (parents.empty())
+            return Generation::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+        if (parents.size() == 1)
+            return Generation::Success(std::move(parents.front()));
+        return AI::DecisionNodeGeneration::Compose(parents);
+    } catch (const std::bad_alloc &) {
+        return Result<std::shared_ptr<const AI::DecisionNodeGeneration>>::Failure(MakeError(AI::AIErrors::DecisionAssetStorageUnavailable));
+    }
+
+    /** @copydoc ProjectGameplayRegistry::RefreshDecisionAuthoringCatalog */
+    Result<void> ProjectGameplayRegistry::RefreshDecisionAuthoringCatalog() {
+        if (!nativeDecisionAvailable_ && luaDecisionPrograms_.empty())
+            return Result<void>::Success();
+        const auto generation = BuildDecisionAuthoringGeneration();
+        if (generation.HasError())
+            return Result<void>::Failure(generation.ErrorValue());
+        auto metadata = AI::DecisionBlackboardProviderMetadata::Capture(*generation.Value());
+        if (metadata.HasError())
+            return Result<void>::Failure(metadata.ErrorValue());
+        decisionUsageMetadata_ = std::move(metadata).Value();
+        decisionAuthoringGeneration_ = generation.Value();
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ProjectGameplayRegistry::ReloadChangedDecisionSources */
+    void ProjectGameplayRegistry::ReloadChangedDecisionSources(std::vector<ProjectGameplayDiagnostic> &diagnostics) {
+        for (auto &entry : luaDecisionPrograms_) {
+            std::error_code error;
+            const auto observed = ReadLuaSourceStat(entry.source, error);
+            if (error) {
+                diagnostics.emplace_back(entry.source, MakeError(Assets::AssetSourceErrors::ReadFailed, error.message()));
+                continue;
+            }
+            if (entry.observation == observed)
+                continue;
+            entry.observation = observed;
+            const auto updated = [&]() -> Result<void> {
+                const auto identity = ReadDecisionScriptIdentity(projectRoot_, entry.source);
+                if (identity.HasError())
+                    return Result<void>::Failure(identity.ErrorValue());
+                const auto previous = entry.program->Acquire();
+                if (previous.HasError())
+                    return Result<void>::Failure(previous.ErrorValue());
+                const auto &descriptor = previous.Value()->Contracts().front().descriptor;
+                if (!identity.Value() || identity.Value()->type != descriptor.type ||
+                    identity.Value()->provider != descriptor.origin.provider)
+                    return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetSchemaInvalid,
+                                                           "Decision script reload requires the original type and provider."));
+                auto candidate = LoadDecisionScript(projectRoot_, entry.source, *identity.Value());
+                if (candidate.HasError())
+                    return Result<void>::Failure(candidate.ErrorValue());
+                if (ReadLuaSourceStat(entry.source, error) != observed || error)
+                    return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+                auto prior = std::exchange(entry.program, std::move(candidate).Value());
+                if (const auto refreshed = RefreshDecisionAuthoringCatalog(); refreshed.HasError()) {
+                    entry.program = std::move(prior);
+                    return refreshed;
+                }
+                prior->Retire();
+                return Result<void>::Success();
+            }();
+            if (updated.HasError())
+                diagnostics.emplace_back(entry.source, updated.ErrorValue());
+        }
+    }
+
     /** @copydoc ProjectGameplayRegistry::HasBlockingDiagnostics */
     bool ProjectGameplayRegistry::HasBlockingDiagnostics() const noexcept {
         return !diagnostics_.empty() || replicationError_.has_value();
@@ -393,6 +579,7 @@ namespace Horo::Editor {
             if (replaced.HasError())
                 diagnostics.emplace_back(luaSources_[index], replaced.ErrorValue());
         }
+        ReloadChangedDecisionSources(diagnostics);
         return diagnostics;
     }
 
@@ -437,6 +624,7 @@ namespace Horo::Editor {
     /** @copydoc ProjectGameplayRegistry::CaptureLuaGeneration */
     Result<ProjectLuaGenerationSnapshot> ProjectGameplayRegistry::CaptureLuaGeneration() const {
         ProjectLuaGenerationSnapshot snapshot;
+        snapshot.decisions = luaDecisionPrograms_;
         snapshot.programs.reserve(luaPrograms_.size());
         for (std::size_t index = 0; index < luaPrograms_.size(); ++index) {
             auto cloned = luaPrograms_[index]->Clone();
@@ -451,9 +639,14 @@ namespace Horo::Editor {
 
     /** @copydoc ProjectGameplayRegistry::AcquireDecisionAuthoringGeneration */
     Result<std::shared_ptr<const AI::DecisionNodeGeneration>> ProjectGameplayRegistry::AcquireDecisionAuthoringGeneration() const {
-        if (!nativeModule_ || !decisionUsageMetadata_)
+        if (!decisionUsageMetadata_)
             return Result<std::shared_ptr<const AI::DecisionNodeGeneration>>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
-        return nativeModule_->AcquireDecisionNodes();
+        if (auto current = decisionAuthoringGeneration_.lock(); current && current->CanAdmit())
+            return Result<std::shared_ptr<const AI::DecisionNodeGeneration>>::Success(std::move(current));
+        auto built = BuildDecisionAuthoringGeneration();
+        if (built.HasValue())
+            decisionAuthoringGeneration_ = built.Value();
+        return built;
     }
 
     /** @copydoc ProjectGameplayRegistry::DecisionUsageMetadata */
@@ -466,8 +659,10 @@ namespace Horo::Editor {
         if (!nativeModule_)
             return Result<Gameplay::GameModuleReloadSnapshot>::Failure(ManifestError("no active native generation is loaded."));
         auto prepared = nativeModule_->PrepareReload();
-        if (prepared.HasValue())
+        if (prepared.HasValue()) {
             decisionUsageMetadata_.reset();
+            decisionAuthoringGeneration_.reset();
+        }
         return prepared;
     }
 
