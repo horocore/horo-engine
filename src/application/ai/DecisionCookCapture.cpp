@@ -139,10 +139,17 @@ namespace Horo::Application::DecisionCookDetail {
             const auto *file = state.files->Find(record.id);
             if (!file || !SameRecord(record, file->record))
                 return Result<void>::Failure(MakeError(DecisionCookErrors::Stale));
-            const auto decoded = AI::EnvironmentQuerySourceCodec::Decode(file->bytes);
+            auto decoded = AI::EnvironmentQuerySourceCodec::Decode(file->bytes);
             if (decoded.HasError())
                 return Result<void>::Failure(decoded.ErrorValue());
             const auto &query = decoded.Value();
+            if (state.authoringValidation) {
+                const auto result = query.ResultSchema();
+                const auto *item = state.querySchema->Find(result.itemType);
+                auto source = std::make_shared<const AI::EnvironmentQueryAsset>(std::move(decoded).Value());
+                state.queries.emplace_back(source->Id(), result, item ? item->kind : AI::QueryItemKind::Count, record.id, source);
+                return Result<void>::Success();
+            }
             auto payload = AI::EnvironmentQueryCookedCodec::Encode(query, *state.querySchema);
             if (payload.HasError())
                 return Result<void>::Failure(payload.ErrorValue());
@@ -201,6 +208,6 @@ namespace Horo::Application::DecisionCookDetail {
         std::ranges::sort(state.queries, {}, &QueryArtifact::query);
         if (std::ranges::adjacent_find(state.queries, {}, &QueryArtifact::query) != state.queries.end())
             return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryIdentityConflict));
-        return Verify(state, cancellation);
+        return state.authoringValidation ? state.files->VerifyUnchanged(cancellation) : Verify(state, cancellation);
     }
 }  // namespace Horo::Application::DecisionCookDetail

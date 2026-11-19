@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <ranges>
 
 namespace Horo::Application {
     namespace {
@@ -281,6 +282,82 @@ namespace Horo::Application {
             return Result<void>::Success();
         }
 
+        /** @brief Overlays exactly one key removal on the canonical captured schema set. */
+        Result<void> OverlaySchema(DecisionCookDetail::State &state, const BlackboardUsageSelection &selection,
+                                   const std::shared_ptr<const AI::BlackboardSchema> &proposed) {
+            const auto existing = std::ranges::find_if(state.environment.schemas, [&selection](const auto &schema) {
+                return schema->Identity() == selection.schema && schema->Version() == selection.version;
+            });
+            if (existing == state.environment.schemas.end() || proposed->Identity() != selection.schema ||
+                proposed->Version() != selection.version || proposed->UnknownValuePolicy() != (*existing)->UnknownValuePolicy())
+                return Result<void>::Failure(MakeError(DecisionCookErrors::Stale));
+            auto remaining = (*existing)->Keys() | std::views::filter([&selection](const auto &key) {
+                return key.key != selection.key;
+            });
+            if (!std::ranges::equal(remaining, proposed->Keys()))
+                return Result<void>::Failure(MakeError(DecisionCookErrors::Invalid));
+            *existing = proposed;
+            return Result<void>::Success();
+        }
+
+        /** @brief Decodes one staged source in its original registry context and preserves semantic identity. */
+        Result<void> OverlayDecision(DecisionCookDetail::State &state, const BlackboardDecisionRetarget &change) {
+            const auto input = std::ranges::find(state.inputs, change.original.asset, &DecisionCookDetail::Input::asset);
+            const auto *original = state.files->Find(change.original.asset);
+            if (input == state.inputs.end() || !original || original->sourceDigest != change.original.source ||
+                original->metadataDigest != change.original.metadata)
+                return Result<void>::Failure(MakeError(DecisionCookErrors::Stale));
+            const Assets::AssetCookPinnedSource candidate{original->record, change.candidate, original->sourceDigest,
+                                                          original->metadataDigest};
+            auto decoded = DecodeRegisteredDecisionGraphSource(candidate, state.limits);
+            if (decoded.HasError())
+                return Result<void>::Failure(decoded.ErrorValue());
+            if (decoded.Value().asset != input->graph.asset)
+                return Result<void>::Failure(MakeError(DecisionCookErrors::Invalid));
+            input->graph = std::move(decoded).Value();
+            return Result<void>::Success();
+        }
+
+        /** @brief Runs the normal Decision cook admission against the exact captured plus overlaid project. */
+        Result<std::size_t> ValidateRetarget(const BlackboardUsageReview &review, const Assets::AssetCookInputSnapshot &capture,
+                                             const Assets::AssetRegistrySnapshot &registry, const BlackboardRetargetValidationInput &input,
+                                             const CancellationToken &cancellation) {
+            using Count = Result<std::size_t>;
+            DecisionCookDetail::State state;
+            state.files = std::make_shared<const Assets::AssetCookInputSnapshot>(capture);
+            state.environment.nodes = input.nodes;
+            state.limits = GraphLimits;
+            state.maximumPreparedBytes = MaximumCapturedBytes;
+            state.querySchema = input.queries;
+            state.authoringValidation = true;
+            if (auto captured = DecisionCookDetail::Capture(state, registry, cancellation); captured.HasError())
+                return Count::Failure(captured.ErrorValue());
+            if (auto overlaid = OverlaySchema(state, review.selection, input.proposedSchema); overlaid.HasError())
+                return Count::Failure(overlaid.ErrorValue());
+            for (const auto &change : review.decisionRetargets)
+                if (auto overlaid = OverlayDecision(state, change); overlaid.HasError())
+                    return Count::Failure(overlaid.ErrorValue());
+            return DecisionCookDetail::ValidateSchemaRoots(state, review.selection.schema, review.selection.version, cancellation);
+        }
+
+        /** @brief Retains validation evidence alongside the read-only source review and typed blockers. */
+        Result<void> RecordValidation(BlackboardUsageReview &review, const Assets::AssetCookInputSnapshot &capture,
+                                      const Assets::AssetRegistrySnapshot &registry, const BlackboardRetargetValidationInput &input,
+                                      const CancellationToken &cancellation) {
+            if (!input.proposedSchema)
+                return Result<void>::Success();
+            if (!review.selection.replacement)
+                return Result<void>::Failure(MakeError(DecisionCookErrors::Invalid));
+            const auto validated = ValidateRetarget(review, capture, registry, input, cancellation);
+            if (validated.HasValue()) {
+                review.decisionValidation.emplace(BlackboardDecisionValidation{validated.Value(), input.nodes});
+                return Result<void>::Success();
+            }
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(DecisionCookErrors::Cancelled));
+            return AddGap(review, {BlackboardUsageGapKind::DecisionClosure, {}, {}, validated.ErrorValue()});
+        }
+
         /** @brief Adds Scene and Prefab evidence and verifies the separately bounded hierarchy capture. */
         Result<void> InspectHierarchy(BlackboardUsageReview &review, const std::filesystem::path &root,
                                       const Assets::AssetCookInputSnapshot &owners, const CancellationToken &cancellation) {
@@ -303,7 +380,8 @@ namespace Horo::Application {
                                                                const Editor::ProjectMutationCoordinator &mutations,
                                                                const BlackboardUsageSelection selection,
                                                                std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> providers,
-                                                               const CancellationToken &cancellation) {
+                                                               const CancellationToken &cancellation,
+                                                               const BlackboardRetargetValidationInput &validation) {
         using Review = Result<BlackboardUsageReview>;
         if (!selection.schemaAsset.IsValid() || !selection.schema.IsValid() || !selection.key.IsValid() || selection.version == 0)
             return Review::Failure(MakeError(DecisionCookErrors::Invalid));
@@ -333,6 +411,8 @@ namespace Horo::Application {
         review.sources.reserve(capture.Value().Sources().size());
         if (auto inspected = InspectAiSources(review, capture.Value(), providers.get(), cancellation); inspected.HasError())
             return Review::Failure(inspected.ErrorValue());
+        if (auto checked = RecordValidation(review, capture.Value(), pinned, validation, cancellation); checked.HasError())
+            return Review::Failure(checked.ErrorValue());
         const auto hierarchy = CaptureHierarchy(root, pinned, selected.Value().hierarchy, review, cancellation);
         if (hierarchy.HasError())
             return Review::Failure(hierarchy.ErrorValue());

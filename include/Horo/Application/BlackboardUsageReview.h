@@ -17,6 +17,10 @@ namespace Horo::Editor {
     class ProjectMutationCoordinator;
 }
 
+namespace Horo::AI {
+    class QuerySchemaRegistry;
+}
+
 namespace Horo::Application {
     /** @brief Stable owner boundaries where this review cannot establish coverage. */
     enum class BlackboardUsageGapKind : std::uint8_t {
@@ -28,6 +32,7 @@ namespace Horo::Application {
         EnvironmentQueryBindings,
         PerceptionPolicy,
         DecisionRetarget,
+        DecisionClosure,
     };
 
     /** @brief An exact unresolved source or provider, or a project-level owner with no review adapter. */
@@ -97,6 +102,19 @@ namespace Horo::Application {
         std::vector<std::uint8_t> candidate;
     };
 
+    /** @brief Successful cooker admission for every affected root, fenced to the provider generation. */
+    struct BlackboardDecisionValidation final {
+        std::size_t roots{};
+        std::weak_ptr<const AI::DecisionNodeGeneration> nodes;
+    };
+
+    /** @brief Explicit compiler authority for one proposed removal, captured by the workspace owner. */
+    struct BlackboardRetargetValidationInput final {
+        std::shared_ptr<const AI::BlackboardSchema> proposedSchema;
+        std::shared_ptr<const AI::DecisionNodeGeneration> nodes;
+        std::shared_ptr<const AI::QuerySchemaRegistry> queries;
+    };
+
     /** @brief Read-only observations scoped to a captured Project publication.
      * @details The weak provider stamp identifies the host-owned detached declaration snapshot. The publishing host must recheck it.
      * Gaps represent unknown coverage. This value grants no document mutation authority.
@@ -112,6 +130,7 @@ namespace Horo::Application {
         std::vector<BlackboardUsageGap> gaps;
         std::vector<BlackboardQueryUsage> queryUsages;
         std::vector<BlackboardDecisionRetarget> decisionRetargets;
+        std::optional<BlackboardDecisionValidation> decisionValidation;
     };
 
     /** @brief Captures and reviews actual registered source/sidecar pairs under the Project mutation coordinator.
@@ -119,7 +138,7 @@ namespace Horo::Application {
      * @param completeInventory Native complete rebuild revision, when supplied by the host. Stale or absent coverage is reported.
      * @param mutations Project's normal source transaction coordinator. @param selection Exact durable key and schema selection.
      * @param providers Detached observed provider declarations, when the Project owns a snapshot. @param cancellation Cooperative read
-     * fence.
+     * fence. @param validation Optional compiler input for validating the explicit removal's Decision closure.
      * @return Owned typed occurrences, stamps and gaps, or a typed capture/staleness error. No authored sources or runtime state are
      * changed.
      */
@@ -127,5 +146,5 @@ namespace Horo::Application {
         const std::filesystem::path &root, const Assets::AssetRegistry &registry,
         std::optional<Assets::AssetRegistryRevision> completeInventory, const Editor::ProjectMutationCoordinator &mutations,
         BlackboardUsageSelection selection, std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> providers = {},
-        const CancellationToken &cancellation = {});
+        const CancellationToken &cancellation = {}, const BlackboardRetargetValidationInput &validation = {});
 }  // namespace Horo::Application

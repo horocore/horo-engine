@@ -32,6 +32,7 @@ namespace Horo::Application::DecisionCookDetail {
         AI::QueryResultSchema result;
         AI::QueryItemKind kind{};
         Assets::AssetId asset;
+        std::shared_ptr<const AI::EnvironmentQueryAsset> source;
     };
 
     struct State final {
@@ -45,6 +46,7 @@ namespace Horo::Application::DecisionCookDetail {
         std::vector<SchemaArtifact> schemas;
         std::shared_ptr<const AI::QuerySchemaRegistry> querySchema;
         std::vector<QueryArtifact> queries;
+        bool authoringValidation{}; /**< Defer executable admission until affected roots and their queries are known. */
         std::vector<Prepared> prepared;
         Sha256Digest settings;
     };
@@ -52,6 +54,9 @@ namespace Horo::Application::DecisionCookDetail {
     [[nodiscard]] Result<void> Verify(const State &state, const CancellationToken &cancellation);
     [[nodiscard]] Result<void> Capture(State &state, const Assets::AssetRegistrySnapshot &registry, const CancellationToken &cancellation);
     [[nodiscard]] Result<void> PrepareRoots(State &state, const CancellationToken &cancellation);
+    /** @brief Checks all registered roots affected by an exact schema after overlaying proposed source candidates. */
+    [[nodiscard]] Result<std::size_t> ValidateSchemaRoots(const State &state, AI::BlackboardSchemaId schema, std::uint32_t version,
+                                                          const CancellationToken &cancellation);
     [[nodiscard]] Result<std::shared_ptr<const Assets::CookerCatalogSnapshot>> Catalog(
         std::shared_ptr<const State> state, std::span<const Assets::CookerContribution> additional);
 }  // namespace Horo::Application::DecisionCookDetail

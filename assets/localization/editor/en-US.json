@@ -1053,6 +1053,8 @@
     "workspace.blackboard.usage_retarget_candidates": {"text": "Decision sources prepared for retargeting"},
     "workspace.blackboard.usage_retarget_reviewed_destination": {"text": "Reviewed replacement key ID"},
     "workspace.blackboard.usage_retarget_blocked": {"text": "Decision retargeting requires reference resolution"},
+    "workspace.blackboard.usage_closure_valid": {"text": "Decision roots validated with their dependencies"},
+    "workspace.blackboard.usage_closure_blocked": {"text": "Decision dependency validation failed"},
     "workspace.blackboard.usage_preview_change": {"text": "Reference review for a proposed key change"},
     "workspace.blackboard.usage_preview_removal": {"text": "Reference review for a proposed key removal"},
     "workspace.blackboard.usage_pending": {"text": "Reading project sources…"},

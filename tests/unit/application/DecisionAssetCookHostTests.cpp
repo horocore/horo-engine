@@ -609,12 +609,13 @@ namespace {
         }
 
         Result<BlackboardUsageReview> Review(BlackboardUsageSelection selection,
-                                             std::shared_ptr<const DecisionBlackboardProviderMetadata> providers = {}) {
+                                             std::shared_ptr<const DecisionBlackboardProviderMetadata> providers = {},
+                                             const BlackboardRetargetValidationInput &validation = {}) {
             const auto revision = Rebuild();
             NativeDurableFileSystem files;
             Editor::ProjectMutationCoordinator mutations{files};
-            return CaptureBlackboardUsageReview(project.source.path, project.registry, revision, mutations, selection,
-                                                std::move(providers));
+            return CaptureBlackboardUsageReview(project.source.path, project.registry, revision, mutations, selection, std::move(providers),
+                                                {}, validation);
         }
     };
 
@@ -766,6 +767,82 @@ namespace {
             REQUIRE(report.HasError());
             CHECK(report.ErrorValue().code.Value() == AIErrors::BlackboardValueTypeMismatch.code.Value());
         }
+    }
+
+    TEST_CASE("Blackboard removal validates modified Decision closures and their saved query targets", "[native][decision-cook][usage]") {
+        QueryOutputFixture query;
+        auto selection = query.WriteSchema();
+        selection.replacement = query.replacement;
+        const auto &environment = query.project.request.environment;
+        const auto metadata = DecisionBlackboardProviderMetadata::Capture(*environment.nodes);
+        REQUIRE(metadata.HasValue());
+        const auto keys = environment.schemas.front()->Keys();
+        const auto replacement = std::ranges::find(keys, query.replacement, &BlackboardKeyDescriptor::key);
+        REQUIRE(replacement != keys.end());
+        const std::array remaining{*replacement};
+        auto receipt = BlackboardSchema::Capture({.identity = SchemaId(), .keys = remaining});
+        REQUIRE(receipt.HasValue());
+        BlackboardRetargetValidationInput validation{std::make_shared<const BlackboardSchema>(std::move(receipt).Value()),
+                                                     environment.nodes, query.project.request.querySchema};
+        SECTION("both the changed graph and its registered caller are validated") {
+            const auto report = query.Review(selection, metadata.Value(), validation);
+            REQUIRE(report.HasValue());
+            REQUIRE(report.Value().decisionValidation);
+            CHECK(report.Value().decisionValidation->roots == 2);
+            CHECK(report.Value().decisionValidation->nodes.lock() == environment.nodes);
+            REQUIRE(report.Value().decisionRetargets.size() == 1);
+            CHECK(report.Value().decisionRetargets.front().original.asset == query.project.child);
+        }
+        SECTION("a saved query version mismatch prevents a validation receipt") {
+            query.WriteQuery(query.SourcePath, query.output.query, 2);
+            const auto report = query.Review(selection, metadata.Value(), validation);
+            REQUIRE(report.HasValue());
+            CHECK_FALSE(report.Value().decisionValidation);
+            CHECK(std::ranges::any_of(report.Value().gaps, [](const auto &gap) {
+                return gap.kind == BlackboardUsageGapKind::DecisionClosure && gap.diagnostic &&
+                       gap.diagnostic->code.Value() == AIErrors::EnvironmentQueryVersionIncompatible.code.Value();
+            }));
+        }
+        SECTION("a registered caller outside the selected version range is still checked") {
+            auto caller = CallingMachine(1, 2, DecisionPlanKind::BehaviorTree);
+            caller.blackboardVersion = {2, 2};
+            query.project.WriteGraph("assets/root.horo_sm", caller);
+            const auto report = query.Review(selection, metadata.Value(), validation);
+            REQUIRE(report.HasValue());
+            CHECK_FALSE(report.Value().decisionValidation);
+            CHECK(std::ranges::any_of(report.Value().gaps, [](const auto &gap) {
+                return gap.kind == BlackboardUsageGapKind::DecisionClosure && gap.diagnostic;
+            }));
+        }
+        SECTION("an unrelated authored query does not require an installed descriptor") {
+            const auto unused = EnvironmentQueryAsset::Capture({.id = MakeIdentity<QueryId>(57),
+                                                                .displayName = "Unreferenced",
+                                                                .result = {query.output.result, 1, query.output.item},
+                                                                .stages = {{.id = MakeIdentity<QueryStageId>(58),
+                                                                            .kind = QueryStageKind::Generator,
+                                                                            .generator = MakeIdentity<QueryGeneratorId>(59)}}});
+            REQUIRE(unused.HasValue());
+            const auto encoded = EnvironmentQuerySourceCodec::Encode(unused.Value());
+            REQUIRE(encoded.HasValue());
+            constexpr auto path = "assets/unused.horo_eqs";
+            Files::WriteFile(query.project.source.path / path, encoded.Value());
+            query.WriteSidecar(path, Files::Id("00000000-0000-0000-0000-0000000000cd"), EnvironmentQuerySourceAssetType);
+            const auto report = query.Review(selection, metadata.Value(), validation);
+            REQUIRE(report.HasValue());
+            REQUIRE(report.Value().decisionValidation);
+            CHECK(report.Value().decisionValidation->roots == 2);
+        }
+        SECTION("the supplied schema must remove exactly the reviewed key") {
+            validation.proposedSchema = environment.schemas.front();
+            const auto report = query.Review(selection, metadata.Value(), validation);
+            REQUIRE(report.HasValue());
+            CHECK_FALSE(report.Value().decisionValidation);
+            CHECK(std::ranges::any_of(report.Value().gaps, [](const auto &gap) {
+                return gap.kind == BlackboardUsageGapKind::DecisionClosure && gap.diagnostic &&
+                       gap.diagnostic->code.Value() == DecisionCookErrors::Invalid.code.Value();
+            }));
+        }
+        CHECK(query.project.ai.probe.factories == 0);
     }
 
     TEST_CASE("Actual decision source pairs cook through AssetCookService and load into the real composed headless runner",

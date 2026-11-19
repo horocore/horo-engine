@@ -226,6 +226,8 @@ namespace Horo::Editor {
                     return "usage_perception";
                 case DecisionRetarget:
                     return "usage_retarget_blocked";
+                case DecisionClosure:
+                    return "usage_closure_blocked";
             }
             return "operation_failed";
         }
@@ -312,6 +314,10 @@ namespace Horo::Editor {
                 frame.Label(std::to_string(review.decisionRetargets.size()));
                 frame.Caption("usage_retarget_reviewed_destination");
                 frame.Label(std::to_string(review.selection.replacement->Value()));
+            }
+            if (const auto &validation = review.decisionValidation) {
+                frame.Caption("usage_closure_valid");
+                frame.Label(std::to_string(validation->roots));
             }
         }
 

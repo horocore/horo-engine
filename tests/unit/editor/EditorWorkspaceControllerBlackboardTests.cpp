@@ -2315,6 +2315,8 @@ TEST_CASE("Blackboard workspace pins the selected replacement to a removal propo
     const auto &view = controller.ViewModel().blackboardDocuments.front();
     REQUIRE(view.usageReview);
     CHECK(view.usageReview->selection.replacement == replacement);
+    REQUIRE(view.usageReview->decisionValidation);
+    CHECK(view.usageReview->decisionValidation->roots == 0);
     REQUIRE(view.referencePreview);
     REQUIRE(view.referencePreview->schema->Keys().size() == 1);
     CHECK(view.referencePreview->schema->Keys().front().key == replacement);

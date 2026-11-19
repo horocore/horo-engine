@@ -1,5 +1,6 @@
 #include "AuthoredAiSourceInventory.h"
 #include "Horo/AI/DecisionPlanCodec.h"
+#include "Horo/AI/EnvironmentQuerySchema.h"
 #include "Horo/Application/BlackboardUsageReview.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Application/ProjectAssetImportCommitter.h"
@@ -31,10 +32,30 @@ namespace Horo::Editor {
             return capture.Value().VerifyUnchanged();
         }
 
-        /** @brief Compares generation owners even after the previously observed catalog has retired. */
-        bool HasSameProviderMetadata(const Application::BlackboardUsageReview &report,
-                                     const std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> &current) noexcept {
-            return !report.providers.owner_before(current) && !current.owner_before(report.providers);
+        /** @brief Checks the detached metadata owner and any revocable compiler authority behind the report. */
+        bool HasCurrentReviewAuthority(const Application::BlackboardUsageReview &report,
+                                       const std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> &current) noexcept {
+            if (report.providers.owner_before(current) || current.owner_before(report.providers))
+                return false;
+            if (!report.decisionValidation || report.decisionValidation->roots == 0)
+                return true;
+            const auto generation = report.decisionValidation->nodes.lock();
+            return generation && generation->CanUse();
+        }
+
+        /** @brief Pins authority for explicit Decision validation without exposing it in the usage report. */
+        Application::BlackboardRetargetValidationInput CaptureDecisionValidation(const BlackboardReferenceEditPreview &preview,
+                                                                                 const ProjectGameplayRegistry *gameplay,
+                                                                                 const AI::QuerySchemaRegistry *queries) {
+            Application::BlackboardRetargetValidationInput validation{.proposedSchema = preview.schema};
+            if (gameplay) {
+                auto generation = gameplay->AcquireDecisionAuthoringGeneration();
+                if (generation.HasValue())
+                    validation.nodes = std::move(generation).Value();
+            }
+            if (queries)
+                validation.queries = std::make_shared<const AI::QuerySchemaRegistry>(*queries);
+            return validation;
         }
     }  // namespace
 
@@ -243,13 +264,15 @@ namespace Horo::Editor {
         if (m_collisionInventory && m_collisionInventory->status == Assets::AssetRegistryBuildStatus::Complete)
             complete = m_collisionInventory->revision;
         const auto providerMetadata = m_gameplayRegistry ? m_gameplayRegistry->DecisionUsageMetadata() : nullptr;
+        auto validation = request.replacement ? CaptureDecisionValidation(*preview, m_gameplayRegistry.get(), m_querySchema)
+                                              : Application::BlackboardRetargetValidationInput{};
         auto result = std::make_shared<std::shared_ptr<const Application::BlackboardUsageReview>>();
         auto job = m_sourceRecoveryJobs->SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Io},
                                                       [root = m_sourceOpenService.ProjectRoot(), assets = m_mutableAssetRegistry,
-                                                       mutations = m_mutations, complete, selection, providerMetadata,
-                                                       result](const CancellationToken &cancellation) {
-            auto capture =
-                Application::CaptureBlackboardUsageReview(root, *assets, complete, *mutations, selection, providerMetadata, cancellation);
+                                                       mutations = m_mutations, complete, selection, providerMetadata, result,
+                                                       validation = std::move(validation)](const CancellationToken &cancellation) {
+            auto capture = Application::CaptureBlackboardUsageReview(root, *assets, complete, *mutations, selection, providerMetadata,
+                                                                     cancellation, validation);
             if (capture.HasError())
                 return Result<void>::Failure(capture.ErrorValue());
             *result = std::make_shared<const Application::BlackboardUsageReview>(std::move(capture).Value());
@@ -273,7 +296,7 @@ namespace Horo::Editor {
     void EditorWorkspaceController::UpdateBlackboardUsageReview() {
         const auto providerMetadata = m_gameplayRegistry ? m_gameplayRegistry->DecisionUsageMetadata() : nullptr;
         for (auto &view : m_viewModel.blackboardDocuments) {
-            if (view.usageReview && !HasSameProviderMetadata(*view.usageReview, providerMetadata)) {
+            if (view.usageReview && !HasCurrentReviewAuthority(*view.usageReview, providerMetadata)) {
                 view.usageReview.reset();
                 view.referencePreview.reset();
             }
@@ -299,7 +322,7 @@ namespace Horo::Editor {
         }
         auto result = std::move(*work.result);
         if (result && result->registry == m_mutableAssetRegistry->Snapshot().Revision() &&
-            HasSameProviderMetadata(*result, providerMetadata)) {
+            HasCurrentReviewAuthority(*result, providerMetadata)) {
             view->usageReview = std::move(result);
             view->referencePreview = std::move(work.preview);
         } else {

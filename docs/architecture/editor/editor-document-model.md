@@ -758,9 +758,9 @@ application holds the project mutation lease through source verification, uses
 the same typed source decode and lowering as cooking, and records registry,
 canonical source and observed provider evidence. The owner thread detaches the
 loaded native gameplay image's declared Decision requirements through its
-existing metadata admission. The review job retains only copied declarations.
-It never starts a provider or extends executable module lifetime. A closed
-opening, newer document revision, replaced registry or different native
+existing metadata admission. The usage scan relies on copied declarations and
+never starts a provider. A closed opening, newer document revision, replaced
+registry or different native
 declaration owner cannot publish an older worker result. The review also
 reports direct saved Scene and concrete Prefab controller bindings through the
 existing typed codecs and exact source registrations. These rows identify
@@ -778,7 +778,11 @@ current schema. An explicit choice stages bounded Decision source candidates for
 authored requirements, query outputs, state guards and Utility considerations.
 Each candidate retains the original source and sidecar digests. Provider declarations
 and opaque properties require their owning provider to resolve the reference.
-The transaction must validate the entire modified Decision closure before publication.
+The explicit replacement review also overlays the proposed schema and prepared
+sources in memory, then runs the cooker checks for affected roots, callers and
+their query targets. The review records successful admission and a weak provider
+generation stamp, or a typed validation gap. The transaction must recheck its
+publication fences before applying the candidates.
 
 ## Cinematic Sequence Asset Documents
 
