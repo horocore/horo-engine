@@ -1,5 +1,6 @@
 #include "NetworkProductLaunch.h"
 
+#include "HeadlessInitialStateAuthority.h"
 #include "HeadlessNetworkServices.h"
 #include "HeadlessProjectScene.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
@@ -25,6 +26,7 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <new>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -302,7 +304,8 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<NetworkProductComposition> ComposeProductWorldServices(
             std::shared_ptr<const Runtime::RuntimeSceneDefinition> scene, const ProductLaunch &launch,
             const Net::NetworkProjectSettings &project, Net::NetworkModeFactories factories, HeadlessProjectSceneResources *resources,
-            std::shared_ptr<AnimationRuntimeIdentitySource> animationIdentities) {
+            std::shared_ptr<AnimationRuntimeIdentitySource> animationIdentities, const HeadlessInitialStateSelection *initialState,
+            std::shared_ptr<HeadlessInitialStateHost> initialHost) {
             std::optional<Gameplay::GameplayReplicationAdmissionPolicy> replicationAdmission;
             if (launch.role != Net::NetworkProjectRole::Standalone)
                 replicationAdmission.emplace(Gameplay::GameplayReplicationAdmissionPolicy{.inventory = project.ReplicationInventory()});
@@ -337,6 +340,11 @@ namespace Horo::Application::Internal {
                                                .mountedWorld = launch.sceneInput.world ? std::make_shared<const CommittedWorldSelection>(
                                                                                              *launch.sceneInput.world)
                                                                                        : nullptr};
+            if (initialState) {
+                input.replicatedSceneObjects = initialState->authoredObjects;
+                input.publicTransforms = initialState->transforms;
+                input.authorityInitialState = std::move(initialHost);
+            }
             if (!launch.cookedDecisionBindings.empty()) {
                 if (!resources->committed)
                     return Result<NetworkProductComposition>::Failure(
@@ -377,7 +385,41 @@ namespace Horo::Application::Internal {
             std::shared_ptr<const NetworkProductAdmission> admission;
             std::shared_ptr<const Net::GnsNativeSecurityOptions> nativeSecurity;
             std::shared_ptr<AnimationRuntimeIdentitySource> animationIdentities;
+            std::shared_ptr<const HeadlessInitialStateSelection> initialState;
         };
+
+        /** @brief Retain the same adapter in the world binding and selected secure transport factory. */
+        [[nodiscard]] Result<std::shared_ptr<HeadlessInitialStateHost>> SelectAuthorityInitialState(
+            const ProductLaunch &launch, ProductRuntimeCapabilities &capabilities) {
+            using Outcome = Result<std::shared_ptr<HeadlessInitialStateHost>>;
+            if (!capabilities.initialState)
+                return Outcome::Success(nullptr);
+            const auto &admission = capabilities.admission;
+            const auto binding = admission ? admission->WorldBinding() : std::nullopt;
+            const bool authorityRole =
+                launch.role == Net::NetworkProjectRole::DedicatedServer || launch.role == Net::NetworkProjectRole::ListenServer;
+            const bool secureGameplay =
+                authorityRole && capabilities.nativeSecurity && launch.purpose == Net::NetworkWorldCompositionPurpose::Gameplay;
+            const bool committedScene = capabilities.resources && capabilities.resources->committed &&
+                                        capabilities.initialState->scene.IsValid() &&
+                                        capabilities.initialState->scene == capabilities.resources->sceneAsset;
+            if (!secureGameplay || !committedScene || !binding || !binding->policy.initialState || !binding->initialStateHost ||
+                !capabilities.initialState->authority)
+                return Outcome::Failure(
+                    MakeError(Net::NetworkErrors::AdmissionPolicyInvalid,
+                              "Authority initial state requires secure gameplay, a committed Scene and explicit grants."));
+            try {
+                auto adapter = std::make_shared<HeadlessInitialStateHost>(capabilities.initialState->authority, binding->initialStateHost);
+                auto configured = NetworkProductAdmission::Capture(admission->Policy(), admission->Providers(), admission->Codecs(),
+                                                                   admission->Handlers(), binding->policy, adapter);
+                if (configured.HasError())
+                    return Outcome::Failure(std::move(configured).ErrorValue());
+                capabilities.admission = std::move(configured).Value();
+                return Outcome::Success(std::move(adapter));
+            } catch (const std::bad_alloc &) {
+                return Outcome::Failure(MakeError(Net::NetworkErrors::ReplicationWorldCapacityExceeded));
+            }
+        }
 
         /** @brief Reject requested network gameplay before composition when no explicit world authority was supplied. */
         [[nodiscard]] Result<void> ValidateGameplayBinding(const ProductLaunch &launch,
@@ -447,6 +489,9 @@ namespace Horo::Application::Internal {
             std::shared_ptr<Clock> clock, const ProductLaunch &launch, const Net::NetworkProjectSettings &project,
             std::shared_ptr<const Runtime::RuntimeSceneDefinition> scene, const ProductWorlds &worlds,
             Net::NetworkTargetDiagnostic &diagnostic, ProductRuntimeCapabilities capabilities) {
+            auto initialHost = SelectAuthorityInitialState(launch, capabilities);
+            if (initialHost.HasError())
+                return Result<std::unique_ptr<NetworkProductHost>>::Failure(std::move(initialHost).ErrorValue());
             const auto binding = capabilities.admission ? capabilities.admission->WorldBinding() : std::nullopt;
             if (auto valid = ValidateGameplayBinding(launch, binding); valid.HasError())
                 return Result<std::unique_ptr<NetworkProductHost>>::Failure(valid.ErrorValue());
@@ -465,7 +510,8 @@ namespace Horo::Application::Internal {
                 ComposeProductWorldServices(std::move(scene), launch, project,
                                             ProductFactories(launch.role, launch.bind, launch.connect, debugger, sessions,
                                                              std::move(capabilities.admission), std::move(capabilities.nativeSecurity)),
-                                            capabilities.resources, std::move(capabilities.animationIdentities));
+                                            capabilities.resources, std::move(capabilities.animationIdentities),
+                                            capabilities.initialState.get(), std::move(initialHost).Value());
             if (configured.HasError())
                 return Result<std::unique_ptr<NetworkProductHost>>::Failure(configured.ErrorValue());
             return NetworkProductHost::Create(*clock,
@@ -576,7 +622,8 @@ namespace Horo::Application::Internal {
 
     int RunNetworkProduct(const std::span<char *> arguments, std::shared_ptr<const NetworkProductAdmission> admission,
                           std::shared_ptr<const Net::GnsNativeSecurityOptions> nativeSecurity, const Prefab::PrefabMetricHandles &metrics,
-                          std::shared_ptr<AnimationRuntimeIdentitySource> animationIdentities) {
+                          std::shared_ptr<AnimationRuntimeIdentitySource> animationIdentities,
+                          std::shared_ptr<const HeadlessInitialStateSelection> initialState) {
         auto launch = ParseNetworkProductLaunch(arguments);
         if (launch.HasError()) {
             std::cerr << "horo-engine: " << launch.ErrorValue().message << '\n';
@@ -600,7 +647,8 @@ namespace Horo::Application::Internal {
         auto clock = std::make_shared<SteadyClock>();
         Net::NetworkTargetDiagnostic diagnostic;
         auto runtime = ComposeProduct(clock, launch.Value(), project.Value(), std::move(scene).Value(), worlds, diagnostic,
-                                      {resources.get(), std::move(admission), std::move(nativeSecurity), std::move(animationIdentities)});
+                                      {resources.get(), std::move(admission), std::move(nativeSecurity), std::move(animationIdentities),
+                                       std::move(initialState)});
         if (runtime.HasError()) {
             std::cerr << "horo-engine: network product admission failed (" << runtime.ErrorValue().code.Value() << ", capability "
                       << static_cast<int>(diagnostic.capability) << ", reason " << static_cast<int>(diagnostic.reason)

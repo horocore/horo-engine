@@ -1,5 +1,6 @@
 #include "../../helpers/GameplayModuleTestSupport.h"
 #include "../../unit/runtime/physics/PhysicsSceneActivationTestSupport.h"
+#include "HeadlessInitialStateAuthority.h"
 #include "HeadlessPrefabIntent.h"
 #include "Horo/Assets/AssetCook.h"
 #include "Horo/Assets/AssetProvider.h"
@@ -8,15 +9,66 @@
 #include "Horo/Runtime/Save/SaveCanonicalCodec.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 #include "Horo/Scene/CookedSceneDefinition.h"
+#include "NetworkInitialStateProductTestSupport.h"
 #include "NetworkModeHostTestSupport.h"
 #include "NetworkProductPrefabTestSupport.h"
 
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <thread>
 
 namespace Horo::Network {
     namespace {
         using namespace PrefabProductTestSupport;
+
+        /** @brief Explicit replica-side delegate for the server-only initial-state fixture. */
+        class UnusedInitialReceiver final : public INetworkInitialStateHost {
+        public:
+            Result<NetworkPeerId> ClientRecipient(const PeerSessionLifecycle &) override {
+                return Unexpected<NetworkPeerId>();
+            }
+
+            Result<std::optional<ReplicationInitialStateSnapshot>> Capture(const ReplicationWorldReadLease &,
+                                                                           const ReplicationWorldLifecycle &, const PeerSessionLifecycle &,
+                                                                           std::size_t) override {
+                return Unexpected<std::optional<ReplicationInitialStateSnapshot>>();
+            }
+
+            Result<NetworkInitialStateTarget> PrepareReceiver(const ReplicationInboundAuthority &, ReplicationWorldLifecycle &,
+                                                              std::span<const ReplicationInitialOwnership>, std::uint64_t) override {
+                return Unexpected<NetworkInitialStateTarget>();
+            }
+
+            unsigned calls{};
+
+        private:
+            template <typename T> Result<T> Unexpected() {
+                ++calls;
+                return Result<T>::Failure(MakeError(NetworkErrors::AuthenticationRejected));
+            }
+        };
+
+        /** @brief Test composition's explicit mapping from a live accepted credential to a simulation peer. */
+        class PrefabInitialAuthority final : public Application::Internal::IHeadlessInitialStateAuthority {
+        public:
+            Result<Application::Internal::HeadlessInitialRecipient> Resolve(const AuthenticationResult &authenticated,
+                                                                            const ReplicationWorldReadLease &world) const override {
+                using Grant = Result<Application::Internal::HeadlessInitialRecipient>;
+                ++resolutions;
+                if (!credential || authenticated != *credential)
+                    return Grant::Failure(MakeError(NetworkErrors::AuthenticationRejected));
+                Application::Internal::HeadlessInitialRecipient grant{Id<NetworkPeerId>(71), 9, {}};
+                for (const auto &row : world.Mapping().Entries())
+                    grant.ownership.push_back({row.object, Id<ReplicationRoleRevision>(6), {}});
+                if (afterResolve)
+                    afterResolve();
+                return Grant::Success(std::move(grant));
+            }
+
+            std::optional<AuthenticationResult> credential;
+            std::function<void()> afterResolve;
+            mutable unsigned resolutions{};
+        };
 
         /** @brief Delivers Prefab records through the authenticated client dispatcher used by the product. */
         void DeliverReplicaRecord(ProductOwners &owners, const NetworkPrefabLifecycleRecord &record,
@@ -63,6 +115,7 @@ namespace Horo::Network {
               "[integration][network][mode][replication][prefab]") {
         if constexpr (!HORO_TEST_PHYSICS_NATIVE)
             SKIP("Canonical Physics is required for actual product world activation.");
+        const bool replacePeerDuringGrant = GENERATE(false, true);
         using namespace Application::Internal;
         const auto kind = NetworkModeWorldKind::AuthorityServer;
         const auto mode = NetworkProjectRole::DedicatedServer;
@@ -118,6 +171,11 @@ namespace Horo::Network {
         const auto project = NetworkProjectSettings::Create(projectInput).Value();
         const auto facts = ProductFacts(project, mode, false);
         const auto owners = std::make_shared<ProductOwners>();
+        const auto authority = std::make_shared<PrefabInitialAuthority>();
+        const auto delegate = std::make_shared<UnusedInitialReceiver>();
+        const auto initialState = std::make_shared<HeadlessInitialStateHost>(authority, delegate);
+        input.authorityInitialState = initialState;
+        owners->worldSetup = InitialProductTestSupport::InitialSetup(initialState);
         std::uint64_t fixedTick{};
         owners->onTransportFixed = [&fixedTick](const Runtime::FixedStepContext &context) {
             fixedTick = context.simulationTick;
@@ -203,8 +261,8 @@ namespace Horo::Network {
         }
         CHECK(slots == std::vector<std::uint32_t>{0, 2});
         const auto encodedSpawn = CaptureNetworkPrefabSpawn(spawned, mappings.front().object).Value();
-        const auto wire = EncodeNetworkPrefabLifecycle(encodedSpawn).Value();
-        const auto decoded = DecodeNetworkPrefabLifecycle(wire).Value();
+        const auto prefabWire = EncodeNetworkPrefabLifecycle(encodedSpawn).Value();
+        const auto decoded = DecodeNetworkPrefabLifecycle(prefabWire).Value();
         REQUIRE(decoded.spawn);
         CHECK(decoded.session == *role.worldSession);
         CHECK(decoded.spawn->recipe == NetworkPrefabTemplateIdentity{prefab, artifact, 3});
@@ -217,6 +275,42 @@ namespace Horo::Network {
         REQUIRE(reconstructed.HasValue());
         CHECK(reconstructed.Value().source.asset == prefab);
         CHECK(reconstructed.Value().source.artifactDigest == artifact);
+
+        // Attach the product's live stream and send its world, authored and Prefab controls without advancing simulation.
+        auto &wire = *owners->binding;
+        wire.setup = owners->worldSetup;
+        wire.AttachOwner(owners->sessions->WorldBinding());
+        const auto binding = wire.binding.lock();
+        REQUIRE(binding);
+        const auto peer = ModeBindingTests::Negotiating(Connection(), Session());
+        ModeBindingTests::CompleteAdmission(peer, Session(), owners->worldSetup.policy.initialState->feature);
+        REQUIRE(peer->Authentication());
+        authority->credential = *peer->Authentication();
+        REQUIRE(owners->sessions->OnSessionActivated(AdmissionEndpoint::Server, peer, Session(), 22).HasValue());
+        wire.RegisterClient(peer);
+        owners->onTransportFlush = [&] {
+            REQUIRE(binding->Flush(22).HasValue());
+        };
+        for (std::size_t frame{}; frame < 10 && authority->resolutions == 0; ++frame)
+            REQUIRE(host->RunFrame().HasValue());
+        REQUIRE(authority->resolutions > 0);
+        CHECK(fixedTick == spawnFrameTick);
+        REQUIRE(wire.transport.size > 0);
+        const auto outgoing = [&] {
+            return DecodeMessageEnvelope(std::span{wire.transport.sent}.first(wire.transport.size), *wire.setup.codecs).Value();
+        };
+        CHECK(outgoing().message != wire.setup.policy.initialState->control.id);
+        CHECK(peer->State() == PeerSessionState::Active);
+
+        bool replacedActivePeer{};
+        if (replacePeerDuringGrant) {
+            auto replacement = ModeBindingTests::Negotiating(peer->Connection(), Session(8));
+            ModeBindingTests::CompleteAdmission(replacement, Session(8), owners->worldSetup.policy.initialState->feature);
+            authority->afterResolve = [&, replacement] {
+                *peer = std::move(*replacement);
+                replacedActivePeer = peer->State() == PeerSessionState::Active && peer->Authentication()->sessionGeneration == Session(8);
+            };
+        }
         std::optional<Result<ReplicationCommittedRead>> committed;
         bool currentAtFlush{};
         owners->onTransportFlush = [&] {
@@ -225,10 +319,12 @@ namespace Horo::Network {
                 currentAtFlush = source->IsCurrent(committed->Value());
                 source->EndRead(committed->Value());
             }
+            REQUIRE(binding->Flush(22).HasValue());
         };
         clock.Advance(Duration::FromNanoseconds(16'666'667));
         const auto capturedFrame = host->RunFrame();
         owners->onTransportFlush = {};
+        authority->afterResolve = {};
         REQUIRE(capturedFrame.HasValue());
         REQUIRE(fixedTick > spawnFrameTick);
         REQUIRE(committed.has_value());
@@ -236,6 +332,18 @@ namespace Horo::Network {
             UNSCOPED_INFO(committed->ErrorValue().message);
         REQUIRE(committed->HasValue());
         CHECK(currentAtFlush);
+        const auto manifest = outgoing();
+        if (replacePeerDuringGrant) {
+            CHECK(replacedActivePeer);
+            CHECK(manifest.message != wire.setup.policy.initialState->control.id);
+        } else {
+            REQUIRE(manifest.message == wire.setup.policy.initialState->control.id);
+            const auto stamp = ReadNetworkInitialStateStamp(manifest.payload).Value();
+            CHECK(stamp.session == spawned.Descriptor().session);
+            CHECK(stamp.authority == spawned.Descriptor().authority);
+            CHECK(stamp.tick == fixedTick);
+        }
+        CHECK(delegate->calls == 0);
 
         const auto committedTick = fixedTick;
         CHECK(awaitMappings(0).Mapping().Entries().empty());

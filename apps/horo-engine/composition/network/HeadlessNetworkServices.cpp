@@ -1,3 +1,4 @@
+#include "HeadlessInitialStateAuthority.h"
 #include "HeadlessNetworkWorldService.h"
 #include "HeadlessPerceptionPolicy.h"
 #include "Horo/Gameplay/GameplayVfxScene.h"
@@ -226,6 +227,12 @@ namespace Horo::Application::Internal {
         if (auto prepared = owners->PreparePhysicsRuntime(input.mode); prepared.HasError())
             return Result<NetworkProductComposition>::Failure(prepared.ErrorValue());
         owners->configured.emplace(std::move(input));
+        if (auto &configured = *owners->configured; configured.authorityInitialState) {
+            if (!configured.publicTransforms)
+                return Result<NetworkProductComposition>::Failure(MakeError(Network::NetworkErrors::AdmissionPolicyInvalid));
+            if (auto bound = configured.authorityInitialState->BindWorlds(owners); bound.HasError())
+                return Result<NetworkProductComposition>::Failure(std::move(bound).ErrorValue());
+        }
         NetworkProductComposition composition{InstallWorldFactories(owners, std::move(selectedFactories)),
                                               {},
                                               [owners](std::uint32_t maximumRecords) {

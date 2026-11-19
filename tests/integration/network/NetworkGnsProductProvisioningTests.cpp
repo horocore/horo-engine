@@ -1,4 +1,5 @@
 #include "GnsTransportFactory.h"
+#include "HeadlessInitialStateAuthority.h"
 #include "Horo/Network/NetworkAuthoredScenePage.h"
 #include "Horo/Network/NetworkInitialStateStream.h"
 #include "Horo/Network/NetworkPrefabLifecycle.h"
@@ -49,6 +50,18 @@ namespace Horo::Network::AdmissionTests {
                 ++calls;
                 return Result<T>::Failure(MakeError(NetworkErrors::NetworkLifecycleInvalid));
             }
+        };
+
+        /** @brief Startup never resolves a gameplay peer before native authentication. */
+        class UnusedInitialAuthority final : public Application::Internal::IHeadlessInitialStateAuthority {
+        public:
+            Result<Application::Internal::HeadlessInitialRecipient> Resolve(const AuthenticationResult &,
+                                                                            const ReplicationWorldReadLease &) const override {
+                ++calls;
+                return Result<Application::Internal::HeadlessInitialRecipient>::Failure(MakeError(NetworkErrors::AuthenticationRejected));
+            }
+
+            mutable unsigned calls{};
         };
 
         /** @brief Extends the same admitted protocol fixture with its real authored, prefab and initial routes. */
@@ -254,8 +267,10 @@ namespace Horo::Network::AdmissionTests {
         providers.privateKeys.reset();
         providers.channel.reset();
         const auto world = InitialWorldSetup(fixture);
-        auto owner = std::make_shared<InitialStateProbe>();
-        const std::weak_ptr<InitialStateProbe> lifetime = owner;
+        auto authority = std::make_shared<UnusedInitialAuthority>();
+        auto delegate = std::make_shared<InitialStateProbe>();
+        auto owner = std::make_shared<HeadlessInitialStateHost>(authority, delegate);
+        const std::weak_ptr<HeadlessInitialStateHost> lifetime = owner;
         auto admitted = NetworkProductAdmission::Capture(policy, std::move(providers), world.codecs, {}, world.policy, owner);
         REQUIRE(admitted.HasValue());
         auto admission = std::move(admitted).Value();
@@ -276,12 +291,14 @@ namespace Horo::Network::AdmissionTests {
         admission.reset();
         owner.reset();
         REQUIRE_FALSE(lifetime.expired());
-        CHECK(lifetime.lock()->calls == 0);
+        CHECK(delegate->calls == 0);
+        CHECK(authority->calls == 0);
         CHECK(issuer->calls == 0);
         const auto prepared = service.Value()->Prepare();
         REQUIRE(prepared.HasError());
         CHECK(prepared.ErrorValue().code.Value() == NetworkErrors::AuthenticationRejected.code.Value());
         CHECK(issuer->calls == 1);
+        CHECK(authority->calls == 0);
         service.Value()->Shutdown();
         CHECK(lifetime.expired());
     }

@@ -53,6 +53,10 @@ namespace {
     static_assert(!BypassesCaptureFactory<Horo::Network::ReplicationStateCapture>);
     static_assert(!BypassesStateCodecFactory<Horo::Network::ReplicationStateCodec>);
     static_assert(!BypassesSceneSourceFactory<Horo::Network::SceneReplicationCommitSource>);
+    static_assert(std::is_same_v<decltype(&Horo::Network::SceneReplicationCommitSource::AcquireCaptureReadAfterCommit),
+                                 Horo::Result<Horo::Network::ReplicationWorldCaptureRead> (Horo::Network::SceneReplicationCommitSource::*)(
+                                     const Horo::Network::ReplicationWorldLifecycle &, Horo::Runtime::RuntimePhase,
+                                     const Horo::CancellationToken &) const>);
     static_assert(std::is_same_v<Horo::Network::RpcScalar, std::variant<std::int64_t, std::uint64_t, double>>);
     static_assert(std::is_default_constructible_v<Horo::Network::RpcGameplayPolicy>);
     static_assert(!std::is_copy_constructible_v<Horo::Network::ReplicationStateCapture>);

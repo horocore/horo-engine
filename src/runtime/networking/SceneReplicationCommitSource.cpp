@@ -1,6 +1,7 @@
 #include "Horo/Network/SceneReplicationCommitSource.h"
 
 #include <algorithm>
+#include <bitset>
 #include <limits>
 #include <new>
 
@@ -25,6 +26,18 @@ namespace Horo::Network {
         bool IsCommittedAttempt(const Runtime::RuntimeDispatchFacts &facts) noexcept {
             return facts.committedTick == facts.fixedTick && facts.committedAttempt == facts.fixedAttempt &&
                    facts.committedFrame == facts.frame;
+        }
+
+        /** @brief The explicit observed Scene projection owns one field per supported transform axis. */
+        bool UniqueObservedAxes(std::span<const SceneReplicationFieldBinding> validated) {
+            std::bitset<static_cast<std::size_t>(SceneReplicationProperty::TranslationZ) + 1> used;
+            for (const auto &binding : validated) {
+                const auto axis = static_cast<std::size_t>(binding.property);
+                if (used.test(axis))
+                    return false;
+                used.set(axis);
+            }
+            return true;
         }
     }  // namespace
 
@@ -70,6 +83,8 @@ namespace Horo::Network {
             auto bindings = CaptureBindings(fields);
             if (bindings.HasError())
                 return Source::Failure(std::move(bindings).ErrorValue());
+            if (!UniqueObservedAxes(bindings.Value()))
+                return Source::Failure(MakeError(ReplicationCaptureErrors::Invalid));
             return Source::Success(std::make_shared<SceneReplicationCommitSource>(ConstructionKey{}, scene, std::move(dispatch), schema,
                                                                                   version, std::move(bindings).Value(),
                                                                                   std::move(sceneOwner)));
@@ -111,23 +126,30 @@ namespace Horo::Network {
         return committed;
     }
 
+    /** @copydoc SceneReplicationCommitSource::AcquireCaptureReadAfterCommit */
+    Result<ReplicationWorldCaptureRead> SceneReplicationCommitSource::AcquireCaptureReadAfterCommit(
+        const ReplicationWorldLifecycle &world, const Runtime::RuntimePhase phase, const CancellationToken &cancellation) const {
+        using Read = Result<ReplicationWorldCaptureRead>;
+        if (owner_ != std::this_thread::get_id() || tick_ == 0)
+            return Read::Failure(MakeError(ReplicationCaptureErrors::Uncommitted));
+        const auto owner = PinSceneOwner();
+        if (!owner || !committed_.IsCurrent())
+            return Read::Failure(MakeError(ReplicationCaptureErrors::Uncommitted));
+        const auto active = world.ActiveDescriptor();
+        if (active.HasError())
+            return Read::Failure(active.ErrorValue());
+        return world.AcquireCaptureRead({committed_.RuntimeId(), active.Value().session, phase, tick_, cancellation});
+    }
+
     /** @copydoc SceneReplicationCommitSource::CaptureAfterCommit */
     Result<ReplicationCaptureReport> SceneReplicationCommitSource::CaptureAfterCommit(const ReplicationWorldLifecycle &world,
                                                                                       ReplicationStateCapture &capture,
                                                                                       const Runtime::RuntimePhase phase,
                                                                                       const CancellationToken &cancellation) const {
-        if (owner_ != std::this_thread::get_id() || tick_ == 0)
-            return Result<ReplicationCaptureReport>::Failure(MakeError(ReplicationCaptureErrors::Uncommitted));
-        const auto owner = PinSceneOwner();
-        if (!owner || !committed_.IsCurrent())
-            return Result<ReplicationCaptureReport>::Failure(MakeError(ReplicationCaptureErrors::Uncommitted));
-        const auto active = world.ActiveDescriptor();
-        if (active.HasError())
-            return Result<ReplicationCaptureReport>::Failure(active.ErrorValue());
-        const auto read = world.AcquireCaptureRead({committed_.RuntimeId(), active.Value().session, phase, tick_, cancellation});
+        const auto read = AcquireCaptureReadAfterCommit(world, phase, cancellation);
         if (read.HasError())
             return Result<ReplicationCaptureReport>::Failure(read.ErrorValue());
-        return capture.CaptureAtCommit(read.Value(), tick_, cancellation);
+        return capture.CaptureAtCommit(read.Value(), read.Value().SimulationTick(), cancellation);
     }
 
     /** @copydoc SceneReplicationCommitSource::BeginRead */

@@ -67,6 +67,17 @@ namespace Horo::Application::Internal {
         std::vector<Network::SceneReplicationFieldBinding> fields;
     };
 
+    class IHeadlessInitialStateAuthority;
+    class HeadlessInitialStateHost;
+
+    /** @brief Existing host grant for one exact cooked Scene and selected public replication schema. */
+    struct HeadlessInitialStateSelection final {
+        Assets::AssetId scene;
+        HeadlessSceneTransformReplication transforms;
+        std::vector<Network::NetworkObjectProvenance> authoredObjects;
+        std::shared_ptr<const IHeadlessInitialStateAuthority> authority;
+    };
+
     // Installs the real gameplay-world participants shared by standalone and dedicated products.
     // Network and presentation factories remain explicit application decisions.
     [[nodiscard]] Network::NetworkModeFactories ComposeHeadlessNetworkServices(
@@ -115,6 +126,7 @@ namespace Horo::Application::Internal {
         std::vector<Network::NetworkObjectProvenance>
             replicatedSceneObjects; /**< Explicit stable object/schema bindings for this definition. */
         std::optional<HeadlessSceneTransformReplication> publicTransforms;
+        std::shared_ptr<HeadlessInitialStateHost> authorityInitialState;
     };
 
     /** @brief Composes actual project Scene services and their sole aggregate-owned Physics/Character pair.

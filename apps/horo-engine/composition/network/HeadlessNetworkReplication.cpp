@@ -1,3 +1,4 @@
+#include "HeadlessInitialStateAuthority.h"
 #include "HeadlessNetworkWorldService.h"
 #include "HeadlessPrefabIntent.h"
 #include "Horo/Network/NetworkErrors.h"
@@ -11,6 +12,99 @@ namespace Horo::Application::Internal {
     namespace {
         using HeadlessNetworkDetail::WorldRecord;
         using HeadlessNetworkDetail::WorldService;
+        namespace Net = Network;
+        using InitialCapture = Result<std::optional<Net::ReplicationInitialStateSnapshot>>;
+        constexpr auto FlushPhase = Runtime::RuntimePhase::NetworkFlush;
+
+        /** @brief Only the exact delayed Scene commitment is retryable during this stream. */
+        InitialCapture InitialCaptureFailure(const Error &error) {
+            const auto &pending = Net::ReplicationCaptureErrors::Uncommitted;
+            if (error.domain.Value() == pending.domain.Value() && error.code.Value() == pending.code.Value())
+                return InitialCapture::Success(std::nullopt);
+            return InitialCapture::Failure(error);
+        }
+
+        /** @brief Finds the exact already-published authority record without retaining retired worlds. */
+        std::shared_ptr<WorldRecord> FindInitialAuthority(const HeadlessNetworkDetail::WorldOwners &worlds, Runtime::SceneRuntimeId scene) {
+            if (worlds.owner != std::this_thread::get_id() || worlds.retirementStarted)
+                return {};
+            for (const auto &candidate : worlds.known) {
+                auto record = candidate.lock();
+                if (record && record->request.scene == scene && record->request.world == Net::NetworkModeWorldKind::AuthorityServer)
+                    return record->closeRequested ? nullptr : std::move(record);
+            }
+            return {};
+        }
+
+        /** @brief Initial state needs one full projection per current mapping row, all from the same grant. */
+        Result<std::vector<std::shared_ptr<Net::ReplicationStateCodec>>> ProjectInitialCodecs(
+            const Net::ReplicationWorldReadLease &world, const HeadlessInitialRecipient &grant,
+            const std::shared_ptr<const Net::ReplicationSerializerRegistry> &serializers) {
+            using Codecs = Result<std::vector<std::shared_ptr<Net::ReplicationStateCodec>>>;
+            const auto entries = world.Mapping().Entries();
+            std::vector<std::shared_ptr<Net::ReplicationStateCodec>> codecs;
+            codecs.reserve(entries.size());
+            for (std::size_t index{}; index < entries.size(); ++index) {
+                const auto role =
+                    Net::ProjectInitialReplicationRole(grant.ownership[index], entries[index], world.Descriptor().session, grant.peer);
+                if (role.HasError())
+                    return Codecs::Failure(role.ErrorValue());
+                auto codec = Net::ReplicationStateCodec::Create(serializers, role.Value(), Net::ReplicationRecordKind::Spawn,
+                                                                grant.descriptorGeneration);
+                if (codec.HasError())
+                    return Codecs::Failure(std::move(codec).ErrorValue());
+                codecs.emplace_back(std::move(codec).Value());
+            }
+            return Codecs::Success(std::move(codecs));
+        }
+
+        /** @brief Samples every exact eligible row of this newly requested initial inventory at one canonical commit. */
+        InitialCapture CaptureInitialTransforms(const WorldRecord &record, const Net::ReplicationWorldReadLease &world,
+                                                const Net::ReplicationWorldLifecycle &lifecycle, const HeadlessInitialRecipient &grant,
+                                                std::size_t maximumWireBytes) {
+            const auto cancellation = world.Cancellation();
+            const auto &source = record.publicTransforms;
+            const auto read = source->AcquireCaptureReadAfterCommit(lifecycle, FlushPhase, cancellation);
+            if (read.HasError())
+                return InitialCaptureFailure(read.ErrorValue());
+            if (read.Value().Descriptor() != world.Descriptor() || read.Value().MappingRevision() != world.MappingRevision())
+                return InitialCapture::Failure(MakeError(Net::NetworkErrors::ReplicationWorldStale));
+            const auto entries = world.Mapping().Entries();
+            const auto tick = read.Value().SimulationTick();
+            if (entries.empty())
+                return InitialCapture::Success(
+                    Net::ReplicationInitialStateSnapshot{world.Descriptor().session, world.Descriptor().authority, tick});
+            Net::ReplicationCaptureLimits limits;
+            if (entries.size() > limits.maximumTargets)
+                return InitialCapture::Failure(MakeError(Net::ReplicationCaptureErrors::Capacity));
+            limits.maximumTargetsPerTick = entries.size();
+            const auto *installed = record.activeGameplay->Replication();
+            if (!installed)
+                return InitialCapture::Failure(MakeError(Net::NetworkErrors::ReplicationDescriptorIncompatible));
+            const auto lease = std::make_shared<const Gameplay::GameplayReplicationLease>(*installed);
+            const auto serializers = std::shared_ptr<const Net::ReplicationSerializerRegistry>{lease, &lease->Serializers()};
+            auto codecs = ProjectInitialCodecs(world, grant, serializers);
+            if (codecs.HasError())
+                return InitialCapture::Failure(std::move(codecs).ErrorValue());
+            std::vector<Net::ReplicationCaptureTarget> targets;
+            targets.reserve(entries.size());
+            for (const auto &entry : entries)
+                targets.push_back({entry, source});
+            auto capture = Net::ReplicationStateCapture::Prepare(read.Value(), serializers, targets, limits);
+            if (capture.HasError())
+                return InitialCapture::Failure(std::move(capture).ErrorValue());
+            const auto report = capture.Value()->CaptureAtCommit(read.Value(), tick, cancellation);
+            if (report.HasError())
+                return InitialCapture::Failure(report.ErrorValue());
+            if (const auto &error = report.Value().firstError; error)
+                return InitialCaptureFailure(*error);
+            if (report.Value().published != entries.size())
+                return InitialCapture::Failure(MakeError(Net::ReplicationCaptureErrors::Capacity));
+            auto encoded =
+                Net::EncodeReplicationInitialState(world, *capture.Value(), tick, codecs.Value(), maximumWireBytes, cancellation);
+            return encoded.HasError() ? InitialCapture::Failure(std::move(encoded).ErrorValue())
+                                      : InitialCapture::Success(std::move(encoded).Value());
+        }
 
         /** @brief Validates the complete transform field set and its actual installed scalar serializers. */
         bool MatchesPublicTransformFields(const HeadlessSceneTransformReplication &selection,
@@ -20,18 +114,10 @@ namespace Horo::Application::Internal {
                 schema.Value()->fields.size() != selection.fields.size())
                 return false;
 
-            std::array<bool, 3> used{};
-            if (selection.fields.empty() || selection.fields.size() > used.size())
-                return false;
-            for (const auto &field : selection.fields) {
-                const auto axis = static_cast<std::size_t>(field.property);
-                if (axis >= used.size() || std::exchange(used[axis], true))
-                    return false;
+            return std::ranges::all_of(selection.fields, [&](const auto &field) {
                 const auto descriptor = installed.Serializers().DescriptorFor(selection.schema, field.field);
-                if (descriptor.HasError() || descriptor.Value()->valueKind != Network::ReplicationValueKind::FloatingPoint)
-                    return false;
-            }
-            return true;
+                return descriptor.HasValue() && descriptor.Value()->valueKind == Network::ReplicationValueKind::FloatingPoint;
+            });
         }
 
         /** @brief Resolves one object against the committed Scene and the admitted live schema registry. */
@@ -294,6 +380,65 @@ namespace Horo::Application::Internal {
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(MakeError(Network::NetworkErrors::ReplicationWorldCapacityExceeded));
         }
+    }
+
+    HeadlessInitialStateHost::HeadlessInitialStateHost(std::shared_ptr<const IHeadlessInitialStateAuthority> authority,
+                                                       std::shared_ptr<Network::INetworkInitialStateHost> client) noexcept
+        : authority_(std::move(authority)), client_(std::move(client)) {}
+
+    /** @copydoc HeadlessInitialStateHost::BindWorlds */
+    Result<void> HeadlessInitialStateHost::BindWorlds(const std::shared_ptr<HeadlessNetworkDetail::WorldOwners> &worlds) {
+        if (!worlds || !authority_ || !client_ || bound_)
+            return Result<void>::Failure(MakeError(Network::NetworkErrors::AdmissionPolicyInvalid));
+        worlds_ = worlds;
+        bound_ = true;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc HeadlessInitialStateHost::ClientRecipient */
+    Result<Network::NetworkPeerId> HeadlessInitialStateHost::ClientRecipient(const Network::PeerSessionLifecycle &peer) {
+        return client_->ClientRecipient(peer);
+    }
+
+    /** @copydoc HeadlessInitialStateHost::Capture */
+    InitialCapture HeadlessInitialStateHost::Capture(const Net::ReplicationWorldReadLease &world,
+                                                     const Net::ReplicationWorldLifecycle &lifecycle, const Net::PeerSessionLifecycle &peer,
+                                                     std::size_t maximumWireBytes) {
+        const auto owners = worlds_.lock();
+        if (!owners || !world.HasCurrentMapping() || !world.Capabilities().publishAuthority)
+            return InitialCapture::Failure(MakeError(Net::NetworkErrors::ReplicationWorldStale));
+        const auto record = FindInitialAuthority(*owners, world.Descriptor().scene);
+        if (!record || !record->publicTransforms || !record->activeGameplay)
+            return InitialCapture::Failure(MakeError(Net::NetworkErrors::ReplicationDescriptorIncompatible));
+        const auto *authenticated = peer.Authentication();
+        if (peer.State() != Net::PeerSessionState::Active || !authenticated)
+            return InitialCapture::Failure(MakeError(Net::NetworkErrors::AuthenticationRejected));
+        const auto evidence = *authenticated;
+        try {
+            const auto grant = authority_->Resolve(evidence, world);
+            if (grant.HasError())
+                return InitialCapture::Failure(grant.ErrorValue());
+            if (!world.HasCurrentMapping() || record->closeRequested)
+                return InitialCapture::Failure(MakeError(Net::NetworkErrors::ReplicationWorldStale));
+            const auto *current = peer.Authentication();
+            if (peer.State() != Net::PeerSessionState::Active || !current || *current != evidence ||
+                peer.Connection() != evidence.connection)
+                return InitialCapture::Failure(MakeError(Net::NetworkErrors::AuthenticationRejected));
+            const auto &recipient = grant.Value();
+            if (!recipient.peer.IsValid() || recipient.descriptorGeneration == 0 ||
+                recipient.ownership.size() != world.Mapping().Entries().size())
+                return InitialCapture::Failure(MakeError(Net::NetworkErrors::ReplicationDescriptorIncompatible));
+            return CaptureInitialTransforms(*record, world, lifecycle, recipient, maximumWireBytes);
+        } catch (const std::bad_alloc &) {
+            return InitialCapture::Failure(MakeError(Net::ReplicationCaptureErrors::Capacity));
+        }
+    }
+
+    /** @copydoc HeadlessInitialStateHost::PrepareReceiver */
+    Result<Network::NetworkInitialStateTarget> HeadlessInitialStateHost::PrepareReceiver(
+        const Network::ReplicationInboundAuthority &authority, Network::ReplicationWorldLifecycle &world,
+        const std::span<const Network::ReplicationInitialOwnership> ownership, const std::uint64_t now) {
+        return client_->PrepareReceiver(authority, world, ownership, now);
     }
 
     /** @copydoc HeadlessNetworkDetail::WorldService::BindAuthoritySceneTransforms */

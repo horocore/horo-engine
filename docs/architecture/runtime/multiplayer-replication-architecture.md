@@ -112,6 +112,15 @@ is admitted after the matching receipt. A valid early packet consumes its
 lane sequence without invoking gameplay or extending the peer lifetime.
 Build native consumers again for the extended policy and phase interfaces.
 
+For a configured headless authority with a secured transport, the host may
+select public Scene transforms for an exact committed Scene asset. Its
+explicit role authority resolves the accepted connection and principal to
+one gameplay peer, negotiated descriptor generation, and the complete
+object ownership inventory. The same initial-state adapter is retained by
+world binding and the secure transport. A new structural revision stays
+pending until the next committed fixed observation. Existing client
+recipient and apply grants continue through the configured client owner.
+
 `CaptureReplicationAuthoredScene` extracts an ordered inventory of exact
 authority identities and stable Scene provenance. It omits process-local
 entity handles and dynamic Prefab occurrences. Once a caller has admitted the

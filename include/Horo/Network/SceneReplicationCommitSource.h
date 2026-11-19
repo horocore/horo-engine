@@ -80,6 +80,16 @@ namespace Horo::Network {
          */
         [[nodiscard]] Result<Runtime::StructuralCommitResult> CommitSimulationTick(const Runtime::SceneCommandBuffer &commands,
                                                                                    std::uint64_t simulationTick);
+        /** @brief Acquires read-only capture evidence for the actual committed Scene and current world mapping.
+         * @param world Matching active replication lifecycle.
+         * @param phase Actual host phase; only NetworkFlush is accepted.
+         * @param cancellation Caller cancellation.
+         * @return Exact world read and committed tick or a typed phase, commitment, or lifecycle error.
+         * @details Intended for preparing a bounded capture or admitting an explicitly empty initial inventory.
+         * Callers still need to read each nonempty target through this source. */
+        [[nodiscard]] Result<ReplicationWorldCaptureRead> AcquireCaptureReadAfterCommit(const ReplicationWorldLifecycle &world,
+                                                                                        Runtime::RuntimePhase phase,
+                                                                                        const CancellationToken &cancellation = {}) const;
         /** @brief Captures declared source targets at the actual completed Scene tick in NetworkFlush.
          * @param world Matching active replication lifecycle.
          * @param capture Prepared coordinator bound to this source generation.

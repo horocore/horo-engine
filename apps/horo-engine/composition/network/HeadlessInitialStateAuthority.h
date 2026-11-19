@@ -1,0 +1,59 @@
+#pragma once
+
+/** @file HeadlessInitialStateAuthority.h @brief Private configured authority capture for secure network launch. */
+
+#include "Horo/Network/NetworkInitialStateStream.h"
+
+#include <memory>
+#include <vector>
+
+namespace Horo::Application::Internal {
+    namespace HeadlessNetworkDetail {
+        struct WorldOwners;
+    }
+
+    /** @brief Host-authorized initial recipient and ownership for one exact admitted mapping. */
+    struct HeadlessInitialRecipient final {
+        Network::NetworkPeerId peer;
+        std::uint64_t descriptorGeneration{};
+        std::vector<Network::ReplicationInitialOwnership> ownership; /**< Complete canonical object order. */
+    };
+
+    /** @brief Explicit project host authority for the gameplay identity behind an authenticated channel. */
+    class IHeadlessInitialStateAuthority {
+    public:
+        virtual ~IHeadlessInitialStateAuthority() = default;
+        /** @brief Resolve the exact active authenticated identity and generation; no inference from connection numbers.
+         * @param authenticated Current accepted connection, trust and principal evidence.
+         * @param world Current exact authority mapping, borrowed only during this invocation.
+         * @return Complete peer, negotiated descriptor generation and ordered ownership, or typed denial. */
+        [[nodiscard]] virtual Result<HeadlessInitialRecipient> Resolve(const Network::AuthenticationResult &authenticated,
+                                                                       const Network::ReplicationWorldReadLease &world) const = 0;
+    };
+
+    /** @brief Adds canonical authority capture while retaining the configured client owner's existing behavior. */
+    class HeadlessInitialStateHost final : public Network::INetworkInitialStateHost {
+    public:
+        /** @brief Retains exact admitted server role policy and existing client owner without invoking them. */
+        HeadlessInitialStateHost(std::shared_ptr<const IHeadlessInitialStateAuthority> authority,
+                                 std::shared_ptr<Network::INetworkInitialStateHost> client) noexcept;
+        /** @brief Bind to one configured application composition before any transport can open its listener. */
+        [[nodiscard]] Result<void> BindWorlds(const std::shared_ptr<HeadlessNetworkDetail::WorldOwners> &worlds);
+        /** @copydoc Network::INetworkInitialStateHost::ClientRecipient */
+        [[nodiscard]] Result<Network::NetworkPeerId> ClientRecipient(const Network::PeerSessionLifecycle &peer) override;
+        /** @copydoc Network::INetworkInitialStateHost::Capture */
+        [[nodiscard]] Result<std::optional<Network::ReplicationInitialStateSnapshot>> Capture(
+            const Network::ReplicationWorldReadLease &world, const Network::ReplicationWorldLifecycle &lifecycle,
+            const Network::PeerSessionLifecycle &peer, std::size_t maximumWireBytes) override;
+        /** @copydoc Network::INetworkInitialStateHost::PrepareReceiver */
+        [[nodiscard]] Result<Network::NetworkInitialStateTarget> PrepareReceiver(
+            const Network::ReplicationInboundAuthority &authority, Network::ReplicationWorldLifecycle &world,
+            std::span<const Network::ReplicationInitialOwnership> ownership, std::uint64_t now) override;
+
+    private:
+        std::weak_ptr<HeadlessNetworkDetail::WorldOwners> worlds_;
+        std::shared_ptr<const IHeadlessInitialStateAuthority> authority_;
+        std::shared_ptr<Network::INetworkInitialStateHost> client_;
+        bool bound_{};
+    };
+}  // namespace Horo::Application::Internal
