@@ -4,7 +4,9 @@
 #endif
 #if defined(HORO_ANDROID_QUALIFICATION_VULKAN)
 #include "QualificationHost.h"
+#endif
 
+#if defined(HORO_ANDROID_QUALIFICATION_VULKAN) || defined(HORO_ANDROID_QUALIFICATION_OPENXR_DISCOVERY)
 #include <chrono>
 #include <thread>
 #endif
@@ -67,6 +69,20 @@ namespace {
             std::this_thread::sleep_for(std::chrono::milliseconds{1});
         }
         __android_log_write(ANDROID_LOG_ERROR, "HoroPackageQualification", "Native shutdown deadline expired; ownership remains pending");
+        std::terminate();
+    }
+#endif
+
+#if defined(HORO_ANDROID_QUALIFICATION_OPENXR_DISCOVERY)
+    /** @brief Drains a retained instance while the exact game Activity, Context and loader remain alive. */
+    void Shutdown(Horo::AndroidQualification::OpenXRDiagnosticHost &host) noexcept {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{30};
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (host.PollRetirement())
+                return;
+            std::this_thread::sleep_for(std::chrono::milliseconds{100});
+        }
+        __android_log_write(ANDROID_LOG_ERROR, "HoroPackageQualification", "OpenXR instance retirement deadline expired");
         std::terminate();
     }
 #endif
@@ -155,5 +171,8 @@ extern "C" void android_main(android_app *app) {
 #else
     CallbackOwner owner{input};
     Run(*app, collector, owner);
+#endif
+#if defined(HORO_ANDROID_QUALIFICATION_OPENXR_DISCOVERY)
+    Shutdown(owner.discovery);
 #endif
 }

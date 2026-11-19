@@ -321,6 +321,12 @@ query and runtime version only after successful instance retirement. Native
 session and graphics activation require separate product composition and device
 qualification.
 
+If native instance destruction fails, the Activity keeps the exact instance,
+JNI references and loader for retry on its control lane. The recorded
+diagnostic stays failed even if a later retry succeeds. Host exit polls the
+retained owner within a 30-second retry window. If retirement remains uncertain,
+the process terminates with the failed ownership still retained.
+
 Developer deployment selects a device explicitly. Install, launch, log capture,
 termination, timeout, and disconnect use argv-based process APIs and bounded
 output. Multiple connected devices never cause implicit target selection.

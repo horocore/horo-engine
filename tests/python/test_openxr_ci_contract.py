@@ -160,6 +160,14 @@ class OpenXRCIContractTests(unittest.TestCase):
         self.assertIn("APP_CMD_PAUSE", command)
         self.assertNotIn("Probe(app)", command)
         self.assertLess(pump.index("State::Attempted"), pump.index("Probe(app)"))
+        probe = host.split("OpenXRDiagnosticHost::Probe(", 1)[1].split("OpenXRDiagnosticHost::Command(", 1)[0]
+        retirement = host.split("OpenXRDiagnosticHost::PollRetirement(", 1)[1]
+        self.assertIn("discovery_ = std::make_unique<AndroidOpenXRColdDiscovery>", probe)
+        self.assertIn("if (result.stage != AndroidOpenXRProbeStage::InstanceRetirement)", probe)
+        self.assertLess(pump.index("PollRetirement()"), pump.index("State::Queued"))
+        self.assertLess(retirement.index("discovery_->Retire()"), retirement.index("discovery_.reset()"))
+        self.assertNotIn("Report(", retirement)
+        self.assertLess(entry.rindex("Run(*app, collector, owner)"), entry.index("Shutdown(owner.discovery)"))
 
     def test_off_composition_stays_off_and_checks_real_target_population(self):
         values = self.variables("ci-xr-disabled")

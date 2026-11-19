@@ -305,6 +305,16 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual(report["observed"]["openxr"], {"abi": "arm64-v8a", "stage": "extension-admission", "result": -51})
         self.assertEqual(report["cleanup"], {"status": "stopped"})
 
+    def test_openxr_retirement_failure_remains_a_failed_deployment(self):
+        first = ("host-openxr abi=arm64-v8a stage=instance-retirement result=-2 "
+                 "runtimeMajor=0 runtimeMinor=0 runtimePatch=0")
+        raw = log_line(first) + log_line("OpenXR instance retirement deadline expired")
+        status, report, _ = self.execute({LOGCAT: raw}, OPENXR_OPTIONS, project.OPENXR_DEVELOPMENT_PROFILE)
+        self.assertEqual((status, report["error"]), (1, "openxr_cold_discovery_failed"))
+        self.assertEqual(report["observed"]["openxr"], {"abi": "arm64-v8a", "stage": "instance-retirement", "result": -2})
+        self.assertEqual(report["cleanup"], {"status": "stopped"})
+        self.assertEqual(report["qualification"]["physicalXrQualification"], "not_run")
+
     def test_explicit_connection_fails_closed_for_contradictory_inventory(self):
         inventory = f"List of devices attached\n{SERIAL} device usb:1-2 transport_id:{TRANSPORT}"
         status, report, commands = self.execute({("devices", "-l"): inventory}, options=("--connection", "emulator"))

@@ -44,34 +44,43 @@ namespace Horo::AndroidQualification {
                                 stage, static_cast<int>(result), static_cast<unsigned>(XR_VERSION_MAJOR(version)),
                                 static_cast<unsigned>(XR_VERSION_MINOR(version)), static_cast<unsigned>(XR_VERSION_PATCH(version)));
         }
-
-        /** @brief Acquires the exact app/loader pair and records a completed one-shot cold diagnostic. */
-        void Probe(android_app &app) {
-            using namespace Platform::Android;
-            using namespace XR::OpenXRInternal;
-            auto observed = AcquireGameActivityJniApplication(app);
-            const auto *references = std::get_if<GameActivityJniApplication>(&observed);
-            if (!references) {
-                Report("host-application", XR_ERROR_INITIALIZATION_FAILED);
-                return;
-            }
-            const auto application = std::make_shared<GameActivityJniApplication>(*references);
-            const auto digest = ParseSha256(OpenXRLoaderPin);
-            if (digest.HasError()) {
-                Report("bundled-loader", XR_ERROR_FILE_CONTENTS_INVALID);
-                return;
-            }
-            auto loader = LoadBundledOpenXRLoader(*application, digest.Value());
-            if (loader.HasError()) {
-                Report("bundled-loader", XR_ERROR_FILE_ACCESS_ERROR);
-                return;
-            }
-            AndroidOpenXRColdDiscovery discovery(std::move(loader).Value(), {application->vm, application->applicationContext.get(),
-                                                                             application->activity.get(), application});
-            const AndroidOpenXRProbeResult result = discovery.Probe(XR_MAKE_VERSION(1, 0, 0));
-            Report(StageName(result.stage), result.result, result.runtimeVersion);
-        }
     }  // namespace
+
+    /** @copydoc OpenXRDiagnosticHost::OpenXRDiagnosticHost */
+    OpenXRDiagnosticHost::OpenXRDiagnosticHost() noexcept = default;
+
+    /** @copydoc OpenXRDiagnosticHost::~OpenXRDiagnosticHost */
+    OpenXRDiagnosticHost::~OpenXRDiagnosticHost() = default;
+
+    /** @copydoc OpenXRDiagnosticHost::Probe */
+    void OpenXRDiagnosticHost::Probe(android_app &app) {
+        using namespace Platform::Android;
+        using namespace XR::OpenXRInternal;
+        auto observed = AcquireGameActivityJniApplication(app);
+        const auto *references = std::get_if<GameActivityJniApplication>(&observed);
+        if (!references) {
+            Report("host-application", XR_ERROR_INITIALIZATION_FAILED);
+            return;
+        }
+        const auto application = std::make_shared<GameActivityJniApplication>(*references);
+        const auto digest = ParseSha256(OpenXRLoaderPin);
+        if (digest.HasError()) {
+            Report("bundled-loader", XR_ERROR_FILE_CONTENTS_INVALID);
+            return;
+        }
+        auto loader = LoadBundledOpenXRLoader(*application, digest.Value());
+        if (loader.HasError()) {
+            Report("bundled-loader", XR_ERROR_FILE_ACCESS_ERROR);
+            return;
+        }
+        const NativeOpenXRAndroidApplication native{application->vm, application->applicationContext.get(), application->activity.get(),
+                                                    application};
+        discovery_ = std::make_unique<AndroidOpenXRColdDiscovery>(std::move(loader).Value(), native);
+        const auto result = discovery_->Probe(XR_MAKE_VERSION(1, 0, 0));
+        if (result.stage != AndroidOpenXRProbeStage::InstanceRetirement)
+            discovery_.reset();
+        Report(StageName(result.stage), result.result, result.runtimeVersion);
+    }
 
     /** @copydoc OpenXRDiagnosticHost::Command */
     void OpenXRDiagnosticHost::Command(std::int32_t command) noexcept {
@@ -85,6 +94,8 @@ namespace Horo::AndroidQualification {
 
     /** @copydoc OpenXRDiagnosticHost::Pump */
     void OpenXRDiagnosticHost::Pump(android_app &app) noexcept {
+        if (!PollRetirement())
+            return;
         if (state_ != State::Queued || app.destroyRequested)
             return;
         state_ = State::Attempted;
@@ -93,5 +104,15 @@ namespace Horo::AndroidQualification {
         } catch (...) {  // Native entry must not unwind into GameActivity.
             Report("host-application", XR_ERROR_INITIALIZATION_FAILED);
         }
+    }
+
+    /** @copydoc OpenXRDiagnosticHost::PollRetirement */
+    bool OpenXRDiagnosticHost::PollRetirement() noexcept {
+        if (!discovery_)
+            return true;
+        if (discovery_->Retire() != XR_SUCCESS)
+            return false;
+        discovery_.reset();
+        return true;
     }
 }  // namespace Horo::AndroidQualification
