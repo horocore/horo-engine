@@ -135,6 +135,23 @@ namespace Horo::AI {
                 value.controller->blackboard = ReadBlackboard(reader);
             return value;
         }
+
+        /** @brief Materializes a complete, strictly ordered population from the admitted record. */
+        Decoded ReadPopulation(DecisionReader &reader, std::size_t count) {
+            AiCanonicalState state;
+            state.agents.reserve(count);
+            AgentId previous;
+            for (std::size_t index = 0; index < count && reader.Valid(); ++index) {
+                auto agent = ReadAgent(reader);
+                if (!reader.Valid() || agent.authored.agent <= previous || !IsValid(agent))
+                    return Decoded::Failure(MakeError(AIErrors::CanonicalStateInvalid));
+                previous = agent.authored.agent;
+                state.agents.push_back(std::move(agent));
+            }
+            if (!reader.Complete())
+                return Decoded::Failure(MakeError(AIErrors::CanonicalStateInvalid));
+            return Decoded::Success(std::move(state));
+        }
     }  // namespace
 
     /** @copydoc EncodeAiCanonicalStateRecord */
@@ -171,19 +188,7 @@ namespace Horo::AI {
             return Decoded::Failure(MakeError(AIErrors::CanonicalSchemaUnsupported));
         const auto count = reader.Count(std::min(MaximumAiSceneAgents, (bytes.size() - RecordHeaderBytes) / MinimumAgentBytes));
         try {
-            AiCanonicalState state;
-            state.agents.reserve(count);
-            AgentId previous;
-            for (std::size_t index = 0; index < count && reader.Valid(); ++index) {
-                auto agent = ReadAgent(reader);
-                if (!reader.Valid() || agent.authored.agent <= previous || !IsValid(agent))
-                    return Decoded::Failure(MakeError(AIErrors::CanonicalStateInvalid));
-                previous = agent.authored.agent;
-                state.agents.push_back(std::move(agent));
-            }
-            if (!reader.Complete())
-                return Decoded::Failure(MakeError(AIErrors::CanonicalStateInvalid));
-            return Decoded::Success(std::move(state));
+            return ReadPopulation(reader, count);
         } catch (const std::bad_alloc &) {
             return Decoded::Failure(MakeError(AIErrors::BlackboardStorageUnavailable));
         }

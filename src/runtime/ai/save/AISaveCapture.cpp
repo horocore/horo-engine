@@ -11,6 +11,7 @@ namespace Horo::AI {
     namespace {
         using namespace Runtime;
         using CaptureResult = Result<CanonicalCaptureDisposition>;
+        using RecordBytes = Result<std::vector<std::uint8_t>>;
         constexpr std::uint32_t SaveSchemaVersion = 1;
 
         /** @brief Copies the base-agent record into the current aggregate capture. */
@@ -22,26 +23,10 @@ namespace Horo::AI {
                   runtime_(std::move(runtime)), scene_(std::move(scene)), owner_(std::this_thread::get_id()) {}
 
             CaptureResult Capture(const CanonicalCaptureContext &context, ICanonicalCaptureSink &sink) const override {
-                if (owner_ != std::this_thread::get_id() || context.participant != participant_ ||
-                    context.schemaVersion.Value() != SaveSchemaVersion || context.scope != SaveParticipantScope::RuntimeScene)
-                    return CaptureResult::Failure(MakeError(SaveErrors::CaptureRegistryStale));
-                const auto &remaining = context.admission;
-                const auto budget = std::min({maximumBytes_, remaining.operationPayloadBytes, remaining.participantPayloadBytes,
-                                              remaining.maximumCopiedRecordBytes});
-                if (budget == 0 || !remaining.operationRecords || !remaining.participantRecords || !remaining.operationSegments)
-                    return CaptureResult::Failure(MakeError(SaveErrors::CaptureBudgetExceeded));
-                const auto owner = runtime_.lock();
-                if (!owner)
-                    return CaptureResult::Failure(MakeError(AIErrors::RuntimeUnavailable));
-                const auto scene = scene_();
-                if (!scene || !scene->IsCurrent() || scene->RuntimeId().value != context.provenance.sceneIncarnation ||
-                    scene->StructuralRevision() != context.provenance.sceneRevision)
-                    return CaptureResult::Failure(
-                        MakeError(SaveErrors::CaptureContextInvalid, "AI capture requires the exact current Scene."));
-                const auto state = owner->CaptureCanonicalState(*scene, static_cast<std::size_t>(budget));
-                if (state.HasError())
-                    return CaptureResult::Failure(state.ErrorValue());
-                const auto encoded = EncodeAiCanonicalStateRecord(state.Value(), static_cast<std::size_t>(budget));
+                const auto allowance = Admit(context);
+                if (allowance.HasError())
+                    return CaptureResult::Failure(allowance.ErrorValue());
+                const auto encoded = CaptureRecord(context.provenance, allowance.Value());
                 if (encoded.HasError())
                     return CaptureResult::Failure(encoded.ErrorValue());
                 if (const auto written = sink.WriteCopied(record_, std::as_bytes(std::span{encoded.Value()})); written.HasError())
@@ -50,6 +35,36 @@ namespace Horo::AI {
             }
 
         private:
+            /** @brief Checks the exact owner lane and the operation's remaining record allowance. */
+            [[nodiscard]] Result<std::size_t> Admit(const CanonicalCaptureContext &context) const {
+                using Allowance = Result<std::size_t>;
+                if (owner_ != std::this_thread::get_id() || context.participant != participant_ ||
+                    context.schemaVersion.Value() != SaveSchemaVersion || context.scope != SaveParticipantScope::RuntimeScene)
+                    return Allowance::Failure(MakeError(SaveErrors::CaptureRegistryStale));
+                const auto &remaining = context.admission;
+                const auto budget = std::min({maximumBytes_, remaining.operationPayloadBytes, remaining.participantPayloadBytes,
+                                              remaining.maximumCopiedRecordBytes});
+                if (budget == 0 || !remaining.operationRecords || !remaining.participantRecords || !remaining.operationSegments)
+                    return Allowance::Failure(MakeError(SaveErrors::CaptureBudgetExceeded));
+                return Allowance::Success(static_cast<std::size_t>(budget));
+            }
+
+            /** @brief Captures and encodes only the AI population for the current Scene revision. */
+            [[nodiscard]] RecordBytes CaptureRecord(const RuntimeSaveCaptureProvenance &provenance, std::size_t budget) const {
+                const auto owner = runtime_.lock();
+                if (!owner)
+                    return RecordBytes::Failure(MakeError(AIErrors::RuntimeUnavailable));
+                const auto scene = scene_();
+                if (!scene || !scene->IsCurrent() || scene->RuntimeId().value != provenance.sceneIncarnation ||
+                    scene->StructuralRevision() != provenance.sceneRevision)
+                    return RecordBytes::Failure(
+                        MakeError(SaveErrors::CaptureContextInvalid, "AI capture requires the exact current Scene."));
+                const auto state = owner->CaptureCanonicalState(*scene, budget);
+                if (state.HasError())
+                    return RecordBytes::Failure(state.ErrorValue());
+                return EncodeAiCanonicalStateRecord(state.Value(), budget);
+            }
+
             SaveParticipantId participant_;
             SaveRecordId record_;
             std::uint64_t maximumBytes_;
