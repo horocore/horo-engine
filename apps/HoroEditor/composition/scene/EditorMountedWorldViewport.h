@@ -21,6 +21,12 @@ namespace Horo::Application::Internal {
     public:
         /** @brief Publishes a complete packet for one new Play world. @return Typed rejection if occupied or invalid. */
         [[nodiscard]] Result<void> Publish(EditorMountedWorldViewportView value);
+        /** @brief Replaces the exact current packet with a fresh capture from the same Scene incarnation and renderer view.
+         * @param expected Packet currently owned by the viewport publication.
+         * @param candidate Complete successor capture, still valid for new submissions.
+         * @return Success or typed rejection that leaves the current publication intact. */
+        [[nodiscard]] Result<void> Replace(const std::shared_ptr<const MountedWorldRenderPacket> &expected,
+                                           std::shared_ptr<const MountedWorldRenderPacket> candidate);
         /** @brief Withdraws only the issuing Play world's packet. */
         void Withdraw(Runtime::SceneRuntimeId owner) noexcept;
 

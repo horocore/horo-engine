@@ -207,6 +207,17 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         /** @brief Activates selected World geometry before ordinary Play becomes externally visible. */
         [[nodiscard]] Result<void> CompleteWorldStartup(const Runtime::FrameContext &frame);
 
+        /** @brief Re-publishes a stale desktop World packet after its owning Scene commit.
+         * @param frame Current commit safe point and cancellation scope.
+         * @return Success or a typed capture/ownership refusal; the old packet remains retained. */
+        [[nodiscard]] Result<void> RefreshDesktopWorldViewport(const Runtime::FrameContext &frame);
+
+        /** @brief Captures the selected canonical geometry from the current committed desktop World.
+         * @param parent Active Scene of this mount. @param renderer Its existing frontend view owner.
+         * @return Retained packet or typed canonical ownership/geometry refusal. */
+        [[nodiscard]] Result<std::shared_ptr<const MountedWorldRenderPacket>> CaptureDesktopWorldViewport(
+            const Runtime::RuntimeSceneView &parent, Render::RenderOriginSceneAdapter &renderer);
+
         /** @brief Creates the renderer participant bound to this exact World and frontend view. */
         [[nodiscard]] Result<std::unique_ptr<Render::RenderOriginSceneAdapter>> PrepareWorldRenderer(Render::RenderViewId view) const;
 
@@ -485,6 +496,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 Shutdown();
                 return mounted;
             }
+            if (auto refreshed = RefreshDesktopWorldViewport(frame); refreshed.HasError())
+                return refreshed;
             if (prefab_.services)
                 if (const auto advanced = prefab_.services->Advance(tick_); advanced.HasError())
                     return advanced;

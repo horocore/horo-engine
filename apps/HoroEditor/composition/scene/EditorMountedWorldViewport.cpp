@@ -20,6 +20,21 @@ namespace Horo::Application::Internal {
         return Result<void>::Success();
     }
 
+    /** @copydoc EditorMountedWorldViewport::Replace */
+    Result<void> EditorMountedWorldViewport::Replace(const std::shared_ptr<const MountedWorldRenderPacket> &expected,
+                                                     std::shared_ptr<const MountedWorldRenderPacket> candidate) {
+        using WorldStreaming::WorldArtifactErrors::Stale;
+        if (!expected || current_.packet != expected || !candidate || !candidate->IsSuccessorOf(*expected))
+            return Result<void>::Failure(MakeError(Stale));
+        const auto scene = candidate->Scene();
+        if (scene.HasError())
+            return Result<void>::Failure(scene.ErrorValue());
+        if (scene.Value().lightSceneDomain != current_.owner.value)
+            return Result<void>::Failure(MakeError(Stale));
+        current_.packet = std::move(candidate);
+        return Result<void>::Success();
+    }
+
     /** @copydoc EditorMountedWorldViewport::Withdraw */
     void EditorMountedWorldViewport::Withdraw(const Runtime::SceneRuntimeId owner) noexcept {
         if (current_.owner == owner)
@@ -35,9 +50,11 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         const auto participant = OriginRebaseParticipantId::Create(identity_.value);
         if (participant.HasError())
             return Result<std::unique_ptr<Render::RenderOriginSceneAdapter>>::Failure(participant.ErrorValue());
+        // Desktop may retain the last prepared frame beside the current publication while capturing its successor.
+        const std::size_t slots = selectedXrHost_ ? 1 : 3;
         return Render::RenderOriginSceneAdapter::Create(mountedWorld_->Origin(), view,
                                                         {participant.Value(), OriginRebaseParticipantRevision::Create(1).Value()},
-                                                        {1, std::max<std::size_t>(1, worldViewport_->meshes.size()), 1});
+                                                        {slots, std::max<std::size_t>(1, worldViewport_->meshes.size()), 1});
     }
 
     /** @copydoc ProjectPlaySceneHost::QueueMountedXrScene */
@@ -108,14 +125,46 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         const auto parent = scenes_->ActiveScene();
         if (!parent)
             return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
-        auto packet = mountedWorld_->CaptureGeometry(*parent, viewport.camera, viewport.meshes, *viewportPrimitives_, *renderer.Value());
+        auto packet = CaptureDesktopWorldViewport(*parent, *renderer.Value());
         if (packet.HasError())
             return Result<void>::Failure(packet.ErrorValue());
-        auto owned = std::make_shared<const MountedWorldRenderPacket>(std::move(packet).Value());
-        if (auto published = viewport.publication->Publish({identity_, view.Value(), std::move(owned)}); published.HasError())
+        if (auto published = viewport.publication->Publish({identity_, view.Value(), std::move(packet).Value()}); published.HasError())
             return published;
         worldRenderer_ = std::move(renderer).Value();
         worldStartup_.reset();
         return Result<void>::Success();
+    }
+
+    /** @copydoc ProjectPlaySceneHost::CaptureDesktopWorldViewport */
+    Result<std::shared_ptr<const MountedWorldRenderPacket>> ProjectPlaySceneHost::CaptureDesktopWorldViewport(
+        const Runtime::RuntimeSceneView &parent, Render::RenderOriginSceneAdapter &renderer) {
+        using Output = Result<std::shared_ptr<const MountedWorldRenderPacket>>;
+        const auto &viewport = *worldViewport_;
+        auto packet = mountedWorld_->CaptureGeometry(parent, viewport.camera, viewport.meshes, *viewportPrimitives_, renderer);
+        if (packet.HasError())
+            return Output::Failure(std::move(packet).ErrorValue());
+        return Output::Success(std::make_shared<const MountedWorldRenderPacket>(std::move(packet).Value()));
+    }
+
+    /** @copydoc ProjectPlaySceneHost::RefreshDesktopWorldViewport */
+    Result<void> ProjectPlaySceneHost::RefreshDesktopWorldViewport(const Runtime::FrameContext &frame) {
+        using namespace WorldStreaming;
+        if (!UsesMountedViewport() || !worldRenderer_)
+            return Result<void>::Success();
+        auto &publication = *worldViewport_->publication;
+        const auto current = publication.Current();
+        if (current.owner != identity_ || !current.packet)
+            return Result<void>::Failure(MakeError(WorldArtifactErrors::Stale));
+        if (current.packet->Scene().HasValue())
+            return Result<void>::Success();
+        if (frame.cancellation.IsCancellationRequested())
+            return Result<void>::Failure(MakeError(WorldArtifactErrors::Cancelled));
+        const auto scene = scenes_->ActiveScene();
+        if (!scene)
+            return Result<void>::Failure(MakeError(WorldArtifactErrors::Stale));
+        auto replacement = CaptureDesktopWorldViewport(*scene, *worldRenderer_);
+        if (replacement.HasError())
+            return Result<void>::Failure(std::move(replacement).ErrorValue());
+        return publication.Replace(current.packet, std::move(replacement).Value());
     }
 }  // namespace Horo::Application::Internal::EditorProjectSceneDetail

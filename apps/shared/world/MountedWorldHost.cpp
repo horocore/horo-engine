@@ -1000,6 +1000,11 @@ namespace Horo::Application::Internal {
         return frame_.OriginScene(resources_);
     }
 
+    /** @copydoc MountedWorldRenderPacket::IsSuccessorOf */
+    bool MountedWorldRenderPacket::IsSuccessorOf(const MountedWorldRenderPacket &previous) const noexcept {
+        return parent_.SameIncarnation(previous.parent_) && frame_.IsSuccessorOf(previous.frame_);
+    }
+
     MountedWorld::MountedWorld(std::unique_ptr<State> state) noexcept : state_(std::move(state)) {}
 
     /** @copydoc MountedWorld::Origin */

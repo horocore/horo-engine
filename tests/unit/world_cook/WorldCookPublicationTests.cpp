@@ -607,6 +607,54 @@ namespace Horo::WorldCook {
             CHECK(view.Value().meshResources.size() == 1);
             publication->Withdraw({7});
             CHECK(publication->Current().packet == packet);
+
+            const auto updateRotation = [&](const float radians, const std::uint64_t frame) {
+                const auto active = *host->Scenes().ActiveScene();
+                const auto entity = active.Find(object.object);
+                REQUIRE(entity);
+                const auto entityState = active.Get(*entity);
+                REQUIRE(entityState.HasValue());
+                auto transform = *entityState.Value().localTransform;
+                transform.rotation = Math::Quaternion::FromAxisAngle({1, 0, 0}, radians);
+                S::SceneCommandBuffer commands;
+                commands.SetLocalTransform(*entity, transform);
+                REQUIRE(host->Scenes().QueueStructuralCommands(std::move(commands)).HasValue());
+                REQUIRE(host->CommitSceneChanges({.frameNumber = frame, .cancellation = cancellation}).HasValue());
+                return publication->Current().packet;
+            };
+            const auto second = updateRotation(Math::Pi / 2.0F, 2);
+            REQUIRE(second);
+            REQUIRE(second->IsSuccessorOf(*packet));
+            REQUIRE(second->Scene().HasValue());
+            CHECK(second->Scene().Value().camera.up.z > 0.99F);
+            CHECK(packet->Scene().HasError());
+            const auto third = updateRotation(Math::Pi / 4.0F, 3);
+            REQUIRE(third);
+            REQUIRE(third->IsSuccessorOf(*second));
+            REQUIRE(third->Scene().HasValue());
+            CHECK(third->Scene().Value().camera.up.y > 0.7F);
+            CHECK(second->Scene().HasError());
+            CHECK(publication->Current().owner == Editor::EditorFirstPlayScene);
+            CHECK(publication->Current().view.value == 43);
+            CHECK(publication->Replace(packet, third).HasError());
+            CHECK(publication->Replace(third, second).HasError());
+            REQUIRE(host->CommitSceneChanges({.frameNumber = 4, .cancellation = cancellation}).HasValue());
+            CHECK(publication->Current().packet == third);
+
+            const auto active = *host->Scenes().ActiveScene();
+            const auto entity = active.Find(object.object);
+            REQUIRE(entity);
+            const auto entityState = active.Get(*entity);
+            REQUIRE(entityState.HasValue());
+            auto changed = *entityState.Value().localTransform;
+            changed.translation.x += 1.0F;
+            S::SceneCommandBuffer moveOutsideAuthority;
+            moveOutsideAuthority.SetLocalTransform(*entity, changed);
+            REQUIRE(host->Scenes().QueueStructuralCommands(std::move(moveOutsideAuthority)).HasValue());
+            W::TestSupport::RequireError(host->CommitSceneChanges({.frameNumber = 5, .cancellation = cancellation}),
+                                         W::WorldArtifactErrors::Stale);
+            CHECK(publication->Current().packet == third);
+            CHECK(third->Scene().HasError());
             host->Shutdown();
             CHECK_FALSE(publication->Current().packet);
             CHECK(packet->Scene().HasError());

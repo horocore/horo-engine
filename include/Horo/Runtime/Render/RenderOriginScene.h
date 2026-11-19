@@ -90,6 +90,12 @@ namespace Horo::Render {
          */
         [[nodiscard]] Result<TemporalHistoryCompatibility> StampHistory(TemporalHistoryCompatibility history) const;
 
+        /** @brief Tests exact renderer-view provenance and capture order, including against a retired frame.
+         * @param previous Earlier retained frame expected by the publication owner.
+         * @return Whether this capture is strictly newer and comes from the same renderer-view owner.
+         * @details This comparison does not admit new submissions. Use Scene or OriginScene to validate the current origin. */
+        [[nodiscard]] bool IsSuccessorOf(const RenderOriginFrame &previous) const noexcept;
+
     private:
         friend class RenderOriginSceneAdapter;
 

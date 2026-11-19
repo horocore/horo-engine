@@ -2,6 +2,8 @@
 #include "Horo/Cinematic/SequencePlaybackRuntimeErrors.h"
 #include "Horo/Cinematic/TransformTrack.h"
 #include "Horo/Runtime/Camera/CameraErrors.h"
+#include "Horo/Runtime/Render/RenderOriginScene.h"
+#include "Horo/WorldStreaming/OriginShiftPolicy.h"
 #include "support/AllocationProbe.h"
 #include "support/CameraCutRuntimeTestFixture.h"
 
@@ -519,15 +521,15 @@ namespace Horo::Cinematic {
         CHECK(cut.selected.values.position.x == 20.0F);
     }
 
-    TEST_CASE("Camera blends resample root and child cameras after anchor relative transform publication",
-              "[unit][cinematic][camera][rebase]") {
+    TEST_CASE("Camera and animated drawable publish together after a committed World origin rebase", "[unit][cinematic][camera][rebase]") {
+        using namespace WorldStreaming;
         Fixture fixture;
         SceneDefinitionBuilder builder{SceneDefinitionId{1}, SceneDefinitionRevision{100}};
-        for (std::uint64_t id = 1; id <= 4; ++id) {
+        for (std::uint64_t id = 1; id <= 5; ++id) {
             RuntimeEntityDefinition entity;
             entity.object = {id};
             entity.localTransform.translation.x = static_cast<float>(id * 10);
-            if (id != 4)
+            if (id < 4)
                 entity.components.camera = CameraComponent{};
             if (id == 2)
                 entity.parent = SceneObjectId{4};
@@ -544,27 +546,82 @@ namespace Horo::Cinematic {
         childChannels.translation[0] = Take(ScalarCurveView::Create(childTranslation));
         const auto anchor = Math::WorldCoordinate64::FromMillimeters(1'000'000, 0, 0);
         const std::array bindings{TransformBindingSnapshot{{1, 1}, {}}, TransformBindingSnapshot{{4, 1}, {}},
-                                  TransformBindingSnapshot{{2, 1}, TransformBindingId{4, 1}}};
+                                  TransformBindingSnapshot{{2, 1}, TransformBindingId{4, 1}}, TransformBindingSnapshot{{5, 1}, {}}};
         const std::array
             tracks{TransformTrackDescriptor{CurrentTransformTrackVersion, {1, 1}, {1, 1}, {}, anchor, channels},
                    TransformTrackDescriptor{CurrentTransformTrackVersion, {4, 1}, {4, 1}, {}, anchor, channels},
-                   TransformTrackDescriptor{CurrentTransformTrackVersion, {2, 1}, {2, 1}, TransformBindingId{4, 1}, {}, childChannels}};
+                   TransformTrackDescriptor{CurrentTransformTrackVersion, {2, 1}, {2, 1}, TransformBindingId{4, 1}, {}, childChannels},
+                   TransformTrackDescriptor{CurrentTransformTrackVersion, {5, 1}, {5, 1}, {}, anchor, childChannels}};
         const auto plan = Take(TransformEvaluationPlan::Create({1, 1}, tracks, bindings));
-        std::array<TransformEvaluationValue, 3> sampled{};
-        const auto publishEpoch = [&](const std::int64_t origin, const std::uint64_t epoch) {
-            REQUIRE(plan.Evaluate(6, {{1, 1}, Math::WorldCoordinate64::FromMillimeters(origin, 0, 0), epoch}, sampled).HasValue());
+        const auto initial = Take(
+            OriginFrame::Create({Take(OriginFrameId::Create(1)), Take(OriginFrameRevision::Create(1)), Take(OriginGeneration::Create(1))},
+                                Math::WorldCoordinate64::FromMillimeters(0, 0, 0)));
+        auto origin = Take(OriginFrameOwner::Create(initial));
+        const OriginRebaseParticipantRequirement requirement{Take(OriginRebaseParticipantId::Create(1)),
+                                                             Take(OriginRebaseParticipantRevision::Create(1))};
+        const Render::RenderViewId renderView{1};
+        auto renderer = Take(Render::RenderOriginSceneAdapter::Create(*origin, renderView, requirement, {2, 1, 0}));
+        const std::array meshVertices{Render::MeshVertex{{0, 0, 0}, {0, 0, 1}, {}}, Render::MeshVertex{{1, 0, 0}, {0, 0, 1}, {}},
+                                      Render::MeshVertex{{0, 1, 0}, {0, 0, 1}, {}}};
+        const std::array<std::uint32_t, 3> meshIndices{0, 1, 2};
+        const Render::RenderMeshSourceHandle mesh{{5}, 1};
+        const std::array resources{Render::RenderMeshResourceView{mesh, meshVertices, meshIndices, {{0, 0, 0}, {1, 1, 0}}}};
+        std::array<TransformEvaluationValue, 4> sampled{};
+        const auto capture = [&](const OriginFrame &frame) {
+            const auto binding = frame.Binding();
+            REQUIRE(plan.Evaluate(6, {{1, 1}, frame.Origin(), binding.generation.Value()}, sampled).HasValue());
             SceneCommandBuffer commands;
             for (const auto &value : sampled)
                 commands.SetLocalTransform(*fixture.scene->View().Find({value.binding.stableValue}), value.localTransform);
             REQUIRE(fixture.scene->Commit(commands).HasValue());
             REQUIRE(fixture.playback->Publish(fixture.scene->View()).HasValue());
-            return fixture.Commit();
+            const auto selection = fixture.Commit();
+            const auto &camera = selection.selected.values;
+            const auto toGlobal = [&](const Math::Vec3 local) {
+                return Take(frame.ToGlobal(Take(OriginLocalCoordinate::Create(local, binding.identity, binding.generation))));
+            };
+            const auto scene = fixture.scene->View();
+            auto animated = *Take(scene.Get(*scene.Find({5}))).localTransform;
+            const auto position = animated.translation;
+            animated.translation = {};
+            const std::array instances{Render::RenderOriginInstance{toGlobal(position), {mesh, animated.ToMatrix()}}};
+            const Render::RenderOriginSceneSource source{{toGlobal(camera.position), toGlobal(camera.target), camera.up, camera.projection},
+                                                         instances,
+                                                         {},
+                                                         scene.RuntimeId().value};
+            return Take(renderer->Capture(source, Render::RenderOriginCoordinateBasis::OriginRelative));
         };
-        const auto before = publishEpoch(0, 1);
-        const auto after = publishEpoch(400'000, 2);
-        CHECK(before.selected.values.position.x == 1023.0F);
-        CHECK(after.selected.values.position.x == 623.0F);
-        CHECK(before.selected.values.position.x == after.selected.values.position.x + 400.0F);
+
+        const auto first = capture(initial);
+        const auto before = Take(first.OriginScene(resources));
+        CHECK(before.scene.camera.position.x == 1023.0F);
+        CHECK(before.scene.instances.front().localToWorld.At(0, 3) == 1026.0F);
+        const auto shift = Take(OriginShiftPolicy::Create({.id = Take(OriginShiftPolicyId::Create(1)),
+                                                           .revision = Take(OriginShiftPolicyRevision::Create(1)),
+                                                           .frame = initial.Binding().identity,
+                                                           .mode = OriginShiftRuntimeMode::EditorPreview,
+                                                           .editorThresholdMillimeters = 100'000}));
+        const auto decision = Take(EvaluateOriginShift(shift, {shift.Id(), shift.Revision(), initial, OriginShiftPolicyState::Active},
+                                                       {Take(OriginShiftRequestId::Create(1)), OriginShiftRequester::Editor,
+                                                        Math::WorldCoordinate64::FromMillimeters(400'000, 0, 0)}));
+        const std::array requirements{requirement};
+        const std::array participants{static_cast<IOriginRebaseParticipant *>(renderer.get())};
+        auto transaction = Take(OriginRebaseTransaction::Prepare({Take(OriginRebaseTransactionId::Create(1)), decision, initial, 1,
+                                                                  OriginRebaseLifecycle::Active},
+                                                                 requirements, participants));
+        REQUIRE(transaction.Commit(*origin, OriginRebaseCommitPoint::PostSimulation, OriginRebaseLifecycle::Active).HasValue());
+        CHECK(first.OriginScene(resources).HasError());
+        CHECK(before.origin.Get().HasError());
+        const auto next = capture(Take(Take(origin->Lease()).Get()));
+        REQUIRE(next.IsSuccessorOf(first));
+        CHECK_FALSE(first.IsSuccessorOf(next));
+        const auto after = Take(next.OriginScene(resources));
+        CHECK(after.view == renderView);
+        CHECK(Take(after.origin.Get()) == transaction.Event().replacementFrame);
+        CHECK(after.scene.camera.position.x == 623.0F);
+        CHECK(after.scene.instances.front().localToWorld.At(0, 3) == 626.0F);
+        CHECK(after.scene.instances.front().localToWorld.At(0, 3) - after.scene.camera.position.x ==
+              before.scene.instances.front().localToWorld.At(0, 3) - before.scene.camera.position.x);
         CHECK(fixture.runtime.Snapshot(fixture.playback->Player()).Value().position == 6);
         CHECK(fixture.scene->View().Get(*fixture.scene->View().Find({2})).Value().localTransform->translation.x == 26.0F);
     }

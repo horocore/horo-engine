@@ -1800,7 +1800,7 @@ add_executable(HoroCameraCutRuntimeTests
 )
 target_compile_features(HoroCameraCutRuntimeTests PRIVATE cxx_std_20)
 target_include_directories(HoroCameraCutRuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(HoroCameraCutRuntimeTests PRIVATE HoroEngine::CinematicCameraRuntime)
+target_link_libraries(HoroCameraCutRuntimeTests PRIVATE HoroEngine::CinematicCameraRuntime HoroEngine::SceneRenderExtraction)
 horo_register_catch_test(HoroCameraCutRuntimeTests LABELS "unit;cinematic;camera;headless")
 add_executable(HoroCameraCutPublicHeaderConsumer support/CameraCutPublicHeaderConsumer.cpp)
 target_compile_features(HoroCameraCutPublicHeaderConsumer PRIVATE cxx_std_20)

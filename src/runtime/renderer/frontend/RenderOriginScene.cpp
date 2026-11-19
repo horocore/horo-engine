@@ -272,6 +272,12 @@ namespace Horo::Render {
         state_->slots.clear();
     }
 
+    /** @copydoc RenderOriginFrame::IsSuccessorOf */
+    bool RenderOriginFrame::IsSuccessorOf(const RenderOriginFrame &previous) const noexcept {
+        return storage_ && previous.storage_ && !owner_.owner_before(previous.owner_) && !previous.owner_.owner_before(owner_) &&
+               storage_->revision > previous.storage_->revision;
+    }
+
     /** @copydoc RenderOriginFrame::Current */
     Result<RenderViewId> RenderOriginFrame::Current() const {
         const auto state = owner_.lock();

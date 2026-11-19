@@ -9,7 +9,7 @@ on 2026-11-19. The original November 13 qualification record follows the matrix.
 | CIN-003.1 | #1700 / HORO-1659 | Closed / Done | ADR-119 authority contract is present in the normative cinematic architecture. Existing context, arbitration, handoff and frame-immutability tests are retained. |
 | CIN-003.2 | #1723 / HORO-1682 | Closed / In Review | Existing runtime and editor hard-cut entry points are reused. Four-field camera keys retain their original hard-cut behavior. |
 | CIN-003.3 | #1724 / HORO-1683 | Delivered for PR #3566 | Authored duration and curve, Camera-owned pose/lens interpolation, capability admission and live degradation are verified. Windows OpenGL and Vulkan produce the authored dual-view blend. Vulkan also presents the single-view fallback when live resource pressure removes the prior capacity. |
-| CIN-003.4 | #1725 / HORO-1684 | Open / To Do | Current publication resolves both endpoints from one scene borrow. Windows native camera resize passed on OpenGL and Vulkan, and OpenGL fullscreen passed. Second-display qualification and live mounted World placement remain open. |
+| CIN-003.4 | #1725 / HORO-1684 | Open / To Do | Current publication resolves both endpoints from one scene borrow. A committed World origin rebase preserves the camera and animated drawable's relative view. Desktop Mounted World replaces a stale packet under the same Scene and renderer owner. Native resize and fullscreen evidence is recorded below. |
 | CIN-003.5 | #1726 / HORO-1685 | Open / To Do | Runtime/editor parity, capability/fallback, malformed input, lens compatibility, cancellation and rebase regressions are added. Execution and native matrix evidence are pending. |
 
 The direct predecessor of CIN-003.3 is CIN-003.2. CIN-003.4 is blocked by
@@ -25,6 +25,7 @@ integrated acceptance needs the blend and presentation outcomes.
 | Host denies single-view blend, explicit hard fallback, required dual-view denial | HoroCameraCutRuntimeTests | Passed on Windows |
 | Compatible lens interpolation and rotation, incompatible projection rejection | HoroCameraCutRuntimeTests | Passed on Windows |
 | Anchor-relative root/child scene publication during a blend | HoroCameraCutRuntimeTests | Passed on Windows |
+| Committed World rebase and current renderer publication | HoroCameraCutRuntimeTests, HoroRenderOriginSceneTests, HoroWorldCookIntegrationTests | The origin transaction preserves the relative camera and drawable at the same authored time and retires the old renderer lease. The desktop integration verifies exact same-owner replacement, stale packet rejection, and typed refusal for placement without a canonical World position. |
 | Actual editor controller extraction versus runtime selection | HoroCameraCutEditorIntegrationTests | Linear and SmoothStep parity and same-position fallback passed on Windows. |
 | Public header boundary and legacy initializer compatibility | HoroCameraCutPublicHeaderConsumer | Passed on Windows |
 | Windows OpenGL camera blend and viewport resize rendering | HoroEditorViewportOpenGLSmoke | Passed real SDL pixel resize and viewport resize. The retained Linear/SmoothStep player advances once and readback verifies the new silhouette. |
@@ -43,16 +44,17 @@ scene before each extraction. Preview extraction bypasses the scene-definition
 cache while an active camera preview exists. The OpenGL viewport validates the
 pass target and allocated extent in `ValidatePassRequest`. Vulkan validates both
 in `PrepareStaticMeshPass`. `EditorPresentationSurface` owns the existing surface
-generation and native realization transaction. These source checks establish
-the intended seams. Native resize, display and fullscreen execution remains
-required for CIN-003.4 and CIN-003.5 acceptance.
+generation and native realization transaction. The matrix records the native
+resize, display and fullscreen outcomes for those seams.
 
 The native camera fixture authors a three-tick blend starting at tick 5. At
 tick 6, Linear and SmoothStep produce distinct expected Z positions
 (approximately 3.666667 and 3.518519). The retained player then advances to
 tick 8 and the destination Z position 5. The OpenGL host observes the actual
-native output transition before publishing this next camera. These are source
-assertions awaiting execution, not recorded native passes.
+native output transition before publishing this next camera. The assertions
+passed in the separately registered Windows resize and
+fullscreen cases. Physical second-display qualification and production
+publication of animated global placement in a mounted World remain open.
 
 ## November 13 historical validation
 

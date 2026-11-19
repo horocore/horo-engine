@@ -84,6 +84,11 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<Render::RenderOriginLocalScene> OriginScene() const;
 
+        /** @brief Checks a newer renderer capture from the same mounted Scene incarnation and view owner.
+         * @param previous Prior packet expected by the viewport publication.
+         * @return Whether this packet is a provenance-matching successor. Validate Scene before publishing it. */
+        [[nodiscard]] bool IsSuccessorOf(const MountedWorldRenderPacket &previous) const noexcept;
+
     private:
         friend class MountedWorld;
         MountedWorldRenderPacket(Runtime::RuntimeSceneView parent, Render::RenderOriginFrame frame,
