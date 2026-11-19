@@ -1,5 +1,6 @@
 #include "Horo/Network/ReplicationWorldLifecycle.h"
 
+#include "AuthoredSceneBindingValidation.h"
 #include "Horo/Network/NetworkErrors.h"
 #include "Horo/Network/NetworkMetrics.h"
 #include "Horo/Network/NetworkPrefabLifecycle.h"
@@ -194,13 +195,6 @@ namespace Horo::Network {
             return Result<NetworkObjectMapping>::Success(std::move(mapping));
         }
 
-        /** @brief Checks the canonical order and scope of one authority-issued initial identity. */
-        bool ValidAuthoredBinding(const ReplicationAuthoredObjectBinding &row, ReplicationAuthorityEpoch authority, std::uint64_t slot,
-                                  std::optional<Runtime::SceneObjectId> previous) noexcept {
-            return row.object.IsValid() && row.object.Epoch() == authority && row.object.Slot() == slot && row.object.Generation() == 1 &&
-                   row.provenance.IsValid() && row.provenance.authoredObject && (!previous || *previous < *row.provenance.authoredObject);
-        }
-
         /** @brief Rejects a stale or incomplete remote inventory before allocating candidate storage. */
         Result<void> ValidateReplicaInventory(const ReplicationWorldActivationDescriptor &descriptor,
                                               const ReplicationAuthoredSceneInventory &inventory, std::size_t localCount,
@@ -225,7 +219,7 @@ namespace Horo::Network {
                 if (cancellation.IsCancellationRequested())
                     return Failure<void>(NetworkErrors::ReplicationWorldCancelled);
                 const auto &published = inventory.objects[index];
-                if (!ValidAuthoredBinding(published, inventory.authority, index + 1, previous))
+                if (!Detail::ValidAuthoredBinding(published, inventory.authority, index + 1, previous))
                     return Failure<void>(NetworkErrors::NetworkObjectMappingInvalid);
                 const auto &entity = local[index];
                 if (entity.provenance != published.provenance)
@@ -298,7 +292,7 @@ namespace Horo::Network {
                 if (!entry.provenance.authoredObject)
                     continue;
                 const ReplicationAuthoredObjectBinding binding{entry.object, entry.provenance};
-                if (!ValidAuthoredBinding(binding, inventory.authority, inventory.objects.size() + 1, previous))
+                if (!Detail::ValidAuthoredBinding(binding, inventory.authority, inventory.objects.size() + 1, previous))
                     return Failure<ReplicationAuthoredSceneInventory>(NetworkErrors::NetworkObjectMappingInvalid);
                 inventory.objects.push_back(binding);
                 previous = binding.provenance.authoredObject;

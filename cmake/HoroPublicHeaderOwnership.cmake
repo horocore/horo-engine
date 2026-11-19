@@ -550,6 +550,7 @@ horo_configure_target_header_boundary(HoroNetworkRuntime PUBLIC_HEADERS
     Horo/Network/NetworkModeComposition.h
     Horo/Network/NetworkWorldBinding.h
     Horo/Network/NetworkPrefabLifecycle.h
+    Horo/Network/NetworkAuthoredScenePage.h
     Horo/Network/TransportBackendComposition.h
     Horo/Network/NetworkDiagnostics.h
     Horo/Network/AuthenticationSessionAdapter.h

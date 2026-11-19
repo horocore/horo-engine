@@ -1,6 +1,7 @@
 #include "Horo/Network/AdmissionProtection.h"
 #include "Horo/Network/InboundMessageDispatcher.h"
 #include "Horo/Network/NetworkAdmissionController.h"
+#include "Horo/Network/NetworkAuthoredScenePage.h"
 #include "Horo/Network/NetworkModeComposition.h"
 #include "Horo/Network/NetworkObjectMapping.h"
 #include "Horo/Network/NetworkPrefabLifecycle.h"
@@ -74,6 +75,8 @@ int main() {
     static_assert(!Horo::Network::NetworkPrefabMemberSource{prefabRecipe, 3}.IsValid());
     static_assert(Horo::Network::MaximumNetworkPrefabLegacyBytes == 7254);
     static_assert(Horo::Network::MaximumNetworkPrefabLifecycleBytes == 11352);
+    static_assert(Horo::Network::MaximumNetworkAuthoredScenePageBytes == 666);
+    static_assert(!std::is_copy_constructible_v<Horo::Network::NetworkAuthoredSceneAssembly>);
     static_assert(std::is_default_constructible_v<Horo::Network::NetworkClientPrefabInbox>);
     return Horo::Network::NetworkProjectRole::Standalone == Horo::Network::NetworkProjectRole::Count ? 1 : 0;
 }

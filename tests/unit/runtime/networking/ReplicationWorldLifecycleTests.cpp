@@ -1,5 +1,6 @@
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "Horo/Network/NetworkAuthoredScenePage.h"
 #include "Horo/Network/NetworkErrors.h"
 #include "Horo/Network/NetworkMetrics.h"
 #include "Horo/Network/ReplicationWorldLifecycle.h"
@@ -218,7 +219,15 @@ namespace Horo::Network {
         REQUIRE(server.RegisterObject(authority.scene, authority.session, dynamic).HasValue());
         const auto authorityLease = server.Acquire(FixedWork(authority)).Value();
         REQUIRE(authorityLease.Mapping().Entries().size() == 3);
-        const auto complete = CaptureReplicationAuthoredScene(authorityLease).Value();
+        const auto captured = CaptureReplicationAuthoredScene(authorityLease).Value();
+        NetworkAuthoredSceneAssembly assembly{captured.session, captured.authority};
+        for (std::size_t index = 0; index < captured.objects.size(); ++index) {
+            const auto page = MakeNetworkAuthoredScenePage(captured, index, 1).Value();
+            const auto encoded = EncodeNetworkAuthoredScenePage(page).Value();
+            REQUIRE(assembly.Append(DecodeNetworkAuthoredScenePage(encoded).Value()).HasValue());
+        }
+        REQUIRE(assembly.IsComplete());
+        const auto complete = assembly.Take().Value();
         CHECK(complete.session == authority.session);
         CHECK(complete.authority == authority.authority);
         REQUIRE(complete.objects.size() == 2);

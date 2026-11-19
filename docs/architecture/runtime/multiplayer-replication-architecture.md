@@ -82,6 +82,17 @@ mapping. Session, authority epoch, schema version, authored identity, and
 mapping capacity are checked before publication. The client keeps its existing
 mapping until the structural safe point commits the replacement.
 
+Hosts using the authored baseline can encode the inventory as ordered
+`NetworkAuthoredScenePage` records. Each big-endian page carries the bound
+session, authority epoch, complete row count, and first row index. Rows
+contain stable Scene object and schema identities with their exact schema
+version. The wire index determines the initial authority slot and generation,
+independent of the client's entity order. A page contains up to 32 rows and
+uses at most 666 payload bytes. Send one empty page for an empty inventory.
+`NetworkAuthoredSceneAssembly` transfers the inventory only after every
+contiguous page has arrived. Existing world binding and Prefab messages retain
+their wire formats. Consumers of the new page API link `NetworkRuntime`.
+
 Existing mode services have an empty authored projection by default. A service
 wrapper around an opted-in authority Scene forwards the projection method to
 retain the same declarations. Existing world staging without authored objects
