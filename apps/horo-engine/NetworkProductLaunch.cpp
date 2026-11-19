@@ -220,25 +220,6 @@ namespace Horo::Application::Internal {
             Net::NetworkModeServiceRequest request_;
         };
 
-#if HORO_PRODUCT_HAS_GNS
-        /** @brief Bind explicitly selected native authorities into the same immutable product capture before service configuration. */
-        Result<std::unique_ptr<Net::INetworkModeService>> CreateSecureProductService(
-            const Net::NetworkProjectRole role, const Net::NetworkAddress &bind, const Net::NetworkAddress &connect,
-            std::shared_ptr<NetworkDebuggerService> debugger, std::shared_ptr<ClientSessionOwner> sessions,
-            const std::shared_ptr<const NetworkProductAdmission> &admission, const Net::GnsNativeSecurityOptions &options) {
-            if (!admission)
-                return Result<std::unique_ptr<Net::INetworkModeService>>::Failure(MakeError(Net::NetworkErrors::AdmissionPolicyInvalid));
-            auto selected =
-                SelectNetworkProductGns(admission->Policy(), admission->Providers(), admission->Codecs(), admission->Handlers(), options,
-                                        admission->WorldBinding() ? std::optional{admission->WorldBinding()->policy} : std::nullopt);
-            if (selected.HasError())
-                return Result<std::unique_ptr<Net::INetworkModeService>>::Failure(selected.ErrorValue());
-            auto composition = std::move(selected).Value();
-            return CreateNetworkProductTransport(std::move(composition.transport), role, bind, connect, std::move(debugger),
-                                                 std::move(sessions), std::move(composition.admission));
-        }
-#endif
-
         [[nodiscard]] Net::NetworkModeFactories ProductFactories(const Net::NetworkProjectRole role, const Net::NetworkAddress &bind,
                                                                  const Net::NetworkAddress &connect,
                                                                  std::shared_ptr<NetworkDebuggerService> debugger,
@@ -256,7 +237,7 @@ namespace Horo::Application::Internal {
             factories.services[static_cast<std::size_t>(Net::NetworkModeServiceKind::Transport)] =
                 [role, bind, connect, debugger, sessions, admission, nativeSecurity](const Net::NetworkModeServiceRequest &) {
                 if (nativeSecurity)
-                    return CreateSecureProductService(role, bind, connect, debugger, sessions, admission, *nativeSecurity);
+                    return CreateSecureNetworkProductTransport(role, bind, connect, debugger, sessions, admission, *nativeSecurity);
                 auto transport = Net::CreateGnsTransport();
                 if (transport.HasError())
                     return Result<std::unique_ptr<Net::INetworkModeService>>::Failure(transport.ErrorValue());

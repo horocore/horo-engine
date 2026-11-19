@@ -42,4 +42,23 @@ namespace Horo::Application::Internal {
             return Result<NetworkProductGnsSelection>::Failure(captured.ErrorValue());
         return Result<NetworkProductGnsSelection>::Success({std::move(composition.transport), std::move(captured).Value()});
     }
+
+    /** @copydoc CreateSecureNetworkProductTransport */
+    Result<std::unique_ptr<Network::INetworkModeService>> CreateSecureNetworkProductTransport(
+        const Network::NetworkProjectRole role, const Network::NetworkAddress &bind, const Network::NetworkAddress &connect,
+        std::shared_ptr<NetworkDebuggerService> debugger, std::shared_ptr<ClientSessionOwner> sessions,
+        const std::shared_ptr<const NetworkProductAdmission> &admission, const Network::GnsNativeSecurityOptions &options) {
+        using Service = Result<std::unique_ptr<Network::INetworkModeService>>;
+        if (!admission)
+            return Service::Failure(MakeError(Network::NetworkErrors::AdmissionPolicyInvalid));
+        const auto &binding = admission->WorldBinding();
+        auto selected =
+            SelectNetworkProductGns(admission->Policy(), admission->Providers(), admission->Codecs(), admission->Handlers(), options,
+                                    binding ? std::optional{binding->policy} : std::nullopt, binding ? binding->initialStateHost : nullptr);
+        if (selected.HasError())
+            return Service::Failure(std::move(selected).ErrorValue());
+        auto composition = std::move(selected).Value();
+        return CreateNetworkProductTransport(std::move(composition.transport), role, bind, connect, std::move(debugger),
+                                             std::move(sessions), std::move(composition.admission));
+    }
 }  // namespace Horo::Application::Internal

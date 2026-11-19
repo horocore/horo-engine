@@ -31,4 +31,14 @@ namespace Horo::Application::Internal {
         std::shared_ptr<const Network::MessageCodecRegistry> codecs, std::span<const NetworkProductInboundHandler> handlers,
         const Network::GnsNativeSecurityOptions &options, std::optional<Network::NetworkWorldBindingPolicy> worldBinding = std::nullopt,
         std::shared_ptr<Network::INetworkInitialStateHost> initialStateHost = {});
+
+    /** @brief Creates the normal secure product transport service from one complete host admission.
+     * @param role Product network role. @param bind Local listener address. @param connect Remote client address.
+     * @param debugger Existing diagnostic owner. @param sessions Existing admitted session/world boundary.
+     * @param admission Exact captured host policy and initial-state owner. @param options Explicit native security options.
+     * @return Configured inert service or original typed selection/transport failure. */
+    [[nodiscard]] Result<std::unique_ptr<Network::INetworkModeService>> CreateSecureNetworkProductTransport(
+        Network::NetworkProjectRole role, const Network::NetworkAddress &bind, const Network::NetworkAddress &connect,
+        std::shared_ptr<NetworkDebuggerService> debugger, std::shared_ptr<ClientSessionOwner> sessions,
+        const std::shared_ptr<const NetworkProductAdmission> &admission, const Network::GnsNativeSecurityOptions &options);
 }  // namespace Horo::Application::Internal
