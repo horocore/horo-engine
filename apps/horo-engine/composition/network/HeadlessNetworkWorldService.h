@@ -328,8 +328,10 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                     MakeError(Network::NetworkErrors::NetworkModeInvalid, "Native project Perception requires standalone authority."));
             const auto &boundary = input.load;
             record_->sceneCancellation = boundary.cancellation;
-            record_->scenes = std::make_unique<Runtime::RuntimeSceneService>(input.registry, input.loads,
+            record_->scenes = std::make_shared<Runtime::RuntimeSceneService>(input.registry, input.loads,
                                                                              Runtime::RuntimeSceneAssetLimits{}, request_.scene);
+            if (auto bound = BindReplicaSceneTransforms(); bound.HasError())
+                return bound;
             if (auto native = PrepareConfiguredNative(); native.HasError())
                 return native;
             if (auto ai = PrepareConfiguredAi(); ai.HasError())
@@ -631,6 +633,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
 
         /** @brief Installs an explicitly configured public transform source after exact schema admission. */
         [[nodiscard]] Result<void> BindAuthoritySceneTransforms() const;
+        [[nodiscard]] Result<void> BindReplicaSceneTransforms() const;
 
         /** @brief Installs protected Prefab consumption on the exact client Scene, with explicit cooked asset authority. */
         [[nodiscard]] Result<void> BindReplicaPrefabs();

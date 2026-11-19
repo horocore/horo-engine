@@ -1,7 +1,10 @@
 #include "Horo/Foundation/CancellationToken.h"
+#include "Horo/Runtime/RuntimeHost.h"
 #include "RuntimeSceneTestSupport.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <functional>
+#include <limits>
 #include <memory>
 
 namespace {
@@ -33,6 +36,118 @@ namespace {
     template <typename T>
     concept FabricablePublicationReceipt = requires { T{std::shared_ptr<ScenePublicationDetail::State>{}}; };
     static_assert(!FabricablePublicationReceipt<ScenePublicationReceipt>);
+
+    /** @brief Keeps the actual frame scheduler deterministic while exercising its phase evidence. */
+    class ReplicaClock final : public Clock {
+    public:
+        Duration MonotonicNow() const override {
+            return {};
+        }
+    };
+
+    /** @brief Runs a test operation in the canonical Runtime callback without issuing its own evidence. */
+    class PhaseObserver final : public RuntimeLifecycleParticipant {
+    public:
+        std::function<void(RuntimePhase, const FrameContext &)> observe;
+
+        Result<void> Startup(const CancellationToken &) override {
+            return Result<void>::Success();
+        }
+
+        Result<void> OnPhase(RuntimePhase phase, const FrameContext &frame) override {
+            observe(phase, frame);
+            return Result<void>::Success();
+        }
+
+        Result<void> OnFixedUpdate(const FixedStepContext &) override {
+            return Result<void>::Success();
+        }
+
+        void Shutdown() noexcept override {}
+    };
+
+    /** @brief Uses one real Scene service and the exact scheduler selected by its host. */
+    struct ReplicaTransformFixture final {
+        ReplicaClock clock;
+        std::unique_ptr<RuntimeHost> host = RuntimeHost::Create(clock).Value();
+        RuntimeSceneService service;
+        PhaseObserver *observer{};
+
+        ReplicaTransformFixture() {
+            REQUIRE(service.BindReplicaTransformDispatch(host->DispatchSource()).HasValue());
+            CHECK(service.BindReplicaTransformDispatch(host->DispatchSource()).HasError());
+            REQUIRE(service.Startup({}).HasValue());
+            REQUIRE(service.QueuePreparation(Definition()).HasValue());
+            REQUIRE(service.OnPhase(RuntimePhase::CommitDeferredLifecycleChanges, Context({})).HasValue());
+            auto phases = std::make_unique<PhaseObserver>();
+            observer = phases.get();
+            REQUIRE(host->AddParticipant(std::move(phases)).HasValue());
+            REQUIRE(host->Startup().HasValue());
+        }
+    };
+
+    TEST_CASE("Scene replica transforms require the exact live structural dispatch and current Scene revision",
+              "[unit][runtime][scene][publication]") {
+        ReplicaTransformFixture fixture;
+        auto &scene = fixture.service;
+        const auto view = scene.ActiveScene().value();
+        const auto entity = view.Find(SceneObjectId{1}).value();
+        SceneCommandBuffer commands;
+        Math::Transform transform;
+        transform.translation.x = 7.0F;
+        commands.SetLocalTransform(entity, transform, {.scene = view.RuntimeId()});
+
+        RuntimeDispatchEvidence publishedEvidence;
+        fixture.observer->observe = [&](RuntimePhase phase, const FrameContext &frame) {
+            if (phase == RuntimePhase::NetworkFlush)
+                CHECK(scene.CommitReplicaTransformBatch(view, commands, frame.dispatchEvidence).HasError());
+            if (phase != RuntimePhase::CommitDeferredLifecycleChanges)
+                return;
+            publishedEvidence = frame.dispatchEvidence;
+            REQUIRE(scene.CommitReplicaTransformBatch(view, commands, frame.dispatchEvidence).HasValue());
+            CHECK(scene.CommitReplicaTransformBatch(view, commands, frame.dispatchEvidence).HasError());
+        };
+        REQUIRE(fixture.host->RunFrame().HasValue());
+        const auto published = scene.ActiveScene().value();
+        CHECK(published.Get(entity).Value().localTransform->translation.x == 7.0F);
+        CHECK(scene.CommitReplicaTransformBatch(published, commands, publishedEvidence).HasError());
+    }
+
+    TEST_CASE("Scene replica transform transaction rejects a cancelled or invalid later row without any mutation",
+              "[unit][runtime][scene][publication]") {
+        ReplicaTransformFixture fixture;
+        auto &scene = fixture.service;
+        const auto view = scene.ActiveScene().value();
+        const auto first = view.Find(SceneObjectId{1}).value();
+        const auto second = view.Find(SceneObjectId{2}).value();
+        fixture.observer->observe = [&](RuntimePhase phase, const FrameContext &frame) {
+            if (phase != RuntimePhase::CommitDeferredLifecycleChanges)
+                return;
+            Math::Transform changed;
+            changed.translation.x = 5.0F;
+            SceneCommandBuffer invalid;
+            invalid.SetLocalTransform(first, changed, {.scene = view.RuntimeId()});
+            auto malformed = changed;
+            malformed.translation.x = std::numeric_limits<float>::infinity();
+            invalid.SetLocalTransform(second, malformed, {.scene = view.RuntimeId()});
+            CHECK(scene.CommitReplicaTransformBatch(view, invalid, frame.dispatchEvidence).HasError());
+
+            CancellationSource retiredReceipt;
+            retiredReceipt.RequestCancellation();
+            SceneCommandBuffer cancelled;
+            cancelled.SetLocalTransform(first, changed, {.scene = view.RuntimeId()});
+            cancelled.SetLocalTransform(second, changed, {.scene = view.RuntimeId(), .ownerCancellation = retiredReceipt.Token()});
+            CHECK(scene.CommitReplicaTransformBatch(view, cancelled, frame.dispatchEvidence).HasError());
+
+            SceneCommandBuffer wrongCommand;
+            wrongCommand.Destroy(second);
+            CHECK(scene.CommitReplicaTransformBatch(view, wrongCommand, frame.dispatchEvidence).HasError());
+        };
+        REQUIRE(fixture.host->RunFrame().HasValue());
+        CHECK(view.IsCurrent());
+        CHECK(view.Get(first).Value().localTransform->translation.x == 0.0F);
+        CHECK(view.Get(second).Value().localTransform->translation.x == 0.0F);
+    }
 
     TEST_CASE("Scene receipts witness the exact aggregate publication and cannot observe an ordinary or moved queue",
               "[unit][runtime][scene][publication]") {

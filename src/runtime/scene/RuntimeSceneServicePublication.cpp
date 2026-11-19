@@ -6,12 +6,50 @@
 #include "RuntimeSceneErrors.h"
 #include "RuntimeScenePublicationInternal.h"
 
+#include <algorithm>
 #include <new>
 #include <thread>
 #include <type_traits>
 #include <utility>
 
 namespace Horo::Runtime {
+    /** @copydoc RuntimeSceneService::BindReplicaTransformDispatch */
+    Result<void> RuntimeSceneService::BindReplicaTransformDispatch(RuntimeDispatchSource source) {
+        // Travel creates the next Scene on the owner lane while the same issuer dispatches. Binding is inert.
+        if (const auto status = source.BindingStatus();
+            status != RuntimeDispatchStatus::Valid && status != RuntimeDispatchStatus::Reentrant)
+            return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate));
+        if (shutdown_)
+            return Result<void>::Failure(MakeError(SceneErrors::ServiceShutdown));
+        if (started_ || replicaTransformDispatch_.IsValid() || mutatingLifecycle_)
+            return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
+        replicaTransformDispatch_ = std::move(source);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc RuntimeSceneService::CommitReplicaTransformBatch */
+    Result<void> RuntimeSceneService::CommitReplicaTransformBatch(const RuntimeSceneView &expected, const SceneCommandBuffer &commands,
+                                                                  const RuntimeDispatchEvidence &evidence) {
+        RuntimeDispatchFacts facts;
+        if (evidence.Read(replicaTransformDispatch_, RuntimePhase::CommitDeferredLifecycleChanges, facts) != RuntimeDispatchStatus::Valid)
+            return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate));
+        if (shutdown_)
+            return Result<void>::Failure(MakeError(SceneErrors::ServiceShutdown));
+        if (!active_.scene || !expected.SameIncarnation(active_.scene->View()) || !expected.IsCurrent())
+            return Result<void>::Failure(MakeError(SceneErrors::StaleView));
+        if (mutatingLifecycle_ || transition_ != TransitionKind::None || structuralCommands_ || preparation_)
+            return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
+        const auto admittedTransform = [](const auto &command) {
+            const auto *transform = std::get_if<SceneCommandBuffer::SetLocalTransformCommand>(&command);
+            return transform && transform->admission.has_value();
+        };
+        if (commands.Empty() || !std::ranges::all_of(commands.commands_, admittedTransform))
+            return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate));
+        const LifecycleMutation mutation{*this};
+        const auto committed = active_.scene->CommitWithRegistry(commands, assetPreparationServices_.registry);
+        return committed.HasValue() ? Result<void>::Success() : Result<void>::Failure(committed.ErrorValue());
+    }
+
     /** @copydoc ScenePublicationDetail::ShutdownCandidates */
     void ScenePublicationDetail::ShutdownCandidates(std::vector<std::unique_ptr<SceneActivationCandidate>> &candidates) noexcept {
         for (auto candidate = candidates.rbegin(); candidate != candidates.rend(); ++candidate)

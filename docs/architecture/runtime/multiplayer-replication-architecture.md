@@ -121,6 +121,15 @@ world binding and the secure transport. A new structural revision stays
 pending until the next committed fixed observation. Existing client
 recipient and apply grants continue through the configured client owner.
 
+An explicitly configured replica Scene can also select the registered
+transform projection and a host grant for the descriptor generation
+negotiated with its authenticated server. It reuses the installed
+serializer lease and the complete reconstructed Scene mapping. The Scene
+service publishes decoded transforms synchronously at its live structural
+safe point. The initial ownership and receipt become eligible only after
+this transaction succeeds. Rebuild native consumers against the additive
+Scene apply owner factory. The direct Scene apply factory remains supported.
+
 `CaptureReplicationAuthoredScene` extracts an ordered inventory of exact
 authority identities and stable Scene provenance. It omits process-local
 entity handles and dynamic Prefab occurrences. Once a caller has admitted the

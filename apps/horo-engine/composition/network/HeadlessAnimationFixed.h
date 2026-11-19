@@ -64,11 +64,19 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             return Result<void>::Success();
         }
 
-        Result<void> OnPhase(Runtime::RuntimePhase, const Runtime::FrameContext &) override {
+        Result<void> OnPhase(Runtime::RuntimePhase phase, const Runtime::FrameContext &frame) override {
             if (!OnOwner())
                 return Rejected();
             DrainResolved();
+            if (phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges && owners_->configured &&
+                owners_->configured->initialSceneState)
+                sceneDispatch_ = frame.dispatchEvidence;
             return closed_ ? Rejected() : Result<void>::Success();
+        }
+
+        /** @brief Copies the exact current structural dispatch for the configured replica admission. */
+        const Runtime::RuntimeDispatchEvidence &SceneDispatch() const noexcept {
+            return sceneDispatch_;
         }
 
         Result<void> OnFixedUpdate(const Runtime::FixedStepContext &context) override {
@@ -270,6 +278,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         std::shared_ptr<WorldOwners> owners_;
         Runtime::RuntimeDispatchSource source_;
         Runtime::RuntimeDispatchEvidence evidence_;
+        Runtime::RuntimeDispatchEvidence sceneDispatch_;
         std::array<std::shared_ptr<WorldRecord>, 4> pins_;
         std::array<std::shared_ptr<WorldRecord>, 4> evaluated_;
         std::size_t count_{};

@@ -1124,6 +1124,22 @@ namespace Horo::Runtime {
         RuntimeSceneService(Assets::AssetRegistry &registry, Assets::AssetLoadService &loads, RuntimeSceneAssetLimits limits,
                             SceneRuntimeId initialRuntimeId);
         ~RuntimeSceneService() override;
+        /** @brief Binds one replica transform writer to the application's actual Runtime scheduler before startup.
+         * @param source Exact live scheduler issuer retained by the Scene owner.
+         * @return Success or typed invalid, duplicate, or late binding failure.
+         * @details This binding grants no receipt or object authority. Only a live dispatch from this issuer can open
+         * the transform safe point, and the caller still supplies the exact active Scene view and per-command admissions.
+         * A replacement Scene may bind on the same owner lane during its live travel callback. */
+        [[nodiscard]] Result<void> BindReplicaTransformDispatch(RuntimeDispatchSource source);
+        /** @brief Atomically publishes one admitted replica transform batch during the bound Scene safe point.
+         * @param expected Exact currently published incarnation and structural revision, borrowed on the owner lane.
+         * @param commands Nonempty local transform batch with each command's Scene and cancellation admission. Other mutation kinds are
+         * refused.
+         * @param evidence Live callback evidence from the bound issuer's CommitDeferredLifecycleChanges dispatch.
+         * @return Success only after the complete Scene transaction is published. Failure preserves the prior Scene.
+         * @details This does not consume a pending work queue, invoke lifecycle phases, or expose mutable Scene storage. */
+        [[nodiscard]] Result<void> CommitReplicaTransformBatch(const RuntimeSceneView &expected, const SceneCommandBuffer &commands,
+                                                               const RuntimeDispatchEvidence &evidence);
         /** @brief Adds one owned activation participant before startup. @param participant Non-null unique owner.
          * @return Success or a typed invalid-input/lifecycle error. */
         [[nodiscard]] Result<void> AddActivationParticipant(std::unique_ptr<SceneActivationParticipant> participant);
@@ -1354,6 +1370,7 @@ namespace Horo::Runtime {
         std::optional<Error> operationError_;
         std::uint64_t nextRuntimeId_{1};
         BorrowedAssetPreparationServices assetPreparationServices_{};
+        RuntimeDispatchSource replicaTransformDispatch_; /**< Bound once before startup, read by the exact owner callback. */
         TransitionKind transition_{TransitionKind::None};
         bool started_{};
         bool shutdown_{};

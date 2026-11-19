@@ -174,7 +174,7 @@ namespace Horo::Network {
         const auto authority = std::make_shared<PrefabInitialAuthority>();
         const auto delegate = std::make_shared<UnusedInitialReceiver>();
         const auto initialState = std::make_shared<HeadlessInitialStateHost>(authority, delegate);
-        input.authorityInitialState = initialState;
+        input.initialSceneState = initialState;
         owners->worldSetup = InitialProductTestSupport::InitialSetup(initialState);
         std::uint64_t fixedTick{};
         owners->onTransportFixed = [&fixedTick](const Runtime::FixedStepContext &context) {

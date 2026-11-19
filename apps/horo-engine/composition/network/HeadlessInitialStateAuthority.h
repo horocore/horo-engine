@@ -31,14 +31,30 @@ namespace Horo::Application::Internal {
                                                                        const Network::ReplicationWorldReadLease &world) const = 0;
     };
 
-    /** @brief Adds canonical authority capture while retaining the configured client owner's existing behavior. */
+    /** @brief Host proof of the exact negotiated descriptor generation for a replica session. */
+    class IHeadlessInitialReplicaAuthority {
+    public:
+        virtual ~IHeadlessInitialReplicaAuthority() = default;
+        /** @brief Resolve the already-authenticated server and negotiated schema without gaining Scene or session mutation authority. */
+        [[nodiscard]] virtual Result<std::uint64_t> DescriptorGeneration(const Network::AuthenticationResult &authenticated,
+                                                                         const Network::HandshakeSelection &negotiated) const = 0;
+    };
+
+    /** @brief Adds canonical capture and optional replica Scene application while retaining existing client recipient admission. */
     class HeadlessInitialStateHost final : public Network::INetworkInitialStateHost {
     public:
         /** @brief Retains exact admitted server role policy and existing client owner without invoking them. */
         HeadlessInitialStateHost(std::shared_ptr<const IHeadlessInitialStateAuthority> authority,
-                                 std::shared_ptr<Network::INetworkInitialStateHost> client) noexcept;
+                                 std::shared_ptr<Network::INetworkInitialStateHost> client,
+                                 std::shared_ptr<const IHeadlessInitialReplicaAuthority> replica = {}) noexcept;
         /** @brief Bind to one configured application composition before any transport can open its listener. */
         [[nodiscard]] Result<void> BindWorlds(const std::shared_ptr<HeadlessNetworkDetail::WorldOwners> &worlds);
+
+        /** @brief Reports the explicit Scene application selection before any candidate can bind a writer. */
+        [[nodiscard]] bool AppliesReplicaTransforms() const noexcept {
+            return static_cast<bool>(replica_);
+        }
+
         /** @copydoc Network::INetworkInitialStateHost::ClientRecipient */
         [[nodiscard]] Result<Network::NetworkPeerId> ClientRecipient(const Network::PeerSessionLifecycle &peer) override;
         /** @copydoc Network::INetworkInitialStateHost::Capture */
@@ -54,6 +70,7 @@ namespace Horo::Application::Internal {
         std::weak_ptr<HeadlessNetworkDetail::WorldOwners> worlds_;
         std::shared_ptr<const IHeadlessInitialStateAuthority> authority_;
         std::shared_ptr<Network::INetworkInitialStateHost> client_;
+        std::shared_ptr<const IHeadlessInitialReplicaAuthority> replica_;
         bool bound_{};
     };
 }  // namespace Horo::Application::Internal

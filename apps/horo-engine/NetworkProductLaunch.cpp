@@ -343,7 +343,7 @@ namespace Horo::Application::Internal {
             if (initialState) {
                 input.replicatedSceneObjects = initialState->authoredObjects;
                 input.publicTransforms = initialState->transforms;
-                input.authorityInitialState = std::move(initialHost);
+                input.initialSceneState = std::move(initialHost);
             }
             if (!launch.cookedDecisionBindings.empty()) {
                 if (!resources->committed)
@@ -389,27 +389,29 @@ namespace Horo::Application::Internal {
         };
 
         /** @brief Retain the same adapter in the world binding and selected secure transport factory. */
-        [[nodiscard]] Result<std::shared_ptr<HeadlessInitialStateHost>> SelectAuthorityInitialState(
-            const ProductLaunch &launch, ProductRuntimeCapabilities &capabilities) {
+        [[nodiscard]] Result<std::shared_ptr<HeadlessInitialStateHost>> SelectSceneInitialState(const ProductLaunch &launch,
+                                                                                                ProductRuntimeCapabilities &capabilities) {
             using Outcome = Result<std::shared_ptr<HeadlessInitialStateHost>>;
             if (!capabilities.initialState)
                 return Outcome::Success(nullptr);
             const auto &admission = capabilities.admission;
             const auto binding = admission ? admission->WorldBinding() : std::nullopt;
+            const auto &scene = *capabilities.initialState;
             const bool authorityRole =
                 launch.role == Net::NetworkProjectRole::DedicatedServer || launch.role == Net::NetworkProjectRole::ListenServer;
-            const bool secureGameplay =
-                authorityRole && capabilities.nativeSecurity && launch.purpose == Net::NetworkWorldCompositionPurpose::Gameplay;
-            const bool committedScene = capabilities.resources && capabilities.resources->committed &&
-                                        capabilities.initialState->scene.IsValid() &&
-                                        capabilities.initialState->scene == capabilities.resources->sceneAsset;
-            if (!secureGameplay || !committedScene || !binding || !binding->policy.initialState || !binding->initialStateHost ||
-                !capabilities.initialState->authority)
-                return Outcome::Failure(
-                    MakeError(Net::NetworkErrors::AdmissionPolicyInvalid,
-                              "Authority initial state requires secure gameplay, a committed Scene and explicit grants."));
+            const bool replicaRole = launch.role == Net::NetworkProjectRole::Client || launch.role == Net::NetworkProjectRole::ListenServer;
+            const bool compatibleAuthority = !scene.authority || authorityRole;
+            const bool compatibleReplica = !scene.replica || replicaRole;
+            const bool secureGameplay = capabilities.nativeSecurity && launch.purpose == Net::NetworkWorldCompositionPurpose::Gameplay;
+            const bool committedScene = capabilities.resources && capabilities.resources->committed && scene.scene.IsValid() &&
+                                        scene.scene == capabilities.resources->sceneAsset;
+            if (!secureGameplay || !committedScene || !binding || !binding->policy.initialState || !binding->initialStateHost)
+                return Outcome::Failure(MakeError(Net::NetworkErrors::AdmissionPolicyInvalid,
+                                                  "Initial Scene state requires secure gameplay, a committed Scene and explicit grants."));
+            if ((!scene.authority && !scene.replica) || !compatibleAuthority || !compatibleReplica)
+                return Outcome::Failure(MakeError(Net::NetworkErrors::AdmissionPolicyInvalid));
             try {
-                auto adapter = std::make_shared<HeadlessInitialStateHost>(capabilities.initialState->authority, binding->initialStateHost);
+                auto adapter = std::make_shared<HeadlessInitialStateHost>(scene.authority, binding->initialStateHost, scene.replica);
                 auto configured = NetworkProductAdmission::Capture(admission->Policy(), admission->Providers(), admission->Codecs(),
                                                                    admission->Handlers(), binding->policy, adapter);
                 if (configured.HasError())
@@ -489,7 +491,7 @@ namespace Horo::Application::Internal {
             std::shared_ptr<Clock> clock, const ProductLaunch &launch, const Net::NetworkProjectSettings &project,
             std::shared_ptr<const Runtime::RuntimeSceneDefinition> scene, const ProductWorlds &worlds,
             Net::NetworkTargetDiagnostic &diagnostic, ProductRuntimeCapabilities capabilities) {
-            auto initialHost = SelectAuthorityInitialState(launch, capabilities);
+            auto initialHost = SelectSceneInitialState(launch, capabilities);
             if (initialHost.HasError())
                 return Result<std::unique_ptr<NetworkProductHost>>::Failure(std::move(initialHost).ErrorValue());
             const auto binding = capabilities.admission ? capabilities.admission->WorldBinding() : std::nullopt;

@@ -227,10 +227,10 @@ namespace Horo::Application::Internal {
         if (auto prepared = owners->PreparePhysicsRuntime(input.mode); prepared.HasError())
             return Result<NetworkProductComposition>::Failure(prepared.ErrorValue());
         owners->configured.emplace(std::move(input));
-        if (auto &configured = *owners->configured; configured.authorityInitialState) {
+        if (auto &configured = *owners->configured; configured.initialSceneState) {
             if (!configured.publicTransforms)
                 return Result<NetworkProductComposition>::Failure(MakeError(Network::NetworkErrors::AdmissionPolicyInvalid));
-            if (auto bound = configured.authorityInitialState->BindWorlds(owners); bound.HasError())
+            if (auto bound = configured.initialSceneState->BindWorlds(owners); bound.HasError())
                 return Result<NetworkProductComposition>::Failure(std::move(bound).ErrorValue());
         }
         NetworkProductComposition composition{InstallWorldFactories(owners, std::move(selectedFactories)),

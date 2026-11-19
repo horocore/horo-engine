@@ -53,6 +53,12 @@ namespace {
     static_assert(!BypassesCaptureFactory<Horo::Network::ReplicationStateCapture>);
     static_assert(!BypassesStateCodecFactory<Horo::Network::ReplicationStateCodec>);
     static_assert(!BypassesSceneSourceFactory<Horo::Network::SceneReplicationCommitSource>);
+    using SceneApplyOwner = Horo::Network::SceneReplicationApplyOwner;
+    using SceneServiceApplyFactory = Horo::Result<std::shared_ptr<SceneApplyOwner>> (*)(
+        std::weak_ptr<Horo::Runtime::RuntimeSceneService>, Horo::Runtime::RuntimeSceneView, Horo::Runtime::RuntimeDispatchEvidence,
+        Horo::Network::ReplicationSchemaId, Horo::Network::ReplicationSchemaVersion,
+        std::span<const Horo::Network::SceneReplicationFieldBinding>);
+    static_assert(std::is_same_v<decltype(&SceneApplyOwner::CreateForService), SceneServiceApplyFactory>);
     static_assert(std::is_same_v<decltype(&Horo::Network::SceneReplicationCommitSource::AcquireCaptureReadAfterCommit),
                                  Horo::Result<Horo::Network::ReplicationWorldCaptureRead> (Horo::Network::SceneReplicationCommitSource::*)(
                                      const Horo::Network::ReplicationWorldLifecycle &, Horo::Runtime::RuntimePhase,

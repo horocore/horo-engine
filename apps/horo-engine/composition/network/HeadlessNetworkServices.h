@@ -68,6 +68,7 @@ namespace Horo::Application::Internal {
     };
 
     class IHeadlessInitialStateAuthority;
+    class IHeadlessInitialReplicaAuthority;
     class HeadlessInitialStateHost;
 
     /** @brief Existing host grant for one exact cooked Scene and selected public replication schema. */
@@ -76,6 +77,7 @@ namespace Horo::Application::Internal {
         HeadlessSceneTransformReplication transforms;
         std::vector<Network::NetworkObjectProvenance> authoredObjects;
         std::shared_ptr<const IHeadlessInitialStateAuthority> authority;
+        std::shared_ptr<const IHeadlessInitialReplicaAuthority> replica;
     };
 
     // Installs the real gameplay-world participants shared by standalone and dedicated products.
@@ -126,7 +128,7 @@ namespace Horo::Application::Internal {
         std::vector<Network::NetworkObjectProvenance>
             replicatedSceneObjects; /**< Explicit stable object/schema bindings for this definition. */
         std::optional<HeadlessSceneTransformReplication> publicTransforms;
-        std::shared_ptr<HeadlessInitialStateHost> authorityInitialState;
+        std::shared_ptr<HeadlessInitialStateHost> initialSceneState;
     };
 
     /** @brief Composes actual project Scene services and their sole aggregate-owned Physics/Character pair.

@@ -575,6 +575,17 @@ Component add/remove, reparent, and direct system-owned component writes require
 the later ECS access/scheduling contract. They are not silently emulated by the
 baseline storage API.
 
+An explicit replica host can bind the Scene service to its Runtime scheduler
+before that Scene starts, including during travel on the scheduler's owner
+lane. It can then commit an admitted local transform batch
+synchronously with the live `CommitDeferredLifecycleChanges` evidence and
+exact active Scene revision. The complete batch passes through the same Scene
+candidate validation, final cancellation check, and atomic publication as
+queued structural work. The capability carries neither mutable Scene storage
+nor permission to create, destroy, or reparent entities. Existing Scene service
+callers keep the queued contract. Rebuild native Scene consumers for the
+additive scheduler binding.
+
 ## System Contract
 
 ```cpp

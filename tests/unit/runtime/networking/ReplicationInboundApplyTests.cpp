@@ -506,4 +506,26 @@ namespace Horo::Network {
         REQUIRE(fixture.scene->Commit(foreign).HasError());
         REQUIRE(fixture.Value(0) == 0);
     }
+
+    TEST_CASE("Scene service apply cannot acquire a preparation view on a foreign lane", "[network][apply][scene]") {
+        auto service = std::make_shared<Runtime::RuntimeSceneService>();
+        Runtime::SceneDefinitionBuilder builder{{1}, {1}};
+        builder.Add(Runtime::RuntimeEntityDefinition{.object = {1}});
+        const CancellationToken cancellation;
+        REQUIRE(service->Startup(cancellation).HasValue());
+        REQUIRE(service->QueuePreparation(std::move(builder).Build().Value()).HasValue());
+        REQUIRE(service->OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, {.cancellation = cancellation}).HasValue());
+        const auto view = service->ActiveScene().value();
+        const auto mapping = Object();
+        const std::array fields{SceneReplicationFieldBinding{FieldIdValue(1), SceneReplicationProperty::TranslationX}};
+        bool stale{};
+        std::jthread foreign([&] {
+            const auto result = SceneReplicationApplyOwner::CreateForService(service, view, {}, mapping.provenance.schema,
+                                                                             mapping.provenance.schemaVersion, fields);
+            stale = result.HasError() && result.ErrorValue().code.Value() == ReplicationStateErrors::Stale.code.Value();
+        });
+        foreign.join();
+        CHECK(stale);
+        CHECK(view.IsCurrent());
+    }
 }  // namespace Horo::Network

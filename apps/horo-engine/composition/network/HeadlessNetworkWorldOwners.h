@@ -57,7 +57,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         std::unique_ptr<Gameplay::PreparedGameModuleImage>
             preparedGameplay;                                        /**< Retained through metadata qualification and scoped activation. */
         std::vector<AI::AiControllerDescriptor> admittedControllers; /**< Outlives the Scene participant's immutable borrow. */
-        std::unique_ptr<Runtime::RuntimeSceneService> scenes;
+        std::shared_ptr<Runtime::RuntimeSceneService> scenes;      /**< World owns shutdown; apply candidates observe through a weak pin. */
         std::unique_ptr<MountedWorld> mountedWorld;                /**< Retires before the Scene service it binds. */
         std::unique_ptr<Prefab::PrefabTemplateProvider> templates; /**< Retired before Scene, borrowing its real loader. */
         std::optional<HeadlessPrefabReplica> prefabReplica;        /**< Scene-side network operations for this generation only. */
