@@ -105,7 +105,9 @@ namespace Horo::Application::Internal {
 #endif
         }
 
-        [[nodiscard]] Result<Net::NetworkProjectSettings> ProjectSettings() {
+        [[nodiscard]] Result<Net::NetworkProjectSettings> ProjectSettings(HeadlessProjectSceneResources *resources) {
+            if (resources && resources->networkSettings)
+                return Result<Net::NetworkProjectSettings>::Success(std::move(*resources->networkSettings));
             auto input = Net::DefaultNetworkProjectSettings(IdentityOf<Net::NetworkProjectSettingsId>(1));
             if (input.HasError())
                 return Result<Net::NetworkProjectSettings>::Failure(input.ErrorValue());
@@ -435,6 +437,30 @@ namespace Horo::Application::Internal {
             return Version::Success(selected);
         }
 
+        /** @brief Pins the exact revisions and protocol selected for target admission. */
+        [[nodiscard]] Result<Net::NetworkTargetSelection> SelectProductTarget(const Net::NetworkProjectRole role,
+                                                                              const Net::NetworkProjectSettings &project,
+                                                                              const Net::NetworkProductCapabilityManifest &product,
+                                                                              const Net::NetworkTargetHostFacts &host,
+                                                                              const ProductRuntimeCapabilities &capabilities) {
+            using Selection = Result<Net::NetworkTargetSelection>;
+            Net::NetworkTargetSelection selection{.role = role,
+                                                  .expectedBuild = product.build,
+                                                  .expectedProductRevision = product.revision,
+                                                  .expectedHostRevision = host.revision,
+                                                  .expectedProjectRevision = project.Revision()};
+            if (role == Net::NetworkProjectRole::Standalone)
+                return Selection::Success(selection);
+            const auto *admission =
+                capabilities.resources && capabilities.resources->networkSettings ? capabilities.admission.get() : nullptr;
+            auto version = SelectProductProtocol(project.Protocol(), admission);
+            if (version.HasError())
+                return Selection::Failure(version.ErrorValue());
+            selection.provider = GnsProvider();
+            selection.protocolVersion = version.Value();
+            return Selection::Success(selection);
+        }
+
         [[nodiscard]] Result<std::unique_ptr<NetworkProductHost>> ComposeProduct(
             std::shared_ptr<Clock> clock, const ProductLaunch &launch, const Net::NetworkProjectSettings &project,
             std::shared_ptr<const Runtime::RuntimeSceneDefinition> scene, const ProductWorlds &worlds,
@@ -446,20 +472,9 @@ namespace Horo::Application::Internal {
             const auto inventory = LinkedPackageInventory(project);
             const auto hostFacts = HeadlessHostFacts(project);
             const auto requirements = ProductRequirements(launch.role);
-            Net::NetworkTargetSelection selection{.role = launch.role,
-                                                  .expectedBuild = product.build,
-                                                  .expectedProductRevision = product.revision,
-                                                  .expectedHostRevision = hostFacts.revision,
-                                                  .expectedProjectRevision = project.Revision()};
-            if (launch.role != Net::NetworkProjectRole::Standalone) {
-                const auto *admission =
-                    capabilities.resources && capabilities.resources->networkSettings ? capabilities.admission.get() : nullptr;
-                auto version = SelectProductProtocol(project.Protocol(), admission);
-                if (version.HasError())
-                    return Result<std::unique_ptr<NetworkProductHost>>::Failure(version.ErrorValue());
-                selection.provider = GnsProvider();
-                selection.protocolVersion = version.Value();
-            }
+            auto selection = SelectProductTarget(launch.role, project, product, hostFacts, capabilities);
+            if (selection.HasError())
+                return Result<std::unique_ptr<NetworkProductHost>>::Failure(selection.ErrorValue());
             const Net::NetworkModePresentation presentation{.localPlayer = launch.role == Net::NetworkProjectRole::Client ||
                                                                            launch.role == Net::NetworkProjectRole::ListenServer};
             auto debugger = CreateProductDebugger(worlds, launch.role);
@@ -477,7 +492,7 @@ namespace Horo::Application::Internal {
                                                inventory,
                                                hostFacts,
                                                requirements,
-                                               selection,
+                                               selection.Value(),
                                                1,
                                                {worlds.values.data(), worlds.count},
                                                presentation,
@@ -591,9 +606,7 @@ namespace Horo::Application::Internal {
         }
         std::unique_ptr<HeadlessProjectSceneResources> resources;
         auto scene = ResolveProductScene(launch.Value(), resources);
-        auto project = resources && resources->networkSettings
-                           ? Result<Net::NetworkProjectSettings>::Success(std::move(*resources->networkSettings))
-                           : ProjectSettings();
+        auto project = ProjectSettings(resources.get());
         if (project.HasError() || scene.HasError()) {
             const auto &failure = project.HasError() ? project.ErrorValue() : scene.ErrorValue();
             std::cerr << "horo-engine: product metadata/Scene failed (" << failure.code.Value() << "): " << failure.message << '\n';
