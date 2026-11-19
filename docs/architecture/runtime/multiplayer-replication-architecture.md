@@ -73,6 +73,14 @@ An authored object identity is retained as provenance. Clients do not derive
 network identities from local object order and require the authenticated
 initial state synchronization path for receiving mappings.
 
+The initial field snapshot uses a reliable Control manifest followed by
+contiguous record segments. The manifest declares the authoritative tick,
+record count, and total wire bytes. The inbox checks the authenticated
+connection, world session, and authority epoch on every frame. It retains
+bounded bytes in canonical object order and hands the full snapshot to the
+field decoder once. Scene state is published at the structural safe point
+after the inbound apply transaction validates every decoded record.
+
 `CaptureReplicationAuthoredScene` extracts an ordered inventory of exact
 authority identities and stable Scene provenance. It omits process-local
 entity handles and dynamic Prefab occurrences. Once a caller has admitted the

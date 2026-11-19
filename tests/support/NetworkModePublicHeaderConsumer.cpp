@@ -2,6 +2,7 @@
 #include "Horo/Network/InboundMessageDispatcher.h"
 #include "Horo/Network/NetworkAdmissionController.h"
 #include "Horo/Network/NetworkAuthoredScenePage.h"
+#include "Horo/Network/NetworkInitialStateStream.h"
 #include "Horo/Network/NetworkModeComposition.h"
 #include "Horo/Network/NetworkObjectMapping.h"
 #include "Horo/Network/NetworkPrefabLifecycle.h"
@@ -40,6 +41,7 @@ namespace {
         };
     static_assert(!std::is_default_constructible_v<Horo::Network::ProofIssuanceAuthorization>);
     static_assert(!std::is_copy_constructible_v<Horo::Network::NetworkAdmissionController>);
+    static_assert(!std::is_copy_constructible_v<Horo::Network::NetworkInitialStateInbox>);
     static_assert(!std::is_default_constructible_v<Horo::Network::NetworkAdmissionController>);
     template <typename Controller>
     concept BypassesAdmissionFactory = requires { Controller{{}, {}}; };
