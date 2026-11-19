@@ -30,6 +30,16 @@ namespace Horo::Application::Internal {
 namespace Horo::Application::Internal::HeadlessNetworkDetail {
     class HeadlessFixedParticipant;
 
+    /** @brief One exact prepared committed capture shared by the current authority world's initial recipients. */
+    struct InitialTransformCapture final {
+        Network::ReplicationWorldActivationDescriptor activation;
+        std::uint64_t mappingRevision{};
+        std::shared_ptr<const Network::ReplicationSerializerRegistry> serializers;
+        std::unique_ptr<Network::ReplicationStateCapture> capture;
+        std::uint64_t attemptedTick{};
+        std::optional<Result<void>> sample;
+    };
+
     /** @brief One generation-owned Scene/Physics pair; equal Scene IDs never imply shared storage. */
     struct WorldRecord final {
         explicit WorldRecord(const Network::NetworkModeServiceRequest &input) : request(input), native({input.scene, input.scene}) {}
@@ -49,6 +59,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         bool closed{};
         std::unique_ptr<AI::AiSceneRuntime> ai;
         std::shared_ptr<Network::SceneReplicationCommitSource> publicTransforms;
+        std::optional<InitialTransformCapture> initialTransformCapture;
         std::shared_ptr<HeadlessDecisionQueries> decisionQueries; /**< Keeps task binding and phase inventory scoped to this world. */
         AI::PerceptionSpatialBroadphase perception;
         std::unique_ptr<ProjectSceneNavigationWorld> navigation;
@@ -183,6 +194,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         if (record.fixedReserved)
             return;
         record.closed = true;
+        record.initialTransformCapture.reset();
         record.publicTransforms.reset();
         if (record.animation)
             record.animation->Shutdown();

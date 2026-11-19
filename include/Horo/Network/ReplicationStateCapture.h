@@ -145,6 +145,12 @@ namespace Horo::Network {
         std::shared_ptr<const ICommittedReplicationSource> source;
     };
 
+    /** @brief Selects publication identity at preparation for one world projection. */
+    enum class ReplicationCapturePublicationMode : std::uint8_t {
+        ChangedState, /**< Retains equal snapshots and advances a per-target revision on publication. */
+        ExactCommit,  /**< Publishes each evaluated target with its exact committed tick as revision. */
+    };
+
     /** @brief Finite preparation and per-tick work limits; all pool backing storage is reserved before reads open. */
     struct ReplicationCaptureLimits final {
         std::size_t maximumTargets{256};
@@ -154,6 +160,7 @@ namespace Horo::Network {
         std::size_t maximumTargetsPerTick{16};
         std::size_t maximumFieldsPerTick{1024};
         std::size_t maximumBytesPerTick{1024 * 1024};
+        ReplicationCapturePublicationMode publicationMode{ReplicationCapturePublicationMode::ChangedState};
     };
 
     /** @brief Owned bounded result of one rotating reconciliation pass. Failures publish no partial object. */
@@ -172,6 +179,9 @@ namespace Horo::Network {
      * reserves stable rotating reconciliation before bounded hint service under object/field/byte budgets; lost hints are reconciled and
      * duplicate hints carry no values. Shutdown precedes module/world destruction. Replace the whole
      * coordinator for descriptor or target-set replacement; Shutdown revokes all old snapshot pins.
+     * An ExactCommit owner publishes equal values for a coherent current-tick inventory, with the
+     * validated committed tick as the publication revision. Use the same mode throughout one
+     * recipient/session projection. A new world activation gives the codec and receiver a new scope.
      */
     class ReplicationStateCapture final {
         struct Impl;

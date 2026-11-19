@@ -502,6 +502,16 @@ or bypass of descriptor validation is admitted. Capture limits are borrowed as a
 const reference only during preparation, and Scene post-commit capture borrows
 the lifecycle read API as const.
 
+Configured headless initial capture shares one coordinator across recipients
+for the exact activation and mapping. Its explicit `ExactCommit` mode
+publishes every sampled row, including equal values, with the positive
+committed tick as the publication revision. The same authority source
+admits only strictly increasing ticks within the activation, including when
+the mapping changes and the inventory is rebuilt. Travel installs a separate
+Scene and world scope. Equal-value refresh and revision selection are fixed
+at preparation. Ordinary capture continues to publish changed values with
+per-object revisions. Rebuild native consumers of the additive capture limits.
+
 Read and capture guards are noncopyable and nonmovable, so each successful owner
 read closes exactly once. A misbehaving native owner or codec may throw a foreign
 exception outside the ordinary nonthrowing adapter contract. The candidate fault
@@ -671,6 +681,12 @@ each), and field count (`u32`). Each ascending distinct field carries
 retain their declared codec's byte order. Full records have zero baseline identity
 and contain the complete selected projection. Delta roots require the exact decoded
 object/schema/session/projection generation, host-resolved entity mapping, tick and publication revision.
+
+The codec and receiver interpret publication order within the existing
+world/session/object/projection identity. The headless exact-commit capture
+feeds only the initial Spawn projection. It sends the same committed
+revision to eligible recipients of that capture. Incremental baseline
+history remains scoped to its separately admitted Update projection.
 
 Decode performs a complete allocation-free framing pass before invoking a codec.
 It bounds counts, tags, ordering, lengths and the complete wire record, copies the

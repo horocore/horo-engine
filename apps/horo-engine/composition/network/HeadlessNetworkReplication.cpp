@@ -47,6 +47,81 @@ namespace Horo::Application::Internal {
                    peer.Connection() == expected.connection;
         }
 
+        /** @brief Resolves and rechecks the live remote recipient before opening canonical capture. */
+        Result<HeadlessInitialRecipient> ResolveAuthorityGrant(const IHeadlessInitialStateAuthority &authority, const WorldRecord &record,
+                                                               const Net::ReplicationWorldReadLease &world,
+                                                               const Net::PeerSessionLifecycle &peer) {
+            using Grant = Result<HeadlessInitialRecipient>;
+            const auto *authenticated = peer.Authentication();
+            if (peer.State() != Net::PeerSessionState::Active || !authenticated)
+                return Grant::Failure(MakeError(Net::NetworkErrors::AuthenticationRejected));
+            const auto evidence = *authenticated;
+            auto grant = authority.Resolve(evidence, world);
+            if (grant.HasError())
+                return grant;
+            if (!world.HasCurrentMapping() || record.closeRequested)
+                return Grant::Failure(MakeError(Net::NetworkErrors::ReplicationWorldStale));
+            if (!SameInitialAuthentication(peer, evidence))
+                return Grant::Failure(MakeError(Net::NetworkErrors::AuthenticationRejected));
+            const auto &recipient = grant.Value();
+            if (!recipient.peer.IsValid() || recipient.descriptorGeneration == 0 ||
+                recipient.ownership.size() != world.Mapping().Entries().size())
+                return Grant::Failure(MakeError(Net::NetworkErrors::ReplicationDescriptorIncompatible));
+            return grant;
+        }
+
+        /** @brief Current replica scope held only while preparing this one structural transaction. */
+        struct InitialReplicaRead final {
+            std::shared_ptr<WorldRecord> record;
+            Net::ReplicationWorldReadLease mapping;
+            Runtime::RuntimeDispatchEvidence dispatch;
+        };
+
+        /** @brief Acquires the actual committed replica mapping from the canonical live structural dispatch. */
+        Result<InitialReplicaRead> OpenInitialReplica(const HeadlessNetworkDetail::WorldOwners &owners,
+                                                      const Net::ReplicationInboundAuthority &authority,
+                                                      const Net::ReplicationWorldLifecycle &world, std::size_t expectedObjects) {
+            using Read = Result<InitialReplicaRead>;
+            const auto record = FindInitialWorld(owners, authority.scene, Net::NetworkModeWorldKind::Client);
+            if (!record || !record->scenes || !record->activeGameplay)
+                return Read::Failure(MakeError(Net::NetworkErrors::ReplicationWorldStale));
+            const auto dispatch = owners.fixed->SceneDispatch();
+            Runtime::RuntimeDispatchFacts facts;
+            if (dispatch.Read(owners.fixed->Source(), CommitPhase, facts) != Runtime::RuntimeDispatchStatus::Valid)
+                return Read::Failure(MakeError(Net::NetworkErrors::ReplicationWorldPhaseInvalid));
+            auto mapping = world.Acquire({authority.scene, authority.networkSession, CommitPhase, facts.committedTick + 1});
+            if (mapping.HasError())
+                return Read::Failure(std::move(mapping).ErrorValue());
+            if (expectedObjects != mapping.Value().Mapping().Entries().size())
+                return Read::Failure(MakeError(Net::NetworkErrors::ReplicationDescriptorIncompatible));
+            return Read::Success({record, std::move(mapping).Value(), dispatch});
+        }
+
+        /** @brief Resolves the exact negotiated descriptor from the same live admitted replica session. */
+        Result<HeadlessInitialRecipient> ResolveReplicaGrant(const IHeadlessInitialReplicaAuthority &replica,
+                                                             const InitialReplicaRead &read,
+                                                             const Net::ReplicationInboundAuthority &authority,
+                                                             std::span<const Net::ReplicationInitialOwnership> ownership,
+                                                             std::uint64_t now) {
+            using Grant = Result<HeadlessInitialRecipient>;
+            const auto &peer = authority.session;
+            if (!peer || peer->AdmitGameplay(authority.connection, authority.generation, now).HasError() || !peer->Authentication() ||
+                !peer->Negotiation())
+                return Grant::Failure(MakeError(Net::NetworkErrors::AuthenticationRejected));
+            const auto accepted = *peer->Authentication();
+            const auto negotiated = *peer->Negotiation();
+            const auto generation = replica.DescriptorGeneration(accepted, negotiated);
+            if (generation.HasError())
+                return Grant::Failure(generation.ErrorValue());
+            if (!SameInitialAuthentication(*peer, accepted))
+                return Grant::Failure(MakeError(Net::NetworkErrors::AuthenticationRejected));
+            if (!read.mapping.HasCurrentMapping() || read.record->closeRequested)
+                return Grant::Failure(MakeError(Net::NetworkErrors::ReplicationWorldStale));
+            if (generation.Value() == 0)
+                return Grant::Failure(MakeError(Net::NetworkErrors::ReplicationDescriptorIncompatible));
+            return Grant::Success({authority.localRecipient, generation.Value(), {ownership.begin(), ownership.end()}});
+        }
+
         /** @brief Pins the very same native module and immutable serializer generation selected by client or server activation. */
         std::shared_ptr<const Net::ReplicationSerializerRegistry> PinInitialSerializers(const WorldRecord &record) {
             const auto *installed = record.activeGameplay ? record.activeGameplay->Replication() : nullptr;
@@ -78,48 +153,86 @@ namespace Horo::Application::Internal {
             return Codecs::Success(std::move(codecs));
         }
 
-        /** @brief Samples every exact eligible row of this newly requested initial inventory at one canonical commit. */
-        InitialCapture CaptureInitialTransforms(const WorldRecord &record, const Net::ReplicationWorldReadLease &world,
-                                                const Net::ReplicationWorldLifecycle &lifecycle, const HeadlessInitialRecipient &grant,
-                                                std::size_t maximumWireBytes) {
-            const auto cancellation = world.Cancellation();
-            const auto &source = record.publicTransforms;
-            const auto read = source->AcquireCaptureReadAfterCommit(lifecycle, FlushPhase, cancellation);
-            if (read.HasError())
-                return InitialCaptureFailure(read.ErrorValue());
-            if (read.Value().Descriptor() != world.Descriptor() || read.Value().MappingRevision() != world.MappingRevision())
-                return InitialCapture::Failure(MakeError(Net::NetworkErrors::ReplicationWorldStale));
-            const auto entries = world.Mapping().Entries();
-            const auto tick = read.Value().SimulationTick();
-            if (entries.empty())
-                return InitialCapture::Success(
-                    Net::ReplicationInitialStateSnapshot{world.Descriptor().session, world.Descriptor().authority, tick});
+        /** @brief Prepares one exact authority inventory before any recipient-specific projection. */
+        Result<HeadlessNetworkDetail::InitialTransformCapture *> PrepareInitialInventory(
+            WorldRecord &record, const Net::ReplicationWorldCaptureRead &read, std::span<const Net::NetworkObjectMappingEntry> entries) {
+            using Inventory = Result<HeadlessNetworkDetail::InitialTransformCapture *>;
+            auto &inventory = record.initialTransformCapture;
+            if (inventory && inventory->activation == read.Descriptor() && inventory->mappingRevision == read.MappingRevision())
+                return Inventory::Success(&*inventory);
+
             Net::ReplicationCaptureLimits limits;
             if (entries.size() > limits.maximumTargets)
-                return InitialCapture::Failure(MakeError(Net::ReplicationCaptureErrors::Capacity));
+                return Inventory::Failure(MakeError(Net::ReplicationCaptureErrors::Capacity));
             limits.maximumTargetsPerTick = entries.size();
+            limits.publicationMode = Net::ReplicationCapturePublicationMode::ExactCommit;
             const auto serializers = PinInitialSerializers(record);
             if (!serializers)
-                return InitialCapture::Failure(MakeError(Net::NetworkErrors::ReplicationDescriptorIncompatible));
-            auto codecs = ProjectInitialCodecs(world, grant, serializers);
-            if (codecs.HasError())
-                return InitialCapture::Failure(std::move(codecs).ErrorValue());
+                return Inventory::Failure(MakeError(Net::NetworkErrors::ReplicationDescriptorIncompatible));
             std::vector<Net::ReplicationCaptureTarget> targets;
             targets.reserve(entries.size());
             for (const auto &entry : entries)
-                targets.push_back({entry, source});
-            auto capture = Net::ReplicationStateCapture::Prepare(read.Value(), serializers, targets, limits);
+                targets.push_back({entry, record.publicTransforms});
+            auto capture = Net::ReplicationStateCapture::Prepare(read, serializers, targets, limits);
             if (capture.HasError())
-                return InitialCapture::Failure(std::move(capture).ErrorValue());
-            const auto report = capture.Value()->CaptureAtCommit(read.Value(), tick, cancellation);
+                return Inventory::Failure(std::move(capture).ErrorValue());
+            auto &prepared = inventory.emplace(read.Descriptor(), read.MappingRevision(), serializers, std::move(capture).Value());
+            return Inventory::Success(&prepared);
+        }
+
+        /** @brief Validates complete publication of the shared inventory at the given actual commit. */
+        Result<void> CaptureInitialInventory(HeadlessNetworkDetail::InitialTransformCapture &inventory,
+                                             const Net::ReplicationWorldCaptureRead &read, std::size_t count,
+                                             const CancellationToken &cancellation) {
+            const auto report = inventory.capture->CaptureAtCommit(read, read.SimulationTick(), cancellation);
             if (report.HasError())
-                return InitialCapture::Failure(report.ErrorValue());
+                return Result<void>::Failure(report.ErrorValue());
             if (const auto &error = report.Value().firstError; error)
-                return InitialCaptureFailure(*error);
-            if (report.Value().published != entries.size())
-                return InitialCapture::Failure(MakeError(Net::ReplicationCaptureErrors::Capacity));
-            auto encoded =
-                Net::EncodeReplicationInitialState(world, *capture.Value(), tick, codecs.Value(), maximumWireBytes, cancellation);
+                return Result<void>::Failure(*error);
+            if (report.Value().published != count)
+                return Result<void>::Failure(MakeError(Net::ReplicationCaptureErrors::Capacity));
+            return Result<void>::Success();
+        }
+
+        /** @brief Shares exactly one attempt for every recipient at the current committed tick. */
+        Result<void> SampleInitialInventory(HeadlessNetworkDetail::InitialTransformCapture &inventory,
+                                            const Net::ReplicationWorldCaptureRead &read, std::size_t count,
+                                            const CancellationToken &cancellation) {
+            const auto tick = read.SimulationTick();
+            if (inventory.attemptedTick != tick) {
+                inventory.sample.reset();
+                inventory.attemptedTick = tick;
+                inventory.sample.emplace(CaptureInitialInventory(inventory, read, count, cancellation));
+            }
+            return inventory.sample ? *inventory.sample : Result<void>::Failure(MakeError(Net::ReplicationCaptureErrors::Capacity));
+        }
+
+        /** @brief Projects the shared canonical committed inventory for one exact remote recipient. */
+        InitialCapture CaptureInitialTransforms(WorldRecord &record, const Net::ReplicationWorldReadLease &world,
+                                                const Net::ReplicationWorldLifecycle &lifecycle, const HeadlessInitialRecipient &grant,
+                                                std::size_t maximumWireBytes) {
+            const auto cancellation = world.Cancellation();
+            const auto opened = record.publicTransforms->AcquireCaptureReadAfterCommit(lifecycle, FlushPhase, cancellation);
+            if (opened.HasError())
+                return InitialCaptureFailure(opened.ErrorValue());
+            const auto &read = opened.Value();
+            if (read.Descriptor() != world.Descriptor() || read.MappingRevision() != world.MappingRevision())
+                return InitialCapture::Failure(MakeError(Net::NetworkErrors::ReplicationWorldStale));
+            const auto entries = world.Mapping().Entries();
+            if (entries.empty())
+                return InitialCapture::Success(
+                    Net::ReplicationInitialStateSnapshot{world.Descriptor().session, world.Descriptor().authority, read.SimulationTick()});
+            const auto prepared = PrepareInitialInventory(record, read, entries);
+            if (prepared.HasError())
+                return InitialCapture::Failure(prepared.ErrorValue());
+            auto &inventory = *prepared.Value();
+            auto codecs = ProjectInitialCodecs(world, grant, inventory.serializers);
+            if (codecs.HasError())
+                return InitialCapture::Failure(std::move(codecs).ErrorValue());
+            if (const auto sampled = SampleInitialInventory(inventory, read, entries.size(), cancellation); sampled.HasError())
+                return InitialCaptureFailure(sampled.ErrorValue());
+            auto encoded = Net::EncodeReplicationInitialState(world, *inventory.capture, read.SimulationTick(), codecs.Value(),
+                                                              maximumWireBytes, cancellation);
             return encoded.HasError() ? InitialCapture::Failure(std::move(encoded).ErrorValue())
                                       : InitialCapture::Success(std::move(encoded).Value());
         }
@@ -475,23 +588,11 @@ namespace Horo::Application::Internal {
         const auto record = FindInitialWorld(*owners, world.Descriptor().scene, Net::NetworkModeWorldKind::AuthorityServer);
         if (!record || !record->publicTransforms || !record->activeGameplay)
             return InitialCapture::Failure(MakeError(Net::NetworkErrors::ReplicationDescriptorIncompatible));
-        const auto *authenticated = peer.Authentication();
-        if (peer.State() != Net::PeerSessionState::Active || !authenticated)
-            return InitialCapture::Failure(MakeError(Net::NetworkErrors::AuthenticationRejected));
-        const auto evidence = *authenticated;
         try {
-            const auto grant = authority_->Resolve(evidence, world);
+            auto grant = ResolveAuthorityGrant(*authority_, *record, world, peer);
             if (grant.HasError())
-                return InitialCapture::Failure(grant.ErrorValue());
-            if (!world.HasCurrentMapping() || record->closeRequested)
-                return InitialCapture::Failure(MakeError(Net::NetworkErrors::ReplicationWorldStale));
-            if (!SameInitialAuthentication(peer, evidence))
-                return InitialCapture::Failure(MakeError(Net::NetworkErrors::AuthenticationRejected));
-            const auto &recipient = grant.Value();
-            if (!recipient.peer.IsValid() || recipient.descriptorGeneration == 0 ||
-                recipient.ownership.size() != world.Mapping().Entries().size())
-                return InitialCapture::Failure(MakeError(Net::NetworkErrors::ReplicationDescriptorIncompatible));
-            return CaptureInitialTransforms(*record, world, lifecycle, recipient, maximumWireBytes);
+                return InitialCapture::Failure(std::move(grant).ErrorValue());
+            return CaptureInitialTransforms(*record, world, lifecycle, grant.Value(), maximumWireBytes);
         } catch (const std::bad_alloc &) {
             return InitialCapture::Failure(MakeError(Net::ReplicationCaptureErrors::Capacity));
         }
@@ -506,36 +607,16 @@ namespace Horo::Application::Internal {
         const auto owners = worlds_.lock();
         if (!owners || !owners->configured || !owners->configured->publicTransforms || !owners->fixed)
             return InitialReceiver::Failure(MakeError(Net::NetworkErrors::ReplicationWorldStale));
-        const auto record = FindInitialWorld(*owners, authority.scene, Net::NetworkModeWorldKind::Client);
-        if (!record || !record->scenes || !record->activeGameplay)
-            return InitialReceiver::Failure(MakeError(Net::NetworkErrors::ReplicationWorldStale));
-        const auto dispatch = owners->fixed->SceneDispatch();
-        Runtime::RuntimeDispatchFacts facts;
-        if (dispatch.Read(owners->fixed->Source(), CommitPhase, facts) != Runtime::RuntimeDispatchStatus::Valid)
-            return InitialReceiver::Failure(MakeError(Net::NetworkErrors::ReplicationWorldPhaseInvalid));
-        const auto mapping = world.Acquire({authority.scene, authority.networkSession, CommitPhase, facts.committedTick + 1});
-        if (mapping.HasError())
-            return InitialReceiver::Failure(mapping.ErrorValue());
-        if (ownership.size() != mapping.Value().Mapping().Entries().size())
-            return InitialReceiver::Failure(MakeError(Net::NetworkErrors::ReplicationDescriptorIncompatible));
-        if (!authority.session || authority.session->AdmitGameplay(authority.connection, authority.generation, now).HasError() ||
-            !authority.session->Authentication() || !authority.session->Negotiation())
-            return InitialReceiver::Failure(MakeError(Net::NetworkErrors::AuthenticationRejected));
-        const auto accepted = *authority.session->Authentication();
-        const auto negotiated = *authority.session->Negotiation();
+        const auto opened = OpenInitialReplica(*owners, authority, world, ownership.size());
+        if (opened.HasError())
+            return InitialReceiver::Failure(opened.ErrorValue());
+        const auto &read = opened.Value();
         try {
-            const auto generation = replica_->DescriptorGeneration(accepted, negotiated);
-            if (generation.HasError())
-                return InitialReceiver::Failure(generation.ErrorValue());
-            if (!SameInitialAuthentication(*authority.session, accepted))
-                return InitialReceiver::Failure(MakeError(Net::NetworkErrors::AuthenticationRejected));
-            if (!mapping.Value().HasCurrentMapping() || record->closeRequested)
-                return InitialReceiver::Failure(MakeError(Net::NetworkErrors::ReplicationWorldStale));
-            if (generation.Value() == 0)
-                return InitialReceiver::Failure(MakeError(Net::NetworkErrors::ReplicationDescriptorIncompatible));
-            const HeadlessInitialRecipient grant{authority.localRecipient, generation.Value(), {ownership.begin(), ownership.end()}};
-            return PrepareReplicaReceiver(*record, world, mapping.Value(), authority, grant, *owners->configured->publicTransforms,
-                                          dispatch, now);
+            auto grant = ResolveReplicaGrant(*replica_, read, authority, ownership, now);
+            if (grant.HasError())
+                return InitialReceiver::Failure(std::move(grant).ErrorValue());
+            return PrepareReplicaReceiver(*read.record, world, read.mapping, authority, grant.Value(),
+                                          *owners->configured->publicTransforms, read.dispatch, now);
         } catch (const std::bad_alloc &) {
             return InitialReceiver::Failure(MakeError(Net::ReplicationCaptureErrors::Capacity));
         }

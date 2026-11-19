@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <functional>
 #include <memory>
 
 namespace Horo::Network::ModeBindingTests {
@@ -118,13 +119,16 @@ namespace Horo::Network::ModeBindingTests {
             return Result<ConnectionHandle>::Failure(MakeError(NetworkErrors::TransportNativeUnavailable));
         }
 
-        Result<void> Send(ConnectionHandle, ChannelId channel, std::span<const std::byte> bytes, DeliveryPolicy delivery) override {
+        Result<void> Send(ConnectionHandle destination, ChannelId channel, std::span<const std::byte> bytes,
+                          DeliveryPolicy delivery) override {
             if (bytes.size() > sent.size() || channel.Value() != 0 || delivery != DeliveryPolicy::ReliableOrdered)
                 return Result<void>::Failure(MakeError(NetworkErrors::TransportLimitExceeded));
             if (backpressure)
                 return Result<void>::Failure(MakeError(NetworkErrors::TransportReliableBackpressure));
             std::copy(bytes.begin(), bytes.end(), sent.begin());
             size = bytes.size();
+            if (observeSend)
+                observeSend(destination, bytes);
             return Result<void>::Success();
         }
 
@@ -167,6 +171,7 @@ namespace Horo::Network::ModeBindingTests {
         }
 
         std::array<std::byte, 8192> sent;
+        std::function<void(ConnectionHandle, std::span<const std::byte>)> observeSend;
         const std::uint64_t maximumMessageBytes;
         std::size_t size{};
         NetworkTransportEvent event;

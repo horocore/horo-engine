@@ -264,11 +264,14 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             if (record_ && record_->prefabReplica)
                 record_->prefabReplica->Cancel();
             if (IsSceneOwner() && record_->activeGameplay) {
+                record_->initialTransformCapture.reset();
                 record_->activeGameplay->Shutdown();
                 record_->activeGameplay = nullptr;
             }
-            if (record_ && record_->activeGameplay == gameplay_.get())
+            if (record_ && gameplay_ && record_->activeGameplay == gameplay_.get()) {
+                record_->initialTransformCapture.reset();
                 record_->activeGameplay = nullptr;
+            }
             if (gameplay_)
                 gameplay_->Shutdown();
             gameplay_.reset();

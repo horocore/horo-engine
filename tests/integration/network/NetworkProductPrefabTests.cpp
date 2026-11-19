@@ -55,9 +55,10 @@ namespace Horo::Network {
                                                                             const ReplicationWorldReadLease &world) const override {
                 using Grant = Result<Application::Internal::HeadlessInitialRecipient>;
                 ++resolutions;
-                if (!credential || authenticated != *credential)
+                const auto recipient = std::ranges::find(credentials, authenticated, &Credential::first);
+                if (recipient == credentials.end())
                     return Grant::Failure(MakeError(NetworkErrors::AuthenticationRejected));
-                Application::Internal::HeadlessInitialRecipient grant{Id<NetworkPeerId>(71), 9, {}};
+                Application::Internal::HeadlessInitialRecipient grant{recipient->second, 9, {}};
                 for (const auto &row : world.Mapping().Entries())
                     grant.ownership.push_back({row.object, Id<ReplicationRoleRevision>(6), {}});
                 if (afterResolve)
@@ -65,7 +66,8 @@ namespace Horo::Network {
                 return Grant::Success(std::move(grant));
             }
 
-            std::optional<AuthenticationResult> credential;
+            using Credential = std::pair<AuthenticationResult, NetworkPeerId>;
+            std::vector<Credential> credentials;
             std::function<void()> afterResolve;
             mutable unsigned resolutions{};
         };
@@ -282,24 +284,34 @@ namespace Horo::Network {
         wire.AttachOwner(owners->sessions->WorldBinding());
         const auto binding = wire.binding.lock();
         REQUIRE(binding);
-        const auto peer = ModeBindingTests::Negotiating(Connection(), Session());
-        ModeBindingTests::CompleteAdmission(peer, Session(), owners->worldSetup.policy.initialState->feature);
-        REQUIRE(peer->Authentication());
-        authority->credential = *peer->Authentication();
-        REQUIRE(owners->sessions->OnSessionActivated(AdmissionEndpoint::Server, peer, Session(), 22).HasValue());
-        wire.RegisterClient(peer);
+        const auto admitPeer = [&](ConnectionHandle connection, NetworkOperationGeneration generation, NetworkPeerId recipient) {
+            const auto peer = ModeBindingTests::Negotiating(connection, generation);
+            ModeBindingTests::CompleteAdmission(peer, generation, owners->worldSetup.policy.initialState->feature);
+            REQUIRE(peer->Authentication());
+            authority->credentials.emplace_back(*peer->Authentication(), recipient);
+            REQUIRE(owners->sessions->OnSessionActivated(AdmissionEndpoint::Server, peer, generation, 22).HasValue());
+            wire.RegisterClient(peer);
+            return peer;
+        };
+        const auto peer = admitPeer(Connection(), Session(), Id<NetworkPeerId>(71));
+        std::shared_ptr<PeerSessionLifecycle> secondPeer;
+        if (!replacePeerDuringGrant)
+            secondPeer = admitPeer(ConnectionHandle::Create(3, 1).Value(), Session(8), Id<NetworkPeerId>(72));
+        std::vector<std::pair<ConnectionHandle, NetworkInitialStateStamp>> manifests;
+        wire.transport.observeSend = [&](ConnectionHandle destination, std::span<const std::byte> payload) {
+            const auto frame = DecodeMessageEnvelope(payload, *wire.setup.codecs).Value();
+            if (frame.message == wire.setup.policy.initialState->control.id)
+                manifests.emplace_back(destination, ReadNetworkInitialStateStamp(frame.payload).Value());
+        };
         owners->onTransportFlush = [&] {
             REQUIRE(binding->Flush(22).HasValue());
         };
-        for (std::size_t frame{}; frame < 10 && authority->resolutions == 0; ++frame)
+        for (std::size_t frame{}; frame < 10 && authority->resolutions < authority->credentials.size(); ++frame)
             REQUIRE(host->RunFrame().HasValue());
-        REQUIRE(authority->resolutions > 0);
+        REQUIRE(authority->resolutions >= authority->credentials.size());
         CHECK(fixedTick == spawnFrameTick);
         REQUIRE(wire.transport.size > 0);
-        const auto outgoing = [&] {
-            return DecodeMessageEnvelope(std::span{wire.transport.sent}.first(wire.transport.size), *wire.setup.codecs).Value();
-        };
-        CHECK(outgoing().message != wire.setup.policy.initialState->control.id);
+        CHECK(manifests.empty());
         CHECK(peer->State() == PeerSessionState::Active);
 
         bool replacedActivePeer{};
@@ -325,6 +337,7 @@ namespace Horo::Network {
         const auto capturedFrame = host->RunFrame();
         owners->onTransportFlush = {};
         authority->afterResolve = {};
+        wire.transport.observeSend = {};
         REQUIRE(capturedFrame.HasValue());
         REQUIRE(fixedTick > spawnFrameTick);
         REQUIRE(committed.has_value());
@@ -332,16 +345,16 @@ namespace Horo::Network {
             UNSCOPED_INFO(committed->ErrorValue().message);
         REQUIRE(committed->HasValue());
         CHECK(currentAtFlush);
-        const auto manifest = outgoing();
         if (replacePeerDuringGrant) {
             CHECK(replacedActivePeer);
-            CHECK(manifest.message != wire.setup.policy.initialState->control.id);
+            CHECK(manifests.empty());
         } else {
-            REQUIRE(manifest.message == wire.setup.policy.initialState->control.id);
-            const auto stamp = ReadNetworkInitialStateStamp(manifest.payload).Value();
-            CHECK(stamp.session == spawned.Descriptor().session);
-            CHECK(stamp.authority == spawned.Descriptor().authority);
-            CHECK(stamp.tick == fixedTick);
+            REQUIRE(manifests.size() == 2);
+            CHECK(manifests[0].first == peer->Connection());
+            CHECK(manifests[1].first == secondPeer->Connection());
+            const NetworkInitialStateStamp expected{spawned.Descriptor().session, spawned.Descriptor().authority, fixedTick};
+            CHECK(manifests[0].second == expected);
+            CHECK(manifests[1].second == expected);
         }
         CHECK(delegate->calls == 0);
 

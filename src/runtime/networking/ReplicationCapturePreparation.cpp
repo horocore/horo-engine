@@ -38,7 +38,8 @@ namespace Horo::Network {
             return limits.maximumTargets > 0 && limits.maximumTargets <= 4096 && targetCount > 0 && targetCount <= limits.maximumTargets &&
                    limits.maximumFieldsPerTarget > 0 && limits.maximumFieldsPerTarget <= 1024 && limits.snapshotSlotsPerTarget >= 2 &&
                    limits.snapshotSlotsPerTarget <= 64 && limits.maximumPreparedBytes > 0 && limits.maximumTargetsPerTick > 0 &&
-                   limits.maximumFieldsPerTick > 0 && limits.maximumBytesPerTick > 0;
+                   limits.maximumFieldsPerTick > 0 && limits.maximumBytesPerTick > 0 &&
+                   limits.publicationMode <= ReplicationCapturePublicationMode::ExactCommit;
         }
     }  // namespace
 

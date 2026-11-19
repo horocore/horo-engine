@@ -388,6 +388,37 @@ namespace Horo::Application::Internal {
             std::shared_ptr<const HeadlessInitialStateSelection> initialState;
         };
 
+        /** @brief Selects only the explicit initial-state lanes supported by this product role. */
+        [[nodiscard]] bool SupportsInitialSceneRoles(Net::NetworkProjectRole role, const HeadlessInitialStateSelection &scene) noexcept {
+            switch (role) {
+                case Net::NetworkProjectRole::DedicatedServer:
+                    return scene.authority && !scene.replica;
+                case Net::NetworkProjectRole::Client:
+                    return scene.replica && !scene.authority;
+                case Net::NetworkProjectRole::ListenServer:
+                    return scene.authority || scene.replica;
+                default:
+                    return false;
+            }
+        }
+
+        /** @brief Qualifies the committed Scene and secure role before opening any initial-state authority. */
+        [[nodiscard]] Result<void> ValidateInitialSceneSelection(const ProductLaunch &launch,
+                                                                 const ProductRuntimeCapabilities &capabilities,
+                                                                 const std::optional<Net::NetworkWorldBindingSetup> &binding) {
+            const auto &scene = *capabilities.initialState;
+            const bool secureGameplay = capabilities.nativeSecurity && launch.purpose == Net::NetworkWorldCompositionPurpose::Gameplay;
+            const bool committedScene = capabilities.resources && capabilities.resources->committed && scene.scene.IsValid() &&
+                                        scene.scene == capabilities.resources->sceneAsset;
+            if (!secureGameplay || !committedScene || !binding || !binding->policy.initialState || !binding->initialStateHost)
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::AdmissionPolicyInvalid,
+                              "Initial Scene state requires secure gameplay, a committed Scene and explicit grants."));
+            if (!SupportsInitialSceneRoles(launch.role, scene))
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::AdmissionPolicyInvalid));
+            return Result<void>::Success();
+        }
+
         /** @brief Retain the same adapter in the world binding and selected secure transport factory. */
         [[nodiscard]] Result<std::shared_ptr<HeadlessInitialStateHost>> SelectSceneInitialState(const ProductLaunch &launch,
                                                                                                 ProductRuntimeCapabilities &capabilities) {
@@ -397,19 +428,8 @@ namespace Horo::Application::Internal {
             const auto &admission = capabilities.admission;
             const auto binding = admission ? admission->WorldBinding() : std::nullopt;
             const auto &scene = *capabilities.initialState;
-            const bool authorityRole =
-                launch.role == Net::NetworkProjectRole::DedicatedServer || launch.role == Net::NetworkProjectRole::ListenServer;
-            const bool replicaRole = launch.role == Net::NetworkProjectRole::Client || launch.role == Net::NetworkProjectRole::ListenServer;
-            const bool compatibleAuthority = !scene.authority || authorityRole;
-            const bool compatibleReplica = !scene.replica || replicaRole;
-            const bool secureGameplay = capabilities.nativeSecurity && launch.purpose == Net::NetworkWorldCompositionPurpose::Gameplay;
-            const bool committedScene = capabilities.resources && capabilities.resources->committed && scene.scene.IsValid() &&
-                                        scene.scene == capabilities.resources->sceneAsset;
-            if (!secureGameplay || !committedScene || !binding || !binding->policy.initialState || !binding->initialStateHost)
-                return Outcome::Failure(MakeError(Net::NetworkErrors::AdmissionPolicyInvalid,
-                                                  "Initial Scene state requires secure gameplay, a committed Scene and explicit grants."));
-            if ((!scene.authority && !scene.replica) || !compatibleAuthority || !compatibleReplica)
-                return Outcome::Failure(MakeError(Net::NetworkErrors::AdmissionPolicyInvalid));
+            if (const auto valid = ValidateInitialSceneSelection(launch, capabilities, binding); valid.HasError())
+                return Outcome::Failure(valid.ErrorValue());
             try {
                 auto adapter = std::make_shared<HeadlessInitialStateHost>(scene.authority, binding->initialStateHost, scene.replica);
                 auto configured = NetworkProductAdmission::Capture(admission->Policy(), admission->Providers(), admission->Codecs(),

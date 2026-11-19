@@ -22,6 +22,29 @@ namespace Horo::Network {
         REQUIRE(fixture.owner->begins == fixture.owner->ends);
     }
 
+    TEST_CASE("Exact commit capture shares a monotonic tick revision across equal samples and mapping replacement", "[network][capture]") {
+        Fixture fixture;
+        ReplicationCaptureLimits limits;
+        limits.publicationMode = ReplicationCapturePublicationMode::ExactCommit;
+        const std::array targets{ReplicationCaptureTarget{Object(), fixture.owner}};
+        auto capture = ReplicationStateCapture::Prepare(Read(fixture.lifecycle), fixture.registry, targets, limits).Value();
+        fixture.owner->Commit(7, 3.0);
+        REQUIRE(capture->CaptureAtCommit(Read(fixture.lifecycle, 7), 7).Value().published == 1);
+        const auto first = capture->Latest(Object().object).Value();
+        CHECK(first->PublicationRevision() == 7);
+        REQUIRE(capture->CaptureAtCommit(Read(fixture.lifecycle, 7), 7).HasError());
+        fixture.owner->Commit(8, 3.0);
+        REQUIRE(capture->CaptureAtCommit(Read(fixture.lifecycle, 8), 8).Value().published == 1);
+        CHECK(capture->Latest(Object().object).Value()->PublicationRevision() == 8);
+
+        REQUIRE(fixture.lifecycle.RegisterObject(World().scene, World().session, Object(2)).HasValue());
+        CHECK_FALSE(first->IsCurrent());
+        capture = ReplicationStateCapture::Prepare(Read(fixture.lifecycle, 9), fixture.registry, targets, limits).Value();
+        fixture.owner->Commit(9, 3.0);
+        REQUIRE(capture->CaptureAtCommit(Read(fixture.lifecycle, 9), 9).Value().published == 1);
+        CHECK(capture->Latest(Object().object).Value()->PublicationRevision() == 9);
+    }
+
     TEST_CASE("Lost hints reconcile through a stable bounded rotating cursor", "[network][capture]") {
         auto lifecycle = Lifecycle();
         auto codec = std::make_shared<CountingCodec>();
