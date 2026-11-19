@@ -75,6 +75,17 @@ namespace Horo::Network {
                 REQUIRE(delivered.lastPacketRejection.has_value());
                 CHECK(delivered.lastPacketRejection->code.Value() == NetworkErrors::MessageDeliveryDuplicate.code.Value());
             }
+
+            void ReceiveRecord(const ReplicationInitialStateSnapshot &snapshot, std::size_t index) {
+                std::size_t offset{};
+                while (offset < snapshot.records[index].wire.size()) {
+                    auto segment =
+                        EncodeNetworkInitialStateSegment(snapshot, index, offset, NetworkInitialStateSegmentHeaderBytes + 31).Value();
+                    REQUIRE(segment.nextOffset > offset);
+                    Receive(std::move(segment.payload));
+                    offset = segment.nextOffset;
+                }
+            }
         };
     }  // namespace
 
@@ -84,40 +95,50 @@ namespace Horo::Network {
         StreamReceiver receiver{fixture};
 
         receiver.Receive(EncodeNetworkInitialStateManifest(snapshot).Value());
-        CHECK(receiver.inbox->Take(22).HasError());
-        for (std::size_t index{}; index < snapshot.records.size(); ++index) {
-            std::size_t offset{};
-            while (offset < snapshot.records[index].wire.size()) {
-                auto segment =
-                    EncodeNetworkInitialStateSegment(snapshot, index, offset, NetworkInitialStateSegmentHeaderBytes + 31).Value();
-                REQUIRE(segment.nextOffset > offset);
-                receiver.Receive(std::move(segment.payload));
-                offset = segment.nextOffset;
-            }
-            if (index + 1 < snapshot.records.size())
-                CHECK(receiver.inbox->Take(22).HasError());
-        }
-        CHECK_FALSE(fixture.Apply().Value().initialPublished);
+        CHECK_FALSE(receiver.inbox->ApplyCompleted(*fixture.inbound, fixture.Work(), 22).Value().initialPublished);
+        REQUIRE(snapshot.records.size() == 2);
+        receiver.ReceiveRecord(snapshot, 0);
+        CHECK_FALSE(receiver.inbox->ApplyCompleted(*fixture.inbound, fixture.Work(), 22).Value().initialPublished);
+        receiver.ReceiveRecord(snapshot, 1);
+        auto wrongPhase = fixture.Work();
+        wrongPhase.phase = Runtime::RuntimePhase::NetworkPoll;
+        CHECK(receiver.inbox->ApplyCompleted(*fixture.inbound, wrongPhase, 22).HasError());
+        ApplyFixture otherPeer{{}, ReplicationInboundApplyMode::InitialSnapshot};
+        CHECK(receiver.inbox->ApplyCompleted(*otherPeer.inbound, otherPeer.Work(), 22).HasError());
         CHECK(fixture.Value(0) == 0);
         CHECK(fixture.Value(1) == 0);
-        auto assembled = receiver.inbox->Take(22).Value();
-        CHECK(receiver.inbox->Take(22).HasError());
-        CHECK(assembled.session == snapshot.session);
-        CHECK(assembled.authority == snapshot.authority);
-        CHECK(assembled.tick == snapshot.tick);
-        REQUIRE(assembled.records.size() == snapshot.records.size());
-        for (std::size_t index{}; index < assembled.records.size(); ++index) {
-            CHECK(assembled.records[index].object == snapshot.records[index].object);
-            CHECK(assembled.records[index].wire == snapshot.records[index].wire);
-            auto message = fixture.Message(index);
-            message.payload = std::move(assembled.records[index].wire);
-            REQUIRE(fixture.Stage(message).HasValue());
-        }
-        const auto published = fixture.Apply().Value();
+        const auto published = receiver.inbox->ApplyCompleted(*fixture.inbound, fixture.Work(), 22).Value();
         CHECK(published.applied == 2);
         CHECK(published.initialPublished);
         CHECK(fixture.Value(0) == 3);
         CHECK(fixture.Value(1) == 4);
+        CHECK(receiver.inbox->Take(22).HasError());
+    }
+
+    TEST_CASE("Invalid initial state records roll back the complete staged batch", "[network][apply][initial]") {
+        InitialStateFixture fixture;
+        auto snapshot = fixture.Snapshot();
+        REQUIRE(snapshot.records.size() == 2);
+        bool retireSession{};
+        SECTION("Segment identity does not match the encoded object") {
+            snapshot.records[1].wire = snapshot.records[0].wire;
+        }
+        SECTION("The decoded tick does not match the manifest") {
+            snapshot.tick += 1;
+        }
+        SECTION("The inbound session retired after the complete transfer") {
+            retireSession = true;
+        }
+        StreamReceiver receiver{fixture};
+        receiver.Receive(EncodeNetworkInitialStateManifest(snapshot).Value());
+        receiver.ReceiveRecord(snapshot, 0);
+        receiver.ReceiveRecord(snapshot, 1);
+        if (retireSession)
+            receiver.router->RevokeSession(fixture.Authority().connection);
+        CHECK(receiver.inbox->ApplyCompleted(*fixture.inbound, fixture.Work(), 22).HasError());
+        CHECK_FALSE(fixture.Apply().Value().initialPublished);
+        CHECK(fixture.Value(0) == 0);
+        CHECK(fixture.Value(1) == 0);
     }
 
     TEST_CASE("Initial state stream rejects stale, noncontiguous and cancelled records", "[network][apply][initial]") {

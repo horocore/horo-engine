@@ -78,8 +78,11 @@ contiguous record segments. The manifest declares the authoritative tick,
 record count, and total wire bytes. The inbox checks the authenticated
 connection, world session, and authority epoch on every frame. It retains
 bounded bytes in canonical object order and hands the full snapshot to the
-field decoder once. Scene state is published at the structural safe point
-after the inbound apply transaction validates every decoded record.
+field decoder once. At the structural safe point, `ApplyCompleted` verifies
+that the receiving apply owner has the same peer, world, and recipient.
+The decoded records must match their segment identities and the manifest
+tick. Validation, cancellation, or a rejected owner transaction discards
+the batch before any Scene value is published.
 
 `CaptureReplicationAuthoredScene` extracts an ordered inventory of exact
 authority identities and stable Scene provenance. It omits process-local

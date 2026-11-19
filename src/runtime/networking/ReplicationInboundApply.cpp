@@ -1,11 +1,27 @@
 #include "Horo/Network/ReplicationInboundApply.h"
 
+#include "ReplicationStateCodecInternal.h"
+
 #include <algorithm>
 #include <limits>
 #include <new>
 
 namespace Horo::Network {
     namespace {
+        /** @brief The stream route and the apply route may differ, but their grants must match. */
+        bool SameWorldGrant(const ReplicationInboundAuthority &expected, const ReplicationInboundAuthority &source) {
+            return expected.session == source.session && expected.connection == source.connection &&
+                   expected.generation == source.generation && expected.scene == source.scene &&
+                   expected.networkSession == source.networkSession && expected.epoch == source.epoch &&
+                   expected.localRecipient == source.localRecipient;
+        }
+
+        /** @brief Checks the exact structural publication request shared by both receipt paths. */
+        bool IsPublicationRequest(const ReplicationWorldWorkRequest &request, const ReplicationInboundAuthority &authority) {
+            return request.scene == authority.scene && request.session == authority.networkSession &&
+                   request.phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges && request.simulationTick != 0;
+        }
+
         /** @brief Preserves the requested result type when constructing a domain rejection. */
         template <typename T> Result<T> Fail(const ErrorCodeDescriptor &error) {
             return Result<T>::Failure(MakeError(error));
@@ -209,17 +225,72 @@ namespace Horo::Network {
             return Fail<void>(ReplicationStateErrors::Closed);
         if (initial_ && context.delivery != DeliveryPolicy::ReliableOrdered)
             return Fail<void>(ReplicationStateErrors::Invalid);
-        if (busy_ || message.payload.size() < 172 || message.payload.size() > limits_.maximumWireBytes)
+        if (busy_ || message.payload.size() < StateCodecDetail::HeaderBytes || message.payload.size() > limits_.maximumWireBytes)
             return Fail<void>(ReplicationStateErrors::Invalid);
         try {
             const auto wire = std::span{message.payload};
             auto index = ResolveRecord(wire, lease.Value());
             if (index.HasError())
                 return Result<void>::Failure(index.ErrorValue());
-            return DecodeAndStage(index.Value(), context, wire);
+            return DecodeAndStage(index.Value(), Runtime::RuntimePhase::NetworkPoll, context.ownerTick, context.cancellation, wire);
         } catch (const std::bad_alloc &) {
             return Fail<void>(ReplicationStateErrors::Capacity);
         }
+    }
+
+    /** @copydoc ReplicationInboundApply::CheckInitialSource */
+    Result<void> ReplicationInboundApply::CheckInitialSource(const ReplicationInboundAuthority &source,
+                                                             const ReplicationWorldWorkRequest &request, std::uint64_t now) const {
+        if (const auto owner = CheckOwner(); owner.HasError())
+            return owner;
+        if (!initial_ || initial_->tick || busy_)
+            return Fail<void>(ReplicationStateErrors::Invalid);
+        if (!SameWorldGrant(authority_, source))
+            return Fail<void>(ReplicationStateErrors::Stale);
+        if (!IsPublicationRequest(request, authority_) || now == 0)
+            return Fail<void>(ReplicationStateErrors::Invalid);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ReplicationInboundApply::StageInitialSnapshot */
+    Result<void> ReplicationInboundApply::StageInitialSnapshot(const ReplicationInitialStateSnapshot &snapshot,
+                                                               const ReplicationWorldWorkRequest &request, std::uint64_t now,
+                                                               const CancellationToken &delivery) {
+        if (snapshot.records.size() != initial_->objects || objects_.size() != initial_->objects)
+            return Fail<void>(ReplicationStateErrors::Invalid);
+        const auto world = Admit(request.phase, now, request.cancellation);
+        if (world.HasError())
+            return Result<void>::Failure(world.ErrorValue());
+        [[maybe_unused]] const auto self = shared_from_this();
+        initial_->tick = snapshot.tick;
+        initial_->delivery = delivery;
+        try {
+            for (const auto &record : snapshot.records) {
+                auto staged = StageInitialRecord(record, world.Value(), request.phase, now, delivery);
+                if (staged.HasError()) {
+                    DiscardPending();
+                    return staged;
+                }
+            }
+        } catch (const std::bad_alloc &) {
+            DiscardPending();
+            return Fail<void>(ReplicationStateErrors::Capacity);
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ReplicationInboundApply::StageInitialRecord */
+    Result<void> ReplicationInboundApply::StageInitialRecord(const ReplicationInitialStateRecord &record,
+                                                             const ReplicationWorldReadLease &world, Runtime::RuntimePhase phase,
+                                                             std::uint64_t now, const CancellationToken &delivery) {
+        if (record.wire.size() < StateCodecDetail::HeaderBytes || record.wire.size() > limits_.maximumWireBytes)
+            return Fail<void>(ReplicationStateErrors::Invalid);
+        auto index = ResolveRecord(record.wire, world);
+        if (index.HasError())
+            return Result<void>::Failure(index.ErrorValue());
+        if (objects_[index.Value()].mapping.object != record.object)
+            return Fail<void>(ReplicationStateErrors::Stale);
+        return DecodeAndStage(index.Value(), phase, now, delivery, record.wire);
     }
 
     /** @copydoc ReplicationInboundApply::ResolveRecord */
@@ -243,7 +314,8 @@ namespace Horo::Network {
     }
 
     /** @copydoc ReplicationInboundApply::DecodeAndStage */
-    Result<void> ReplicationInboundApply::DecodeAndStage(const std::size_t index, const InboundMessageContext &context,
+    Result<void> ReplicationInboundApply::DecodeAndStage(const std::size_t index, const Runtime::RuntimePhase phase,
+                                                         const std::uint64_t now, const CancellationToken &cancellation,
                                                          const std::span<const std::byte> wire) {
         const auto found = objects_.begin() + index;
         const auto digest = ComputeSha256(wire);
@@ -253,12 +325,12 @@ namespace Horo::Network {
         const auto revision = revision_;
         [[maybe_unused]] const auto self = shared_from_this();
         const BusyGuard guard{busy_};
-        auto decoded = pinned.codec->Decode(wire, pinned.mapping, DecodeBaseline(pinned, wire), context.cancellation);
+        auto decoded = pinned.codec->Decode(wire, pinned.mapping, DecodeBaseline(pinned, wire), cancellation);
         if (decoded.HasError())
             return Result<void>::Failure(decoded.ErrorValue());
-        if (stopped_ || revision != revision_ || context.cancellation.IsCancellationRequested())
+        if (stopped_ || revision != revision_ || cancellation.IsCancellationRequested())
             return Fail<void>(ReplicationStateErrors::Closed);
-        auto current = Admit(Runtime::RuntimePhase::NetworkPoll, context.ownerTick, context.cancellation);
+        auto current = Admit(phase, now, cancellation);
         if (current.HasError())
             return Result<void>::Failure(current.ErrorValue());
         if (const auto valid = ValidateObject(objects_[index], current.Value()); valid.HasError())
@@ -269,7 +341,7 @@ namespace Horo::Network {
             return retained;
         objects_[index].pending = std::move(decoded).Value();
         objects_[index].pendingWire = digest;
-        objects_[index].cancellation = context.cancellation;
+        objects_[index].cancellation = cancellation;
         if (initial_)
             initial_->tick = objects_[index].pending->SimulationTick();
         return Result<void>::Success();
@@ -332,6 +404,8 @@ namespace Horo::Network {
 
     /** @copydoc ReplicationInboundApply::ValidatePending */
     Result<void> ReplicationInboundApply::ValidatePending(const ReplicationWorldWorkRequest &request, const std::uint64_t now) const {
+        if (initial_ && initial_->delivery.IsCancellationRequested())
+            return Fail<void>(ReplicationStateErrors::Closed);
         auto current = Admit(request.phase, now, request.cancellation);
         if (current.HasError())
             return Result<void>::Failure(current.ErrorValue());
@@ -350,8 +424,10 @@ namespace Horo::Network {
     void ReplicationInboundApply::DiscardPending() noexcept {
         for (auto &object : objects_)
             object.pending.reset();
-        if (initial_)
+        if (initial_) {
             initial_->tick.reset();
+            initial_->delivery = {};
+        }
     }
 
     /** @copydoc ReplicationInboundApply::ApplyAtSafePoint */
@@ -359,8 +435,7 @@ namespace Horo::Network {
                                                                              const std::uint64_t now) {
         if (const auto owner = CheckOwner(); owner.HasError())
             return Result<ReplicationApplyReport>::Failure(owner.ErrorValue());
-        if (request.scene != authority_.scene || request.session != authority_.networkSession ||
-            request.phase != Runtime::RuntimePhase::CommitDeferredLifecycleChanges || request.simulationTick == 0 || busy_)
+        if (!IsPublicationRequest(request, authority_) || busy_)
             return Fail<ReplicationApplyReport>(ReplicationStateErrors::Invalid);
         auto lease = Admit(request.phase, now, request.cancellation);
         if (lease.HasError()) {

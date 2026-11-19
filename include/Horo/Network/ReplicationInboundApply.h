@@ -8,6 +8,8 @@
 #include "Horo/Network/ReplicationStateCodec.h"
 
 namespace Horo::Network {
+    class NetworkInitialStateInbox;
+
     /** @brief One complete immutable decoded update and exact local owner identity. */
     struct ReplicationApplyUpdate final {
         NetworkObjectMappingEntry mapping;
@@ -144,6 +146,8 @@ namespace Horo::Network {
         [[nodiscard]] Result<void> Shutdown();
 
     private:
+        friend class NetworkInitialStateInbox;
+
         struct Object final {
             NetworkObjectMappingEntry mapping;
             std::shared_ptr<ReplicationRoleState> role;
@@ -175,7 +179,18 @@ namespace Horo::Network {
         [[nodiscard]] Result<void> ValidatePending(const ReplicationWorldWorkRequest &request, std::uint64_t now) const;
         [[nodiscard]] Result<void> AdmitRetainedState(std::size_t index, const ReplicationDecodedState &state) const;
         [[nodiscard]] Result<std::size_t> ResolveRecord(std::span<const std::byte> wire, const ReplicationWorldReadLease &world) const;
-        [[nodiscard]] Result<void> DecodeAndStage(std::size_t index, const InboundMessageContext &context, std::span<const std::byte> wire);
+        [[nodiscard]] Result<void> DecodeAndStage(std::size_t index, Runtime::RuntimePhase phase, std::uint64_t now,
+                                                  const CancellationToken &cancellation, std::span<const std::byte> wire);
+        /** @brief Validates that an inbox belongs to this exact pending initial publication. */
+        [[nodiscard]] Result<void> CheckInitialSource(const ReplicationInboundAuthority &source, const ReplicationWorldWorkRequest &request,
+                                                      std::uint64_t now) const;
+        /** @brief Stages an intact snapshot from a verified inbox with no partial decoded state on rejection. */
+        [[nodiscard]] Result<void> StageInitialSnapshot(const ReplicationInitialStateSnapshot &snapshot,
+                                                        const ReplicationWorldWorkRequest &request, std::uint64_t now,
+                                                        const CancellationToken &delivery);
+        /** @brief Checks that the segment inventory identity agrees with the encoded state record. */
+        [[nodiscard]] Result<void> StageInitialRecord(const ReplicationInitialStateRecord &record, const ReplicationWorldReadLease &world,
+                                                      Runtime::RuntimePhase phase, std::uint64_t now, const CancellationToken &delivery);
         /** @brief Copies a complete call-owned immutable batch before invoking any mutation owner. */
         [[nodiscard]] std::vector<ReplicationApplyUpdate> CollectPending(const CancellationToken &worldCancellation) const;
 
@@ -217,6 +232,7 @@ namespace Horo::Network {
             std::uint64_t mappingRevision;
             std::size_t objects;
             std::optional<std::uint64_t> tick;
+            CancellationToken delivery;
         };
 
         std::optional<InitialInventory> initial_; /**< Frozen mapping evidence, including the explicit empty case. */

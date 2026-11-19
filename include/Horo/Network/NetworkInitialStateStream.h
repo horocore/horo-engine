@@ -59,6 +59,16 @@ namespace Horo::Network {
          */
         [[nodiscard]] Result<ReplicationInitialStateSnapshot> Take(std::uint64_t now);
 
+        /**
+         * @brief Transfers and publishes the complete authenticated snapshot at the structural safe point.
+         * @param receiver Initial snapshot receiver for the same authority, world and local recipient.
+         * @param request Exact receiving world, nonzero local simulation tick, and structural phase.
+         * @param now Current owner admission-clock tick.
+         * @return Pending while incomplete, committed report, or typed failure with no partial state.
+         */
+        [[nodiscard]] Result<ReplicationApplyReport> ApplyCompleted(ReplicationInboundApply &receiver,
+                                                                    const ReplicationWorldWorkRequest &request, std::uint64_t now);
+
     private:
         /** @brief Verifies the authenticated connection and exact reserved Control route. */
         [[nodiscard]] Result<void> Admit(const InboundMessageContext &context, const MessageEnvelope &message) const;

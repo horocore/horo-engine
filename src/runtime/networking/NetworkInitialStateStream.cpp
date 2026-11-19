@@ -326,4 +326,25 @@ namespace Horo::Network {
         transferred_ = true;
         return Result<ReplicationInitialStateSnapshot>::Success(std::move(snapshot_));
     }
+
+    /** @copydoc NetworkInitialStateInbox::ApplyCompleted */
+    Result<ReplicationApplyReport> NetworkInitialStateInbox::ApplyCompleted(ReplicationInboundApply &receiver,
+                                                                            const ReplicationWorldWorkRequest &request, std::uint64_t now) {
+        if (std::this_thread::get_id() != owner_)
+            return Reject<ReplicationApplyReport>(NetworkErrors::NetworkModeUnavailable);
+        if (const auto checked = receiver.CheckInitialSource(authority_, request, now); checked.HasError())
+            return Result<ReplicationApplyReport>::Failure(checked.ErrorValue());
+        auto snapshot = Take(now);
+        if (snapshot.HasError()) {
+            if (!transferred_)
+                return Result<ReplicationApplyReport>::Success({});
+            return Result<ReplicationApplyReport>::Failure(snapshot.ErrorValue());
+        }
+        if (auto staged = receiver.StageInitialSnapshot(snapshot.Value(), request, now, delivery_); staged.HasError())
+            return Result<ReplicationApplyReport>::Failure(staged.ErrorValue());
+        auto published = receiver.ApplyAtSafePoint(request, now);
+        if (published.HasError())
+            receiver.DiscardPending();
+        return published;
+    }
 }  // namespace Horo::Network
