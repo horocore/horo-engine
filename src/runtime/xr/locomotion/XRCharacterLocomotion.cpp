@@ -48,28 +48,47 @@ namespace Horo::XR {
 
         /** @brief Copies the Character queue decision without retaining a controller observation. */
         XRLocomotionAdmission MotionAdmission(Character::CharacterCommandAdmissionStatus status) noexcept {
+            using enum Character::CharacterCommandAdmissionStatus;
+            using enum XRLocomotionAdmission;
             switch (status) {
-                case Character::CharacterCommandAdmissionStatus::Deferred:
-                    return XRLocomotionAdmission::Queued;
-                case Character::CharacterCommandAdmissionStatus::RejectedBusy:
-                    return XRLocomotionAdmission::Busy;
-                case Character::CharacterCommandAdmissionStatus::RejectedFull:
-                    return XRLocomotionAdmission::Full;
+                case Deferred:
+                    return Queued;
+                case RejectedBusy:
+                    return Busy;
+                case RejectedFull:
+                    return Full;
             }
-            return XRLocomotionAdmission::Full;
+            return Full;
         }
+
+        /** @brief Denies recursive admission for the duration of an owner callback. */
+        class SubmissionScope final {
+        public:
+            explicit SubmissionScope(bool &busy) noexcept : busy_(&busy) {
+                busy = true;
+            }
+
+            SubmissionScope(const SubmissionScope &) = delete;
+            SubmissionScope &operator=(const SubmissionScope &) = delete;
+
+            ~SubmissionScope() {
+                *busy_ = false;
+            }
+
+        private:
+            bool *const busy_;
+        };
     }  // namespace
 
     struct XRCharacterLocomotionAdapter::State final {
         State(XRCharacterLocomotionBinding selected, Character::CharacterCapability grant)
             : binding(std::move(selected)), capability(std::move(grant)) {}
 
-        ~State() {
-            Revoke();
-        }
+        State(const State &) = delete;
+        State &operator=(const State &) = delete;
 
         /** @brief Cancels deferred owner work without recalling frozen Character commands. */
-        void Revoke() noexcept {
+        void Revoke() const noexcept {
             lifetime.RequestCancellation();
             capability.Revoke();
         }
@@ -87,7 +106,7 @@ namespace Horo::XR {
         }
 
         /** @brief Submits velocity and heading to the sole Character queue after applying the host speed limit. */
-        Submission Queue(const XRLocomotionIntent &intent, const XRLocomotionMotion &motion) {
+        Submission Queue(const XRLocomotionIntent &intent, const XRLocomotionMotion &motion) const {
             if (!motion.velocityMetersPerSecond && !motion.heading)
                 return Reject<XRLocomotionAdmission>(XRErrors::OperationInvalid);
             if (motion.heading && !UnitHeading(*motion.heading))
@@ -110,7 +129,7 @@ namespace Horo::XR {
         }
 
         /** @brief Forwards a scoped destination for Character clearance and placement at its own safe point. */
-        Submission Queue(const XRLocomotionIntent &intent, const XRLocomotionTeleport &teleport) {
+        Submission Queue(const XRLocomotionIntent &intent, const XRLocomotionTeleport &teleport) const {
             if (teleport.space.kind != XRSpaceKind::World || !MatchesSpace(teleport.space, intent.scope.tracking))
                 return Reject<XRLocomotionAdmission>(XRErrors::CoordinateSpaceIncompatible);
             if (teleport.destinationRevision == 0 || !Finite(teleport.position) || !UnitHeading(teleport.heading))
@@ -123,9 +142,9 @@ namespace Horo::XR {
         }
 
         /** @brief Forwards reference replacement only to the selected application calibration owner. */
-        Submission Queue(const XRLocomotionIntent &intent, const XRLocomotionRecenter &recenter) {
-            const auto kind = recenter.reference.kind;
-            if ((kind != XRSpaceKind::Local && kind != XRSpaceKind::Stage) || !MatchesSpace(recenter.reference, intent.scope.tracking))
+        Submission Queue(const XRLocomotionIntent &intent, const XRLocomotionRecenter &recenter) const {
+            if (const auto kind = recenter.reference.kind;
+                (kind != XRSpaceKind::Local && kind != XRSpaceKind::Stage) || !MatchesSpace(recenter.reference, intent.scope.tracking))
                 return Reject<XRLocomotionAdmission>(XRErrors::CoordinateSpaceIncompatible);
             const auto owner = binding.recenter.lock();
             return owner ? owner->QueueRecenter(intent, lifetime.Token()) : Reject<XRLocomotionAdmission>(XRErrors::OperationUnsupported);
@@ -133,18 +152,7 @@ namespace Horo::XR {
 
         /** @brief Contains foreign owners and advances watermarks only after a command was copied. */
         Submission Dispatch(const XRLocomotionIntent &intent) {
-            struct SubmissionScope final {
-                explicit SubmissionScope(bool &value) : busy(value) {
-                    busy = true;
-                }
-
-                ~SubmissionScope() {
-                    busy = false;
-                }
-
-                bool &busy;
-            } scope{busy};
-
+            const SubmissionScope scope{busy};
             try {
                 auto submitted = std::visit([this, &intent](const auto &operation) {
                     return Queue(intent, operation);
@@ -157,6 +165,7 @@ namespace Horo::XR {
             } catch (const std::bad_alloc &) {
                 return Reject<XRLocomotionAdmission>(XRErrors::CapacityExceeded);
             } catch (...) {
+                // Foreign owner implementations can throw non-standard exceptions.
                 return Reject<XRLocomotionAdmission>(XRErrors::OperationUnavailable);
             }
         }
