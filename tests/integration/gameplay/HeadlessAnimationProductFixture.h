@@ -22,11 +22,14 @@ namespace Horo::Network::AnimationProduct {
 
     struct Inputs final : Runtime::SceneAnimationInputSource {
         mutable std::size_t calls{};
+        mutable Runtime::SceneRuntimeId lastScene;
         std::size_t badAt{};
+        std::int32_t playbackRate{1'000'000};
 
-        Runtime::SceneAnimationInputSnapshot Read(Runtime::EntityRef, const Runtime::FixedStepContext &) const noexcept override {
+        Runtime::SceneAnimationInputSnapshot Read(Runtime::EntityRef entity, const Runtime::FixedStepContext &) const noexcept override {
             const auto call = ++calls;
-            return {.playbackRate = {call == badAt ? std::numeric_limits<std::int32_t>::max() : 1'000'000}};
+            lastScene = entity.runtime;
+            return {.playbackRate = {call == badAt ? std::numeric_limits<std::int32_t>::max() : playbackRate}};
         }
     };
 
@@ -45,8 +48,10 @@ namespace Horo::Network::AnimationProduct {
         bool cancelAfterTick{};
         bool closeAfterTick{};
         bool closeDeferred{};
+        bool closeRevokedDiscovery{};
         bool closeAtPrepare{};
         bool observeCommitted{};
+        std::optional<Runtime::EntityRef> retiringEntity;
         std::optional<Animation::PoseHandle> observedCommitted;
         INetworkModeService *sceneFacade{};
         bool observedOldPublication{};
@@ -66,9 +71,9 @@ namespace Horo::Network::AnimationProduct {
             return nullptr;
         }
 
-        Runtime::EntityRef Entity() const {
+        Runtime::EntityRef Entity(Runtime::SceneRuntimeId selected = {}) const {
             for (const auto &entry : entries)
-                if (entry.live) {
+                if (entry.live && (!selected.IsValid() || entry.scene == selected)) {
                     const auto entity = App::InspectHeadlessAnimationEntity(*entry.service, {3});
                     REQUIRE(entity);
                     return *entity;
@@ -142,9 +147,10 @@ namespace Horo::Network::AnimationProduct {
         void CloseRequestedScene() {
             if (!std::exchange(trace_->closeAfterTick, false))
                 return;
+            const auto entity = App::InspectHeadlessAnimationEntity(*service_, {3});
             trace_->sceneFacade->Shutdown();
             const auto *owner = App::InspectHeadlessAnimation(*service_);
-            const auto entity = App::InspectHeadlessAnimationEntity(*service_, {3});
+            trace_->closeRevokedDiscovery = !App::InspectHeadlessAnimationEntity(*service_, {3});
             trace_->closeDeferred = owner && entity && owner->Query(*entity).HasValue();
         }
 
@@ -178,16 +184,20 @@ namespace Horo::Network::AnimationProduct {
 
         Result<void> PrepareFixedCommit(const Runtime::FixedStepContext &context) override {
             auto prepared = owner_->PrepareFixedCommit(context);
-            if (prepared.HasValue() && std::exchange(trace_->closeAtPrepare, false))
+            if (prepared.HasValue() && std::exchange(trace_->closeAtPrepare, false)) {
+                trace_->retiringEntity = App::InspectHeadlessAnimationEntity(*trace_->entries[0].service, {3});
                 trace_->sceneFacade->Shutdown();
+            }
             return prepared;
         }
 
         void CommitFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
             owner_->CommitFixedUpdate(context);
-            if (trace_->observeCommitted) {
+            if (trace_->observeCommitted && trace_->retiringEntity) {
                 const auto *adapter = trace_->Owner();
-                const auto observed = adapter->Query(*App::InspectHeadlessAnimationEntity(*trace_->entries[0].service, {3}));
+                if (!adapter)
+                    return;
+                const auto observed = adapter->Query(*trace_->retiringEntity);
                 if (observed.HasValue() && observed.Value().component)
                     trace_->observedCommitted = observed.Value().component->currentPose;
             }
@@ -212,6 +222,7 @@ namespace Horo::Network::AnimationProduct {
         std::shared_ptr<ProductOwners> productOwners = std::make_shared<ProductOwners>();
         Animation::Test::Instance::Prepared native;
         std::shared_ptr<Inputs> inputs = std::make_shared<Inputs>();
+        std::shared_ptr<Inputs> replicaInputs;
         std::shared_ptr<Trace> trace = std::make_shared<Trace>();
         std::shared_ptr<App::AnimationRuntimeIdentitySource> identities =
             std::make_shared<App::AnimationRuntimeIdentitySource>(App::AnimationRuntimeIdentityRange{1001, 1100});
@@ -223,7 +234,8 @@ namespace Horo::Network::AnimationProduct {
         std::unique_ptr<App::NetworkProductHost> host;
         App::NetworkFixedParticipantFactory retainedFactory;
 
-        explicit Fixture(bool directClip = false, bool pair = false) : listenPair(pair) {
+        explicit Fixture(bool directClip = false, bool pair = false, std::shared_ptr<Inputs> publicPresentation = {})
+            : listenPair(pair), replicaInputs(std::move(publicPresentation)) {
             WriteAnimation(directClip);
             project.Cook();
             committed = Take(App::CommittedSceneAssets::Capture(project.project.files,
@@ -309,6 +321,7 @@ namespace Horo::Network::AnimationProduct {
             input.animationTarget = project.project.request.assets.target;
             input.animationIdentities = identities;
             input.animationInputs = inputs;
+            input.replicaAnimationInputs = replicaInputs;
             std::optional<Gameplay::GameplayReplicationAdmissionPolicy> admission;
             if (listenPair)
                 admission = Gameplay::GameplayReplicationAdmissionPolicy{

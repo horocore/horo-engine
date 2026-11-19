@@ -149,6 +149,7 @@ namespace Horo::Network::AnimationProduct {
         REQUIRE(first.component);
         const auto *client = fixture.trace->Owner({72});
         REQUIRE(client);
+        REQUIRE(Take(client->Query(fixture.trace->Entity({72}))).component);
         CHECK(first.instance.owner.Value() == 1001);
         fixture.trace->expected = first.component->currentPose;
         fixture.trace->failScene = {72};
@@ -157,10 +158,34 @@ namespace Horo::Network::AnimationProduct {
         REQUIRE(failed.HasError());
         CHECK(failed.ErrorValue().code.Value() == "test.headless.native_after_tick");
         CHECK(fixture.trace->observedOldPublication);
-        CHECK(fixture.inputs->calls == 4);
+        CHECK(fixture.inputs->calls == 2);
         CHECK(fixture.trace->Owner({71}) == nullptr);
         CHECK(fixture.trace->Owner({72}) == nullptr);
         CHECK(fixture.host->RunFrame().HasError());
+    }
+
+    TEST_CASE("Connected animation reads only its explicit presentation source in a real listen pair",
+              "[animation][headless][product][listen][presentation]") {
+        const auto publicInputs = std::make_shared<Inputs>();
+        publicInputs->playbackRate = 500'000;
+        Fixture fixture(false, true, publicInputs);
+        REQUIRE(fixture.Tick().HasValue());
+        const auto server = fixture.trace->Observe();
+        REQUIRE(server.component);
+        const auto *client = fixture.trace->Owner({72});
+        REQUIRE(client);
+        const auto replica = Take(client->Query(fixture.trace->Entity({72})));
+        REQUIRE(replica.component);
+
+        CHECK(fixture.inputs->calls == 2);
+        CHECK(fixture.inputs->lastScene == Runtime::SceneRuntimeId{71});
+        CHECK(publicInputs->calls == 2);
+        CHECK(publicInputs->lastScene == Runtime::SceneRuntimeId{72});
+        std::array<Math::Transform, 1> authorityPose;
+        std::array<Math::Transform, 1> replicaPose;
+        REQUIRE(fixture.trace->Owner()->CopyPose(server.entity, server.component->currentPose, authorityPose).HasValue());
+        REQUIRE(client->CopyPose(replica.entity, replica.component->currentPose, replicaPose).HasValue());
+        CHECK(std::abs(replicaPose[0].translation.x * 2.0F - authorityPose[0].translation.x) < 0.00001F);
     }
 
     TEST_CASE("Actual Headless Scene facade retirement defers its native aggregate until exact fixed abort",
@@ -171,6 +196,7 @@ namespace Horo::Network::AnimationProduct {
         fixture.trace->closeAfterTick = true;
         const auto stopped = fixture.Tick();
         REQUIRE(stopped.HasError());
+        CHECK(fixture.trace->closeRevokedDiscovery);
         CHECK(fixture.trace->closeDeferred);
         CHECK(fixture.trace->observedOldPublication);
         CHECK(fixture.trace->Owner() == nullptr);

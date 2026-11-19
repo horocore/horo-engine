@@ -110,7 +110,9 @@ namespace Horo::Application::Internal {
         AssetCookTargetId animationTarget;         /**< Exact selected committed target, never inferred from runtime source. */
         std::shared_ptr<AnimationRuntimeIdentitySource> animationIdentities; /**< One cold host issuer shared by all records/travel. */
         std::shared_ptr<const Runtime::SceneAnimationInputSource>
-            animationInputs; /**< Exact optional adjacent-owner snapshot, no new store. */
+            animationInputs; /**< Optional gameplay snapshot for authority and standalone Worlds. */
+        std::shared_ptr<const Runtime::SceneAnimationInputSource>
+            replicaAnimationInputs; /**< Optional public presentation snapshot for a connected client World. */
         AI::AiScenePerceptionPositionSource
             perceptionPositions; /**< Global positions from the supplied candidate/current Scene in ascending entity order. */
         AI::PerceptionFilteringPolicy perceptionFiltering;
