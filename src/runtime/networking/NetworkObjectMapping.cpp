@@ -10,6 +10,17 @@ namespace Horo::Network {
         template <typename T> Result<T> Fail(const ErrorCodeDescriptor &code) {
             return Result<T>::Failure(MakeError(code));
         }
+
+        /** @brief Allows intent bytes only on the exact, generation-qualified occurrence anchor. */
+        bool ValidPrefabMapping(const NetworkObjectMappingEntry &entry) {
+            const auto &prefab = entry.provenance.prefab;
+            if (prefab && prefab->occurrence.Epoch() != entry.object.Epoch())
+                return false;
+            if (!entry.prefabIntent)
+                return true;
+            return prefab && prefab->occurrence == entry.object && !entry.prefabIntent->empty() &&
+                   entry.prefabIntent->size() <= MaximumNetworkPrefabIntentBytes;
+        }
     }  // namespace
 
     NetworkObjectMappingSnapshot::NetworkObjectMappingSnapshot(const ReplicationAuthorityEpoch epoch, const Runtime::SceneRuntimeId scene,
@@ -80,12 +91,7 @@ namespace Horo::Network {
         if (const auto active = RequireActive(); active.HasError())
             return Result<void>::Failure(active.ErrorValue());
         if (!entry.object.IsValid() || entry.object.Epoch() != epoch_ || !entry.entity.IsValid() || entry.entity.runtime != scene_ ||
-            !entry.provenance.IsValid())
-            return Result<void>::Failure(MakeError(NetworkErrors::NetworkObjectMappingInvalid));
-        if (entry.provenance.prefab && entry.provenance.prefab->occurrence.Epoch() != epoch_)
-            return Result<void>::Failure(MakeError(NetworkErrors::NetworkObjectMappingInvalid));
-        if (entry.prefabIntent && (!entry.provenance.prefab || entry.provenance.prefab->occurrence != entry.object ||
-                                   entry.prefabIntent->empty() || entry.prefabIntent->size() > MaximumNetworkPrefabIntentBytes))
+            !entry.provenance.IsValid() || !ValidPrefabMapping(entry))
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkObjectMappingInvalid));
         if (const auto entity = LowerBound(entry.entity); entity != entityIndex_.end() && entity->entity == entry.entity)
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkObjectMappingConflict));

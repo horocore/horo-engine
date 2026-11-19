@@ -47,24 +47,35 @@ namespace Horo::Application::Internal {
 
         /** @brief Writes the same exact closed value types as cooked Prefab initialization. */
         Result<void> WriteValue(CanonicalValueWriter &writer, const BehaviorFieldValue &value) {
-            (void)writer.WriteUInt8(static_cast<std::uint8_t>(value.index()));
-            return std::visit([&writer]<typename T>(const T &input) -> Result<void> {
-                if constexpr (std::is_same_v<T, bool>)
+            using Kind = Prefab::PrefabInitializationKind;
+            const auto tag = [&](Kind kind) {
+                (void)writer.WriteUInt8(static_cast<std::uint8_t>(kind));
+            };
+            return std::visit([&]<typename T>(const T &input) -> Result<void> {
+                if constexpr (std::is_same_v<T, bool>) {
+                    tag(Kind::Boolean);
                     return writer.WriteBool(input);
-                else if constexpr (std::is_same_v<T, std::int64_t>)
+                } else if constexpr (std::is_same_v<T, std::int64_t>) {
+                    tag(Kind::Integer);
                     return writer.WriteInt64(input);
-                else if constexpr (std::is_same_v<T, double>)
+                } else if constexpr (std::is_same_v<T, double>) {
+                    tag(Kind::Number);
                     return writer.WriteFloat64(input);
-                else if constexpr (std::is_same_v<T, std::string>)
+                } else if constexpr (std::is_same_v<T, std::string>) {
+                    tag(Kind::String);
                     return input.size() <= MaximumInitializationStringBytes ? writer.WriteUtf8(input) : Invalid<void>();
-                else if constexpr (std::is_same_v<T, Math::Vec2>)
+                } else if constexpr (std::is_same_v<T, Math::Vec2>) {
+                    tag(Kind::Vec2);
                     return writer.WriteVec2(input);
-                else if constexpr (std::is_same_v<T, Math::Vec3>)
+                } else if constexpr (std::is_same_v<T, Math::Vec3>) {
+                    tag(Kind::Vec3);
                     return writer.WriteVec3(input);
-                else if constexpr (std::is_same_v<T, Math::Quaternion>)
+                } else if constexpr (std::is_same_v<T, Math::Quaternion>) {
+                    tag(Kind::Quaternion);
                     return writer.WriteQuaternion(input);
-                else
+                } else {
                     return Invalid<void>();
+                }
             }, value);
         }
 
@@ -115,29 +126,33 @@ namespace Horo::Application::Internal {
                                     : Result<BehaviorFieldValue>::Success(std::move(value).Value());
         }
 
+        /** @brief Enforces the cooked Prefab string limit after decoding. */
+        Result<BehaviorFieldValue> ReadInitializationString(CanonicalValueReader &reader) {
+            auto text = reader.ReadUtf8();
+            if (text.HasValue() && text.Value().size() > MaximumInitializationStringBytes)
+                return Invalid<BehaviorFieldValue>();
+            return AsValue(std::move(text));
+        }
+
         /** @brief Reads only the approved initialization types, including per-string bounds. */
         Result<BehaviorFieldValue> ReadValue(CanonicalValueReader &reader) {
             const auto kind = reader.ReadUInt8();
             if (kind.HasError())
                 return Result<BehaviorFieldValue>::Failure(kind.ErrorValue());
-            switch (kind.Value()) {
-                case 1:
+            switch (static_cast<Prefab::PrefabInitializationKind>(kind.Value())) {
+                case Prefab::PrefabInitializationKind::Boolean:
                     return AsValue(reader.ReadBool());
-                case 2:
+                case Prefab::PrefabInitializationKind::Integer:
                     return AsValue(reader.ReadInt64());
-                case 3:
+                case Prefab::PrefabInitializationKind::Number:
                     return AsValue(reader.ReadFloat64());
-                case 4: {
-                    auto text = reader.ReadUtf8();
-                    if (text.HasValue() && text.Value().size() > MaximumInitializationStringBytes)
-                        return Invalid<BehaviorFieldValue>();
-                    return AsValue(std::move(text));
-                }
-                case 5:
+                case Prefab::PrefabInitializationKind::String:
+                    return ReadInitializationString(reader);
+                case Prefab::PrefabInitializationKind::Vec2:
                     return AsValue(reader.ReadVec2());
-                case 6:
+                case Prefab::PrefabInitializationKind::Vec3:
                     return AsValue(reader.ReadVec3());
-                case 7:
+                case Prefab::PrefabInitializationKind::Quaternion:
                     return AsValue(reader.ReadQuaternion());
                 default:
                     return Invalid<BehaviorFieldValue>();
@@ -189,6 +204,122 @@ namespace Horo::Application::Internal {
             }
             return Result<void>::Success();
         }
+
+        /** @brief Writes the optional canonical override document. */
+        Result<void> WriteOverrides(CanonicalValueWriter &writer, const Prefab::PrefabSpawnRequest &request,
+                                    const Prefab::PrefabLimitProfile &limits) {
+            (void)writer.WriteBool(request.overrides.has_value());
+            if (!request.overrides)
+                return Result<void>::Success();
+            auto serialized = Prefab::SerializePrefabValueOverrides(*request.overrides, limits);
+            if (serialized.HasError())
+                return Result<void>::Failure(serialized.ErrorValue());
+            return writer.WriteUtf8(serialized.Value());
+        }
+
+        /** @brief Reads the versioned placement prefix and validates the resulting transform. */
+        Result<Math::Transform> ReadPlacement(CanonicalValueReader &reader) {
+            const auto version = reader.ReadUInt16();
+            if (version.HasError() || version.Value() != Version)
+                return Invalid<Math::Transform>();
+            const auto translation = reader.ReadVec3();
+            const auto rotation = reader.ReadQuaternion();
+            const auto scale = reader.ReadVec3();
+            if (translation.HasError() || rotation.HasError() || scale.HasError())
+                return Invalid<Math::Transform>();
+            Math::Transform placement{.translation = translation.Value(), .rotation = rotation.Value(), .scale = scale.Value()};
+            if (placement.TryToMatrix().HasError())
+                return Invalid<Math::Transform>();
+            return Result<Math::Transform>::Success(placement);
+        }
+
+        /** @brief Reads only the initialization fields declared by this wire format. */
+        Result<void> ReadInitialization(CanonicalValueReader &reader, Prefab::PrefabSpawnRequest &request) {
+            return ReadInputs(reader, request.initialization, Prefab::MaximumPrefabInitializationValues,
+                              [&](std::uint64_t identity) -> Result<Prefab::PrefabInitializationValue> {
+                auto value = ReadValue(reader);
+                if (value.HasError())
+                    return Result<Prefab::PrefabInitializationValue>::Failure(value.ErrorValue());
+                return Result<Prefab::PrefabInitializationValue>::Success({{identity}, std::move(value).Value()});
+            });
+        }
+
+        /** @brief Reads explicit optional override data through the cooked override contract. */
+        Result<void> ReadOverrides(CanonicalValueReader &reader, Prefab::PrefabSpawnRequest &request,
+                                   const Prefab::PrefabLimitProfile &limits) {
+            const auto present = reader.ReadBool();
+            if (present.HasError())
+                return Result<void>::Failure(present.ErrorValue());
+            if (!present.Value())
+                return Result<void>::Success();
+            auto serialized = reader.ReadUtf8();
+            if (serialized.HasError())
+                return Result<void>::Failure(serialized.ErrorValue());
+            auto overrides = Prefab::ParsePrefabValueOverrides(serialized.Value(), limits);
+            if (overrides.HasError())
+                return Result<void>::Failure(overrides.ErrorValue());
+            request.overrides.emplace(std::move(overrides).Value());
+            return Result<void>::Success();
+        }
+
+        /** @brief Reads and resolves the optional parent using the same relationship rules as bindings. */
+        Result<void> ReadParent(CanonicalValueReader &reader, Prefab::PrefabSpawnRequest &request,
+                                Network::NetworkSessionGeneration session, const Runtime::RuntimeSceneView &scene,
+                                const Network::NetworkClientPrefabInbox &inbox) {
+            const auto present = reader.ReadBool();
+            if (present.HasError())
+                return Result<void>::Failure(present.ErrorValue());
+            if (!present.Value())
+                return Result<void>::Success();
+            const auto parent = ReadReference(reader, session, scene, inbox);
+            if (parent.HasError())
+                return Result<void>::Failure(parent.ErrorValue());
+            request.parent = parent.Value();
+            return Result<void>::Success();
+        }
+
+        /** @brief Resolves external bindings after their exact interface IDs pass canonical-order validation. */
+        Result<void> ReadBindings(CanonicalValueReader &reader, Prefab::PrefabSpawnRequest &request, std::size_t maximum,
+                                  Network::NetworkSessionGeneration session, const Runtime::RuntimeSceneView &scene,
+                                  const Network::NetworkClientPrefabInbox &inbox) {
+            return ReadInputs(reader, request.bindings, maximum, [&](std::uint64_t identity) -> Result<Prefab::PrefabRuntimeBinding> {
+                const auto id = Prefab::PrefabPropertyId::Create(identity);
+                if (id.HasError())
+                    return Result<Prefab::PrefabRuntimeBinding>::Failure(id.ErrorValue());
+                const auto entity = ReadReference(reader, session, scene, inbox);
+                if (entity.HasError())
+                    return Result<Prefab::PrefabRuntimeBinding>::Failure(entity.ErrorValue());
+                return Result<Prefab::PrefabRuntimeBinding>::Success({id.Value(), entity.Value()});
+            });
+        }
+
+        /** @brief Reads the complete request body before any Scene operation can be queued. */
+        Result<void> ReadSpawnRequest(CanonicalValueReader &reader, Prefab::PrefabSpawnRequest &request,
+                                      const Prefab::PrefabLimitProfile &limits, Network::NetworkSessionGeneration session,
+                                      const Runtime::RuntimeSceneView &scene, const Network::NetworkClientPrefabInbox &inbox) {
+            auto placement = ReadPlacement(reader);
+            if (placement.HasError())
+                return Result<void>::Failure(placement.ErrorValue());
+            request.placement = placement.Value();
+            if (auto parent = ReadParent(reader, request, session, scene, inbox); parent.HasError())
+                return parent;
+            if (auto initialization = ReadInitialization(reader, request); initialization.HasError())
+                return initialization;
+            if (auto bindings = ReadBindings(reader, request, limits.Policy().maximumInstanceBindings, session, scene, inbox);
+                bindings.HasError())
+                return bindings;
+            if (auto overrides = ReadOverrides(reader, request, limits); overrides.HasError())
+                return overrides;
+            return reader.RequireFinished();
+        }
+
+        /** @brief Checks request limits before narrowing counts or writing any bytes. */
+        bool FitsIntent(const Prefab::PrefabSpawnRequest &request, const Prefab::PrefabLimitProfile &limits) {
+            return request.placement.TryToMatrix().HasValue() &&
+                   request.initialization.size() <= Prefab::MaximumPrefabInitializationValues &&
+                   request.bindings.size() <= limits.Policy().maximumInstanceBindings &&
+                   std::in_range<std::uint16_t>(request.bindings.size());
+        }
     }  // namespace
 
     /** @copydoc EncodeHeadlessPrefabIntent */
@@ -197,8 +328,7 @@ namespace Horo::Application::Internal {
                                                               const Runtime::RuntimeSceneView &scene,
                                                               const Network::NetworkAuthorityObjectPublication &authority) {
         using Outcome = Result<std::vector<std::byte>>;
-        if (request.placement.TryToMatrix().HasError() || request.initialization.size() > Prefab::MaximumPrefabInitializationValues ||
-            request.bindings.size() > limits.Policy().maximumInstanceBindings || !std::in_range<std::uint16_t>(request.bindings.size()))
+        if (!FitsIntent(request, limits))
             return Invalid<std::vector<std::byte>>();
         try {
             CanonicalValueWriter writer{WireLimits};
@@ -212,13 +342,8 @@ namespace Horo::Application::Internal {
                     return Outcome::Failure(parent.ErrorValue());
             if (auto values = WriteInputs(writer, request, scene, authority); values.HasError())
                 return Outcome::Failure(values.ErrorValue());
-            (void)writer.WriteBool(request.overrides.has_value());
-            if (request.overrides) {
-                auto overrides = Prefab::SerializePrefabValueOverrides(*request.overrides, limits);
-                if (overrides.HasError())
-                    return Outcome::Failure(overrides.ErrorValue());
-                (void)writer.WriteUtf8(overrides.Value());
-            }
+            if (auto overrides = WriteOverrides(writer, request, limits); overrides.HasError())
+                return Outcome::Failure(overrides.ErrorValue());
             auto encoded = std::move(writer).Finalize();
             if (encoded.HasError())
                 return Outcome::Failure(encoded.ErrorValue());
@@ -242,64 +367,9 @@ namespace Horo::Application::Internal {
             if (created.HasError())
                 return Outcome::Failure(created.ErrorValue());
             auto reader = std::move(created).Value();
-            const auto version = reader.ReadUInt16();
-            const auto translation = reader.ReadVec3();
-            const auto rotation = reader.ReadQuaternion();
-            const auto scale = reader.ReadVec3();
-            const auto hasParent = reader.ReadBool();
-            if (version.HasError() || version.Value() != Version || translation.HasError() || rotation.HasError() || scale.HasError() ||
-                hasParent.HasError())
-                return Invalid<Prefab::PrefabSpawnRequest>();
-            Prefab::PrefabSpawnRequest request{.source = {record.spawn->recipe.asset, record.spawn->recipe.artifactDigest, target},
-                                               .placement = {.translation = translation.Value(),
-                                                             .rotation = rotation.Value(),
-                                                             .scale = scale.Value()}};
-            if (request.placement.TryToMatrix().HasError())
-                return Invalid<Prefab::PrefabSpawnRequest>();
-            const auto resolve = [&] {
-                return ReadReference(reader, record.session, scene, inbox);
-            };
-            if (hasParent.Value()) {
-                auto parent = resolve();
-                if (parent.HasError())
-                    return Outcome::Failure(parent.ErrorValue());
-                request.parent = parent.Value();
-            }
-            if (auto read = ReadInputs(reader, request.initialization, Prefab::MaximumPrefabInitializationValues,
-                                       [&](std::uint64_t identity) -> Result<Prefab::PrefabInitializationValue> {
-                auto value = ReadValue(reader);
-                if (value.HasError())
-                    return Result<Prefab::PrefabInitializationValue>::Failure(value.ErrorValue());
-                return Result<Prefab::PrefabInitializationValue>::Success({{identity}, std::move(value).Value()});
-            });
-                read.HasError())
-                return Outcome::Failure(read.ErrorValue());
-            if (auto read = ReadInputs(reader, request.bindings, limits.Policy().maximumInstanceBindings,
-                                       [&](std::uint64_t identity) -> Result<Prefab::PrefabRuntimeBinding> {
-                const auto id = Prefab::PrefabPropertyId::Create(identity);
-                if (id.HasError())
-                    return Result<Prefab::PrefabRuntimeBinding>::Failure(id.ErrorValue());
-                auto entity = resolve();
-                if (entity.HasError())
-                    return Result<Prefab::PrefabRuntimeBinding>::Failure(entity.ErrorValue());
-                return Result<Prefab::PrefabRuntimeBinding>::Success({id.Value(), entity.Value()});
-            });
-                read.HasError())
-                return Outcome::Failure(read.ErrorValue());
-            const auto hasOverrides = reader.ReadBool();
-            if (hasOverrides.HasError())
-                return Outcome::Failure(hasOverrides.ErrorValue());
-            if (hasOverrides.Value()) {
-                auto serialized = reader.ReadUtf8();
-                if (serialized.HasError())
-                    return Outcome::Failure(serialized.ErrorValue());
-                auto overrides = Prefab::ParsePrefabValueOverrides(serialized.Value(), limits);
-                if (overrides.HasError())
-                    return Outcome::Failure(overrides.ErrorValue());
-                request.overrides.emplace(std::move(overrides).Value());
-            }
-            if (auto finished = reader.RequireFinished(); finished.HasError())
-                return Outcome::Failure(finished.ErrorValue());
+            Prefab::PrefabSpawnRequest request{.source = {record.spawn->recipe.asset, record.spawn->recipe.artifactDigest, target}};
+            if (auto decoded = ReadSpawnRequest(reader, request, limits, record.session, scene, inbox); decoded.HasError())
+                return Outcome::Failure(decoded.ErrorValue());
             return Outcome::Success(std::move(request));
         } catch (const std::bad_alloc &) {
             return Outcome::Failure(MakeError(Network::NetworkErrors::MessageEnvelopeCapacityExceeded));
