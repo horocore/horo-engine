@@ -1,17 +1,20 @@
 #pragma once
 
 #include "Horo/AI/DecisionIdentity.h"
+#include "Horo/Foundation/Diagnostics.h"
 #include "editor/screens/workspace/DecisionStateMachineAuthoring.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <variant>
 #include <vector>
 
 namespace Horo::AI {
     class DecisionBlackboardProviderMetadata;
+    struct DecisionAssetValidationDiagnostic;
     enum class DecisionProviderBindingIssueKind : std::uint8_t;
     struct DecisionGraphSource;
     struct StateMachineAssetDescriptor;
@@ -65,6 +68,7 @@ namespace Horo::Editor {
         bool initial{};
         bool missing{};
         std::optional<AI::DecisionProviderBindingIssueKind> providerIssue;
+        std::optional<DiagnosticSeverity> validationSeverity;
     };
 
     /** @brief Stable link and the two projected endpoint indices it connects. */
@@ -115,6 +119,10 @@ namespace Horo::Editor {
      */
     void ApplyDecisionCanvasProviderIssues(GraphViewSnapshot &view, const AI::DecisionGraphSource &source,
                                            const AI::DecisionBlackboardProviderMetadata *providers);
+
+    /** @brief Projects the highest severity for each existing node in the exact authored graph. */
+    void ApplyDecisionCanvasValidation(GraphViewSnapshot &view, AI::DecisionGraphAssetId asset,
+                                       std::span<const AI::DecisionAssetValidationDiagnostic> findings);
 
     /** @brief Checks whether an authored state can be removed without changing initial or hierarchy links.
      * @param machine Exact authored graph under edit.

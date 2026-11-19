@@ -314,6 +314,10 @@ namespace Horo::AI {
             CHECK(HasCode(invalid.Value().validation, AIErrors::DecisionAssetBindingAccessMismatch));
             CHECK(HasCode(invalid.Value().validation, AIErrors::DecisionAssetBindingPresenceMismatch));
             CHECK(HasCode(invalid.Value().validation, AIErrors::DecisionAssetBindingDefaultMissing));
+            const auto expected = DecisionDiagnosticTarget{MakeIdentity<DecisionGraphAssetId>(100), MakeIdentity<DecisionNodeId>(1),
+                                                           MakeIdentity<BlackboardSchemaId>(7), MakeIdentity<BlackboardKeyId>(10)};
+            for (const auto &finding : invalid.Value().validation.Diagnostics())
+                CHECK(finding.target == expected);
 
             const auto incompatibleSchemaAsset = [&] {
                 auto value = Asset(101, 7, {Node(1, 101)});

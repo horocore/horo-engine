@@ -147,6 +147,24 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc ApplyDecisionCanvasValidation */
+    void ApplyDecisionCanvasValidation(GraphViewSnapshot &view, AI::DecisionGraphAssetId asset,
+                                       std::span<const AI::DecisionAssetValidationDiagnostic> findings) {
+        std::map<AI::DecisionNodeId, DiagnosticSeverity> severities;
+        for (const auto &finding : findings) {
+            const auto &target = finding.target;
+            if (target.asset != asset || !target.node.IsValid())
+                continue;
+            const auto [entry, inserted] = severities.try_emplace(target.node, finding.severity);
+            if (!inserted)
+                entry->second = std::max(entry->second, finding.severity);
+        }
+        for (auto &node : view.nodes) {
+            const auto finding = severities.find(node.id);
+            node.validationSeverity = finding == severities.end() ? std::nullopt : std::optional{finding->second};
+        }
+    }
+
     /** @copydoc CanRemoveMachineState */
     bool CanRemoveMachineState(const AI::StateMachineAssetDescriptor &machine, AI::DecisionNodeId id) {
         return id != machine.initial && std::ranges::none_of(machine.states, [id](const auto &state) {

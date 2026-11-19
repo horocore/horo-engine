@@ -83,14 +83,15 @@ namespace Horo::AI {
                                           const DecisionAssetValidationDiagnostic &right) noexcept {
             return left.code.Value() == right.code.Value() && left.severity == right.severity && left.message == right.message &&
                    left.source.source == right.source.source && left.source.line == right.source.line &&
-                   left.source.column == right.source.column && left.path == right.path;
+                   left.source.column == right.source.column && left.path == right.path && left.target == right.target;
         }
 
         void CanonicalizeDiagnostics(std::vector<DecisionAssetValidationDiagnostic> &diagnostics) {
             std::ranges::sort(diagnostics,
                               [](const DecisionAssetValidationDiagnostic &left, const DecisionAssetValidationDiagnostic &right) {
-                return std::tie(left.source.source, left.source.line, left.source.column, left.path, left.code.Value(), left.message) <
-                       std::tie(right.source.source, right.source.line, right.source.column, right.path, right.code.Value(), right.message);
+                return std::tie(left.source.source, left.source.line, left.source.column, left.path, left.code.Value(), left.message,
+                                left.target) < std::tie(right.source.source, right.source.line, right.source.column, right.path,
+                                                        right.code.Value(), right.message, right.target);
             });
             const auto uniqueEnd = std::ranges::unique(diagnostics, SameDiagnostic).begin();
             diagnostics.erase(uniqueEnd, diagnostics.end());
@@ -343,8 +344,11 @@ namespace Horo::AI {
                 unique.reserve(requirements.size());
                 bool valid = lookup.descriptor != nullptr || ValidIntrinsic(node);
                 for (const auto *requirement : requirements) {
+                    const auto first = diagnostics_.size();
                     const bool admitted = ValidateUniqueRequirement(*requirement, unique, schema, fallback, node.source,
                                                                     path + ".blackboard", resolvedBindings);
+                    for (auto &finding : std::span{diagnostics_}.subspan(first))
+                        finding.target.key = requirement->key;
                     valid = admitted && valid;
                 }
                 return valid;
@@ -422,8 +426,15 @@ namespace Horo::AI {
                 std::ranges::sort(orderedNodes, {}, [](const auto *node) {
                     return node->id;
                 });
-                for (const auto *node : orderedNodes)
+                for (const auto *node : orderedNodes) {
+                    const auto first = diagnostics_.size();
                     ValidateNode(asset, *node, schema, rootAsset);
+                    for (auto &finding : std::span{diagnostics_}.subspan(first)) {
+                        finding.target.asset = asset.asset;
+                        finding.target.node = node->id;
+                        finding.target.blackboard = asset.blackboardSchema;
+                    }
+                }
             }
 
             void ValidateSubtrees(const DecisionAssetDescriptor &asset, const std::size_t depth, const std::string &assetPath) {

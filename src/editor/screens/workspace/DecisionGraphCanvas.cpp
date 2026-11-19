@@ -2,6 +2,8 @@
 
 #include "DecisionGraphCanvasModel.h"
 #include "Horo/AI/BlackboardUsageInspection.h"
+#include "Horo/AI/DecisionAssetValidation.h"
+#include "Horo/AI/DecisionGraphCompiler.h"
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
@@ -156,6 +158,11 @@ namespace Horo::Editor {
                 if (node.providerIssue)
                     ImGui::TextColored(Theme::Warn(), "%s",
                                        context.localization.Get("editor", ProviderIssueLabel(*node.providerIssue)).c_str());
+                if (node.validationSeverity) {
+                    const auto color = *node.validationSeverity >= DiagnosticSeverity::Error ? Theme::Err() : Theme::Warn();
+                    const auto &label = context.localization.Get("editor", "workspace.decision_canvas.validation_issue");
+                    ImGui::TextColored(color, "%s", label.c_str());
+                }
                 if (node.incomingOrder) {
                     const auto label = node.role == GraphNodeRole::UtilityOption ? "workspace.decision_canvas.utility_order"
                                                                                  : "workspace.decision_graph.edit_tree_order";
@@ -267,6 +274,7 @@ namespace Horo::Editor {
             GraphViewSnapshot snapshot;
             std::shared_ptr<const AI::DecisionGraphSource> source;
             std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> providers;
+            std::shared_ptr<const AI::DecisionAssetValidationReport> validation;
             DecisionGraphLayout positions;
             float scale{};
             std::unique_ptr<Widget::EditorContext, CanvasContextDeleter> context;
@@ -316,6 +324,12 @@ namespace Horo::Editor {
         if (rebuildCanvas || session.providers != providers) {
             ApplyDecisionCanvasProviderIssues(session.snapshot, *document.graph, providers.get());
             session.providers = providers;
+        }
+        if (rebuildCanvas || session.validation != document.validation) {
+            session.validation = document.validation;
+            const auto findings =
+                session.validation ? session.validation->Diagnostics() : std::span<const AI::DecisionAssetValidationDiagnostic>{};
+            ApplyDecisionCanvasValidation(session.snapshot, document.graph->asset, findings);
         }
         if (replacePositions) {
             session.snapshot.revision = document.revision;

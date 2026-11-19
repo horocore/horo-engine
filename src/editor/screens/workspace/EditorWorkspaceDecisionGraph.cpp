@@ -19,6 +19,7 @@
 #include <cmath>
 #include <format>
 #include <functional>
+#include <iterator>
 #include <limits>
 #include <set>
 #include <tuple>
@@ -419,7 +420,7 @@ namespace Horo::Editor {
         Result<void> ValidateDecisionDraft(const std::filesystem::path &root, const Assets::AssetRegistrySnapshot &registry,
                                            const AI::DecisionGraphSource &candidate,
                                            const std::shared_ptr<const AI::DecisionNodeGeneration> &providers,
-                                           std::optional<Sha256Digest> expectedScoreSchema = {},
+                                           DecisionGraphWorkspaceDocument &document, std::optional<Sha256Digest> expectedScoreSchema = {},
                                            const std::optional<BehaviorTreeSubtreeReview> &review = {}) {
             using ResultType = Result<void>;
             if ((!EditableMachine(candidate) && !NeedsDecisionTaskProviders(candidate)) || !providers || !providers->CanUse())
@@ -433,12 +434,16 @@ namespace Horo::Editor {
             auto closure = CaptureDecisionTreeClosure(root, registry, candidate, review);
             if (closure.HasError())
                 return ResultType::Failure(closure.ErrorValue());
-            const auto compiled = AI::DecisionGraphCompiler::Compile(candidate.asset, closure.Value().graphs,
-                                                                     {.nodes = providers, .schemas = {schema.Value().schema}});
+            auto compiled = AI::DecisionGraphCompiler::Compile(candidate.asset, closure.Value().graphs,
+                                                               {.nodes = providers, .schemas = {schema.Value().schema}});
             if (compiled.HasError())
                 return ResultType::Failure(compiled.ErrorValue());
-            if (!compiled.Value().validation.Empty() || !compiled.Value().plan)
-                return ResultType::Failure(MakeDecisionValidationError(compiled.Value().validation));
+            if (!compiled.Value().validation.Empty() || !compiled.Value().plan) {
+                auto &validation = compiled.Value().validation;
+                auto error = MakeDecisionValidationError(validation);
+                document.validation = std::make_shared<const AI::DecisionAssetValidationReport>(std::move(validation));
+                return ResultType::Failure(std::move(error));
+            }
             if (auto verified = schema.Value().inputs.VerifyUnchanged(); verified.HasError())
                 return verified;
             if (closure.Value().inputs) {
@@ -1103,7 +1108,7 @@ namespace Horo::Editor {
         constexpr std::size_t MaximumDocuments = 16;
         if (documents.empty())
             documents.reserve(MaximumDocuments);
-        const auto existing = std::ranges::find_if(documents, [&](const auto &document) {
+        auto existing = std::ranges::find_if(documents, [&](const auto &document) {
             return document.identity.instance == opened.identity.instance || document.asset == record->id;
         });
         if (existing == documents.end() && documents.size() >= MaximumDocuments) {
@@ -1121,6 +1126,7 @@ namespace Horo::Editor {
             if (existing->identity != opened.identity || existing->source != source.sourceDigest) {
                 existing->conflict = true;
                 existing->diagnostic = MakeError(Assets::AssetSourceErrors::Conflict);
+                existing->validation.reset();
                 if (existing->identity != opened.identity) {
                     fail("workspace.source_open.unavailable");
                     return;
@@ -1157,10 +1163,10 @@ namespace Horo::Editor {
         const bool needsProviders = NeedsDecisionTaskProviders(*candidate.graph);
         if (m_mutations && m_durableFiles && (EditableMachine(*candidate.graph) || (needsProviders && m_gameplayRegistry))) {
             const auto providers = AcquireDecisionDraftProviders(*candidate.graph);
-            const auto admitted = !needsProviders ? Result<void>::Success()
-                                  : providers.HasValue()
-                                      ? ValidateDecisionDraft(ProjectRoot(), m_assetRegistry, *candidate.graph, providers.Value())
-                                      : Result<void>::Failure(providers.ErrorValue());
+            const auto admitted = !needsProviders        ? Result<void>::Success()
+                                  : providers.HasValue() ? ValidateDecisionDraft(ProjectRoot(), m_assetRegistry, *candidate.graph,
+                                                                                 providers.Value(), candidate)
+                                                         : Result<void>::Failure(providers.ErrorValue());
             if (admitted.HasError() && (HasDecisionTreeCalls(*candidate.graph) || !admitted.ErrorValue().diagnostics.empty()))
                 candidate.diagnostic = admitted.ErrorValue();
             const auto encoded = AI::DecisionPlanCodec::EncodeSource(std::span{candidate.graph.get(), 1}, candidate.graph->asset);
@@ -1182,18 +1188,19 @@ namespace Horo::Editor {
             fail("workspace.source_open.unavailable");
             return;
         }
-        if (candidate.diagnostic)
-            PublishDecisionGraphDiagnostics(*candidate.diagnostic);
         if (existing != documents.end())
             m_decisionGraphDrafts.erase(existing->identity.instance);
         m_decisionGraphDrafts.merge(prepared);
         if (existing == documents.end()) {
             documents.push_back(std::move(candidate));
-            return;
+            existing = std::prev(documents.end());
+        } else {
+            if (existing->identity.instance != opened.identity.instance)
+                static_cast<void>(host.CloseDocument(existing->identity.instance));
+            *existing = std::move(candidate);
         }
-        if (existing->identity.instance != opened.identity.instance)
-            static_cast<void>(host.CloseDocument(existing->identity.instance));
-        *existing = std::move(candidate);
+        if (existing->diagnostic)
+            PublishDecisionGraphDiagnostics(*existing->diagnostic);
     }
 
     /** @copydoc EditorWorkspaceController::CloseDecisionGraphSource */
@@ -1305,7 +1312,7 @@ namespace Horo::Editor {
             const auto providers = AcquireDecisionDraftProviders(*candidate);
             if (providers.HasError())
                 return Replay::Failure(providers.ErrorValue());
-            if (auto admitted = ValidateDecisionDraft(root, registry, *candidate, providers.Value()); admitted.HasError())
+            if (auto admitted = ValidateDecisionDraft(root, registry, *candidate, providers.Value(), document); admitted.HasError())
                 return admitted;
         }
         document.graph = candidate;
@@ -1438,7 +1445,7 @@ namespace Horo::Editor {
             }
         }
         const auto validate = [&](const AI::DecisionGraphSource &candidate) {
-            return ValidateDecisionDraft(root, registry, candidate, providers.Value(), expectedScoreSchema, reviewedSubtree);
+            return ValidateDecisionDraft(root, registry, candidate, providers.Value(), document, expectedScoreSchema, reviewedSubtree);
         };
         auto candidate = std::make_shared<AI::DecisionGraphSource>(*document.graph);
         const auto edited = [&]() {
@@ -1493,6 +1500,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::SaveDecisionGraphDraft */
     Result<void> EditorWorkspaceController::SaveDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft) {
+        document.validation.reset();
         try {
             using Saved = Result<void>;
             const auto fail = [&](const Error &error) {
@@ -1526,7 +1534,7 @@ namespace Horo::Editor {
                 const auto providers = AcquireDecisionDraftProviders(*document.graph);
                 if (providers.HasError())
                     return fail(providers.ErrorValue());
-                const auto validated = ValidateDecisionDraft(root, registry, *document.graph, providers.Value());
+                const auto validated = ValidateDecisionDraft(root, registry, *document.graph, providers.Value(), document);
                 if (validated.HasError())
                     return fail(validated.ErrorValue());
                 const auto encoded = AI::DecisionPlanCodec::EncodeSource(std::span{document.graph.get(), 1}, document.graph->asset);
@@ -1583,6 +1591,7 @@ namespace Horo::Editor {
             });
             if (document == documents.end() || (family && document->family != *family))
                 return;
+            document->validation.reset();
             try {
                 const auto result = [&] {
                     if constexpr (std::is_same_v<Request, DecisionGraphLayoutRequest>)

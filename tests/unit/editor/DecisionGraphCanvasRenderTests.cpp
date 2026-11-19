@@ -146,6 +146,53 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    TEST_CASE("Decision canvas validation resolves only exact visible nodes and clears replaced findings",
+              "[unit][editor][decision][canvas]") {
+        const auto graph = AI::DecisionGraphAssetId::Create(10).Value();
+        const auto other = AI::DecisionGraphAssetId::Create(11).Value();
+        const auto node = AI::DecisionNodeId::Create(1).Value();
+        const auto sibling = AI::DecisionNodeId::Create(2).Value();
+        GraphViewSnapshot view{.nodes = {{.id = node}, {.id = sibling}}};
+        const std::array findings{
+            AI::DecisionAssetValidationDiagnostic{.severity = DiagnosticSeverity::Warning, .target = {graph, node}},
+            AI::DecisionAssetValidationDiagnostic{.severity = DiagnosticSeverity::Error, .target = {graph, node}},
+            AI::DecisionAssetValidationDiagnostic{.severity = DiagnosticSeverity::Fatal, .target = {other, node}},
+            AI::DecisionAssetValidationDiagnostic{.severity = DiagnosticSeverity::Fatal, .target = {other, sibling}},
+        };
+        ApplyDecisionCanvasValidation(view, graph, findings);
+        CHECK(view.nodes[0].validationSeverity == DiagnosticSeverity::Error);
+        CHECK_FALSE(view.nodes[1].validationSeverity);
+        ApplyDecisionCanvasValidation(view, graph, {});
+        CHECK_FALSE(view.nodes[0].validationSeverity);
+    }
+
+    TEST_CASE("Decision canvas renders a validation badge on the current graph revision", "[unit][editor][decision][canvas]") {
+        using namespace AI::DecisionGraphTestSupport;
+        Fixture provider;
+        auto task = TreeNode(2, AI::DecisionControlKind::Task);
+        task.typeVersion = {2, 0};
+        auto source =
+            std::make_shared<const AI::DecisionGraphSource>(Tree(4, {TreeNode(1, AI::DecisionControlKind::Root), task}, {Edge(1, 1, 2)}));
+        auto compiled = AI::DecisionGraphCompiler::Compile(source->asset, std::span{source.get(), 1}, provider.Environment());
+        REQUIRE(compiled.HasValue());
+        REQUIRE_FALSE(compiled.Value().validation.Empty());
+
+        DecisionGraphWorkspaceDocument document;
+        document.identity.instance = DocumentInstanceId::Create(19).Value();
+        document.graph = std::move(source);
+        document.family = AI::DecisionPlanKind::BehaviorTree;
+        document.revision = 1;
+        document.validation = std::make_shared<const AI::DecisionAssetValidationReport>(std::move(compiled.Value().validation));
+        CanvasFixture fixture;
+        fixture.Draw(document, 280.0F);
+        CHECK(fixture.labels.Used("workspace.decision_canvas.validation_issue"));
+
+        fixture.labels.Clear();
+        document.validation.reset();
+        fixture.Draw(document, 280.0F);
+        CHECK_FALSE(fixture.labels.Used("workspace.decision_canvas.validation_issue"));
+    }
+
     TEST_CASE("Decision graph canvas renders native links across revisions and narrow widths", "[unit][editor][decision][canvas]") {
         CanvasFixture fixture;
         const auto first = AI::DecisionNodeId::Create(1).Value();

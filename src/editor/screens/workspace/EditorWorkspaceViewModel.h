@@ -49,6 +49,7 @@
 #include <vector>
 
 namespace Horo::AI {
+    class DecisionAssetValidationReport;
     class DecisionBlackboardProviderMetadata;
     class EnvironmentQueryAsset;
     struct QueryDebugSnapshot;
@@ -606,6 +607,7 @@ namespace Horo::Editor {
         bool canUndo{};
         bool canRedo{};
         std::optional<Error> diagnostic;
+        std::shared_ptr<const AI::DecisionAssetValidationReport> validation; /**< Typed targets from the last failed validation. */
         bool conflict{};
     };
 

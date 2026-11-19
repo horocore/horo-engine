@@ -112,6 +112,16 @@ namespace Horo::AI {
         std::size_t maximumDiagnostics{DecisionAssetValidationHardLimits::Diagnostics};
     };
 
+    /** @brief Authored identities associated with a validation finding. Invalid fields have no exact target. */
+    struct DecisionDiagnosticTarget final {
+        DecisionGraphAssetId asset;    /**< Owning decision graph. */
+        DecisionNodeId node;           /**< Authored node within that graph. */
+        BlackboardSchemaId blackboard; /**< Schema referenced by the graph. */
+        BlackboardKeyId key;           /**< Required key, which may be absent from the schema. */
+
+        auto operator<=>(const DecisionDiagnosticTarget &) const = default;
+    };
+
     /** @brief One source-located finding emitted by decision-asset validation. */
     struct DecisionAssetValidationDiagnostic final {
         ErrorCode code;                                         /**< Stable AIErrors identity. */
@@ -119,6 +129,7 @@ namespace Horo::AI {
         std::string message;                                    /**< Finding-specific detail. */
         SourceLocation source;                                  /**< Exact authored source context. */
         std::string path;                                       /**< Machine-readable semantic path, never a runtime lookup key. */
+        DecisionDiagnosticTarget target{};                      /**< Exact authored identities when available. */
     };
 
     /** @brief Immutable, deterministically ordered findings from one decision-asset validation pass. */
