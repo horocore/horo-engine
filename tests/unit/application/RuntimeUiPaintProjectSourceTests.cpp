@@ -6,10 +6,32 @@
 #include "RuntimeUiPaintProjectSources.h"
 #include "UiPaintPackageTestFixture.h"
 
+#include <chrono>
+#include <thread>
+
 using namespace Horo;
 using namespace Horo::Tests::UiPaintHostTesting;
 
 namespace {
+    /** @brief Pumps the actual Scene owner to its exact requested publication or retained operation error. */
+    std::optional<Error> FinishScenePublication(Runtime::RuntimeSceneService &scenes, const Runtime::SceneDefinitionRevision revision,
+                                                const auto &advance) {
+        using namespace std::chrono_literals;
+        const auto deadline = std::chrono::steady_clock::now() + 5s;
+        do {
+            if (const auto advanced = advance(); advanced.HasError())
+                return advanced.ErrorValue();
+            if (auto failure = scenes.TakeOperationError())
+                return failure;
+            const auto scene = scenes.ActiveScene();
+            if (scene && scene->DefinitionRevision() == revision)
+                return std::nullopt;
+            std::this_thread::sleep_for(1ms);
+        } while (std::chrono::steady_clock::now() < deadline);
+        FAIL("Scene preparation did not publish the requested revision or reach a terminal error");
+        return std::nullopt;
+    }
+
     /** @brief Runs the real application project participant over canonical cooked artifact envelopes; tracking is CPU-only. */
     struct ProjectUi final {
         std::unique_ptr<Render::RenderFrontend> frontend{Frontend()};
@@ -113,16 +135,22 @@ namespace {
                 UNSCOPED_INFO("Scene queue failure: " << error.domain.Value() << '/' << error.code.Value() << ": " << error.message);
                 return error;
             }
-            REQUIRE(
-                scenes
-                    .OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, {.frameNumber = revision, .cancellation = cancellation})
-                    .HasValue());
-            auto failure = scenes.TakeOperationError();
+            auto failure = FinishScenePublication(scenes, {revision}, [&] {
+                return scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges,
+                                      {.frameNumber = revision, .cancellation = cancellation});
+            });
             if (failure) {
                 UNSCOPED_INFO("Scene publication failure: " << failure->domain.Value() << '/' << failure->code.Value() << ": "
                                                             << failure->message);
             }
             return failure;
+        }
+
+        /** @brief Uses the actual selected Play owner on both sides of the native frame admission boundary. */
+        std::optional<Error> CommitPlay(Editor::EditorPlaySceneHost &play, const std::uint64_t revision) const {
+            return FinishScenePublication(play.Scenes(), {revision}, [&] {
+                return play.CommitSceneChanges({.frameNumber = revision, .cancellation = cancellation});
+            });
         }
 
         /** @brief Publishes this actual authored source through the production registry and immutable cook format for the real factory. */
@@ -284,8 +312,7 @@ TEST_CASE("Actual project Play factory installs the same optional UI participant
     auto &play = *prepared.Value();
     REQUIRE(play.Scenes().Startup({}).HasValue());
     REQUIRE(play.Scenes().QueuePreparation(fixture.Definition(1, 0)).HasValue());
-    REQUIRE(play.CommitSceneChanges({.frameNumber = 1, .cancellation = fixture.cancellation}).HasValue());
-    REQUIRE_FALSE(play.Scenes().TakeOperationError());
+    REQUIRE_FALSE(fixture.CommitPlay(play, 1));
     REQUIRE(play.Scenes().ActiveScene());
     CHECK(fixture.port.Phase() != RuntimeUiPaintHostPhase::Failed);
     play.Shutdown();
@@ -372,8 +399,7 @@ TEST_CASE("Actual project Play UI preparation stays outside native admission thr
     REQUIRE(play->Scenes().Startup({}).HasValue());
     REQUIRE(play->Scenes().QueuePreparation(fixture.Definition(1, 1)).HasValue());
     CHECK_FALSE(Tests::RenderFrontendTesting::lifecycleState.frameActive);
-    REQUIRE(play->CommitSceneChanges({.frameNumber = 1, .cancellation = fixture.cancellation}).HasValue());
-    const auto error = play->Scenes().TakeOperationError();
+    const auto error = fixture.CommitPlay(*play, 1);
     INFO((error ? error->message : "Project preparation succeeded"));
     REQUIRE_FALSE(error);
     REQUIRE(play->Scenes().ActiveScene());
@@ -404,13 +430,14 @@ TEST_CASE("Early native admission cannot publish actual project Play UI resource
     {
         auto frame = Take(fixture.frontend->BeginFrame({.frameNumber = 1, .outputExtent = fixture.output}));
         REQUIRE(Tests::RenderFrontendTesting::lifecycleState.frameActive);
-        // With no Scene asset dependencies, QueuePreparation synchronously prepares the UI participant.
-        const auto queued = play->Scenes().QueuePreparation(fixture.Definition(1, 1));
-        REQUIRE(queued.HasError());
-        const auto &error = queued.ErrorValue();
-        UNSCOPED_INFO(error.domain.Value() << '/' << error.code.Value() << ": " << error.message);
-        CHECK(error.domain.Value() == "render.frontend");
-        CHECK(error.code.Value() == "render.frontend.resource.change_during_frame");
+        REQUIRE(play->Scenes().QueuePreparation(fixture.Definition(1, 1)).HasValue());
+        CHECK_FALSE(play->Scenes().ActiveScene());
+        // The registered canvas loads asynchronously; keep the actual native frame open through the publication attempt.
+        const auto error = fixture.CommitPlay(*play, 1);
+        REQUIRE(error);
+        UNSCOPED_INFO(error->domain.Value() << '/' << error->code.Value() << ": " << error->message);
+        CHECK(error->domain.Value() == "render.frontend");
+        CHECK(error->code.Value() == "render.frontend.resource.change_during_frame");
         CHECK_FALSE(play->Scenes().ActiveScene());
         CHECK_FALSE(fixture.port.InputEligible({Source::Owner(), 1, 1}));
     }
