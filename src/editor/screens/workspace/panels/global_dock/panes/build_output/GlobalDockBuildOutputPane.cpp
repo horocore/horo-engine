@@ -2,7 +2,9 @@
 
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "Horo/Foundation/Utf8.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
+#include "editor/screens/workspace/WorkspacePathText.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneChrome.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneLayout.h"
 
@@ -137,10 +139,17 @@ namespace Horo::Editor {
             return std::format("{}:{}", record.source->line, record.source->column);
         }
 
+        /** @brief Decodes UTF-8 diagnostic paths while preserving legacy native narrow input. */
+        [[nodiscard]] std::filesystem::path DiagnosticNativePath(std::string_view path) {
+            if (IsValidUtf8ScalarSequence(path))
+                return WorkspaceNativePath(path);
+            return std::filesystem::path{path};
+        }
+
         [[nodiscard]] std::string FileLabel(const BuildOutputRecord &record) {
             if (!record.source.has_value() || record.source->absolutePath.empty())
                 return record.stage.empty() ? "Editor" : record.stage;
-            return std::filesystem::path{record.source->absolutePath}.filename().string();
+            return WorkspacePathText(DiagnosticNativePath(record.source->absolutePath).filename());
         }
 
         [[nodiscard]] std::string FormatTimeOfDay(const std::chrono::system_clock::time_point &timestampUtc) {
@@ -457,7 +466,7 @@ namespace Horo::Editor {
         if (activated && record.source.has_value()) {
             command.command = EditorWorkspaceViewCommand::OpenDiagnosticSource;
             command.diagnosticSource = DiagnosticSourceRequest{
-                .absolutePath = std::filesystem::path{record.source->absolutePath},
+                .absolutePath = DiagnosticNativePath(record.source->absolutePath),
                 .line = record.source->line,
                 .column = record.source->column,
             };

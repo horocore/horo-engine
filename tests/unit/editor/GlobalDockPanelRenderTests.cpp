@@ -12,6 +12,7 @@
 #include "OwnedTestDirectory.h"
 #include "WorldCompositionSourceTestSupport.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
+#include "editor/screens/workspace/WorkspacePathText.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneChrome.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneLayout.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPanel.h"
@@ -674,12 +675,13 @@ TEST_CASE("Content browser renders responsive layouts and every dock tab", "[uni
                                  .operationQuery = &operationStore,
                                  .operationControl = &operationStore};
     BuildOutputStore clickableBuildOutputStore{4};
+    const std::filesystem::path diagnosticPath{u8"/tmp/HoroProject/assets/g\u00f6lge-\u0131\u015f\u0131k.glsl"};
     clickableBuildOutputStore.Append(BuildOutputRecord{
         .timestampUtc = std::chrono::system_clock::now(),
         .severity = DiagnosticSeverity::Error,
         .stage = "compile",
         .message = "Clickable diagnostic",
-        .source = DiagnosticSourceLocation{.absolutePath = "/tmp/HoroProject/assets/shader.glsl", .line = 12, .column = 3},
+        .source = DiagnosticSourceLocation{.absolutePath = WorkspacePathText(diagnosticPath), .line = 12, .column = 3},
     });
     PanelContext clickableActivityContext{.dataBus = editorEvents, .buildOutputQuery = &clickableBuildOutputStore};
     GlobalDockPanel clickableBuild{GlobalDockTab::BuildOutput};
@@ -703,7 +705,7 @@ TEST_CASE("Content browser renders responsive layouts and every dock tab", "[uni
     ImGui::Render();
     REQUIRE((diagnosticCommand.command == EditorWorkspaceViewCommand::OpenDiagnosticSource));
     REQUIRE(diagnosticCommand.diagnosticSource.has_value());
-    REQUIRE((diagnosticCommand.diagnosticSource->absolutePath == "/tmp/HoroProject/assets/shader.glsl"));
+    REQUIRE((diagnosticCommand.diagnosticSource->absolutePath == diagnosticPath));
     REQUIRE((diagnosticCommand.diagnosticSource->line == 12U));
     REQUIRE((diagnosticCommand.diagnosticSource->column == 3U));
     clickableBuild.OnDetach();

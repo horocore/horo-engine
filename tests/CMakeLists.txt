@@ -4085,6 +4085,7 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     target_link_libraries(HoroGlobalDockPanelRenderTests
             PRIVATE
+            HoroEngine::AISceneIntegration
             HoroEngine::NetworkTransportNull
             HoroEngine::Gui
             HoroThirdParty::ImGui
