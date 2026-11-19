@@ -5,6 +5,7 @@
 #include "Horo/Platform/ExternalProcess.h"
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
 #include "ShaderCompilerToolchain.h"
+#include "ShaderReflectionCook.h"
 #include "VulkanReconstructionReleaseCook.h"
 
 #include <algorithm>
@@ -28,6 +29,7 @@ namespace {
         Shadow,
         MultiviewMotion,
         MultiviewCoverage,
+        MultiviewCoverageReduction,
         TemporalLinearDepth,
         TemporalMotion
     };
@@ -58,6 +60,8 @@ namespace {
                 return Editor::EditorVulkanMultiviewMotionShaderManifest();
             case MultiviewCoverage:
                 return Editor::EditorVulkanMultiviewCoverageShaderManifest();
+            case MultiviewCoverageReduction:
+                return StereoCoverageReductionManifest();
             case TemporalLinearDepth:
             case TemporalMotion:
                 return Editor::EditorVulkanTemporalInputShaderManifest(*TemporalInput(mode));
@@ -82,6 +86,8 @@ namespace {
                 return Editor::EditorVulkanMultiviewMotionReflectionNames();
             case MultiviewCoverage:
                 return Editor::EditorVulkanMultiviewCoverageReflectionNames();
+            case MultiviewCoverageReduction:
+                return StereoCoverageReductionReflectionNames();
             case TemporalLinearDepth:
             case TemporalMotion:
                 return Editor::EditorVulkanTemporalInputReflectionNames(*TemporalInput(mode));
@@ -106,6 +112,8 @@ namespace {
                 return "multiview-motion";
             case MultiviewCoverage:
                 return "multiview-coverage";
+            case MultiviewCoverageReduction:
+                return "multiview-coverage-reduction";
             case TemporalLinearDepth:
                 return "temporal-linear-depth";
             case TemporalMotion:
@@ -204,6 +212,8 @@ namespace {
                 return Admit(Editor::LoadEditorVulkanMultiviewMotionCook(artifact.payload, metadata));
             case MultiviewCoverage:
                 return Admit(Editor::LoadEditorVulkanMultiviewCoverageCook(artifact.payload, metadata));
+            case MultiviewCoverageReduction:
+                return Admit(ValidateStereoCoverageReductionCook(artifact.payload, metadata));
             case TemporalLinearDepth:
             case TemporalMotion:
                 return Admit(Editor::ValidateEditorVulkanTemporalInputCook(*TemporalInput(mode), artifact.payload, metadata));
@@ -217,12 +227,13 @@ namespace {
             const std::array identities{tools[0].identity, tools[1].identity, tools[2].identity};
             return Editor::Offline::MakeVulkanSceneLinearCookRequest(std::move(source), identities);
         }
-        const auto target = Editor::EditorVulkanViewportShaderTarget();
+        auto manifest = Manifest(mode);
+        const auto target = manifest.targets.front();
         ShaderCompilerTargetDescriptor route{.requirement = target,
                                              .platformTriple = "linux-x86_64",
                                              .intermediateEnvironment = ShaderIntermediateEnvironment::Vulkan13SpirV16,
                                              .tools = {tools[0].identity, tools[1].identity}};
-        ShaderCompilationRequest request{.manifest = Manifest(mode),
+        ShaderCompilationRequest request{.manifest = std::move(manifest),
                                          .source = std::move(source),
                                          .targets = {route},
                                          .reflection = ShaderCompilerReflectionRequest{tools[2].identity, Names(mode)}};
@@ -359,6 +370,8 @@ namespace {
             return MultiviewMotion;
         if (std::string_view{argv[7]} == "--multiview-coverage")
             return MultiviewCoverage;
+        if (std::string_view{argv[7]} == "--multiview-coverage-reduction")
+            return MultiviewCoverageReduction;
         if (std::string_view{argv[7]} == "--temporal-linear-depth")
             return TemporalLinearDepth;
         if (std::string_view{argv[7]} == "--temporal-motion")
@@ -377,7 +390,8 @@ int main(int argc, char **argv) {
     const bool manualColorOutput = argc == 9 && std::string_view{argv[7]} == "--color-output-manual";
     if (!mode && !reconstruction && !manualColorOutput) {
         std::cerr << "Usage: HoroEditorVulkanShaderCook source.hlsl output-prefix scratch-root dxc spirv-val spirv-cross "
-                     "[--scene-linear|--multiview|--multiview-motion|--multiview-coverage|--shadow|--temporal-linear-depth|"
+                     "[--scene-linear|--multiview|--multiview-motion|--multiview-coverage|--multiview-coverage-reduction|--shadow|--"
+                     "temporal-linear-depth|"
                      "--temporal-motion|--camera-cross-fade]\n"
                      "       HoroEditorVulkanShaderCook source.hlsl absolute-new-stage scratch-root dxc spirv-val spirv-cross "
                      "--native-reconstruction candidate-id [--scene-linear-source viewport.hlsl]\n"

@@ -208,6 +208,16 @@ The regression checks packed pixels from two eyes at known depths and rejects
 a stale completion. Full-image reduction and runtime-specific encoding
 remain separate from this bounded probe.
 
+The closed reduction stage is available through the same offline cooker. Cook
+`assets/shaders/runtime/multiview_coverage_reduce.hlsl` with
+`--multiview-coverage-reduction`. Its two input views and two exact active
+rectangles map to one pair of visited and unresolved counters per eye.
+Every covered pixel contributes once. Only the depth-consistent code
+resolves a sample. The producer must initialize the counter storage per
+submission and retain the exact paired mask through graphics completion.
+The cooked stage is a prerequisite for an integrated GPU result and
+compositor admission.
+
 ## Public contract migration and evidence
 
 The additive headers are owned by RenderApi or XRApi in the ownership registry.

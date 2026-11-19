@@ -253,3 +253,80 @@ TEST_CASE("XR coverage cook admits only the exact predecessor sampled depth and 
     }
     CHECK(LoadEditorVulkanMultiviewMotionCook(compiled.payload, metadata.Value()).HasError());
 }
+
+TEST_CASE("XR reduction cook closes the exact per-eye count and rectangle ABI", "[renderer][shader-cook][xr][coverage-reduction]") {
+    // Shape of real SPIRV-Cross evidence for the shipped kernel. Native execution is tested separately.
+    const SpirvReflectionStage canonical{ShaderStage::Compute, "CSReduceCoverage", R"({
+        "entryPoints":[{"name":"CSReduceCoverage","mode":"comp","workgroup_size":[8,8,1],
+                        "workgroup_size_is_spec_constant_id":[false,false,false]}],
+        "types":{
+            "_10":{"name":"type.RWStructuredBuffer.v2uint","members":[{"name":"_m0","type":"uvec2",
+                     "array":[0],"array_size_is_literal":[true],"offset":0,"array_stride":8}]},
+            "_11":{"name":"type.CoverageRectangles","members":[{"name":"LeftRect","type":"uvec4","offset":0},
+                                                              {"name":"RightRect","type":"uvec4","offset":16}]}},
+        "separate_images":[{"type":"texture2D","name":"CoverageLeft","set":0,"binding":0},
+                           {"type":"texture2D","name":"CoverageRight","set":0,"binding":1}],
+        "ssbos":[{"type":"_10","name":"CoverageCounts","block_size":0,"set":0,"binding":2}],
+        "ubos":[{"type":"_11","name":"type.CoverageRectangles","block_size":32,"set":0,"binding":3}]
+    })"};
+    const auto manifest = StereoCoverageReductionManifest();
+    const auto &target = manifest.targets.front();
+    const auto names = StereoCoverageReductionReflectionNames();
+    auto normalized = NormalizeVulkanReflection(manifest, target, std::span{&canonical, 1}, names);
+    REQUIRE(normalized.HasValue());
+    REQUIRE(normalized.Value().bindings.size() == 4);
+    REQUIRE(normalized.Value().parameters.size() == 2);
+    CHECK(normalized.Value().bindings[2].kind == ShaderResourceKind::StorageBuffer);
+    CHECK(normalized.Value().bindings[2].access == ShaderResourceAccess::ReadWrite);
+    CHECK(normalized.Value().parameters[1].byteOffset == 16);
+
+    SECTION("rejects changed compiler resource and execution evidence") {
+        const auto mutation =
+            GENERATE(std::pair{std::string_view{"[8,8,1]"}, std::string_view{"[8,4,1]"}},
+                     std::pair{std::string_view{"[false,false,false]"}, std::string_view{"[false,true,false]"}},
+                     std::pair{std::string_view{R"("binding":0)"}, std::string_view{R"("binding":1)"}},
+                     std::pair{std::string_view{"texture2D"}, std::string_view{"texture2DArray"}},
+                     std::pair{std::string_view{R"("array_stride":8)"}, std::string_view{R"("array_stride":16)"}},
+                     std::pair{std::string_view{R"("block_size":0)"}, std::string_view{R"("block_size":0,"readonly":true)"}},
+                     std::pair{std::string_view{R"("offset":16)"}, std::string_view{R"("offset":16.0)"}});
+        CAPTURE(mutation.first, mutation.second);
+        auto changed = canonical;
+        ReplaceEvidence(changed.json, mutation.first, mutation.second);
+        CHECK(NormalizeVulkanReflection(manifest, target, std::span{&changed, 1}, names).HasError());
+    }
+    SECTION("the closed reflection route rejects another source identity") {
+        auto foreign = manifest;
+        foreign.sourceIdentity = "runtime/other_kernel.hlsl";
+        CHECK(NormalizeVulkanReflection(foreign, target, std::span{&canonical, 1}, names).HasError());
+    }
+    SECTION("the loader validates the bound sidecar and rejects the wrong stage") {
+        const bool wrongEntry = GENERATE(false, true);
+        const std::array stages{ShaderArtifactStage{ShaderStage::Compute, wrongEntry ? "OtherReduction" : "CSReduceCoverage", {1}}};
+        auto payload = PackageShaderArtifactStages(target.backend, target.payloadFormat, stages, 1024);
+        REQUIRE(payload.HasValue());
+        CompiledShaderArtifact compiled{.backend = target.backend,
+                                        .payloadFormat = target.payloadFormat,
+                                        .artifactKey = ComputeSha256(std::as_bytes(std::span{payload.Value()})),
+                                        .payload = std::move(payload).Value()};
+        auto cooked =
+            CookReflectedShaderArtifact(compiled, {ShaderCompilerTool::SpirvCross, "scripted-official-schema", compiled.artifactKey},
+                                        normalized.Value());
+        REQUIRE(cooked.HasValue());
+        const auto metadata = EncodeReflectedShaderArtifact(cooked.Value());
+        REQUIRE(metadata.HasValue());
+        CHECK(ValidateStereoCoverageReductionCook(compiled.payload, metadata.Value()).HasError() == wrongEntry);
+        if (!wrongEntry) {
+            auto remapped = normalized.Value();
+            std::swap(remapped.targetBindings[0].nativeBinding, remapped.targetBindings[1].nativeBinding);
+            const auto relabeled =
+                CookReflectedShaderArtifact(compiled, {ShaderCompilerTool::SpirvCross, "scripted-official-schema", compiled.artifactKey},
+                                            remapped);
+            REQUIRE(relabeled.HasValue());
+            const auto wrongMetadata = EncodeReflectedShaderArtifact(relabeled.Value());
+            REQUIRE(wrongMetadata.HasValue());
+            CHECK(ValidateStereoCoverageReductionCook(compiled.payload, wrongMetadata.Value()).HasError());
+        }
+        compiled.payload.back() ^= 1;
+        CHECK(ValidateStereoCoverageReductionCook(compiled.payload, metadata.Value()).HasError());
+    }
+}

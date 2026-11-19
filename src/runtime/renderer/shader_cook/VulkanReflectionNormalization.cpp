@@ -1,4 +1,5 @@
 #include "Horo/Runtime/Render/NativeReconstructionKernel.h"
+#include "Horo/Runtime/Render/ShaderArtifact.h"
 #include "Horo/Runtime/Render/ShaderReflectionErrors.h"
 #include "ShaderReflectionCookJson.h"
 
@@ -9,6 +10,8 @@
 #include <utility>
 
 namespace Horo::Render {
+#include "VulkanCoverageReduction.inl"
+
     namespace {
         using Foundation::Json;
 
@@ -426,6 +429,8 @@ namespace Horo::Render {
                                                                  const std::span<const SpirvReflectionStage> stages,
                                                                  const std::span<const ShaderReflectionBindingName> names) {
         try {
+            if (manifest.sourceIdentity == CoverageReductionSource)
+                return ReflectCoverageReduction(manifest, target, stages, names);
             const bool reconstruction = AdmittedReconstructionEnvelope(manifest, target, stages, names);
             if (!reconstruction && !AdmittedVulkanEnvelope(manifest, target, stages, names))
                 throw InvalidEvidence{};
