@@ -85,6 +85,13 @@ value from Android's PowerManager and publishes only state transitions. The
 deployment report carries `enabled`, `disabled`, `inactive`, `unsupported`,
 or `unavailable`. Battery charge level and charging state are separate signals.
 
+The resumed, focused Activity obtains the Android-reported refresh rate from
+the display attached to its window. It samples on focus and on notifications
+for that display, and withdraws the value on focus loss or window detachment.
+The optional report records a bounded rate in millihertz when a rate is
+available. Frame cadence, display completion, and OpenXR headset refresh have
+their own authorities.
+
 ## Nonblocking acquisition and retirement
 
 Availability polling observes the native output and advances retirement. It does

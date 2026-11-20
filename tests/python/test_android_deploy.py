@@ -459,6 +459,24 @@ class AndroidDeployTests(unittest.TestCase):
                 self.assertEqual(report["observed"]["power"], {"revision": revision, "state": state})
                 self.assertNotIn("raw=private", json.dumps(report))
 
+    def test_vulkan_capture_requires_a_bounded_rate_only_for_observed_refresh(self):
+        log = log_line(LIFECYCLE) + log_line(FRAME)
+        log += log_line("host-refresh revision=2 state=observed milliHz=59940")
+        log += log_line("host-refresh revision=3 state=observed milliHz=0")
+        log += log_line("host-refresh revision=4 state=unavailable milliHz=60000")
+        log += log_line("host-refresh revision=5 state=observed milliHz=2147483648")
+        log += log_line("host-refresh revision=6 state=observed milliHz=90000", uid="10200")
+        status, report, _ = self.execute({LOGCAT: log}, profile_name=VULKAN_PROFILE)
+        self.assertEqual((status, report["status"]), (0, "complete"))
+        self.assertEqual(report["observed"]["refresh"], {"revision": 2, "state": "observed", "milliHz": 59940})
+
+    def test_vulkan_capture_clears_the_rate_when_display_evidence_is_withdrawn(self):
+        first = log_line(LIFECYCLE) + log_line("host-refresh revision=2 state=inactive milliHz=0")
+        second = log_line(FRAME) + log_line("host-refresh revision=1 state=observed milliHz=60000")
+        status, report, _ = self.execute({LOGCAT: [first, second]}, profile_name=VULKAN_PROFILE)
+        self.assertEqual((status, report["status"]), (0, "complete"))
+        self.assertEqual(report["observed"]["refresh"], {"revision": 2, "state": "inactive"})
+
     def test_device_clock_discontinuity_or_malformed_clock_cannot_supply_evidence(self):
         for final, expected in ((START, "device_log_clock_changed"),
                                 ("1795000000.111000001", "device_log_clock_changed"),

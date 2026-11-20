@@ -639,7 +639,7 @@ def apk_write_project(stage: Path, tools: dict, profile: dict, abis: list[str], 
         package = Path("org/horocore/qualification")
         destination = stage / "java" / package
         destination.mkdir(parents=True, exist_ok=True)
-        for source_name in ("HoroVulkanQualificationActivity.java", "PowerSaveObservation.java"):
+        for source_name in ("HoroVulkanQualificationActivity.java", "PowerSaveObservation.java", "DisplayRefreshObservation.java"):
             shutil.copyfile(ROOT / "apps/android-package-qualification/java" / package / source_name, destination / source_name)
         activity_base = "org.horocore.qualification.HoroVulkanQualificationActivity"
     source = (f"package {profile['applicationId']};\n"
@@ -1173,7 +1173,7 @@ STATE_LINE = re.compile(
 FRAME_LINE = re.compile(
     r"host-frame stage=(?P<stage>begin|execute|present) outcome=(?P<outcome>accepted|backpressure|failed) "
     + " ".join(fr"{name}=(?P<{name}>[0-9]{{1,20}})" for name in FRAME_FIELDS) + r" completion=unobserved")
-PRESSURE_LINES = {
+PLATFORM_STATE_LINES = {
     "thermal": re.compile(
         r"host-thermal revision=(?P<revision>[1-9][0-9]{0,18}) "
         r"state=(?P<state>pending|inactive|unsupported|unavailable|none|light|moderate|severe|critical|emergency|shutdown)"),
@@ -1183,6 +1183,9 @@ PRESSURE_LINES = {
     "power": re.compile(
         r"host-power revision=(?P<revision>[1-9][0-9]{0,18}) "
         r"state=(?P<state>inactive|unsupported|unavailable|enabled|disabled)"),
+    "refresh": re.compile(
+        r"host-refresh revision=(?P<revision>[1-9][0-9]{0,18}) "
+        r"state=(?P<state>inactive|unsupported|unavailable|observed) milliHz=(?P<milliHz>0|[1-9][0-9]{0,9})"),
 }
 OPENXR_LINE = re.compile(
     r"host-openxr abi=(arm64-v8a|x86_64) stage=(host-application|bundled-loader|loader-dispatch|loader-initialization|extension-admission|"
@@ -1266,6 +1269,21 @@ def process_log_entries(log: str, process: DeployedProcess, after: int, through:
             yield logged, priority, tag, message
 
 
+def record_platform_state(evidence: dict, category: str, state: re.Match) -> None:
+    """Retain bounded, strictly newer observations and omit rates when the display is unavailable."""
+    revision = int(state["revision"])
+    if not evidence.get(category, {}).get("revision", 0) < revision < 2**63:
+        return
+    value = {"revision": revision, "state": state["state"]}
+    if category == "refresh":
+        rate = int(state["milliHz"])
+        if rate >= 2**31 or (rate > 0) != (value["state"] == "observed"):
+            return
+        if rate:
+            value["milliHz"] = rate
+    evidence[category] = value
+
+
 def package_log_evidence(log: str, process: DeployedProcess, after: int, through: int, categories: tuple[str, ...]) -> dict:
     """Project named telemetry only from the exact UID, PID and admitted time interval."""
     evidence = {"crashObserved": False}
@@ -1284,11 +1302,9 @@ def package_log_evidence(log: str, process: DeployedProcess, after: int, through
                 raise AndroidDeployError("openxr_diagnostic_ambiguous")
             evidence["openxr"] = openxr_log_evidence(message)
             continue
-        for category, pattern in PRESSURE_LINES.items():
-            if category in categories and (pressure := pattern.fullmatch(message)):
-                revision = int(pressure["revision"])
-                if evidence.get(category, {}).get("revision", 0) < revision < 2**63:
-                    evidence[category] = {"revision": revision, "state": pressure["state"]}
+        for category, pattern in PLATFORM_STATE_LINES.items():
+            if category in categories and (state := pattern.fullmatch(message)):
+                record_platform_state(evidence, category, state)
                 break
         for category, pattern in (("lifecycle", STATE_LINE), ("renderer", FRAME_LINE)):
             if category in categories and logged >= latest.get(category, 0) and (match := pattern.fullmatch(message)):
@@ -1365,12 +1381,12 @@ def await_deploy_diagnostics(device: AdmittedAdbDevice, application: str, proces
         required = ("entry",)
     else:
         required = ("lifecycle", "renderer")
-    categories = (*required, *PRESSURE_LINES) if profile["renderer"] == "vulkan-android" else required
+    categories = (*required, *PLATFORM_STATE_LINES) if profile["renderer"] == "vulkan-android" else required
     facts = {"crashObserved": False}
     while time.monotonic() < device.deadline:
         observed = deploy_diagnostics(device, application, process, start, categories)
-        for category in PRESSURE_LINES:
-            if (pressure := observed.get(category)) and pressure["revision"] <= facts.get(category, {}).get("revision", 0):
+        for category in PLATFORM_STATE_LINES:
+            if (state := observed.get(category)) and state["revision"] <= facts.get(category, {}).get("revision", 0):
                 observed.pop(category)
         facts.update(observed)
         applicable = all(key in facts for key in required)

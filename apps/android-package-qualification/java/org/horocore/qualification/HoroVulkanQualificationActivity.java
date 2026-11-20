@@ -12,6 +12,7 @@ public class HoroVulkanQualificationActivity extends HoroInputActivity {
     private static ThermalObservation thermal;
     private static final MemoryObservation memory = new MemoryObservation();
     private static final PowerSaveObservation power = new PowerSaveObservation();
+    private static final DisplayRefreshObservation refresh = new DisplayRefreshObservation();
 
     @Override public void onResume() {
         super.onResume();
@@ -19,9 +20,11 @@ public class HoroVulkanQualificationActivity extends HoroInputActivity {
         thermal.resume(this);
         memory.resume(this);
         power.resume(this);
+        refresh.resume(this);
     }
 
     @Override public void onPause() {
+        refresh.pause(this);
         if (thermal != null) thermal.pause(this);
         memory.pause(this);
         power.pause(this);
@@ -29,10 +32,21 @@ public class HoroVulkanQualificationActivity extends HoroInputActivity {
     }
 
     @Override public void onDestroy() {
+        refresh.pause(this);
         if (thermal != null) thermal.pause(this);
         memory.pause(this);
         power.pause(this);
         super.onDestroy();
+    }
+
+    @Override public void onWindowFocusChanged(boolean focused) {
+        super.onWindowFocusChanged(focused);
+        refresh.focus(this, focused);
+    }
+
+    @Override public void onDetachedFromWindow() {
+        refresh.focus(this, false);
+        super.onDetachedFromWindow();
     }
 
     @Override public void onTrimMemory(int level) {
