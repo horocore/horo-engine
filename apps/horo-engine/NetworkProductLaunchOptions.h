@@ -6,6 +6,7 @@
 #include "HeadlessCookedDecisionAdmission.h"
 #include "HeadlessNetworkServices.h"
 #include "HeadlessProjectScene.h"
+#include "HeadlessReplayArtifact.h"
 #include "Horo/Network/NetworkAddress.h"
 #include "Horo/Network/NetworkModeComposition.h"
 
@@ -26,6 +27,7 @@ namespace Horo::Application::Internal {
         std::optional<AI::AiMissingControllerPolicy> aiMissingController;
         std::optional<HeadlessNavigationPathPolicy> navigationPath;
         std::shared_ptr<HeadlessDecisionReplay> decisionReplay;
+        std::optional<HeadlessReplayOutput> decisionReplayOutput;
     };
 
     /** @brief Parses existing positional network modes plus explicit optional Scene input without native activation.

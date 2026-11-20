@@ -392,6 +392,9 @@ namespace Horo::Application::Internal {
 
         /** @brief Requires the authoritative terminal path and the matching native/cooked authority. */
         Result<void> ValidateCookedDecisions(const ProductLaunch &launch) {
+            if (launch.decisionReplayOutput && !launch.decisionReplay)
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "AI replay output requires --ai-replay selection."));
             if (launch.decisionReplay && launch.cookedDecisionBindings.empty())
                 return Result<void>::Failure(
                     MakeError(Net::NetworkErrors::NetworkModeInvalid, "AI replay requires explicit cooked controller selection."));
@@ -433,6 +436,17 @@ namespace Horo::Application::Internal {
             launch.decisionReplay =
                 std::make_shared<HeadlessDecisionReplay>(HeadlessDecisionReplaySelection{AI::AgentId::Create(agent).Value(), tick});
             index += 3;
+            return Result<void>::Success();
+        }
+
+        /** @brief Admits one explicit artifact destination without creating anything. */
+        Result<void> ReadDecisionReplayOutput(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch) {
+            const bool available = !launch.decisionReplayOutput && arguments.size() - index >= 2;
+            auto output = HeadlessReplayOutput::Parse(available ? std::string_view{arguments[index + 1]} : std::string_view{});
+            if (output.HasError())
+                return Result<void>::Failure(std::move(output).ErrorValue());
+            launch.decisionReplayOutput.emplace(std::move(output).Value());
+            index += 2;
             return Result<void>::Success();
         }
 
@@ -520,6 +534,11 @@ namespace Horo::Application::Internal {
                 if (key == "--ai-replay") {
                     if (auto selected = ReadDecisionReplay(arguments, index, launch); selected.HasError())
                         return selected;
+                    continue;
+                }
+                if (key == "--ai-replay-output") {
+                    if (auto output = ReadDecisionReplayOutput(arguments, index, launch); output.HasError())
+                        return output;
                     continue;
                 }
                 if (auto applied = ReadSceneOption(arguments, index, seen, launch.sceneInput); applied.HasError())

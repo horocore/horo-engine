@@ -54,7 +54,7 @@ namespace Horo::Application::Internal {
             });
             if (encoded.HasError())
                 return HeadlessDecisionReplay::Capture::Failure(std::move(encoded).ErrorValue());
-            return HeadlessDecisionReplay::Capture::Success({std::move(evidence), std::move(encoded).Value()});
+            return HeadlessDecisionReplay::Capture::Success({std::move(evidence), std::move(encoded).Value(), scene.DefinitionId()});
         }
     }  // namespace
 

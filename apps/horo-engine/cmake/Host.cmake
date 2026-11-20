@@ -7,6 +7,7 @@ add_library(HoroNetworkProductHost STATIC
     horo-engine/composition/network/NetworkProductSession.cpp
     horo-engine/composition/network/NetworkProductTransport.cpp
     horo-engine/composition/network/HeadlessNetworkServices.cpp
+    horo-engine/composition/network/HeadlessReplayArtifact.cpp
     horo-engine/composition/network/HeadlessNetworkReplication.cpp
     horo-engine/composition/network/HeadlessPrefabIntent.cpp
     horo-engine/composition/network/HeadlessPrefabReplica.cpp

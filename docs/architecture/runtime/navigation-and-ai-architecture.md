@@ -3299,6 +3299,17 @@ the authored object ID, both unsigned 64-bit big-endian values, with generation
 one for the original authored occurrence. References to stale, gameplay-spawned,
 or mounted entities fail capture until those owners can supply stable identities.
 
+`--ai-replay-output <absolute-new-directory>` also writes a neutral
+`evidence.json` report under an existing caller-controlled parent. The
+headless host stages the report beside its destination and publishes the
+complete directory without replacing any existing entry. The version 1
+report carries the stable Scene and agent IDs, fixed tick, canonical AI
+digest and its record revision, and the semantic decision records from the
+original versioned trace. Stable 64-bit identifiers are decimal strings.
+Blackboard values and process-local handles stay out of the report. The
+report covers the decision and canonical AI boundaries. Input playback
+requires an additional input recording.
+
 ### Scene decision scheduling tiers
 
 Hosts can compose an `AiDecisionSimulationProfile` through

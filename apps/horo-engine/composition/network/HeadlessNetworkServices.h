@@ -73,6 +73,7 @@ namespace Horo::Application::Internal {
     struct HeadlessDecisionReplayData final {
         AI::AiSceneDecisionReplayCapture evidence;
         std::vector<std::uint8_t> canonicalRecord;
+        Runtime::SceneDefinitionId definition;
     };
 
     /** @brief Product-owned mailbox for one exact committed tick; no concurrent access or file storage. */

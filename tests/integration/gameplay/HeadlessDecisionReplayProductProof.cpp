@@ -1,12 +1,16 @@
 #include "HeadlessNetworkServices.h"
+#include "HeadlessReplayArtifact.h"
 #include "Horo/AI/AICanonicalState.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/Network/NetworkErrors.h"
 #include "NetworkProductHost.h"
+#include "OwnedTestDirectory.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <fstream>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <utility>
 
 namespace Horo::Application::PrefabAtomicTest {
@@ -46,6 +50,37 @@ namespace Horo::Application::PrefabAtomicTest {
         private:
             std::unique_ptr<Runtime::RuntimeLifecycleParticipant> next_;
         };
+
+        /** @brief Checks the actual detached report and protects the previously published bytes on a second invocation. */
+        void ExpectReplayArtifact(const Internal::HeadlessReplayOutput &output, const Internal::HeadlessDecisionReplayData &data) {
+            const auto digest = ComputeSha256(std::as_bytes(std::span{data.canonicalRecord}));
+            const auto published = Internal::PublishHeadlessReplayArtifact(output, data, digest);
+            INFO((published.HasError() ? published.ErrorValue().message : "success"));
+            REQUIRE(published.HasValue());
+            const auto file = output.Directory() / "evidence.json";
+            std::ifstream stream{file, std::ios::binary};
+            REQUIRE(stream.is_open());
+            const auto artifact = nlohmann::json::parse(stream);
+            CHECK(artifact.at("format") == "horo-ai-replay-evidence");
+            CHECK(artifact.at("version") == 1);
+            CHECK(artifact.at("sceneDefinitionId") == std::to_string(data.definition.value));
+            CHECK(artifact.at("tick") == "1");
+            CHECK(artifact.at("agentId") == std::to_string(data.evidence.subject.Value()));
+            CHECK(artifact.at("canonicalAi").at("digest") == FormatSha256(digest));
+            CHECK(artifact.at("canonicalAi").at("recordVersion") == AI::AiCanonicalReferenceRecordVersion);
+            const auto &decision = artifact.at("decision");
+            CHECK(decision.at("planDigest") == FormatSha256(data.evidence.trace->Header().planDigest));
+            CHECK(decision.at("traceVersion") == AI::DecisionTraceHeader::CurrentVersion);
+            REQUIRE(decision.at("records").size() == data.evidence.trace->Records().size());
+            for (const auto &record : decision.at("records")) {
+                CHECK(record.at("hasActiveTaskHandle").is_boolean());
+                CHECK_FALSE(record.contains("taskHandle"));
+            }
+            CHECK_FALSE(decision.at("blackboard").contains("values"));
+            CHECK(Internal::PublishHeadlessReplayArtifact(output, data, digest).HasError());
+            std::ifstream retained{file, std::ios::binary};
+            CHECK(nlohmann::json::parse(retained) == artifact);
+        }
     }  // namespace
 
     /** @copydoc ExpectDecisionReplay */
@@ -54,6 +89,12 @@ namespace Horo::Application::PrefabAtomicTest {
                               std::optional<std::uint32_t> referenceGeneration) {
         using namespace Network;
         const auto definitionId = definition->Id();
+        Tests::OwnedTestDirectory artifactOwner{"headless-replay"};
+        const auto artifactPath = artifactOwner.Path() / std::filesystem::path{u8"replay evidence ü"};
+        const auto utf8 = artifactPath.u8string();
+        const auto output =
+            Internal::HeadlessReplayOutput::Parse(std::string_view{reinterpret_cast<const char *>(utf8.data()), utf8.size()});
+        REQUIRE(output.HasValue());
         const auto replay = std::make_shared<Internal::HeadlessDecisionReplay>(Internal::HeadlessDecisionReplaySelection{agent, 1});
         input.decisionReplay = replay;
         auto configured = Internal::ComposeHeadlessSceneNetworkServices(std::move(definition), std::move(input));
@@ -119,6 +160,7 @@ namespace Horo::Application::PrefabAtomicTest {
             REQUIRE(fixed.HasError());
             CHECK(fixed.ErrorValue().message == "Reject prepared replay test tick.");
             CHECK_FALSE(replay->TakeCommitted());
+            CHECK_FALSE(std::filesystem::exists(artifactPath));
             return;
         }
         INFO((fixed.HasError() ? fixed.ErrorValue().message : "success"));
@@ -156,6 +198,7 @@ namespace Horo::Application::PrefabAtomicTest {
         REQUIRE(decoded.HasValue());
         CHECK(decoded.Value() == evidence.canonical);
         CHECK(references == (referenceGeneration ? 1 : 0));
+        ExpectReplayArtifact(output.Value(), data);
         CHECK_FALSE(replay->TakeCommitted());
         host.Value()->Shutdown();
     }

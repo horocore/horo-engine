@@ -589,7 +589,7 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Hashes detached replay state after the frame loop and reports its original trace identity. */
-        [[nodiscard]] Result<void> PrintDecisionReplay(HeadlessDecisionReplay &replay) {
+        [[nodiscard]] Result<void> PrintDecisionReplay(HeadlessDecisionReplay &replay, const std::optional<HeadlessReplayOutput> &output) {
             auto captured = replay.TakeCommitted();
             if (!captured)
                 return Result<void>::Failure(
@@ -599,6 +599,10 @@ namespace Horo::Application::Internal {
             const auto &data = captured->Value();
             const auto &capture = data.evidence;
             const auto hash = ComputeSha256(std::as_bytes(std::span{data.canonicalRecord}));
+            if (output) {
+                if (auto published = PublishHeadlessReplayArtifact(*output, data, hash); published.HasError())
+                    return published;
+            }
             std::cout << "AI replay scene " << capture.scene.value << " tick " << capture.tick << " agent " << capture.subject.Value()
                       << " blackboard-revision " << capture.blackboardRevision << " plan "
                       << FormatSha256(capture.trace->Header().planDigest) << " canonical-ai-state " << FormatSha256(hash) << '\n';
@@ -626,7 +630,7 @@ namespace Horo::Application::Internal {
                 }
             }
             if (launch.decisionReplay) {
-                if (auto replay = PrintDecisionReplay(*launch.decisionReplay); replay.HasError()) {
+                if (auto replay = PrintDecisionReplay(*launch.decisionReplay, launch.decisionReplayOutput); replay.HasError()) {
                     std::cerr << "horo-engine: AI replay failed (" << replay.ErrorValue().code.Value()
                               << "): " << replay.ErrorValue().message << '\n';
                     return 3;
