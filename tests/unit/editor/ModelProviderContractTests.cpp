@@ -1,3 +1,4 @@
+#include "AgentLocalSceneTurn.h"
 #include "AgentTurnTestTools.h"
 #include "AllocationProbe.h"
 #include "Horo/Agent/ModelProvider.h"
@@ -161,6 +162,22 @@ TEST_CASE("Local HTTP inference completes an approved editor MCP tool round with
     REQUIRE(result.messages.size() == 4);
     CHECK(tools.scene->calls == 1);
     CHECK(result.messages.back().text == "Three objects");
+}
+
+TEST_CASE("The editor local scene turn probes model tools and returns only the approved count", "[agent][model][http]") {
+    const ModelProviderConfig config{.endpoint = Endpoint(), .timeout = std::chrono::seconds{2}};
+    auto entropy = std::make_shared<Horo::Mcp::Test::Entropy>();
+    const auto result = RunApprovedLocalSceneTurn(config, Request("editor-approved-tool"), 7, 3, entropy, {});
+    REQUIRE(result.status == AgentTurnStatus::Completed);
+    REQUIRE(result.messages.size() == 4);
+    CHECK(result.messages[2].role == ModelRole::Tool);
+    CHECK(result.messages[2].text == R"({"count":3})");
+    CHECK(result.messages.back().text == "Three objects");
+
+    const auto unsupported = RunApprovedLocalSceneTurn(config, Request("normal"), 8, 4, entropy, {});
+    CHECK(unsupported.status == AgentTurnStatus::ProviderFailed);
+    CHECK(unsupported.providerError == ModelErrorCode::UnsupportedCapability);
+    CHECK(unsupported.messages.empty());
 }
 
 TEST_CASE("Local model discovery rejects malformed loopback authorities before transport", "[agent][model][http]") {

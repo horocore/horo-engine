@@ -49,7 +49,7 @@ endif ()
 horo_allow_target_dependencies(TARGET HoroModelProvider)
 horo_allow_target_dependencies(TARGET HoroEditorAgentTurnInternal DEPENDENCIES HoroModelProvider HoroProjectCodeQuery HoroSecurity)
 horo_allow_target_dependencies(TARGET HoroEditorAgentHistoryInternal DEPENDENCIES HoroFoundation HoroSecurity HoroAssets)
-horo_allow_target_dependencies(TARGET HoroMcpEditorAgentToolsInternal DEPENDENCIES HoroEditorAgentTurnInternal HoroMcpSession)
+horo_allow_target_dependencies(TARGET HoroMcpEditorAgentToolsInternal DEPENDENCIES HoroEditorAgentTurnInternal HoroMcpSession HoroMcpController HoroModelProviderAdapters)
 horo_allow_target_dependencies(TARGET HoroModelProviderAdapters DEPENDENCIES HoroModelProvider)
 horo_allow_target_dependencies(TARGET HoroPlatform DEPENDENCIES HoroFoundation HoroSecurity HoroRootedStorageNativeInternal HoroRootedProjectOwnersInternal)
 horo_allow_target_dependencies(TARGET HoroPlatformAndroidWindowInternal DEPENDENCIES HoroPlatform)
@@ -440,7 +440,7 @@ horo_allow_target_dependencies(TARGET HoroThirdPartyRccpp)
 horo_allow_target_dependencies(TARGET HoroEditor
     DEPENDENCIES HoroVisualAccessibility HoroXRSimulatorPlayHost HoroXRSimulatorProjectArtifacts HoroPlatformProjectIo HoroEditorClusteredLightingAssetsInternal HoroEditorBaselineLightingAssetsInternal HoroEditorViewportLightingInternal HoroEditorTerrainHostInternal HoroEditorGuiLiveReloadHost HoroEditorUiStyleHostInternal HoroRuntimeUiPaintHost HoroShaderHotReloadHostInternal
         HoroPlatformProjectReadFiles
-        HoroEditorAgentTurnInternal HoroModelProviderAdapters
+        HoroEditorAgentTurnInternal HoroMcpEditorAgentToolsInternal HoroModelProviderAdapters
         HoroNativeNavigationBakeHost
         HoroPlatformProjectIo
         HoroEditorSceneProductHost

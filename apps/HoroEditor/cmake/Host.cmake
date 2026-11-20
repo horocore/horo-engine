@@ -31,7 +31,7 @@ if(HORO_BUILD_EDITOR_GUI)
     endif()
 
     target_link_libraries(HoroEditor PRIVATE HoroEngine::PlatformProjectReadFiles HoroShaderHotReloadHostInternal)
-    target_link_libraries(HoroEditor PRIVATE HoroEditorAgentTurnInternal HoroEngine::ModelProviderAdapters)
+    target_link_libraries(HoroEditor PRIVATE HoroEditorAgentTurnInternal HoroMcpEditorAgentToolsInternal HoroEngine::ModelProviderAdapters)
     target_link_libraries(HoroEditor PRIVATE HoroXRSimulatorPlayHost HoroEngine::VisualAccessibility)
     target_link_libraries(HoroEditor PRIVATE HoroXRSimulatorProjectArtifacts HoroEngine::PlatformProjectIo)
     include(HoroEditorGuiLiveReloadHost)

@@ -6,7 +6,10 @@
 #include "Horo/Editor/WorkspaceDockArea.h"
 #include "Horo/Runtime/Input.h"
 
+#include <cstddef>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -74,7 +77,8 @@ namespace Horo::Editor {
         std::weak_ptr<IXRSimulatorArtifacts>
             xrSimulatorArtifacts{};      /**< Same admitted project source/publication port, revoked before retirement. */
         XRSimulatorModel *xrSimulator{}; /**< Explicit application model; invalidated when panel detaches. */
-        PlatformServices::IPlatformDiagnostics *platformDiagnostics{}; /**< Host-owned owner-lane diagnostics capability. */
+        PlatformServices::IPlatformDiagnostics *platformDiagnostics{};  /**< Host-owned owner-lane diagnostics capability. */
+        std::function<std::optional<std::size_t>()> sceneObjectCount{}; /**< Narrow owner-lane authoring observation. */
     };
 
     /** @brief Base interface for a modular Workspace Panel (e.g. Hierarchy, Inspector) */

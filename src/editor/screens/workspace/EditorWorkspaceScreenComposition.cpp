@@ -127,6 +127,12 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             .xrSimulatorArtifacts = simulatorArtifacts_,
             .xrSimulator = panelServices_.xrSimulator,
             .platformDiagnostics = panelServices_.platformDiagnostics,
+            .sceneObjectCount = [this]() -> std::optional<std::size_t> {
+            const auto &model = controller_->ViewModel();
+            if (model.projectRoot.empty() || model.documentRevision.value == 0 || model.worldDocument)
+                return std::nullopt;
+            return model.objects.size();
+        },
         };
         contributions_.panels.AttachAll(panelContext);
     }

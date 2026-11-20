@@ -16,8 +16,10 @@ namespace Horo::Agent {
     public:
         /** @brief Captures the session generation before any model-derived operation is admitted.
          * @param adapter Exact authenticated MCP session.
-         * @param project Same host-approved project binding as the authenticated session, or absence for turn-only use. */
-        explicit AgentTurnMcp(std::shared_ptr<const Mcp::McpInProcessAdapter> adapter, AgentContextProjectAuthority project = {});
+         * @param project Same host-approved project binding as the authenticated session, or absence for turn-only use.
+         * @param pump Optional bounded pump for immutable tools owned by this caller's lane. */
+        explicit AgentTurnMcp(std::shared_ptr<const Mcp::McpInProcessAdapter> adapter, AgentContextProjectAuthority project = {},
+                              std::function<Result<void>()> pump = {});
 
         /** @copydoc IAgentTurnTools::ValidArguments */
         [[nodiscard]] bool ValidArguments(std::string_view arguments) const override;
@@ -46,5 +48,6 @@ namespace Horo::Agent {
         std::shared_ptr<const Mcp::McpInProcessAdapter> adapter_;
         Mcp::McpSessionHandle session_;
         AgentContextProjectAuthority project_;
+        std::function<Result<void>()> pump_;
     };
 }  // namespace Horo::Agent

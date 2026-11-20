@@ -42,6 +42,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
         payload = json.loads(self.rfile.read(length))
+        if self.path == "/api/show":
+            if self.headers.get("Authorization") is not None or payload not in ({"model": "editor-approved-tool"}, {"model": "normal"}):
+                self.send_records(["{}"], status=400)
+                return
+            supports_tools = payload["model"] == "editor-approved-tool"
+            self.server.approved_tool_probe = supports_tools
+            self.send_records([json.dumps({"capabilities": ["completion", "tools"] if supports_tools else ["completion"]})])
+            return
         cloud = self.path == "/v1/chat/completions"
         if not cloud and self.path != "/api/chat":
             self.send_records(["{}"], status=404)
@@ -49,7 +57,7 @@ class Handler(BaseHTTPRequestHandler):
         if cloud and self.headers.get("Authorization") != "Bearer fixture-token":
             self.send_records([json.dumps({"error": "private"})], status=401)
             return
-        if not cloud and payload["model"] == "editor-local-tool":
+        if not cloud and payload["model"] in {"editor-local-tool", "editor-approved-tool"}:
             self.send_editor_local_tool(payload)
             return
         if not cloud and payload["model"] in {"editor-local-loading", "editor-local-idle"}:
@@ -96,6 +104,9 @@ class Handler(BaseHTTPRequestHandler):
         messages = payload.get("messages", [])
         tools = [tool.get("function", {}).get("name") for tool in payload.get("tools", [])]
         if self.headers.get("Authorization") is not None or tools != ["scene.inspect"]:
+            self.send_records(["{}"], status=400)
+            return
+        if payload["model"] == "editor-approved-tool" and not self.server.approved_tool_probe:
             self.send_records(["{}"], status=400)
             return
         if len(messages) == 1:
@@ -157,6 +168,7 @@ def main():
         raise ValueError("CTest must supply the built HoroModelProviderTests executable")
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     server.local_restart_observed = False
+    server.approved_tool_probe = False
     server.release_pending = threading.Event()
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()

@@ -443,6 +443,38 @@ namespace Horo::Agent {
         return std::make_unique<ReferenceProvider>(Protocol::Ollama, std::move(config), ModelCredentialResolver{});
     }
 
+    /** @copydoc ConfirmOllamaModelTools */
+    ModelOutcome ConfirmOllamaModelTools(const ModelProviderConfig &config, std::string_view model, std::stop_token cancellation) {
+        using enum ModelErrorCode;
+        std::string request;
+        try {
+            if (!model.empty() && model.size() <= 256)
+                request = Json{{"model", model}}.dump();
+        } catch (const Json::exception &) {
+            return {ModelError{InvalidRequest, "Invalid installed model identifier", std::nullopt}};
+        }
+        if (request.empty())
+            return {ModelError{InvalidRequest, "Invalid installed model identifier", std::nullopt}};
+
+        std::string body;
+        auto outcome = HttpRequest(config, Protocol::Ollama, "/api/show", &request, nullptr, cancellation, [&body](std::string_view line) {
+            if (line.size() > kMaximumDiscoveryBytes - body.size())
+                return false;
+            body.append(line);
+            return true;
+        });
+        if (!outcome.Succeeded()) {
+            if (outcome.error->httpStatus == 404)
+                return {ModelError{InvalidRequest, "Configured local model was not found", 404}};
+            return outcome;
+        }
+        const auto response = Json::parse(body, nullptr, false);
+        const auto features = response.find("capabilities");
+        if (features != response.end() && features->is_array() && std::ranges::find(*features, "tools") != features->end())
+            return {};
+        return {ModelError{UnsupportedCapability, "The installed model does not advertise tools", std::nullopt}};
+    }
+
     /** @copydoc CreateOpenAIModelProvider */
     std::unique_ptr<IModelProvider> CreateOpenAIModelProvider(ModelProviderConfig config, ModelCredentialResolver resolver) {
         return std::make_unique<ReferenceProvider>(Protocol::OpenAI, std::move(config), std::move(resolver));

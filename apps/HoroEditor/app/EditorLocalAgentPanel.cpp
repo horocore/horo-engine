@@ -1,9 +1,11 @@
 #include "EditorLocalAgentPanel.h"
 
+#include "AgentLocalSceneTurn.h"
 #include "AgentTurn.h"
 #include "Horo/Agent/ReferenceModelProviders.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/IWorkspacePanel.h"
+#include "Horo/Platform/SecureRandom.h"
 
 #include <algorithm>
 #include <array>
@@ -18,9 +20,14 @@ namespace Horo::Editor {
         using namespace Agent;
         using Reply = std::variant<ProviderDiscovery, AgentTurnResult>;
 
-        /** @brief Runs one user-initiated discovery or text-only inference on an isolated worker. */
-        Reply RunLocalOperation(std::string endpoint, std::optional<ModelRequest> request, std::uint64_t turn, std::stop_token stop) {
-            auto provider = CreateOllamaModelProvider({.endpoint = std::move(endpoint)});
+        /** @brief Runs one user-initiated discovery or inference on an isolated worker. */
+        Reply RunLocalOperation(std::string endpoint, std::optional<ModelRequest> request, std::optional<std::size_t> sceneCount,
+                                std::uint64_t turn, std::stop_token stop) {
+            ModelProviderConfig config{.endpoint = std::move(endpoint)};
+            if (request && sceneCount)
+                return RunApprovedLocalSceneTurn(std::move(config), std::move(*request), turn, *sceneCount,
+                                                 Platform::CreateNativeSecureRandomSource(), stop);
+            auto provider = CreateOllamaModelProvider(std::move(config));
             if (!request)
                 return provider->Discover(stop);
             AgentTurnRuntime runtime;
@@ -34,6 +41,8 @@ namespace Horo::Editor {
                 return "invalid";
             if (error == Cancelled)
                 return "cancelled";
+            if (error == UnsupportedCapability)
+                return "tools_unsupported";
             if (error == Unavailable || error == Transport)
                 return "unavailable";
             return "failed";
@@ -64,13 +73,16 @@ namespace Horo::Editor {
                 return {};
             }
 
-            void OnAttach(PanelContext &) override {}
+            void OnAttach(PanelContext &context) override {
+                sceneCount_ = context.sceneObjectCount;
+            }
 
             void OnDetach() override {
                 stop_.request_stop();
                 discard_ = true;
                 prompt_.clear();
                 response_.clear();
+                sceneCount_ = {};
                 status_ = nullptr;
             }
 
@@ -90,12 +102,7 @@ namespace Horo::Editor {
                 DrawProvider(locale, fonts);
                 ImGui::TextUnformatted(LocalizedText(locale, "prompt").c_str());
                 static_cast<void>(Ui::InputTextControl("##Prompt", prompt_, 4096, fonts));
-                if (Button(locale, "ask", !Busy() && !endpoint_.empty() && !model_.empty() && !prompt_.empty())) {
-                    ModelRequest request;
-                    request.model = model_;
-                    request.messages.push_back({.role = ModelRole::User, .text = prompt_});
-                    Start(std::move(request));
-                }
+                DrawSendActions(locale);
                 if (Busy() && Button(locale, "stop", !stop_.stop_requested()))
                     stop_.request_stop();
                 if (status_)
@@ -144,10 +151,32 @@ namespace Horo::Editor {
                     model_ = models_[static_cast<std::size_t>(selection_)].id;
             }
 
-            void Start(std::optional<ModelRequest> request) {
+            void DrawSendActions(const ILocalizationService &locale) {
+                const bool ready = !Busy() && !endpoint_.empty() && !model_.empty() && !prompt_.empty();
+                if (Button(locale, "ask", ready)) {
+                    Send({});
+                    return;
+                }
+                const auto count = sceneCount_ ? sceneCount_() : std::nullopt;
+                if (count) {
+                    ImGui::Text("%s %zu", LocalizedText(locale, "scene_count").c_str(), *count);
+                    if (Button(locale, "ask_with_scene_count", ready))
+                        Send(count);
+                }
+            }
+
+            void Send(std::optional<std::size_t> sceneCount) {
+                ModelRequest request;
+                request.model = model_;
+                request.messages.push_back({.role = ModelRole::User, .text = prompt_});
+                Start(std::move(request), sceneCount);
+            }
+
+            void Start(std::optional<ModelRequest> request, std::optional<std::size_t> sceneCount = {}) {
                 try {
                     stop_ = std::stop_source{};
-                    reply_ = std::async(std::launch::async, RunLocalOperation, endpoint_, std::move(request), ++turn_, stop_.get_token());
+                    reply_ = std::async(std::launch::async, RunLocalOperation, endpoint_, std::move(request), sceneCount, ++turn_,
+                                        stop_.get_token());
                     discard_ = false;
                     status_ = "working";
                     response_.clear();
@@ -203,6 +232,7 @@ namespace Horo::Editor {
             std::string prompt_;
             std::string response_;
             std::vector<ModelDescriptor> models_;
+            std::function<std::optional<std::size_t>()> sceneCount_;
             int selection_{-1};
             const char *status_{};
             std::uint64_t turn_{};

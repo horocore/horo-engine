@@ -72,8 +72,10 @@ namespace Horo::Agent {
     }  // namespace
 
     /** @copydoc AgentTurnMcp::AgentTurnMcp */
-    AgentTurnMcp::AgentTurnMcp(std::shared_ptr<const Mcp::McpInProcessAdapter> adapter, AgentContextProjectAuthority project)
-        : adapter_(std::move(adapter)), session_(adapter_ ? adapter_->Session() : Mcp::McpSessionHandle{}), project_(std::move(project)) {}
+    AgentTurnMcp::AgentTurnMcp(std::shared_ptr<const Mcp::McpInProcessAdapter> adapter, AgentContextProjectAuthority project,
+                               std::function<Result<void>()> pump)
+        : adapter_(std::move(adapter)), session_(adapter_ ? adapter_->Session() : Mcp::McpSessionHandle{}), project_(std::move(project)),
+          pump_(std::move(pump)) {}
 
     /** @copydoc AgentTurnMcp::ValidArguments */
     bool AgentTurnMcp::ValidArguments(const std::string_view arguments) const {
@@ -127,6 +129,12 @@ namespace Horo::Agent {
                 return Call::Failure(MakeError(ToolOutputInvalid));
             if (auto outcome = ReadToolOutcome(std::move(state).Value()))
                 return std::move(*outcome);
+            if (pump_) {
+                if (const auto pumped = pump_(); pumped.HasError()) {
+                    static_cast<void>(adapter_->Cancel(id));
+                    return Call::Failure(pumped.ErrorValue());
+                }
+            }
             std::this_thread::sleep_until(std::min(Clock::now() + 10ms, deadline));
             if (!stopped() && Clock::now() < deadline)
                 state = adapter_->Call({.id = id + "/poll", .method = "operations/get", .params = {{"operationId", operation}}});

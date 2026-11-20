@@ -769,6 +769,11 @@ models from that address. Discovery and explicitly submitted text run on a
 worker. The workspace keeps running while the service responds. The panel sends
 the entered message, and workspace detachment cancels pending work.
 
+The panel can authorize a single read-only MCP query for the displayed scene
+object count. The worker checks that the selected installed model supports
+tools before sending the prompt. Its authenticated session exposes only the
+approved count, and releases the snapshot when the turn ends.
+
 ### Cloud Provider
 
 - Connects through a provider adapter selected by host/project policy
