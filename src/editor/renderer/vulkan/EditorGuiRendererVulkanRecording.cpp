@@ -8,7 +8,7 @@ namespace Horo::Editor {
     Result<void> EditorGuiRendererVulkan::BeginFrame() {
         if (const auto valid = Validate(); valid.HasError())
             return valid;
-        if (!nativeInitialized_ || !platformInitialized_ || static_cast<std::uintptr_t>(ImGui::GetIO().Fonts->TexID) != fontIdentity_)
+        if (!nativeInitialized_ || !platformInitialized_ || static_cast<std::uintptr_t>(ImGui::GetIO().Fonts->TexID) != FontTexture())
             return Result<void>::Failure(MakeError(RendererErrors::GuiOwnerInvalid));
         composition_.Reset();
         // Stock Vulkan NewFrame can submit/wait for its own atlas. Horo owns and uploads the atlas instead.

@@ -528,6 +528,59 @@ namespace Horo::Render::OpenGLSmokeTests {
         SDL_Quit();
     }
 
+    TEST_CASE("OpenGL presents text from a replacement atlas after the bootstrap font", "[integration][renderer][gpu][font-atlas]") {
+        auto window = CreateNativeViewportWindow(NativeOutputChange::None);
+        HeadlessOpenGLPresentationPort port{*window};
+        auto frontend = CreateViewportFrontend(port);
+        REQUIRE(gladLoadGL(SDL_GL_GetProcAddress) != 0);
+        ImGui::CreateContext();
+        auto &io = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        Editor::EditorGuiRendererOpenGL gui{*window, SDL_GL_GetCurrentContext(), *frontend};
+        REQUIRE(gui.Initialize().HasValue());
+
+        constexpr FramebufferExtent output{640, 480};
+        for (std::uint64_t frameNumber = 1; frameNumber <= 3; ++frameNumber) {
+            REQUIRE(gui.BeginFrame().HasValue());
+            using Atlas = std::unique_ptr<ImFontAtlas, decltype(&IM_DELETE<ImFontAtlas>)>;
+            Atlas previous{nullptr, &IM_DELETE<ImFontAtlas>};
+            if (frameNumber != 1) {
+                Atlas candidate{IM_NEW(ImFontAtlas)(), &IM_DELETE<ImFontAtlas>};
+                ImFontConfig config;
+                config.RasterizerDensity = static_cast<float>(frameNumber);
+                auto *font = candidate->AddFontDefault(&config);
+                REQUIRE(font);
+                REQUIRE(candidate->Build());
+                REQUIRE(Editor::ReplaceEditorFontAtlas(gui, *candidate).HasValue());
+                CHECK(candidate->TexID != io.Fonts->TexID);
+                previous.reset(std::exchange(io.Fonts, candidate.release()));
+                io.FontDefault = font;
+            }
+            ImGui::NewFrame();
+            previous.reset();
+            ImGui::GetForegroundDrawList()->AddText({12, 12}, IM_COL32_WHITE, "Atlas replacement");
+            ImGui::Render();
+            auto begun = frontend->BeginFrame({frameNumber, output});
+            REQUIRE(begun.HasValue());
+            auto frame = std::move(begun).Value();
+            const std::array passes{
+                RenderPassDescriptor{.id = RenderPassId{1}, .kind = RenderPassKind::Graphics, .primaryOutput = PrimaryOutputAttachment{}}};
+            const auto drawn = frame.Execute(passes);
+            INFO((drawn.HasError() ? drawn.ErrorValue().message : ""));
+            REQUIRE(drawn.HasValue());
+            const auto composed = frame.ComposeGui(gui);
+            INFO((composed.HasError() ? composed.ErrorValue().message : ""));
+            REQUIRE(composed.HasValue());
+            REQUIRE(frame.Present().HasValue());
+        }
+        Horo::Render::Test::RequireDrainedOwner(*frontend);
+        gui.Shutdown();
+        ImGui::DestroyContext();
+        frontend.reset();
+        window.reset();
+        SDL_Quit();
+    }
+
     TEST_CASE("Editor Viewport Open GL Smoke", "[integration][renderer][gpu][cinematic][resize]") {
         const auto curve = GENERATE(Cinematic::CameraBlendCurve::Linear, Cinematic::CameraBlendCurve::SmoothStep);
         QualifyCameraPresentation(curve, NativeOutputChange::Resize);

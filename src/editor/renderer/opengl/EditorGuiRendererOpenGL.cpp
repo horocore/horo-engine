@@ -109,7 +109,8 @@ namespace Horo::Editor {
         ImGui_ImplOpenGL3_NewFrame();
         if (nativeFontIdentity_ == 0)
             nativeFontIdentity_ = static_cast<std::uintptr_t>(ImGui::GetIO().Fonts->TexID);
-        if (nativeFontIdentity_ == 0 || static_cast<std::uintptr_t>(ImGui::GetIO().Fonts->TexID) != nativeFontIdentity_)
+        if (const auto activeFont = FontTexture() != 0 ? FontTexture() : nativeFontIdentity_;
+            activeFont == 0 || static_cast<std::uintptr_t>(ImGui::GetIO().Fonts->TexID) != activeFont)
             return Result<void>::Failure(MakeError(RendererErrors::GuiCompositionInvalid));
         ImGui_ImplSDL3_NewFrame();
         return Result<void>::Success();
@@ -208,6 +209,8 @@ namespace Horo::Editor {
 
     /** @copydoc EditorGuiRendererOpenGL::DestroyTexture */
     void EditorGuiRendererOpenGL::DestroyTexture(const std::uintptr_t textureId) noexcept {
+        if (textureId == FontTexture())
+            return;
         if (const auto found = std::ranges::find(textures_, textureId, &TextureRecord::imageIdentity); found != textures_.end()) {
             ReleaseTextureResources(found->texture, found->view);
             textures_.erase(found);
@@ -219,6 +222,7 @@ namespace Horo::Editor {
         composition_.Reset();
         BindViewportTexture({});
         nativeFontIdentity_ = 0;
+        AdoptFontTexture(0);
         for (const TextureRecord &texture : textures_) {
             ReleaseTextureResources(texture.texture, texture.view);
         }

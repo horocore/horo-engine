@@ -123,6 +123,7 @@
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/input/EditorInputActions.h"
 #include "editor/project_model/RendererAvailability.h"
+#include "editor/renderer/EditorGuiComposition.h"
 #include "editor/renderer/EditorGuiRenderer.h"
 #include "editor/renderer/EditorRenderMemoryScopes.h"
 #include "editor/renderer/EditorViewportRenderer.h"
@@ -563,7 +564,6 @@ namespace Horo::Editor {
             return f;
         }
 
-#if defined(HORO_HAS_RENDER_VULKAN)
         /** @brief Matches the atlas allocation convention used by the Dear ImGui context. */
         struct EditorFontAtlasDeleter final {
             void operator()(ImFontAtlas *atlas) const noexcept {
@@ -572,7 +572,6 @@ namespace Horo::Editor {
         };
 
         using EditorFontAtlasOwner = std::unique_ptr<ImFontAtlas, EditorFontAtlasDeleter>;
-#endif
 
         [[nodiscard]] std::uintptr_t LoadEditorTexture(IEditorGuiRenderer &guiRenderer, const char *assetPath) {
             const std::string path = AssetPath(assetPath);
@@ -2594,21 +2593,17 @@ namespace Horo::Editor {
                 }
             }
 
-#if defined(HORO_HAS_RENDER_VULKAN)
-            /** @brief Builds and publishes a matching Vulkan atlas once per observed display generation. */
-            [[nodiscard]] EditorFontAtlasOwner RefreshVulkanFonts() {
+            /** @brief Builds and publishes a matching atlas once per observed display generation. */
+            [[nodiscard]] EditorFontAtlasOwner RefreshGuiFonts() {
                 if (fontDisplayRevision_ == windowDisplayRevision_)
                     return {};
                 fontDisplayRevision_ = windowDisplayRevision_;
-                auto *renderer = dynamic_cast<EditorGuiRendererVulkan *>(&p_->presentation.guiRenderer);
-                if (!renderer)
-                    return {};
                 auto &io = p_->presentation.io;
                 const auto density = QueryRasterizerDensity(p_->presentation.window);
                 if (!io.Fonts->ConfigData.empty() && io.Fonts->ConfigData.front().RasterizerDensity == density)
                     return {};
                 try {
-                    return ReplaceVulkanFonts(*renderer, io, density);
+                    return ReplaceGuiFonts(io, density);
                 } catch (const std::filesystem::filesystem_error &error) {
                     LOG_WARN("editor.font", "Keeping the active editor font atlas: %s", error.what());
                     return {};
@@ -2619,7 +2614,7 @@ namespace Horo::Editor {
             }
 
             /** @brief Commits prepared font roles after renderer admission and returns the previous CPU owner. */
-            [[nodiscard]] EditorFontAtlasOwner ReplaceVulkanFonts(EditorGuiRendererVulkan &renderer, ImGuiIO &io, float density) {
+            [[nodiscard]] EditorFontAtlasOwner ReplaceGuiFonts(ImGuiIO &io, float density) {
                 static_assert(std::is_nothrow_move_assignable_v<Fonts>);
                 EditorFontAtlasOwner candidate{IM_NEW(ImFontAtlas)()};
                 auto fonts = LoadEditorFonts(*candidate, density);
@@ -2628,7 +2623,7 @@ namespace Horo::Editor {
                     LOG_WARN("editor.font", "Keeping the active editor font atlas: replacement roles or pixels are unavailable.");
                     return {};
                 }
-                if (const auto replaced = renderer.ReplaceFontTexture(*candidate); replaced.HasError()) {
+                if (const auto replaced = ReplaceEditorFontAtlas(p_->presentation.guiRenderer, *candidate); replaced.HasError()) {
                     LOG_WARN("editor.font", "Keeping the active editor font atlas: %s", replaced.ErrorValue().message.c_str());
                     return {};
                 }
@@ -2637,7 +2632,6 @@ namespace Horo::Editor {
                 p_->fonts = std::move(fonts);
                 return previous;
             }
-#endif
 
             Result<void> UpdatePresentation(const Runtime::FrameContext &context) {
                 if (auto refreshed = RefreshEditorThemeAccessibility(p_->configuration, *p_->presentation.window, themeAccessibility_);
@@ -2661,12 +2655,10 @@ namespace Horo::Editor {
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                     qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::GuiBegin);
 #endif
-#if defined(HORO_HAS_RENDER_VULKAN)
-                    auto previousAtlas = RefreshVulkanFonts();  // NewFrame changes ImGui's cached current font before this lease ends.
-#endif
                     if (const Result<void> guiBegun = p_->presentation.guiRenderer.BeginFrame(); guiBegun.HasError()) {
                         return guiBegun;
                     }
+                    auto previousAtlas = RefreshGuiFonts();  // Keep ImGui's cached font pointers valid through NewFrame.
                     ImGui::NewFrame();
                     frameState_.guiFrameStarted = true;
 
@@ -3401,9 +3393,7 @@ namespace Horo::Editor {
 #endif
             EditorSurfaceRecovery surfaceRecovery_{EditorSurfaceRecovery::Defer};
             std::uint64_t windowDisplayRevision_{1};
-#if defined(HORO_HAS_RENDER_VULKAN)
             std::uint64_t fontDisplayRevision_{1};
-#endif
             bool displayChangePending_{};
 
             /** @brief One frame's native admission, GUI extraction and prepared scope, retaining the original lifetime order. */

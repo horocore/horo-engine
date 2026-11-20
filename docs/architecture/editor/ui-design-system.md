@@ -402,10 +402,12 @@ framebuffer conversion. The theme starts from its unscaled metrics on each
 change, projects the same scale into native controls and design tokens, and
 keeps visible text at or above 16 logical pixels. Existing glyph resources stay
 valid while the logical scale changes. When the owning display reports a new
-rasterizer density, the Vulkan editor prepares a separate atlas before its
-next GUI frame. After upload admission it publishes the atlas and font roles
+rasterizer density, the editor prepares a separate atlas before its next GUI
+frame. The selected OpenGL, Metal or Vulkan owner stages the same RGBA source
+through its canonical image registry. The editor publishes the atlas and font roles
 together. The previous CPU atlas is retained until Dear ImGui begins the
-new frame, and canonical frame retirement owns the previous GPU texture.
+new frame. Canonical frame retirement owns superseded managed textures.
+OpenGL and Metal retain the native startup texture until backend shutdown.
 Failed preparation preserves the active atlas and roles.
 
 Shared text scopes still take resolved logical sizes. Desktop editor and native

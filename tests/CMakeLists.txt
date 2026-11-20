@@ -6768,6 +6768,7 @@ if (HORO_BUILD_RENDER_METAL)
                 HoroEngine::EditorViewportMetal
                 HoroEngine::RenderFrontend
                 HoroEngine::RenderMetal
+                HoroThirdParty::ImGuiMetal
                 ${HORO_SDL3_TARGET}
                 "-framework Metal"
                 "-framework QuartzCore"

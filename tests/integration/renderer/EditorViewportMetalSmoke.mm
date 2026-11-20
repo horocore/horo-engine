@@ -1,5 +1,7 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Scene/PrimitiveMesh.h"
+#include "editor/renderer/EditorGuiComposition.h"
+#include "editor/renderer/metal/EditorGuiRendererMetal.h"
 #include "editor/renderer/metal/EditorViewportRendererMetal.h"
 #include "editor/renderer/metal/SdlMetalPresentationPort.h"
 #include "renderer/RenderBackendDrainTestSupport.h"
@@ -129,6 +131,68 @@ namespace {
         Check(viewport.TextureView().textureId != activeTexture.textureId);
     }
 }  // namespace
+
+TEST_CASE("Metal presents a GUI frame with a replacement font atlas", "[integration][renderer][gpu][font-atlas]") {
+    REQUIRE(SDL_Init(SDL_INIT_VIDEO));
+
+    const struct SdlSession final {
+        ~SdlSession() {
+            SDL_Quit();
+        }
+    } sdl{};
+
+    constexpr FramebufferExtent output{256, 256};
+    std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window{SDL_CreateWindow("Horo Metal atlas smoke", output.width, output.height,
+                                                                                      SDL_WINDOW_METAL),
+                                                                     SDL_DestroyWindow};
+    REQUIRE(window);
+    SdlMetalPresentationPort port{*window};
+    MetalEditorGraphicsBridge bridge;
+    RenderBackendRegistry registry;
+    REQUIRE(RegisterMetalRenderBackend(registry, port, bridge).HasValue());
+    REQUIRE(registry.Seal().HasValue());
+    auto created = RenderFrontend::Create(registry, RenderBackendId{"metal"}, {.requirePresentation = true, .maxFramesInFlight = 2});
+    REQUIRE(created.HasValue());
+    auto frontend = std::move(created).Value();
+    REQUIRE(frontend->Resize(output).HasValue());
+
+    ImGui::CreateContext();
+    auto &io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    EditorGuiRendererMetal gui{*window, bridge, *frontend};
+    REQUIRE(gui.Initialize().HasValue());
+    REQUIRE(gui.BeginFrame().HasValue());
+    const auto bootstrap = io.Fonts->TexID;
+    using Atlas = std::unique_ptr<ImFontAtlas, decltype(&IM_DELETE<ImFontAtlas>)>;
+    Atlas candidate{IM_NEW(ImFontAtlas)(), &IM_DELETE<ImFontAtlas>};
+    ImFontConfig config;
+    config.RasterizerDensity = 2;
+    auto *font = candidate->AddFontDefault(&config);
+    REQUIRE(font);
+    CHECK(ReplaceEditorFontAtlas(gui, *candidate).HasError());
+    REQUIRE(candidate->Build());
+    REQUIRE(ReplaceEditorFontAtlas(gui, *candidate).HasValue());
+    CHECK(candidate->TexID != bootstrap);
+    Atlas previous{std::exchange(io.Fonts, candidate.release()), &IM_DELETE<ImFontAtlas>};
+    io.FontDefault = font;
+    REQUIRE(gui.BeginFrame().HasValue());
+    ImGui::NewFrame();
+    previous.reset();
+    ImGui::GetForegroundDrawList()->AddText({12, 12}, IM_COL32_WHITE, "Atlas replacement");
+    ImGui::Render();
+    AwaitPresentation(*frontend, output);
+    auto begun = frontend->BeginFrame({1, output});
+    REQUIRE(begun.HasValue());
+    auto frame = std::move(begun).Value();
+    const std::array passes{
+        RenderPassDescriptor{.id = RenderPassId{1}, .kind = RenderPassKind::Graphics, .primaryOutput = PrimaryOutputAttachment{}}};
+    REQUIRE(frame.Execute(passes).HasValue());
+    REQUIRE(frame.ComposeGui(gui).HasValue());
+    REQUIRE(frame.Present().HasValue());
+    Horo::Render::Test::RequireDrainedOwner(*frontend);
+    gui.Shutdown();
+    ImGui::DestroyContext();
+}
 
 TEST_CASE("Editor Viewport Metal Smoke", "[integration][renderer][gpu]") {
     Check(SDL_Init(SDL_INIT_VIDEO));

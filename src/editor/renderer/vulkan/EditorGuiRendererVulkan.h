@@ -9,7 +9,6 @@
 #include <thread>
 
 struct SDL_Window;
-struct ImFontAtlas;
 
 namespace Horo::Editor {
     /** @brief Host-owned encoder; native children are released after canonical drain, before the selected device. */
@@ -26,12 +25,6 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> RenderDrawData(const Render::GuiCompositionRequest &request) override;
         [[nodiscard]] Result<std::uintptr_t> CreateTexture(const EditorRgba8ImageView &image) override;
         void DestroyTexture(std::uintptr_t identity) noexcept override;
-        /** @brief Uploads and selects a complete replacement atlas before GUI frame preparation.
-         * @param candidate Built CPU atlas retained by the caller.
-         * @return Success with the new atlas texture assigned, or failure preserving the active texture.
-         * @post The caller must publish the same atlas to ImGui before the next BeginFrame.
-         */
-        [[nodiscard]] Result<void> ReplaceFontTexture(ImFontAtlas &candidate);
         void Shutdown() noexcept override;
         void ReleaseNative() noexcept override;
         [[nodiscard]] Result<void> Record(VkCommandBuffer command, Render::Detail::VulkanFrameRetentionSlot slot,
@@ -76,7 +69,6 @@ namespace Horo::Editor {
         Render::RenderSamplerHandle sampler_;
         PFN_vkUpdateDescriptorSets updateDescriptors_{};
         std::uintptr_t nextIdentity_{1};
-        std::uintptr_t fontIdentity_{};
         std::uint32_t recordingSlot_{};
         bool platformInitialized_{};
         bool nativeInitialized_{};

@@ -1296,10 +1296,10 @@ namespace Horo::Tests::VulkanEditor {
         config.RasterizerDensity = 1.5F;
         auto *font = replacement->AddFontDefault(&config);
         REQUIRE(font);
-        CHECK(host.gui->ReplaceFontTexture(*replacement).HasError());
+        CHECK(ReplaceEditorFontAtlas(*host.gui, *replacement).HasError());
         CHECK(io.Fonts->TexID == originalIdentity);
         REQUIRE(replacement->Build());
-        Check(host.gui->ReplaceFontTexture(*replacement), "upload replacement atlas");
+        Check(ReplaceEditorFontAtlas(*host.gui, *replacement), "upload replacement atlas");
         CHECK(replacement->TexID != originalIdentity);
         CHECK(replacement->TexID != 0);
         Atlas previous{std::exchange(io.Fonts, replacement.release()), &IM_DELETE<ImFontAtlas>};
