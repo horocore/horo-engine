@@ -68,6 +68,7 @@ namespace Horo::Tests::OpenXR {
         XrResult completeResult{XR_SUCCESS};
         std::uint32_t contextStarts{};
         std::uint32_t scans{};
+        std::uint32_t polls{};
         std::uint32_t cancels{};
         bool hasContext{};
         bool hasSnapshot{};
@@ -110,6 +111,7 @@ namespace Horo::Tests::OpenXR {
 
         static XRAPI_ATTR XrResult XRAPI_CALL Poll(XrInstance, const XrFuturePollInfoEXT *info, XrFuturePollResultEXT *value) {
             CHECK(info->future == (current->hasContext ? ScanFuture : ContextFuture));
+            ++current->polls;
             value->state = current->ready ? XR_FUTURE_STATE_READY_EXT : XR_FUTURE_STATE_PENDING_EXT;
             return XR_SUCCESS;
         }

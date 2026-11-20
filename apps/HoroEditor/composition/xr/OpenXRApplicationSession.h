@@ -448,8 +448,14 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> RetirePlaneCapture();
         /** @brief Advances one async operation after canonical tracking publication. @param tracking Current Input evidence. */
         void AdvancePlaneCapture(const XR::XRTrackingSnapshot &tracking);
-        /** @brief Starts the one authorized native capture in the current calibrated space. */
-        [[nodiscard]] bool StartPlaneCapture(const XR::XRSessionId &session, const XR::XRCoordinateSpace &space, XR::XRRuntimeTime now);
+        /** @brief Starts the one authorized native capture in the current calibrated space.
+         * @param session Current XR session identity.
+         * @param space The portable identity of the calibrated World space.
+         * @param world The native space borrowed from that exact portable identity.
+         * @param now Current tracking cutoff.
+         * @return True after the same consent grant authorizes the queued context. */
+        [[nodiscard]] bool StartPlaneCapture(const XR::XRSessionId &session, const XR::XRCoordinateSpace &space, XrSpace world,
+                                             XR::XRRuntimeTime now);
 
         /** @brief Verifies the required projection protocol through the one selected native instance. */
         [[nodiscard]] Result<void> ValidateProjectionDispatch(XrInstance instance) const;

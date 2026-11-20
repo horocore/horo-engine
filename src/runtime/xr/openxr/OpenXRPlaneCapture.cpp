@@ -64,10 +64,12 @@ namespace Horo::XR::OpenXRInternal {
     }
 
     /** @copydoc OpenXRPlaneCapture::Start */
-    Result<void> OpenXRPlaneCapture::Start(XRLoaderPreflightAttempt attempt, const XRPlaneScope &scope, const XRPlaneLimits &limits,
-                                           XRRuntimeTime now) {
+    Result<void> OpenXRPlaneCapture::Start(XRLoaderPreflightAttempt attempt, const XRPlaneScope &scope, XrSpace world,
+                                           const XRPlaneLimits &limits, XRRuntimeTime now) {
         if (std::this_thread::get_id() != lane_ || busy_ || instance_)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
+        if (world == XR_NULL_HANDLE)
+            return Result<void>::Failure(MakeError(XRErrors::CoordinateSpaceIncompatible));
         if (!now.IsValid())
             return Result<void>::Failure(MakeError(XRErrors::TimeDomainIncompatible));
         const ScopedOperation guard{busy_};
@@ -101,6 +103,7 @@ namespace Horo::XR::OpenXRInternal {
         limits_ = limits;
         census_ = feature;
         instance_ = owner.Value().instance;
+        world_ = world;
         incarnation_ = owner.Value().incarnation;
         lastCutoff_ = now;
         auto started = BeginContext(current.Value(), now);
@@ -135,9 +138,13 @@ namespace Horo::XR::OpenXRInternal {
         if (std::this_thread::get_id() != lane_ || busy_ || !instance_)
             return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
         const ScopedOperation guard{busy_};
-        if (scope != scope_ || world == XR_NULL_HANDLE) {
+        if (scope != scope_) {
             publication_.Revoke();
             return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+        }
+        if (world != world_) {
+            publication_.Revoke();
+            return Outcome::Failure(MakeError(XRErrors::CoordinateSpaceIncompatible));
         }
         if (!now.IsValid() || now < lastCutoff_)
             return Outcome::Failure(MakeError(XRErrors::TimeDomainIncompatible));
@@ -153,7 +160,7 @@ namespace Horo::XR::OpenXRInternal {
         if (const auto released = ReleaseSnapshot(); released.HasError())
             return Outcome::Failure(released.ErrorValue());
         if (future_ != XR_NULL_FUTURE_EXT)
-            return Poll(native.Value(), world, now);
+            return Poll(native.Value(), now);
         if (!context_ || !active.Value())
             return Outcome::Success(false);
         if (now.Nanoseconds() - lastRequest_.Nanoseconds() < limits_.minimumUpdateInterval.ToNanoseconds())
@@ -162,7 +169,7 @@ namespace Horo::XR::OpenXRInternal {
     }
 
     /** @brief Polls once and retains ownership of pending work until completion or explicit cancellation. */
-    Result<bool> OpenXRPlaneCapture::Poll(const NativeSessionBorrow &native, XrSpace world, XRRuntimeTime now) {
+    Result<bool> OpenXRPlaneCapture::Poll(const NativeSessionBorrow &native, XRRuntimeTime now) {
         using Outcome = Result<bool>;
         if (now.Nanoseconds() - lastRequest_.Nanoseconds() > limits_.maximumAge.ToNanoseconds()) {
             publication_.Revoke();
@@ -182,7 +189,7 @@ namespace Horo::XR::OpenXRInternal {
             publication_.Revoke();
             return Outcome::Failure(MakeError(XRErrors::OperationInvalid, "Malformed spatial future state"));
         }
-        return context_ ? FinishScan(world, now) : FinishContext(native);
+        return context_ ? FinishScan(now) : FinishContext(native);
     }
 
     /** @brief Consumes a ready context future and preserves any returned native handle for cleanup. */
@@ -223,10 +230,10 @@ namespace Horo::XR::OpenXRInternal {
     }
 
     /** @brief Resolves the native snapshot in the current calibrated space and publishes only after cleanup succeeds. */
-    Result<bool> OpenXRPlaneCapture::FinishScan(XrSpace world, XRRuntimeTime now) {
+    Result<bool> OpenXRPlaneCapture::FinishScan(XRRuntimeTime now) {
         using Outcome = Result<bool>;
         const XrCreateSpatialDiscoverySnapshotCompletionInfoEXT request{XR_TYPE_CREATE_SPATIAL_DISCOVERY_SNAPSHOT_COMPLETION_INFO_EXT,
-                                                                        nullptr, world, now.Nanoseconds(), future_};
+                                                                        nullptr, world_, now.Nanoseconds(), future_};
         XrCreateSpatialDiscoverySnapshotCompletionEXT completed{XR_TYPE_CREATE_SPATIAL_DISCOVERY_SNAPSHOT_COMPLETION_EXT};
         const auto result = dispatch_.completeScan(context_, &request, &completed);
         if (XR_SUCCEEDED(result)) {
@@ -332,6 +339,7 @@ namespace Horo::XR::OpenXRInternal {
         for (auto &slot : slots_)
             slot.entity = XR_NULL_SPATIAL_ENTITY_ID_EXT;
         instance_ = XR_NULL_HANDLE;
+        world_ = XR_NULL_HANDLE;
         scope_ = {};
         incarnation_ = 0;
         return Result<void>::Success();

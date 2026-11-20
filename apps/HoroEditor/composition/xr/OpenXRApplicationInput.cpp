@@ -623,7 +623,7 @@ namespace Horo::Application::Internal {
             return;
         }
         if (!planes_.native) {
-            if (!StartPlaneCapture(session, space.Value(), now) && currentGrant())
+            if (!StartPlaneCapture(session, space.Value(), world.Value(), now) && currentGrant())
                 RevokePlaneCapture();
             return;
         }
@@ -645,14 +645,15 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc OpenXRApplicationSession::StartPlaneCapture */
-    bool OpenXRApplicationSession::StartPlaneCapture(const XRSessionId &session, const XRCoordinateSpace &space, XRRuntimeTime now) {
+    bool OpenXRApplicationSession::StartPlaneCapture(const XRSessionId &session, const XRCoordinateSpace &space, XrSpace world,
+                                                     XRRuntimeTime now) {
         const auto consent = planes_.lastGrant;
         const auto grant = XRPlaneGrant::Create(consent);
         if (grant.HasError())
             return false;
         planes_.native.emplace(*native_);
         const XRPlaneScope scope{session, space, grant.Value()};
-        if (const auto started = planes_.native->Start(selection_.attempt, scope, PlaneCapturePolicy, now);
+        if (const auto started = planes_.native->Start(selection_.attempt, scope, world, PlaneCapturePolicy, now);
             started.HasError() || !planes_.allowed || planes_.lastGrant != consent)
             return false;
         planes_.scope = scope;

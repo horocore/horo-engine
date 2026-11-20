@@ -16,15 +16,16 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Starts one nonblocking context creation for an already consented native session.
          * @param attempt Exact discovery that supplied the active native session.
          * @param scope Current purpose-bound grant and calibrated World identity.
+         * @param world The exact native World space borrowed for this grant.
          * @param limits Finite batch, request cadence and age policy.
          * @param now Current chosen runtime-clock time.
          * @return Success once queued, or typed unsupported, permission, identity or native failure. */
-        [[nodiscard]] Result<void> Start(XRLoaderPreflightAttempt attempt, const XRPlaneScope &scope, const XRPlaneLimits &limits,
-                                         XRRuntimeTime now);
+        [[nodiscard]] Result<void> Start(XRLoaderPreflightAttempt attempt, const XRPlaneScope &scope, XrSpace world,
+                                         const XRPlaneLimits &limits, XRRuntimeTime now);
 
         /** @brief Advances one step without waiting on a native future.
          * @param scope Exact still-consented scope paired with the borrowed space.
-         * @param world The owner's current calibrated native space for this scope.
+         * @param world The owner's current calibrated native space. A change revokes the grant before polling.
          * @param now Current runtime-clock cutoff.
          * @return True for one complete publication, false for pending/cadence, or typed failure. */
         [[nodiscard]] Result<bool> Advance(const XRPlaneScope &scope, XrSpace world, XRRuntimeTime now);
@@ -62,9 +63,9 @@ namespace Horo::XR::OpenXRInternal {
         };
 
         [[nodiscard]] Result<void> BeginContext(const NativeSessionBorrow &native, XRRuntimeTime now);
-        [[nodiscard]] Result<bool> Poll(const NativeSessionBorrow &native, XrSpace world, XRRuntimeTime now);
+        [[nodiscard]] Result<bool> Poll(const NativeSessionBorrow &native, XRRuntimeTime now);
         [[nodiscard]] Result<bool> FinishContext(const NativeSessionBorrow &native);
-        [[nodiscard]] Result<bool> FinishScan(XrSpace world, XRRuntimeTime now);
+        [[nodiscard]] Result<bool> FinishScan(XRRuntimeTime now);
         [[nodiscard]] Result<bool> QueueScan(XRRuntimeTime now);
         [[nodiscard]] Result<void> Publish(const NativeSpatialPlaneBatch &batch, XRRuntimeTime now);
         [[nodiscard]] Result<void> ReleaseSnapshot();
@@ -78,6 +79,7 @@ namespace Horo::XR::OpenXRInternal {
         NativePlaneCensus census_;
         XRPlanePublication publication_;
         XrInstance instance_{XR_NULL_HANDLE};
+        XrSpace world_{XR_NULL_HANDLE}; /**< Borrowed for the exact grant until native retirement. */
         std::uint64_t incarnation_{};
         XrFutureEXT future_{XR_NULL_FUTURE_EXT};
         XrSpatialContextEXT context_{XR_NULL_HANDLE};

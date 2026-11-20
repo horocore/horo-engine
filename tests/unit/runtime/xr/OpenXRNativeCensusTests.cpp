@@ -559,7 +559,9 @@ namespace Horo::Tests::OpenXR {
             REQUIRE(snapshot.HasValue());
             return snapshot.Value();
         };
-        REQUIRE(capture.Start(attempt, scope, limits, time(100)).HasValue());
+        RequireFailureIdentity(capture.Start(attempt, scope, XR_NULL_HANDLE, limits, time(100)), XRErrors::CoordinateSpaceIncompatible);
+        CHECK(script.contextStarts == 0);
+        REQUIRE(capture.Start(attempt, scope, world, limits, time(100)).HasValue());
         SECTION("timed-out context cancels its one outstanding future") {
             RequireFailureIdentity(advance(131), XRErrors::TrackingSnapshotStale);
             CHECK(script.cancels == 1);
@@ -592,6 +594,20 @@ namespace Horo::Tests::OpenXR {
                 script.completeResult = XR_ERROR_PERMISSION_INSUFFICIENT;
                 RequireFailureIdentity(advance(122), XRErrors::PermissionDenied);
                 RequireFailureIdentity(capture.Read(scope, time(122)), XRErrors::OperationUnavailable);
+            }
+            SECTION("a different native space revokes the unchanged portable grant before polling") {
+                const auto polls = script.polls;
+                const auto queries = geometry.calls;
+                const bool missingSpace = GENERATE(false, true);
+                const auto replacement = missingSpace ? XR_NULL_HANDLE : NativeHandle<XrSpace>(5);
+                RequireFailureIdentity(capture.Advance(scope, replacement, time(122)), XRErrors::CoordinateSpaceIncompatible);
+                RequireFailureIdentity(capture.Read(scope, time(122)), XRErrors::OperationUnavailable);
+                RequireFailureIdentity(advance(122), XRErrors::OperationUnavailable);
+                CHECK(script.polls == polls);
+                CHECK(geometry.calls == queries);
+                CHECK(script.cancels == 0);
+                REQUIRE(capture.Close().HasValue());
+                CHECK(script.cancels == 1);
             }
             SECTION("recenter rejects the old grant and retirement retains retryable native debt") {
                 auto replacement = scope;
